@@ -11,6 +11,7 @@ import type {
   TriggerSnapshot,
   ZenXRoom,
   ZenXTrigger,
+  AssistantWorkspace,
 } from "./trigger-types.js";
 import {
   MAX_ERROR_BYTES,
@@ -35,12 +36,22 @@ import {
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
   MAX_ROOM_MESSAGES,
+  MAX_ROOM_OPERATIONS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_COUNT,
   MAX_TRIGGER_LABEL_BYTES,
   MAX_TRIGGER_PROMPT_BYTES,
   utf8Bytes,
   withinBytes,
+  MAX_ASSISTANT_MATTERS,
+  MAX_ASSISTANT_MEMORY,
+  MAX_ASSISTANT_REFERENCES,
+  MAX_ASSISTANT_TITLE_BYTES,
+  MAX_ASSISTANT_PLAN_BYTES,
+  MAX_ASSISTANT_STATUS_NOTE_BYTES,
+  MAX_ASSISTANT_NOTE_BYTES,
+  MAX_ASSISTANT_WORKSPACE_BYTES,
+  MAX_ASSISTANT_RESOURCE_WORKSPACE_BYTES,
 } from "./trigger-limits.js";
 
 interface StoredState extends TriggerSnapshot {
@@ -82,6 +93,7 @@ interface LegacyStoredState extends Omit<TriggerSnapshot, "history"> {
 const STORED_STATE_KEYS = ["version", "triggers", "history", "rooms"] as const;
 const TRIGGER_BASE_KEYS = [
   "id",
+  "definitionRevision",
   "threadId",
   "kind",
   "label",
@@ -90,7 +102,13 @@ const TRIGGER_BASE_KEYS = [
   "active",
 ] as const;
 const TIMER_KEYS = ["nextRunAt", "intervalMinutes"] as const;
-const WATCH_KEYS = ["threadId", "event", "once"] as const;
+const WATCH_KEYS = [
+  "threadId",
+  "event",
+  "once",
+  "sourceDevice",
+  "sourceWorkspace",
+] as const;
 const ROOM_TRIGGER_KEYS = ["roomId", "mention"] as const;
 const SIGNAL_KEYS = ["name"] as const;
 const PROGRAM_KEYS = ["predicate", "action", "match"] as const;
@@ -126,6 +144,8 @@ const HISTORY_SOURCE_KEYS = [
 const HISTORY_V2_KEYS = [...HISTORY_BASE_KEYS, ...HISTORY_SOURCE_KEYS] as const;
 const HISTORY_V3_KEYS = [
   "delivery",
+  "sourceDevice",
+  "sourceWorkspace",
   ...HISTORY_BASE_KEYS,
   ...HISTORY_SOURCE_KEYS,
   "replyRoomId",
@@ -142,9 +162,21 @@ const OUTCOME_KEYS = [
   "exitCode",
   "error",
 ] as const;
-const ROOM_KEYS = ["id", "name", "members", "messages", "createdAt"] as const;
+const ROOM_KEYS = [
+  "assistant",
+  "assistantWorkspace",
+  "id",
+  "name",
+  "members",
+  "messages",
+  "operations",
+  "operationEpoch",
+  "createdAt",
+] as const;
 const MEMBER_KEYS = ["name", "threadId"] as const;
 const MESSAGE_KEYS = [
+  "replyTo",
+  "reactions",
   "id",
   "roomId",
   "author",
@@ -268,6 +300,9 @@ function canonicalTrigger(
 ): ZenXTrigger {
   const common = {
     id: trigger.id,
+    ...(version === "v3" && trigger.definitionRevision !== undefined
+      ? { definitionRevision: trigger.definitionRevision }
+      : {}),
     threadId: trigger.threadId,
     kind: trigger.kind,
     label: trigger.label,
@@ -299,6 +334,12 @@ function canonicalTrigger(
         ...(trigger.watch!.once === undefined
           ? {}
           : { once: trigger.watch!.once }),
+        ...(trigger.watch!.sourceDevice === undefined
+          ? {}
+          : { sourceDevice: trigger.watch!.sourceDevice }),
+        ...(trigger.watch!.sourceWorkspace === undefined
+          ? {}
+          : { sourceWorkspace: trigger.watch!.sourceWorkspace }),
       },
       ...program,
     };
@@ -355,6 +396,12 @@ function canonicalHistory(entry: TriggerHistoryEntry): TriggerHistoryEntry {
     ...(entry.delivery === undefined ? {} : { delivery: entry.delivery }),
     ...canonicalBaseHistory(entry),
     sourceThreadId: entry.sourceThreadId,
+    ...(entry.sourceDevice === undefined
+      ? {}
+      : { sourceDevice: entry.sourceDevice }),
+    ...(entry.sourceWorkspace === undefined
+      ? {}
+      : { sourceWorkspace: entry.sourceWorkspace }),
     sourceTurnId: entry.sourceTurnId,
     sourceRoomId: entry.sourceRoomId,
     sourceRoomMessageId: entry.sourceRoomMessageId,
@@ -421,6 +468,12 @@ function canonicalProgramOutcome(
 
 function canonicalRoom(room: ZenXRoom): ZenXRoom {
   return {
+    ...(room.assistant === undefined
+      ? {}
+      : { assistant: { ...room.assistant } }),
+    ...(room.assistantWorkspace === undefined
+      ? {}
+      : { assistantWorkspace: structuredClone(room.assistantWorkspace) }),
     id: room.id,
     name: room.name,
     members: room.members.map((member) => ({
@@ -428,6 +481,12 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
       threadId: member.threadId,
     })),
     messages: room.messages.map((message) => ({
+      ...(message.replyTo === undefined
+        ? {}
+        : { replyTo: structuredClone(message.replyTo) }),
+      ...(message.reactions === undefined
+        ? {}
+        : { reactions: structuredClone(message.reactions) }),
       id: message.id,
       roomId: message.roomId,
       author: message.author,
@@ -437,6 +496,31 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
       originThreadId: message.originThreadId,
       originTurnId: message.originTurnId,
     })),
+    ...(room.operationEpoch === undefined
+      ? {}
+      : { operationEpoch: room.operationEpoch }),
+    ...(room.operations === undefined
+      ? {}
+      : {
+          operations: room.operations.map((operation) => ({
+            ...(operation.replyTo === undefined
+              ? {}
+              : { replyTo: structuredClone(operation.replyTo) }),
+            id: operation.id,
+            text: operation.text,
+            messageId: operation.messageId,
+            createdAt: operation.createdAt,
+            acknowledged: operation.acknowledged,
+            ...(operation.cancelled === true
+              ? { cancelled: true as const }
+              : {}),
+            mentions: operation.mentions.map((mention) => ({
+              name: mention.name,
+              threadId: mention.threadId,
+              triggerIds: [...mention.triggerIds],
+            })),
+          })),
+        }),
     createdAt: room.createdAt,
   };
 }
@@ -497,6 +581,10 @@ function isTrigger(
   if (
     trigger === null ||
     !string(trigger["id"], MAX_ID_BYTES) ||
+    (trigger["definitionRevision"] !== undefined &&
+      (version !== "v3" ||
+        !Number.isSafeInteger(trigger["definitionRevision"]) ||
+        (trigger["definitionRevision"] as number) < 0)) ||
     !string(trigger["threadId"], MAX_ID_BYTES) ||
     !triggerKind(trigger["kind"]) ||
     !string(trigger["label"], MAX_TRIGGER_LABEL_BYTES) ||
@@ -518,7 +606,10 @@ function isTrigger(
       trigger,
       version === "v3"
         ? [...TRIGGER_BASE_KEYS, variantKey, "program"]
-        : [...TRIGGER_BASE_KEYS, variantKey],
+        : [
+            ...TRIGGER_BASE_KEYS.filter((key) => key !== "definitionRevision"),
+            variantKey,
+          ],
     ) ||
     (version !== "v3" && trigger["program"] !== undefined) ||
     (trigger["program"] !== undefined && !isProgramConfig(trigger["program"]))
@@ -542,6 +633,14 @@ function isTrigger(
       exactKeys(watch, WATCH_KEYS) &&
       string(watch["threadId"], MAX_ID_BYTES) &&
       watch["event"] === "turn_completed" &&
+      (watch["sourceDevice"] === undefined ||
+        (version === "v3" &&
+          string(watch["sourceDevice"], MAX_ID_BYTES) &&
+          watch["sourceDevice"] !== "local")) &&
+      (watch["sourceWorkspace"] === undefined ||
+        (version === "v3" &&
+          string(watch["sourceDevice"], MAX_ID_BYTES) &&
+          string(watch["sourceWorkspace"], MAX_ID_BYTES))) &&
       (watch["once"] === undefined || typeof watch["once"] === "boolean")
     );
   }
@@ -572,6 +671,19 @@ function isHistory(value: unknown): value is TriggerHistoryEntry {
         String(entry["delivery"]),
       )) &&
     isHistoryBase(entry) &&
+    nullableString(entry["sourceThreadId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceTurnId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomId"], MAX_ID_BYTES) &&
+    nullableString(entry["sourceRoomMessageId"], MAX_ID_BYTES) &&
+    (entry["sourceDevice"] === undefined ||
+      (entry["kind"] === "thread" &&
+        string(entry["sourceDevice"], MAX_ID_BYTES) &&
+        entry["sourceDevice"] !== "local" &&
+        string(entry["sourceThreadId"], MAX_ID_BYTES) &&
+        string(entry["sourceTurnId"], MAX_ID_BYTES))) &&
+    (entry["sourceWorkspace"] === undefined ||
+      (string(entry["sourceDevice"], MAX_ID_BYTES) &&
+        string(entry["sourceWorkspace"], MAX_ID_BYTES))) &&
     entry !== null &&
     nullableString(entry["replyRoomId"], MAX_ID_BYTES) &&
     nullableString(entry["replyAuthor"], MAX_MEMBER_NAME_BYTES) &&
@@ -728,7 +840,29 @@ function isRoom(value: unknown): value is ZenXRoom {
     !string(room["name"], MAX_ROOM_NAME_BYTES) ||
     !arrayOf(room["members"], isRoomMember, MAX_ROOM_MEMBERS) ||
     !arrayOf(room["messages"], isRoomMessage, MAX_ROOM_MESSAGES) ||
+    (room["operationEpoch"] !== undefined &&
+      !string(room["operationEpoch"], MAX_ID_BYTES)) ||
+    (room["operations"] !== undefined &&
+      !arrayOf(room["operations"], isRoomOperation, MAX_ROOM_OPERATIONS)) ||
     !finiteNumber(room["createdAt"])
+  )
+    return false;
+  if (room["assistant"] !== undefined) {
+    const assistant = record(room["assistant"]);
+    if (
+      !assistant ||
+      !exactKeys(assistant, ["threadId", "triggerId"]) ||
+      !string(assistant["threadId"], MAX_ID_BYTES) ||
+      !string(assistant["triggerId"], MAX_ID_BYTES) ||
+      room["members"].length !== 1 ||
+      room["members"][0]?.threadId !== assistant["threadId"]
+    )
+      return false;
+  }
+  if (
+    room["assistantWorkspace"] !== undefined &&
+    (room["assistant"] === undefined ||
+      !isAssistantWorkspace(room["assistantWorkspace"]))
   )
     return false;
   const names = new Set<string>();
@@ -740,6 +874,203 @@ function isRoom(value: unknown): value is ZenXRoom {
     threads.add(member.threadId);
   }
   return room["messages"].every((message) => message.roomId === room["id"]);
+}
+
+export function canonicalAssistantWorkspace(
+  value: unknown,
+): AssistantWorkspace {
+  if (!isAssistantWorkspace(value))
+    throw Error("Invalid PAW workspace fields, identifiers or limits");
+  return structuredClone(value);
+}
+
+function annotationKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return (
+    Object.keys(value).length === allowed.length && exactKeys(value, allowed)
+  );
+}
+function annotationArrayOf<T>(
+  value: unknown,
+  predicate: (entry: unknown) => entry is T,
+  maximum: number,
+): value is T[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > maximum ||
+    Object.keys(value).length !== value.length
+  )
+    return false;
+  for (let index = 0; index < value.length; index++)
+    if (!Object.hasOwn(value, index) || !predicate(value[index])) return false;
+  return true;
+}
+function isAssistantWorkspace(value: unknown): value is AssistantWorkspace {
+  const workspace = record(value);
+  if (
+    !workspace ||
+    !annotationKeys(workspace, [
+      "revision",
+      "updatedAt",
+      "matters",
+      "memory",
+    ]) ||
+    !Number.isSafeInteger(workspace["revision"]) ||
+    (workspace["revision"] as number) < 0 ||
+    !Number.isSafeInteger(workspace["updatedAt"]) ||
+    (workspace["updatedAt"] as number) < 0 ||
+    !annotationArrayOf(
+      workspace["matters"],
+      isAssistantMatter,
+      MAX_ASSISTANT_MATTERS,
+    ) ||
+    !annotationArrayOf(
+      workspace["memory"],
+      isAssistantMemory,
+      MAX_ASSISTANT_MEMORY,
+    )
+  )
+    return false;
+  const unique = (items: { id: string }[]) =>
+    new Set(items.map((item) => item.id)).size === items.length;
+  return (
+    unique(workspace["matters"]) &&
+    unique(workspace["memory"]) &&
+    withinBytes(JSON.stringify(workspace), MAX_ASSISTANT_WORKSPACE_BYTES)
+  );
+}
+function annotationIdentifier(
+  value: unknown,
+  maximum: number,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    withinBytes(value, maximum)
+  );
+}
+function annotationText(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && withinBytes(value, maximum);
+}
+function isAssistantMatter(
+  value: unknown,
+): value is AssistantWorkspace["matters"][number] {
+  const matter = record(value);
+  return (
+    !!matter &&
+    annotationKeys(matter, [
+      "id",
+      "title",
+      "plan",
+      "statusNote",
+      "notes",
+      "references",
+    ]) &&
+    annotationIdentifier(matter["id"], MAX_ID_BYTES) &&
+    annotationIdentifier(matter["title"], MAX_ASSISTANT_TITLE_BYTES) &&
+    annotationText(matter["plan"], MAX_ASSISTANT_PLAN_BYTES) &&
+    annotationText(matter["statusNote"], MAX_ASSISTANT_STATUS_NOTE_BYTES) &&
+    annotationText(matter["notes"], MAX_ASSISTANT_NOTE_BYTES) &&
+    annotationArrayOf(
+      matter["references"],
+      isAssistantReference,
+      MAX_ASSISTANT_REFERENCES,
+    )
+  );
+}
+function isAssistantMemory(
+  value: unknown,
+): value is AssistantWorkspace["memory"][number] {
+  const memory = record(value);
+  return (
+    !!memory &&
+    annotationKeys(memory, ["id", "title", "text"]) &&
+    annotationIdentifier(memory["id"], MAX_ID_BYTES) &&
+    annotationIdentifier(memory["title"], MAX_ASSISTANT_TITLE_BYTES) &&
+    annotationText(memory["text"], MAX_ASSISTANT_NOTE_BYTES)
+  );
+}
+function isAssistantReference(
+  value: unknown,
+): value is AssistantWorkspace["matters"][number]["references"][number] {
+  const reference = record(value);
+  if (
+    !reference ||
+    !annotationText(reference["label"], MAX_ASSISTANT_TITLE_BYTES)
+  )
+    return false;
+  if (reference["kind"] === "thread")
+    return (
+      annotationKeys(reference, [
+        "kind",
+        "device",
+        "workspace",
+        "threadId",
+        "label",
+      ]) &&
+      annotationIdentifier(reference["device"], MAX_ID_BYTES) &&
+      annotationIdentifier(
+        reference["workspace"],
+        MAX_ASSISTANT_RESOURCE_WORKSPACE_BYTES,
+      ) &&
+      annotationIdentifier(reference["threadId"], MAX_ID_BYTES)
+    );
+  return (
+    reference["kind"] === "trigger" &&
+    annotationKeys(reference, ["kind", "triggerId", "label"]) &&
+    annotationIdentifier(reference["triggerId"], MAX_ID_BYTES)
+  );
+}
+
+function isRoomOperation(
+  value: unknown,
+): value is NonNullable<ZenXRoom["operations"]>[number] {
+  const operation = record(value);
+  return (
+    operation !== null &&
+    exactKeys(operation, [
+      "replyTo",
+      "id",
+      "text",
+      "messageId",
+      "createdAt",
+      "acknowledged",
+      ...(operation["cancelled"] === undefined ? [] : ["cancelled"]),
+      "mentions",
+    ]) &&
+    (operation["replyTo"] === undefined || isRoomQuote(operation["replyTo"])) &&
+    string(operation["id"], MAX_ID_BYTES) &&
+    string(operation["text"], MAX_MESSAGE_TEXT_BYTES) &&
+    nullableString(operation["messageId"], MAX_ID_BYTES) &&
+    finiteNumber(operation["createdAt"]) &&
+    typeof operation["acknowledged"] === "boolean" &&
+    (operation["cancelled"] === undefined ||
+      (operation["cancelled"] === true &&
+        operation["messageId"] === null &&
+        operation["acknowledged"] === true)) &&
+    arrayOf(
+      operation["mentions"],
+      (
+        entry,
+      ): entry is { name: string; threadId: string; triggerIds: string[] } => {
+        const mention = record(entry);
+        return (
+          mention !== null &&
+          exactKeys(mention, ["name", "threadId", "triggerIds"]) &&
+          string(mention["name"], MAX_MEMBER_NAME_BYTES) &&
+          string(mention["threadId"], MAX_ID_BYTES) &&
+          arrayOf(
+            mention["triggerIds"],
+            (id): id is string => string(id, MAX_ID_BYTES),
+            MAX_TRIGGER_COUNT,
+          )
+        );
+      },
+      MAX_ROOM_MEMBERS,
+    )
+  );
 }
 
 function isRoomMember(value: unknown): value is RoomMember {
@@ -757,6 +1088,9 @@ function isRoomMessage(value: unknown): value is RoomMessage {
   return (
     message !== null &&
     exactKeys(message, MESSAGE_KEYS) &&
+    (message["replyTo"] === undefined || isRoomQuote(message["replyTo"])) &&
+    (message["reactions"] === undefined ||
+      isRoomReactions(message["reactions"])) &&
     string(message["id"], MAX_ID_BYTES) &&
     string(message["roomId"], MAX_ID_BYTES) &&
     string(message["author"], MAX_MESSAGE_AUTHOR_BYTES) &&
@@ -851,4 +1185,36 @@ function programStatus(
     value === "oversized_output" ||
     value === "uncertain"
   );
+}
+
+function isRoomQuote(value: unknown): boolean {
+  const quote = record(value);
+  return (
+    quote !== null &&
+    exactKeys(quote, ["messageId", "author", "text"]) &&
+    string(quote["messageId"], MAX_ID_BYTES) &&
+    string(quote["author"], MAX_MESSAGE_AUTHOR_BYTES) &&
+    string(quote["text"], 1000)
+  );
+}
+function isRoomReactions(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > MAX_ROOM_MEMBERS + 1)
+    return false;
+  const actors = new Set<string>();
+  return value.every((entry) => {
+    const reaction = record(entry);
+    if (
+      !reaction ||
+      !exactKeys(reaction, ["actorId", "label", "emoji"]) ||
+      !string(reaction["actorId"], MAX_ID_BYTES + 7) ||
+      !string(reaction["label"], MAX_MESSAGE_AUTHOR_BYTES) ||
+      !["👍", "❤️", "🎉", "👀", "✅", "🤔"].includes(
+        reaction["emoji"] as string,
+      ) ||
+      actors.has(reaction["actorId"])
+    )
+      return false;
+    actors.add(reaction["actorId"]);
+    return true;
+  });
 }

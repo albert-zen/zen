@@ -4,15 +4,23 @@ import path from "node:path";
 import WebSocket from "ws";
 
 import {
+  processUserBrowserLiveFrame,
+  USER_BROWSER_MAX_LIVE_FRAME_BYTES,
+  type UserBrowserLiveImageDecoder,
+} from "./user-browser-live-frame.js";
+
+import {
   browserActionScript,
   browserScrollScript,
   assertBrowserObservation,
   type BrowserScrollDirection,
   browserInspectScript,
+  browserDomCapture,
   redactBrowserUrl,
   resolveBrowserObservedTarget,
   BrowserScreenshotArtifactStore,
   type BrowserInspection,
+  type BrowserDomInspection,
   type BrowserLiveObservationEvent,
   type BrowserLiveObservationListener,
   type BrowserScreenshotArtifact,
@@ -21,6 +29,10 @@ import {
   type BrowserTargetFingerprint,
   type ZenXBrowserBackend,
 } from "./browser-provider.js";
+import {
+  MAX_OBSERVATION_CAPTURE_ITEMS,
+  OBSERVATION_CAPTURE,
+} from "./observation-capture.js";
 
 const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
 const USER_BROWSER_SCREENSHOT_TIMEOUT_MS = 10_000;
@@ -33,7 +45,7 @@ const USER_BROWSER_MAX_ACTIVE_SESSIONS = 32;
 const USER_BROWSER_LATE_RESPONSE_RETENTION_MS = 5_000;
 const USER_BROWSER_DOCUMENT_WORLD_NAME = "__zenx_user_browser_document__";
 export const USER_BROWSER_LIVE_FRAME_INTERVAL_MS = 100;
-export const USER_BROWSER_MAX_LIVE_FRAME_BYTES = 1024 * 1024;
+const USER_BROWSER_LIVE_CAPTURE_INTERVAL_MS = 500;
 const USER_BROWSER_MAX_LIVE_FRAME_WIDTH = 1920;
 const USER_BROWSER_MAX_LIVE_FRAME_HEIGHT = 1200;
 const FALLBACK_SCREENSHOT_PNG_BASE64 =
@@ -45,6 +57,8 @@ export class UserBrowserScreenshotMalformedError extends Error {
     this.name = "UserBrowserScreenshotMalformedError";
   }
 }
+
+export { USER_BROWSER_MAX_LIVE_FRAME_BYTES };
 
 type UserBrowserCdpOutcome =
   "known-success" | "known-failure" | "outcome-unknown";
@@ -89,6 +103,9 @@ interface UserBrowserScreencastState {
   subscription: UserBrowserScreencastSubscription;
   latestFrame?: Extract<BrowserLiveObservationEvent, { type: "frame" }>;
   publishTimer?: NodeJS.Timeout;
+  captureTimer?: NodeJS.Timeout;
+  captureDueAt?: number;
+  captureInFlight?: boolean;
   lastPublishedAt: number;
   nextSequence: number;
 }
@@ -109,6 +126,10 @@ export interface UserBrowserCdpTarget {
 }
 
 export interface UserBrowserCdpClient {
+  observeTargetMetadata?(
+    targetId: string,
+    listener: (target: UserBrowserCdpTarget) => void,
+  ): () => void;
   observeScreencast?(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -151,6 +172,11 @@ export interface UserBrowserCdpClient {
     owner: UserBrowserAttachmentOwner,
     signal?: AbortSignal,
   ): Promise<string>;
+  assertDocumentCurrent?(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+  ): void;
   detachTarget(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -320,12 +346,24 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     }
     let active = true;
     let stop: (() => Promise<void>) | undefined;
+    const stopMetadata = this.#client.observeTargetMetadata?.(
+      tabId,
+      (target) => {
+        if (active)
+          listener({
+            type: "metadata",
+            title: target.title.slice(0, 256),
+            url: redactBrowserUrl(target.url),
+          });
+      },
+    );
     const entry = {
       sessionId,
       tabId,
       listener,
       stop: () => {
         active = false;
+        stopMetadata?.();
         this.#liveSubscriptions.delete(entry);
         this.#liveQueue = this.#liveQueue
           .then(async () => {
@@ -652,6 +690,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   ): Promise<BrowserInspection> {
     throwIfAborted(signal);
     const { session, tab } = this.#sessionTab(sessionId, tabId);
+    tab.observation = undefined;
     const operation = this.#startOperation(session, tab, async () => {
       let evaluation: { value: unknown; documentIdentity: string };
       try {
@@ -672,13 +711,37 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       if (
         raw === undefined ||
         typeof raw.visibleText !== "string" ||
-        !Array.isArray(raw.targets)
+        !Array.isArray(raw.targets) ||
+        (raw.documentIdentity !== undefined &&
+          !isCaptureIdentity(raw.documentIdentity, 16_384)) ||
+        [raw.itemTotal, raw.textTotal].some(
+          (total) =>
+            total !== undefined &&
+            (typeof total !== "number" ||
+              !Number.isSafeInteger(total) ||
+              total < 0),
+        )
       ) {
         throw new Error(
           "User browser CDP inspection returned an unsupported shape",
         );
       }
-      const fingerprints = raw.targets.map(requireFingerprint).slice(0, 80);
+      const fingerprints = raw.targets
+        .slice(0, MAX_OBSERVATION_CAPTURE_ITEMS)
+        .map(requireFingerprint);
+      const inspected: BrowserDomInspection = {
+        visibleText: raw.visibleText,
+        targets: fingerprints,
+        ...(raw.documentIdentity === undefined
+          ? {}
+          : { documentIdentity: raw.documentIdentity as string }),
+        ...(raw.itemTotal === undefined
+          ? {}
+          : { itemTotal: raw.itemTotal as number }),
+        ...(raw.textTotal === undefined
+          ? {}
+          : { textTotal: raw.textTotal as number }),
+      };
       const targets = new Map<string, BrowserTargetFingerprint>();
       const observationId = randomUUID();
       const screenshotCapture =
@@ -801,7 +864,34 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         documentVersion: tab.documentVersion,
         visibleText: raw.visibleText.slice(0, 8_000),
         screenshot,
-        targets: projected,
+        targets: projected.slice(0, 80),
+        [OBSERVATION_CAPTURE]: {
+          ...browserDomCapture(
+            inspected,
+            projected,
+            JSON.stringify([
+              "user-browser",
+              session.id,
+              session.incarnation,
+              tabId,
+              evaluation.documentIdentity,
+            ]),
+          ),
+          assertCurrent: () => {
+            this.#assertTabCurrent(session, tabId, tab);
+            if (
+              tab.observation?.id !== observationId ||
+              tab.documentIdentity !== evaluation.documentIdentity
+            ) {
+              throw new Error("User browser capture expired; inspect again");
+            }
+            this.#client.assertDocumentCurrent?.(
+              tabId,
+              this.#attachmentOwner(session),
+              evaluation.documentIdentity,
+            );
+          },
+        },
       };
     });
     const result = await raceAbort(operation, signal);
@@ -1629,7 +1719,10 @@ export interface UserBrowserConnection {
 export async function connectUserBrowserCdp(
   endpoint: string,
   signal?: AbortSignal,
-  options: { authorization?: string } = {},
+  options: {
+    authorization?: string;
+    liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
+  } = {},
 ): Promise<UserBrowserConnection> {
   const base = validateCdpEndpoint(endpoint);
   const timeout = AbortSignal.timeout(5_000);
@@ -1716,6 +1809,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   readonly #socket: WebSocket;
   readonly #httpBase: URL;
   readonly #authorization?: string;
+  readonly #liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
   readonly #pending = new Map<
     number,
     {
@@ -1748,6 +1842,11 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
   >();
   readonly #connectionTaints: string[] = [];
+  readonly #targetMetadata = new Map<string, UserBrowserCdpTarget>();
+  readonly #targetMetadataListeners = new Map<
+    string,
+    Set<(target: UserBrowserCdpTarget) => void>
+  >();
   readonly #targetDocuments = new Map<
     string,
     {
@@ -1774,10 +1873,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     socket: WebSocket,
     httpBase: URL,
     authorization?: string,
+    liveFrameImageDecoder?: UserBrowserLiveImageDecoder,
   ) {
     this.#socket = socket;
     this.#httpBase = httpBase;
     this.#authorization = authorization;
+    this.#liveFrameImageDecoder = liveFrameImageDecoder;
     socket.on("message", (data) => this.#receive(data.toString()));
     socket.on("close", () =>
       this.#failAll(new Error("User browser CDP connection closed")),
@@ -1789,7 +1890,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     url: string,
     httpBase: URL,
     signal?: AbortSignal,
-    options: { authorization?: string } = {},
+    options: {
+      authorization?: string;
+      liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
+    } = {},
   ): Promise<JsonRpcUserBrowserCdpClient> {
     const socket = new WebSocket(url, {
       handshakeTimeout: 5_000,
@@ -1821,6 +1925,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       socket,
       httpBase,
       options.authorization,
+      options.liveFrameImageDecoder,
     );
     try {
       await client.#send("Target.setDiscoverTargets", { discover: true });
@@ -1842,7 +1947,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (infos.length > USER_BROWSER_MAX_DISCOVERED_TARGETS) {
       throw new Error("User browser CDP target list exceeded its bound");
     }
-    return infos.map((value) => {
+    const targets = infos.map((value) => {
       const target = asRecord(value);
       if (
         target === undefined ||
@@ -1860,6 +1965,27 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         url: target.url,
       };
     });
+    for (const target of targets)
+      this.#targetMetadata.set(target.targetId, target);
+    return targets;
+  }
+
+  observeTargetMetadata(
+    targetId: string,
+    listener: (target: UserBrowserCdpTarget) => void,
+  ): () => void {
+    let listeners = this.#targetMetadataListeners.get(targetId);
+    if (listeners === undefined) {
+      listeners = new Set();
+      this.#targetMetadataListeners.set(targetId, listeners);
+    }
+    listeners.add(listener);
+    const current = this.#targetMetadata.get(targetId);
+    if (current !== undefined) listener(current);
+    return () => {
+      listeners!.delete(listener);
+      if (listeners!.size === 0) this.#targetMetadataListeners.delete(targetId);
+    };
   }
 
   async createTarget(url: string, signal?: AbortSignal): Promise<string> {
@@ -2070,7 +2196,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       response = asRecord(
         await this.#send(
           "Page.captureScreenshot",
-          { format: "png", fromSurface: false, captureBeyondViewport: false },
+          { format: "png", fromSurface: true, captureBeyondViewport: false },
           before.sessionId,
           signal,
           USER_BROWSER_SCREENSHOT_TIMEOUT_MS,
@@ -2125,6 +2251,48 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     signal?: AbortSignal,
   ): Promise<string> {
     return (await this.#executionDocument(targetId, owner, signal)).identity;
+  }
+
+  assertDocumentCurrent(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+  ): void {
+    const epoch = this.#attachmentClosures.get(targetId);
+    const state = this.#targetDocuments.get(targetId);
+    const sessionId = this.#targetSessions.get(targetId);
+    if (
+      this.#closing ||
+      epoch === undefined ||
+      state === undefined ||
+      sessionId === undefined ||
+      state.frameId.length === 0 ||
+      state.isolatedExecutionContextId === undefined ||
+      state.pendingFrameInvalidations.size > 0 ||
+      [...state.pendingIsolatedContexts].some(
+        ([contextId, frameId]) =>
+          frameId === state.frameId &&
+          contextId !== state.isolatedExecutionContextId,
+      )
+    ) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
+    const fence = {
+      targetId,
+      sessionId,
+      attachmentEpoch: epoch,
+      ...owner,
+      providerRevision: this.#providerRevision,
+      documentRevision: state.revision,
+      frameId: state.frameId,
+      loaderId: state.loaderId,
+      url: state.url,
+      executionContextId: state.isolatedExecutionContextId,
+    };
+    this.#assertDocumentFence(fence, true);
+    if (this.#documentFenceIdentity(fence) !== expectedDocumentIdentity) {
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    }
   }
 
   async observeScreencast(
@@ -2198,11 +2366,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         this.#screencastSubscription !== subscription
       )
         throw new Error("Browser observation target changed during connection");
-      subscription.listener({
-        type: "status",
-        status: "live",
-        message: "Watching the Agent's browser tab live.",
-      });
+      this.#scheduleLiveCapture(state);
     } catch (error) {
       if (this.#screencast === state) this.#clearScreencast(state);
       if (started && !this.#closed) {
@@ -2278,7 +2442,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
 
   #clearScreencast(state: UserBrowserScreencastState): void {
     if (state.publishTimer !== undefined) clearTimeout(state.publishTimer);
+    if (state.captureTimer !== undefined) clearTimeout(state.captureTimer);
     state.publishTimer = undefined;
+    state.captureTimer = undefined;
+    state.captureDueAt = undefined;
     state.latestFrame = undefined;
     if (this.#screencast === state) this.#screencast = undefined;
   }
@@ -2301,10 +2468,23 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       { sessionId: frameSessionId },
       cdpSessionId,
     ).catch((error: unknown) => {
-      if (state !== undefined && this.#screencast === state)
+      if (
+        state !== undefined &&
+        state.sessionId === cdpSessionId &&
+        this.#screencast === state
+      )
         this.#failScreencast(state, error);
     });
-    if (state === undefined || state.sessionId !== cdpSessionId) return;
+    // CDP events contain no document or screencast generation. A queued event
+    // can outlive navigation or resubscription, so acknowledge it without
+    // publishing its pixels or accelerating the fixed fenced capture loop.
+  }
+
+  #publishScreencastFrame(
+    state: UserBrowserScreencastState,
+    params: Record<string, unknown>,
+  ): void {
+    if (this.#screencast !== state) return;
     try {
       this.#assertDocumentFence(state.fence, true);
       const data = params.data;
@@ -2340,6 +2520,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           height,
         },
       };
+      if (state.lastPublishedAt === 0) {
+        state.subscription.listener({
+          type: "status",
+          status: "live",
+          message: "Watching the Agent's browser tab live.",
+        });
+      }
       const elapsed = Date.now() - state.lastPublishedAt;
       if (
         state.lastPublishedAt === 0 ||
@@ -2362,6 +2549,70 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       state.publishTimer.unref();
     } catch (error) {
       this.#failScreencast(state, error);
+    }
+  }
+
+  #scheduleLiveCapture(
+    state: UserBrowserScreencastState,
+    delay = USER_BROWSER_LIVE_CAPTURE_INTERVAL_MS,
+  ): void {
+    if (this.#screencast !== state || state.captureInFlight) return;
+    const dueAt = Date.now() + delay;
+    if (state.captureDueAt !== undefined && state.captureDueAt <= dueAt) return;
+    if (state.captureTimer !== undefined) clearTimeout(state.captureTimer);
+    state.captureDueAt = dueAt;
+    state.captureTimer = setTimeout(() => {
+      state.captureTimer = undefined;
+      state.captureDueAt = undefined;
+      void this.#captureLiveFrame(state);
+    }, delay);
+    state.captureTimer.unref();
+  }
+
+  async #captureLiveFrame(state: UserBrowserScreencastState): Promise<void> {
+    if (this.#screencast !== state || state.captureInFlight) return;
+    state.captureInFlight = true;
+    try {
+      // Every displayed image belongs to this request's exact observation state.
+      // Native events are acknowledged separately from this fixed single-flight loop.
+      this.#assertDocumentFence(state.fence, true);
+      const result = asRecord(
+        await this.#send(
+          "Page.captureScreenshot",
+          {
+            format: "jpeg",
+            quality: 70,
+            fromSurface: true,
+            captureBeyondViewport: false,
+          },
+          state.sessionId,
+          undefined,
+          USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
+          undefined,
+          undefined,
+          () => this.#assertDocumentFence(state.fence, true),
+        ),
+      );
+      if (this.#screencast !== state) return;
+      this.#assertDocumentFence(state.fence, true);
+      const frame = await processUserBrowserLiveFrame(
+        result?.data,
+        this.#liveFrameImageDecoder,
+      );
+      if (this.#screencast !== state) return;
+      this.#assertDocumentFence(state.fence, true);
+      this.#publishScreencastFrame(state, {
+        data: frame.data,
+        metadata: {
+          deviceWidth: frame.width,
+          deviceHeight: frame.height,
+        },
+      });
+    } catch (error) {
+      if (this.#screencast === state) this.#failScreencast(state, error);
+    } finally {
+      state.captureInFlight = false;
+      this.#scheduleLiveCapture(state);
     }
   }
 
@@ -2577,24 +2828,34 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       settledContextState.invalidExecutionContextIds.clear();
     }
     this.#assertDocumentFence(fence, true);
-    const identity = JSON.stringify({
-      targetId,
-      sessionId,
+    return {
+      identity: this.#documentFenceIdentity({
+        ...fence,
+        executionContextId: world.executionContextId,
+      }),
+      ...fence,
+      executionContextId: world.executionContextId,
+    };
+  }
+
+  #documentFenceIdentity(
+    fence: ZenXUserBrowserDocumentExecutionFence & {
+      executionContextId: number;
+    },
+  ): string {
+    return JSON.stringify({
+      targetId: fence.targetId,
+      sessionId: fence.sessionId,
       attachAttempt: fence.attachmentEpoch.attachAttempt,
       logicalSessionId: fence.logicalSessionId,
       logicalSessionIncarnation: fence.logicalSessionIncarnation,
       providerRevision: fence.providerRevision,
       revision: fence.documentRevision,
-      frameId: frame.id,
-      loaderId: frame.loaderId,
-      url: frame.url,
-      executionContextId: world.executionContextId,
+      frameId: fence.frameId,
+      loaderId: fence.loaderId,
+      url: fence.url,
+      executionContextId: fence.executionContextId,
     });
-    return {
-      identity,
-      ...fence,
-      executionContextId: world.executionContextId,
-    };
   }
 
   async #documentBarrier(
@@ -3210,10 +3471,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#receiveScreencastFrame(message, params);
       return;
     }
+    if (method === "Target.targetInfoChanged") {
+      const target = readUserBrowserTarget(params.targetInfo);
+      if (target === undefined) return;
+      this.#targetMetadata.set(target.targetId, target);
+      for (const listener of this.#targetMetadataListeners.get(
+        target.targetId,
+      ) ?? [])
+        listener(target);
+      return;
+    }
     if (
       method === "Target.targetDestroyed" &&
       typeof params.targetId === "string"
     ) {
+      this.#targetMetadata.delete(params.targetId);
       this.#reapTarget(params.targetId, true);
       return;
     }
@@ -3281,6 +3553,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       method === "Runtime.executionContextDestroyed" &&
       typeof params.executionContextId === "number"
     ) {
+      if (document.isolatedExecutionContextId === params.executionContextId) {
+        this.#invalidateTarget(targetId, false);
+        return;
+      }
       if (
         document.invalidExecutionContextIds.size <
           USER_BROWSER_MAX_OPERATION_EVIDENCE ||
@@ -3325,9 +3601,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           document.isolatedExecutionContextId !== undefined &&
           document.isolatedExecutionContextId !== context.id
         ) {
-          document.invalidExecutionContextIds.add(
-            document.isolatedExecutionContextId,
-          );
+          this.#invalidateTarget(targetId, false);
         }
       }
       return;
@@ -3517,6 +3791,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     this.#targetSessions.clear();
     this.#sessionTargets.clear();
     this.#targetDocuments.clear();
+    this.#targetMetadata.clear();
+    this.#targetMetadataListeners.clear();
     for (const late of this.#lateResponses.values()) {
       clearTimeout(late.expires);
       late.expire();
@@ -3767,6 +4043,25 @@ function summarizeTarget(
   };
 }
 
+function readUserBrowserTarget(
+  value: unknown,
+): UserBrowserCdpTarget | undefined {
+  const target = asRecord(value);
+  if (
+    typeof target?.targetId !== "string" ||
+    typeof target.type !== "string" ||
+    typeof target.title !== "string" ||
+    typeof target.url !== "string"
+  )
+    return undefined;
+  return {
+    targetId: target.targetId,
+    type: target.type,
+    title: target.title,
+    url: target.url,
+  };
+}
+
 function requireFingerprint(value: unknown): BrowserTargetFingerprint {
   const target = asRecord(value);
   const actions = target?.actions;
@@ -3788,6 +4083,10 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
       (action) =>
         action === "click" || action === "type" || action === "select",
     ) ||
+    (target.documentIdentity !== undefined &&
+      !isCaptureIdentity(target.documentIdentity, 16_384)) ||
+    (target.nodeIdentity !== undefined &&
+      !isCaptureIdentity(target.nodeIdentity, 256)) ||
     (target.value !== undefined && typeof target.value !== "string") ||
     (target.checked !== undefined && typeof target.checked !== "boolean") ||
     (target.selected !== undefined && typeof target.selected !== "boolean") ||
@@ -3810,6 +4109,12 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
     throw new Error("User browser CDP inspection target is invalid");
   }
   return {
+    ...(target.documentIdentity === undefined
+      ? {}
+      : { documentIdentity: target.documentIdentity as string }),
+    ...(target.nodeIdentity === undefined
+      ? {}
+      : { nodeIdentity: target.nodeIdentity as string }),
     selector: target.selector as string,
     tag: target.tag as string,
     role: target.role as string,
@@ -3840,6 +4145,12 @@ function requireFingerprint(value: unknown): BrowserTargetFingerprint {
           }),
         }),
   };
+}
+
+function isCaptureIdentity(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= maxLength
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

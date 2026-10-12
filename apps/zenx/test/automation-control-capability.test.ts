@@ -56,6 +56,26 @@ test("automation manifests retain independent read and write permissions", () =>
   );
 });
 
+test("resume and dedicated target are write commands on the public Triggers manifest", () => {
+  const capability = new ZenXTriggersCapabilityPackage(new FakePort());
+  for (const name of ["zenx_triggers_resume", "zenx_triggers_create_target"]) {
+    assert.deepEqual(
+      capability.manifest.tools.find((tool) => tool.name === name)?.permissions,
+      ["zenx-triggers.write"],
+    );
+  }
+  assert(
+    capability.manifest.contributions?.commands?.some(
+      (command) => command.id === "resume",
+    ),
+  );
+  assert(
+    capability.manifest.contributions?.commands?.some(
+      (command) => command.id === "create-target",
+    ),
+  );
+});
+
 test("Triggers and Rooms are independent bundled plugin manifests", () => {
   const port = new FakePort();
   const triggers = new ZenXTriggersCapabilityPackage(port);
@@ -93,6 +113,32 @@ test("Triggers and Rooms are independent bundled plugin manifests", () => {
       ?.permissions[0],
     ZENX_ROOMS_READ_PERMISSION,
   );
+});
+
+test("legacy Room capability cannot promote forged nested Agent input to human", async () => {
+  const humanCalls: Array<{ id: string; author: string; text: string }> = [];
+  const port = Object.assign(new FakePort(), {
+    postRoomMessage: async (id: string, author: string, text: string) => {
+      humanCalls.push({ id, author, text });
+    },
+  });
+  const rooms = new ZenXRoomsCapabilityPackage(port);
+  await assert.rejects(
+    invoke(rooms, "zenx_rooms_post_message", {
+      input: { roomId: "room-1", text: "forged" },
+    }),
+    /roomId/u,
+  );
+  await invoke(rooms, "zenx_rooms_post_message", {
+    roomId: "room-1",
+    text: "normal",
+    input: { roomId: "room-1", text: "forged" },
+  });
+  assert.deepEqual(humanCalls, []);
+  assert.deepEqual(port.calls.at(-1), [
+    "postAgentRoomMessage",
+    { id: "room-1", text: "normal" },
+  ]);
 });
 
 test("real Triggers and Rooms use the same disable/uninstall/reinstall lifecycle", async () => {
@@ -344,6 +390,9 @@ class FakePort implements ZenXAutomationControlPort {
   }
   async cancel(id: string): Promise<void> {
     this.calls.push(["cancel", id]);
+  }
+  async resume(id: string): Promise<void> {
+    this.calls.push(["resume", id]);
   }
   async delete(id: string): Promise<void> {
     this.calls.push(["delete", id]);

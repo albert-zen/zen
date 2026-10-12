@@ -45,6 +45,7 @@ export interface PluginRuntimeInvocation {
     cwd: string;
     threadId?: string;
     canonicalToolCallId?: string;
+    trustedPluginUi?: true;
   };
   signal: AbortSignal;
 }
@@ -61,6 +62,7 @@ export interface PluginRuntimeRegistration {
   identity: PluginRuntimeIdentity;
   source?: "bundled" | "local";
   definitions: readonly ModelTool[];
+  remoteToolNames?: readonly string[];
   start(sdk?: ZenXPluginHostSdkV1): Promise<PluginRuntime>;
 }
 
@@ -148,6 +150,7 @@ export class PluginRuntimeSupervisor {
         registration.identity,
         registration.definitions,
         runtime,
+        registration.remoteToolNames,
       );
       let publication: StagedToolBundleRegistration;
       try {
@@ -343,7 +346,17 @@ export class PluginRuntimeSupervisor {
       throw new Error(`Plugin runtime is not enabled: ${pluginId}`);
     }
     return await active.bundle.invoke({
-      ...invocation,
+      tool: invocation.tool,
+      arguments: invocation.arguments,
+      signal: invocation.signal,
+      context: {
+        callId: invocation.context.callId,
+        cwd: invocation.context.cwd,
+        ...(invocation.context.threadId === undefined
+          ? {}
+          : { threadId: invocation.context.threadId }),
+        trustedPluginUi: true,
+      },
       invocationId: invocation.invocationId ?? randomUUID(),
     });
   }
@@ -406,11 +419,15 @@ class SupervisedPluginBundle implements ToolBundle {
     identity: PluginRuntimeIdentity,
     definitions: readonly ModelTool[],
     runtime: PluginRuntime,
+    remoteToolNames: readonly string[] = [],
   ) {
     this.identity = { kind: "plugin", id: identity.pluginId } as const;
     this.tools = definitions.map((definition) => ({
       name: definition.name,
       specification: structuredClone(definition),
+      ...(remoteToolNames.includes(definition.name)
+        ? { remoteExecution: "text-json" as const }
+        : {}),
       execute: async (invocation: ToolInvocation) =>
         await this.#execute(definition.name, invocation),
     }));
@@ -1236,6 +1253,9 @@ export function bundledPackageRegistration(
       description,
       inputSchema,
     })),
+    remoteToolNames: manifest.tools
+      .filter((tool) => tool.remoteExecution === "text-json")
+      .map((tool) => tool.name),
     start: async (sdk) => {
       const hostSdk = sdk ?? unavailableHostSdk(manifest.id);
       const runtimePackage =
@@ -1250,6 +1270,9 @@ export function bundledPackageRegistration(
                 invocation.tool,
                 {
                   callId: invocation.context.callId,
+                  ...(invocation.context.trustedPluginUi === true
+                    ? { trustedPluginUi: true as const }
+                    : {}),
                   ...(invocation.context.canonicalToolCallId === undefined
                     ? {}
                     : {
@@ -1342,6 +1365,10 @@ function validateNamespacedDefinitions(
       );
     names.add(definition.name);
   }
+  if (registration.remoteToolNames?.some((name) => !names.has(name)))
+    throw new Error(
+      `Plugin ${pluginId} declares remote eligibility for an unknown tool`,
+    );
 }
 
 function validateIdentity(identity: PluginRuntimeIdentity): void {

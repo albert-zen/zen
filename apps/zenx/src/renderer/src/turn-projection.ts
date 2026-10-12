@@ -1,4 +1,16 @@
+import { i18n } from "./i18n.js";
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
+import {
+  commandSummary,
+  commandPhaseLabel,
+  commandPhase,
+  commandTask,
+  isTerminalCommandPhase,
+  commandTitle,
+  toolPresentation,
+  type CommandPhase,
+  type CommandItem,
+} from "./tool-presentation.js";
 
 export type TurnDisplayNode =
   | {
@@ -34,6 +46,46 @@ export interface TraceDisplayRow {
   parentToolName: string | null;
 }
 
+/** Only adjacent completed reasoning items with no public summary or content share a visual row; visibility is not projected. */
+export function groupReasoningWithoutDetailsRows(
+  rows: readonly TraceDisplayRow[],
+): Array<
+  TraceDisplayRow | { kind: "reasoningWithoutDetailsRun"; ids: string[] }
+> {
+  const result: Array<
+    TraceDisplayRow | { kind: "reasoningWithoutDetailsRun"; ids: string[] }
+  > = [];
+  let run: TraceDisplayRow[] = [];
+  const flush = () => {
+    if (run.length > 1) {
+      result.push({
+        kind: "reasoningWithoutDetailsRun",
+        ids: run.map((row) => row.item.id),
+      });
+    } else if (run[0] !== undefined) {
+      result.push(run[0]);
+    }
+    run = [];
+  };
+  for (const row of rows) {
+    const item = row.item;
+    if (
+      item.type === "reasoning" &&
+      item.status !== "inProgress" &&
+      item.status !== "interrupted" &&
+      item.summary.every((part) => part.trim().length === 0) &&
+      item.content.every((part) => part.trim().length === 0)
+    ) {
+      run.push(row);
+    } else {
+      flush();
+      result.push(row);
+    }
+  }
+  flush();
+  return result;
+}
+
 /** Derive visual lineage solely from canonical call ids carried by the wire projection. */
 export function traceDisplayRows(
   items: readonly Extract<
@@ -61,7 +113,10 @@ export function traceDisplayRows(
   });
 }
 
-export function projectTurn(turn: Turn): TurnDisplayProjection {
+export function projectTurn(
+  turn: Turn,
+  observations: TraceObservationIndex = createTraceObservationIndex(turn.items),
+): TurnDisplayProjection {
   const userItems = turn.items.filter(
     (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
       item.type === "userMessage" && item.deliveryAfter === undefined,
@@ -136,7 +191,7 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
         : {
             kind: "traceGroup",
             id,
-            summary: traceSummary(traceItems),
+            summary: traceSummary(traceItems, observations),
             items: traceItems,
           },
     );
@@ -181,27 +236,158 @@ export function projectTurn(turn: Turn): TurnDisplayProjection {
         ? null
         : (turn.error?.message ??
           (turn.status === "interrupted"
-            ? "This turn was interrupted before a final response arrived."
-            : "This turn ended without a final response.")),
+            ? i18n.t("shell:thisTurnWasInterruptedBeforeAFinalResponseArrived")
+            : i18n.t("shell:thisTurnEndedWithoutAFinalResponse"))),
   };
 }
 
+export interface TraceObservationIndex {
+  tasks: ReadonlyMap<string, { itemId: string; phase: CommandPhase }>;
+}
+/** Disposable observation facts, never a second runtime state. A task cannot restart. */
+export function createTraceObservationIndex(
+  items: readonly ThreadItem[],
+): TraceObservationIndex {
+  const tasks = new Map<string, { itemId: string; phase: CommandPhase }>();
+  for (const item of items) {
+    if (item.type !== "commandExecution") continue;
+    const task = commandTask(item);
+    if (task === null) continue;
+    const prior = tasks.get(task.id);
+    if (
+      prior &&
+      isTerminalCommandPhase(prior.phase) &&
+      !isTerminalCommandPhase(task.phase)
+    )
+      continue;
+    tasks.set(task.id, { itemId: item.id, phase: task.phase });
+  }
+  return { tasks };
+}
+export function observedCommandPhase(
+  item: CommandItem,
+  observations: TraceObservationIndex,
+): CommandPhase {
+  const phase = commandPhase(item);
+  const task = commandTask(item);
+  if (task === null || isTerminalCommandPhase(phase)) return phase;
+  return observations.tasks.get(task.id)?.phase ?? phase;
+}
+export interface TraceActivity {
+  total: number;
+  active: number;
+  outstanding: number;
+  failed: number;
+  cancelled: number;
+  unconfirmed: number;
+  pending: number;
+  running: number;
+  waiting: number;
+  current: CommandItem | null;
+  phase: CommandPhase | "thinking" | "idle";
+  categories: Array<{ label: string; count: number }>;
+}
+export function summarizeTraceActivity(
+  items: readonly ThreadItem[],
+  context: TraceObservationIndex | readonly ThreadItem[] = items,
+): TraceActivity {
+  const observations = Array.isArray(context)
+    ? createTraceObservationIndex(context)
+    : (context as TraceObservationIndex);
+  const result: TraceActivity = {
+    total: 0,
+    active: 0,
+    outstanding: 0,
+    failed: 0,
+    cancelled: 0,
+    unconfirmed: 0,
+    pending: 0,
+    running: 0,
+    waiting: 0,
+    current: null,
+    phase: "idle",
+    categories: [],
+  };
+  const categories = new Map<string, number>();
+  const active: Array<{ item: CommandItem; phase: CommandPhase }> = [];
+  for (const item of items) {
+    if (item.type !== "commandExecution") continue;
+    result.total += 1;
+    const category = toolPresentation(item.toolName ?? item.command).category;
+    categories.set(category, (categories.get(category) ?? 0) + 1);
+    const phase = commandPhase(item);
+    if (phase === "failed" || phase === "timed_out") result.failed += 1;
+    if (phase === "cancelled" || phase === "declined") result.cancelled += 1;
+    const task = commandTask(item);
+    const observed = task === null ? null : observations.tasks.get(task.id);
+    if (
+      isTerminalCommandPhase(phase) ||
+      (observed &&
+        (isTerminalCommandPhase(observed.phase) || observed.itemId !== item.id))
+    )
+      continue;
+    active.push({ item, phase });
+    result.active += 1;
+    if (task !== null) result.outstanding += 1;
+    if (phase === "running") result.running += 1;
+    if (phase === "waiting") result.waiting += 1;
+    if (phase === "cancellation_unconfirmed") result.unconfirmed += 1;
+    if (
+      phase === "cancel_requested" ||
+      phase === "queued" ||
+      phase === "admitting" ||
+      phase === "requested"
+    )
+      result.pending += 1;
+  }
+  const priority: CommandPhase[] = [
+    "cancellation_unconfirmed",
+    "cancel_requested",
+    "running",
+    "waiting",
+    "admitting",
+    "queued",
+    "requested",
+  ];
+  const current = priority
+    .map((phase) => active.findLast((entry) => entry.phase === phase))
+    .find(Boolean);
+  result.current = current?.item ?? null;
+  result.phase =
+    current?.phase ??
+    (items.some(
+      (item) => item.type === "reasoning" && item.status === "inProgress",
+    )
+      ? "thinking"
+      : "idle");
+  result.categories = [...categories].map(([label, count]) => ({
+    label,
+    count,
+  }));
+  return result;
+}
 export function traceSummary(
-  items: readonly Extract<
-    ThreadItem,
-    { type: "reasoning" | "commandExecution" }
-  >[],
+  items: readonly ThreadItem[],
+  observations: TraceObservationIndex | readonly ThreadItem[] = items,
 ): string {
+  const index = Array.isArray(observations)
+    ? createTraceObservationIndex(observations)
+    : (observations as TraceObservationIndex);
+  const activity = summarizeTraceActivity(items, index);
+  if (activity.phase === "thinking") return i18n.t("shell:thinking");
   const commands = items.filter(
-    (item): item is Extract<ThreadItem, { type: "commandExecution" }> =>
-      item.type === "commandExecution",
+    (item): item is CommandItem => item.type === "commandExecution",
   );
-  const reasoning = items.length - commands.length;
-  if (commands.length === 0) return "Reasoned through the next step";
-  const names = commands.map((item) => commandLabel(item.command));
-  const unique = [...new Set(names)];
-  const action = unique.length === 1 ? unique[0] : `${unique.length} tools`;
-  return reasoning > 0 ? `Reasoned and used ${action}` : `Used ${action}`;
+  if (commands.length === 1) {
+    const item = commands[0]!;
+    const phase = observedCommandPhase(item, index);
+    return phase === commandPhase(item)
+      ? commandSummary(item)
+      : `${commandTitle(item)} · ${commandPhaseLabel(phase).toLowerCase()}`;
+  }
+  if (activity.current) return commandTitle(activity.current);
+  if (activity.total === 0) return i18n.t("shell:thoughts");
+  return i18n.t("shell:toolCalls", { count: activity.total });
 }
 
 export function commandLabel(command: string): string {

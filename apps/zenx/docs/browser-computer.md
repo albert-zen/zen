@@ -36,6 +36,37 @@ The default ZenX workspace browser now uses one Thread-bound WebContentsView tar
 
 Computer panels may subscribe to the latest exact window targets used by Computer tools. On macOS the built-in provider captures at most one frame at a time every 750 ms while subscribed, reports each capture timestamp, and stops immediately when the panel unsubscribes. This is a live observation surface, not authority to control the window; Computer actions retain their existing semantic/foreground permission boundaries.
 
+## Incremental observation contract
+
+Current Browser/Computer inspection uses a self-contained bounded first page,
+immutable cursor continuation and optional explicit-baseline diff. The package
+[Browser guide](../../../packages/zenx-browser-plugin/README.md) and
+[Computer guide](../../../packages/zenx-computer-plugin/README.md) define fields,
+capture/output limits, reference freshness and recovery. A truncated view is
+never described as a complete page/tree. Native omissions, unknown completeness
+and captured-but-unread tails are separate states.
+
+Diffs apply only to the retained first-page view. Discard old tail pages when a
+new observation arrives. Context compaction does not implicitly preserve a
+baseline: omit `baseObservationId` or request `full: true` when its contents are
+no longer available. Host-local caches are bounded and disposable; ordinary
+tool results remain the only recorded trace, with no second durable ledger.
+
+Browser identity follows actual surviving DOM objects and document incarnation;
+Computer continuity uses only a unique exact full-fingerprint presentation key.
+Neither bypasses a fresh action observation or native target revalidation.
+Paging broadens access to already captured data; targeted find/subtree queries,
+unbounded native traversal, nested-container scrolling and image diffs remain
+outside this change.
+
+The design draws on agent-browser's scope-keyed delta/full snapshots and
+Playwright MCP's snapshot-local action references. These are engineering
+precedents, not evidence that every Codex browser operation uses diff output:
+
+- [agent-browser snapshots](https://agent-browser.dev/snapshots) and
+  [v0.38.0 release](https://agent-browser.dev/changelog#v0380)
+- [Playwright MCP snapshot documentation](https://github.com/microsoft/playwright.dev/blob/main/mcp/snapshots.mdx)
+
 ## Sources
 
 - [OpenAI Browser documentation](https://developers.openai.com/es-419/docs/browser?surface=app) and [Computer Use documentation](https://developers.openai.com/es-419/docs/computer-use) describe the product surfaces; local observations above are narrower than those general descriptions.

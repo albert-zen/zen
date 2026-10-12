@@ -12,6 +12,37 @@ export function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+export function fakeJpegCaptureData(
+  label: string,
+  options: { width?: number; height?: number; trailingBytes?: number } = {},
+): string {
+  const width = options.width ?? 800;
+  const height = options.height ?? 600;
+  const header = Buffer.from([
+    0xff,
+    0xd8,
+    0xff,
+    0xc0,
+    0x00,
+    0x0b,
+    0x08,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (width >> 8) & 0xff,
+    width & 0xff,
+    0x01,
+    0x01,
+    0x11,
+    0x00,
+  ]);
+  return Buffer.concat([
+    header,
+    Buffer.from(label),
+    Buffer.alloc(options.trailingBytes ?? 0),
+    Buffer.from([0xff, 0xd9]),
+  ]).toString("base64");
+}
+
 export async function nextTurn(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -64,6 +95,9 @@ export async function createFakeCdpServer(): Promise<{
       | "before-post-isolated-world-barrier-response",
     event?: { method: string; params: Record<string, unknown> },
   ): void;
+  nextLiveCaptureData(data: string): void;
+  holdNextLiveCaptureReply(): void;
+  releaseLiveCaptureReply(): void;
   loseNextCreateReply(): void;
   dropNextCreateReply(): void;
   dropNextAttachReply(): void;
@@ -98,7 +132,9 @@ export async function createFakeCdpServer(): Promise<{
   disconnect(): void;
   emitScreencastFrame(value: string, frameNumber: number): void;
   emitRawScreencastFrame(data: string, frameNumber: number): void;
+  emitTargetInfoChanged(targetId: string, title: string, url: string): void;
   emitMainDocumentChange(): void;
+  replaceMainDocument(url: string): void;
   close(): Promise<void>;
 }> {
   const sockets = new Set<WebSocket>();
@@ -113,6 +149,8 @@ export async function createFakeCdpServer(): Promise<{
   let nextSession = 1;
   let latestSession = "";
   let nextContext = 100;
+  let mainDocumentLoader = 1;
+  let mainDocumentUrl = "https://example.test/account";
   let endpoint = "";
   let invalidateNextAttachment = false;
   let actionInvalidation:
@@ -137,6 +175,9 @@ export async function createFakeCdpServer(): Promise<{
         event: { method: string; params: Record<string, unknown> };
       }
     | undefined;
+  let nextCaptureData: string | undefined;
+  let holdLiveCapture = false;
+  let liveCaptureReply: (() => void) | undefined;
   let loseCreateReply = false;
   let dropCreateReply = false;
   let dropAttachReply = false;
@@ -309,13 +350,40 @@ export async function createFakeCdpServer(): Promise<{
           return;
         }
         runtimeEnabledSessions.add(request.sessionId ?? "");
+      } else if (request.method === "Page.getLayoutMetrics") {
+        result = {
+          cssLayoutViewport: {
+            clientWidth: 1600,
+            clientHeight: 900,
+            pageX: 0,
+            pageY: 0,
+          },
+        };
+      } else if (
+        request.method === "Page.captureScreenshot" &&
+        request.params.format === "jpeg"
+      ) {
+        result = {
+          data:
+            nextCaptureData ??
+            fakeJpegCaptureData(
+              `capture-${methods.filter((method) => method === "Page.captureScreenshot").length}`,
+            ),
+        };
+        nextCaptureData = undefined;
+        if (holdLiveCapture) {
+          holdLiveCapture = false;
+          liveCaptureReply = () =>
+            socket.send(JSON.stringify({ id: request.id, result }));
+          return;
+        }
       } else if (request.method === "Page.getFrameTree") {
         result = {
           frameTree: {
             frame: {
               id: "main",
-              loaderId: "loader",
-              url: "https://example.test/account",
+              loaderId: `loader-${String(mainDocumentLoader)}`,
+              url: mainDocumentUrl,
             },
           },
         };
@@ -500,6 +568,16 @@ export async function createFakeCdpServer(): Promise<{
         },
       };
     },
+    nextLiveCaptureData: (data) => {
+      nextCaptureData = data;
+    },
+    holdNextLiveCaptureReply: () => {
+      holdLiveCapture = true;
+    },
+    releaseLiveCaptureReply: () => {
+      liveCaptureReply?.();
+      liveCaptureReply = undefined;
+    },
     loseNextCreateReply: () => {
       loseCreateReply = true;
     },
@@ -677,6 +755,17 @@ export async function createFakeCdpServer(): Promise<{
         );
       }
     },
+    emitTargetInfoChanged: (targetId, title, url) => {
+      for (const socket of sockets)
+        socket.send(
+          JSON.stringify({
+            method: "Target.targetInfoChanged",
+            params: {
+              targetInfo: { targetId, type: "page", title, url },
+            },
+          }),
+        );
+    },
     emitMainDocumentChange: () => {
       for (const socket of sockets) {
         socket.send(
@@ -688,6 +777,25 @@ export async function createFakeCdpServer(): Promise<{
               url: "https://example.test/next",
               navigationType: "differentDocument",
             },
+          }),
+        );
+      }
+    },
+    replaceMainDocument: (url) => {
+      const oldContext = sessionContexts.get(latestSession);
+      const targetId = sessionTargets.get(latestSession);
+      assert.ok(targetId);
+      mainDocumentLoader += 1;
+      mainDocumentUrl = url;
+      targets.set(targetId, url);
+      sessionContexts.delete(latestSession);
+      if (oldContext === undefined) return;
+      for (const socket of sockets) {
+        socket.send(
+          JSON.stringify({
+            method: "Runtime.executionContextDestroyed",
+            sessionId: latestSession,
+            params: { executionContextId: oldContext },
           }),
         );
       }

@@ -1,4 +1,8 @@
 import type { SubscriptionUsage } from "../main/subscription-usage.js";
+import type {
+  ImZenXSetupView,
+  ImZenXChannelSave,
+} from "../main/imzenx-setup-service.js";
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppServerHostStatus } from "../main/app-server-manager.js";
@@ -15,6 +19,7 @@ import type {
   ServerNotificationParams,
 } from "../protocol-client/index.js";
 import { ipcChannels } from "./ipc.js";
+import type { ProtocolIpcResult } from "./queue-edit-ipc.js";
 import type {
   PublicHostSettings,
   ZenXProviderDeleteReplacements,
@@ -23,6 +28,7 @@ import type {
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../main/host-profile.js";
+import type { ProviderMutationReply } from "../main/settings-diagnostic-log.js";
 import type {
   ZenXImageCapabilityProbeResult,
   ZenXProviderCatalogSnapshot,
@@ -65,9 +71,24 @@ import type {
 } from "../main/capabilities/computer-thread-observation.js";
 import type { ComputerObservationEnvelope } from "../main/computer-live-observation-ipc.js";
 import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-bridge.js";
+import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  imzenx: {
+    inspect: async (): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupInspect),
+    saveChannel: async (input: ImZenXChannelSave): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupSaveChannel, input),
+    prepareRuntime: async (): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupPrepareRuntime),
+  },
   platform: process.platform,
+  locale: {
+    getSystemLanguages: (): Promise<string[]> =>
+      ipcRenderer.invoke(ipcChannels.localeSystemLanguages),
+    setLanguage: (language: string): Promise<void> =>
+      ipcRenderer.invoke(ipcChannels.localeSetLanguage, language),
+  },
   skills: {
     list: () => ipcRenderer.invoke(ipcChannels.skillsList),
     importDirectory: (directory: string) =>
@@ -170,7 +191,8 @@ contextBridge.exposeInMainWorld("zenx", {
     request: async <M extends ClientRequestMethod>(
       method: M,
       params: ClientRequestParams[M],
-    ): Promise<ClientRequestResults[M]> =>
+    ): Promise<ProtocolIpcResult<M>> =>
+      // Edit rejection envelopes must stay plain data through contextBridge.
       await ipcRenderer.invoke(ipcChannels.request, method, params),
     respondToApproval: async (
       requestId: string,
@@ -269,6 +291,37 @@ contextBridge.exposeInMainWorld("zenx", {
         selection,
       ),
   },
+  fleet: {
+    catalog: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "catalog", id),
+    listThreads: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "listThreads", input),
+    createThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "createThread", input),
+    readThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "readThread", input),
+    threadStatus: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "threadStatus", input),
+    sendThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "sendThread", input),
+    status: () => ipcRenderer.invoke(ipcChannels.fleetControl, "status"),
+    readiness: () => ipcRenderer.invoke(ipcChannels.fleetControl, "readiness"),
+    save: (config: unknown, revision?: number) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "save", config, revision),
+    pair: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "pair", input),
+    remove: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "remove", id),
+    test: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "test", id),
+    invoke: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "invoke", input),
+    hostPair: () => ipcRenderer.invoke(ipcChannels.fleetControl, "hostPair"),
+    hostInvitation: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "hostInvitation", input),
+    revoke: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "revoke", id),
+  },
   settings: {
     onChanged: (listener: (settings: PublicHostSettings) => void) => {
       const receive = (
@@ -290,27 +343,41 @@ contextBridge.exposeInMainWorld("zenx", {
       apiKey?: string,
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.settingsSave, settings, apiKey),
+    recordDiagnostic: async (
+      event: import("../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
+    ): Promise<void> => {
+      await ipcRenderer.invoke(ipcChannels.settingsDiagnosticRecord, event);
+    },
+    openDiagnosticsFolder: async (): Promise<void> => {
+      await ipcRenderer.invoke(ipcChannels.settingsDiagnosticsOpenFolder);
+    },
     addProvider: async (
       provider: ZenXProviderProfile,
       apiKey?: string,
       baseRevision?: number,
-    ): Promise<PublicHostSettings> =>
+      logoUpload?: Uint8Array,
+      diagnosticAttemptId?: string,
+    ): Promise<ProviderMutationReply<PublicHostSettings>> =>
       await ipcRenderer.invoke(
         ipcChannels.providerAdd,
         provider,
         apiKey,
         baseRevision,
+        logoUpload,
+        diagnosticAttemptId,
       ),
     editProvider: async (
       providerProfileId: string,
       provider: ZenXProviderProfile,
       options?: ZenXProviderEditOptions,
-    ): Promise<PublicHostSettings> =>
+      diagnosticAttemptId?: string,
+    ): Promise<ProviderMutationReply<PublicHostSettings>> =>
       await ipcRenderer.invoke(
         ipcChannels.providerEdit,
         providerProfileId,
         provider,
         options,
+        diagnosticAttemptId,
       ),
     deleteProvider: async (
       providerProfileId: string,
@@ -426,6 +493,16 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.chromeBridgeRemove),
     openExtension: async (): Promise<void> =>
       await ipcRenderer.invoke(ipcChannels.chromeBridgeOpenExtension),
+  },
+  computerReadiness: {
+    get: async (): Promise<ZenXComputerReadinessSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.computerReadinessGet),
+    probe: async (): Promise<ZenXComputerReadinessSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.computerReadinessProbe),
+    openSettings: async (
+      kind: "accessibility" | "screen-recording",
+    ): Promise<void> =>
+      await ipcRenderer.invoke(ipcChannels.computerReadinessOpenSettings, kind),
   },
   browserObservation: {
     subscribe: (

@@ -1,6 +1,8 @@
-export type ComposerIntent = "start" | "queue" | "steer" | "replace";
+export type ComposerIntent =
+  "start" | "batch-next" | "queue" | "steer" | "replace";
 
 import type { ZenXImageDraft } from "../../main/image-attachments.js";
+import type { CanonicalItem } from "../../../../../src/item.js";
 
 export type ComposerDraftImage = ZenXImageDraft;
 
@@ -13,6 +15,7 @@ export interface ComposerSubmission {
   intent: ComposerIntent;
   expectedTurnId: string | null;
   clientUserMessageId: string;
+  draftRevision: number;
   draftAtSubmit: ComposerDraft;
   text: string;
   images: readonly ComposerDraftImage[];
@@ -21,40 +24,71 @@ export interface ComposerSubmission {
 }
 
 export interface ComposerState {
+  /** Local draft identity: editing away and back never restores clear authority. */
+  draftRevision: number;
+  /** Ephemeral UI acknowledgement of an uncertain admission, not an execution record. */
+  confirmedAdmission?: {
+    clientId: string;
+    stage: "queued" | "delivered" | "completed" | "ended";
+  };
   /** Transient command feedback; never a message or durable execution state. */
-  compaction?: { status: "pending" | "succeeded" | "failed"; message: string };
+  compaction?: {
+    status: "pending" | "succeeded" | "failed";
+    message: string;
+    detail?: string;
+  };
   draft: ComposerDraft;
   submission: ComposerSubmission | null;
 }
 
 export function emptyComposerState(): ComposerState {
-  return { draft: { text: "", images: [] }, submission: null };
+  return {
+    draftRevision: 0,
+    draft: { text: "", images: [] },
+    submission: null,
+  };
 }
 
-export type ComposerSendMode = "queue" | "soft" | "hard";
+/** Invalidate old submission clear authority when the global send mode changes. */
+export function advanceComposerDraftRevision(
+  state: ComposerState,
+): ComposerState {
+  return {
+    ...state,
+    draftRevision: state.draftRevision + 1,
+    confirmedAdmission: undefined,
+  };
+}
+
+export type ComposerSendMode = "batch" | "queue" | "soft" | "hard";
 export function defaultComposerIntent(
   active: boolean,
-  mode: ComposerSendMode = "queue",
+  mode: ComposerSendMode = "soft",
   alternate = false,
 ): ComposerIntent {
   if (!active) return "start";
-  if (alternate) return mode === "queue" ? "steer" : "queue";
-  return mode === "queue" ? "queue" : mode === "soft" ? "steer" : "replace";
+  if (alternate)
+    return mode === "queue" || mode === "batch" ? "steer" : "batch-next";
+  return mode === "batch"
+    ? "batch-next"
+    : mode === "queue"
+      ? "queue"
+      : mode === "soft"
+        ? "steer"
+        : "replace";
 }
 
 export function editComposer(
   state: ComposerState,
   text: string,
 ): ComposerState {
-  const submission =
-    state.submission?.status === "failed" &&
-    text !== state.submission.draftAtSubmit.text
-      ? null
-      : state.submission;
   return {
-    ...clearCompactionFeedback(state),
+    ...state,
+    draftRevision: state.draftRevision + (text !== state.draft.text ? 1 : 0),
     draft: { ...state.draft, text },
-    submission,
+    // Retain a failed old operation's ID for canonical reconciliation; its
+    // error belongs to that operation, not to the newly edited draft.
+    ...(text !== state.draft.text ? { confirmedAdmission: undefined } : {}),
   };
 }
 
@@ -64,9 +98,10 @@ export function addComposerImages(
 ): ComposerState {
   if (images.length === 0) return state;
   return {
-    ...clearCompactionFeedback(state),
+    ...state,
+    draftRevision: state.draftRevision + 1,
+    confirmedAdmission: undefined,
     draft: { ...state.draft, images: [...state.draft.images, ...images] },
-    submission: state.submission?.status === "failed" ? null : state.submission,
   };
 }
 
@@ -77,9 +112,10 @@ export function removeComposerImage(
   const images = state.draft.images.filter((image) => image.id !== imageId);
   if (images.length === state.draft.images.length) return state;
   return {
-    ...clearCompactionFeedback(state),
+    ...state,
+    draftRevision: state.draftRevision + 1,
+    confirmedAdmission: undefined,
     draft: { ...state.draft, images },
-    submission: state.submission?.status === "failed" ? null : state.submission,
   };
 }
 
@@ -104,12 +140,15 @@ export function beginComposerSubmission(
     state.submission?.status === "failed" &&
     state.submission.intent === intent &&
     state.submission.expectedTurnId === expectedTurnId &&
+    state.submission.draftRevision === state.draftRevision &&
     sameDraft(state.submission.draftAtSubmit, state.draft);
   return {
     ...state,
+    confirmedAdmission: undefined,
     submission: {
       intent,
       expectedTurnId,
+      draftRevision: state.draftRevision,
       clientUserMessageId: retry
         ? state.submission!.clientUserMessageId
         : createId(),
@@ -122,6 +161,80 @@ export function beginComposerSubmission(
   };
 }
 
+/** Reconcile only exact canonical client identity, never text or queue disappearance. */
+export function reconcileCanonicalAdmission(
+  state: ComposerState,
+  items: readonly CanonicalItem[],
+  terminalEvent?: {
+    turnId: string;
+    status: "completed" | "failed" | "interrupted";
+  },
+): ComposerState {
+  const submission = state.submission;
+  const clientId =
+    submission?.clientUserMessageId ?? state.confirmedAdmission?.clientId;
+  if (
+    clientId === undefined ||
+    (submission?.status === "failed" &&
+      !submission.error?.includes("outcome unknown"))
+  )
+    return state;
+  const delivered = items.find(
+    (item) => item.type === "user_message" && item.clientId === clientId,
+  );
+  const queued = items.some(
+    (item) => item.type === "user_message_queued" && item.clientId === clientId,
+  );
+  // A queued record only confirms a queue submission; other modes require
+  // the actual user_message associated with a Turn.
+  if (
+    delivered === undefined &&
+    (!queued || (submission !== null && submission.intent !== "queue"))
+  )
+    return state;
+  const terminal =
+    delivered === undefined
+      ? undefined
+      : items.find(
+          (item) =>
+            (item.type === "turn_completed" || item.type === "turn_aborted") &&
+            item.turnId === delivered.turnId,
+        );
+  const stage =
+    terminal?.type === "turn_completed" && terminal.status === "completed"
+      ? "completed"
+      : terminal !== undefined
+        ? "ended"
+        : delivered !== undefined && terminalEvent?.turnId === delivered.turnId
+          ? terminalEvent?.status === "completed"
+            ? "completed"
+            : "ended"
+          : delivered !== undefined
+            ? "delivered"
+            : "queued";
+  if (
+    submission === null &&
+    state.confirmedAdmission?.clientId === clientId &&
+    (state.confirmedAdmission.stage === "completed" ||
+      state.confirmedAdmission.stage === "ended") &&
+    (stage === "queued" || stage === "delivered")
+  )
+    return state;
+  if (submission === null && state.confirmedAdmission?.stage === stage)
+    return state;
+  if (submission !== null) {
+    return {
+      ...state,
+      draft: canClearSubmittedDraft(state, submission)
+        ? { text: "", images: [] }
+        : state.draft,
+      submission: null,
+      confirmedAdmission: { clientId, stage },
+    };
+  }
+  return { ...state, confirmedAdmission: { clientId, stage } };
+}
+
 export function acceptComposerSubmission(
   state: ComposerState,
   clientUserMessageId: string,
@@ -129,7 +242,9 @@ export function acceptComposerSubmission(
   const submission = matchingSubmission(state, clientUserMessageId);
   if (submission === null) return state;
   return {
-    draft: sameDraft(state.draft, submission.draftAtSubmit)
+    ...(state.compaction === undefined ? {} : { compaction: state.compaction }),
+    draftRevision: state.draftRevision,
+    draft: canClearSubmittedDraft(state, submission)
       ? { text: "", images: [] }
       : state.draft,
     submission: null,
@@ -145,6 +260,16 @@ function sameDraft(left: ComposerDraft, right: ComposerDraft): boolean {
     left.text === right.text &&
     left.images.length === right.images.length &&
     left.images.every((image, index) => image.id === right.images[index]?.id)
+  );
+}
+
+function canClearSubmittedDraft(
+  state: ComposerState,
+  submission: ComposerSubmission,
+): boolean {
+  return (
+    state.draftRevision === submission.draftRevision &&
+    sameDraft(state.draft, submission.draftAtSubmit)
   );
 }
 
@@ -170,7 +295,7 @@ function matchingSubmission(
     : null;
 }
 
-function clearCompactionFeedback(state: ComposerState): ComposerState {
+export function dismissCompactionFeedback(state: ComposerState): ComposerState {
   if (state.compaction === undefined || state.compaction.status === "pending")
     return state;
   const { compaction: _feedback, ...rest } = state;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
 import {
   access,
   mkdir,
@@ -7,24 +8,39 @@ import {
   realpath,
   readlink,
   readdir,
+  rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   applicationIconForPlatform,
+  assertMacNativeHelperDeploymentTarget,
   copyChromeExtensionResource,
   copyBundledPnpmResource,
   copyFirstPartyPluginResources,
   copyMarketplaceCatalogResource,
   copyPackagedProviderResources,
+  compileMacNativeHelpers,
   createBuildSnapshot,
+  extractMacNativeHelperSources,
+  MACOS_MINIMUM_VERSION,
+  MACOS_CODESIGN_MODE_ENV,
+  macAdHocSignOptionsForFile,
+  macLocalSignOptionsForFile,
+  macNativeHelperSignOptions,
+  macOsPackagerOptions,
+  macPackagedProviderSignIgnore,
+  macSwiftTargetTriple,
   packageManifest,
   publishPackagedArtifact,
+  resolveMacOsSigningConfiguration,
   stagePackage,
   withPackagingTargetLock,
 } from "../scripts/package-zenx-portable.mjs";
@@ -34,6 +50,7 @@ import {
 } from "../src/main/plugin-profile.js";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
+const run = promisify(execFile);
 
 test("uses production platform icons only for packaged applications", () => {
   assert.equal(
@@ -47,6 +64,446 @@ test("uses production platform icons only for packaged applications", () => {
   );
   assert.equal(applicationIconForPlatform("win32", "smoke"), undefined);
   assert.equal(applicationIconForPlatform("linux", "app"), undefined);
+});
+
+test("uses a stable macOS bundle ID and fail-closed ad-hoc signing by default", () => {
+  assert.deepEqual(macOsPackagerOptions("linux", "app"), {});
+  const adHoc = macOsPackagerOptions("darwin", "app");
+  assert.equal(adHoc.appBundleId, "com.electron.zenx");
+  assert.equal(
+    adHoc.extendInfo.NSScreenCaptureUsageDescription,
+    "ZenX captures the target window for Computer screenshot tools.",
+  );
+  assert.deepEqual(adHoc.osxSign, {
+    identity: "-",
+    identityValidation: false,
+    continueOnError: false,
+    ignore: macPackagedProviderSignIgnore,
+    optionsForFile: macAdHocSignOptionsForFile,
+    preAutoEntitlements: false,
+    strictVerify: true,
+  });
+  assert.deepEqual(
+    macOsPackagerOptions("darwin", "app", {
+      identity: "Developer ID Application: Example",
+      mode: "developer-id",
+    }).osxSign,
+    {
+      identity: "Developer ID Application: Example",
+      continueOnError: false,
+      ignore: macPackagedProviderSignIgnore,
+      optionsForFile: macNativeHelperSignOptions,
+      preAutoEntitlements: false,
+      strictVerify: true,
+    },
+  );
+  assert.equal(
+    macOsPackagerOptions("darwin", "smoke").appBundleId,
+    "com.electron.zenx-provider-smoke",
+  );
+  assert.deepEqual(
+    macNativeHelperSignOptions(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    { entitlements: [] },
+  );
+  assert.equal(
+    macNativeHelperSignOptions("/Applications/ZenX.app/Contents/MacOS/ZenX"),
+    null,
+  );
+  assert.deepEqual(
+    macAdHocSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    { entitlements: [], hardenedRuntime: false },
+  );
+  assert.deepEqual(
+    macAdHocSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    ),
+    { entitlements: [], hardenedRuntime: false },
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Resources/providers/runtime/node",
+    ),
+    true,
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    false,
+  );
+  assert.equal(
+    macPackagedProviderSignIgnore(
+      "/tmp/ZenX.app/Contents/Frameworks/Electron Framework.framework/Electron Framework",
+    ),
+    false,
+  );
+});
+
+test("uses stable local identity signing without Apple Team ID assumptions", () => {
+  const identity = "0123456789ABCDEF0123456789ABCDEF01234567";
+  const local = macOsPackagerOptions("darwin", "app", {
+    identity,
+    mode: "local",
+  });
+  assert.equal(local.appBundleId, "com.electron.zenx");
+  assert.deepEqual(local.osxSign, {
+    identity,
+    identityValidation: false,
+    continueOnError: false,
+    ignore: macPackagedProviderSignIgnore,
+    optionsForFile: macLocalSignOptionsForFile,
+    preAutoEntitlements: false,
+    strictVerify: true,
+  });
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-accessibility",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+      additionalArguments: [
+        "--identifier",
+        "com.electron.zenx.native-helper.zenx-accessibility",
+      ],
+    },
+  );
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Resources/native-helpers/zenx-foreground-input",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+      additionalArguments: [
+        "--identifier",
+        "com.electron.zenx.native-helper.zenx-foreground-input",
+      ],
+    },
+  );
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+    },
+  );
+  assert.deepEqual(
+    macLocalSignOptionsForFile(
+      "/Applications/ZenX.app/Contents/MacOS/zenx-accessibility",
+    ),
+    {
+      entitlements: [],
+      hardenedRuntime: false,
+      timestamp: "none",
+    },
+  );
+});
+
+test("resolves local macOS signing config and lets an explicit identity override it", async () => {
+  const localIdentity = "0123456789abcdef0123456789abcdef01234567";
+  const readCalls = [];
+  const local = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: {},
+    homeDirectory: "/Users/example",
+    readFile: async (filePath, encoding) => {
+      readCalls.push([filePath, encoding]);
+      return JSON.stringify({ identity: localIdentity, mode: "local" });
+    },
+  });
+  assert.deepEqual(local, {
+    identity: localIdentity.toUpperCase(),
+    mode: "local",
+  });
+  assert.deepEqual(readCalls, [
+    ["/Users/example/Library/Application Support/ZenX/signing.json", "utf8"],
+  ]);
+
+  let configRead = false;
+  const developerId = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: {
+      ZENX_CODESIGN_IDENTITY: "Developer ID Application: Example",
+    },
+    readFile: async () => {
+      configRead = true;
+      throw new Error("config should not be read");
+    },
+  });
+  assert.deepEqual(developerId, {
+    identity: "Developer ID Application: Example",
+    mode: "developer-id",
+  });
+  assert.equal(configRead, false);
+
+  const adHoc = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: { ZENX_CODESIGN_IDENTITY: "-" },
+    readFile: async () => {
+      throw new Error("config should not be read");
+    },
+  });
+  assert.deepEqual(adHoc, { identity: "-", mode: "ad-hoc" });
+
+  const explicitLocal = await resolveMacOsSigningConfiguration({
+    platform: "darwin",
+    environment: {
+      ZENX_CODESIGN_IDENTITY: localIdentity,
+      [MACOS_CODESIGN_MODE_ENV]: "local",
+    },
+    readFile: async () => {
+      throw new Error("config should not be read");
+    },
+  });
+  assert.deepEqual(explicitLocal, {
+    identity: localIdentity.toUpperCase(),
+    mode: "local",
+  });
+});
+
+test("keeps missing local config ad-hoc but rejects malformed or incomplete explicit config", async () => {
+  const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+  assert.deepEqual(
+    await resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () => {
+        throw missing;
+      },
+    }),
+    { identity: "-", mode: "ad-hoc" },
+  );
+  assert.deepEqual(
+    await resolveMacOsSigningConfiguration({
+      platform: "linux",
+      environment: {},
+      readFile: async () => {
+        throw new Error("non-macOS must not read signing config");
+      },
+    }),
+    { identity: "-", mode: "ad-hoc" },
+  );
+
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () => "{bad json",
+    }),
+    /Invalid ZenX macOS signing configuration/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () => JSON.stringify({ mode: "local" }),
+    }),
+    /40-character SHA-1/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {},
+      readFile: async () =>
+        JSON.stringify({
+          identity: "0123456789ABCDEF0123456789ABCDEF01234567",
+          mode: "developer-id",
+        }),
+    }),
+    /mode must be "local"/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {
+        [MACOS_CODESIGN_MODE_ENV]: "local",
+      },
+      readFile: async () => {
+        throw new Error("config should not be read");
+      },
+    }),
+    /ZENX_CODESIGN_IDENTITY is required/u,
+  );
+  await assert.rejects(
+    resolveMacOsSigningConfiguration({
+      platform: "darwin",
+      environment: {
+        ZENX_CODESIGN_IDENTITY: "not-a-sha",
+        [MACOS_CODESIGN_MODE_ENV]: "local",
+      },
+      readFile: async () => {
+        throw new Error("config should not be read");
+      },
+    }),
+    /40-character SHA-1/u,
+  );
+});
+
+test("pins helper architecture and deployment target to the app minimum", () => {
+  assert.equal(MACOS_MINIMUM_VERSION, "12.0");
+  assert.equal(macSwiftTargetTriple("arm64"), "arm64-apple-macos12.0");
+  assert.equal(macSwiftTargetTriple("x64"), "x86_64-apple-macos12.0");
+  assert.throws(
+    () => macSwiftTargetTriple("ia32"),
+    /Unsupported macOS helper architecture/u,
+  );
+  assert.doesNotThrow(() =>
+    assertMacNativeHelperDeploymentTarget(`Load command 11
+      cmd LC_BUILD_VERSION
+ platform MACOS
+   minos 12.0
+     sdk 26.5`),
+  );
+  assert.throws(
+    () =>
+      assertMacNativeHelperDeploymentTarget(`platform MACOS
+ minos 26.0`),
+    /minimum system 26\.0; expected 12\.0/u,
+  );
+  assert.throws(
+    () => assertMacNativeHelperDeploymentTarget("platform IOS\n minos 12.0"),
+    /no MACOS build platform/u,
+  );
+});
+
+test("extracts and compiles both fixed macOS Computer helpers into App Resources", async () => {
+  const providerSource = await readFile(
+    new URL("../src/main/capabilities/computer-provider.ts", import.meta.url),
+    "utf8",
+  );
+  const sources = extractMacNativeHelperSources(providerSource);
+  assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /AXIsProcessTrusted/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /current ZenX\.app is already enabled/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /visitLimit: Int = 1024, maxDepth: Int = 24/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /let outputLimit = 120[\s\S]*?prefix\(outputLimit\)/u,
+  );
+  const listWindows = sources.MAC_ACCESSIBILITY_SOURCE.match(
+    /if operation == "listWindows"[\s\S]*?exit\(0\)/u,
+  )?.[0];
+  assert.ok(listWindows);
+  const listRoleActivation = listWindows.indexOf(
+    "_ = textAttribute(element, kAXRoleAttribute)",
+  );
+  const listWindowResolution = listWindows.indexOf(
+    "elementArrayAttribute(element, kAXWindowsAttribute)",
+  );
+  assert.ok(listRoleActivation >= 0);
+  assert.ok(listWindowResolution > listRoleActivation);
+  const roleActivation = sources.MAC_ACCESSIBILITY_SOURCE.indexOf(
+    "_ = textAttribute(appElement, kAXRoleAttribute)",
+  );
+  const windowResolution = sources.MAC_ACCESSIBILITY_SOURCE.indexOf(
+    "elementArrayAttribute(appElement, kAXWindowsAttribute)",
+  );
+  assert.ok(roleActivation >= 0);
+  assert.ok(windowResolution > roleActivation);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /matchingWindows\.contains\(where: \{ CFEqual\(\$0, window\) \}\)/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /matchingWindows\.count != 1[\s\S]*?target window title is ambiguous/u,
+  );
+  for (const field of [
+    "targetContext",
+    "launchTime",
+    "windowFrame",
+    "windowId",
+  ]) {
+    assert.match(sources.MAC_ACCESSIBILITY_SOURCE, new RegExp(field));
+  }
+  for (const field of [
+    "visitedCount",
+    "visitLimitReached",
+    "depthLimitReached",
+    "outputLimitReached",
+    "actionableCount",
+    "semanticCount",
+    "fallbackCount",
+    "encounteredWebArea",
+    "webAreaControlCount",
+    "webAreaActionableCount",
+  ]) {
+    assert.match(sources.MAC_ACCESSIBILITY_SOURCE, new RegExp(field));
+  }
+  const displayLabel = sources.MAC_ACCESSIBILITY_SOURCE.match(
+    /func displayLabel[\s\S]*?func isContainerRole/u,
+  )?.[0];
+  assert.ok(displayLabel);
+  assert.match(displayLabel, /kAXDescriptionAttribute/u);
+  assert.match(displayLabel, /kAXHelpAttribute/u);
+  assert.doesNotMatch(displayLabel, /kAXValueAttribute/u);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /func supportsTextValue[\s\S]*?AXTextField[\s\S]*?isSettable/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /guard supportsTextValue\(element\) else/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /kCGWindowOwnerPID[\s\S]*?kCGWindowLayer[\s\S]*?cgWindowBounds/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /geometryMatches\.count > 1[\s\S]*?mapping is ambiguous/u,
+  );
+
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-native-helper-resource-"),
+  );
+  try {
+    const destinationDirectory = path.join(directory, "native-helpers");
+    const compiled = [];
+    await compileMacNativeHelpers({
+      destinationDirectory,
+      providerSource,
+      compile: async (sourcePath, executablePath) => {
+        if (process.platform === "darwin") {
+          await run("/usr/bin/swiftc", ["-typecheck", sourcePath]);
+        }
+        compiled.push({
+          name: path.basename(executablePath),
+          source: await readFile(sourcePath, "utf8"),
+        });
+        await writeFile(executablePath, "fixture", { mode: 0o600 });
+      },
+    });
+    assert.deepEqual(
+      compiled.map(({ name }) => name),
+      ["zenx-accessibility", "zenx-foreground-input"],
+    );
+    assert.equal(compiled[0].source, sources.MAC_ACCESSIBILITY_SOURCE);
+    assert.equal(compiled[1].source, sources.MAC_FOREGROUND_INPUT_SOURCE);
+    assert.equal((await stat(destinationDirectory)).mode & 0o777, 0o755);
+    for (const { name } of compiled) {
+      const mode = (await stat(path.join(destinationDirectory, name))).mode;
+      assert.notEqual(mode & 0o100, 0);
+    }
+    assert.deepEqual((await readdir(directory)).sort(), ["native-helpers"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("copies packaged provider symlinks verbatim into the platform resources directory", async () => {
@@ -174,7 +631,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     const sourceDirectory = path.join(directory, "source", "plugins");
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(
-      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.0.tgz"),
+      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.6.tgz"),
       "rooms tarball",
     );
     const buildPath = path.join(
@@ -191,7 +648,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     });
     assert.equal(
       await readFile(
-        path.join(destination, "zenx-rooms-plugin-1.0.0.tgz"),
+        path.join(destination, "zenx-rooms-plugin-1.0.6.tgz"),
         "utf8",
       ),
       "rooms tarball",
@@ -506,6 +963,463 @@ test("publishes a complete run artifact without exposing its staging path", asyn
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("publishing retries transient Windows EPERM without discarding the old artifact", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-publish-retry-"),
+  );
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    let failures = 2;
+    let waits = 0;
+    await publishPackagedArtifact(staged, published, {
+      platform: "win32",
+      renameArtifact: async (from, to) => {
+        if (from === staged && failures-- > 0) {
+          const error = new Error("injected sharing violation");
+          error.code = "EPERM";
+          throw error;
+        }
+        return await (await import("node:fs/promises")).rename(from, to);
+      },
+      wait: async () => {
+        waits++;
+        assert.equal(
+          await readFile(path.join(published, "version"), "utf8"),
+          "old",
+        );
+        assert.equal(
+          await readFile(path.join(staged, "version"), "utf8"),
+          "new",
+        );
+      },
+    });
+    assert.equal(waits, 2);
+    assert.equal(
+      await readFile(path.join(published, "version"), "utf8"),
+      "new",
+    );
+    assert.deepEqual(await readdir(path.dirname(published)), ["ZenX-fixture"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("exhausted EPERM preserves the old artifact and reports failure", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-publish-fail-"));
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    let waits = 0;
+    const error = Object.assign(new Error("permanent denial"), {
+      code: "EPERM",
+    });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) throw error;
+          return await (await import("node:fs/promises")).rename(from, to);
+        },
+        wait: async () => {
+          waits++;
+        },
+      }),
+      (caught) => caught === error,
+    );
+    assert.equal(waits, 4);
+    assert.equal(
+      await readFile(path.join(published, "version"), "utf8"),
+      "old",
+    );
+    assert.equal(await readFile(path.join(staged, "version"), "utf8"), "new");
+    assert.deepEqual(await readdir(path.dirname(published)), ["ZenX-fixture"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("non-EPERM publication failure never retries or destroys the old artifact", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-publish-other-"),
+  );
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    let attempts = 0;
+    const error = Object.assign(new Error("bad filesystem"), { code: "EIO" });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) {
+            attempts++;
+            throw error;
+          }
+          return await (await import("node:fs/promises")).rename(from, to);
+        },
+        wait: async () => {
+          throw new Error("must not wait");
+        },
+      }),
+      (caught) => caught === error,
+    );
+    assert.equal(attempts, 1);
+    assert.equal(
+      await readFile(path.join(published, "version"), "utf8"),
+      "old",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("missing source or surprise target cannot be treated as a transient EPERM", async () => {
+  for (const scenario of ["source removed", "target appeared"]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-publish-state-"),
+    );
+    try {
+      const staged = path.join(directory, "run", "ZenX-fixture");
+      const published = path.join(directory, "artifact", "ZenX-fixture");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      let waits = 0;
+      let attempts = 0;
+      const error = Object.assign(new Error("injected EPERM"), {
+        code: "EPERM",
+      });
+      await assert.rejects(
+        publishPackagedArtifact(staged, published, {
+          platform: "win32",
+          renameArtifact: async (from, to) => {
+            if (from === staged) {
+              attempts++;
+              if (scenario === "source removed")
+                await rm(staged, { recursive: true });
+              else await mkdir(published, { recursive: true });
+              throw error;
+            }
+            return await rename(from, to);
+          },
+          wait: async () => {
+            waits++;
+          },
+        }),
+        /Packaged artifact (source|target) changed during publication/u,
+      );
+      assert.equal(attempts, 1);
+      assert.equal(waits, 0);
+      if (scenario === "target appeared") {
+        assert.equal((await stat(published)).isDirectory(), true);
+        assert.equal(
+          await readFile(path.join(staged, "version"), "utf8"),
+          "new",
+        );
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("publish rejects a replaced target during retry wait without deleting foreign data", async () => {
+  for (const hadOld of [true, false]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-retry-foreign-"),
+    );
+    try {
+      const staged = path.join(directory, "run", "ZenX-fixture");
+      const published = path.join(directory, "artifact", "ZenX-fixture");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      if (hadOld) {
+        await mkdir(published, { recursive: true });
+        await writeFile(path.join(published, "version"), "old");
+      }
+      const error = Object.assign(new Error("injected EPERM"), {
+        code: "EPERM",
+      });
+      let stageMoves = 0;
+      await assert.rejects(
+        publishPackagedArtifact(staged, published, {
+          platform: "win32",
+          renameArtifact: async (from, to) => {
+            if (from === staged && ++stageMoves === 1) throw error;
+            await rename(from, to);
+          },
+          wait: async () => {
+            if (hadOld) {
+              assert.equal(
+                await readFile(path.join(published, "version"), "utf8"),
+                "old",
+              );
+              await rm(published, { recursive: true });
+            }
+            await mkdir(published, { recursive: true });
+            await writeFile(
+              path.join(published, "foreign-marker"),
+              "must-survive",
+            );
+          },
+        }),
+        /changed|not a directory/u,
+      );
+      assert.equal(stageMoves, 1);
+      assert.equal(
+        await readFile(path.join(published, "foreign-marker"), "utf8"),
+        "must-survive",
+      );
+      assert.equal(await readFile(path.join(staged, "version"), "utf8"), "new");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("publish rejects replaced or missing staging during retry wait", async () => {
+  for (const scenario of [
+    "replaced",
+    "missing",
+    ...(process.platform === "win32" ? [] : ["symlink"]),
+  ]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-retry-source-"),
+    );
+    try {
+      const staged = path.join(directory, "run", "ZenX-fixture");
+      const published = path.join(directory, "artifact", "ZenX-fixture");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      await mkdir(published, { recursive: true });
+      await writeFile(path.join(published, "version"), "old");
+      const error = Object.assign(new Error("injected EPERM"), {
+        code: "EPERM",
+      });
+      let moves = 0;
+      await assert.rejects(
+        publishPackagedArtifact(staged, published, {
+          platform: "win32",
+          renameArtifact: async (from, to) => {
+            if (from === staged && ++moves === 1) throw error;
+            await rename(from, to);
+          },
+          wait: async () => {
+            await rm(staged, { recursive: true });
+            if (scenario === "replaced") {
+              await mkdir(staged);
+              await writeFile(path.join(staged, "foreign-marker"), "untouched");
+            } else if (scenario === "symlink") {
+              const foreign = path.join(directory, "foreign");
+              await mkdir(foreign);
+              await symlink(foreign, staged, "dir");
+            }
+          },
+        }),
+        /changed|not a directory/u,
+      );
+      assert.equal(moves, 1);
+      assert.equal(
+        await readFile(path.join(published, "version"), "utf8"),
+        "old",
+      );
+      if (scenario === "replaced")
+        assert.equal(
+          await readFile(path.join(staged, "foreign-marker"), "utf8"),
+          "untouched",
+        );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("rollback failure reports both errors and retains the old backup after staging cleanup", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-publish-rollback-"),
+  );
+  try {
+    const staged = path.join(
+      directory,
+      "runs",
+      "package-test",
+      "artifact",
+      "ZenX-fixture",
+    );
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    const publishError = Object.assign(new Error("publish"), { code: "EPERM" });
+    const rollbackError = Object.assign(new Error("rollback"), { code: "EIO" });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) throw publishError;
+          if (from.endsWith(".retired")) throw rollbackError;
+          await rename(from, to);
+        },
+      }),
+      (error) =>
+        error instanceof AggregateError &&
+        error.errors[0] === publishError &&
+        error.errors[1] === rollbackError,
+    );
+    await rm(path.join(directory, "runs"), { recursive: true, force: true });
+    const backups = await readdir(path.dirname(published));
+    assert.equal(backups.length, 1);
+    assert.match(backups[0], /^\.ZenX-fixture\..*\.retired$/u);
+    assert.equal(
+      await readFile(
+        path.join(path.dirname(published), backups[0], "version"),
+        "utf8",
+      ),
+      "old",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("publish preserves backup and foreign target when rollback is unsafe", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-unsafe-rollback-"),
+  );
+  try {
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    await mkdir(staged, { recursive: true });
+    await mkdir(published, { recursive: true });
+    await writeFile(path.join(staged, "version"), "new");
+    await writeFile(path.join(published, "version"), "old");
+    const injected = Object.assign(new Error("stage EPERM"), { code: "EPERM" });
+    await assert.rejects(
+      publishPackagedArtifact(staged, published, {
+        platform: "win32",
+        renameArtifact: async (from, to) => {
+          if (from === staged) {
+            await mkdir(published);
+            await writeFile(
+              path.join(published, "foreign-marker"),
+              "untouched",
+            );
+            throw injected;
+          }
+          await rename(from, to);
+        },
+      }),
+      (error) =>
+        error instanceof AggregateError &&
+        error.errors[0] === injected &&
+        /target before rollback changed/u.test(error.errors[1]?.message),
+    );
+    assert.equal(
+      await readFile(path.join(published, "foreign-marker"), "utf8"),
+      "untouched",
+    );
+    const backups = (await readdir(path.dirname(published))).filter((name) =>
+      name.endsWith(".retired"),
+    );
+    assert.equal(backups.length, 1);
+    assert.equal(
+      await readFile(
+        path.join(path.dirname(published), backups[0], "version"),
+        "utf8",
+      ),
+      "old",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test(
+  "Windows publishes after a smoke-owned file handle releases",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-publish-windows-"),
+    );
+    const staged = path.join(directory, "run", "ZenX-fixture");
+    const published = path.join(directory, "artifact", "ZenX-fixture");
+    let child;
+    try {
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "version"), "new");
+      // A child owning a handle without FILE_SHARE_DELETE simulates a lingering
+      // packaged-smoke descendant. This does NOT identify the original holder.
+      child = spawn(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$h=[IO.File]::Open($env:ZENX_TEST_LOCKED_FILE, 'Open', 'Read', 'Read'); Write-Output READY; Start-Sleep -Milliseconds 650; $h.Dispose()",
+        ],
+        {
+          env: {
+            ...process.env,
+            ZENX_TEST_LOCKED_FILE: path.join(staged, "version"),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      await new Promise((resolve, reject) => {
+        let stdout = "";
+        child.once("error", reject);
+        child.stdout.on("data", (chunk) => {
+          stdout += chunk.toString();
+          if (stdout.includes("READY")) resolve();
+        });
+        child.once("exit", (code) =>
+          reject(new Error(`holder exited before ready: ${code}`)),
+        );
+      });
+      let blocked = 0;
+      assert.equal(
+        await publishPackagedArtifact(staged, published, {
+          renameArtifact: async (from, to) => {
+            try {
+              await rename(from, to);
+            } catch (error) {
+              if (from === staged && error?.code === "EPERM") blocked++;
+              throw error;
+            }
+          },
+        }),
+        published,
+      );
+      assert.ok(
+        blocked > 0,
+        "Windows handle fixture did not exercise the EPERM retry",
+      );
+      assert.equal(
+        await readFile(path.join(published, "version"), "utf8"),
+        "new",
+      );
+    } finally {
+      if (child && child.exitCode === null) {
+        await new Promise((resolve) => child.once("exit", resolve));
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("fails concurrent packaging of the same target explicitly", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-lock-test-"));

@@ -97,6 +97,27 @@ test("URLSearchParams normalizes strings, iterable pairs and records inside the 
   `);
 });
 
+test("URLSearchParams defaults and null retain native semantics through mutation and copies", async () => {
+  await matchesNative(`
+    const rows = [];
+    for (const args of [[], [undefined], [null], [''], ['null'], [0], [false], [true]]) {
+      const p = new URLSearchParams(...args);
+      const initial = [p.toString(), [...p], p.size, p.get('null')];
+      p.append('z', 'hello world');
+      p.append('a', '中+&=');
+      p.append('a', 'second');
+      p.sort();
+      const copy = new URLSearchParams(p);
+      copy.delete('a', 'second');
+      p.set('z', 'changed');
+      p.delete('null');
+      rows.push([initial, p.toString(), [...p], p.getAll('a'),
+        copy.toString(), [...copy], copy !== p]);
+    }
+    text(rows);
+  `);
+});
+
 test("iterators and forEach observe append, delete, sort and URL replacement live", async () => {
   await matchesNative(`
     const u = new URL('https://e.test/?b=1&a=2&c=3'), p = u.searchParams;
@@ -185,7 +206,7 @@ test("all URL surfaces and UUID stay guest-owned without extra crypto or I/O", a
     JSON.parse(
       await execute(`
     const u = new URL('https://example.com/?x=1'), p = u.searchParams;
-    const targets = [URL, URLSearchParams, u, p, crypto, crypto.randomUUID,
+    const targets = [URL, URLSearchParams, u, p, new URLSearchParams(null), crypto, crypto.randomUUID,
       p.getAll('x'), p.entries(), p.entries().next(), p.entries().next().value,
       Object.getPrototypeOf(p.entries()).next, Object.getPrototypeOf(p.entries())[Symbol.iterator]];
     for (const object of [URL, URLSearchParams, URL.prototype, URLSearchParams.prototype, Object.getPrototypeOf(p.entries())]) {

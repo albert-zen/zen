@@ -1,14 +1,22 @@
+import { initializeLanguage } from "./language.js";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { getAppearanceController } from "./appearance";
+import { installScrollbarVisibility } from "./scrollbar-visibility";
 import "./theme.css";
 import "./styles.css";
+import "./agent-readiness-notice.css";
 import "./trigger-ui.css";
 import "./skills.css";
 import "./cockpit.css";
+import "./rooms-layout.css";
+import "./room-conversations.css";
+import "./companion-workspace.css";
 
 getAppearanceController();
+const disposeScrollbars = installScrollbarVisibility(document);
+import.meta.hot?.dispose(disposeScrollbars);
 
 document.documentElement.dataset.platform = navigator.userAgent.includes(
   "Macintosh",
@@ -22,8 +30,11 @@ const root = document.getElementById("root");
 
 if (!root) throw new Error("ZenX renderer root is missing");
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+void initializeLanguage(window).then((disposeLanguage) => {
+  import.meta.hot?.dispose(disposeLanguage);
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+});

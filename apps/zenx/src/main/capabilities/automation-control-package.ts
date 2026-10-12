@@ -4,12 +4,15 @@ import type {
   CreateRoomInput,
   CreateTriggerInput,
   RoomMember,
+  RoomDeliveryView,
   TriggerProgramConfig,
   TriggerProgramSpec,
   TriggerSnapshot,
   UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
+  AssistantWorkspace,
+  UpdateAssistantWorkspaceInput,
 } from "../trigger-types.js";
 import {
   MAX_ID_BYTES,
@@ -40,6 +43,7 @@ import type {
   ZenXPluginSidebarContribution,
 } from "./types.js";
 import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
+import type { AutomationTargetPreview } from "../automation-plugin-service.js";
 
 export const ZENX_AUTOMATION_CONTROL_CAPABILITY_ID = "zenx-automation-control";
 export const ZENX_TRIGGERS_CAPABILITY_ID = "zenx-triggers";
@@ -53,16 +57,29 @@ export const ZENX_AUTOMATION_WRITE_PERMISSION = "zenx-automation-control.write";
 
 export interface ZenXAutomationControlPort {
   threads?(): Promise<ThreadCandidate[]>;
+  workspaces?(): Promise<string[]>;
+  previewTarget?(workspace: string): Promise<AutomationTargetPreview>;
+  createTarget?(
+    workspace: string,
+    preview: AutomationTargetPreview,
+  ): Promise<{ threadId: string; effective: AutomationTargetPreview }>;
   result?(historyId: string): Promise<{
+    sourceDevice?: string;
+    sourceWorkspace?: string;
     threadId: string;
     turnId: string;
     status: string;
     preview: string;
   }>;
   snapshot(): TriggerSnapshot;
+  assistantWorkspace?(roomId: string): AssistantWorkspace;
+  updateAssistantWorkspace?(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace>;
   create(input: CreateTriggerInput): Promise<ZenXTrigger>;
   update(input: UpdateTriggerInput): Promise<ZenXTrigger>;
   cancel(triggerId: string): Promise<void>;
+  resume(triggerId: string, expectedRevision?: number): Promise<void>;
   delete(triggerId: string): Promise<void>;
   signal(name: string, detail: string): Promise<void>;
   createRoom(input: CreateRoomInput): Promise<ZenXRoom>;
@@ -71,9 +88,16 @@ export interface ZenXAutomationControlPort {
   addRoomMember(roomId: string, member: RoomMember): Promise<void>;
   removeRoomMember(roomId: string, threadId: string): Promise<void>;
   postAgentRoomMessage(roomId: string, text: string): Promise<void>;
+  cancelPreparedRoomOperation?(
+    roomId: string,
+    operationId: string,
+  ): Promise<RoomDeliveryView>;
   postRoomMessage?(roomId: string, author: string, text: string): Promise<void>;
   startPlugin?(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void>;
-  stopPlugin?(pluginId: string): Promise<void>;
+  stopPlugin?(
+    pluginId: string,
+    runtimeSdk?: ZenXPluginHostSdkV1,
+  ): Promise<void>;
 }
 
 const programSpecSchema = {
@@ -134,6 +158,18 @@ const triggerProperties = {
     maxLength: MAX_ID_BYTES,
     description: "Source Thread: full ID, unique short ID, or exact title.",
   },
+  sourceDevice: {
+    type: "string",
+    maxLength: MAX_ID_BYTES,
+    description:
+      "Optional Fleet source device for a Thread watch. Omit or use local for this Host; notification target stays local.",
+  },
+  sourceWorkspace: {
+    type: "string",
+    maxLength: MAX_ID_BYTES,
+    description:
+      "Optional remote source workspace ID or exact label; resolved and retained with the exact source Thread.",
+  },
   once: {
     type: "boolean",
     description:
@@ -148,6 +184,38 @@ const triggerProperties = {
   mention: { type: "string", maxLength: MAX_MEMBER_NAME_BYTES },
   signalName: { type: "string", maxLength: MAX_ID_BYTES },
   program: programSchema,
+};
+
+const targetPreviewSchema = {
+  type: "object",
+  properties: {
+    workspace: { type: "string", maxLength: 4096 },
+    resolvedWorkspace: { type: "string", maxLength: 4096 },
+    model: { type: "string", maxLength: 1024 },
+    providerProfileId: { type: "string", maxLength: 256 },
+    modelId: { type: "string", maxLength: 256 },
+    reasoningEffort: { type: ["string", "null"] },
+    sandbox: {
+      type: "string",
+      enum: ["read-only", "workspace-write", "danger-full-access"],
+    },
+    approvalPolicy: { type: "string", enum: ["never", "on-request"] },
+    processEpoch: { type: "string", maxLength: 128 },
+    revision: { type: "integer", minimum: 0 },
+  },
+  required: [
+    "workspace",
+    "resolvedWorkspace",
+    "model",
+    "providerProfileId",
+    "modelId",
+    "reasoningEffort",
+    "sandbox",
+    "approvalPolicy",
+    "processEpoch",
+    "revision",
+  ],
+  additionalProperties: false,
 };
 
 const manifest: ZenXPluginManifestV2 = {
@@ -192,6 +260,29 @@ const manifest: ZenXPluginManifestV2 = {
       false,
     ),
     tool(
+      "zenx_triggers_workspaces",
+      "List configured Project workspaces eligible for a new automation Thread.",
+      {},
+      [],
+      false,
+    ),
+    tool(
+      "zenx_triggers_preview_target",
+      "Preview trusted Host Thread defaults and configured workspace before explicit confirmation.",
+      { workspace: { type: "string", maxLength: 4096 } },
+      ["workspace"],
+      false,
+    ),
+    tool(
+      "zenx_triggers_create_target",
+      "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+      {
+        workspace: { type: "string", maxLength: 4096 },
+        preview: targetPreviewSchema,
+      },
+      ["workspace", "preview"],
+    ),
+    tool(
       "zenx_triggers_result",
       "Read the exact source Turn preview of a retained notification; full original content is available through Thread reading.",
       { historyId: { type: "string" } },
@@ -221,6 +312,15 @@ const manifest: ZenXPluginManifestV2 = {
       "zenx_triggers_cancel",
       "Deactivate a Trigger without deleting its definition or history.",
       { triggerId: { type: "string" } },
+      ["triggerId"],
+    ),
+    tool(
+      "zenx_triggers_resume",
+      "Resume a stopped Trigger after validating its full definition revision; elapsed timers must first be edited.",
+      {
+        triggerId: { type: "string", maxLength: MAX_ID_BYTES },
+        expectedRevision: { type: "integer", minimum: 0 },
+      },
       ["triggerId"],
     ),
     tool(
@@ -312,13 +412,33 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
     if (name !== invocation.name)
       throw new Error("Automation tool name mismatch");
     invocation.signal.throwIfAborted();
-    const uiInput = record(invocation.arguments.input);
+    // Legacy first-party package path follows the same Host-minted boundary:
+    // nested Agent input never authorizes a human Room post.
+    const uiInput =
+      invocation.trustedPluginUi === true
+        ? (record(invocation.arguments.input) ?? {})
+        : null;
     const args = uiInput ?? invocation.arguments;
     switch (name) {
       case "zenx_triggers_threads":
         if (this.#port.threads === undefined)
           throw new Error("Thread discovery is unavailable");
         return { threads: await this.#port.threads() };
+      case "zenx_triggers_workspaces":
+        if (this.#port.workspaces === undefined)
+          throw new Error("Configured workspaces are unavailable");
+        return { workspaces: await this.#port.workspaces() };
+      case "zenx_triggers_preview_target":
+        if (this.#port.previewTarget === undefined)
+          throw new Error("Target preview is unavailable");
+        return await this.#port.previewTarget(string(args, "workspace", 4096));
+      case "zenx_triggers_create_target":
+        if (this.#port.createTarget === undefined)
+          throw new Error("Creating a target Thread is unavailable");
+        return await this.#port.createTarget(
+          string(args, "workspace", 4096),
+          args.preview as AutomationTargetPreview,
+        );
       case "zenx_triggers_result":
         if (this.#port.result === undefined)
           throw new Error("Reading source results is unavailable");
@@ -349,6 +469,19 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
       case "zenx_triggers_cancel":
         await this.#port.cancel(string(args, "triggerId", MAX_ID_BYTES));
         return { cancelled: true };
+      case "zenx_triggers_resume":
+        if (
+          uiInput !== undefined &&
+          !Number.isSafeInteger(args.expectedRevision)
+        )
+          throw new Error("Refresh Trigger definitions before enabling");
+        await this.#port.resume(
+          string(args, "triggerId", MAX_ID_BYTES),
+          args.expectedRevision === undefined
+            ? undefined
+            : number(args, "expectedRevision"),
+        );
+        return { resumed: true };
       case "zenx_triggers_delete":
         await this.#port.delete(string(args, "triggerId", MAX_ID_BYTES));
         return { deleted: true };
@@ -430,13 +563,13 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
       writePermission: ZENX_TRIGGERS_WRITE_PERMISSION,
       page: {
         id: "triggers",
-        title: "Triggers",
+        title: "Automations",
         route: "/plugins/zenx-triggers/triggers",
         surfaceId: "triggers-page",
       },
       sidebar: {
         id: "triggers",
-        label: "Triggers",
+        label: "Automations",
         icon: "clock",
         pageId: "triggers",
         order: 10,
@@ -569,7 +702,7 @@ function automationPluginManifest(
     },
     mainDocument:
       plugin.displayName === "Triggers"
-        ? "Use Triggers to notify a Thread when another Turn ends. Full IDs, unique short IDs and exact titles select Threads. New thread watches default to one notification attempt; omit threadId to notify the calling Thread. includeLatest checks an already ended latest Turn. Use list for delivery state, result for the exact source Turn preview, and cancel to stop listening. queued means accepted input, not completed work. Failed/interrupted source Turns are explicitly labeled. Offline events are not replayed; failed or unknown sends are not retried."
+        ? "Use Triggers to notify a local Thread when another Turn ends. Full IDs, unique short IDs and exact titles select Threads. For a native Fleet source, set sourceDevice and optionally sourceWorkspace; setup retains the exact remote device/workspace/Thread locator and listens to canonical completions. Omit sourceDevice or use local for this Host. New thread watches default to one notification attempt; omit threadId to notify the calling local Thread. includeLatest checks an already ended latest Turn only on creation. Use list for delivery state and visible source connection errors, result for the exact local or remote source Turn preview, and cancel to stop listening. queued means accepted input, not completed work. Failed/interrupted source Turns are explicitly labeled. Read-only recovery follows already observed active Turns without replaying unrelated old completions; failed or unknown sends are not retried."
         : "Use Rooms to manage shared collaboration and explicit member routing.",
     description: plugin.description,
     provider: {
@@ -645,11 +778,15 @@ function automationPluginManifest(
 function readSafeTrigger(trigger: ZenXTrigger): unknown {
   const common = {
     id: trigger.id,
+    definitionRevision: trigger.definitionRevision ?? 0,
     threadId: trigger.threadId,
     label: trigger.label,
     prompt: trigger.prompt,
     createdAt: trigger.createdAt,
     active: trigger.active,
+    ...(trigger.sourceError === undefined
+      ? {}
+      : { sourceError: trigger.sourceError }),
     ...(trigger.program === undefined
       ? {}
       : { program: readSafeProgram(trigger.program) }),
@@ -671,6 +808,12 @@ function readSafeTrigger(trigger: ZenXTrigger): unknown {
         threadId: trigger.watch?.threadId,
         event: trigger.watch?.event,
         once: trigger.watch?.once ?? false,
+        ...(trigger.watch?.sourceDevice === undefined
+          ? {}
+          : { sourceDevice: trigger.watch.sourceDevice }),
+        ...(trigger.watch?.sourceWorkspace === undefined
+          ? {}
+          : { sourceWorkspace: trigger.watch.sourceWorkspace }),
       },
     };
   if (trigger.kind === "roomMention")
@@ -738,6 +881,12 @@ function readSafeHistory(entry: TriggerSnapshot["history"][number]): unknown {
     status: entry.status,
     turnId: entry.turnId,
     sourceThreadId: entry.sourceThreadId,
+    ...(entry.sourceDevice === undefined
+      ? {}
+      : { sourceDevice: entry.sourceDevice }),
+    ...(entry.sourceWorkspace === undefined
+      ? {}
+      : { sourceWorkspace: entry.sourceWorkspace }),
     sourceTurnId: entry.sourceTurnId,
     sourceRoomId: entry.sourceRoomId,
     sourceRoomMessageId: entry.sourceRoomMessageId,
@@ -839,6 +988,12 @@ function triggerInput(args: Record<string, unknown>): CreateTriggerInput {
       ...common,
       kind,
       watchedThreadId: string(args, "watchedThreadId", MAX_ID_BYTES),
+      ...(args.sourceDevice === undefined
+        ? {}
+        : { sourceDevice: string(args, "sourceDevice", MAX_ID_BYTES) }),
+      ...(args.sourceWorkspace === undefined
+        ? {}
+        : { sourceWorkspace: string(args, "sourceWorkspace", MAX_ID_BYTES) }),
       ...(args.once === undefined ? {} : { once: boolean(args, "once") }),
       ...(args.includeLatest === undefined
         ? {}

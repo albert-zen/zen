@@ -2,7 +2,13 @@ import type { Thread } from "../protocol-client/index.js";
 import type { ZenXProjectProjection } from "./project-projection.js";
 
 export interface ThreadTargetPort {
-  readonly projectProjection: Pick<ZenXProjectProjection, "canonicalKeys">;
+  readonly projectProjection: Pick<ZenXProjectProjection, "canonicalKeys"> &
+    Partial<
+      Pick<
+        ZenXProjectProjection,
+        "configuredWorkspace" | "configuredWorkspaces"
+      >
+    >;
   request(
     method: "thread/list",
     params: { archived: boolean; cursor?: string; limit?: number },
@@ -92,7 +98,12 @@ export async function listThreadCandidates(
 
 export async function resolveThreadTarget(
   port: ThreadTargetPort,
-  options: { target: string; workspace?: string },
+  options: {
+    target: string;
+    workspace?: string;
+    /** Treat target only as an immutable full Thread ID. */
+    exact?: boolean;
+  },
 ): Promise<ThreadTargetResolution> {
   if (typeof options.target !== "string" || options.target.trim().length === 0)
     throw new Error("target must be a non-empty string");
@@ -101,13 +112,15 @@ export async function resolveThreadTarget(
     (candidate) => candidate.threadId === options.target,
   );
   const matches =
-    exact === undefined
-      ? candidates.filter(
-          (candidate) =>
-            candidate.threadId.startsWith(options.target) ||
-            candidate.name === options.target,
-        )
-      : [exact];
+    exact !== undefined
+      ? [exact]
+      : options.exact === true
+        ? []
+        : candidates.filter(
+            (candidate) =>
+              candidate.threadId.startsWith(options.target) ||
+              candidate.name === options.target,
+          );
   const candidate = matches[0];
   return matches.length === 1 && candidate !== undefined
     ? { status: "resolved", threadId: candidate.threadId, candidate }

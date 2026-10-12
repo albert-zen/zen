@@ -51,12 +51,26 @@ export interface HostConfigurationCurrent {
   processEpoch: string;
   revision: number;
   pendingRestart: string[];
+  threadStartDefaults?: import("../../../../src/app-server.js").AppServerDefaults;
 }
 
 export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
 
 export type HostCommand =
+  | {
+      type: "fleet/control";
+      requestId: string;
+      action: string;
+      input?: unknown;
+    }
+  | {
+      type: "fleet/room-result";
+      requestId: string;
+      result?: unknown;
+      error?: string;
+    }
+  | { type: "fleet/room-event"; roomId: string; threadId: string }
   | {
       type: "start";
       config: ZenXHostConfig;
@@ -124,6 +138,25 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | {
+      type: "fleet/result";
+      requestId: string;
+      result?: unknown;
+      error?: string;
+    }
+  | {
+      type: "fleet/room-request";
+      requestId: string;
+      operation: "list" | "read" | "post";
+      params: {
+        workspaceId: string;
+        workspaceCwd: string;
+        deviceId: string;
+        roomId?: string;
+        text?: string;
+        clientId?: string;
+      };
+    }
   | { type: "ready"; url: string; processEpoch: string }
   | { type: "error"; message: string }
   | {
@@ -209,12 +242,20 @@ export type HostEvent =
     }
   | {
       type: "capability/invoke";
+      /** Host-minted execution-target transport; never tool-argument provenance. */
+      targetRoute?: true;
       invocationId: string;
       generationToken: string;
       invocation: {
         callId: string;
         canonicalToolCallId?: string;
         threadId?: string;
+        task?: {
+          waitForCompletion?: boolean;
+          yieldTimeMs?: number;
+          timeoutMs?: number;
+          previewBytes?: number;
+        };
         name: string;
         arguments: Record<string, unknown>;
         cwd: string;
@@ -249,6 +290,20 @@ export function isHostCommand(value: unknown): value is HostCommand {
   if (typeof value !== "object" || value === null || !("type" in value)) {
     return false;
   }
+  const fleet = value as Record<string, unknown>;
+  if (fleet.type === "fleet/control")
+    return (
+      typeof fleet.requestId === "string" && typeof fleet.action === "string"
+    );
+  if (fleet.type === "fleet/room-result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
+  if (fleet.type === "fleet/room-event")
+    return (
+      typeof fleet.roomId === "string" && typeof fleet.threadId === "string"
+    );
   const command = value as {
     type?: unknown;
     requestId?: unknown;
@@ -337,12 +392,35 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
   if (typeof value !== "object" || value === null || !("type" in value)) {
     return false;
   }
+  const fleet = value as Record<string, unknown>;
+  if (fleet.type === "fleet/result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
+  if (fleet.type === "fleet/room-request") {
+    const params = fleet.params as Record<string, unknown> | undefined;
+    return (
+      typeof fleet.requestId === "string" &&
+      ["list", "read", "post"].includes(fleet.operation as string) &&
+      !!params &&
+      typeof params === "object" &&
+      !Array.isArray(params) &&
+      typeof params.workspaceId === "string" &&
+      typeof params.workspaceCwd === "string" &&
+      typeof params.deviceId === "string" &&
+      (params.roomId === undefined || typeof params.roomId === "string") &&
+      (params.text === undefined || typeof params.text === "string") &&
+      (params.clientId === undefined || typeof params.clientId === "string")
+    );
+  }
   const event = value as {
     type?: unknown;
     url?: unknown;
     message?: unknown;
     invocationId?: unknown;
     invocation?: unknown;
+    targetRoute?: unknown;
     generationToken?: unknown;
     requestId?: unknown;
     summaries?: unknown;
@@ -436,7 +514,10 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     ((event.type === "capability/invoke" ||
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string" &&
-      typeof event.generationToken === "string")
+      typeof event.generationToken === "string" &&
+      (event.type !== "capability/invoke" ||
+        event.targetRoute === undefined ||
+        event.targetRoute === true))
   );
 }
 
@@ -468,7 +549,16 @@ function isHostConfigurationCurrent(
     Array.isArray((value as { pendingRestart?: unknown }).pendingRestart) &&
     (value as { pendingRestart: unknown[] }).pendingRestart.every(
       (domain) => typeof domain === "string",
-    )
+    ) &&
+    ((value as HostConfigurationCurrent).threadStartDefaults === undefined ||
+      (typeof (value as HostConfigurationCurrent).threadStartDefaults
+        ?.providerProfileId === "string" &&
+        typeof (value as HostConfigurationCurrent).threadStartDefaults
+          ?.modelId === "string" &&
+        typeof (value as HostConfigurationCurrent).threadStartDefaults
+          ?.sandbox === "string" &&
+        typeof (value as HostConfigurationCurrent).threadStartDefaults
+          ?.approvalPolicy === "string"))
   );
 }
 
@@ -522,10 +612,47 @@ function isCapabilityHostSnapshot(
     typeof value === "object" &&
     value !== null &&
     Array.isArray((value as { definitions?: unknown }).definitions) &&
+    ((value as { remoteToolNames?: unknown }).remoteToolNames === undefined ||
+      (Array.isArray(
+        (value as { remoteToolNames?: unknown }).remoteToolNames,
+      ) &&
+        (value as { remoteToolNames: unknown[] }).remoteToolNames.every(
+          (name) =>
+            typeof name === "string" &&
+            (value as { definitions: unknown[] }).definitions.some(
+              (definition) =>
+                typeof definition === "object" &&
+                definition !== null &&
+                (definition as { name?: unknown }).name === name,
+            ),
+        ))) &&
     typeof (value as { generationToken?: unknown }).generationToken ===
       "string" &&
     ((value as { plugins?: unknown }).plugins === undefined ||
-      Array.isArray((value as { plugins?: unknown }).plugins))
+      Array.isArray((value as { plugins?: unknown }).plugins)) &&
+    ((value as { pluginCatalogAvailable?: unknown }).pluginCatalogAvailable ===
+      undefined ||
+      typeof (value as { pluginCatalogAvailable?: unknown })
+        .pluginCatalogAvailable === "boolean") &&
+    ((value as { pluginReadiness?: unknown }).pluginReadiness === undefined ||
+      (Array.isArray(
+        (value as { pluginReadiness?: unknown }).pluginReadiness,
+      ) &&
+        (value as { pluginReadiness: unknown[] }).pluginReadiness.every(
+          (entry) => {
+            if (typeof entry !== "object" || entry === null) return false;
+            const summary = entry as Record<string, unknown>;
+            return (
+              typeof summary.id === "string" &&
+              typeof summary.displayName === "string" &&
+              ["installed", "enabled", "uninstalled"].includes(
+                String(summary.lifecycle),
+              ) &&
+              typeof summary.enabled === "boolean" &&
+              typeof summary.available === "boolean"
+            );
+          },
+        )))
   );
 }
 

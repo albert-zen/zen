@@ -12,6 +12,7 @@ import {
   PluginSettings,
   pluginSpacesForSettings,
 } from "../src/renderer/src/PluginSettings.js";
+import { PluginAccessReview } from "../src/renderer/src/PluginAccessReview.js";
 
 // SettingsView owns transient feedback; this harness observes that public callback.
 function PluginSettingsHarness() {
@@ -23,6 +24,330 @@ function PluginSettingsHarness() {
     React.createElement("div", { role: "status" }, message),
   );
 }
+
+test("Computer enablement first explains requested access and keeps OS setup explicit", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
+  const enabled: Array<[string, boolean]> = [];
+  const opened: string[] = [];
+  let accessProbes = 0;
+  const installed: ZenXPluginSnapshot = {
+    ...emptyPluginSnapshot,
+    plugins: [
+      {
+        id: "computer",
+        displayName: "Computer",
+        version: "1.0.0",
+        source: "bundled",
+        lifecycle: "installed",
+        enabled: false,
+        available: true,
+        contributionCount: 0,
+        permissions: [
+          {
+            id: "computer.window.capture",
+            title: "Capture a targeted window",
+            description: "Capture one selected window.",
+            scope: "local-device",
+          },
+        ],
+      },
+    ],
+  };
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      marketplace: {
+        get: async () => ({
+          entries: [],
+          builtIns: [builtIn("computer", "@zenx/computer", "Computer", true)],
+        }),
+      },
+      computerReadiness: {
+        probe: async () => {
+          accessProbes += 1;
+          return {
+            platform: "darwin",
+            accessibility: "granted",
+            screenRecording: "granted",
+            foregroundControlEnabled: false,
+            verification: {
+              accessibility: { state: "needs-setup" },
+              screenCapture: { state: "ready" },
+            },
+          };
+        },
+        openSettings: async (kind: string) => {
+          opened.push(kind);
+        },
+      },
+      plugins: {
+        get: async () => installed,
+        onChange: () => () => {},
+        setEnabled: async (pluginId: string, next: boolean) => {
+          enabled.push([pluginId, next]);
+          return {
+            snapshot: {
+              ...installed,
+              plugins: [
+                {
+                  ...installed.plugins[0]!,
+                  lifecycle: "enabled",
+                  enabled: true,
+                },
+              ],
+            },
+            capabilityRefresh: { status: "refreshed" },
+          };
+        },
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(React.createElement(PluginSettingsHarness));
+    await Promise.resolve();
+  });
+  const button = (label: string) =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === label,
+    ) as HTMLButtonElement;
+  await act(async () => button("Enable").click());
+  assert.deepEqual(enabled, []);
+  assert.equal(
+    dom.window.document.activeElement?.getAttribute("aria-label"),
+    "Computer access details",
+  );
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Capture a targeted window/u,
+  );
+  assert.match(dom.window.document.body.textContent ?? "", /Needs setup/u);
+  assert.equal(accessProbes, 1);
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /native helper can inspect open windows/u,
+  );
+  await act(async () => {
+    button("Open Accessibility settings").click();
+    await Promise.resolve();
+  });
+  assert.deepEqual(opened, ["accessibility"]);
+  assert.deepEqual(enabled, []);
+  await act(async () => {
+    button("Continue enabling Computer").click();
+    await Promise.resolve();
+  });
+  assert.deepEqual(enabled, [["computer", true]]);
+  await act(async () => root.unmount());
+});
+
+test("first Computer installation shows the selected manifest scopes before install", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
+  const titles = [
+    "Inspect a targeted app",
+    "Act on a targeted control",
+    "Capture a targeted window",
+    "Control the foreground desktop",
+  ];
+  const installed: string[] = [];
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      marketplace: {
+        get: async () => ({
+          entries: [],
+          builtIns: [
+            {
+              ...builtIn("computer", "@zenx/computer", "Computer", true),
+              permissions: titles.map((title, index) => ({
+                id: `computer.scope.${index}`,
+                title,
+                description: `Scope ${index}`,
+                scope: "local-device",
+              })),
+            },
+          ],
+        }),
+      },
+      computerReadiness: {
+        get: async () => ({
+          platform: "darwin",
+          accessibility: "granted",
+          screenRecording: "granted",
+          foregroundControlEnabled: false,
+        }),
+      },
+      plugins: {
+        get: async () => emptyPluginSnapshot,
+        onChange: () => () => {},
+        installBuiltIn: async (pluginId: string) => {
+          installed.push(pluginId);
+          return {
+            snapshot: emptyPluginSnapshot,
+            capabilityRefresh: { status: "refreshed" },
+          };
+        },
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(React.createElement(PluginSettingsHarness));
+    await Promise.resolve();
+  });
+  const button = (label: string) =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === label,
+    ) as HTMLButtonElement;
+  await act(async () => button("Install").click());
+  assert.deepEqual(installed, []);
+  assert.deepEqual(
+    [
+      ...dom.window.document.querySelectorAll(".plugin-access-scopes strong"),
+    ].map((element) => element.textContent),
+    titles,
+  );
+  await act(async () => {
+    button("Continue enabling Computer").click();
+    await Promise.resolve();
+  });
+  assert.deepEqual(installed, ["computer"]);
+  await act(async () => root.unmount());
+});
+
+test("Browser setup distinguishes the isolated session from Connected Chrome", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let connectedMode = false;
+  const openedGeneral: string[] = [];
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      chromeBridge: {
+        get: async () => ({
+          configuredMode: connectedMode ? "user-session" : "isolated",
+          effectiveMode: connectedMode ? "user-session" : "isolated",
+          environmentOverride: false,
+          connector: connectedMode ? "chrome-extension" : "inactive",
+          packaged: true,
+          nativeHostRegistered: false,
+          extensionDirectory: "/tmp/extension",
+          extensionId: "fixture",
+          connection: { state: "waiting", tabCount: 0 },
+        }),
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(
+      React.createElement(PluginAccessReview, {
+        pluginId: "browser",
+        permissions: [],
+        onOpenGeneral: (pluginId) => openedGeneral.push(pluginId),
+      }),
+    );
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /No Chrome connector/u,
+  );
+  connectedMode = true;
+  const button = (label: string) =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === label,
+    ) as HTMLButtonElement;
+  await act(async () => {
+    button("Refresh status").click();
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Register the local connector/u,
+  );
+  await act(async () => button("Open Browser settings").click());
+  assert.deepEqual(openedGeneral, ["browser"]);
+  await act(async () => root.unmount());
+});
+
+test("Browser status leaves Checking after a failed read and refreshes on return", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let unavailable = true;
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      chromeBridge: {
+        get: async () => {
+          if (unavailable) throw new Error("Connection status unavailable");
+          return {
+            configuredMode: "isolated",
+            effectiveMode: "isolated",
+            environmentOverride: false,
+            connector: "inactive",
+            packaged: true,
+            nativeHostRegistered: false,
+            extensionDirectory: "/tmp/extension",
+            extensionId: "fixture",
+            connection: { state: "waiting", tabCount: 0 },
+          };
+        },
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => {
+    root.render(
+      React.createElement(PluginAccessReview, {
+        pluginId: "browser",
+        permissions: [],
+      }),
+    );
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Status unavailable/u,
+  );
+  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /Checking…/u);
+  unavailable = false;
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.window.Event("focus"));
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /No Chrome setup needed/u,
+  );
+  await act(async () => root.unmount());
+});
 
 test("Plugin Settings does not offer enable for an uninstalled catalog package", () => {
   const plugins: ZenXPluginSnapshot = {
@@ -339,10 +664,7 @@ test("Marketplace exposes loading, search, detail, version install, and canonica
     root.render(React.createElement(PluginSettingsHarness));
     await Promise.resolve();
   });
-  assert.match(
-    dom.window.document.body.textContent ?? "",
-    /Loading plugin inventory/u,
-  );
+  assert.match(dom.window.document.body.textContent ?? "", /Loading plugins/u);
 
   await act(async () => {
     resolveCatalog({
@@ -722,7 +1044,7 @@ test("real Plugin Settings DOM confirms uninstall and keeps delete-data separate
   await act(async () => button("Delete data").click());
   assert.match(
     dom.window.document.body.textContent ?? "",
-    /historical Threads are not changed/u,
+    /conversations and other plugins will be kept/u,
   );
   await act(async () => {
     button("Confirm delete data").click();
@@ -745,6 +1067,122 @@ const emptyPluginSnapshot: ZenXPluginSnapshot = {
   menus: [],
   resultRenderers: [],
 };
+
+for (const source of ["built-in", "catalog", "source"] as const) {
+  test(`unavailable ${source} plugin overrides enabled status and can still be disabled`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "https://zenx.local",
+    });
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: dom.window.navigator,
+      configurable: true,
+    });
+    const snapshot = pluginSnapshot("enabled");
+    snapshot.plugins[0]!.available = false;
+    snapshot.plugins[0]!.unavailableReason =
+      "fixture: committed package does not match its descriptor";
+    snapshot.plugins[0]!.profileSource = {
+      mode: source === "built-in" ? "bundled" : "npm",
+      packageSpec: "@fixture/plugin@1.0.0",
+      resolvedSpec: "@fixture/plugin@1.0.0",
+      packageName: "@fixture/plugin",
+      packageVersion: "1.0.0",
+    };
+    const disabledCalls: Array<[string, boolean]> = [];
+    Object.defineProperty(dom.window, "zenx", {
+      configurable: true,
+      value: {
+        marketplace: {
+          get: async () => ({
+            builtIns:
+              source === "built-in"
+                ? [builtIn("fixture", "@fixture/plugin", "Fixture", true)]
+                : [],
+            entries:
+              source === "catalog"
+                ? [
+                    {
+                      packageSpec: "@fixture/plugin",
+                      name: "Fixture",
+                      description: "Fixture plugin",
+                      icon: "layers",
+                      recommendedVersion: "1.0.0",
+                      curated: true,
+                      versions: [
+                        {
+                          version: "1.0.0",
+                          packageSpec: "@fixture/plugin@1.0.0",
+                        },
+                      ],
+                    },
+                  ]
+                : [],
+          }),
+        },
+        plugins: {
+          get: async () => snapshot,
+          onChange: () => () => {},
+          setEnabled: async (id: string, enabled: boolean) => {
+            disabledCalls.push([id, enabled]);
+            return {
+              ...snapshot,
+              plugins: snapshot.plugins.map((plugin) => ({
+                ...plugin,
+                enabled: false,
+                lifecycle: "installed",
+              })),
+            };
+          },
+        },
+      },
+    });
+    const root = createRoot(dom.window.document.getElementById("root")!);
+    try {
+      await act(async () => {
+        root.render(React.createElement(PluginSettingsHarness));
+        await Promise.resolve();
+      });
+      const card = dom.window.document.querySelector(".marketplace-card")!;
+      assert.equal(card.getAttribute("data-available"), "false");
+      assert.equal(
+        card.querySelector(".plugin-status")?.textContent,
+        "Unavailable",
+      );
+      assert.equal(card.querySelector(".status-enabled"), null);
+      const errorDetails = [...card.querySelectorAll("details")].find(
+        (details) =>
+          details.querySelector("summary")?.textContent === "Error details",
+      )!;
+      assert.ok(errorDetails);
+      assert.equal(errorDetails.open, false);
+      errorDetails.open = true;
+      assert.match(
+        errorDetails.textContent!,
+        /committed package does not match its descriptor/u,
+      );
+      const disable = [...card.querySelectorAll("button")].find(
+        (button) => button.textContent === "Disable",
+      )!;
+      assert.equal(disable.disabled, false);
+      await act(async () => {
+        disable.click();
+        await Promise.resolve();
+      });
+      assert.deepEqual(disabledCalls, [["fixture", false]]);
+      const enable = [...card.querySelectorAll("button")].find(
+        (button) => button.textContent === "Enable",
+      )!;
+      assert.equal(enable.disabled, true);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}
 
 function pluginSnapshot(
   lifecycle: "enabled" | "uninstalled",

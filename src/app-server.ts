@@ -6,7 +6,10 @@ import {
 } from "./skill-input.js";
 import { loadWorkspaceInstructions } from "./workspace-instructions.js";
 import type { WorkspaceInstructionFile } from "./item.js";
-import { pendingQueuedMessages } from "./input-queue.js";
+import {
+  pendingQueuedMessages,
+  type PendingQueuedUserMessage,
+} from "./input-queue.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -21,7 +24,9 @@ import {
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
   contextCompactionTokenBudget,
+  originalItemListReference,
   latestCompaction,
+  latestCompletedCompactionBoundary,
   latestEligibleCompactionBoundary,
   normalizeContextCompactionConfig,
   type ContextCompactionConfig,
@@ -42,10 +47,14 @@ import type {
   UserInput,
   UserMessageItem,
   QueuedUserMessageItem,
+  QueuedUserMessageCancelledItem,
+  QueuedUserMessageEditedItem,
 } from "./item.js";
 import {
   contentFromUserMessage,
+  SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   normalizeUserInput,
+  validateUserInput,
   previewFromUserMessage,
   sameUserInput,
 } from "./item.js";
@@ -113,6 +122,7 @@ export interface StartThreadInput {
 
 export interface ThreadSnapshot {
   id: string;
+  parentThreadId?: string;
   items: readonly CanonicalItem[];
   turns: DerivedTurn[];
   cwd: string;
@@ -143,8 +153,31 @@ export interface TurnHandle {
   done: Promise<void>;
 }
 
+export interface QueuedCancellationTarget {
+  queuedItemId: string;
+  clientId: string;
+}
+
+export interface QueuedCancellationResult extends QueuedCancellationTarget {
+  status: "cancelled" | "already_cancelled" | "already_started" | "not_found";
+}
+
+export interface QueuedEditTarget extends QueuedCancellationTarget {
+  expectedRevision: number;
+  /** Unique per Save; an exact retry reuses this ID and original request. */
+  editId: string;
+}
+
+export interface QueuedEditResult extends QueuedCancellationTarget {
+  revision: number;
+  editItemId: string;
+  status: "edited" | "already_edited";
+}
+
 export interface CompactThreadOptions {
   signal?: AbortSignal;
+  includeOriginalReference?: boolean;
+  retention?: ContextCompactionConfig["retention"];
 }
 
 export interface CompactThreadResult {
@@ -157,13 +190,20 @@ export interface ForkThreadInput {
   workspace: { type: "same-directory" };
 }
 
+export interface CreateChildThreadInput {
+  parentThreadId: string;
+  mode: "fresh" | "fork" | "side-chat";
+}
+
 export interface SteerTurnOptions {
   clientId?: string;
+  requireUnarchived?: boolean;
 }
 
 export interface ReplaceTurnOptions {
   clientId: string;
   requestApproval?: ApprovalHandler;
+  requireUnarchived?: boolean;
 }
 
 export interface ReplaceTurnResult {
@@ -202,6 +242,26 @@ export interface ModelCatalogUpdatedEvent {
 
 export type AppServerEvent =
   | RuntimeEvent
+  | {
+      type: "queue_admission_started";
+      /** Missing only on events from older Hosts. */
+      revision?: number;
+      threadId: string;
+      queuedItemId: string;
+      clientId: string;
+      attemptId: string;
+    }
+  | {
+      type: "queue_failed";
+      /** Missing only on events from older Hosts. */
+      revision?: number;
+      threadId: string;
+      queuedItemId: string;
+      clientId: string;
+      attemptId: string;
+      code: string;
+      message: string;
+    }
   | ThreadSettingsUpdatedEvent
   | ThreadNameUpdatedEvent
   | ThreadArchivedUpdatedEvent
@@ -281,6 +341,7 @@ export class ZenAppServer {
   readonly #id: () => string;
   readonly #now: () => string;
   readonly #threads = new Map<string, Thread>();
+  readonly #threadLoads = new Map<string, Promise<Thread | undefined>>();
   readonly #activeTurns = new Map<
     string,
     {
@@ -289,6 +350,8 @@ export class ZenAppServer {
       done: Promise<void>;
       inputModalities: readonly string[] | null;
       deliveryAnchorId?: string;
+      contextCompactionNotice: string | undefined;
+      contextCompactionNoticeIssued: boolean;
     }
   >();
   readonly #subscribers = new Set<(event: AppServerEvent) => void>();
@@ -486,6 +549,11 @@ export class ZenAppServer {
     }));
   }
 
+  /** Trusted Host runtime defaults used by thread/start, not renderer settings. */
+  threadStartDefaults(): AppServerDefaults {
+    return { ...this.#runtimeConfiguration.defaults };
+  }
+
   completeProviderSelection(
     current: ProviderSelection,
     input: ProviderSelectionInput,
@@ -494,6 +562,53 @@ export class ZenAppServer {
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
+    return await this.#startThread(input);
+  }
+
+  async createChildThread(
+    input: CreateChildThreadInput,
+  ): Promise<ThreadSnapshot> {
+    if (
+      input.mode !== "fresh" &&
+      input.mode !== "fork" &&
+      input.mode !== "side-chat"
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Child mode must be fresh, fork, or side-chat",
+      );
+    const parent = await this.#requireThread(input.parentThreadId);
+    if (input.mode === "fork" || input.mode === "side-chat") {
+      return await this.#forkThread(
+        {
+          sourceThreadId: parent.id,
+          through: { type: "latest-complete" },
+          workspace: { type: "same-directory" },
+        },
+        parent.id,
+        input.mode === "side-chat",
+      );
+    }
+    const configuration = parent.effectiveConfiguration();
+    return await this.#startThread(
+      {
+        cwd: configuration.cwd,
+        selection: {
+          providerProfileId: configuration.providerProfileId,
+          modelId: configuration.modelId,
+          reasoningEffort: configuration.reasoningEffort,
+        },
+        sandbox: configuration.sandbox,
+        approvalPolicy: configuration.approvalPolicy,
+      },
+      parent.id,
+    );
+  }
+
+  async #startThread(
+    input: StartThreadInput,
+    parentThreadId?: string,
+  ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("turn", "thread/start");
     try {
       const threadId = this.#id();
@@ -508,6 +623,7 @@ export class ZenAppServer {
         type: "thread_metadata",
         workspaceInstructionPolicy: "repo-root-on-first-message",
         cwd: path.resolve(input.cwd ?? defaults.cwd),
+        ...(parentThreadId === undefined ? {} : { parentThreadId }),
         ...selection,
         sandbox: input.sandbox ?? defaults.sandbox,
         approvalPolicy:
@@ -534,6 +650,14 @@ export class ZenAppServer {
   }
 
   async forkThread(input: ForkThreadInput): Promise<ThreadSnapshot> {
+    return await this.#forkThread(input);
+  }
+
+  async #forkThread(
+    input: ForkThreadInput,
+    parentThreadId?: string,
+    fullContext = false,
+  ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("other", "thread/fork");
     try {
       if (input.through.type !== "latest-complete") {
@@ -551,20 +675,32 @@ export class ZenAppServer {
       const source = await this.#requireThread(input.sourceThreadId);
       const sourceItems = source.items;
       const terminalIndex = findLatestClosedTurnIndex(sourceItems);
-      if (terminalIndex < 0) {
+      if (terminalIndex < 0 && !fullContext) {
         throw new AppServerError(
           "fork_boundary_unavailable",
           "Copy is available after the Thread has a complete Turn",
         );
       }
-      const terminal = sourceItems[terminalIndex]!;
+      const terminal = fullContext
+        ? sourceItems.at(-1)!
+        : sourceItems[terminalIndex]!;
       const sourceTurnId = terminal.turnId;
-      if (sourceTurnId === undefined) {
+      if (sourceTurnId === undefined && !fullContext) {
         throw new Error("Closed Turn boundary is missing a Turn id");
       }
-      const prefix = forkablePrefix(sourceItems, terminalIndex);
+      const prefix = fullContext
+        ? sourceItems
+        : forkablePrefix(sourceItems, terminalIndex);
       const threadId = this.#id();
       const copiedItems = remapForkItems(prefix, threadId, this.#id);
+      if (parentThreadId !== undefined) {
+        const metadata = copiedItems.find(
+          (item) => item.type === "thread_metadata",
+        );
+        if (metadata === undefined)
+          throw new Error("Forked Thread has no metadata");
+        metadata.parentThreadId = parentThreadId;
+      }
       const forked: ThreadForkedItem = {
         id: this.#id(),
         threadId,
@@ -572,10 +708,21 @@ export class ZenAppServer {
         type: "thread_forked",
         sourceThreadId: source.id,
         sourceBoundaryItemId: terminal.id,
-        sourceTurnId,
+        ...(sourceTurnId === undefined ? {} : { sourceTurnId }),
         workspace: "same-directory",
+        ...(fullContext ? { context: "full" as const } : {}),
       };
       const thread = new Thread(threadId, [...copiedItems, forked]);
+      if (fullContext) {
+        appendSideChatSnapshotClosures(thread, this.#id, this.#now);
+        thread.append({
+          id: this.#id(),
+          threadId,
+          createdAt: this.#now(),
+          type: "thread_instruction",
+          text: `This conversation is a side chat (Thread ${threadId}) forked from parent Thread ${source.id}. You are not the main thread. The inherited conversation is context, not a request to continue the parent's work. Wait for an explicit user request in this side chat. Do not begin work independently or execute inherited pending work.`,
+        });
+      }
       if (this.#journal.create === undefined) {
         throw new AppServerError(
           "fork_unsupported",
@@ -593,7 +740,7 @@ export class ZenAppServer {
       try {
         const sourceMetadata = await this.#threadMetadata.read(source.id);
         if (sourceMetadata.name !== undefined) {
-          const suffix = " · Copy";
+          const suffix = fullContext ? " · Side chat" : " · Copy";
           await this.#threadMetadata.setName(
             threadId,
             `${sourceMetadata.name.slice(0, 200 - suffix.length)}${suffix}`,
@@ -649,6 +796,44 @@ export class ZenAppServer {
   async readThread(threadId: string): Promise<ThreadSnapshot> {
     const thread = await this.#requireThread(threadId);
     return await this.#snapshot(thread);
+  }
+
+  /** Host-only launch fence; the existing task manager registers before unlock. */
+  async dispatchHostTool<T>(
+    expected: Pick<
+      ThreadSnapshot,
+      "id" | "cwd" | "sandbox" | "approvalPolicy" | "archived"
+    >,
+    launch: () => Promise<T>,
+  ): Promise<{ result: Promise<T> }> {
+    return await this.#withThreadMutation(expected.id, async () => {
+      if (!this.#acceptingRootOperations)
+        throw new AppServerError(
+          "host_restarting",
+          "The Zen host is restarting",
+        );
+      const thread = await this.#requireThread(expected.id);
+      const metadata = await this.#threadMetadata.read(expected.id);
+      const current = thread.effectiveConfiguration();
+      if (
+        current.cwd !== expected.cwd ||
+        current.sandbox !== expected.sandbox ||
+        current.approvalPolicy !== expected.approvalPolicy ||
+        (metadata.archived ?? false) !== expected.archived ||
+        expected.archived
+      )
+        throw new AppServerError(
+          "stale_thread",
+          "Target execution permissions or archival changed before dispatch",
+        );
+      if (!this.#acceptingRootOperations)
+        throw new AppServerError(
+          "host_restarting",
+          "The Zen host is restarting",
+        );
+      // Do not await (or async-flatten) the execution body under this lock.
+      return { result: launch() };
+    });
   }
 
   async updateThreadSettings(
@@ -798,12 +983,18 @@ export class ZenAppServer {
     threadId: string,
     requestedInput: RequestedUserInput,
     clientId: string,
-    options: { requestApproval?: ApprovalHandler } = {},
+    options: {
+      requestApproval?: ApprovalHandler;
+      deliveryMode?: "batch-next";
+      requireUnarchived?: boolean;
+    } = {},
   ): Promise<void> {
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
     await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -819,6 +1010,19 @@ export class ZenAppServer {
         duplicate?.type === "user_message_queued" ||
         duplicate?.type === "user_message"
       ) {
+        if (
+          duplicate.type === "user_message_queued" &&
+          thread.items.some(
+            (item) =>
+              item.type === "user_message_queue_cancelled" &&
+              item.queuedItemId === duplicate.id &&
+              item.clientId === clientId,
+          )
+        )
+          throw new AppServerError(
+            "queue_id_cancelled",
+            "This queued client ID was canceled; use a new ID for a new message",
+          );
         const prior =
           duplicate.type === "user_message_queued"
             ? duplicate.input
@@ -828,6 +1032,15 @@ export class ZenAppServer {
             "idempotency_conflict",
             "Queue client id was already used for different input",
           );
+        if (
+          duplicate.type === "user_message_queued" &&
+          duplicate.deliveryMode !== options.deliveryMode
+        ) {
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Queue client id was already used for a different delivery mode",
+          );
+        }
         return;
       }
       const resolved = this.#requireSelection(thread.effectiveConfiguration());
@@ -839,6 +1052,9 @@ export class ZenAppServer {
         createdAt: this.#now(),
         clientId,
         input,
+        ...(options.deliveryMode === undefined
+          ? {}
+          : { deliveryMode: options.deliveryMode }),
       };
       await this.#commit(thread, queued);
       this.#emit({ type: "item_completed", item: queued });
@@ -846,49 +1062,526 @@ export class ZenAppServer {
     await this.resumeQueue(threadId, options);
   }
 
-  async resumeQueue(
+  /** Edits append a revision without moving, admitting, or resuming the queue. */
+  async editQueuedMessage(
     threadId: string,
-    options: { requestApproval?: ApprovalHandler } = {},
-  ): Promise<void> {
-    const thread = await this.#requireThread(threadId);
-    if (this.#activeTurns.has(threadId)) return;
-    const first = pendingQueuedMessages(thread.items)[0];
-    if (first !== undefined) {
-      const selection = this.#requireSelection(thread.effectiveConfiguration());
-      await this.#validateInput(first.input, selection.model.inputModalities);
-    }
-    void this.#drainQueue(threadId, options).catch(() => {
-      console.error(
-        "Queued message could not start; the durable queue remains available for retry",
+    target: QueuedEditTarget,
+    requestedInput: UserInput,
+  ): Promise<QueuedEditResult> {
+    target = { ...target }; // Freeze request identity before any asynchronous work.
+    if (
+      [target.queuedItemId, target.clientId, target.editId].some(
+        (value) =>
+          typeof value !== "string" ||
+          value.trim().length === 0 ||
+          value.length > 512,
+      ) ||
+      !Number.isSafeInteger(target.expectedRevision) ||
+      target.expectedRevision < 0 ||
+      target.expectedRevision >= Number.MAX_SAFE_INTEGER
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Queue identity, edit ID and a nonnegative expected revision are required",
       );
+    let input: UserInput;
+    try {
+      validateUserInput(requestedInput, "input");
+      input = normalizeUserInput(requestedInput);
+    } catch {
+      throw new AppServerError(
+        "invalid_input",
+        "Provide valid text and image attachment input",
+      );
+    }
+    if (
+      input.some(
+        (part) =>
+          part.type === "audio" ||
+          (part.type === "text" && part.skillSource !== undefined),
+      )
+    )
+      throw new AppServerError(
+        "queue_edit_unsupported_input",
+        "Queued edits support ordinary text and images only",
+      );
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const previous = thread.items.find(
+        (item): item is QueuedUserMessageEditedItem =>
+          item.type === "user_message_queue_edited" &&
+          item.editId === target.editId,
+      );
+      if (previous !== undefined) {
+        if (
+          previous.queuedItemId !== target.queuedItemId ||
+          previous.clientId !== target.clientId ||
+          previous.revision !== target.expectedRevision + 1 ||
+          !sameUserInput(previous.input, input)
+        )
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Queue edit ID was already used for a different edit",
+          );
+        return {
+          queuedItemId: previous.queuedItemId,
+          clientId: previous.clientId,
+          revision: previous.revision,
+          editItemId: previous.id,
+          status: "already_edited",
+        };
+      }
+      const original = thread.items.find(
+        (item): item is QueuedUserMessageItem =>
+          item.type === "user_message_queued" &&
+          item.id === target.queuedItemId &&
+          item.clientId === target.clientId,
+      );
+      if (original === undefined)
+        throw new AppServerError(
+          "queue_not_found",
+          "Queued message was not found",
+        );
+      if (
+        this.#reservedQueuedItems.get(threadId)?.has(original.id) ||
+        thread.items.some(
+          (item) =>
+            item.type === "user_message" && item.clientId === target.clientId,
+        )
+      )
+        throw new AppServerError(
+          "queue_already_started",
+          "This queued message has already started and cannot be edited",
+        );
+      const current = pendingQueuedMessages(thread.items).find(
+        (item) => item.id === original.id,
+      );
+      if (current === undefined)
+        throw new AppServerError(
+          "queue_cancelled",
+          "This queued message was cancelled and cannot be edited",
+        );
+      if (current.revision !== target.expectedRevision)
+        throw new AppServerError(
+          "queue_revision_conflict",
+          "This queued message changed. Review the current version before saving again",
+        );
+      if (
+        current.input.some(
+          (part) =>
+            part.type === "audio" ||
+            (part.type === "text" && part.skillSource !== undefined),
+        )
+      )
+        throw new AppServerError(
+          "queue_edit_unsupported_input",
+          "Queued messages containing audio or Host skill snapshots cannot be edited",
+        );
+      const resolved = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(input, resolved.model.inputModalities);
+      const edited: QueuedUserMessageEditedItem = {
+        id: this.#id(),
+        type: "user_message_queue_edited",
+        threadId,
+        createdAt: this.#now(),
+        queuedItemId: current.id,
+        clientId: current.clientId,
+        editId: target.editId,
+        revision: current.revision + 1,
+        input,
+      };
+      await this.#commit(thread, edited);
+      this.#emit({ type: "item_completed", item: edited });
+      return {
+        queuedItemId: current.id,
+        clientId: current.clientId,
+        revision: edited.revision,
+        editItemId: edited.id,
+        status: "edited",
+      };
     });
   }
 
+  /** A canonical cancellation cannot undo a launched or delivered input. */
+  async cancelQueuedMessages(
+    threadId: string,
+    targets: readonly QueuedCancellationTarget[],
+  ): Promise<QueuedCancellationResult[]> {
+    if (
+      targets.length < 1 ||
+      targets.length > 128 ||
+      new Set(targets.map((item) => item.queuedItemId)).size !==
+        targets.length ||
+      targets.some(
+        (item) =>
+          typeof item.queuedItemId !== "string" ||
+          item.queuedItemId.trim().length === 0 ||
+          typeof item.clientId !== "string" ||
+          item.clientId.trim().length === 0,
+      )
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Provide 1–128 distinct queued message IDs and client IDs",
+      );
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const outcomes: QueuedCancellationResult[] = [];
+      for (const target of targets) {
+        const queued = thread.items.find(
+          (item) =>
+            item.type === "user_message_queued" &&
+            item.id === target.queuedItemId &&
+            item.clientId === target.clientId,
+        );
+        let status: QueuedCancellationResult["status"];
+        if (queued === undefined) status = "not_found";
+        else if (
+          thread.items.some(
+            (item) =>
+              item.type === "user_message" && item.clientId === target.clientId,
+          ) ||
+          this.#reservedQueuedItems.get(threadId)?.has(target.queuedItemId)
+        )
+          status = "already_started";
+        else if (
+          thread.items.some(
+            (item) =>
+              item.type === "user_message_queue_cancelled" &&
+              item.queuedItemId === target.queuedItemId &&
+              item.clientId === target.clientId,
+          )
+        )
+          status = "already_cancelled";
+        else {
+          const canceled: QueuedUserMessageCancelledItem = {
+            id: this.#id(),
+            type: "user_message_queue_cancelled",
+            threadId,
+            createdAt: this.#now(),
+            queuedItemId: target.queuedItemId,
+            clientId: target.clientId,
+          };
+          await this.#commit(thread, canceled);
+          this.#emit({ type: "item_completed", item: canceled });
+          status = "cancelled";
+        }
+        outcomes.push({ ...target, status });
+      }
+      return outcomes;
+    });
+  }
+
+  readonly #reservedQueuedItems = new Map<string, Set<string>>();
+
+  #releaseQueuedReservation(threadId: string, queuedItemId: string): void {
+    const reserved = this.#reservedQueuedItems.get(threadId);
+    reserved?.delete(queuedItemId);
+    if (reserved?.size === 0) this.#reservedQueuedItems.delete(threadId);
+  }
+
+  async resumeQueue(
+    threadId: string,
+    options: {
+      requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
+    } = {},
+  ): Promise<void> {
+    const thread = await this.#requireThread(threadId);
+    const admissionInProgress = this.#queueAdmissions.get(threadId);
+    if (admissionInProgress !== undefined) {
+      await admissionInProgress;
+      return;
+    }
+    if (this.#activeTurns.has(threadId) || this.#drainingQueues.has(threadId))
+      return;
+    let first = pendingQueuedMessages(thread.items)[0];
+    if (first === undefined) return;
+    // Claim the admission before the first asynchronous validation. A second
+    // explicit resume observes the same result, not a duplicate launch.
+    this.#drainingQueues.add(threadId);
+    const admission = deferred<void>();
+    const gate = admission.promise;
+    this.#queueAdmissions.set(threadId, gate);
+    void gate
+      .finally(() => {
+        if (this.#queueAdmissions.get(threadId) === gate)
+          this.#queueAdmissions.delete(threadId);
+      })
+      .catch(() => undefined);
+    let firstSettled = false;
+    const settleFirst = (
+      outcome: { type: "admitted" } | { type: "rejected"; reason: unknown },
+    ) => {
+      if (firstSettled) return;
+      firstSettled = true;
+      if (outcome.type === "admitted") {
+        admission.resolve();
+      } else {
+        const cause =
+          outcome.reason instanceof QueueAdmissionRejection
+            ? outcome.reason.reason
+            : outcome.reason;
+        const safe = safeQueueFailure(cause);
+        admission.reject(new AppServerError(safe.code, safe.message));
+      }
+    };
+    let attemptId: string;
+    let batch: PendingQueuedUserMessage[];
+    while (true) {
+      const pending = pendingQueuedMessages(thread.items)[0];
+      if (pending === undefined) {
+        this.#drainingQueues.delete(threadId);
+        settleFirst({ type: "admitted" }); // canceled while preflight was in flight
+        await gate;
+        return;
+      }
+      first = pending;
+      attemptId = randomUUID();
+      this.#announceQueueAttempt(first, attemptId);
+      try {
+        batch = await this.#preflightQueue(thread, first, attemptId);
+        break;
+      } catch (error) {
+        if (error instanceof QueueBatchChanged) continue;
+        this.#drainingQueues.delete(threadId);
+        this.#reportQueueFailure(threadId, error);
+        settleFirst({ type: "rejected", reason: error });
+        await gate;
+        return;
+      }
+    }
+    void this.#drainQueue(
+      threadId,
+      options,
+      { batch, attemptId },
+      settleFirst,
+    ).catch((error: unknown) => {
+      const failure =
+        !firstSettled && !(error instanceof QueueAdmissionRejection)
+          ? new QueueAdmissionRejection(first, attemptId, error)
+          : error;
+      this.#reportQueueFailure(threadId, failure);
+      settleFirst({ type: "rejected", reason: failure });
+      console.error(
+        "Queued message could not start; the durable queue remains available for retry",
+        safeQueueFailure(
+          failure instanceof QueueAdmissionRejection ? failure.reason : failure,
+        ).code,
+      );
+    });
+    await gate;
+  }
+
   readonly #drainingQueues = new Set<string>();
+  readonly #queueAdmissions = new Map<string, Promise<void>>();
+
+  #announceQueueAttempt(
+    item: PendingQueuedUserMessage,
+    attemptId: string,
+  ): void {
+    this.#emit({
+      type: "queue_admission_started",
+      revision: item.revision,
+      threadId: item.threadId,
+      queuedItemId: item.id,
+      clientId: item.clientId,
+      attemptId,
+    });
+  }
+
+  #reportQueueFailure(threadId: string, error: unknown): void {
+    if (!(error instanceof QueueAdmissionRejection)) {
+      console.error("Queue admission failed without a known queued Item");
+      return;
+    }
+    const thread = this.#threads.get(threadId);
+    if (thread !== undefined && !this.#queueBatchCurrent(thread, [error.item]))
+      return;
+    const { code, message } = safeQueueFailure(error.reason);
+    this.#emit({
+      type: "queue_failed",
+      revision: error.item.revision,
+      threadId,
+      queuedItemId: error.item.id,
+      clientId: error.item.clientId,
+      attemptId: error.attemptId,
+      code,
+      message,
+    });
+  }
+
+  #queueBatchCurrent(
+    thread: Thread,
+    batch: readonly PendingQueuedUserMessage[],
+  ): boolean {
+    const pending = pendingQueuedMessages(thread.items);
+    return batch.every((item) =>
+      pending.some(
+        (current) =>
+          current.id === item.id &&
+          current.clientId === item.clientId &&
+          current.revision === item.revision,
+      ),
+    );
+  }
+
+  async #preflightQueue(
+    thread: Thread,
+    first: PendingQueuedUserMessage,
+    attemptId: string,
+  ): Promise<PendingQueuedUserMessage[]> {
+    let selection: ResolvedProviderSelection;
+    try {
+      selection = this.#requireSelection(thread.effectiveConfiguration());
+    } catch (error) {
+      if (
+        !pendingQueuedMessages(thread.items).some(
+          (item) => item.id === first.id && item.revision === first.revision,
+        )
+      )
+        throw new QueueBatchChanged();
+      throw new QueueAdmissionRejection(first, attemptId, error);
+    }
+    const pending = pendingQueuedMessages(thread.items);
+    const batch = [first];
+    if (first.deliveryMode === "batch-next") {
+      // Capture a bounded FIFO admission boundary; later appends and legacy
+      // entries cannot be silently pulled into this batch.
+      const byteBudget = Math.min(
+        64 * 1024,
+        (selection.model.contextWindow ?? 32_768) * 2,
+      );
+      let bytes = Buffer.byteLength(JSON.stringify(first.input));
+      for (const next of pending.slice(1, 8)) {
+        if (next.deliveryMode !== "batch-next") break;
+        const nextBytes = Buffer.byteLength(JSON.stringify(next.input));
+        if (bytes + nextBytes > byteBudget) break;
+        batch.push(next);
+        bytes += nextBytes;
+      }
+    }
+    for (const [index, item] of batch.entries()) {
+      if (index > 0) this.#announceQueueAttempt(item, attemptId);
+      try {
+        await this.#validateInput(item.input, selection.model.inputModalities);
+      } catch (error) {
+        if (!this.#queueBatchCurrent(thread, batch))
+          throw new QueueBatchChanged();
+        throw new QueueAdmissionRejection(item, attemptId, error);
+      }
+      if (!this.#queueBatchCurrent(thread, batch))
+        throw new QueueBatchChanged();
+    }
+    return batch;
+  }
 
   async #drainQueue(
     threadId: string,
-    options: { requestApproval?: ApprovalHandler },
+    options: {
+      requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
+    },
+    firstAttempt?: { batch: PendingQueuedUserMessage[]; attemptId: string },
+    onFirstAdmission?: (
+      outcome: { type: "admitted" } | { type: "rejected"; reason: unknown },
+    ) => void,
   ): Promise<void> {
-    if (this.#drainingQueues.has(threadId) || this.#activeTurns.has(threadId))
-      return;
-    this.#drainingQueues.add(threadId);
+    let nextAttempt = firstAttempt;
+    let admittedFirst = false;
     try {
-      while (!this.#activeTurns.has(threadId)) {
+      while (true) {
+        if (this.#activeTurns.has(threadId)) {
+          if (!admittedFirst && firstAttempt?.batch[0] !== undefined)
+            throw new QueueAdmissionRejection(
+              firstAttempt.batch[0],
+              firstAttempt.attemptId,
+              new AppServerError(
+                "thread_busy",
+                "Another Turn started before queued input could be admitted",
+              ),
+            );
+          return;
+        }
         const thread = await this.#requireThread(threadId);
-        if (this.#pendingReplacement(thread) !== undefined) return;
+        if (this.#pendingReplacement(thread) !== undefined) {
+          if (!admittedFirst && firstAttempt?.batch[0] !== undefined)
+            throw new QueueAdmissionRejection(
+              firstAttempt.batch[0],
+              firstAttempt.attemptId,
+              new AppServerError(
+                "replacement_pending",
+                "A replacement was requested before queued input could be admitted",
+              ),
+            );
+          return;
+        }
         const queued = pendingQueuedMessages(thread.items)[0];
-        if (queued === undefined) return;
-        const turn = await this.#launchTurn(
-          threadId,
-          queued.input,
-          {
-            ...options,
-            clientId: queued.clientId,
-          },
-          { preparedInput: true },
-        );
-        await turn.done;
+        if (queued === undefined) {
+          if (!admittedFirst) onFirstAdmission?.({ type: "admitted" });
+          return;
+        }
+        const attemptId = nextAttempt?.attemptId ?? randomUUID();
+        if (nextAttempt === undefined)
+          this.#announceQueueAttempt(queued, attemptId);
+        let batch: PendingQueuedUserMessage[];
+        if (
+          nextAttempt !== undefined &&
+          nextAttempt.batch[0]?.id === queued.id &&
+          this.#queueBatchCurrent(thread, nextAttempt.batch)
+        ) {
+          batch = nextAttempt.batch;
+        } else {
+          try {
+            batch = await this.#preflightQueue(thread, queued, attemptId);
+          } catch (error) {
+            if (error instanceof QueueBatchChanged) {
+              nextAttempt = undefined;
+              continue;
+            }
+            throw error;
+          }
+        }
+        nextAttempt = undefined;
+        let turn: TurnHandle;
+        try {
+          turn = await this.#launchTurn(
+            threadId,
+            queued.input,
+            {
+              ...options,
+              clientId: queued.clientId,
+            },
+            {
+              preparedInput: true,
+              queuedAdmission: { items: batch, attemptId },
+              ...(batch.length === 1
+                ? {}
+                : {
+                    initialMessages: batch.map(({ input, clientId }) => ({
+                      input,
+                      clientId,
+                    })),
+                  }),
+            },
+          );
+        } catch (error) {
+          if (error instanceof QueueBatchChanged) continue;
+          throw error instanceof QueueAdmissionRejection
+            ? error
+            : new QueueAdmissionRejection(queued, attemptId, error);
+        }
+        if (!admittedFirst) {
+          admittedFirst = true;
+          onFirstAdmission?.({ type: "admitted" });
+        }
+        // A started Turn has its own canonical failure lifecycle; this is
+        // not another queue-admission failure or permission to retry it.
+        try {
+          await turn.done;
+        } catch {
+          return;
+        }
         if (
           !thread.items.some(
             (item) =>
@@ -912,6 +1605,13 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      /** Host admission fence, checked under the Thread mutation lock. */
+      requireUnarchived?: boolean;
+      /** Host admission fence, checked under the Thread mutation lock. */
+      requirePermissions?: {
+        sandbox: SandboxMode;
+        approvalPolicy: ApprovalPolicy;
+      };
     } = {},
   ): Promise<TurnHandle> {
     return await this.#launchTurn(threadId, input, options);
@@ -963,6 +1663,15 @@ export class ZenAppServer {
         );
       }
 
+      if (
+        options.includeOriginalReference !== undefined &&
+        typeof options.includeOriginalReference !== "boolean"
+      ) {
+        throw new AppServerError(
+          "compaction_invalid_options",
+          "includeOriginalReference must be a boolean",
+        );
+      }
       const configuration = thread.effectiveConfiguration();
       const admitted = this.#admitProviderOperation(
         "compaction",
@@ -975,7 +1684,16 @@ export class ZenAppServer {
           boundary,
           initiator: "human",
           selection: admitted.provider,
-          contextCompaction: admitted.configuration.contextCompaction,
+          contextCompaction:
+            options.retention === undefined
+              ? admitted.configuration.contextCompaction
+              : normalizeContextCompactionConfig({
+                  ...admitted.configuration.contextCompaction,
+                  retention: options.retention,
+                }),
+          includeOriginalReference:
+            options.includeOriginalReference ??
+            admitted.configuration.contextCompaction.includeOriginalReference,
           signal,
         });
         return { compactionItemId: item.id };
@@ -1013,15 +1731,45 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
+      requirePermissions?: {
+        sandbox: SandboxMode;
+        approvalPolicy: ApprovalPolicy;
+      };
     },
     internal: {
       preparedInput?: boolean;
       turnId?: string;
       replacementClientId?: string;
+      initialMessages?: readonly { input: UserInput; clientId: string }[];
+      queuedAdmission?: {
+        items: readonly PendingQueuedUserMessage[];
+        attemptId: string;
+      };
     } = {},
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
+      if (
+        internal.queuedAdmission !== undefined &&
+        !this.#queueBatchCurrent(thread, internal.queuedAdmission.items)
+      )
+        throw new QueueBatchChanged();
+      if (
+        internal.preparedInput !== true &&
+        options.clientId !== undefined &&
+        thread.items.some(
+          (item) =>
+            item.type === "user_message_queue_cancelled" &&
+            item.clientId === options.clientId,
+        )
+      )
+        throw new AppServerError(
+          "queue_id_cancelled",
+          "This queued client ID was canceled; use a new ID for a new message",
+        );
       // Only delivered user messages prove execution. Queue/replacement intents
       // still need their prepared internal launch, even with the same client ID.
       if (internal.preparedInput !== true && options.clientId !== undefined) {
@@ -1061,7 +1809,9 @@ export class ZenAppServer {
             !matchesSkillInputSnapshot(
               requestedInput,
               intent.type === "user_message_queued"
-                ? intent.input
+                ? (pendingQueuedMessages(thread.items).find(
+                    (item) => item.id === intent.id,
+                  )?.input ?? intent.input)
                 : inputFromReplacement(intent),
             )
           ) {
@@ -1071,6 +1821,17 @@ export class ZenAppServer {
             );
           }
         }
+      }
+      if (options.requirePermissions !== undefined) {
+        const actual = thread.effectiveConfiguration();
+        if (
+          actual.sandbox !== options.requirePermissions.sandbox ||
+          actual.approvalPolicy !== options.requirePermissions.approvalPolicy
+        )
+          throw new AppServerError(
+            "operation_forbidden",
+            "Thread permissions changed before Turn admission",
+          );
       }
       const input =
         internal.preparedInput === true
@@ -1113,6 +1874,25 @@ export class ZenAppServer {
       );
       const prospective = this.#requireSelection(prospectiveSelection);
       await this.#validateInput(input, prospective.model.inputModalities);
+      for (const [index, message] of (
+        internal.initialMessages ?? []
+      ).entries()) {
+        try {
+          await this.#validateInput(
+            message.input,
+            prospective.model.inputModalities,
+          );
+        } catch (error) {
+          const source = internal.queuedAdmission?.items[index];
+          if (source !== undefined)
+            throw new QueueAdmissionRejection(
+              source,
+              internal.queuedAdmission!.attemptId,
+              error,
+            );
+          throw error;
+        }
+      }
       if (options.selection !== undefined || options.model !== undefined) {
         await this.#updateThreadSettingsUnlocked(thread, {
           ...(options.selection === undefined
@@ -1155,6 +1935,9 @@ export class ZenAppServer {
           thread,
           turnId,
           input,
+          ...(internal.initialMessages === undefined
+            ? {}
+            : { initialMessages: internal.initialMessages }),
           resolved,
           contextCompaction: admitted.configuration.contextCompaction,
           signal: controller.signal,
@@ -1179,6 +1962,9 @@ export class ZenAppServer {
                 thread,
                 turnId,
                 input,
+                ...(internal.initialMessages === undefined
+                  ? {}
+                  : { initialMessages: internal.initialMessages }),
                 ...(options.clientId === undefined
                   ? {}
                   : { clientId: options.clientId }),
@@ -1218,6 +2004,16 @@ export class ZenAppServer {
                 commit: async (item) => {
                   await this.#withThreadMutation(threadId, async () => {
                     await this.#commit(thread, item);
+                    if (
+                      item.type === "user_message" &&
+                      item.clientId !== undefined
+                    ) {
+                      const queued = internal.queuedAdmission?.items.find(
+                        (entry) => entry.clientId === item.clientId,
+                      );
+                      if (queued !== undefined)
+                        this.#releaseQueuedReservation(threadId, queued.id);
+                    }
                   });
                 },
                 prepareModelSample: async (modelResponseId) =>
@@ -1243,8 +2039,29 @@ export class ZenAppServer {
                         "Model sample has no canonical context boundary",
                       );
                     }
+                    const messages = compileModelMessages(
+                      items,
+                      resolved.selection,
+                    );
+                    const notice =
+                      active.contextCompactionNotice !== undefined &&
+                      active.contextCompactionNoticeIssued !== true
+                        ? active.contextCompactionNotice
+                        : undefined;
+                    if (notice !== undefined) {
+                      active.contextCompactionNoticeIssued = true;
+                    }
                     return {
-                      messages: compileModelMessages(items, resolved.selection),
+                      messages:
+                        notice === undefined
+                          ? messages
+                          : [
+                              ...messages,
+                              {
+                                role: "user" as const,
+                                text: notice,
+                              },
+                            ],
                       contextBoundaryItemId,
                     };
                   }),
@@ -1267,6 +2084,23 @@ export class ZenAppServer {
                 },
                 agenticCompactionCommitted: () => {
                   highestInputTokens = undefined;
+                  const active = this.#activeTurns.get(threadId);
+                  if (active?.turnId === turnId) {
+                    active.contextCompactionNotice = undefined;
+                    active.contextCompactionNoticeIssued = false;
+                  }
+                },
+                afterToolBatch: async ({ inputTokens, agenticCompaction }) => {
+                  const compacted = await this.#handleActiveTurnCompaction({
+                    threadId,
+                    turnId,
+                    resolved,
+                    contextCompaction: admitted.configuration.contextCompaction,
+                    inputTokens,
+                    agenticCompaction,
+                    signal: controller.signal,
+                  });
+                  if (compacted) highestInputTokens = undefined;
                 },
                 emit: (event) => {
                   if (
@@ -1300,6 +2134,8 @@ export class ZenAppServer {
               const active = this.#activeTurns.get(threadId);
               if (active?.turnId === turnId) {
                 this.#activeTurns.delete(threadId);
+                for (const queued of internal.queuedAdmission?.items ?? [])
+                  this.#releaseQueuedReservation(threadId, queued.id);
                 if (
                   executionSucceeded &&
                   thread.items.some(
@@ -1323,11 +2159,20 @@ export class ZenAppServer {
         });
       });
 
+      if (internal.queuedAdmission !== undefined) {
+        const held =
+          this.#reservedQueuedItems.get(threadId) ?? new Set<string>();
+        for (const queued of internal.queuedAdmission.items)
+          held.add(queued.id);
+        this.#reservedQueuedItems.set(threadId, held);
+      }
       this.#activeTurns.set(threadId, {
         turnId,
         controller,
         done,
         inputModalities: resolved.model.inputModalities,
+        contextCompactionNotice: undefined,
+        contextCompactionNoticeIssued: false,
       });
       return { handle: { id: turnId, done }, ready: ready.promise };
     });
@@ -1355,6 +2200,8 @@ export class ZenAppServer {
 
     const planned = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -1371,6 +2218,17 @@ export class ZenAppServer {
         (item): item is UserMessageItem =>
           item.type === "user_message" && item.clientId === options.clientId,
       );
+      const queuedIntent = thread.items.find(
+        (item): item is QueuedUserMessageItem =>
+          item.type === "user_message_queued" &&
+          item.clientId === options.clientId,
+      );
+      if (queuedIntent !== undefined) {
+        throw new AppServerError(
+          "idempotency_conflict",
+          `clientUserMessageId ${options.clientId} is already reserved by a queued message`,
+        );
+      }
       if (existing === undefined && existingUserMessage !== undefined) {
         throw new AppServerError(
           "idempotency_conflict",
@@ -1513,6 +2371,9 @@ export class ZenAppServer {
           inputFromReplacement(replacementIntent),
           {
             clientId: replacementIntent.clientId,
+            ...(options.requireUnarchived === undefined
+              ? {}
+              : { requireUnarchived: options.requireUnarchived }),
             ...(options.requestApproval === undefined
               ? {}
               : { requestApproval: options.requestApproval }),
@@ -1552,6 +2413,8 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     return await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -1562,6 +2425,17 @@ export class ZenAppServer {
           (item): item is UserMessageItem =>
             item.type === "user_message" && item.clientId === options.clientId,
         );
+        const queuedIntent = thread.items.find(
+          (item): item is QueuedUserMessageItem =>
+            item.type === "user_message_queued" &&
+            item.clientId === options.clientId,
+        );
+        if (queuedIntent !== undefined) {
+          throw new AppServerError(
+            "idempotency_conflict",
+            `clientUserMessageId ${options.clientId} is already reserved by a queued message`,
+          );
+        }
         if (duplicate !== undefined) {
           if (
             duplicate.turnId === expectedTurnId &&
@@ -1629,20 +2503,147 @@ export class ZenAppServer {
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
-    const activeHandle = await this.#withThreadMutation(threadId, async () => {
-      const active = this.#activeTurns.get(threadId);
-      if (active === undefined || active.turnId !== turnId) {
+    const active = this.#activeTurns.get(threadId);
+    if (active === undefined || active.turnId !== turnId) {
+      throw new AppServerError(
+        "turn_not_running",
+        `Turn ${turnId} is not running on thread ${threadId}`,
+      );
+    }
+    active.controller.abort(
+      new DOMException("Interrupted by user", "AbortError"),
+    );
+    await active.done;
+  }
+
+  async #handleActiveTurnCompaction(options: {
+    threadId: string;
+    turnId: string;
+    resolved: ResolvedProviderSelection;
+    contextCompaction: ResolvedContextCompactionConfig;
+    inputTokens: number | undefined;
+    agenticCompaction: boolean;
+    signal: AbortSignal;
+  }): Promise<boolean> {
+    const contextWindow = options.resolved.model.contextWindow;
+    const inputTokens = options.inputTokens;
+    if (contextWindow === null) return false;
+
+    return await this.#withThreadMutation(options.threadId, async () => {
+      const active = this.#activeTurns.get(options.threadId);
+      if (active?.turnId !== options.turnId) return false;
+      const thread = await this.#requireThread(options.threadId);
+      // Provider usage describes the request that just completed. Tool results
+      // are appended afterwards, so estimate the complete projection that is
+      // about to be sampled as well. This closes the gap where a large result
+      // crosses the window between two Provider usage reports.
+      const estimatedInputTokens = estimateModelMessageInputTokens(
+        compileModelMessages(thread.items, options.resolved.selection),
+      );
+      const observedInputTokens = Math.max(
+        inputTokens ?? 0,
+        estimatedInputTokens,
+      );
+      // An agent initiated reset has its own durable success/failure result
+      // and projection rules. Do not let the usage from the reset request
+      // immediately trigger a second Host reset (or attach a Host notice to
+      // the exact continuation the agent supplied).
+      if (options.agenticCompaction) {
+        active.contextCompactionNotice = undefined;
+        active.contextCompactionNoticeIssued = false;
+        return false;
+      }
+      const trigger = automaticCompactionThreshold(
+        contextWindow,
+        options.contextCompaction.triggerPercent,
+      );
+      if (observedInputTokens < trigger) {
+        active.contextCompactionNotice = undefined;
+        active.contextCompactionNoticeIssued = false;
+        return false;
+      }
+      const fallbackPercent = Math.min(
+        100,
+        Math.max(
+          options.contextCompaction.triggerPercent,
+          Math.min(99, options.contextCompaction.triggerPercent + 15),
+        ),
+      );
+      const hardFallback =
+        observedInputTokens >=
+        automaticCompactionThreshold(contextWindow, fallbackPercent);
+      // With agentic mode disabled, the Host owns automatic compaction and
+      // should act at the configured trigger rather than waiting for the
+      // emergency margin. Agentic mode gets the reminder window first.
+      const automaticAtTrigger = !options.contextCompaction.agenticEnabled;
+      if (!hardFallback && !automaticAtTrigger) {
+        if (
+          options.contextCompaction.agenticEnabled &&
+          active.contextCompactionNotice === undefined
+        ) {
+          active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
+            Math.round((observedInputTokens / contextWindow) * 100),
+          )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue.`;
+          active.contextCompactionNoticeIssued = false;
+        }
+        return false;
+      }
+
+      // Use the same bounded retention planner as ordinary compaction. In
+      // particular, an active first Turn has no completed boundary: the
+      // planner returns undefined and we can fail closed before admitting a
+      // request that is already known to exceed the model window.
+      let boundary: ReturnType<typeof latestCompletedCompactionBoundary>;
+      try {
+        boundary = boundedCompactionBoundary(thread.items, {
+          retainedTokenBudget: contextCompactionTokenBudget(
+            contextWindow,
+            options.contextCompaction.targetPercent,
+          ),
+          estimateRetainedTokens: (retainedItems) =>
+            estimateModelMessageInputTokens(
+              compileModelMessages(retainedItems, options.resolved.selection),
+            ),
+          retention: options.contextCompaction.retention,
+          allowOpenTurns: true,
+        });
+      } catch (error) {
         throw new AppServerError(
-          "turn_not_running",
-          `Turn ${turnId} is not running on thread ${threadId}`,
+          "automatic_compaction_failed",
+          `Automatic context compaction could not produce a bounded projection: ${describeCompactionError(error, "bounded projection unavailable")}`,
         );
       }
-      active.controller.abort(
-        new DOMException("Interrupted by user", "AbortError"),
-      );
-      return { done: active.done };
+      if (boundary === undefined) {
+        // There is no completed Turn that can safely be summarized (for
+        // example, the very first active Turn). Never send the next sample if
+        // the post-tool projection already fills the configured window.
+        if (observedInputTokens >= contextWindow) {
+          throw new AppServerError(
+            "context_window_exceeded",
+            `The active Turn reached the configured context window (${String(observedInputTokens)} estimated input tokens); no completed history is available for compaction`,
+          );
+        }
+        return false;
+      }
+      if (
+        latestCompaction(thread.items)?.coveredThroughItemId ===
+        boundary.item.id
+      ) {
+        return false;
+      }
+      await this.#appendContextCompaction({
+        thread,
+        boundary,
+        initiator: "automatic",
+        selection: options.resolved,
+        contextCompaction: options.contextCompaction,
+        signal: options.signal,
+        allowOpenTurns: true,
+      });
+      active.contextCompactionNotice = undefined;
+      active.contextCompactionNoticeIssued = false;
+      return true;
     });
-    await activeHandle.done;
   }
 
   async #commitFinalResponse(
@@ -1694,6 +2695,9 @@ export class ZenAppServer {
           ...automaticCompaction,
         });
       } catch (error) {
+        if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+          throw error;
+        }
         console.warn(
           `Could not automatically compact completed Turn ${turnId}`,
           error,
@@ -1760,6 +2764,9 @@ export class ZenAppServer {
         signal: options.signal,
       });
     } catch (error) {
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+        throw error;
+      }
       throw new AppServerError(
         "automatic_compaction_failed",
         `Automatic context compaction failed: ${describeCompactionError(
@@ -1775,6 +2782,7 @@ export class ZenAppServer {
     thread: Thread;
     turnId: string;
     input: UserInput;
+    initialMessages?: readonly { input: UserInput; clientId: string }[];
     resolved: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
@@ -1794,14 +2802,16 @@ export class ZenAppServer {
         type: "turn_started",
         selection: options.resolved.selection,
       },
-      {
-        id: `${options.turnId}:context-preview-input`,
-        threadId: options.thread.id,
-        turnId: options.turnId,
-        createdAt: this.#now(),
-        type: "user_message",
-        content: options.input,
-      },
+      ...(options.initialMessages ?? [{ input: options.input }]).map(
+        (message, index) => ({
+          id: `${options.turnId}:context-preview-input:${index}`,
+          threadId: options.thread.id,
+          turnId: options.turnId,
+          createdAt: this.#now(),
+          type: "user_message" as const,
+          content: message.input,
+        }),
+      ),
     ];
     if (
       estimateModelMessageInputTokens(
@@ -1842,9 +2852,11 @@ export class ZenAppServer {
     thread: Thread;
     boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
     initiator: "human" | "automatic";
+    includeOriginalReference?: boolean;
     selection: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
+    allowOpenTurns?: boolean;
   }): Promise<ContextCompactionItem> {
     const sourceMessages = compileModelMessages(
       options.thread.items.slice(0, options.boundary.index + 1),
@@ -1873,7 +2885,7 @@ export class ZenAppServer {
     const summaryTokens = estimateModelMessageInputTokens([
       {
         role: "user",
-        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}`,
+        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}${(options.includeOriginalReference ?? options.contextCompaction.includeOriginalReference) === false ? "" : `\n[Original ItemList: ${originalItemListReference(options.thread.id, options.boundary.item.id)}; use authorized thread/original/read, do not infer hidden content]`}`,
       },
     ]);
     if (summaryTokens > targetTokenBudget) {
@@ -1886,19 +2898,49 @@ export class ZenAppServer {
       options.thread.effectiveConfiguration().cwd,
     );
     options.signal.throwIfAborted();
+    const item: ContextCompactionItem = {
+      id: this.#id(),
+      threadId: options.thread.id,
+      createdAt: this.#now(),
+      type: "context_compaction",
+      provenance: "provider_generated",
+      initiator: options.initiator,
+      workspaceInstructions,
+      coveredThroughItemId: options.boundary.item.id,
+      summary: summary.text,
+      retainedItemIds: [],
+      includeOriginalReference:
+        options.includeOriginalReference ??
+        options.contextCompaction.includeOriginalReference,
+      providerProfileId: options.selection.selection.providerProfileId,
+      modelId: options.selection.selection.modelId,
+      reasoningEffort: options.selection.selection.reasoningEffort,
+      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
+      tokenUsage: summary.tokenUsage,
+    };
     let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
     try {
       boundedBoundary = boundedCompactionBoundary(options.thread.items, {
-        retainedTokenBudget: targetTokenBudget - summaryTokens,
+        // Standalone instructions and the uncompacted suffix stay visible;
+        // budget the actual proposed projection, not retained Items alone.
+        retainedTokenBudget: targetTokenBudget,
         estimateRetainedTokens: (retainedItems) =>
           estimateModelMessageInputTokens(
             compileModelMessages(
-              retainedItems,
+              [
+                ...options.thread.items,
+                {
+                  ...item,
+                  retainedItemIds: retainedItems.map((retained) => retained.id),
+                },
+              ],
               options.selection.selection,
-              workspaceInstructions,
             ),
           ),
         retention: options.contextCompaction.retention,
+        ...(options.allowOpenTurns === undefined
+          ? {}
+          : { allowOpenTurns: options.allowOpenTurns }),
       });
     } catch (error) {
       throw new AppServerError(
@@ -1912,27 +2954,26 @@ export class ZenAppServer {
         "Context compaction boundary changed during generation",
       );
     }
-    const item: ContextCompactionItem = {
-      id: this.#id(),
-      threadId: options.thread.id,
-      createdAt: this.#now(),
-      type: "context_compaction",
-      provenance: "provider_generated",
-      initiator: options.initiator,
-      workspaceInstructions,
-      coveredThroughItemId: options.boundary.item.id,
-      summary: summary.text,
-      retainedItemIds: boundedBoundary.retainedItemIds,
-      providerProfileId: options.selection.selection.providerProfileId,
-      modelId: options.selection.selection.modelId,
-      reasoningEffort: options.selection.selection.reasoningEffort,
-      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
-      tokenUsage: summary.tokenUsage,
-    };
+    item.retainedItemIds = boundedBoundary.retainedItemIds;
+    const projectedTokens = estimateModelMessageInputTokens(
+      compileModelMessages(
+        [...options.thread.items, item],
+        options.selection.selection,
+      ),
+    );
+    if (projectedTokens > targetTokenBudget) {
+      throw new AppServerError(
+        "compaction_budget_exceeded",
+        `Context compaction projection exceeds the ${String(targetTokenBudget)} token target`,
+      );
+    }
     try {
       await this.#commit(options.thread, item);
       this.#emit({ type: "item_completed", item });
     } catch (error) {
+      if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+        throw error;
+      }
       throw new AppServerError(
         "compaction_persistence_failed",
         describeCompactionError(
@@ -1947,10 +2988,16 @@ export class ZenAppServer {
   #pendingReplacement(
     thread: Thread,
   ): TurnReplacementRequestedItem | undefined {
-    const intents = thread.items.filter(
-      (item): item is TurnReplacementRequestedItem =>
-        item.type === "turn_replacement_requested",
+    const items = thread.items;
+    const forkIndex = items.findLastIndex(
+      (item) => item.type === "thread_forked",
     );
+    const intents = items
+      .slice(forkIndex + 1)
+      .filter(
+        (item): item is TurnReplacementRequestedItem =>
+          item.type === "turn_replacement_requested",
+      );
     for (const intent of intents.reverse()) {
       const successorInput = thread.items.some(
         (item) =>
@@ -1987,17 +3034,25 @@ export class ZenAppServer {
     if (cached !== undefined) {
       return cached;
     }
-    const items = await this.#journal.read(threadId);
-    if (items.length === 0) {
-      return undefined;
+    // Share a read-only cold load across readers and admission. Another Host
+    // may still own an open Turn in the same journal: this reader must never
+    // manufacture its terminal Item from a missing local active handle.
+    const loading = this.#threadLoads.get(threadId);
+    if (loading !== undefined) return await loading;
+    const load = (async () => {
+      const items = await this.#journal.read(threadId);
+      if (items.length === 0) return undefined;
+      const thread = new Thread(threadId, items);
+      this.#threads.set(threadId, thread);
+      return thread;
+    })();
+    this.#threadLoads.set(threadId, load);
+    try {
+      return await load;
+    } finally {
+      if (this.#threadLoads.get(threadId) === load)
+        this.#threadLoads.delete(threadId);
     }
-    const concurrentlyLoaded = this.#threads.get(threadId);
-    if (concurrentlyLoaded !== undefined) {
-      return concurrentlyLoaded;
-    }
-    const thread = new Thread(threadId, items);
-    this.#threads.set(threadId, thread);
-    return thread;
   }
 
   async #requireThread(threadId: string): Promise<Thread> {
@@ -2009,6 +3064,16 @@ export class ZenAppServer {
       );
     }
     return thread;
+  }
+
+  /** Call under the same mutation lock used by setThreadArchived. */
+  async #requireUnarchived(threadId: string): Promise<void> {
+    if ((await this.#threadMetadata.read(threadId)).archived === true) {
+      throw new AppServerError(
+        "operation_forbidden",
+        `Thread ${threadId} is archived. Unarchive it before sending a message`,
+      );
+    }
   }
 
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
@@ -2047,11 +3112,15 @@ export class ZenAppServer {
     const activeTurnId = this.#activeTurns.get(thread.id)?.turnId;
     const configuration = thread.effectiveConfiguration();
     const items = thread.items;
+    const parentThreadId = items.find(
+      (item) => item.type === "thread_metadata",
+    )?.parentThreadId;
     const turns = thread.deriveTurns(
       activeTurnId === undefined ? {} : { activeTurnId },
     );
     return {
       id: thread.id,
+      ...(parentThreadId === undefined ? {} : { parentThreadId }),
       items,
       turns,
       cwd: configuration.cwd,
@@ -2194,29 +3263,42 @@ export class ZenAppServer {
         error,
       );
     }
-    const metadata = thread.items.find(
+    const items = thread.items;
+    const metadata = items.find(
       (item): item is ThreadMetadataItem => item.type === "thread_metadata",
     );
     if (metadata === undefined) {
       throw new Error(`Thread ${thread.id} has no metadata item`);
     }
-    const fork = latestThreadFork(thread.items);
+    const fork = latestThreadFork(items);
+    const forkIndex = fork === undefined ? -1 : items.indexOf(fork);
     return {
       threadId: thread.id,
       currentMetadata: configuration,
+      ...(metadata.parentThreadId === undefined
+        ? {}
+        : { parentThreadId: metadata.parentThreadId }),
       archived: productMetadata.archived ?? false,
       ...(productMetadata.name === undefined
         ? {}
         : { name: productMetadata.name }),
       createdAt: fork?.createdAt ?? metadata.createdAt,
-      updatedAt: thread.items.at(-1)?.createdAt ?? metadata.createdAt,
+      updatedAt: items.at(-1)?.createdAt ?? metadata.createdAt,
+      turnSortAt:
+        items.findLast(
+          (item, index) => index > forkIndex && item.type === "turn_started",
+        )?.createdAt ??
+        fork?.createdAt ??
+        metadata.createdAt,
       ...(fork === undefined
         ? {}
         : {
             forkedFromThreadId: fork.sourceThreadId,
-            forkedFromTurnId: fork.sourceTurnId,
+            ...(fork.sourceTurnId === undefined
+              ? {}
+              : { forkedFromTurnId: fork.sourceTurnId }),
           }),
-      preview: firstUserMessagePreview(thread.items),
+      preview: firstUserMessagePreview(items),
       status: thread
         .deriveTurns(
           this.#activeTurns.get(thread.id)?.turnId === undefined
@@ -2502,7 +3584,7 @@ function latestThreadFork(
 function findLatestClosedTurnIndex(items: readonly CanonicalItem[]): number {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.type === "turn_completed" || item?.type === "turn_aborted") {
+    if (item?.type === "turn_completed" && item.status === "completed") {
       return index;
     }
   }
@@ -2525,6 +3607,69 @@ function forkablePrefix(
     end += 1;
   }
   return items.slice(0, end);
+}
+
+/** Close only the child's copied execution projection; never operate on the parent. */
+function appendSideChatSnapshotClosures(
+  thread: Thread,
+  idFactory: () => string,
+  now: () => string,
+): void {
+  const snapshot = thread.items;
+  const resultKeys = new Set(
+    snapshot.flatMap((item) =>
+      item.type === "tool_result" ? [`${item.turnId}\0${item.callId}`] : [],
+    ),
+  );
+  for (const item of snapshot) {
+    if (
+      item.type !== "tool_call" ||
+      resultKeys.has(`${item.turnId}\0${item.callId}`)
+    )
+      continue;
+    thread.append({
+      id: idFactory(),
+      threadId: thread.id,
+      turnId: item.turnId,
+      createdAt: now(),
+      type: "tool_result",
+      callId: item.callId,
+      contentType: SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
+      structuredContent: { status: "snapshot", executed: false },
+      output:
+        "Parent tool call snapshot: no result was available when this side chat was created. This call was not executed in the side chat; the parent may still be running.",
+      exitCode: 1,
+    });
+  }
+  const closedTurns = new Set(
+    snapshot.flatMap((item) =>
+      item.type === "turn_completed" || item.type === "turn_aborted"
+        ? [item.turnId]
+        : [],
+    ),
+  );
+  for (const item of snapshot) {
+    if (item.type !== "turn_started" || closedTurns.has(item.turnId)) continue;
+    thread.append({
+      id: idFactory(),
+      threadId: thread.id,
+      turnId: item.turnId,
+      createdAt: now(),
+      type: "turn_aborted",
+      reason:
+        "Copied parent Turn is historical context. No execution was transferred to this side chat; the parent is unaffected.",
+    });
+  }
+  for (const queued of pendingQueuedMessages(snapshot)) {
+    thread.append({
+      id: idFactory(),
+      threadId: thread.id,
+      createdAt: now(),
+      type: "user_message_queue_cancelled",
+      queuedItemId: queued.id,
+      clientId: queued.clientId,
+    });
+  }
 }
 
 function remapForkItems(
@@ -2552,6 +3697,13 @@ function remapForkItems(
   return items.map((item) => {
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
+    if (copied.type === "thread_metadata") delete copied.parentThreadId;
+    if (
+      copied.type === "user_message_queue_cancelled" ||
+      copied.type === "user_message_queue_edited"
+    ) {
+      copied.queuedItemId = remap(copied.queuedItemId);
+    }
     if (copied.type === "user_message" && copied.deliveryAfter !== undefined) {
       copied.deliveryAfter = remap(copied.deliveryAfter);
     }
@@ -2587,6 +3739,74 @@ export class AppServerError extends Error {
     super(message);
     this.name = "AppServerError";
     this.code = code;
+  }
+}
+
+/** An admission attempt is transient; only its queued Item is durable. */
+class QueueBatchChanged extends Error {
+  constructor() {
+    super("The pending FIFO boundary changed before admission");
+  }
+}
+
+class QueueAdmissionRejection extends Error {
+  constructor(
+    readonly item: PendingQueuedUserMessage,
+    readonly attemptId: string,
+    readonly reason: unknown,
+  ) {
+    super("Queued input was not admitted");
+  }
+}
+
+function safeQueueFailure(error: unknown): { code: string; message: string } {
+  const code =
+    error instanceof AppServerError ? error.code : "queue_admission_failed";
+  switch (code) {
+    case "operation_forbidden":
+      return {
+        code,
+        message:
+          "This Thread is archived. Unarchive it before using Continue queue; the queued input was not sent.",
+      };
+    case "image_input_unsupported":
+      return {
+        code,
+        message:
+          "The selected model cannot accept images. Choose an image-capable model, then Continue queue.",
+      };
+    case "attachment_missing":
+    case "attachment_corrupt":
+      return {
+        code,
+        message:
+          "A queued image attachment is unavailable. Restore that attachment before using Continue queue; the queued input was not sent.",
+      };
+    case "model_unavailable":
+    case "provider_unavailable":
+    case "context_window_unknown":
+    case "reasoning_effort_unknown":
+    case "reasoning_effort_unavailable":
+      return {
+        code,
+        message:
+          "The current provider/model settings cannot start this queued message. Choose an available model and reasoning setting, then Continue queue.",
+      };
+    case "thread_busy":
+    case "replacement_pending":
+      return {
+        code,
+        message:
+          "Another Turn is using this Thread. Wait for it to finish, then Continue queue if the message is still pending.",
+      };
+    default:
+      // Never transmit arbitrary Provider/attachment errors or their
+      // potentially sensitive payload over the native UI notification.
+      return {
+        code: "queue_admission_failed",
+        message:
+          "This queued message could not start. It remains queued; check the model, attachments and Thread settings before using Continue queue.",
+      };
   }
 }
 

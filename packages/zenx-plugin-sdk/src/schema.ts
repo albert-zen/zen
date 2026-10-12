@@ -155,6 +155,15 @@ export function validatePluginManifest(value: unknown): ZenXPluginManifestV2 {
       tool.capabilities,
       `Plugin tool ${name} capabilities`,
     );
+    if (
+      tool.remoteExecution !== undefined &&
+      (tool.remoteExecution !== "text-json" ||
+        tool.interactionMode !== "background_safe")
+    ) {
+      throw new Error(
+        `Plugin tool ${name} remoteExecution must be text-json on a background_safe tool`,
+      );
+    }
     if (capabilities.length === 0)
       throw new Error(`Plugin tool ${name} declares no capabilities`);
     for (const permissionId of requireStringArray(
@@ -437,7 +446,7 @@ function validateUi(
     requireString(menu.label, "menu label");
     menuIds.add(menuId);
   }
-  for (const collection of ["settings", "panels"] as const) {
+  for (const collection of ["settings", "panels", "threadHeaders"] as const) {
     const contributionIds = new Set<string>();
     for (const item of optionalArray(
       contributions[collection],
@@ -453,7 +462,8 @@ function validateUi(
         (item.order !== undefined && !Number.isSafeInteger(item.order))
       )
         throw new Error(`Plugin ${id} has dangling ${collection} contribution`);
-      requireString(item.title, `Plugin ${id} ${collection} title`);
+      if (collection !== "threadHeaders")
+        requireString(item.title, `Plugin ${id} ${collection} title`);
       contributionIds.add(contributionId);
     }
   }

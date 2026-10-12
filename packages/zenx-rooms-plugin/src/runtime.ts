@@ -13,6 +13,8 @@ export interface RoomMember {
 }
 
 export interface RoomMessage {
+  replyTo?: { messageId: string; author: string; text: string };
+  reactions?: Array<{ actorId: string; label: string; emoji: string }>;
   id: string;
   roomId: string;
   author: string;
@@ -23,29 +25,149 @@ export interface RoomMessage {
   originTurnId: string | null;
 }
 
+export interface RoomOperation {
+  id: string;
+  text: string;
+  messageId: string | null;
+  createdAt: number;
+  acknowledged: boolean;
+  mentions: Array<{ name: string; threadId: string; triggerIds: string[] }>;
+}
+
 export interface Room {
+  assistant?: { threadId: string; triggerId: string };
   id: string;
   name: string;
   members: RoomMember[];
   messages: RoomMessage[];
+  operations?: RoomOperation[];
+  operationEpoch?: string;
   createdAt: number;
 }
 
+// Plugin service JSON contract. The Host validates and commits annotations.
+export type AssistantReference =
+  | {
+      kind: "thread";
+      device: string;
+      workspace: string;
+      threadId: string;
+      label: string;
+    }
+  | { kind: "trigger"; triggerId: string; label: string };
+export interface AssistantMatter {
+  id: string;
+  title: string;
+  plan: string;
+  statusNote: string;
+  notes: string;
+  references: AssistantReference[];
+}
+export interface AssistantMemory {
+  id: string;
+  title: string;
+  text: string;
+}
+export interface AssistantWorkspace {
+  revision: number;
+  updatedAt: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+export interface UpdateAssistantWorkspaceInput {
+  roomId: string;
+  expectedRevision: number;
+  matters: AssistantMatter[];
+  memory: AssistantMemory[];
+}
+
+export interface AutomationTargetPreview {
+  workspace: string;
+  resolvedWorkspace: string;
+  model: string;
+  providerProfileId: string;
+  modelId: string;
+  reasoningEffort: string | null;
+  sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  approvalPolicy: "on-request" | "never";
+  processEpoch: string;
+  revision: number;
+}
+export interface CreateAssistantRoomInput {
+  name: string;
+  memberName: string;
+  operationId: string;
+  target:
+    | { kind: "new"; workspace: string; expected: AutomationTargetPreview }
+    | { kind: "existing"; threadId: string };
+}
+
 export interface ZenXRoomsTrustedService {
-  snapshot(): { rooms: Room[] };
+  assistantWorkspace?(roomId: string): AssistantWorkspace;
+  updateAssistantWorkspace?(
+    input: UpdateAssistantWorkspaceInput,
+  ): Promise<AssistantWorkspace>;
+  workspaces?(): Promise<string[]>;
+  previewTarget?(workspace: string): Promise<AutomationTargetPreview>;
+  createAssistantRoom?(
+    input: CreateAssistantRoomInput | { name: string; members: RoomMember[] },
+  ): Promise<Room>;
+  setAssistantReplies?(roomId: string, enabled: boolean): Promise<void>;
   createRoom(input: { name: string; members: RoomMember[] }): Promise<Room>;
   renameRoom(roomId: string, name: string): Promise<void>;
   deleteRoom(roomId: string): Promise<void>;
   addRoomMember(roomId: string, member: RoomMember): Promise<void>;
   removeRoomMember(roomId: string, threadId: string): Promise<void>;
-  postAgentRoomMessage(roomId: string, text: string): Promise<void>;
+  postAgentRoomMessage(
+    roomId: string,
+    text: string,
+    replyToMessageId?: string,
+  ): Promise<void>;
   postRoomMessage?(roomId: string, author: string, text: string): Promise<void>;
+  prepareRoomMessage?(
+    roomId: string,
+    operationId: string,
+    text: string,
+    replyToMessageId?: string,
+  ): Promise<RoomOperation>;
+  postPreparedRoomMessage?(
+    roomId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomOperation>;
+  cancelPreparedRoomOperation?(
+    roomId: string,
+    operationId: string,
+  ): Promise<unknown>;
+  roomOperation?(roomId: string, operationId: string): unknown;
+  roomDelivery?(roomId: string, messageId: string): unknown;
+  reactRoomMessage?(
+    roomId: string,
+    messageId: string,
+    emoji: string | null,
+  ): Promise<RoomMessage>;
+  wakeupsEnabled?(): boolean;
+  acknowledgeRoomOperation?(roomId: string, operationId: string): Promise<void>;
+  snapshot(): {
+    rooms: Room[];
+    triggers?: Array<{
+      id?: string;
+      active: boolean;
+      kind: string;
+      threadId: string;
+      room?: { roomId: string; mention: string };
+    }>;
+  };
   startPlugin?(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void>;
-  stopPlugin?(pluginId: string): Promise<void>;
+  stopPlugin?(
+    pluginId: string,
+    runtimeSdk?: ZenXPluginHostSdkV1,
+  ): Promise<void>;
 }
 
 export interface ZenXTrustedPluginInvocation {
   readonly callId: string;
+  readonly trustedPluginUi?: true;
   readonly arguments: Readonly<Record<string, unknown>>;
   readonly cwd: string;
   readonly signal: AbortSignal;
@@ -67,16 +189,266 @@ export interface ZenXTrustedPluginRuntime {
 export function createZenXTrustedPlugin(
   service: ZenXRoomsTrustedService,
 ): ZenXTrustedPluginRuntime {
+  let runtimeSdk: ZenXPluginHostSdkV1 | undefined;
   return {
     storage: { version: 1, initialValue: { rooms: [] } },
-    start: async (sdk) => await service.startPlugin?.(PLUGIN_ID, sdk),
+    start: async (sdk) => {
+      await service.startPlugin?.(PLUGIN_ID, sdk);
+      runtimeSdk = sdk;
+    },
     invoke: async (toolName, invocation) => {
       invocation.signal.throwIfAborted();
-      const uiInput = record(invocation.arguments["input"]);
+      // Only the Host's direct UI command route may mint trustedPluginUi.
+      // Agent tool arguments (including nested input/source/trustedPluginUi)
+      // are never authority, even when the model omits schema validation.
+      const uiInput =
+        invocation.trustedPluginUi === true
+          ? (record(invocation.arguments["input"]) ?? {})
+          : null;
       const args = uiInput ?? invocation.arguments;
       switch (toolName) {
-        case "zenx_rooms_list":
-          return { rooms: service.snapshot().rooms.map(readSafeRoom) };
+        case "zenx_rooms_workspace":
+          fields(args, ["roomId"]);
+          if (!service.assistantWorkspace)
+            throw Error("PAW workspace service unavailable");
+          return service.assistantWorkspace(
+            string(args, "roomId", MAX_ID_BYTES),
+          );
+        case "zenx_rooms_update_workspace": {
+          fields(args, ["roomId", "expectedRevision", "matters", "memory"]);
+          if (!service.updateAssistantWorkspace)
+            throw Error("PAW workspace service unavailable");
+          if (
+            !Number.isSafeInteger(args["expectedRevision"]) ||
+            Number(args["expectedRevision"]) < 0 ||
+            !Array.isArray(args["matters"]) ||
+            !Array.isArray(args["memory"])
+          )
+            throw Error("Invalid PAW workspace update fields or revision");
+          return await service.updateAssistantWorkspace({
+            roomId: string(args, "roomId", MAX_ID_BYTES),
+            expectedRevision: Number(args["expectedRevision"]),
+            matters: args["matters"] as AssistantMatter[],
+            memory: args["memory"] as AssistantMemory[],
+          });
+        }
+        case "zenx_rooms_list": {
+          const state = service.snapshot();
+          const cursor = Number(args["cursor"] ?? 0);
+          if (!Number.isSafeInteger(cursor) || cursor < 0)
+            throw new Error("Invalid Room list cursor");
+          return {
+            nextCursor: cursor + 1 < state.rooms.length ? cursor + 1 : null,
+            rooms: state.rooms.slice(cursor, cursor + 1).map((room) => ({
+              ...readSafeRoom(room),
+              messageCount: room.messages.length,
+              messages: room.messages
+                .slice(-1)
+                .map(
+                  ({
+                    replyTo: _replyTo,
+                    reactions: _reactions,
+                    ...message
+                  }) => ({
+                    ...message,
+                    text: Array.from(message.text).slice(0, 120).join(""),
+                  }),
+                ),
+              ...(uiInput === null
+                ? {}
+                : {
+                    assistantRepliesEnabled: room.assistant
+                      ? (service.wakeupsEnabled?.() ?? false) &&
+                        state.triggers?.some(
+                          (t) =>
+                            t.active &&
+                            t.kind === "roomMention" &&
+                            t.threadId === room.assistant!.threadId &&
+                            t.room?.roomId === room.id &&
+                            t.id === room.assistant!.triggerId,
+                        ) === true
+                      : undefined,
+                    operationEpoch: room.operationEpoch ?? "legacy",
+                    pendingCount: (room.operations ?? []).filter(
+                      (operation) => !operation.acknowledged,
+                    ).length,
+                    operations: [],
+                    responders: room.members.map((member) => ({
+                      name: member.name,
+                      configured:
+                        ((service.wakeupsEnabled?.() ?? false) &&
+                          state.triggers?.some(
+                            (trigger) =>
+                              trigger.active &&
+                              trigger.kind === "roomMention" &&
+                              trigger.threadId === member.threadId &&
+                              trigger.room?.roomId === room.id &&
+                              trigger.room.mention.toLocaleLowerCase() ===
+                                member.name.toLocaleLowerCase(),
+                          )) ??
+                        false,
+                    })),
+                  }),
+            })),
+          };
+        }
+        case "zenx_rooms_messages": {
+          const roomId = string(args, "roomId", MAX_ID_BYTES);
+          const cursor = Number(args["cursor"] ?? 0);
+          if (!Number.isSafeInteger(cursor) || cursor < 0)
+            throw new Error("Invalid Room message cursor");
+          const room = service
+            .snapshot()
+            .rooms.find((entry) => entry.id === roomId);
+          if (!room) throw new Error("Room was not found");
+          const end = Math.max(0, room.messages.length - cursor);
+          let start = end;
+          while (start > 0 && end - start < 4) {
+            const bytes = new TextEncoder().encode(
+              JSON.stringify(room.messages.slice(start - 1, end)),
+            ).byteLength;
+            // Usually keep pages under 60 KiB. One reaction-heavy message may
+            // exceed that target, but never split or truncate its body.
+            if (start < end && bytes > 60 * 1024) break;
+            start -= 1;
+          }
+          return {
+            roomId,
+            messages: room.messages.slice(start, end),
+            nextCursor: start > 0 ? cursor + (end - start) : null,
+          };
+        }
+        case "zenx_rooms_operations": {
+          if (uiInput === null) throw new Error("Trusted Room UI required");
+          const roomId = string(args, "roomId", MAX_ID_BYTES);
+          const cursor = Number(args["cursor"] ?? 0);
+          if (!Number.isSafeInteger(cursor) || cursor < 0)
+            throw new Error("Invalid Room operation cursor");
+          const room = service
+            .snapshot()
+            .rooms.find((entry) => entry.id === roomId);
+          if (!room) throw new Error("Room was not found");
+          const pending = (room.operations ?? []).filter(
+            (operation) => !operation.acknowledged,
+          );
+          const page = pending.slice(cursor, cursor + 8).map((operation) => ({
+            id: operation.id,
+            text: Array.from(operation.text).slice(0, 120).join(""),
+            messageId: operation.messageId,
+            createdAt: operation.createdAt,
+          }));
+          return {
+            operations: page,
+            nextCursor:
+              cursor + page.length < pending.length
+                ? cursor + page.length
+                : null,
+          };
+        }
+        case "zenx_rooms_prepare_message":
+          if (uiInput === null || !service.prepareRoomMessage)
+            throw new Error("Trusted Room UI required");
+          return await service.prepareRoomMessage(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+            string(args, "text", MAX_MESSAGE_TEXT_BYTES),
+            args["replyToMessageId"] === undefined
+              ? undefined
+              : string(args, "replyToMessageId", MAX_ID_BYTES),
+          );
+        case "zenx_rooms_react":
+          if (!service.reactRoomMessage)
+            throw new Error("Room reactions unavailable");
+          const updatedMessage = await service.reactRoomMessage(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "messageId", MAX_ID_BYTES),
+            args["emoji"] === null ? null : string(args, "emoji", 32),
+          );
+          return { updated: true, message: updatedMessage };
+        case "zenx_rooms_cancel_prepared":
+          if (uiInput === null || !service.cancelPreparedRoomOperation)
+            throw new Error("Trusted Room UI required");
+          return await service.cancelPreparedRoomOperation(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+          );
+        case "zenx_rooms_operation":
+          if (uiInput === null || !service.roomOperation)
+            throw new Error("Trusted Room UI required");
+          return service.roomOperation(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+          );
+        case "zenx_rooms_delivery":
+          if (uiInput === null || !service.roomDelivery)
+            throw new Error("Trusted Room UI required");
+          return service.roomDelivery(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "messageId", MAX_ID_BYTES),
+          );
+        case "zenx_rooms_ack_operation":
+          if (uiInput === null || !service.acknowledgeRoomOperation)
+            throw new Error("Trusted Room UI required");
+          await service.acknowledgeRoomOperation(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+          );
+          return { acknowledged: true };
+        case "zenx_rooms_workspaces":
+          if (uiInput === null || !service.workspaces)
+            throw new Error("Trusted Room UI required");
+          fields(args, []);
+          return await service.workspaces();
+        case "zenx_rooms_preview_target":
+          if (uiInput === null || !service.previewTarget)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["workspace"]);
+          return await service.previewTarget(string(args, "workspace", 4096));
+        case "zenx_rooms_create_assistant": {
+          if (uiInput === null || !service.createAssistantRoom)
+            throw new Error("Trusted Room UI required");
+          if (args["members"] !== undefined) {
+            fields(args, ["name", "members"]);
+            return await service.createAssistantRoom({
+              name: string(args, "name", MAX_ROOM_NAME_BYTES),
+              members: members(args["members"]),
+            });
+          }
+          fields(args, ["name", "memberName", "operationId", "target"]);
+          const target = record(args["target"]);
+          if (target === null) throw Error("PAW Thread target is required");
+          let selected: CreateAssistantRoomInput["target"];
+          if (target["kind"] === "new") {
+            fields(target, ["kind", "workspace", "expected"]);
+            selected = {
+              kind: "new",
+              workspace: string(target, "workspace", 4096),
+              expected: targetPreview(target["expected"]),
+            };
+          } else if (target["kind"] === "existing") {
+            fields(target, ["kind", "threadId"]);
+            selected = {
+              kind: "existing",
+              threadId: string(target, "threadId", MAX_ID_BYTES),
+            };
+          } else throw Error("Choose a new or existing PAW Thread");
+          return await service.createAssistantRoom({
+            name: string(args, "name", MAX_ROOM_NAME_BYTES),
+            memberName: string(args, "memberName", MAX_MEMBER_NAME_BYTES),
+            operationId: string(args, "operationId", MAX_ID_BYTES),
+            target: selected,
+          });
+        }
+        case "zenx_rooms_assistant_replies":
+          if (uiInput === null || !service.setAssistantReplies)
+            throw new Error("Trusted Room UI required");
+          if (typeof args["enabled"] !== "boolean")
+            throw new Error("enabled must be boolean");
+          await service.setAssistantReplies(
+            string(args, "roomId", MAX_ID_BYTES),
+            args["enabled"],
+          );
+          return { updated: true };
         case "zenx_rooms_create":
           return await service.createRoom({
             name: string(args, "name", MAX_ROOM_NAME_BYTES),
@@ -106,19 +478,77 @@ export function createZenXTrustedPlugin(
         case "zenx_rooms_post_message": {
           const roomId = string(args, "roomId", MAX_ID_BYTES);
           const text = string(args, "text", MAX_MESSAGE_TEXT_BYTES);
-          if (uiInput !== null && service.postRoomMessage !== undefined) {
-            await service.postRoomMessage(roomId, "You", text);
-          } else {
-            await service.postAgentRoomMessage(roomId, text);
+          if (uiInput !== null) {
+            if (!service.postPreparedRoomMessage)
+              throw new Error("Trusted Room operation service unavailable");
+            const operation = await service.postPreparedRoomMessage(
+              roomId,
+              string(args, "operationId", MAX_ID_BYTES),
+              text,
+            );
+            return {
+              posted: true,
+              roomId,
+              operationId: operation.id,
+              messageId: operation.messageId,
+            };
           }
+          await service.postAgentRoomMessage(
+            roomId,
+            text,
+            args["replyToMessageId"] === undefined
+              ? undefined
+              : string(args, "replyToMessageId", MAX_ID_BYTES),
+          );
           return { posted: true };
         }
         default:
           throw new Error(`Unsupported Rooms tool: ${toolName}`);
       }
     },
-    close: async () => await service.stopPlugin?.(PLUGIN_ID),
+    close: async () => {
+      await service.stopPlugin?.(PLUGIN_ID, runtimeSdk);
+      runtimeSdk = undefined;
+    },
   };
+}
+
+function targetPreview(value: unknown): AutomationTargetPreview {
+  const preview = record(value);
+  if (preview === null) throw Error("PAW target preview is required");
+  fields(preview, [
+    "workspace",
+    "resolvedWorkspace",
+    "model",
+    "providerProfileId",
+    "modelId",
+    "reasoningEffort",
+    "sandbox",
+    "approvalPolicy",
+    "processEpoch",
+    "revision",
+  ]);
+  for (const [key, maximum] of [
+    ["workspace", 4096],
+    ["resolvedWorkspace", 4096],
+    ["model", 1024],
+    ["providerProfileId", 256],
+    ["modelId", 256],
+    ["processEpoch", 128],
+  ] as const)
+    string(preview, key, maximum);
+  if (preview["reasoningEffort"] !== null)
+    string(preview, "reasoningEffort", 128);
+  if (
+    !["read-only", "workspace-write", "danger-full-access"].includes(
+      String(preview["sandbox"]),
+    ) ||
+    !["never", "on-request"].includes(String(preview["approvalPolicy"])) ||
+    !Number.isSafeInteger(preview["revision"]) ||
+    Number(preview["revision"]) < 0
+  )
+    throw Error("PAW target preview is invalid");
+  return preview as unknown as AutomationTargetPreview;
 }
 
 function members(value: unknown): RoomMember[] {
@@ -140,6 +570,7 @@ function members(value: unknown): RoomMember[] {
 
 function readSafeRoom(room: Room) {
   return {
+    ...(room.assistant ? { assistant: { ...room.assistant } } : {}),
     id: room.id,
     name: room.name,
     createdAt: room.createdAt,
@@ -148,6 +579,10 @@ function readSafeRoom(room: Room) {
       threadId: member.threadId,
     })),
     messages: room.messages.slice(-50).map((message) => ({
+      ...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
+      ...(message.reactions === undefined
+        ? {}
+        : { reactions: message.reactions }),
       id: message.id,
       roomId: message.roomId,
       author: message.author,
@@ -180,4 +615,8 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
     : null;
+}
+function fields(args: Readonly<Record<string, unknown>>, allowed: string[]) {
+  if (Object.keys(args).some((key) => !allowed.includes(key)))
+    throw Error("Unknown PAW workspace input field");
 }

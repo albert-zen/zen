@@ -8,6 +8,8 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -152,12 +154,46 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         pluginId: ZENX_ROOMS_CAPABILITY_ID,
         packageName: ZENX_ROOMS_PACKAGE_NAME,
       }),
-      /already version 1\.0\.0/u,
+      /already version 1\.0\.6/u,
     );
     const unchangedCatalog = JSON.parse(
       await readFile(path.join(userData, "capability-grants.json"), "utf8"),
     ) as { profileGeneration: string };
     assert.equal(unchangedCatalog.profileGeneration, catalog.profileGeneration);
+
+    // Installed profile loader (not a source-runtime stand-in) must preserve
+    // the Host-minted distinction when an Agent supplies a forged nested input.
+    await assert.rejects(
+      capabilities.execute(
+        invocation("agent-forged-list", "zenx_rooms_list", {
+          input: { cursor: 0 },
+        }),
+      ),
+      /Trusted Room UI required/u,
+    );
+    const ordinaryAgentList = await capabilities.execute(
+      invocation("agent-list", "zenx_rooms_list", { cursor: 0 }),
+    );
+    assert.equal(
+      (
+        JSON.parse(ordinaryAgentList.output) as {
+          rooms: Array<{ operationEpoch?: string }>;
+        }
+      ).rooms[0]?.operationEpoch,
+      undefined,
+    );
+    await assert.rejects(
+      capabilities.execute(
+        invocation("agent-prepare", "zenx_rooms_prepare_message", {
+          input: {
+            roomId: "legacy-room",
+            operationId: `legacy:${crypto.randomUUID()}`,
+            text: "forged human",
+          },
+        }),
+      ),
+      /Trusted Room UI required/u,
+    );
 
     await manager.start();
     const thread = (await manager.request("thread/start", {})).thread;
@@ -219,11 +255,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       "remove-member",
       { roomId: temporaryId, threadId: "thread-reviewer-2" },
     );
-    await capabilities.executePluginCommand(
-      ZENX_ROOMS_CAPABILITY_ID,
-      "post-message",
-      { roomId: temporaryId, text: "temporary message" },
-    );
+    await postTrustedHuman(capabilities, temporaryId, "temporary message");
     assert.equal(
       domain.snapshot().rooms.find((room) => room.id === temporaryId)?.name,
       "renamed",
@@ -248,10 +280,10 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         members: [{ name: "Builder", threadId: "thread-builder" }],
       },
     );
-    await capabilities.executePluginCommand(
-      ZENX_ROOMS_CAPABILITY_ID,
-      "post-message",
-      { roomId: domain.snapshot().rooms.at(-1)!.id, text: "ready" },
+    await postTrustedHuman(
+      capabilities,
+      domain.snapshot().rooms.at(-1)!.id,
+      "ready",
     );
     assert.equal(domain.snapshot().rooms.at(-1)?.messages[0]?.author, "You");
 
@@ -284,10 +316,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
     try {
       await restarted.initialize();
       assert.equal(restarted.pluginSnapshot().plugins[0]?.lifecycle, "enabled");
-      const restored = (await restarted.executePluginCommand(
-        ZENX_ROOMS_CAPABILITY_ID,
-        "list",
-      )) as { rooms: Array<{ name: string }> };
+      const restored = await listAllRoomPages(restarted);
       assert.equal(
         restored.rooms.some((room) => room.name === "release"),
         true,
@@ -326,10 +355,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       );
       assert.match(preserved, /release/u);
       await lifecycle.reinstall(ZENX_ROOMS_CAPABILITY_ID);
-      const reinstalled = (await lifecycle.executePluginCommand(
-        ZENX_ROOMS_CAPABILITY_ID,
-        "list",
-      )) as { rooms: Array<{ name: string }> };
+      const reinstalled = await listAllRoomPages(lifecycle);
       assert.equal(
         reinstalled.rooms.some((room) => room.name === "release"),
         true,
@@ -338,10 +364,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       await lifecycle.uninstall(ZENX_ROOMS_CAPABILITY_ID);
       await lifecycle.deletePluginData(ZENX_ROOMS_CAPABILITY_ID);
       await lifecycle.reinstall(ZENX_ROOMS_CAPABILITY_ID);
-      const cleared = (await lifecycle.executePluginCommand(
-        ZENX_ROOMS_CAPABILITY_ID,
-        "list",
-      )) as { rooms: unknown[] };
+      const cleared = await listAllRoomPages(lifecycle);
       assert.deepEqual(cleared.rooms, []);
       assert.equal(await readFile(legacyFile, "utf8").then(Boolean), true);
     } finally {
@@ -706,3 +729,202 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+async function listAllRoomPages(
+  capabilities: ZenXCapabilityService,
+): Promise<{ rooms: Array<{ name: string }> }> {
+  const rooms: Array<{ name: string }> = [];
+  let cursor: number | null = 0;
+  while (cursor !== null) {
+    const page = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "list",
+      { cursor },
+    )) as { rooms: Array<{ name: string }>; nextCursor: number | null };
+    rooms.push(...page.rooms);
+    cursor = page.nextCursor;
+  }
+  return { rooms };
+}
+
+async function postTrustedHuman(
+  capabilities: ZenXCapabilityService,
+  roomId: string,
+  text: string,
+): Promise<void> {
+  let cursor: number | null = 0;
+  let operationEpoch: string | undefined;
+  while (cursor !== null) {
+    const page = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "list",
+      { cursor },
+    )) as {
+      rooms: Array<{ id: string; operationEpoch?: string }>;
+      nextCursor: number | null;
+    };
+    operationEpoch = page.rooms.find(
+      (room) => room.id === roomId,
+    )?.operationEpoch;
+    if (operationEpoch) break;
+    cursor = page.nextCursor;
+  }
+  if (!operationEpoch) throw new Error("Room send epoch not found");
+  const operationId = `${operationEpoch}:${crypto.randomUUID()}`;
+  await capabilities.executePluginCommand(
+    ZENX_ROOMS_CAPABILITY_ID,
+    "prepare-message",
+    { roomId, operationId, text },
+  );
+  await capabilities.executePluginCommand(
+    ZENX_ROOMS_CAPABILITY_ID,
+    "post-message",
+    { roomId, operationId, text },
+  );
+}
+
+test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing Room data", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-rooms-upgrade-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const resources = path.join(directory, "resources");
+  const tarball = await copyPreparedRoomsPlugin(resources);
+  const oldDirectory = path.join(directory, "old-package");
+  await mkdir(oldDirectory, { recursive: true });
+  const run = promisify(execFile);
+  // A synthetic previous package advertises the 1.0.3 tool surface. It uses
+  // known local runtime bytes; this proves real profile admission/upgrade, not
+  // a direct source-runtime substitute or an ignored cached archive.
+  await run("tar", ["-xzf", tarball, "-C", oldDirectory]);
+  const oldPackage = path.join(oldDirectory, "package");
+  const oldManifestFile = path.join(oldPackage, "zenx.plugin.json");
+  const oldPackageFile = path.join(oldPackage, "package.json");
+  const oldManifest = JSON.parse(await readFile(oldManifestFile, "utf8"));
+  oldManifest.version = "1.0.3";
+  oldManifest.tools = oldManifest.tools.filter(
+    (tool: { name: string }) =>
+      !["zenx_rooms_workspace", "zenx_rooms_update_workspace"].includes(
+        tool.name,
+      ),
+  );
+  oldManifest.contributions.commands =
+    oldManifest.contributions.commands.filter(
+      (command: { id: string }) =>
+        !["workspace", "update-workspace"].includes(command.id),
+    );
+  const oldPackageJson = JSON.parse(await readFile(oldPackageFile, "utf8"));
+  oldPackageJson.version = "1.0.3";
+  await writeFile(oldManifestFile, JSON.stringify(oldManifest));
+  await writeFile(oldPackageFile, JSON.stringify(oldPackageJson));
+  const oldTarball = path.join(
+    resources,
+    "plugins",
+    "zenx-rooms-plugin-1.0.3.tgz",
+  );
+  await run("tar", ["-czf", oldTarball, "-C", oldDirectory, "package"]);
+  await new ZenXTriggerStore(
+    path.join(userData, "trigger-registry.json"),
+  ).write({
+    triggers: [],
+    history: [],
+    rooms: [
+      {
+        id: "companion-room",
+        name: "User chosen name",
+        members: [{ name: "Aster", threadId: "assistant-thread" }],
+        assistant: { threadId: "assistant-thread", triggerId: "owned-trigger" },
+        messages: [],
+        createdAt: 1,
+      },
+    ],
+  });
+  const domain = await createBundledAutomationPluginService({
+    userDataDirectory: userData,
+    appServer: {
+      request: async () => {
+        throw Error("Notebook tools must not call a model");
+      },
+      onNotification: () => () => {},
+    } as never,
+  });
+  const options = {
+    userDataDirectory: userData,
+    resourcesDirectory: resources,
+    pnpmCliPath: pnpmCli,
+    trustedProfileLoaders: {
+      [ZENX_ROOMS_CAPABILITY_ID]: createZenXRoomsProfileLoader(() => domain),
+    },
+    bundledProvidersOnly: true,
+  };
+  const capabilities = new ZenXCapabilityService(options);
+  try {
+    await capabilities.initialize();
+    await capabilities.installBundledPluginPackage(oldTarball, {
+      pluginId: ZENX_ROOMS_CAPABILITY_ID,
+      packageName: ZENX_ROOMS_PACKAGE_NAME,
+    });
+    assert.equal(
+      capabilities
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID)
+        ?.version,
+      "1.0.3",
+    );
+    await assert.rejects(
+      capabilities.executePluginCommand(ZENX_ROOMS_CAPABILITY_ID, "workspace", {
+        roomId: "companion-room",
+      }),
+    );
+    await installZenXBundledPluginsAtStartup(capabilities, resources);
+    assert.equal(
+      capabilities
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID)
+        ?.version,
+      "1.0.6",
+    );
+    const before = await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "workspace",
+      { roomId: "companion-room" },
+    );
+    assert.deepEqual(before, {
+      revision: 0,
+      updatedAt: 0,
+      matters: [],
+      memory: [],
+    });
+    const saved = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "update-workspace",
+      {
+        roomId: "companion-room",
+        expectedRevision: 0,
+        matters: [],
+        memory: [
+          {
+            id: "decision",
+            title: "User decision",
+            text: "Inspectable after package restart",
+          },
+        ],
+      },
+    )) as { revision: number };
+    assert.equal(saved.revision, 1);
+    assert.equal(domain.snapshot().rooms[0]?.name, "User chosen name");
+    assert.equal(domain.snapshot().rooms[0]?.members[0]?.name, "Aster");
+    await capabilities.setEnabled(ZENX_ROOMS_CAPABILITY_ID, false);
+    await capabilities.setEnabled(ZENX_ROOMS_CAPABILITY_ID, true);
+    const reloaded = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "workspace",
+      { roomId: "companion-room" },
+    )) as { revision: number; memory: Array<{ text: string }> };
+    assert.equal(reloaded.revision, 1);
+    assert.equal(reloaded.memory[0]?.text, "Inspectable after package restart");
+  } finally {
+    await capabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

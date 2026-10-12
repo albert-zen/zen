@@ -1,4 +1,7 @@
+import { deliverAssistantInput } from "../assistant-preset.js";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fleetTools, type FleetRouter } from "../fleet.js";
 import { readThreadHistory } from "../thread-history.js";
 import { createHash } from "node:crypto";
 import { matchesSkillInputSnapshot } from "../../../../../src/skill-input.js";
@@ -15,6 +18,7 @@ import type {
 import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
 import { ZenXProjectProjection } from "../project-projection.js";
 import type { WorkflowCommand } from "../workflow-configuration.js";
+import { ZenXProtocolError } from "../../protocol-client/index.js";
 
 export const ZENX_SELF_CONTROL_CAPABILITY_ID = "zenx-self-control";
 export const ZENX_SELF_CONTROL_WORKSPACE_PERMISSION =
@@ -25,6 +29,8 @@ export const ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION =
 type SelfControlRequestMethod = Extract<
   ClientRequestMethod,
   | "zen/thread/read"
+  | "zen/thread/create-child"
+  | "zen/turn/send-unarchived"
   | "model/list"
   | "thread/settings/update"
   | "turn/queue"
@@ -141,7 +147,7 @@ const manifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: ZENX_SELF_CONTROL_CAPABILITY_ID,
   name: "ZenX self-control",
-  version: "1.0.0",
+  version: "1.0.1",
   description:
     "List derived workspaces and control Zen Threads through typed App Server requests.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -177,6 +183,7 @@ const manifest: ZenXPluginManifestV2 = {
   tools: [
     {
       name: "zenx_models_list",
+      remoteExecution: "text-json",
       description:
         "Discover the current model IDs, supported reasoning efforts and defaults from the App Server model catalog.",
       inputSchema: {
@@ -200,7 +207,8 @@ const manifest: ZenXPluginManifestV2 = {
           model: { type: "string" },
           effort: { type: "string" },
         },
-        required: ["target", "model"],
+        required: ["model"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [
@@ -297,7 +305,7 @@ const manifest: ZenXPluginManifestV2 = {
             maximum: MAX_READ_ITEMS,
           },
         },
-        required: ["target"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
@@ -312,7 +320,7 @@ const manifest: ZenXPluginManifestV2 = {
       inputSchema: {
         type: "object",
         properties: targetProperties(),
-        required: ["target"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
@@ -330,7 +338,8 @@ const manifest: ZenXPluginManifestV2 = {
           ...targetProperties(),
           name: { type: "string" },
         },
-        required: ["target", "name"],
+        required: ["name"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [
@@ -370,7 +379,7 @@ const manifest: ZenXPluginManifestV2 = {
     {
       name: "zenx_threads_send",
       description:
-        "Send a message to a Thread. Omit messageType to follow the saved ZenX sending preference; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
+        "Send a message to a Thread. By default new messages supplement active work; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
       inputSchema: {
         type: "object",
         properties: {
@@ -383,7 +392,8 @@ const manifest: ZenXPluginManifestV2 = {
           },
           text: { type: "string" },
         },
-        required: ["target", "text"],
+        required: ["text"],
+        ...threadTargetRequirement(),
         additionalProperties: false,
       },
       permissions: [
@@ -443,11 +453,62 @@ const manifest: ZenXPluginManifestV2 = {
     },
   ],
 };
+manifest.tools.push(
+  {
+    name: "zenx_self_control_devices",
+    description:
+      "List configured Fleet devices. Omitted device or local means this machine; remote entries are configuration, not a live reachability check.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
+    interactionMode: "background_safe",
+    capabilities: ["zenx.threads.read"],
+    maxOutputBytes: 32 * 1024,
+  },
+  {
+    name: "zenx_self_control_threads_wait",
+    description:
+      "Wait up to 30 seconds for an explicit Turn to finish, then return its canonical status. Timed out means still pending, not completed. Can be run as a background tool task; use read for results.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...targetProperties(),
+        turnId: { type: "string" },
+        timeoutSeconds: { type: "integer", minimum: 1, maximum: 30 },
+      },
+      required: ["turnId"],
+      ...threadTargetRequirement(),
+      additionalProperties: false,
+    },
+    permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
+    interactionMode: "background_safe",
+    capabilities: ["zenx.threads.read"],
+    maxOutputBytes: 32 * 1024,
+  },
+);
+for (const tool of manifest.tools) {
+  if (!fleetTools.has(tool.name)) continue;
+  tool.inputSchema = {
+    ...tool.inputSchema,
+    properties: {
+      ...(tool.inputSchema.properties as Record<string, unknown>),
+      device: {
+        type: "string",
+        description:
+          "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine.",
+      },
+    },
+  };
+}
 const controlToolNames = new Set(manifest.tools.map((tool) => tool.name));
 
 export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest = manifest;
   readonly #appServer: AppServerRequestPort;
+  readonly #fleet: FleetRouter | undefined;
   readonly #workflows: WorkflowConfigurationPort | undefined;
   readonly #sendPreference: () => Promise<"queue" | "soft" | "hard">;
   readonly #sending = new Map<
@@ -458,11 +519,13 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   constructor(options: {
     appServer: AppServerRequestPort;
     workflows?: WorkflowConfigurationPort;
+    fleet?: FleetRouter;
     sendPreference?: () => Promise<"queue" | "soft" | "hard">;
   }) {
     this.#appServer = options.appServer;
+    this.#fleet = options.fleet;
     this.#workflows = options.workflows;
-    this.#sendPreference = options.sendPreference ?? (async () => "queue");
+    this.#sendPreference = options.sendPreference ?? (async () => "soft");
   }
 
   async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
@@ -470,6 +533,34 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       throw new Error(`Unsupported ZenX self-control tool: ${name}`);
     }
     invocation.signal.throwIfAborted();
+    if (name === "zenx_self_control_devices") {
+      assertOnly(invocation.arguments, []);
+      return {
+        devices: this.#fleet
+          ? await this.#fleet.devices()
+          : [
+              {
+                id: "local",
+                label: "This device",
+                transport: "local",
+                access: "control",
+                status: "local",
+              },
+            ],
+      };
+    }
+    if (invocation.arguments.device !== undefined) {
+      if (!fleetTools.has(name))
+        throw new Error("This tool does not support Fleet");
+      const device = requiredString(invocation.arguments.device, "device");
+      if (device !== "local") {
+        if (!this.#fleet)
+          throw new Error("Fleet is not configured on this Host");
+        return await this.#fleet.invoke(device, invocation);
+      }
+      const { device: _device, ...args } = invocation.arguments;
+      invocation = { ...invocation, arguments: args };
+    }
     if (name === "zenx_threads_send") {
       const key = messageIdentity(invocation);
       const args = JSON.stringify(invocation.arguments);
@@ -489,6 +580,18 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       this.#sending.set(key, { args, result });
       try {
         return await result;
+      } catch (error) {
+        if (
+          invocation.arguments.threadId !== undefined &&
+          invocation.arguments.target === undefined &&
+          error instanceof ZenXProtocolError &&
+          error.code === -32601
+        )
+          throw new Error(
+            "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
+            { cause: error },
+          );
+        throw error;
       } finally {
         this.#sending.delete(key);
       }
@@ -504,10 +607,12 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     args: Record<string, unknown>,
     invocation: ToolInvocation,
   ): Promise<unknown> {
+    let requireActive = false;
     if (
       [
         "zenx_threads_read",
         "zenx_threads_status",
+        "zenx_self_control_threads_wait",
         "zenx_threads_rename",
         "zenx_threads_archive",
         "zenx_threads_unarchive",
@@ -516,15 +621,29 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       ].includes(name)
     ) {
       if (args.target !== undefined && args.threadId !== undefined)
-        throw new Error("Specify only target");
+        throw new Error("Specify only target or threadId");
+      const exact = args.threadId !== undefined;
       const resolution = await resolveThreadTarget(this.#appServer, {
-        target: requiredString(args.target ?? args.threadId, "target"),
+        target: requiredString(
+          exact ? args.threadId : args.target,
+          exact ? "threadId" : "target",
+        ),
+        exact,
         ...(args.workspace === undefined
           ? {}
           : { workspace: requiredString(args.workspace, "workspace") }),
       });
       if (resolution.status !== "resolved")
         return { source: SOURCE, ...resolution };
+      requireActive =
+        exact &&
+        [
+          "zenx_threads_read",
+          "zenx_threads_status",
+          "zenx_self_control_threads_wait",
+          "zenx_threads_send",
+        ].includes(name);
+      if (requireActive) assertActiveThread(resolution.candidate);
       const { target: _target, workspace: _workspace, ...rest } = args;
       args = { ...rest, threadId: resolution.threadId };
     }
@@ -565,9 +684,44 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       case "zenx_threads_create":
         return await this.#createThread(args);
       case "zenx_threads_read":
-        return await this.#readThread(args);
+        return await this.#readThread(args, requireActive);
+      case "zenx_self_control_threads_wait": {
+        assertOnly(args, ["threadId", "turnId", "timeoutSeconds"]);
+        const threadId = requiredString(args.threadId, "threadId");
+        const turnId = requiredString(args.turnId, "turnId");
+        const seconds = args.timeoutSeconds ?? 30;
+        if (
+          !Number.isInteger(seconds) ||
+          (seconds as number) < 1 ||
+          (seconds as number) > 30
+        )
+          throw new Error("timeoutSeconds must be between 1 and 30");
+        const deadline = Date.now() + (seconds as number) * 1000;
+        for (;;) {
+          invocation.signal.throwIfAborted();
+          if (requireActive) await this.#assertActiveThread(threadId);
+          const { thread } = await this.#appServer.request("thread/read", {
+            threadId,
+            includeTurns: true,
+          });
+          const turn = thread.turns.find((turn) => turn.id === turnId);
+          if (!turn) throw new Error("Turn not found on target Thread");
+          if (turn.status !== "inProgress" || Date.now() >= deadline)
+            return {
+              source: SOURCE,
+              threadId,
+              turnId,
+              status: turn.status,
+              timedOut: turn.status === "inProgress",
+              error: turn.error?.message ?? null,
+            };
+          await delay(Math.min(500, deadline - Date.now()), undefined, {
+            signal: invocation.signal,
+          });
+        }
+      }
       case "zenx_threads_status":
-        return await this.#threadStatus(args);
+        return await this.#threadStatus(args, requireActive);
       case "zenx_threads_rename":
         return await this.#renameThread(args);
       case "zenx_threads_archive":
@@ -575,7 +729,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       case "zenx_threads_unarchive":
         return await this.#setArchived(args, false);
       case "zenx_threads_send":
-        return await this.#send(args, invocation);
+        return await this.#send(args, invocation, requireActive);
       case "zenx_self_control_workflows_get":
         assertOnly(args, []);
         return await this.#requireWorkflows().workflowConfiguration();
@@ -834,7 +988,17 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     };
   }
 
-  async #readThread(args: Record<string, unknown>): Promise<unknown> {
+  async #assertActiveThread(threadId: string): Promise<void> {
+    const { thread } = await this.#appServer.request("zen/thread/read", {
+      threadId,
+    });
+    assertActiveThread({ threadId: thread.id, archived: thread.archived });
+  }
+
+  async #readThread(
+    args: Record<string, unknown>,
+    requireActive: boolean,
+  ): Promise<unknown> {
     assertOnly(args, [
       "threadId",
       "maxTurns",
@@ -866,6 +1030,8 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     const thread = (
       await this.#appServer.request("zen/thread/read", { threadId })
     ).thread;
+    if (requireActive)
+      assertActiveThread({ threadId: thread.id, archived: thread.archived });
     return readThreadHistory(thread, {
       granularity,
       ...(turnId === undefined ? {} : { turnId }),
@@ -886,9 +1052,13 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     });
   }
 
-  async #threadStatus(args: Record<string, unknown>): Promise<unknown> {
+  async #threadStatus(
+    args: Record<string, unknown>,
+    requireActive: boolean,
+  ): Promise<unknown> {
     assertOnly(args, ["threadId"]);
     const requestedThreadId = requiredString(args.threadId, "threadId");
+    if (requireActive) await this.#assertActiveThread(requestedThreadId);
     const thread = (
       await this.#appServer.request("thread/read", {
         threadId: requestedThreadId,
@@ -946,6 +1116,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   async #send(
     args: Record<string, unknown>,
     invocation: ToolInvocation,
+    requireActive: boolean,
   ): Promise<unknown> {
     assertOnly(args, ["threadId", "text", "messageType"]);
     const threadId = requiredString(args.threadId, "threadId");
@@ -959,6 +1130,8 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     const thread = (
       await this.#appServer.request("zen/thread/read", { threadId })
     ).thread;
+    if (requireActive)
+      assertActiveThread({ threadId: thread.id, archived: thread.archived });
     const previous = thread.items.find(
       (item) =>
         (item.type === "user_message" ||
@@ -986,12 +1159,21 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         // Reuse the original canonical fence, including an interrupted replacement
         // whose successor has not yet been accepted. The server owns that retry.
         invocation.signal.throwIfAborted();
-        const result = await this.#appServer.request("turn/replace", {
+        const params = {
           threadId,
           expectedTurnId: previous.turnId,
           clientUserMessageId,
           input: [{ type: "text", text }],
-        });
+        } as const;
+        const result = requireActive
+          ? await this.#appServer.request("zen/turn/send-unarchived", {
+              ...params,
+              mode: "replace",
+            })
+          : await this.#appServer.request("turn/replace", {
+              ...params,
+              input: [...params.input],
+            });
         return {
           source: SOURCE,
           threadId,
@@ -1026,26 +1208,56 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
             : await this.#sendPreference();
     invocation.signal.throwIfAborted();
     const input = [{ type: "text" as const, text }];
+    if (preference === "soft") {
+      const result = await deliverAssistantInput(
+        this.#appServer,
+        {
+          threadId,
+          input,
+          clientUserMessageId,
+        },
+        invocation.signal,
+        requireActive ? { requireUnarchived: true } : {},
+      );
+      return { source: SOURCE, threadId, clientUserMessageId, ...result };
+    }
     if (active === undefined) {
-      const result = await this.#appServer.request("turn/start", {
+      const params = {
         threadId,
         input,
         clientUserMessageId,
-      });
+      };
+      const turnId = requireActive
+        ? requiredString(
+            (
+              await this.#appServer.request("zen/turn/send-unarchived", {
+                ...params,
+                mode: "start",
+              })
+            ).turnId,
+            "accepted turnId",
+          )
+        : (await this.#appServer.request("turn/start", params)).turn.id;
       return {
         source: SOURCE,
         threadId,
         mode: "start",
         clientUserMessageId,
-        turnId: result.turn.id,
+        turnId,
       };
     }
     if (preference === "queue") {
-      await this.#appServer.request("turn/queue", {
+      const params = {
         threadId,
         input,
         clientUserMessageId,
-      });
+      };
+      if (requireActive)
+        await this.#appServer.request("zen/turn/send-unarchived", {
+          ...params,
+          mode: "queue",
+        });
+      else await this.#appServer.request("turn/queue", params);
       return {
         source: SOURCE,
         threadId,
@@ -1056,28 +1268,18 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       };
     }
     const expectedTurnId = active.id;
-    if (preference === "soft") {
-      const result = await this.#appServer.request("turn/steer", {
-        threadId,
-        input,
-        clientUserMessageId,
-        expectedTurnId,
-      });
-      return {
-        source: SOURCE,
-        threadId,
-        mode: "steer",
-        clientUserMessageId,
-        expectedTurnId,
-        turnId: result.turnId,
-      };
-    }
-    const result = await this.#appServer.request("turn/replace", {
+    const params = {
       threadId,
       input,
       clientUserMessageId,
       expectedTurnId,
-    });
+    };
+    const result = requireActive
+      ? await this.#appServer.request("zen/turn/send-unarchived", {
+          ...params,
+          mode: "replace",
+        })
+      : await this.#appServer.request("turn/replace", params);
     return {
       source: SOURCE,
       threadId,
@@ -1119,7 +1321,7 @@ function threadIdSchema(): Record<string, unknown> {
   return {
     type: "object",
     properties: targetProperties(),
-    required: ["target"],
+    ...threadTargetRequirement(),
     additionalProperties: false,
   };
 }
@@ -1260,8 +1462,17 @@ function messageIdentity(invocation: ToolInvocation): string {
     .digest("hex")}`;
 }
 
+function threadTargetRequirement(): Record<string, unknown> {
+  return { oneOf: [{ required: ["target"] }, { required: ["threadId"] }] };
+}
+
 function targetProperties(): Record<string, unknown> {
   return {
+    threadId: {
+      type: "string",
+      description:
+        "Exact full Thread ID. Never matches a title or ID prefix. Read, status, send and wait require an active, non-archived Thread. Use either threadId or target.",
+    },
     target: {
       type: "string",
       description:
@@ -1272,4 +1483,12 @@ function targetProperties(): Record<string, unknown> {
       description: "Optional workspace path to disambiguate the target.",
     },
   };
+}
+
+function assertActiveThread(thread: {
+  threadId: string;
+  archived: boolean;
+}): void {
+  if (thread.archived)
+    throw new Error(`Thread ${thread.threadId} is archived and inactive`);
 }

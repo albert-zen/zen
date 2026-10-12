@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  constants as fsConstants,
+  mkdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,6 +18,16 @@ import {
   type ComputerThreadRequest,
 } from "./computer-thread-observation.js";
 import { observeComputerWindow } from "./computer-electron-observation.js";
+import {
+  ObservationPresentation,
+  observationReadOptions,
+  observationReadProperties,
+  MAX_OBSERVATION_PAGE_BYTES,
+} from "./observation-presentation.js";
+import {
+  OBSERVATION_CAPTURE,
+  type ObservationCapture,
+} from "./observation-capture.js";
 
 export interface ComputerTarget {
   pid?: number;
@@ -30,7 +46,21 @@ export const COMPUTER_ACTION_SET_VALUE = "set_value";
 export type ComputerControlAction =
   typeof COMPUTER_ACTION_PRESS | typeof COMPUTER_ACTION_SET_VALUE;
 
+/** Ephemeral position of a successful semantic action in its exact window. */
+export interface ComputerActionPointer {
+  x: number;
+  y: number;
+  action: ComputerControlAction;
+  capturedAt: string;
+  windowWidth: number;
+  windowHeight: number;
+  windowId?: number;
+}
+
 export interface ComputerInspection {
+  [OBSERVATION_CAPTURE]?: ObservationCapture<
+    ComputerInspection["controls"][number]
+  >;
   platform: NodeJS.Platform;
   observationId: string;
   target: {
@@ -48,6 +78,26 @@ export interface ComputerInspection {
     actions: ComputerControlAction[];
   }>;
   truncated: boolean;
+  diagnostics?: ComputerInspectionDiagnostics;
+}
+
+export interface ComputerInspectionDiagnostics {
+  visitedCount: number;
+  visitLimit: number;
+  visitLimitReached: boolean;
+  maxDepth: number;
+  maxDepthVisited: number;
+  depthLimitReached: boolean;
+  outputLimit: number;
+  outputLimitReached: boolean;
+  selectionLimit: number;
+  selectionLimitReached: boolean;
+  actionableCount: number;
+  semanticCount: number;
+  fallbackCount: number;
+  encounteredWebArea: boolean;
+  webAreaControlCount: number;
+  webAreaActionableCount: number;
 }
 
 export interface ComputerLiveObservationFrame {
@@ -57,6 +107,9 @@ export interface ComputerLiveObservationFrame {
   width: number;
   height: number;
   capturedAt: string;
+  windowWidth?: number;
+  windowHeight?: number;
+  windowId?: number;
 }
 
 export type ComputerLiveObservationEvent =
@@ -91,6 +144,7 @@ export interface ZenXComputerBackend {
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
+    pointer?: ComputerActionPointer;
   }>;
   setValue(
     target: ComputerTarget,
@@ -101,6 +155,7 @@ export interface ZenXComputerBackend {
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
+    pointer?: ComputerActionPointer;
   }>;
   screenshot(
     target: ComputerTarget,
@@ -162,18 +217,26 @@ export type ComputerKey =
 
 export const MAX_COMPUTER_INSPECTION_CONTROLS = 32;
 
-/** Preserve source order, reserving the bounded result for usable actions first. */
+/** Preserve source order within each tier while keeping preferred semantics visible. */
 export function selectComputerInspectionControls<T>(
   controls: readonly T[],
   actionable: (control: T) => boolean,
+  preferred: (control: T) => boolean = () => false,
 ): T[] {
   if (controls.length <= MAX_COMPUTER_INSPECTION_CONTROLS) return [...controls];
-  const flags = controls.map(actionable);
+  const actionableFlags = controls.map(actionable);
+  const preferredFlags = controls.map(preferred);
   const selected = new Set<number>();
-  for (const priority of [true, false]) {
+  const tiers = [
+    (index: number) => preferredFlags[index] && actionableFlags[index],
+    (index: number) => preferredFlags[index] && !actionableFlags[index],
+    (index: number) => !preferredFlags[index] && actionableFlags[index],
+    (index: number) => !preferredFlags[index] && !actionableFlags[index],
+  ];
+  for (const tier of tiers) {
     for (let index = 0; index < controls.length; index += 1) {
       if (selected.size === MAX_COMPUTER_INSPECTION_CONTROLS) break;
-      if (flags[index] === priority) selected.add(index);
+      if (tier(index)) selected.add(index);
     }
   }
   return controls.filter((_, index) => selected.has(index));
@@ -183,13 +246,13 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "computer",
   name: "Computer",
-  version: "1.0.1",
+  version: "1.0.2",
   description:
     "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/computer" },
   mainDocument:
-    "Start with computer_list_windows to find open windows and running applications. If truncated, narrow with query. Pass a returned target unchanged to computer_inspect before acting; prefer background-safe semantic controls.",
+    "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls.",
   provider: {
     id: "macos-desktop",
     platforms: ["darwin"],
@@ -252,8 +315,11 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_inspect",
       description:
-        "Inspect at most 32 semantic accessibility controls in one exact app window target without activating it or reading sibling windows. target.windowTitle is required.",
-      inputSchema: objectSchema({ target: targetSchema() }, ["target"]),
+        "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. baseObservationId requests a diff only of a retained first-page baseline; omit it or set full:true to resync. target.windowTitle is required.",
+      inputSchema: objectSchema(
+        { target: targetSchema(), ...observationReadProperties },
+        ["target"],
+      ),
       permissions: ["computer.accessibility.inspect"],
       interactionMode: "background_safe",
       capabilities: [
@@ -261,7 +327,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
         "app_targeted",
         "no_global_input",
       ],
-      maxOutputBytes: 12 * 1024,
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
     {
       name: "computer_press",
@@ -309,6 +375,23 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXComputerBackend;
   readonly #threadObservation: ComputerThreadObservation;
+  readonly #presentation = new ObservationPresentation<
+    ComputerInspection["controls"][number]
+  >({
+    itemsField: "controls",
+    changesField: "controlChanges",
+    pageItems: 32,
+    identityKind: "exact-fingerprint-presentation",
+    getId: (control) => control.selector.targetId,
+    withId: (control, targetId) => ({
+      ...control,
+      selector: { ...control.selector, targetId },
+    }),
+    withObservationId: (control, observationId) => ({
+      ...control,
+      selector: { ...control.selector, observationId },
+    }),
+  });
   #foregroundControlAllowed: boolean;
   #foregroundConsent = new AbortController();
 
@@ -347,32 +430,91 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       return await this.#invokeForeground(toolName, invocation);
     }
     const target = requiredTarget(invocation.arguments);
+    const key = JSON.stringify([
+      invocation.threadId ?? null,
+      computerTargetKey(target),
+    ]);
     let result: unknown;
     switch (toolName) {
-      case "computer_inspect":
+      case "computer_inspect": {
         requireScopedWindow(target, "computer_inspect");
-        result = await this.#backend.inspect(target, invocation.signal);
-        break;
-      case "computer_press":
-        requireScopedWindow(target, "computer_press");
-        result = await this.#backend.press(
+        const options = observationReadOptions(invocation.arguments);
+        if (options.cursor !== undefined) {
+          result = await this.#presentation.read(
+            key,
+            options.cursor,
+            invocation.signal,
+          );
+          break;
+        }
+        const inspected = await this.#backend.inspect(
           target,
-          requiredControl(invocation.arguments),
           invocation.signal,
         );
+        const {
+          controls,
+          [OBSERVATION_CAPTURE]: captured,
+          ...header
+        } = inspected;
+        const capture: ObservationCapture<
+          ComputerInspection["controls"][number]
+        > = captured ?? {
+          scopeKey: computerTargetKey(inspected.target),
+          entries: controls.map((value) => ({ value })),
+          coverage: {
+            scope: "backend-provided bounded window observation",
+            sourceComplete: null,
+            reasons: ["backend_capture_coverage_unknown"],
+          },
+        };
+        result = this.#presentation.publish(
+          key,
+          inspected.observationId,
+          header,
+          capture,
+          options,
+        );
         break;
+      }
+      case "computer_press": {
+        requireScopedWindow(target, "computer_press");
+        const control = requiredControl(invocation.arguments);
+        const native = await this.#actionControl(
+          key,
+          control,
+          invocation.threadId !== undefined,
+          invocation.signal,
+        );
+        this.#presentation.invalidate(key);
+        result = {
+          ...(await this.#backend.press(target, native, invocation.signal)),
+          control,
+        };
+        break;
+      }
       case "computer_set_value": {
         requireScopedWindow(target, "computer_set_value");
         const value = requiredString(invocation.arguments, "value", true);
         if (value.length > 4_000) {
           throw new Error("computer_set_value is limited to 4000 characters");
         }
-        result = await this.#backend.setValue(
-          target,
-          requiredControl(invocation.arguments),
-          value,
+        const control = requiredControl(invocation.arguments);
+        const native = await this.#actionControl(
+          key,
+          control,
+          invocation.threadId !== undefined,
           invocation.signal,
         );
+        this.#presentation.invalidate(key);
+        result = {
+          ...(await this.#backend.setValue(
+            target,
+            native,
+            value,
+            invocation.signal,
+          )),
+          control,
+        };
         break;
       }
       case "computer_screenshot":
@@ -393,9 +535,42 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         invocation.threadId,
         invocation.callId,
         resolved,
+        toolName === "computer_press" || toolName === "computer_set_value"
+          ? (result as { pointer?: ComputerActionPointer }).pointer
+          : undefined,
       );
     }
+    // The cursor belongs to the transient observation, never the canonical tool result.
+    if (
+      (toolName === "computer_press" || toolName === "computer_set_value") &&
+      result &&
+      typeof result === "object"
+    ) {
+      const { pointer: _pointer, ...canonical } = result as Record<
+        string,
+        unknown
+      >;
+      return canonical;
+    }
     return result;
+  }
+
+  async #actionControl(
+    key: string,
+    control: ComputerControlSelector,
+    owned: boolean,
+    signal?: AbortSignal,
+  ): Promise<ComputerControlSelector> {
+    if (!owned && !this.#presentation.has(key)) return control;
+    return {
+      ...control,
+      targetId: await this.#presentation.resolveAction(
+        key,
+        control.observationId,
+        control.targetId,
+        signal,
+      ),
+    };
   }
 
   observeThread(
@@ -424,6 +599,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         }
         await foregroundTakeoverNotice(signal);
         this.#assertForegroundControlAllowed(toolName);
+        this.#presentation.invalidateAll();
         await this.#backend.foregroundClick(x, y, button, signal);
         return { action: "click", x, y, button, impact: "foreground_takeover" };
       }
@@ -431,6 +607,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         const key = requiredComputerKey(invocation.arguments);
         await foregroundTakeoverNotice(signal);
         this.#assertForegroundControlAllowed(toolName);
+        this.#presentation.invalidateAll();
         await this.#backend.foregroundKeyPress(key, signal);
         return { action: "key_press", key, impact: "foreground_takeover" };
       }
@@ -443,6 +620,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         }
         await foregroundTakeoverNotice(signal);
         this.#assertForegroundControlAllowed(toolName);
+        this.#presentation.invalidateAll();
         await this.#backend.foregroundScroll(deltaY, signal);
         return { action: "scroll", deltaY, impact: "foreground_takeover" };
       }
@@ -467,6 +645,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
+    this.#presentation.close();
     this.#threadObservation.close();
     await this.#backend.close();
   }
@@ -478,12 +657,14 @@ export interface ComputerControlFingerprint {
   subrole?: string;
   title?: string;
   description?: string;
+  help?: string;
   frame?: string;
   actions: ComputerControlAction[];
 }
 
 interface ComputerObservation {
   observationId: string;
+  targetIdentity?: string;
   targets: Map<string, ComputerControlFingerprint>;
 }
 
@@ -493,6 +674,7 @@ export class ComputerObservationLedger {
   observe(
     targetKey: string,
     fingerprints: ComputerControlFingerprint[],
+    targetIdentity?: string,
   ): { observationId: string; selectors: ComputerControlSelector[] } {
     const observationId = randomUUID();
     const targets = new Map<string, ComputerControlFingerprint>();
@@ -501,7 +683,7 @@ export class ComputerObservationLedger {
       targets.set(targetId, fingerprint);
       return { observationId, targetId };
     });
-    this.#latest.set(targetKey, { observationId, targets });
+    this.#latest.set(targetKey, { observationId, targets, targetIdentity });
     return { observationId, selectors };
   }
 
@@ -509,11 +691,13 @@ export class ComputerObservationLedger {
     targetKey: string,
     selector: ComputerControlSelector,
     action: ComputerControlAction,
+    targetIdentity?: string,
   ): ComputerControlFingerprint {
     const observation = this.#latest.get(targetKey);
     if (
       observation === undefined ||
-      observation.observationId !== selector.observationId
+      observation.observationId !== selector.observationId ||
+      observation.targetIdentity !== targetIdentity
     ) {
       throw new Error(
         "Computer observation is stale, unknown, or scoped to another target; inspect the target again",
@@ -542,9 +726,37 @@ export class ComputerObservationLedger {
     return fingerprint;
   }
 
+  assertCurrent(targetKey: string, observationId: string): void {
+    if (this.#latest.get(targetKey)?.observationId !== observationId) {
+      throw new Error(
+        "Computer observation is stale, consumed, or unknown; inspect the target again",
+      );
+    }
+  }
+
   clear(): void {
     this.#latest.clear();
   }
+}
+
+/** Exact presentation continuity only; repeated fingerprints prove no identity. */
+export function uniqueComputerCaptureEntries<T>(
+  values: readonly T[],
+  identities: readonly string[],
+): Array<{ value: T; identity?: string }> {
+  const counts = new Map<string, number>();
+  for (const identity of identities) {
+    counts.set(identity, (counts.get(identity) ?? 0) + 1);
+  }
+  return values.map((value, index) => {
+    const identity = identities[index];
+    return {
+      value,
+      ...(identity !== undefined && counts.get(identity) === 1
+        ? { identity }
+        : {}),
+    };
+  });
 }
 
 interface MacRawControl {
@@ -554,18 +766,44 @@ interface MacRawControl {
     subrole?: string;
     title?: string;
     description?: string;
+    help?: string;
     frame?: string;
   };
   role: string;
   title: string;
   enabled: boolean;
   actions: string[];
+  inWebArea: boolean;
+}
+
+const MAC_CONTAINER_ROLES = new Set([
+  "AXWindow",
+  "AXGroup",
+  "AXToolbar",
+  "AXScrollArea",
+  "AXSplitGroup",
+  "AXWebArea",
+  "AXLayoutArea",
+  "AXLayoutItem",
+]);
+
+function preferredMacWebControl(control: MacRawControl): boolean {
+  if (!control.inWebArea) return false;
+  return (
+    canonicalComputerActions(control.actions).length > 0 ||
+    (control.title.length > 0 && !MAC_CONTAINER_ROLES.has(control.role))
+  );
 }
 
 interface MacInspectionResult {
   target: ComputerInspection["target"];
+  targetContext: Record<string, string | number>;
   controls: MacRawControl[];
   truncated: boolean;
+  diagnostics: Omit<
+    ComputerInspectionDiagnostics,
+    "selectionLimit" | "selectionLimitReached"
+  >;
 }
 
 function rawControlFingerprint(
@@ -575,6 +813,14 @@ function rawControlFingerprint(
     ...control.selector,
     actions: canonicalComputerActions(control.actions),
   };
+}
+
+function macCaptureIdentity(value: Record<string, unknown>): string {
+  return JSON.stringify(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, value[key]]),
+  );
 }
 
 function canonicalComputerActions(
@@ -604,7 +850,43 @@ function computerTargetKey(target: ComputerTarget): string {
   });
 }
 
+export async function retryDesktopSourceEnumeration<T>(
+  getSources: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await getSources();
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "Failed to get sources"
+    ) {
+      throw new Error(
+        `Window source enumeration failed: ${boundedDesktopCaptureError(error)}`,
+        { cause: error },
+      );
+    }
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 150));
+  try {
+    return await getSources();
+  } catch (error) {
+    throw new Error(
+      `Window source enumeration failed after retry: ${boundedDesktopCaptureError(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+function boundedDesktopCaptureError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const printable = message.replace(/[\x00-\x1f\x7f]/gu, " ").trim();
+  return printable.length > 200
+    ? `${printable.slice(0, 200)}…`
+    : printable || "unknown error";
+}
+
 export class ElectronMacComputerBackend implements ZenXComputerBackend {
+  readonly #captureScope = randomUUID();
   readonly #artifactDirectory: string;
   readonly #expiryTimers = new Set<NodeJS.Timeout>();
   readonly #accessibility: MacAccessibilityDriver;
@@ -638,34 +920,80 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     return selectComputerWindows(targets, query);
   }
 
-  async inspect(target: ComputerTarget): Promise<ComputerInspection> {
+  async inspect(
+    target: ComputerTarget,
+    signal?: AbortSignal,
+  ): Promise<ComputerInspection> {
     requireMacOs();
-    const result = (await this.#accessibility.run({
-      operation: "inspect",
-      target,
-    })) as MacInspectionResult;
+    const result = (await this.#accessibility.run(
+      { operation: "inspect", target },
+      signal,
+    )) as MacInspectionResult;
     const boundedControls = selectComputerInspectionControls(
       result.controls,
       (control) =>
         control.enabled && canonicalComputerActions(control.actions).length > 0,
+      preferredMacWebControl,
     );
+    const selected = new Set(boundedControls);
+    const capturedControls = [
+      ...boundedControls,
+      ...result.controls.filter((control) => !selected.has(control)),
+    ];
     const observation = this.#observations.observe(
       computerTargetKey(target),
-      boundedControls.map(rawControlFingerprint),
+      capturedControls.map(rawControlFingerprint),
     );
+    const controls = capturedControls.map((control, index) => ({
+      selector: observation.selectors[index]!,
+      role: control.role,
+      title: control.title,
+      enabled: control.enabled,
+      actions: rawControlFingerprint(control).actions,
+    }));
+    const reasons = [
+      ...(result.diagnostics.visitLimitReached ? ["visit_limit"] : []),
+      ...(result.diagnostics.depthLimitReached ? ["depth_limit"] : []),
+      ...(result.diagnostics.outputLimitReached ? ["native_output_limit"] : []),
+    ];
     return {
       platform: process.platform,
       observationId: observation.observationId,
       target: result.target,
-      controls: boundedControls.map((control, index) => ({
-        selector: observation.selectors[index]!,
-        role: control.role,
-        title: control.title,
-        enabled: control.enabled,
-        actions: rawControlFingerprint(control).actions,
-      })),
+      controls: controls.slice(0, boundedControls.length),
+      [OBSERVATION_CAPTURE]: {
+        assertCurrent: () =>
+          this.#observations.assertCurrent(
+            computerTargetKey(target),
+            observation.observationId,
+          ),
+        scopeKey: JSON.stringify([
+          this.#captureScope,
+          macCaptureIdentity(result.targetContext),
+        ]),
+        entries: uniqueComputerCaptureEntries(
+          controls,
+          capturedControls.map((control) =>
+            macCaptureIdentity({
+              ...rawControlFingerprint(control),
+              enabled: control.enabled,
+            }),
+          ),
+        ),
+        coverage: {
+          scope: "scoped_window_accessibility_capture",
+          sourceComplete: !result.truncated,
+          reasons,
+          ...(!result.truncated ? { itemTotal: controls.length } : {}),
+        },
+      },
       truncated:
         result.truncated || result.controls.length > boundedControls.length,
+      diagnostics: {
+        ...result.diagnostics,
+        selectionLimit: MAX_COMPUTER_INSPECTION_CONTROLS,
+        selectionLimitReached: result.controls.length > boundedControls.length,
+      },
     };
   }
 
@@ -690,9 +1018,11 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   async press(
     target: ComputerTarget,
     control: ComputerControlSelector,
+    signal?: AbortSignal,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
+    pointer?: ComputerActionPointer;
   }> {
     requireMacOs();
     const fingerprint = this.#observations.consume(
@@ -700,22 +1030,34 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       control,
       COMPUTER_ACTION_PRESS,
     );
-    const response = (await this.#accessibility.run({
-      operation: "press",
-      target,
-      control: semanticControlSelector(fingerprint),
-    })) as { target: ComputerInspection["target"] };
-    return { target: response.target, control };
+    const response = (await this.#accessibility.run(
+      {
+        operation: "press",
+        target,
+        control: semanticControlSelector(fingerprint),
+      },
+      signal,
+    )) as {
+      target: ComputerInspection["target"];
+      pointer?: ComputerActionPointer;
+    };
+    return {
+      target: response.target,
+      control,
+      ...(response.pointer ? { pointer: response.pointer } : {}),
+    };
   }
 
   async setValue(
     target: ComputerTarget,
     control: ComputerControlSelector,
     value: string,
+    signal?: AbortSignal,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
+    pointer?: ComputerActionPointer;
   }> {
     requireMacOs();
     const fingerprint = this.#observations.consume(
@@ -723,14 +1065,18 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       control,
       COMPUTER_ACTION_SET_VALUE,
     );
-    const response = (await this.#accessibility.run({
-      operation: "setValue",
-      target,
-      control: semanticControlSelector(fingerprint),
-      value,
-    })) as {
+    const response = (await this.#accessibility.run(
+      {
+        operation: "setValue",
+        target,
+        control: semanticControlSelector(fingerprint),
+        value,
+      },
+      signal,
+    )) as {
       target: ComputerInspection["target"];
       characterCount: number;
+      pointer?: ComputerActionPointer;
     };
     return { ...response, control };
   }
@@ -777,7 +1123,18 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     const exactWindow = this.#resolveWindow(target);
     return observeComputerWindow(async () => {
       const resolved = await exactWindow;
-      return await this.#captureWindowId(resolved.windowId);
+      const current = await this.#resolveWindow(target);
+      if (current.windowId !== resolved.windowId) {
+        throw new Error(
+          "The selected Computer window changed; inspect the target again",
+        );
+      }
+      return {
+        image: await this.#captureWindowId(resolved.windowId),
+        windowWidth: current.windowWidth,
+        windowHeight: current.windowHeight,
+        windowId: current.windowId,
+      };
     }, listener);
   }
 
@@ -793,16 +1150,23 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     return (await this.#accessibility.run({
       operation: "resolveWindow",
       target,
-    })) as { target: ComputerInspection["target"]; windowId: number };
+    })) as {
+      target: ComputerInspection["target"];
+      windowId: number;
+      windowWidth: number;
+      windowHeight: number;
+    };
   }
 
   async #captureWindowId(windowId: number) {
     const { desktopCapturer } = await import("electron");
-    const sources = await desktopCapturer.getSources({
-      types: ["window"],
-      thumbnailSize: { width: 1600, height: 1000 },
-      fetchWindowIcons: false,
-    });
+    const sources = await retryDesktopSourceEnumeration(() =>
+      desktopCapturer.getSources({
+        types: ["window"],
+        thumbnailSize: { width: 1600, height: 1000 },
+        fetchWindowIcons: false,
+      }),
+    );
     const source = sources.find((candidate) =>
       candidate.id.startsWith(`window:${String(windowId)}:`),
     );
@@ -879,7 +1243,12 @@ export class MacForegroundInputDriver {
     } = {},
   ) {
     this.#directory = directory;
-    this.#compileHelper = dependencies.compile ?? (() => this.#compile());
+    this.#compileHelper =
+      dependencies.compile ??
+      (() =>
+        resolveMacNativeHelperExecutable("zenx-foreground-input", () =>
+          this.#compile(),
+        ));
     this.#runProcess = dependencies.runProcess ?? runProcess;
   }
 
@@ -938,7 +1307,10 @@ class MacAccessibilityDriver {
     signal?: AbortSignal,
   ): Promise<unknown> {
     signal?.throwIfAborted();
-    const executable = await (this.#executable ??= this.#compile());
+    const executable = await (this.#executable ??=
+      resolveMacNativeHelperExecutable("zenx-accessibility", () =>
+        this.#compile(),
+      ));
     const output = await runProcess(
       executable,
       [],
@@ -970,7 +1342,38 @@ class MacAccessibilityDriver {
   }
 }
 
-const MAC_ACCESSIBILITY_SOURCE = `import AppKit
+export async function resolveMacNativeHelperExecutable(
+  helperName: "zenx-accessibility" | "zenx-foreground-input",
+  compileDevelopmentHelper: () => Promise<string>,
+  runtime: {
+    resourcesPath?: string;
+    defaultApp?: boolean;
+  } = process as typeof process & {
+    resourcesPath?: string;
+    defaultApp?: boolean;
+  },
+  assertExecutable: (path: string, mode: number) => Promise<void> = access,
+): Promise<string> {
+  if (runtime.resourcesPath !== undefined && runtime.defaultApp !== true) {
+    const executable = path.join(
+      runtime.resourcesPath,
+      "native-helpers",
+      helperName,
+    );
+    try {
+      await assertExecutable(executable, fsConstants.X_OK);
+    } catch (error) {
+      throw new Error(
+        `Packaged macOS Computer helper is missing or not executable: ${executable}`,
+        { cause: error },
+      );
+    }
+    return executable;
+  }
+  return await compileDevelopmentHelper();
+}
+
+export const MAC_ACCESSIBILITY_SOURCE = `import AppKit
 import ApplicationServices
 import Foundation
 
@@ -1034,18 +1437,48 @@ func isSettable(_ element: AXUIElement, _ name: String) -> Bool {
   return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success && settable.boolValue
 }
 
-func frameFingerprint(_ element: AXUIElement) -> String {
+func elementFrame(_ element: AXUIElement) -> CGRect? {
   guard let rawPosition = attribute(element, kAXPositionAttribute),
         let rawSize = attribute(element, kAXSizeAttribute),
         CFGetTypeID(rawPosition) == AXValueGetTypeID(),
-        CFGetTypeID(rawSize) == AXValueGetTypeID() else { return "" }
+        CFGetTypeID(rawSize) == AXValueGetTypeID() else { return nil }
   let positionValue = unsafeBitCast(rawPosition, to: AXValue.self)
   let sizeValue = unsafeBitCast(rawSize, to: AXValue.self)
   var position = CGPoint.zero
   var size = CGSize.zero
   guard AXValueGetValue(positionValue, .cgPoint, &position),
-        AXValueGetValue(sizeValue, .cgSize, &size) else { return "" }
-  return String(format: "%.1f,%.1f,%.1f,%.1f", position.x, position.y, size.width, size.height)
+        AXValueGetValue(sizeValue, .cgSize, &size),
+        position.x.isFinite, position.y.isFinite,
+        size.width.isFinite, size.height.isFinite,
+        size.width > 0, size.height > 0 else { return nil }
+  return CGRect(origin: position, size: size)
+}
+
+func actionPointer(_ element: AXUIElement, _ window: AXUIElement?, _ action: String) -> [String: Any]? {
+  guard let window,
+        let controlFrame = elementFrame(element),
+        let windowFrame = elementFrame(window) else { return nil }
+  let center = CGPoint(x: controlFrame.midX, y: controlFrame.midY)
+  guard windowFrame.contains(center) else { return nil }
+  let x = (center.x - windowFrame.minX) / windowFrame.width
+  let y = (center.y - windowFrame.minY) / windowFrame.height
+  guard x.isFinite, y.isFinite, x >= 0, x <= 1, y >= 0, y <= 1 else { return nil }
+  let timestamp = ISO8601DateFormatter()
+  timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  var pointer: [String: Any] = [
+    "x": x, "y": y, "action": action,
+    "capturedAt": timestamp.string(from: Date()),
+    "windowWidth": windowFrame.width, "windowHeight": windowFrame.height
+  ]
+  if let windowId = uniqueActionWindowId(window, windowFrame) {
+    pointer["windowId"] = windowId
+  }
+  return pointer
+}
+
+func frameFingerprint(_ element: AXUIElement) -> String {
+  guard let frame = elementFrame(element) else { return "" }
+  return String(format: "%.1f,%.1f,%.1f,%.1f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
 }
 
 let data = FileHandle.standardInput.readDataToEndOfFile()
@@ -1064,12 +1497,15 @@ if operation == "desktopContext" {
   exit(0)
 }
 guard AXIsProcessTrusted() else {
-  fail("macOS Accessibility permission is required for background-safe computer operations")
+  fail("macOS Accessibility denied for helper at " + CommandLine.arguments[0] + ". If the current ZenX.app is already enabled in System Settings > Privacy & Security > Accessibility, remove the old ZenX entry, add the current ZenX.app again, and relaunch ZenX.")
 }
 if operation == "listWindows" {
   var targets: [[String: Any]] = []
   for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
     let element = AXUIElementCreateApplication(app.processIdentifier)
+    // Chromium publishes its current AX window surface on demand. Requesting
+    // the application role before AXWindows keeps list and inspect consistent.
+    _ = textAttribute(element, kAXRoleAttribute)
     for window in elementArrayAttribute(element, kAXWindowsAttribute) {
       var target: [String: Any] = [
         "pid": Int(app.processIdentifier),
@@ -1105,19 +1541,29 @@ if let expectedBundle = string(targetRequest["bundleId"]), running.bundleIdentif
 }
 
 let appElement = AXUIElementCreateApplication(running.processIdentifier)
+// Chromium enables its native macOS accessibility surface on demand when an
+// assistive client requests the application role. Query it before resolving
+// windows so the first scoped inspection can include the web-area subtree.
+_ = textAttribute(appElement, kAXRoleAttribute)
 let requestedWindowTitle = string(targetRequest["windowTitle"])
 var windows = elementArrayAttribute(appElement, kAXWindowsAttribute)
 if let focused = elementAttribute(appElement, kAXFocusedWindowAttribute) { windows.append(focused) }
 if let main = elementAttribute(appElement, kAXMainWindowAttribute) { windows.append(main) }
 let selectedWindow: AXUIElement?
 if let title = requestedWindowTitle {
-  selectedWindow = windows.first(where: {
-    textAttribute($0, kAXRoleAttribute) == kAXWindowRole &&
-    textAttribute($0, kAXTitleAttribute) == title
-  })
-  if selectedWindow == nil {
+  var matchingWindows: [AXUIElement] = []
+  for window in windows where textAttribute(window, kAXRoleAttribute) == kAXWindowRole && textAttribute(window, kAXTitleAttribute) == title {
+    if !matchingWindows.contains(where: { CFEqual($0, window) }) {
+      matchingWindows.append(window)
+    }
+  }
+  if matchingWindows.isEmpty {
     fail("target window was not found as a scoped AXWindow")
   }
+  if matchingWindows.count != 1 {
+    fail("target window title is ambiguous; choose a uniquely titled window")
+  }
+  selectedWindow = matchingWindows[0]
 } else {
   selectedWindow = nil
 }
@@ -1135,6 +1581,39 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
   return elementArrayAttribute(element, "AXChildrenInNavigationOrder")
 }
 
+func supportsTextValue(_ element: AXUIElement) -> Bool {
+  let role = textAttribute(element, kAXRoleAttribute)
+  return ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role) &&
+    isSettable(element, kAXValueAttribute)
+}
+
+func supportedActions(_ element: AXUIElement) -> [String] {
+  var result = actions(element)
+  if supportsTextValue(element) { result.append("AXSetValue") }
+  return Array(Set(result)).sorted()
+}
+
+func displayLabel(_ element: AXUIElement) -> String {
+  for name in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXIdentifierAttribute] {
+    let value = textAttribute(element, name)
+    if !value.isEmpty { return value }
+  }
+  return ""
+}
+
+func isContainerRole(_ role: String) -> Bool {
+  return [
+    kAXWindowRole,
+    kAXGroupRole,
+    kAXToolbarRole,
+    kAXScrollAreaRole,
+    kAXSplitGroupRole,
+    "AXWebArea",
+    "AXLayoutArea",
+    "AXLayoutItem"
+  ].contains(role)
+}
+
 func selector(_ element: AXUIElement) -> [String: String] {
   var result: [String: String] = [:]
   let identifier = textAttribute(element, kAXIdentifierAttribute)
@@ -1142,12 +1621,14 @@ func selector(_ element: AXUIElement) -> [String: String] {
   let subrole = textAttribute(element, kAXSubroleAttribute)
   let title = textAttribute(element, kAXTitleAttribute)
   let description = textAttribute(element, kAXDescriptionAttribute)
+  let help = textAttribute(element, kAXHelpAttribute)
   let frame = frameFingerprint(element)
   if !identifier.isEmpty { result["identifier"] = identifier }
   if !role.isEmpty { result["role"] = role }
   if !subrole.isEmpty { result["subrole"] = subrole }
   if !title.isEmpty { result["title"] = title }
   if !description.isEmpty { result["description"] = description }
+  if !help.isEmpty { result["help"] = help }
   if !frame.isEmpty { result["frame"] = frame }
   return result
 }
@@ -1158,24 +1639,95 @@ func matches(_ element: AXUIElement, _ wanted: [String: Any]) -> Bool {
   if let value = string(wanted["subrole"]), textAttribute(element, kAXSubroleAttribute) != value { return false }
   if let value = string(wanted["title"]), textAttribute(element, kAXTitleAttribute) != value { return false }
   if let value = string(wanted["description"]), textAttribute(element, kAXDescriptionAttribute) != value { return false }
+  if let value = string(wanted["help"]), textAttribute(element, kAXHelpAttribute) != value { return false }
   if let value = string(wanted["frame"]), frameFingerprint(element) != value { return false }
-  return string(wanted["identifier"]) != nil || string(wanted["role"]) != nil || string(wanted["subrole"]) != nil || string(wanted["title"]) != nil || string(wanted["description"]) != nil || string(wanted["frame"]) != nil
+  return string(wanted["identifier"]) != nil || string(wanted["role"]) != nil || string(wanted["subrole"]) != nil || string(wanted["title"]) != nil || string(wanted["description"]) != nil || string(wanted["help"]) != nil || string(wanted["frame"]) != nil
 }
 
-func walk(_ root: AXUIElement, limit: Int = 120) -> ([AXUIElement], Bool) {
-  var queue: [(AXUIElement, Int)] = [(root, 0)]
-  var result: [AXUIElement] = []
-  while !queue.isEmpty && result.count < limit {
-    let (element, depth) = queue.removeFirst()
-    result.append(element)
-    if depth < 8 { queue.append(contentsOf: children(element).map { ($0, depth + 1) }) }
+struct WalkEntry {
+  let element: AXUIElement
+  let inWebArea: Bool
+}
+
+struct WalkResult {
+  let entries: [WalkEntry]
+  var elements: [AXUIElement] { entries.map { $0.element } }
+  let visitLimit: Int
+  let visitLimitReached: Bool
+  let maxDepth: Int
+  let maxDepthVisited: Int
+  let depthLimitReached: Bool
+}
+
+func walk(_ root: AXUIElement, visitLimit: Int = 1024, maxDepth: Int = 24) -> WalkResult {
+  var queue: [(AXUIElement, Int, Bool)] = [(root, 0, false)]
+  var result: [WalkEntry] = []
+  var cursor = 0
+  var maxDepthVisited = 0
+  var depthLimitReached = false
+  while cursor < queue.count && result.count < visitLimit {
+    let (element, depth, inheritedWebArea) = queue[cursor]
+    cursor += 1
+    let inWebArea = inheritedWebArea || textAttribute(element, kAXRoleAttribute) == "AXWebArea"
+    result.append(WalkEntry(element: element, inWebArea: inWebArea))
+    maxDepthVisited = max(maxDepthVisited, depth)
+    let descendants = children(element)
+    if depth < maxDepth {
+      queue.append(contentsOf: descendants.map { ($0, depth + 1, inWebArea) })
+    } else if !descendants.isEmpty {
+      depthLimitReached = true
+    }
   }
-  return (result, !queue.isEmpty)
+  return WalkResult(
+    entries: result,
+    visitLimit: visitLimit,
+    visitLimitReached: cursor < queue.count,
+    maxDepth: maxDepth,
+    maxDepthVisited: maxDepthVisited,
+    depthLimitReached: depthLimitReached
+  )
+}
+
+func cgWindowBounds(_ entry: [String: Any]) -> CGRect? {
+  guard let raw = entry[kCGWindowBounds as String] as? [String: Any],
+        let x = (raw["X"] as? NSNumber)?.doubleValue,
+        let y = (raw["Y"] as? NSNumber)?.doubleValue,
+        let width = (raw["Width"] as? NSNumber)?.doubleValue,
+        let height = (raw["Height"] as? NSNumber)?.doubleValue,
+        x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+        width > 0, height > 0 else { return nil }
+  return CGRect(x: x, y: y, width: width, height: height)
+}
+
+func windowBoundsMatch(_ candidate: CGRect, _ expected: CGRect, tolerance: CGFloat = 24) -> Bool {
+  return abs(candidate.origin.x - expected.origin.x) <= tolerance &&
+    abs(candidate.origin.y - expected.origin.y) <= tolerance &&
+    abs(candidate.size.width - expected.size.width) <= tolerance &&
+    abs(candidate.size.height - expected.size.height) <= tolerance
+}
+
+func uniqueActionWindowId(_ window: AXUIElement, _ bounds: CGRect) -> Int? {
+  let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  let geometryMatches = info.filter { entry in
+    guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == running.processIdentifier,
+          (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          let candidate = cgWindowBounds(entry) else { return false }
+    return windowBoundsMatch(candidate, bounds)
+  }
+  let title = textAttribute(window, kAXTitleAttribute)
+  let titleMatches = title.isEmpty ? [] : geometryMatches.filter {
+    ($0[kCGWindowName as String] as? String ?? "") == title
+  }
+  let candidates = titleMatches.isEmpty ? geometryMatches : titleMatches
+  guard candidates.count == 1,
+        let id = (candidates[0][kCGWindowNumber as String] as? NSNumber)?.intValue,
+        id > 0 else { return nil }
+  return id
 }
 
 func findControl(_ wanted: [String: Any]) -> AXUIElement {
-  let (elements, _) = walk(root)
-  let found = elements.filter { matches($0, wanted) }
+  let traversal = walk(root)
+  let found = traversal.elements.filter { matches($0, wanted) }
   if found.isEmpty { fail("accessibility control was not found") }
   if found.count > 1 { fail("accessibility selector is ambiguous") }
   return found[0]
@@ -1184,47 +1736,140 @@ func findControl(_ wanted: [String: Any]) -> AXUIElement {
 var response: [String: Any]
 switch operation {
 case "inspect":
-  let (elements, truncated) = walk(root)
-  let controls = elements.compactMap { element -> [String: Any]? in
+  let traversal = walk(root)
+  var actionableControls: [[String: Any]] = []
+  var semanticControls: [[String: Any]] = []
+  var fallbackControls: [[String: Any]] = []
+  var encounteredWebArea = false
+  var webAreaControlCount = 0
+  var webAreaActionableCount = 0
+  for entry in traversal.entries {
+    let element = entry.element
     let controlSelector = selector(element)
-    if controlSelector.isEmpty { return nil }
-    var supportedActions = actions(element)
-    if isSettable(element, kAXValueAttribute) { supportedActions.append("AXSetValue") }
-    return [
+    if controlSelector.isEmpty { continue }
+    let role = textAttribute(element, kAXRoleAttribute)
+    if role == "AXWebArea" { encounteredWebArea = true }
+    let label = displayLabel(element)
+    let enabled = boolAttribute(element, kAXEnabledAttribute)
+    let elementActions = supportedActions(element)
+    if entry.inWebArea { webAreaControlCount += 1 }
+    let control: [String: Any] = [
       "selector": controlSelector,
-      "role": textAttribute(element, kAXRoleAttribute),
-      "title": textAttribute(element, kAXTitleAttribute),
-      "enabled": boolAttribute(element, kAXEnabledAttribute),
-      "actions": supportedActions.sorted(),
+      "role": role,
+      "title": label,
+      "enabled": enabled,
+      "actions": elementActions,
+      "inWebArea": entry.inWebArea,
     ]
+    if enabled && (elementActions.contains("AXPress") || elementActions.contains("AXSetValue")) {
+      if entry.inWebArea { webAreaActionableCount += 1 }
+      actionableControls.append(control)
+    } else if !isContainerRole(role) && !label.isEmpty {
+      semanticControls.append(control)
+    } else {
+      fallbackControls.append(control)
+    }
   }
-  response = ["target": resolvedTarget, "controls": controls, "truncated": truncated]
+  let orderedControls = actionableControls + semanticControls + fallbackControls
+  let outputLimit = 120
+  let controls = Array(orderedControls.prefix(outputLimit))
+  let outputLimitReached = orderedControls.count > controls.count
+  var targetContext: [String: Any] = [
+    "pid": Int(running.processIdentifier),
+    "bundleId": running.bundleIdentifier ?? "",
+    "windowTitle": requestedWindowTitle ?? ""
+  ]
+  if let launchDate = running.launchDate {
+    targetContext["launchTime"] = launchDate.timeIntervalSince1970
+  }
+  if let selectedWindow {
+    targetContext["windowFrame"] = frameFingerprint(selectedWindow)
+    if let bounds = elementFrame(selectedWindow),
+       let windowId = uniqueActionWindowId(selectedWindow, bounds) {
+      targetContext["windowId"] = windowId
+    }
+  }
+  response = [
+    "target": resolvedTarget,
+    "targetContext": targetContext,
+    "controls": controls,
+    "truncated": traversal.visitLimitReached || traversal.depthLimitReached || outputLimitReached,
+    "diagnostics": [
+      "visitedCount": traversal.elements.count,
+      "visitLimit": traversal.visitLimit,
+      "visitLimitReached": traversal.visitLimitReached,
+      "maxDepth": traversal.maxDepth,
+      "maxDepthVisited": traversal.maxDepthVisited,
+      "depthLimitReached": traversal.depthLimitReached,
+      "outputLimit": outputLimit,
+      "outputLimitReached": outputLimitReached,
+      "actionableCount": actionableControls.count,
+      "semanticCount": semanticControls.count,
+      "fallbackCount": fallbackControls.count,
+      "encounteredWebArea": encounteredWebArea,
+      "webAreaControlCount": webAreaControlCount,
+      "webAreaActionableCount": webAreaActionableCount
+    ]
+  ]
 case "press":
   let wanted = dictionary(request["control"], "control")
   let element = findControl(wanted)
   guard actions(element).contains(kAXPressAction) else { fail("control does not support background-safe AXPress; foreground_required") }
+  let pointer = actionPointer(element, selectedWindow, "press")
   let error = AXUIElementPerformAction(element, kAXPressAction as CFString)
   guard error == .success else { fail("AXPress failed with error " + String(error.rawValue)) }
   response = ["target": resolvedTarget, "control": selector(element)]
+  if let pointer { response["pointer"] = pointer }
 case "setValue":
   let wanted = dictionary(request["control"], "control")
   guard let value = request["value"] as? String else { fail("value must be a string") }
   let element = findControl(wanted)
-  var settable: DarwinBoolean = false
-  guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue else {
+  guard supportsTextValue(element) else {
     fail("control does not support background-safe AXValue; foreground_required")
   }
+  let pointer = actionPointer(element, selectedWindow, "set_value")
   let error = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
   guard error == .success else { fail("AXValue failed with error " + String(error.rawValue)) }
   response = ["target": resolvedTarget, "control": selector(element), "characterCount": value.count]
+  if let pointer { response["pointer"] = pointer }
 case "resolveWindow":
   guard let title = requestedWindowTitle else { fail("windowTitle is required") }
+  guard let selectedWindow, let selectedBounds = elementFrame(selectedWindow) else {
+    fail("target AXWindow has no valid bounds for scoped capture")
+  }
   let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-  guard let window = info.first(where: {
-    ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == running.processIdentifier &&
-    ($0[kCGWindowName as String] as? String ?? "") == title
-  }), let number = window[kCGWindowNumber as String] as? NSNumber else { fail("target window is not available for scoped capture") }
-  response = ["target": resolvedTarget, "windowId": number]
+  let candidates = info.compactMap { entry -> ([String: Any], CGRect)? in
+    guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == running.processIdentifier,
+          (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          let bounds = cgWindowBounds(entry) else { return nil }
+    return (entry, bounds)
+  }
+  let titleMatches = candidates.filter {
+    ($0.0[kCGWindowName as String] as? String ?? "") == title
+  }
+  let scopedCandidates = titleMatches.isEmpty ? candidates : titleMatches
+  let window: [String: Any]
+  if titleMatches.count == 1 {
+    window = titleMatches[0].0
+  } else {
+    let geometryMatches = scopedCandidates.filter {
+      windowBoundsMatch($0.1, selectedBounds)
+    }
+    if geometryMatches.count > 1 {
+      fail("target window mapping is ambiguous for scoped capture")
+    }
+    guard let matched = geometryMatches.first else {
+      fail("target window is not available for scoped capture")
+    }
+    window = matched.0
+  }
+  guard let number = window[kCGWindowNumber as String] as? NSNumber else {
+    fail("target window has no CGWindow identifier for scoped capture")
+  }
+  response = [
+    "target": resolvedTarget, "windowId": number,
+    "windowWidth": selectedBounds.width, "windowHeight": selectedBounds.height
+  ]
 default:
   fail("unsupported accessibility operation")
 }
@@ -1233,7 +1878,7 @@ guard let output = try? JSONSerialization.data(withJSONObject: response) else { 
 FileHandle.standardOutput.write(output)
 `;
 
-const MAC_FOREGROUND_INPUT_SOURCE = `import ApplicationServices
+export const MAC_FOREGROUND_INPUT_SOURCE = `import ApplicationServices
 import Foundation
 
 func fail(_ message: String) -> Never {
@@ -1242,7 +1887,7 @@ func fail(_ message: String) -> Never {
 }
 
 guard AXIsProcessTrusted() else {
-  fail("macOS Accessibility permission is required for foreground takeover")
+  fail("macOS Accessibility denied for helper at " + CommandLine.arguments[0] + ". If the current ZenX.app is already enabled in System Settings > Privacy & Security > Accessibility, remove the old ZenX entry, add the current ZenX.app again, and relaunch ZenX.")
 }
 let data = FileHandle.standardInput.readDataToEndOfFile()
 guard let raw = try? JSONSerialization.jsonObject(with: data),

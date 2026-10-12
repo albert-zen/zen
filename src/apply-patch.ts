@@ -74,6 +74,7 @@ type PlannedOperation =
 export class ApplyPatchToolRuntime implements ToolRuntime {
   readonly name = "apply_patch";
   readonly enforcesSandbox = true;
+  readonly remoteExecution = "text-json";
   readonly specification: ModelTool = {
     name: this.name,
     description:

@@ -1,4 +1,9 @@
+import type { ProtocolIpcResult } from "../../preload/queue-edit-ipc.js";
 import type { SubscriptionUsage } from "../../main/subscription-usage.js";
+import type {
+  ImZenXSetupView,
+  ImZenXChannelSave,
+} from "../../main/imzenx-setup-service.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import type {
   ApprovalDecision,
@@ -21,6 +26,7 @@ import type {
   ZenXSidebarOrder,
   ZenXSettingsUpdate,
 } from "../../main/host-profile.js";
+import type { ProviderMutationReply } from "../../main/settings-diagnostic-log.js";
 import type {
   ZenXPluginSnapshot,
   ZenXPluginTarballSelectionResult,
@@ -52,6 +58,7 @@ import type {
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { MarketplaceCatalogLoadSnapshot } from "../../marketplace.js";
 import type { ChromeBridgeSettingsSnapshot } from "../../main/chrome-extension-bridge.js";
+import type { ZenXComputerReadinessSnapshot } from "../../main/computer-readiness.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   BrowserThreadRequest,
@@ -61,7 +68,18 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      imzenx: {
+        inspect(): Promise<ImZenXSetupView>;
+        saveChannel(input: ImZenXChannelSave): Promise<ImZenXSetupView>;
+        prepareRuntime(): Promise<ImZenXSetupView>;
+      };
       platform: NodeJS.Platform;
+      locale: {
+        getSystemLanguages(): Promise<string[]>;
+        setLanguage(
+          language: import("../../locale.js").SupportedLanguage,
+        ): Promise<void>;
+      };
       skills: {
         list(): Promise<import("../../../../cli/src/skills.js").SkillsSnapshot>;
         importDirectory(
@@ -141,7 +159,7 @@ declare global {
         request<M extends ClientRequestMethod>(
           method: M,
           params: ClientRequestParams[M],
-        ): Promise<ClientRequestResults[M]>;
+        ): Promise<ProtocolIpcResult<M>>;
         respondToApproval(
           requestId: string,
           decision: ApprovalDecision,
@@ -196,16 +214,23 @@ declare global {
           settings: ZenXSettingsUpdate,
           apiKey?: string,
         ): Promise<PublicHostSettings>;
+        recordDiagnostic(
+          event: import("../../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
+        ): Promise<void>;
+        openDiagnosticsFolder(): Promise<void>;
         addProvider(
           provider: ZenXProviderProfile,
           apiKey?: string,
           baseRevision?: number,
-        ): Promise<PublicHostSettings>;
+          logoUpload?: Uint8Array,
+          diagnosticAttemptId?: string,
+        ): Promise<ProviderMutationReply<PublicHostSettings>>;
         editProvider(
           providerProfileId: string,
           provider: ZenXProviderProfile,
           options?: ZenXProviderEditOptions,
-        ): Promise<PublicHostSettings>;
+          diagnosticAttemptId?: string,
+        ): Promise<ProviderMutationReply<PublicHostSettings>>;
         deleteProvider(
           providerProfileId: string,
           replacements?: ZenXProviderDeleteReplacements,
@@ -258,6 +283,11 @@ declare global {
         prepare(): Promise<ChromeBridgeSettingsSnapshot>;
         remove(): Promise<ChromeBridgeSettingsSnapshot>;
         openExtension(): Promise<void>;
+      };
+      computerReadiness: {
+        get(): Promise<ZenXComputerReadinessSnapshot>;
+        probe(): Promise<ZenXComputerReadinessSnapshot>;
+        openSettings(kind: "accessibility" | "screen-recording"): Promise<void>;
       };
       browserObservation: {
         subscribe(

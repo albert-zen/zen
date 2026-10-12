@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Icon } from "./icons.js";
 
 export type ProviderLogoKind =
@@ -51,12 +52,30 @@ export function providerLogoKindForIdentity(
   return "generic";
 }
 
-export function ProviderLogo({ kind }: { kind: ProviderLogoKind }) {
-  const asset = formalProviderAssets[kind];
+export function ProviderLogo({
+  kind,
+  customSrc,
+}: {
+  kind: ProviderLogoKind;
+  customSrc?: string;
+}) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const asset =
+    customSrc !== undefined && customSrc !== failedSrc
+      ? customSrc
+      : formalProviderAssets[kind];
   return (
     <span className={`provider-logo ${kind}`} aria-hidden="true">
       {asset !== undefined ? (
-        <img alt="" src={asset} />
+        <img
+          alt=""
+          src={asset}
+          onError={
+            customSrc !== undefined && asset === customSrc
+              ? () => setFailedSrc(customSrc)
+              : undefined
+          }
+        />
       ) : kind === "local" ? (
         <Icon name="terminal" size={13} />
       ) : kind === "generic" ? (

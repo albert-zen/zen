@@ -13,6 +13,69 @@ import {
 import type { HostEvent } from "../src/main/host-messages.js";
 import { shellPrintCommand } from "./fixtures/shell-command.js";
 
+test("hosted Agents read lifecycle readiness without disclosing or invoking plugin tools", async (t) => {
+  const spool = new ToolOutputSpool();
+  t.after(() => spool.close());
+  const snapshot = {
+    definitions: [],
+    plugins: [],
+    pluginCatalogAvailable: true,
+    pluginReadiness: [
+      {
+        id: "fixture",
+        displayName: "Fixture",
+        lifecycle: "installed" as const,
+        enabled: false,
+        available: true,
+      },
+    ],
+  };
+  const composition = createZenXHostToolEnvironment({
+    capabilities: snapshot,
+    toolOutputSpool: spool,
+    send: (event) => {
+      if (event.type === "capability/invoke")
+        throw new Error("Readiness must not invoke the Host plugin");
+    },
+  });
+  const inspect = async () =>
+    JSON.parse(
+      (
+        await composition.toolEnvironment.execute(
+          composition.toolEnvironment.prepare({
+            name: "zenx_plugin",
+            callId: "readiness",
+            arguments: { operation: "readiness", pluginIds: ["fixture"] },
+            cwd: process.cwd(),
+            signal: new AbortController().signal,
+          }),
+        )
+      ).output,
+    );
+  assert.equal((await inspect()).plugins[0].state, "disabled");
+  composition.replaceCapabilities({
+    ...snapshot,
+    pluginReadiness: [
+      {
+        ...snapshot.pluginReadiness[0]!,
+        lifecycle: "uninstalled",
+        enabled: false,
+      },
+    ],
+  });
+  assert.equal((await inspect()).plugins[0].state, "missing");
+  assert.deepEqual(
+    composition.toolDefinitionProjection([]).map((tool) => tool.name),
+    ["wait", "shell", "zenx_plugin"],
+  );
+  composition.replaceCapabilities({
+    ...snapshot,
+    pluginCatalogAvailable: false,
+  });
+  await assert.rejects(inspect(), /catalog is unavailable/);
+  await composition.close();
+});
+
 test("simultaneous threads with the same model call id retain separate bridge results", async (t) => {
   t.mock.method(Date, "now", () => 1234);
   const events: HostEvent[] = [];
@@ -283,9 +346,23 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
   assert.deepEqual(initial.at(-1), {
     name: "zenx_plugin",
     description:
-      "Discover available ZenX plugins or read one plugin's main document and tool index.",
+      "Discover available ZenX plugins, inspect selected plugin readiness, or read one plugin's main document and tool index. Readiness never enables a plugin or approves tool permissions.",
     inputSchema: {
       oneOf: [
+        {
+          type: "object",
+          properties: {
+            operation: { const: "readiness" },
+            pluginIds: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 128 },
+              minItems: 1,
+              maxItems: 32,
+            },
+          },
+          required: ["operation", "pluginIds"],
+          additionalProperties: false,
+        },
         {
           type: "object",
           properties: { operation: { const: "discover" } },

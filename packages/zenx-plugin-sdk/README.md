@@ -91,3 +91,18 @@ Read the current `window.zenxPluginUi` getters (or the event's `detail.sdk`) to
 update custom UI. Theme changes do not replace the document or clear local form
 input. Bundle replacement still creates a new document and invalidates replies
 to the old frame. Appearance is display information, never runtime authority.
+
+### Explicit remote execution eligibility
+
+An ordinary tool may declare `remoteExecution: "text-json"` together with
+`interactionMode: "background_safe"`. The Host carries this eligibility outside
+its model-facing input schema; omission remains local-only. Fleet still requires
+its own separate Host, client and device tools grant and applies the selected
+existing target Thread's permissions.
+
+Opt in only when the tool can use target-local context and produce bounded
+text/JSON with its origin preserved. Do not opt in composite orchestration,
+trusted UI commands, model-media output, page/session handles or artifact-bearing
+results requiring an origin-aware transfer adapter. Remote paths are never local
+paths. Catalog eligibility and supported exact schemas remain authoritative;
+a declaration alone does not promise transport support or grant execution.

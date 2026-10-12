@@ -292,9 +292,20 @@ test("DOM inspection exposes bounded control state and native select and rich-te
       "options-changed",
     );
     speedElement.options[1]!.disabled = false;
+    const reorderedSelect = {
+      ...select,
+      options: select.options?.map((option) => ({
+        disabled: option.disabled,
+        label: option.label,
+        selected: option.selected,
+        value: option.value,
+      })),
+    };
     assert.equal(
       (
-        dom.window.eval(browserActionScript(select, "select", "Express")) as {
+        dom.window.eval(
+          browserActionScript(reorderedSelect, "select", "Express"),
+        ) as {
           ok: boolean;
         }
       ).ok,
@@ -772,6 +783,220 @@ test("DOM action rejects an earlier route change but permits its own route chang
       "/agent-route",
       "the action's own synchronous route change must not turn success stale",
     );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("Agent pointer marks only validated DOM actions without focus or pointer input", async () => {
+  const dom = new JSDOM(
+    `<style>* { opacity: 1 }</style><button id="first">First</button><button id="second">Second</button>`,
+    { runScripts: "outside-only", url: "https://example.test/" },
+  );
+  try {
+    dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+      const left = this.id === "second" ? 200 : 20;
+      return {
+        x: left,
+        y: 10,
+        top: 10,
+        left,
+        width: 100,
+        height: 40,
+        right: left + 100,
+        bottom: 50,
+        toJSON() {
+          return {};
+        },
+      };
+    };
+    const inspect = () =>
+      dom.window.eval(browserInspectScript) as {
+        visibleText: string;
+        targets: BrowserTargetFingerprint[];
+      };
+    const targets = inspect().targets;
+    let pointerEvents = 0;
+    let focusEvents = 0;
+    dom.window.document.addEventListener("pointermove", () => pointerEvents++);
+    dom.window.document.addEventListener("mousedown", () => pointerEvents++);
+    dom.window.document.addEventListener("focusin", () => focusEvents++);
+    const stale = { ...targets[0]!, name: "Changed" };
+    assert.equal(
+      (dom.window.eval(browserActionScript(stale, "click")) as { ok: boolean })
+        .ok,
+      false,
+    );
+    assert.equal(
+      dom.window.document.querySelector("[data-zenx-agent-pointer]"),
+      null,
+    );
+    for (const target of targets) {
+      assert.equal(
+        (
+          dom.window.eval(browserActionScript(target, "click")) as {
+            ok: boolean;
+          }
+        ).ok,
+        true,
+      );
+    }
+    const pointer = dom.window.document.querySelector(
+      "[data-zenx-agent-pointer]",
+    );
+    assert.ok(pointer);
+    assert.equal(pointer.getAttribute("aria-hidden"), "true");
+    assert.equal(
+      pointer.shadowRoot,
+      null,
+      "drawing stays in closed shadow root",
+    );
+    assert.equal(JSON.parse(pointer.getAttribute("data-points")!).length, 2);
+    assert.equal(pointerEvents, 0);
+    assert.equal(focusEvents, 0);
+    assert.equal(dom.window.document.activeElement?.tagName, "BODY");
+    const after = inspect();
+    assert.equal(after.targets.length, 2);
+    assert.equal(after.visibleText.includes("zenx"), false);
+    Object.defineProperty(dom.window, "scrollBy", { value: () => undefined });
+    dom.window.eval(browserScrollScript("down", 50));
+    assert.equal(
+      dom.window.document.querySelector("[data-zenx-agent-pointer]"),
+      null,
+    );
+    dom.window.eval(browserActionScript(targets[0]!, "click"));
+    assert.ok(dom.window.document.querySelector("[data-zenx-agent-pointer]"));
+    dom.window.history.pushState({}, "", "/new-route");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(
+      dom.window.document.querySelector("[data-zenx-agent-pointer]"),
+      null,
+      "a same-document route change clears stale coordinates",
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("Agent pointer keeps the validated position when a click removes its target", () => {
+  const dom = new JSDOM(`<button id="gone">Remove</button>`, {
+    runScripts: "outside-only",
+    url: "https://example.test/",
+  });
+  try {
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 40,
+      y: 10,
+      top: 10,
+      left: 40,
+      width: 60,
+      height: 30,
+      right: 100,
+      bottom: 40,
+      toJSON() {
+        return {};
+      },
+    });
+    const target = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets[0]!;
+    dom.window.document
+      .querySelector("button")!
+      .addEventListener("click", (e) => {
+        (e.currentTarget as Element).remove();
+      });
+    assert.equal(
+      (dom.window.eval(browserActionScript(target, "click")) as { ok: boolean })
+        .ok,
+      true,
+    );
+    const pointer = dom.window.document.querySelector(
+      "[data-zenx-agent-pointer]",
+    );
+    assert.ok(pointer);
+    assert.deepEqual(JSON.parse(pointer.getAttribute("data-points")!), [
+      [70, 25],
+    ]);
+    const inspection = dom.window.eval(browserInspectScript) as {
+      visibleText: string;
+      targets: BrowserTargetFingerprint[];
+    };
+    assert.equal(inspection.targets.length, 0);
+    assert.equal(inspection.visibleText.includes("Agent"), false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("Agent pointer does not jump when the clicked target moves", () => {
+  const dom = new JSDOM(`<button id="moving">Move</button>`, {
+    runScripts: "outside-only",
+    url: "https://example.test/",
+  });
+  try {
+    let left = 10;
+    dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: left,
+      y: 10,
+      top: 10,
+      left,
+      width: 80,
+      height: 30,
+      right: left + 80,
+      bottom: 40,
+      toJSON() {
+        return {};
+      },
+    });
+    const target = (
+      dom.window.eval(browserInspectScript) as {
+        targets: BrowserTargetFingerprint[];
+      }
+    ).targets[0]!;
+    dom.window.document
+      .querySelector("button")!
+      .addEventListener("click", () => (left = 300));
+    assert.equal(
+      (dom.window.eval(browserActionScript(target, "click")) as { ok: boolean })
+        .ok,
+      true,
+    );
+    const pointer = dom.window.document.querySelector(
+      "[data-zenx-agent-pointer]",
+    );
+    assert.ok(pointer);
+    assert.deepEqual(JSON.parse(pointer.getAttribute("data-points")!), [
+      [50, 25],
+    ]);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("pointer cleanup failure cannot turn a completed scroll into an action failure", () => {
+  const dom = new JSDOM(`<div></div>`, { runScripts: "outside-only" });
+  try {
+    let scrolled = false;
+    Object.defineProperty(dom.window, "scrollBy", {
+      value: () => {
+        scrolled = true;
+      },
+    });
+    const pointer = dom.window.document.createElement("div");
+    pointer.setAttribute("data-zenx-agent-pointer", "");
+    Object.defineProperty(pointer, "__zenxCleanup", {
+      value: () => {
+        throw new Error("visual cleanup failed");
+      },
+    });
+    dom.window.document.documentElement.appendChild(pointer);
+    assert.equal(
+      (dom.window.eval(browserScrollScript("down", 50)) as { ok: boolean }).ok,
+      true,
+    );
+    assert.equal(scrolled, true);
   } finally {
     dom.window.close();
   }

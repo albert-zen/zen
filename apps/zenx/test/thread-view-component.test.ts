@@ -9,6 +9,7 @@ import test from "node:test";
 import type { Thread, ThreadItem, Turn } from "../src/protocol-client/index.js";
 import type { AttachmentRef } from "../../../src/attachment.js";
 import type { CanonicalItem } from "../../../src/item.js";
+import { applyNativeThreadEvent } from "../src/renderer/src/thread-view-state.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
@@ -20,9 +21,50 @@ import {
 } from "../src/renderer/src/composer-state.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
-const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
+const { ThreadView, ContextUsageIndicator } =
+  await import("../src/renderer/src/ThreadView.js");
+const { requestContextCompaction } =
+  await import("../src/renderer/src/compact-command.js");
 
 const noop = async () => undefined;
+
+test("new-thread execution context can sit beneath input while existing conversations keep their context before it", () => {
+  for (const position of ["before", "after"] as const) {
+    const html = renderToStaticMarkup(
+      createElement(ThreadView, {
+        approvals: [],
+        composer: emptyComposerState(),
+        composerContext: createElement(
+          "div",
+          { "data-context": "target" },
+          "Run on This machine",
+        ),
+        composerContextPosition: position,
+        thread: null,
+        onDraftChange: () => {},
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+      }),
+    );
+    const dom = new JSDOM(html);
+    const children = [
+      ...dom.window.document.querySelector(".bottom-zone")!.children,
+    ];
+    const formIndex = children.findIndex((child) =>
+      child.classList.contains("composer"),
+    );
+    const contextIndex = children.findIndex((child) =>
+      child.hasAttribute("data-context"),
+    );
+    assert.ok(
+      position === "before"
+        ? contextIndex < formIndex
+        : contextIndex > formIndex,
+    );
+    dom.window.close();
+  }
+});
 
 test("manual Skills are slash candidates and selection stays removable without sending", async () => {
   await withDom(async (root) => {
@@ -113,12 +155,27 @@ test("idle composer exposes one disabled Send action when empty", () => {
   assert.doesNotMatch(html, /Steer now/u);
 });
 
+test("confirmed sends do not leave protocol receipts in the composer", () => {
+  for (const stage of ["queued", "delivered", "completed", "ended"] as const) {
+    const html = render(false, [], {
+      ...emptyComposerState(),
+      confirmedAdmission: { clientId: "sent-message", stage },
+    });
+    const form = html.match(/<form[\s\S]*?<\/form>/u)?.[0] ?? "";
+    assert.ok(form);
+    assert.doesNotMatch(
+      form,
+      /composer-note|containing this message|admitted to the queue|added to a Turn/u,
+    );
+  }
+});
+
 test("composer textarea opts into bounded content-driven growth", () => {
   const html = render(false, [], editComposer(emptyComposerState(), "draft"));
   assert.match(html, /<textarea[^>]*data-autogrow="true"/u);
 });
 
-test("context usage renders beside the composer with honest tooltip details", () => {
+test("context usage renders beside the composer with concise usage and cache details", () => {
   const html = renderTurns(
     [],
     [],
@@ -146,7 +203,7 @@ test("context usage renders beside the composer with honest tooltip details", ()
   );
   assert.match(
     html,
-    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% est[^"]*Thread cache 50%/u,
+    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 50%/u,
   );
   assert.match(html, /aria-haspopup="dialog"/u);
   assert.match(html, /aria-expanded="false"/u);
@@ -176,14 +233,129 @@ test("context ring opens an accessible popover before its compact action runs", 
 
     const ring = requiredButton(".context-usage-trigger");
     assert.equal(ring.getAttribute("aria-expanded"), "false");
+    await act(async () => ring.focus());
+    assert.equal(document.activeElement, ring);
     await act(async () => ring.click());
     assert.equal(compactCalls, 0);
     assert.equal(ring.getAttribute("aria-expanded"), "true");
     assert.ok(document.querySelector('[role="dialog"]'));
+    assert.match(document.body.textContent ?? "", /78\.2K \/ 262K tokens/u);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Configured window|last provider|configured window tokens|estimated next input|Condense earlier|Your conversation/u,
+    );
+    assert.match(
+      requiredElement('[role="progressbar"]').getAttribute("aria-valuetext") ??
+        "",
+      /Context 30% · 78\.2K \/ 262K tokens/u,
+    );
 
     await act(async () => requiredButton(".context-usage-compact").click());
     assert.equal(compactCalls, 1);
   });
+});
+
+test("context pressure above the configured window keeps the real percent in its label", () => {
+  const html = renderToStaticMarkup(
+    createElement(ContextUsageIndicator, {
+      context: {
+        inputTokens: 587_500,
+        inputTokenSource: "provider",
+        contextWindow: 271_992,
+        ratio: 587_500 / 271_992,
+      },
+      threadCacheHitRate: 0.96,
+    }),
+  );
+  assert.match(html, /Context 216%/u);
+  assert.match(html, /Thread cache 96%/u);
+  assert.match(html, /587\.5K \/ 272K tokens/u);
+  assert.doesNotMatch(html, /last provider|configured window/u);
+  assert.match(html, /stroke-dasharray="1 1"/u);
+});
+
+test("context hover remains open across a real gap corridor above and below the ring, then closes outside or on Escape", async () => {
+  for (const placement of ["above", "below"] as const) {
+    await withDom(async (root) => {
+      const anchorTop = placement === "above" ? 300 : 4;
+      const anchorBottom = anchorTop + 28;
+      const getRect = window.HTMLElement.prototype.getBoundingClientRect;
+      window.HTMLElement.prototype.getBoundingClientRect = function () {
+        if (this.classList.contains("context-usage-indicator"))
+          return new window.DOMRect(680, anchorTop, 28, 28);
+        if (this.classList.contains("context-usage-popover"))
+          return new window.DOMRect(422, 0, 286, 150);
+        return getRect.call(this);
+      };
+      await act(async () =>
+        root.render(
+          createElement(ContextUsageIndicator, {
+            context: usageProjection().context,
+            threadCacheHitRate: 0.5,
+            onCompact: noop,
+          }),
+        ),
+      );
+      const ring = requiredButton(".context-usage-trigger");
+      await act(async () =>
+        ring.dispatchEvent(
+          new window.MouseEvent("mouseover", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        ),
+      );
+      const panel = requiredElement<HTMLElement>(".context-usage-popover");
+      const corridor = requiredElement<HTMLElement>(
+        ".context-usage-hover-bridge",
+      );
+      assert.equal(panel.getAttribute("data-placement"), placement);
+      assert.equal(corridor.style.position, "fixed");
+      assert.equal(corridor.style.left, panel.style.left);
+      assert.equal(corridor.style.width, panel.style.width);
+      assert.equal(corridor.style.height, "8px");
+      assert.equal(
+        corridor.style.top,
+        `${placement === "above" ? anchorTop - 8 : anchorBottom}px`,
+      );
+      assert.equal(corridor.getAttribute("aria-hidden"), "true");
+      for (const [from, to] of [
+        [ring, corridor],
+        [corridor, panel],
+        [panel, requiredButton(".context-usage-compact")],
+      ] as const) {
+        await act(async () =>
+          from.dispatchEvent(
+            new window.MouseEvent("mouseout", {
+              bubbles: true,
+              relatedTarget: to,
+            }),
+          ),
+        );
+        assert.ok(document.querySelector('[role="dialog"]'));
+      }
+      await act(async () =>
+        panel.dispatchEvent(
+          new window.MouseEvent("mouseout", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        ),
+      );
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      await act(async () => ring.focus());
+      assert.ok(document.querySelector('[role="dialog"]'));
+      await act(async () =>
+        ring.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            bubbles: true,
+            key: "Escape",
+          }),
+        ),
+      );
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+    });
+  }
 });
 
 test("compaction progress is a transcript item and completed items reveal exact effective messages", async () => {
@@ -259,6 +431,286 @@ test("compaction progress is a transcript item and completed items reveal exact 
   });
 });
 
+for (const provenance of ["human", "automatic", "agent"] as const) {
+  test(`${provenance} compaction arriving before canonical hydration keeps the conversation usable`, async () => {
+    await withDom(async (root) => {
+      const history = compactionHistory();
+      const generated = history.at(-1)!;
+      assert.equal(generated.type, "context_compaction");
+      const compact: CanonicalItem =
+        provenance === "agent"
+          ? {
+              id: generated.id,
+              type: "context_compaction",
+              threadId: generated.threadId,
+              turnId: "turn-1",
+              callId: "compact-call",
+              sourceModelResponseId: "response-1",
+              createdAt: generated.createdAt,
+              provenance: "agentic",
+              initiator: "agent",
+              coveredThroughItemId: generated.coveredThroughItemId,
+              summary: generated.summary,
+              retainedItemIds: generated.retainedItemIds,
+              algorithmVersion: generated.algorithmVersion,
+            }
+          : { ...generated, initiator: provenance };
+      const original = thread([
+        turnWithItems("completed", [
+          user("Keep this request"),
+          agent("Kept answer"),
+        ]),
+      ]);
+      const composer = editComposer(emptyComposerState(), "Unsent draft");
+      const renderView = (value: Thread) =>
+        act(async () =>
+          root.render(
+            createElement(ThreadView, {
+              approvals: [],
+              composer,
+              thread: value,
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          ),
+        );
+      await renderView(original);
+      const partial = applyNativeThreadEvent(original, {
+        type: "item_completed",
+        item: compact,
+      });
+      await renderView(partial);
+      assert.equal(
+        document.querySelectorAll(".context-compaction-event").length,
+        1,
+      );
+      await act(async () =>
+        requiredButton(".context-compaction-toggle").click(),
+      );
+      assert.match(
+        requiredElement(".compaction-summary").textContent ?? "",
+        /Continue with the accepted plan/u,
+      );
+      const diagnostics = requiredElement(".compaction-projection");
+      assert.match(diagnostics.textContent ?? "", /unavailable/u);
+      assert.match(diagnostics.textContent ?? "", /boundary does not exist/u);
+      assert.equal(diagnostics.querySelector("ol"), null);
+      assert.equal(
+        requiredElement<HTMLTextAreaElement>("textarea").value,
+        "Unsent draft",
+      );
+
+      // Duplicate delivery and a status update must not remove the committed summary.
+      const duplicate = applyNativeThreadEvent(partial, {
+        type: "item_completed",
+        item: compact,
+      });
+      await renderView({ ...duplicate, status: { type: "idle" } });
+      assert.equal(
+        document.querySelectorAll(".context-compaction-event").length,
+        1,
+      );
+      assert.equal(
+        requiredElement(".compaction-projection").querySelector("ol"),
+        null,
+      );
+      const unrelated = {
+        ...original,
+        id: "other-thread",
+        sessionId: "other-thread",
+      };
+      await renderView(unrelated);
+      assert.equal(document.querySelector(".context-compaction-event"), null);
+      await renderView(partial);
+      await act(async () =>
+        requiredButton(".context-compaction-toggle").click(),
+      );
+
+      // A later authoritative read restores exact diagnostics, with no invented context while waiting.
+      const hydrated = {
+        ...partial,
+        canonicalItems: [...history.slice(0, -1), compact],
+      };
+      await renderView(hydrated);
+      assert.doesNotMatch(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /unavailable/u,
+      );
+      assert.match(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /Keep this request/u,
+      );
+      assert.match(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /Kept answer/u,
+      );
+      assert.ok(requiredElement(".compaction-projection").querySelector("ol"));
+      assert.equal(
+        requiredElement<HTMLTextAreaElement>("textarea").value,
+        "Unsent draft",
+      );
+    });
+  });
+}
+
+test("compaction with a present boundary but missing retained items keeps its summary", async () => {
+  await withDom(async (root) => {
+    const history = compactionHistory();
+    const partial = {
+      ...thread([]),
+      canonicalItems: history.filter(
+        (item) =>
+          item.type === "turn_completed" || item.type === "context_compaction",
+      ),
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: partial,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".context-compaction-toggle").click());
+    assert.match(
+      requiredElement(".compaction-summary").textContent ?? "",
+      /Continue with the accepted plan/u,
+    );
+    assert.match(
+      requiredElement(".compaction-projection").textContent ?? "",
+      /Retained context Item does not exist/u,
+    );
+    assert.equal(
+      requiredElement(".compaction-projection").querySelector("ol"),
+      null,
+    );
+  });
+});
+
+test("compaction error is a keyboard-reachable context notice with plain details and explicit dismiss", async () => {
+  await withDom(async (root) => {
+    let composer: ComposerState = {
+      ...emptyComposerState(),
+      compaction: {
+        status: "failed",
+        message: "Could not confirm this compaction request.",
+        detail: "Error invoking <script> & token hidden",
+      },
+    };
+    let selected = thread([]);
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: selected,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+          onDismissCompaction: () => {
+            composer = { ...composer, compaction: undefined };
+            renderView();
+          },
+        }),
+      );
+    await act(async () => renderView());
+    const alert = requiredElement('[role="alert"].context-compaction-progress');
+    assert.equal(alert.closest(".messages-inner"), null);
+    assert.equal(alert.closest(".composer-error"), null);
+    const details = requiredElement<HTMLDetailsElement>(
+      ".context-compaction-error-detail",
+    );
+    assert.equal(details.open, false);
+    const summary = requiredElement<HTMLElement>(
+      ".context-compaction-error-detail summary",
+    );
+    assert.equal(summary.tabIndex, 0);
+    assert.equal(document.querySelector("script"), null);
+    assert.match(details.textContent ?? "", /<script>/u);
+    await act(async () =>
+      requiredButton('[aria-label="Dismiss compaction error"]').click(),
+    );
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+    selected = { ...selected, id: "other-thread" };
+    await act(async () => renderView());
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+  });
+});
+
+test("real compaction request rejection stays with its Thread, ignores stale completion and coexists with a canonical success", async () => {
+  await withDom(async (root) => {
+    const states: Record<string, ComposerState> = {
+      a: emptyComposerState(),
+      b: emptyComposerState(),
+    };
+    const a = { ...thread([]), id: "a", canonicalItems: compactionHistory() };
+    const b = { ...thread([]), id: "b" };
+    let selected: Thread = a;
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: states[selected.id]!,
+          thread: selected,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
+    let reject!: (reason: unknown) => void;
+    const pending = requestContextCompaction({
+      threadId: "a",
+      active: false,
+      clearCommandDraft: false,
+      read: () => states.a!,
+      update: (change) => {
+        states.a = change(states.a!);
+        renderView();
+      },
+      compact: () =>
+        new Promise((_, rejectRequest) => {
+          reject = rejectRequest;
+        }),
+    });
+    await act(async () => renderView());
+    selected = b;
+    await act(async () => renderView());
+    reject(new Error("Error invoking remote method: private=secret"));
+    await act(async () => pending);
+    assert.equal(
+      document.querySelector(".context-compaction-progress.is-error"),
+      null,
+    );
+    selected = a;
+    await act(async () => renderView());
+    assert.match(
+      requiredElement(".context-compaction-event").textContent ?? "",
+      /Context compacted/u,
+    );
+    assert.match(
+      requiredElement(".context-compaction-progress.is-error").textContent ??
+        "",
+      /Could not confirm/u,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /private=secret/u);
+  });
+});
+
 test("context tooltip exposes exact zero and unknown Thread cache rates", () => {
   const zero = renderTurns(
     [],
@@ -281,7 +733,10 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
       },
     },
   );
-  assert.match(zero, /Context 30% est[^"]*Thread cache 0%/u);
+  assert.match(
+    zero,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 0%/u,
+  );
 
   const unknown = renderTurns(
     [],
@@ -299,7 +754,10 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
       },
     },
   );
-  assert.match(unknown, /Context 30% est[^"]*Thread cache unknown/u);
+  assert.match(
+    unknown,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache unknown/u,
+  );
 });
 
 test("context indicator hides unknown ratio instead of presenting zero", () => {
@@ -360,12 +818,12 @@ test("composer textarea grows to its cap, scrolls, and shrinks after deletion", 
 
     await act(async () => root.render(props("long draft")));
     const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
-    assert.equal(textarea.style.height, "150px");
+    assert.equal(textarea.style.height, "136px");
     assert.equal(textarea.style.overflowY, "auto");
 
-    contentHeight = 42;
+    contentHeight = 24;
     await act(async () => root.render(props("")));
-    assert.equal(textarea.style.height, "68px");
+    assert.equal(textarea.style.height, "36px");
     assert.equal(textarea.style.overflowY, "hidden");
   });
 });
@@ -384,7 +842,8 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
     const computedStyle = window.getComputedStyle;
     window.getComputedStyle = (() =>
       ({
-        maxHeight: `${Math.max(68, Math.min(150, window.innerHeight * 0.35))}px`,
+        minHeight: "54px",
+        maxHeight: `${Math.max(54, Math.min(136, window.innerHeight * 0.35 - 14))}px`,
       }) as unknown as CSSStyleDeclaration) as typeof window.getComputedStyle;
     try {
       const props = createElement(ThreadView, {
@@ -398,7 +857,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
       });
       await act(async () => root.render(props));
       const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
-      assert.equal(textarea.style.height, "70px");
+      assert.equal(textarea.style.height, "56px");
       assert.equal(textarea.style.overflowY, "auto");
 
       Object.defineProperty(window, "innerHeight", {
@@ -406,7 +865,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
         value: 168,
       });
       await act(async () => window.dispatchEvent(new window.Event("resize")));
-      assert.equal(textarea.style.height, "68px");
+      assert.equal(textarea.style.height, "54px");
       assert.equal(textarea.style.overflowY, "auto");
 
       Object.defineProperty(window, "innerHeight", {
@@ -414,7 +873,7 @@ test("composer respects the viewport cap and remeasures on resize", async () => 
         value: 600,
       });
       await act(async () => window.dispatchEvent(new window.Event("resize")));
-      assert.equal(textarea.style.height, "150px");
+      assert.equal(textarea.style.height, "136px");
       assert.equal(textarea.style.overflowY, "auto");
     } finally {
       window.getComputedStyle = computedStyle;
@@ -429,12 +888,387 @@ test("running empty composer exposes Stop without locking the editor", () => {
   assert.match(html, /aria-label="Stop"/u);
 });
 
-test("running draft defaults to Queue with a Soft steer alternative", () => {
+test("one running orb switches between Stop and send without losing attachment-only drafts", async () => {
+  await withDom(async (root) => {
+    const calls: string[] = [];
+    let composer = emptyComposerState();
+    let running = true;
+    const show = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: thread(running ? [turn()] : []),
+          onDraftChange: () => undefined,
+          onInterrupt: async (id) => {
+            calls.push(`stop:${id}`);
+          },
+          onRespondToApproval: noop,
+          onSubmit: async (intent, id) => {
+            calls.push(`${intent}:${id ?? "idle"}`);
+          },
+        }),
+      );
+    await act(async () => show());
+    const orb = requiredButton(".action-orb");
+    for (const text of ["", " \n\t "]) {
+      composer = editComposer(composer, text);
+      await act(async () => show());
+      assert.equal(requiredButton(".action-orb"), orb);
+      assert.equal(
+        orb.getAttribute("aria-label"),
+        calls.length === 0 ? "Stop" : "Stopping…",
+      );
+      assert.equal(orb.disabled, calls.length > 0);
+      assert.ok(orb.classList.contains("stop"));
+      await act(async () => orb.click());
+    }
+    composer = editComposer(composer, "new direction");
+    await act(async () => show());
+    assert.equal(orb.getAttribute("aria-label"), "Steer now");
+    await act(async () => orb.click());
+    composer = addComposerImages(editComposer(composer, ""), [
+      {
+        id: "attachment-only",
+        name: "fixture.png",
+        attachment: {
+          type: "attachment",
+          sha256: "a".repeat(64),
+          mediaType: "image/png",
+          byteLength: 4,
+          width: 1,
+          height: 1,
+        },
+      },
+    ]);
+    await act(async () => show());
+    assert.equal(requiredButton(".action-orb"), orb);
+    assert.equal(orb.getAttribute("aria-label"), "Steer now");
+    await act(async () => orb.click());
+    assert.equal(composer.draft.images.length, 1);
+    running = false;
+    await act(async () => show());
+    assert.equal(requiredButton(".action-orb"), orb);
+    assert.equal(orb.getAttribute("aria-label"), "Send");
+    await act(async () => orb.click());
+    assert.deepEqual(calls, [
+      "stop:turn-1",
+      "steer:turn-1",
+      "steer:turn-1",
+      "start:idle",
+    ]);
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+  });
+});
+
+test("running draft keeps one send action and hides alternate choices until hover", () => {
   const composer = editComposer(emptyComposerState(), "change direction");
   const html = render(true, [], composer);
-  assert.match(html, />Soft steer</u);
-  assert.match(html, /aria-label="Queue message"/u);
+  assert.match(html, /aria-label="Steer now"/u);
+  assert.doesNotMatch(html, />Next turn</u);
+  assert.doesNotMatch(html, />Each turn</u);
   assert.doesNotMatch(html, /Interrupt without sending the draft/u);
+});
+
+test("mounted Thread queue disappears on canonical acceptance without navigation", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const queued = {
+      id: "queue-one",
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId: "client-one",
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: "identical" }],
+    };
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: queued,
+    });
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    assert.match(
+      document.querySelector('[aria-label="Message queue"]')?.textContent ?? "",
+      /Pending send · 1.*identical/u,
+    );
+    const queue = document.querySelector<HTMLElement>(
+      '[aria-label="Message queue"]',
+    );
+    assert.equal(queue?.getAttribute("aria-live"), null);
+    assert.equal(
+      queue?.querySelector('[role="status"]')?.textContent,
+      "Pending send · 1",
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: {
+        id: "accepted-one",
+        type: "user_message",
+        threadId: current.id,
+        turnId: "turn-1",
+        clientId: "client-one",
+        createdAt: new Date().toISOString(),
+        content: queued.input,
+      },
+    });
+    await show();
+    assert.equal(document.querySelector('[aria-label="Message queue"]'), null);
+    assert.equal(document.querySelectorAll(".user-row").length, 1);
+  });
+});
+
+test("mounted queue cancel waits for canonical event instead of optimistically hiding a row", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const queued = ["first", "second"].map((clientId) => ({
+      id: `queued-${clientId}`,
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId,
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: "identical" }],
+    }));
+    for (const item of queued)
+      current = applyNativeThreadEvent(current, {
+        type: "item_completed",
+        item,
+      });
+    let resolve!: (value: {
+      results: [
+        { queuedItemId: string; clientId: string; status: "cancelled" },
+      ];
+    }) => void;
+    const pending = new Promise<{
+      results: [
+        { queuedItemId: string; clientId: string; status: "cancelled" },
+      ];
+    }>((done) => {
+      resolve = done;
+    });
+    const requests: Array<{ queuedItemId: string; clientId: string }[]> = [];
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onCancelQueued: async (targets) => {
+              requests.push([...targets]);
+              return await pending;
+            },
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    await act(async () =>
+      requiredButton('[aria-label="Cancel queued message 1"]').click(),
+    );
+    assert.deepEqual(requests, [
+      [{ queuedItemId: queued[0]!.id, clientId: "first" }],
+    ]);
+    assert.match(
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 2/u,
+    );
+    await act(async () =>
+      resolve({
+        results: [
+          {
+            queuedItemId: queued[0]!.id,
+            clientId: "first",
+            status: "cancelled",
+          },
+        ],
+      }),
+    );
+    assert.match(
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 2/u,
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: {
+        id: "cancel-first",
+        type: "user_message_queue_cancelled",
+        threadId: current.id,
+        queuedItemId: queued[0]!.id,
+        clientId: "first",
+        createdAt: new Date().toISOString(),
+      },
+    });
+    await show();
+    assert.match(
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 1/u,
+    );
+    assert.equal(document.querySelectorAll(".queue-shelf li").length, 1);
+  });
+});
+
+test("bulk queue confirmation captures IDs before a later append", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const make = (id: string) => ({
+      id: `queued-${id}`,
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId: id,
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: id }],
+    });
+    for (const id of ["alpha", "beta"])
+      current = applyNativeThreadEvent(current, {
+        type: "item_completed",
+        item: make(id),
+      });
+    const requests: string[][] = [];
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onCancelQueued: async (targets) => {
+              requests.push(targets.map((item) => item.clientId));
+              return {
+                results: targets.map((item) => ({
+                  ...item,
+                  status: "cancelled" as const,
+                })),
+              };
+            },
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    await act(async () =>
+      requiredButton('.queue-shelf [data-queue-control="cancel-all"]').click(),
+    );
+    assert.match(
+      document.querySelector('[role="dialog"]')?.textContent ?? "",
+      /Cancel 2 queued messages/u,
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: make("later"),
+    });
+    await show();
+    assert.match(
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 3/u,
+    );
+    await act(async () =>
+      requiredButton('[role="dialog"] button:last-child').click(),
+    );
+    assert.deepEqual(requests, [["alpha", "beta"]]);
+  });
+});
+
+test("a message that started before cancellation reports a conflict even after queue projection clears", async () => {
+  await withDom(async (root) => {
+    let current: Thread = {
+      ...thread([turn()]),
+      canonicalItems: [],
+      queuedMessages: [],
+    };
+    const queued = {
+      id: "queued-race",
+      type: "user_message_queued" as const,
+      threadId: current.id,
+      clientId: "racing-client",
+      createdAt: new Date().toISOString(),
+      input: [{ type: "text" as const, text: "race" }],
+    };
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: queued,
+    });
+    const show = async () =>
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: current,
+            onCancelQueued: async (targets) => ({
+              results: targets.map((item) => ({
+                ...item,
+                status: "already_started" as const,
+              })),
+            }),
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    await show();
+    await act(async () =>
+      requiredButton('[aria-label="Cancel queued message 1"]').click(),
+    );
+    assert.match(
+      document.querySelector(".queued-cancel-notice")?.textContent ?? "",
+      /already starting or delivered/u,
+    );
+    current = applyNativeThreadEvent(current, {
+      type: "item_completed",
+      item: {
+        id: "accepted-race",
+        type: "user_message",
+        threadId: current.id,
+        turnId: "turn-1",
+        clientId: queued.clientId,
+        createdAt: new Date().toISOString(),
+        content: queued.input,
+      },
+    });
+    await show();
+    assert.equal(document.querySelector(".queue-shelf"), null);
+    assert.match(
+      document.querySelector(".queued-cancel-notice")?.textContent ?? "",
+      /cannot be canceled/u,
+    );
+  });
 });
 
 test("pending approvals render in the bottom zone next to the composer", () => {
@@ -462,14 +1296,17 @@ test("pending approvals render in the bottom zone next to the composer", () => {
     },
   } as ApprovalCardState;
   const html = render(true, [approval]);
-  assert.match(html, /class="bottom-zone"/u);
-  assert.match(html, /class="approval-bar"/u);
-  assert.match(html, /Allow the shell-equivalent run_code capability\?/u);
-  assert.match(html, /remembered for the stable run_code capability/u);
-  assert.match(html, /not granted per command or code segment/u);
+  assert.match(html, /class="bottom-zone[^"]*"/u);
+  assert.match(html, /class="approval-request-card"/u);
+  assert.match(html, /Allow tool access\?/u);
+  assert.match(
+    html,
+    /Remember permission for the stable, shell-equivalent run_code capability/u,
+  );
+  assert.match(html, /not per command or code segment/u);
   assert.match(html, /printf &lt;full&gt;/u);
   assert.match(html, /very\/long\/path\/that\/must\/remain\/visible/u);
-  assert.match(html, /Allow capability/u);
+  assert.match(html, /Allow access/u);
 });
 
 test("approval response returns keyboard focus to the composer", async () => {
@@ -512,10 +1349,12 @@ test("approval response returns keyboard focus to the composer", async () => {
       ),
     );
     await act(async () => {
-      requiredButton(".approval-actions .allow").click();
+      requiredButton(".approval-request-allow").focus();
+      requiredButton(".approval-request-allow").click();
       await Promise.resolve();
     });
     assert.equal(decision, "accept");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
     assert.equal(document.activeElement?.id, "thread-composer");
   });
 });
@@ -867,7 +1706,7 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   assert.match(html, /Checking the relevant files\./u);
   assert.match(
     html,
-    /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*Reasoned and used rg[\s\S]*2 items/u,
+    /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*rg ThreadView[\s\S]*2 items/u,
   );
 });
 
@@ -919,8 +1758,61 @@ test("renders canonical run_code children as nested rows with full code", async 
     )[0];
     assert.ok(outerToggle);
     await act(async () => outerToggle.click());
-    assert.equal(requiredElement(".trace-command code").textContent, fullCode);
+    assert.equal(
+      requiredElement(".trace-input-preview code").textContent,
+      fullCode,
+    );
     assert.match(document.body.textContent ?? "", /Inspect nested output/u);
+  });
+});
+
+test("tool and group disclosures remain mounted, inert when closed, and stable across streamed updates", async () => {
+  await withDom(async (root) => {
+    const first = commandItem("motion-one", "printf first") as Extract<
+      ThreadItem,
+      { type: "commandExecution" }
+    >;
+    const second = commandItem("motion-two", "printf second");
+    await renderInteractive(root, turnWithItems("inProgress", [first, second]));
+    const group = requiredButton(".trace-toggle");
+    const groupReveal = requiredElement(".trace-group > .trace-reveal");
+    assert.equal(groupReveal.getAttribute("aria-hidden"), "true");
+    assert.equal(groupReveal.hasAttribute("inert"), true);
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "true");
+    assert.equal(groupReveal.getAttribute("aria-hidden"), "false");
+    assert.equal(groupReveal.hasAttribute("inert"), false);
+    const item = requiredButton(".trace-items .trace-item-toggle");
+    const itemReveal = requiredElement(
+      ".trace-items .trace-item .trace-reveal",
+    );
+    await act(async () => item.click());
+    assert.equal(item.getAttribute("aria-expanded"), "true");
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        { ...first, aggregatedOutput: "streamed output" },
+        second,
+      ]),
+    );
+    assert.equal(
+      requiredElement(".trace-items .trace-item .trace-reveal"),
+      itemReveal,
+    );
+    assert.equal(itemReveal.dataset.open, "true");
+    await act(async () => {
+      item.click();
+      item.click();
+      item.click();
+    });
+    assert.equal(itemReveal.dataset.open, "false");
+    assert.equal(itemReveal.hasAttribute("inert"), true);
+    await act(async () => {
+      group.click();
+      group.click();
+    });
+    assert.equal(groupReveal.dataset.open, "true");
+    assert.equal(requiredElement(".trace-group > .trace-reveal"), groupReveal);
   });
 });
 
@@ -1098,7 +1990,7 @@ test("public reasoning with a summary expands from summary to full content", asy
     );
 
     await act(async () => toggle.click());
-    const detail = requiredWithin(row, ":scope > .trace-detail");
+    const detail = requiredWithin(row, ":scope > .trace-reveal .trace-detail");
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.equal(detail.textContent, "Full public reasoning");
     assert.doesNotMatch(detail.textContent ?? "", /Provider summary/u);
@@ -1131,7 +2023,7 @@ test("projected public reasoning keeps its summary label and expandable content"
 
     await act(async () => toggle.click());
     assert.equal(
-      requiredWithin(row, ":scope > .trace-detail").textContent,
+      requiredWithin(row, ":scope > .trace-reveal .trace-detail").textContent,
       "Projected public reasoning",
     );
   });
@@ -1149,12 +2041,12 @@ test("public reasoning without a summary keeps a neutral expandable label", asyn
     );
     assert.equal(
       requiredWithin(toggle, ":scope > span").textContent,
-      "Reasoning details",
+      "Thought",
     );
 
     await act(async () => toggle.click());
     assert.equal(
-      requiredWithin(row, ":scope > .trace-detail").textContent,
+      requiredWithin(row, ":scope > .trace-reveal .trace-detail").textContent,
       "Full public reasoning",
     );
   });
@@ -1175,6 +2067,38 @@ test("opaque reasoning with a summary is a static summary row", async () => {
   });
 });
 
+test("adjacent no-details reasoning shares an honest count while tools and public summaries remain in order", async () => {
+  await withDom(async (root) => {
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoningItem("opaque-a", [], []),
+        reasoningItem("opaque-b", [], []),
+        commandItem("tool-between", "shell"),
+        reasoningItem("opaque-c", [], []),
+        reasoningItem("public-summary", ["Public summary"], []),
+        reasoningItem("opaque-d", [], []),
+        reasoningItem("opaque-e", [], []),
+      ]),
+    );
+    await act(async () => requiredButton(".trace-toggle").click());
+    const details = requiredElement(".trace-items");
+    const rows = [...details.children].map((row) => row.textContent ?? "");
+    assert.equal(rows.length, 2);
+    assert.match(rows[0]!, /Shell/u);
+    assert.match(rows[1]!, /Public summary/u);
+    assert.equal(
+      details.querySelectorAll(".trace-reasoning-without-details").length,
+      0,
+    );
+    assert.equal(
+      details.querySelectorAll(".trace-reasoning-without-details button")
+        .length,
+      0,
+    );
+  });
+});
+
 test("opaque reasoning without a summary exposes only a neutral static row", async () => {
   await withDom(async (root) => {
     const row = await openReasoningRow(
@@ -1183,7 +2107,7 @@ test("opaque reasoning without a summary exposes only a neutral static row", asy
     );
     assert.equal(
       requiredWithin(row, ":scope > .trace-item-static > span").textContent,
-      "Reasoning details",
+      "Thought",
     );
     assert.equal(row.querySelector(":scope > button"), null);
     assert.equal(row.querySelector("[aria-expanded]"), null);
@@ -1651,7 +2575,7 @@ test("failed turn opens received trace and preserves the error without a final a
   );
   assert.equal(document.querySelector(".turn-final"), null);
   assert.equal(
-    document.querySelector(".turn-terminal")?.textContent,
+    document.querySelector(".turn-outcome > p")?.textContent,
     "invalid tool call id",
   );
 });
@@ -1659,9 +2583,10 @@ test("failed turn opens received trace and preserves the error without a final a
 test("keyboard modifiers and send button honor all running send modes", async () => {
   await withDom(async (root) => {
     for (const [mode, normal, alternate] of [
+      ["batch", "batch-next", "steer"],
       ["queue", "queue", "steer"],
-      ["soft", "steer", "queue"],
-      ["hard", "replace", "queue"],
+      ["soft", "steer", "batch-next"],
+      ["hard", "replace", "batch-next"],
     ] as const) {
       const intents: string[] = [];
       await act(async () =>
@@ -1720,7 +2645,43 @@ test("keyboard modifiers and send button honor all running send modes", async ()
   });
 });
 
-test("yielded shell work is labelled Started or Waiting rather than Done", async () => {
+test("shell headings and pending calls do not claim that a started call is running", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("shell-start", "sleep 10");
+    assert.equal(base.type, "commandExecution");
+    if (base.type !== "commandExecution") return;
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        {
+          ...base,
+          toolName: "shell",
+          status: "inProgress",
+          toolArguments: { command: "sleep 10" },
+        },
+      ]),
+    );
+    assert.match(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /Shell/,
+    );
+    assert.equal(requiredElement(".tool-status").textContent, "Requested");
+    assert.equal(document.querySelector(".trace-item .mini-spinner"), null);
+  });
+});
+
+test("public reasoning content without a summary has an honest heading", () => {
+  const html = renderTurns([
+    turnWithItems("inProgress", [
+      reasoningItem("public-reason", [], ["Visible thought"]),
+    ]),
+  ]);
+  assert.match(html, />Thought</u);
+  assert.doesNotMatch(html, /Think[\s\S]*Reasoning/u);
+  assert.doesNotMatch(html, /Reasoning details/u);
+});
+
+test("yielded shell work reports the actual task receipt phase", async () => {
   await withDom(async (root) => {
     const base = commandItem("shell-start", "npm run dev");
     assert.equal(base.type, "commandExecution");
@@ -1742,7 +2703,7 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
     );
     assert.equal(
       document.querySelector(".tool-status")?.textContent,
-      "Started",
+      "Running",
     );
     await renderInteractive(
       root,
@@ -1775,6 +2736,51 @@ test("yielded shell work is labelled Started or Waiting rather than Done", async
   });
 });
 
+test("folded task group and expanded wait row use the same receipt phase", async () => {
+  await withDom(async (root) => {
+    const base = commandItem("wait-item", "wait");
+    if (base.type !== "commandExecution") throw new Error("missing command");
+    const wait = {
+      ...base,
+      toolName: "wait",
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: { task_id: "test-task", status: "running" },
+    };
+    const reasoning = reasoningItem("reason-wait", [], ["Waiting for task"]);
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [reasoning, wait]),
+    );
+    const group = requiredButton(".trace-toggle");
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+    assert.match(group.textContent ?? "", /Waiting for task/u);
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "true");
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Waiting",
+    );
+
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [
+        reasoning,
+        {
+          ...wait,
+          structuredContent: { task_id: "test-task", status: "timed_out" },
+        },
+      ]),
+    );
+    assert.match(group.textContent ?? "", /Wait · timed out/u);
+    assert.equal(
+      requiredElement(".trace-items .tool-status").textContent,
+      "Timed out",
+    );
+    await act(async () => group.click());
+    assert.equal(group.getAttribute("aria-expanded"), "false");
+  });
+});
+
 test("generic tool task observations distinguish waiting and unconfirmed cancellation", async () => {
   await withDom(async (root) => {
     const base = commandItem("image-task", "generate image");
@@ -1782,14 +2788,14 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     const cases = [
       ["browser_click", "queued", "Queued"],
       ["wait", "queued", "Queued"],
-      ["image_generate", "running", "Started"],
+      ["image_generate", "running", "Running"],
       ["wait", "running", "Waiting"],
       ["wait", "cancel_requested", "Cancelling"],
       ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
       ["wait", "cancelled", "Cancelled"],
       ["wait", "timed_out", "Timed out"],
       ["wait", "failed", "Failed"],
-      ["wait", "completed", "Done"],
+      ["wait", "completed", "Waited"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
       await renderInteractive(
@@ -1854,7 +2860,7 @@ test("partial canonical reasoning remains visibly interrupted after reopening", 
   assert.equal((item as { status?: string }).status, "interrupted");
 });
 
-test("tool image thumbnails are a display projection beside unchanged call and output", async () => {
+test("tool images appear only inside expanded tool details beside unchanged call and output", async () => {
   await withDom(async (root) => {
     const value = commandItem(
       "view-call",
@@ -1889,11 +2895,12 @@ test("tool image thumbnails are a display projection beside unchanged call and o
         }),
       ),
     );
+    assert.equal(document.querySelector('[aria-label="Tool images"]'), null);
     await act(async () => requiredButton(".trace-item-toggle").click());
     assert.ok(document.querySelector('[aria-label="Tool images"]'));
     assert.ok(document.querySelector('[aria-label="Preview Tool image 1"]'));
     assert.equal(
-      document.querySelector(".trace-command")?.textContent,
+      document.querySelector(".trace-input-preview")?.textContent,
       value.command,
     );
     assert.match(
@@ -1901,6 +2908,139 @@ test("tool image thumbnails are a display projection beside unchanged call and o
       /Viewed image \/tmp\/image.png/,
     );
     assert.equal(JSON.stringify(value), original);
+    await act(async () => requiredButton(".trace-item-toggle").click());
+    assert.equal(
+      requiredElement('.trace-reveal[data-open="false"]').getAttribute(
+        "aria-hidden",
+      ),
+      "true",
+    );
+  });
+});
+
+test("tool input offers disclosure only while its two-line preview overflows", async () => {
+  await withDom(async (root) => {
+    await withInputPreviewLayout(async (resize) => {
+      const value = commandItem(
+        "short-input",
+        'zenx_plugin {"operation":"read","pluginId":"computer"}',
+      );
+      await renderInteractive(root, turnWithItems("inProgress", [value]));
+      await act(async () => requiredButton(".trace-item-toggle").click());
+      assert.ok(!document.querySelector(".trace-input summary"));
+      assert.ok(!document.querySelector(".trace-input-heading svg"));
+      assert.equal(
+        requiredElement(".trace-input-preview code").textContent,
+        value.type === "commandExecution" ? value.command : "",
+      );
+
+      await act(async () => resize(60));
+      const input = requiredElement<HTMLDetailsElement>("details.trace-input");
+      assert.equal(input.open, false);
+      await act(async () =>
+        requiredElement<HTMLElement>(".trace-input summary").click(),
+      );
+      assert.equal(input.open, true);
+      // Widening while expanded must remove the obsolete control too.
+      await act(async () => resize(40));
+      assert.ok(!document.querySelector(".trace-input summary"));
+      assert.ok(!document.querySelector(".trace-input-heading svg"));
+      await act(async () => resize(60));
+      assert.equal(
+        requiredElement<HTMLDetailsElement>("details.trace-input").open,
+        false,
+      );
+    });
+  });
+});
+
+async function withInputPreviewLayout(
+  run: (resize: (height: number) => void) => Promise<void>,
+  initialHeight = 40,
+) {
+  let contentHeight = initialHeight;
+  const callbacks = new Set<() => void>();
+  const previous = globalThis.ResizeObserver;
+  Object.defineProperties(window.HTMLElement.prototype, {
+    clientHeight: {
+      configurable: true,
+      get() {
+        return this.classList.contains("trace-input-preview") ? 40 : 0;
+      },
+    },
+    scrollHeight: {
+      configurable: true,
+      get() {
+        return this.classList.contains("trace-input-preview")
+          ? contentHeight
+          : 0;
+      },
+    },
+  });
+  globalThis.ResizeObserver = class {
+    constructor(private callback: () => void) {}
+    observe() {
+      callbacks.add(this.callback);
+    }
+    unobserve() {
+      callbacks.delete(this.callback);
+    }
+    disconnect() {
+      callbacks.delete(this.callback);
+    }
+  } as unknown as typeof ResizeObserver;
+  try {
+    await run((height) => {
+      contentHeight = height;
+      for (const callback of [...callbacks]) callback();
+    });
+  } finally {
+    globalThis.ResizeObserver = previous;
+  }
+}
+
+test("tool details disclose full input independently of scrollable output", async () => {
+  await withDom(async (root) => {
+    await withInputPreviewLayout(async () => {
+      const value = commandItem(
+        "long-tool",
+        "printf 'first line\\nsecond line\\nlast line'".repeat(20),
+      );
+      if (value.type !== "commandExecution") return;
+      value.aggregatedOutput = Array.from(
+        { length: 80 },
+        (_, index) => `Result ${index}`,
+      ).join("\n");
+      await renderInteractive(root, turnWithItems("inProgress", [value]));
+      await act(async () => requiredButton(".trace-item-toggle").click());
+      const input = requiredElement(".trace-input") as HTMLDetailsElement;
+      const summary = requiredElement(".trace-input summary") as HTMLElement;
+      assert.equal(input.open, false);
+      assert.equal(
+        requiredElement(".trace-input-preview code").textContent,
+        value.command,
+      );
+      await act(async () => summary.click());
+      assert.equal(input.open, true);
+      assert.equal(
+        requiredElement(".trace-command code").textContent,
+        value.command,
+      );
+      const output = requiredElement(
+        '[role="region"][aria-label="Tool output"]',
+      );
+      assert.equal(output.getAttribute("tabindex"), "0");
+      assert.equal(
+        output.querySelector("pre")?.textContent,
+        value.aggregatedOutput,
+      );
+      await act(async () => summary.click());
+      assert.equal(input.open, false);
+      assert.equal(
+        output.querySelector("pre")?.textContent,
+        value.aggregatedOutput,
+      );
+    }, 80);
   });
 });
 
@@ -1922,7 +3062,7 @@ test("running and completed durations share second, minute and hour formatting",
       await renderInteractive(root, turnWithItems("inProgress", []));
       assert.equal(
         requiredElement(".turn-running-label").textContent,
-        `Working for ${label}`,
+        `Working${label}`,
       );
       await renderInteractive(root, turnWithItems("completed", [], duration));
       assert.equal(
@@ -1939,22 +3079,22 @@ test("running duration ticks from turn start and stops on completion", async (t)
     await renderInteractive(root, turnWithItems("inProgress", []));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 12s",
+      "Working12s",
     );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 14s",
+      "Working14s",
     );
     await act(async () => t.mock.timers.tick(46_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 1m 0s",
+      "Working1m 0s",
     );
     await act(async () => t.mock.timers.tick(3_540_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 1h 0m 0s",
+      "Working1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
     assert.equal(document.querySelector(".turn-running-label"), null);
@@ -1965,3 +3105,501 @@ test("running duration ticks from turn start and stops on completion", async (t)
     );
   });
 });
+
+test("send hover options preserve actual shortcuts and changing defaults never sends", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const sends: string[] = [];
+    let mode: "soft" | "batch" | "queue" | "hard" = "soft";
+    const renderControl = () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode,
+          running: true,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: "steer",
+          primaryLabel: "Steer now",
+          compact: false,
+          onPrimary: () => sends.push("primary"),
+          onSend: (intent) => sends.push(intent),
+          onStop: () => sends.push("stop"),
+          onModeChange: async (next) => {
+            mode = next;
+            renderControl();
+          },
+        }),
+      );
+    await act(async () => renderControl());
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await act(async () =>
+      requiredElement(".composer-send-control").dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    const panel = requiredElement('[role="dialog"][aria-label="Send options"]');
+    assert.equal(document.querySelector("form .composer-send-popover"), null);
+    const buttons = [...panel.querySelectorAll<HTMLButtonElement>("button")];
+    assert.match(
+      buttons.find((button) => button.textContent?.startsWith("Steer now"))!
+        .textContent!,
+      /Enter/,
+    );
+    assert.match(
+      buttons.find((button) => button.textContent?.startsWith("Next turn"))!
+        .textContent!,
+      /(?:Ctrl\+|⌘)Enter/,
+    );
+    assert.equal(
+      buttons
+        .find((button) => button.textContent?.startsWith("Each turn"))!
+        .querySelector("kbd"),
+      null,
+    );
+    await act(async () =>
+      requiredButton('[aria-label="Default send mode"]').click(),
+    );
+    await act(async () =>
+      requiredElement('[role="option"][data-value="queue"]').click(),
+    );
+    assert.equal(mode, "queue");
+    assert.deepEqual(sends, []);
+    assert.equal(
+      requiredButton('[aria-label="Default send mode"]').getAttribute(
+        "data-value",
+      ),
+      "queue",
+    );
+    const nextButton = [
+      ...panel.querySelectorAll<HTMLButtonElement>("button"),
+    ].find(
+      (button) => button.querySelector("strong")?.textContent === "Next turn",
+    )!;
+    await act(async () => nextButton.click());
+    assert.deepEqual(sends, ["batch-next"]);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+  });
+});
+
+test("send preferences keep the current choice on a failed save and expose the error", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    await act(async () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: false,
+          hasDraft: false,
+          disabled: true,
+          sendDisabled: false,
+          primaryMode: "send",
+          primaryLabel: "Send",
+          compact: false,
+          onPrimary: () => assert.fail("must not send"),
+          onSend: () => assert.fail("must not send"),
+          onStop: () => assert.fail("must not stop"),
+          onModeChange: async () => {
+            throw new Error("Settings changed elsewhere");
+          },
+        }),
+      ),
+    );
+    await act(async () => openSendOptions());
+    await act(async () =>
+      requiredButton('[aria-label="Default send mode"]').click(),
+    );
+    await act(async () =>
+      requiredElement('[role="option"][data-value="hard"]').click(),
+    );
+    assert.equal(
+      requiredButton('[aria-label="Default send mode"]').getAttribute(
+        "data-value",
+      ),
+      "soft",
+    );
+    assert.equal(
+      requiredElement('[role="alert"]').textContent,
+      "Settings changed elsewhere",
+    );
+  });
+});
+
+test("completed thread actions show the action without a second success badge", async () => {
+  await withDom(async (root) => {
+    const item = commandItem("sent", "threads_send");
+    if (item.type !== "commandExecution") throw new Error("missing command");
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [{ ...item, toolName: "zenx_threads_send" }]),
+    );
+    assert.match(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /Sent message/,
+    );
+    assert.equal(document.querySelector(".trace-item .tool-status"), null);
+    assert.doesNotMatch(
+      requiredElement(".trace-item-toggle").textContent ?? "",
+      /completed/i,
+    );
+  });
+});
+
+test("send panel Stop follows interrupt availability independently of send availability", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    for (const stopDisabled of [true, false]) {
+      let stops = 0;
+      await act(async () =>
+        root.render(
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running: true,
+            hasDraft: true,
+            disabled: true,
+            sendDisabled: true,
+            stopDisabled,
+            primaryMode: "steer",
+            primaryLabel: "Steer now",
+            compact: false,
+            onPrimary: () => assert.fail("must not send"),
+            onSend: () => assert.fail("must not send"),
+            onStop: () => stops++,
+          }),
+        ),
+      );
+      await act(async () =>
+        requiredElement<HTMLDivElement>(".composer-send-control").dispatchEvent(
+          new window.MouseEvent("pointerover", { bubbles: true }),
+        ),
+      );
+      const stop = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".composer-send-options button",
+        ),
+      ].find(
+        (button) => button.querySelector("strong")?.textContent === "Stop",
+      )!;
+      assert.equal(stop.disabled, stopDisabled);
+      await act(async () => stop.click());
+      assert.equal(stops, stopDisabled ? 0 : 1);
+    }
+  });
+});
+
+test("send hover keeps one visible orb and primary click still submits once", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: true,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: "steer",
+          primaryLabel: "Steer now",
+          compact: false,
+          onPrimary: () => calls.push("primary"),
+          onSend: (intent) => calls.push(intent),
+          onStop: () => calls.push("stop"),
+        }),
+      ),
+    );
+    const primary = requiredButton(".action-orb");
+    assert.equal(primary.getAttribute("aria-haspopup"), null);
+    assert.ok(
+      !document.querySelector(".composer-send-disclosure"),
+      "no adjacent disclosure is rendered",
+    );
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+    await act(async () =>
+      requiredElement(".composer-send-control").dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    assert.deepEqual(calls, []);
+    assert.match(
+      requiredElement(".composer-send-heading").textContent!,
+      /Steer now/,
+    );
+    assert.match(
+      requiredElement(".composer-send-description").textContent!,
+      /current turn/,
+    );
+    await act(async () => primary.click());
+    assert.deepEqual(calls, ["primary"]);
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+test("send orb supports keyboard focus and Escape without reopening", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    await act(async () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: true,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: "steer",
+          primaryLabel: "Steer now",
+          compact: false,
+          onPrimary: () => assert.fail("must not submit"),
+          onSend: () => assert.fail("must not submit"),
+          onStop: () => assert.fail("must not stop"),
+        }),
+      ),
+    );
+    const primary = requiredButton(".action-orb");
+    await act(async () => {
+      primary.focus();
+      primary.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    assert.equal(
+      document.activeElement?.matches(
+        ".composer-send-popover button:not(:disabled)",
+      ),
+      true,
+    );
+    await act(async () =>
+      document.activeElement!.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    await waitForSendFocus("Steer now");
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+test("touch sends once without hover and disabled orb keeps keyboard options access", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    let calls = 0;
+    const renderControl = (disabled: boolean) =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: false,
+          hasDraft: true,
+          disabled,
+          sendDisabled: disabled,
+          primaryMode: "send",
+          primaryLabel: "Send",
+          compact: false,
+          onPrimary: () => calls++,
+          onSend: () => calls++,
+          onStop: () => calls++,
+        }),
+      );
+    await act(async () => renderControl(false));
+    const touch = (type: string) => {
+      const event = new window.MouseEvent(type, { bubbles: true });
+      Object.defineProperty(event, "pointerType", { value: "touch" });
+      return event;
+    };
+    await act(async () => {
+      requiredElement(".composer-send-control").dispatchEvent(
+        touch("pointerover"),
+      );
+      requiredButton(".action-orb").dispatchEvent(touch("pointerdown"));
+      requiredButton(".action-orb").focus();
+    });
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await act(async () => requiredButton(".action-orb").click());
+    assert.equal(calls, 1);
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    assert.equal(requiredButton(".composer-send-summary").disabled, true);
+    assert.equal(requiredElement(".composer-send-control").tabIndex, 0);
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+    assert.equal(calls, 1);
+  });
+});
+
+test("an open send panel closes when the running turn ends without sending the draft", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const renderControl = (running: boolean) =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: running ? "steer" : "send",
+          primaryLabel: running ? "Steer now" : "Send",
+          compact: false,
+          onPrimary: () => assert.fail("must not send"),
+          onSend: () => assert.fail("must not send"),
+          onStop: () => assert.fail("must not stop"),
+        }),
+      );
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    assert.ok(document.querySelector(".composer-send-popover"));
+    await act(async () => renderControl(false));
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await waitForSendFocus("Send");
+    assert.equal(
+      requiredButton(".action-orb").getAttribute("aria-label"),
+      "Send",
+    );
+  });
+});
+
+test("panel action returns keyboard focus while hover Escape preserves the editor focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement("textarea", { "aria-label": "Outside editor" }),
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running: true,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: "steer",
+            primaryLabel: "Steer now",
+            compact: false,
+            onPrimary: () => calls.push("primary"),
+            onSend: (intent) => calls.push(intent),
+            onStop: () => calls.push("stop"),
+          }),
+        ),
+      ),
+    );
+    await act(async () => openSendOptions());
+    await act(async () =>
+      requiredButton(".composer-send-options button").click(),
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+    await waitForSendFocus("Steer now");
+    const editor = requiredElement<HTMLTextAreaElement>(
+      '[aria-label="Outside editor"]',
+    );
+    await act(async () => editor.focus());
+    await act(async () =>
+      requiredElement(".composer-send-control").dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    assert.ok(document.querySelector(".composer-send-popover"));
+    await act(async () =>
+      editor.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "Outside editor",
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+  });
+});
+
+test("turn transition restores nested preference focus without stealing outside focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const renderControl = (running: boolean) =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement("input", { "aria-label": "Outside control" }),
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: running ? "steer" : "send",
+            primaryLabel: running ? "Steer now" : "Send",
+            compact: false,
+            onPrimary: () => assert.fail("must not send"),
+            onSend: () => assert.fail("must not send"),
+            onStop: () => assert.fail("must not stop"),
+            onModeChange: async () => {},
+          }),
+        ),
+      );
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    await act(async () =>
+      requiredButton('[aria-label="Default send mode"]').click(),
+    );
+    assert.equal(document.activeElement?.getAttribute("role"), "option");
+    await act(async () => renderControl(false));
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await waitForSendFocus("Send");
+    await act(async () =>
+      requiredElement<HTMLInputElement>(
+        '[aria-label="Outside control"]',
+      ).focus(),
+    );
+    await act(async () => renderControl(true));
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "Outside control",
+    );
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+// Radix restores focus after its closing FocusScope has unmounted.
+async function waitForSendFocus(label: string): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (
+    document.activeElement?.getAttribute("aria-label") !== label &&
+    Date.now() < deadline
+  ) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+  }
+  assert.equal(document.activeElement?.getAttribute("aria-label"), label);
+}
+
+function openSendOptions(): void {
+  const orb = requiredButton(".action-orb");
+  const target = orb.disabled
+    ? requiredElement<HTMLElement>(".composer-send-control")
+    : orb;
+  target.focus();
+  target.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+  );
+}

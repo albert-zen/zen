@@ -21,7 +21,7 @@ import {
 const runner = new ZenXTriggerProgramRunner();
 
 test("Windows process-table observation has bounded cold-start headroom", () => {
-  assert.equal(processTableTimeoutMs("win32"), 8_000);
+  assert.equal(processTableTimeoutMs("win32"), 20_000);
   assert.equal(processTableTimeoutMs("darwin"), 750);
 });
 

@@ -1,3 +1,5 @@
+import { i18n } from "./i18n.js";
+import { useTranslation } from "react-i18next";
 import type {
   PublicHostSettings,
   ZenXHostProfile,
@@ -14,6 +16,7 @@ export function RtkSettingsCard({
   busy: boolean;
   onChange(enabled: boolean): void;
 }) {
+  const { t } = useTranslation("settings");
   const enabled = draft.experimentalRtkEnabled === true;
   const saved = settings.profile.experimentalRtkEnabled === true;
   const available = settings.rtk?.available === true;
@@ -22,37 +25,38 @@ export function RtkSettingsCard({
     settings.configuration?.pendingRestart.includes("experimentalRtk") === true;
   const unconfirmed = settings.configuration?.status === "unconfirmed";
   const status = !available
-    ? "Unavailable"
+    ? t("rtkSettingsCard.unavailable")
     : dirty
-      ? "Unsaved change"
+      ? t("rtkSettingsCard.unsavedChange")
       : unconfirmed
-        ? "Application unconfirmed"
+        ? t("rtkSettingsCard.applicationUnconfirmed")
         : pending
-          ? "Restart required"
+          ? t("rtkSettingsCard.restartRequired")
           : saved
-            ? "On"
-            : "Off";
+            ? t("rtkSettingsCard.on")
+            : t("rtkSettingsCard.off");
   return (
     <div
       className="page-card settings-card rtk-settings-card"
-      aria-label="RTK experiment"
+      aria-label={t("rtkSettingsCard.rtkExperiment")}
     >
       <div className="settings-row">
         <div>
           <h3>
-            Compact shell output{" "}
-            <span className="rtk-experiment-label">Experimental · RTK</span>
+            {t("rtkSettingsCard.compactShellOutput")}{" "}
+            <span className="rtk-experiment-label">
+              {t("rtkSettingsCard.experimentalRtk")}
+            </span>
           </h3>
           <span>
-            Reduce repetitive test output sent to the model while keeping the
-            original output available to read back.
+            {t("rtkSettingsCard.reduceRepetitiveTestOutputSentToTheModelWhile")}
           </span>
         </div>
         <button
           className="plugin-switch"
           type="button"
           role="switch"
-          aria-label="Compact shell output with RTK"
+          aria-label={t("rtkSettingsCard.compactShellOutputWithRtk")}
           aria-describedby="rtk-scope rtk-state"
           aria-checked={enabled}
           disabled={busy || unconfirmed || (!available && !enabled)}
@@ -60,8 +64,7 @@ export function RtkSettingsCard({
         />
       </div>
       <p id="rtk-scope" className="settings-note">
-        Apple silicon Macs · cargo test only. Commands run as usual. Shell
-        output inside run_code stays unchanged.
+        {t("rtkSettingsCard.appleSiliconMacsCargoTestOnlyCommandsRunAs")}
       </p>
       <div
         id="rtk-state"
@@ -72,14 +75,23 @@ export function RtkSettingsCard({
         <strong>{status}</strong>
         <span>
           {!available
-            ? (settings.rtk?.reason ?? "RTK is not included in this build.")
+            ? (settings.rtk?.reason ??
+              t("rtkSettingsCard.rtkIsNotIncludedInThisBuild"))
             : dirty
-              ? "Apply to save. The change takes effect next launch."
+              ? t("rtkSettingsCard.applyToSaveTheChangeTakesEffectNextLaunch")
               : unconfirmed
-                ? "Check application status below before making another change."
+                ? t(
+                    "rtkSettingsCard.checkApplicationStatusBelowBeforeMakingAnotherChange",
+                  )
                 : pending
-                  ? `Saved ${saved ? "on" : "off"}. Use Safe restart when tasks are idle, or relaunch ZenX later.`
-                  : "Off by default. Changes take effect next launch; running tasks keep their current behavior."}
+                  ? t("rtkSettingsCard.savedStateRestart", {
+                      state: saved
+                        ? t("rtkSettingsCard.onLower")
+                        : t("rtkSettingsCard.offLower"),
+                    })
+                  : t(
+                      "rtkSettingsCard.offByDefaultChangesTakeEffectNextLaunchRunning",
+                    )}
         </span>
       </div>
     </div>

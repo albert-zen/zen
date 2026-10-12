@@ -288,3 +288,94 @@ function validState(): TriggerSnapshot & { version: 2 } {
     ],
   };
 }
+
+test("remote Thread source locators round-trip while transient errors and malformed namespaces are rejected", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-store-remote-"));
+  const file = path.join(directory, "triggers.json");
+  const state = validState();
+  state.triggers = [
+    {
+      id: "watch-remote",
+      threadId: "thread-a",
+      kind: "thread",
+      label: "Remote",
+      prompt: "Review remote",
+      createdAt: 1,
+      active: true,
+      watch: {
+        threadId: "thread-b",
+        event: "turn_completed",
+        once: false,
+        sourceDevice: "desktop-a",
+        sourceWorkspace: "workspace-a",
+      },
+    },
+  ];
+  state.history[0]!.kind = "thread";
+  state.history[0]!.sourceDevice = "desktop-a";
+  state.history[0]!.sourceWorkspace = "workspace-a";
+  const store = new ZenXTriggerStore(file);
+  try {
+    await store.write({
+      triggers: state.triggers,
+      history: state.history,
+      rooms: state.rooms,
+    });
+    const loaded = await store.read();
+    assert.deepEqual(loaded.triggers[0]?.watch, state.triggers[0]?.watch);
+    assert.equal(loaded.history[0]?.sourceDevice, "desktop-a");
+    assert.equal(loaded.history[0]?.sourceWorkspace, "workspace-a");
+    const corruptions: unknown[] = [
+      {
+        ...state,
+        triggers: [
+          { ...state.triggers[0], sourceError: "Transient offline error" },
+        ],
+      },
+      {
+        ...state,
+        triggers: [
+          {
+            ...state.triggers[0],
+            watch: { ...state.triggers[0]!.watch, sourceDevice: undefined },
+          },
+        ],
+      },
+      {
+        ...state,
+        triggers: [
+          {
+            ...state.triggers[0],
+            watch: { ...state.triggers[0]!.watch, sourceDevice: "local" },
+          },
+        ],
+      },
+      {
+        ...state,
+        triggers: [
+          {
+            ...state.triggers[0],
+            watch: {
+              ...state.triggers[0]!.watch,
+              sourceWorkspace: { bad: true },
+            },
+          },
+        ],
+      },
+      { ...state, history: [{ ...state.history[0], sourceDevice: undefined }] },
+      { ...state, history: [{ ...state.history[0], sourceThreadId: null }] },
+      { ...state, history: [{ ...state.history[0], kind: "timer" }] },
+      {
+        ...state,
+        history: [{ ...state.history[0], sourceDevice: "x".repeat(513) }],
+      },
+      { ...state, version: 2 },
+    ];
+    for (const value of corruptions) {
+      await writeFile(file, JSON.stringify(value), "utf8");
+      await assert.rejects(store.read(), /invalid entry shape/u);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

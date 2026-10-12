@@ -60,7 +60,7 @@ body { margin: 0; padding: 16px; font: var(--font-size-body,14px)/1.55 "Segoe UI
 * { box-sizing: border-box; }
 button,input,textarea,select { font: inherit; color: inherit; min-height: var(--control-height,32px); padding: 6px 10px; border: 1px solid var(--color-border-control); border-radius: var(--radius-control,7px); background: var(--color-surface-control); }
 button,summary { cursor:pointer; } button:hover { background:var(--color-surface-control-hover); } button:disabled { opacity:.5; cursor:not-allowed; }
-label { display:grid; gap:6px; } :focus-visible { outline:2px solid var(--color-focus-ring); outline-offset:3px; }
+label { display:grid; gap:6px; } :focus-visible { outline:1px solid var(--color-focus-ring); outline-offset:2px; }
 input { accent-color:var(--color-accent); } small { color:var(--color-text-secondary); } textarea { max-width:100%; }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; transition-duration:.01ms!important; scroll-behavior:auto!important; } }
 `;

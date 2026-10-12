@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import type { ComposerState } from "./composer-state.js";
 
 export function isCompactCommand(text: string): boolean {
@@ -10,7 +11,10 @@ export interface ContextCompactionRequest {
   clearCommandDraft: boolean;
   read(): ComposerState;
   update(change: (state: ComposerState) => ComposerState): void;
-  compact(threadId: string): Promise<unknown>;
+  compact(
+    threadId: string,
+    includeOriginalReference: boolean,
+  ): Promise<unknown>;
 }
 
 /** Handles the composer command before any turn, queue, steer, or replacement. */
@@ -19,22 +23,26 @@ export async function handleCompactCommand(options: {
   active: boolean;
   read(): ComposerState;
   update(change: (state: ComposerState) => ComposerState): void;
-  compact(threadId: string): Promise<unknown>;
+  compact(
+    threadId: string,
+    includeOriginalReference: boolean,
+  ): Promise<unknown>;
 }): Promise<boolean> {
   const state = options.read();
   if (state.compaction?.status === "pending") return true;
   if (!isCompactCommand(state.draft.text)) return false;
   if (state.submission?.status === "pending") return true;
-  const error =
-    state.draft.text.trim() !== "/compact"
-      ? "Use /compact on its own, without arguments."
-      : state.draft.images.length > 0
-        ? "Remove attachments before compacting context."
-        : options.threadId === null
-          ? "There is no conversation to compact yet."
-          : options.active
-            ? "Wait for the current reply to finish before compacting context."
-            : null;
+  const error = !["/compact", "/compact --no-reference"].includes(
+    state.draft.text.trim(),
+  )
+    ? i18n.t("common:compactArguments")
+    : state.draft.images.length > 0
+      ? i18n.t("common:compactAttachments")
+      : options.threadId === null
+        ? i18n.t("common:compactNoConversation")
+        : options.active
+          ? i18n.t("common:compactWait")
+          : null;
   if (error !== null) {
     options.update((current) => ({
       ...current,
@@ -61,9 +69,9 @@ export async function requestContextCompaction(
     return;
   const error =
     options.threadId === null
-      ? "There is no conversation to compact yet."
+      ? i18n.t("common:compactNoConversation")
       : options.active
-        ? "Wait for the current reply to finish before compacting context."
+        ? i18n.t("common:compactWait")
         : null;
   if (error !== null) {
     options.update((current) => ({
@@ -74,7 +82,7 @@ export async function requestContextCompaction(
   }
   const pending = {
     status: "pending" as const,
-    message: "Compacting context…",
+    message: i18n.t("common:compacting"),
   };
   options.update((current) => ({
     ...current,
@@ -82,7 +90,13 @@ export async function requestContextCompaction(
     compaction: pending,
   }));
   try {
-    await options.compact(options.threadId!);
+    await options.compact(
+      options.threadId!,
+      !(
+        options.clearCommandDraft &&
+        state.draft.text.trim() === "/compact --no-reference"
+      ),
+    );
     options.update((current) =>
       current.compaction !== pending
         ? current
@@ -92,7 +106,10 @@ export async function requestContextCompaction(
               options.clearCommandDraft && current.draft === state.draft
                 ? { text: "", images: [] }
                 : current.draft,
-            compaction: { status: "succeeded", message: "Context compacted." },
+            compaction: {
+              status: "succeeded",
+              message: i18n.t("common:compacted"),
+            },
           },
     );
   } catch (reason) {
@@ -101,21 +118,41 @@ export async function requestContextCompaction(
         ? current
         : {
             ...current,
-            compaction: { status: "failed", message: compactError(reason) },
+            compaction: { status: "failed", ...compactError(reason) },
           },
     );
   }
 }
 
-function compactError(reason: unknown): string {
-  const message = reason instanceof Error ? reason.message : String(reason);
-  if (/thread_busy|already has a running turn/u.test(message))
-    return "Wait for the current reply to finish before compacting context.";
-  if (
-    /compaction_not_available|no eligible completed Turn boundary|already compacted/u.test(
-      message,
-    )
-  )
-    return "There is no new completed conversation to compact.";
-  return `Context could not be compacted: ${message}`;
+function compactError(reason: unknown): { message: string; detail: string } {
+  // Do not infer a semantic error code from Electron's free-form IPC message.
+  // Only a preserved typed code is authoritative. Never render raw rejection text:
+  // it may include provider output, credentials, or a private conversation.
+  const value = reason !== null && typeof reason === "object" ? reason : null;
+  const code =
+    value !== null && "code" in value && typeof value.code === "string"
+      ? value.code
+      : value !== null &&
+          "zenCode" in value &&
+          typeof value.zenCode === "string"
+        ? value.zenCode
+        : null;
+  const detail =
+    code === "thread_busy" || code === "compaction_not_available"
+      ? i18n.t("common:compactRejected", { code })
+      : i18n.t("common:compactUnknown");
+  if (code === "thread_busy")
+    return {
+      message: i18n.t("common:compactWait"),
+      detail,
+    };
+  if (code === "compaction_not_available")
+    return {
+      message: i18n.t("common:compactNoNew"),
+      detail,
+    };
+  return {
+    message: i18n.t("common:compactUnconfirmed"),
+    detail,
+  };
 }

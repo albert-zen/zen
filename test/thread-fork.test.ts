@@ -265,10 +265,10 @@ test("fork preserves effective compaction context with remapped references", asy
     modelId: source.modelId,
     reasoningEffort: source.reasoningEffort,
   };
-  assert.deepEqual(
-    compileModelMessages(fork.items, selection),
-    compileModelMessages(compactedSource.items, selection),
-  );
+  const forkMessages = compileModelMessages(fork.items, selection);
+  const sourceMessages = compileModelMessages(compactedSource.items, selection);
+  assert.deepEqual(forkMessages.slice(0, -1), sourceMessages.slice(0, -1));
+  assert.equal(sourceMessages.at(-1)?.role, "user");
   const sourceCompaction = compactedSource.items.find(
     (item) => item.type === "context_compaction",
   );
@@ -277,6 +277,10 @@ test("fork preserves effective compaction context with remapped references", asy
   );
   assert.ok(sourceCompaction);
   assert.ok(forkCompaction);
+  assert.deepEqual(forkMessages.at(-1), {
+    role: "user",
+    text: `[Zen compacted context]\n${forkCompaction.summary}\n[Original ItemList: zen-thread://${fork.id}/items?through=${forkCompaction.coveredThroughItemId}; use authorized thread/original/read, do not infer hidden content]`,
+  });
   assert.notEqual(
     forkCompaction.coveredThroughItemId,
     sourceCompaction.coveredThroughItemId,
@@ -301,6 +305,32 @@ test("fork rejects Threads without a closed Turn", async () => {
   };
   const server = createServer(model);
   const source = await server.startThread();
+
+  await assert.rejects(
+    server.forkThread({
+      sourceThreadId: source.id,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "fork_boundary_unavailable",
+  );
+});
+
+test("latest-complete fork rejects a failed Turn", async () => {
+  const model: ModelAdapter = {
+    provider: "failing",
+    async *stream(): AsyncIterable<ModelEvent> {
+      throw new Error("failed turn");
+    },
+  };
+  const server = createServer(model);
+  const source = await server.startThread();
+  await (
+    await server.startTurn(source.id, "fail")
+  ).done;
 
   await assert.rejects(
     server.forkThread({

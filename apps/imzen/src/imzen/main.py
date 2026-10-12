@@ -58,7 +58,11 @@ def create_gateway(
     *,
     client=None,
     channels=None,
+    channel_config=None,
     persistent_subscriptions: bool = False,
+    controller_factory=None,
+    delivery_authorizer=None,
+    outbound_presentation=None,
 ) -> tuple[ImAgentGateway, SQLiteGatewayState]:
     """Compose the same SDK bridge for standalone IMZen and the ZenX plugin."""
     client = client or _build_app_server_client(resolved)
@@ -76,11 +80,14 @@ def create_gateway(
         subscription_commands=persistent_subscriptions,
         allow_unique_prefix=True,
     )
+    if controller_factory is not None:
+        controller = controller_factory(controller)
     resolved_channels = (
         channels
         if channels is not None
         else build_channels(
             resolved.channels_config_file,
+            channel_config=channel_config,
             permission_mode=resolved.permission_mode,
             allow_unrestricted_full_access=resolved.allow_unrestricted_full_access,
         )
@@ -95,10 +102,13 @@ def create_gateway(
             bindings=gateway_state if persistent_subscriptions else InMemoryBindingRepository(),
             projections=gateway_state if persistent_subscriptions else None,
             idempotency=gateway_state,
+            delivery_submissions=gateway_state if persistent_subscriptions else None,
         ),
         projection_policy=ProjectionPolicy.FOREGROUND_ONLY,
+        delivery_authorizer=delivery_authorizer,
         extensions=GatewayExtensions(
             controller=controller,
+            outbound_presentation=outbound_presentation,
             inbound_content_transformer=ImZenContentTransformer(),
             inbound_failure_presenter=ImZenFailurePresenter(),
             request_presenter=ImZenRequestPresenter(),

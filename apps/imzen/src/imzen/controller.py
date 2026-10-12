@@ -199,6 +199,21 @@ class ImZenController:
             ImZenXSlashController(self._presenter) if subscription_commands else SlashController()
         )
 
+    def register_command_names(self, names: Mapping[str, str]) -> None:
+        """Include product wrapper commands in the shared prefix namespace."""
+        self._command_names.update(names)
+
+    def resolve_command_name(self, name: str) -> tuple[str, ...]:
+        return resolve_command_name(
+            name, self._command_names, allow_unique_prefix=self._allow_unique_prefix
+        )
+
+    def present_response(self, message: InboundMessage, text: str) -> OutboundMessage:
+        return self._presenter.response(message, text)
+
+    async def clear_thread(self, message: InboundMessage, actions: ControllerActions) -> str:
+        return await self._clear_thread(message, actions)
+
     async def handle(
         self,
         message: InboundMessage,
@@ -209,9 +224,7 @@ class ImZenController:
             if command is None:
                 await self._ensure_thread(message, actions)
                 return None
-            candidates = resolve_command_name(
-                command.name, self._command_names, allow_unique_prefix=self._allow_unique_prefix
-            )
+            candidates = self.resolve_command_name(command.name)
             if len(candidates) > 1:
                 choices = ", ".join("/" + name for name in candidates)
                 return (
@@ -543,16 +556,28 @@ class ImZenFailurePresenter:
         delivery_id: str,
         reply_to_message_id: str,
     ) -> OutboundMessage:
-        if phase is InboundFailurePhase.OUTCOME_UNKNOWN:
-            prefix = "Zen may have accepted this message, but its outcome is unknown"
+        if phase is InboundFailurePhase.TURN_ENDED:
+            prefix = (
+                "The turn has ended; this message was not sent. Send it again to start a new turn"
+            )
+        elif phase is InboundFailurePhase.THREAD_BUSY:
+            prefix = "A turn is still running; this message was not sent. Try again later"
+        elif phase is InboundFailurePhase.OUTCOME_UNKNOWN:
+            prefix = (
+                "Zen may have accepted this message; its outcome is unknown. "
+                "Check the thread before resending"
+            )
         elif phase is InboundFailurePhase.POST_ACCEPTANCE:
-            prefix = "Zen accepted this message, but IM projection failed"
+            prefix = (
+                "Zen accepted this message, but IM projection failed. "
+                "Check the thread for the result"
+            )
         else:
-            prefix = "Zen could not process this message"
+            prefix = "Zen could not process this message; it was not accepted"
         return OutboundMessage(
             delivery_id=delivery_id,
             conversation_ref=conversation_ref,
-            content=(TextContent(f"**Error:** {prefix}.", TextFormat.MARKDOWN),),
+            content=(TextContent(f"Error: {prefix}.", TextFormat.PLAIN),),
             created_at=datetime.now(UTC),
             reply_to=reply_to_message_id,
         )

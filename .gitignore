@@ -19,3 +19,9 @@ node_modules/
 
 apps/zenx/resources/rtk/
 apps/zenx/resources/.rtk-build-*/
+
+apps/mobile/node_modules/
+apps/mobile/android/
+apps/mobile/.expo/
+
+apps/mobile/evidence/

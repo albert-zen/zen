@@ -68,6 +68,46 @@ test("Settings footer hugs its single navigation row", async () => {
   );
 });
 
+test("side panel keeps stable corner controls and an interruptible width transition", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.thread-panel-toggle\s*\{[^}]*position:\s*fixed;[^}]*right:\s*8px;/su,
+  );
+  assert.match(
+    styles,
+    /\.workspace:has\(> \.auxiliary-panel\)\s*\{[^}]*display:\s*flex;/su,
+  );
+  assert.match(
+    styles,
+    /\.auxiliary-panel\[data-open="false"\]\s*\{[^}]*flex-basis:\s*0;[^}]*width:\s*0;[^}]*min-width:\s*0;/su,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.auxiliary-heading \.auxiliary-close-button\s*\{[^}]*display:\s*none;/su,
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="win32"\] \.thread-panel-toggle\s*\{[^}]*right:\s*calc\(var\(--windows-control-region\) \+ 4px\);/su,
+  );
+  const narrow = styles.slice(styles.indexOf("@media (max-width: 720px)"));
+  assert.match(
+    narrow,
+    /\.workspace:has\(> \.auxiliary-panel\)\s*\{[^}]*display:\s*block;/su,
+  );
+  assert.match(
+    narrow,
+    /:root\[data-platform="win32"\] \.thread-panel-toggle\s*\{[^}]*top:\s*calc\(var\(--native-titlebar-height\) \+ 4px\);[^}]*right:\s*8px;/su,
+  );
+  assert.match(
+    styles,
+    /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*:root\s*\{[^}]*--motion-layout:\s*0ms;/su,
+  );
+});
+
 test("plugin page and panel collapse to one usable narrow desktop column", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
@@ -113,7 +153,11 @@ test("592px Settings reflows tabs and moves the sidebar off canvas", async () =>
   );
   assert.match(
     narrow,
-    /\.sidebar\s*\{[^}]*position:\s*absolute;[^}]*transform:\s*translateX\(-102%\);/su,
+    /\.sidebar\s*\{[^}]*position:\s*absolute;[^}]*transform:\s*translateX\(-102%\);[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none;/su,
+  );
+  assert.match(
+    narrow,
+    /\.sidebar\.open\s*\{[^}]*visibility:\s*visible;[^}]*pointer-events:\s*auto;/su,
   );
   assert.match(
     narrow,
@@ -123,6 +167,34 @@ test("592px Settings reflows tabs and moves the sidebar off canvas", async () =>
     mobile,
     /\.settings-nav\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/su,
   );
+});
+
+test("narrow global notices wrap long errors and keep recovery controls usable", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.app-notice span\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/su,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 420px\)\s*\{[^}]*\.app-notice\s*\{[^}]*flex-wrap:\s*wrap;/su,
+  );
+  assert.match(styles, /\.app-notice button\s*\{[^}]*min-height:\s*44px;/su);
+});
+
+test("mobile sidebar opening clears a persisted desktop collapse", async () => {
+  const app = await readFile(
+    new URL("../src/renderer/src/App.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    app,
+    /const openSidebar = \(\) => \{\s*setSidebarCollapsed\(false\);\s*setSidebarOpen\(true\);/su,
+  );
+  assert.doesNotMatch(app, /onOpenSidebar=\{\(\) => setSidebarOpen\(true\)\}/u);
 });
 
 test("200% text zoom keeps Settings copy and Appearance controls reflowable", async () => {
@@ -169,5 +241,39 @@ test("200% text zoom keeps Settings copy and Appearance controls reflowable", as
   assert.match(
     zoomed,
     /\.settings-nav,\s*\.appearance-options,\s*\.appearance-preset-options,\s*\.appearance-accent-options\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/su,
+  );
+});
+
+test("Linux overlay controls reserve space for the workspace toggle", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="linux"\] \.window-titlebar,\s*:root\[data-platform="win32"\] \.window-titlebar\s*\{[^}]*padding-right:\s*var\(--windows-control-region\);/su,
+  );
+  assert.match(
+    styles,
+    /:root\[data-platform="linux"\] \.thread-panel-toggle,\s*:root\[data-platform="win32"\] \.thread-panel-toggle\s*\{[^}]*right:\s*calc\(var\(--windows-control-region\) \+ 4px\);/su,
+  );
+});
+
+test("Linux workspace heading and narrow toggle stay clear of native window controls", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /:root:is\(\[data-platform="linux"\], \[data-platform="win32"\]\) \.auxiliary-heading\s*\{[^}]*padding-right:\s*8px;/su,
+  );
+  const lastToggle = styles.lastIndexOf(
+    ':root[data-platform="linux"] .thread-panel-toggle',
+  );
+  assert.ok(lastToggle > styles.indexOf("/* Rooms:"));
+  assert.match(
+    styles.slice(lastToggle),
+    /top:\s*calc\(var\(--native-titlebar-height\) \+ 4px\);\s*right:\s*8px;/u,
   );
 });

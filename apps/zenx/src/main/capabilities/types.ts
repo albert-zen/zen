@@ -42,6 +42,7 @@ export interface ZenXCapabilityTool extends ModelTool {
   interactionMode: ZenXCapabilityInteractionMode;
   capabilities: string[];
   maxOutputBytes?: number;
+  remoteExecution?: "text-json";
 }
 
 export interface ZenXPluginSidebarContribution {
@@ -91,7 +92,14 @@ export interface ZenXPluginResultRendererContribution {
   surfaceId: string;
 }
 
+export interface ZenXPluginThreadHeaderContribution {
+  id: string;
+  surfaceId: string;
+  order?: number;
+}
+
 export interface ZenXPluginContributions {
+  threadHeaders?: ZenXPluginThreadHeaderContribution[];
   sidebar?: ZenXPluginSidebarContribution[];
   pages?: ZenXPluginPageContribution[];
   subroutes?: ZenXPluginSubrouteContribution[];
@@ -244,7 +252,11 @@ export interface ZenXPluginSummary {
   lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
   available: boolean;
+  /** Current load failure, separate from the user's saved enablement. */
+  unavailableReason?: string;
   contributionCount: number;
+  /** Requested scopes from the installed manifest; these are not OS grants. */
+  permissions?: ZenXCapabilityPermission[];
 }
 
 export type ZenXPluginProfileSourceMode =
@@ -272,6 +284,9 @@ export interface ZenXPluginSnapshot {
   subroutes: ZenXPluginSubrouteProjection[];
   settings: ZenXPluginSurfaceProjection[];
   panels: ZenXPluginSurfaceProjection[];
+  threadHeaders?: Array<
+    ZenXPluginThreadHeaderContribution & ZenXPluginContributionProjection
+  >;
   commands: ZenXPluginCommandProjection[];
   menus: ZenXPluginMenuProjection[];
   resultRenderers?: ZenXPluginResultRendererProjection[];
@@ -280,6 +295,8 @@ export interface ZenXPluginSnapshot {
 export interface ZenXPluginDiagnostics {
   providerDiagnostics: ZenXCapabilityProviderDiagnostic[];
   discoveryErrors: string[];
+  /** Subset of discoveryErrors retained for existing diagnostics UI. */
+  bundledStartupFailureCount: number;
 }
 
 export type ZenXPostCommitCapabilityRefresh =
@@ -300,9 +317,19 @@ export type ZenXPluginTarballSelectionResult =
 
 export interface ZenXCapabilityHostSnapshot {
   definitions: ModelTool[];
+  /** Exposed exact-name runtimes whose authors declared text/JSON eligibility. */
+  remoteToolNames?: string[];
   /** Current v2 discovery catalog projected into the hosted App Server. */
   plugins?: ZenXAvailablePlugin[];
+  /** Nonsecret lifecycle projection, including disabled/uninstalled plugins. */
+  pluginReadiness?: ZenXPluginReadinessSummary[];
+  pluginCatalogAvailable?: boolean;
 }
+
+export type ZenXPluginReadinessSummary = Pick<
+  ZenXPluginSummary,
+  "id" | "displayName" | "lifecycle" | "enabled" | "available"
+>;
 
 /** Host-only snapshot identity; never projected into model-visible tool specs. */
 export interface ZenXCapabilityGenerationSnapshot extends ZenXCapabilityHostSnapshot {
@@ -327,6 +354,8 @@ export interface ZenXCapabilityHost {
     invocation: ToolInvocation,
     generationToken?: string,
   ): Promise<ToolExecutionResult>;
+  /** Host adapter for target-owned executions, with no local plugin task. */
+  executeTarget?(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }
 
 export interface ZenXPluginCatalogStore {

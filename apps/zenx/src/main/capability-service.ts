@@ -7,7 +7,7 @@ import type {
   ComputerThreadListener,
 } from "./capabilities/computer-thread-observation.js";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
@@ -17,7 +17,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 
-import { ToolEnvironment, type ToolInvocation } from "../../../../src/tool.js";
+import {
+  ToolEnvironment,
+  type ToolExecutionResult,
+  type ToolInvocation,
+} from "../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
   type ZenXBrowserBackend,
@@ -56,6 +60,7 @@ import type {
   PluginHostUiPort,
 } from "./plugin-host-sdk.js";
 import { createZenXPluginHostSdk } from "./plugin-host-sdk.js";
+import { clearBundledAutomationRoomsData } from "./automation-plugin-service.js";
 import type { AppServerRequestPort } from "./capabilities/self-control-package.js";
 import type { ZenXProjectProjection } from "./project-projection.js";
 import {
@@ -97,6 +102,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     };
   }
   readonly #pluginToolEnvironment: ToolEnvironment;
+  readonly #toolTargetTransport:
+    ((invocation: ToolInvocation) => Promise<ToolExecutionResult>) | undefined;
   readonly #pluginRuntimeSupervisor: PluginRuntimeSupervisor;
   readonly #userDataDirectory: string;
   readonly #browserBackend?: ZenXBrowserBackend;
@@ -150,6 +157,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   constructor(options: {
     userDataDirectory: string;
+    toolTargetTransport?: (
+      invocation: ToolInvocation,
+    ) => Promise<ToolExecutionResult>;
     catalogStore?: ZenXPluginCatalogStore;
     browserBackend?: ZenXBrowserBackend;
     browserBackendAuthoritative?: boolean;
@@ -177,6 +187,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     projectProjection?: ZenXProjectProjection;
     appServerPort?: AppServerRequestPort & PluginHostAppServerPort;
   }) {
+    this.#toolTargetTransport = options.toolTargetTransport;
     this.#foregroundRequiredAllowed = options.allowForegroundRequired ?? false;
     this.#pluginToolEnvironment = new ToolEnvironment();
     this.#pluginRuntimeSupervisor = new PluginRuntimeSupervisor(
@@ -638,7 +649,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   recordBundledPluginStartupError(pluginId: string, error: unknown): void {
-    this.#registry.recordDiscoveryError(`${pluginId}: ${describeError(error)}`);
+    this.#registry.recordBundledStartupError(
+      `${pluginId}: ${describeError(error)}`,
+    );
   }
 
   recordDiscoveryError(message: string): void {
@@ -661,6 +674,21 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       );
       return {
         ...entry,
+        ...(entry.pluginId === "browser" &&
+        this.#browserProfilePackage !== undefined
+          ? {
+              permissions: structuredClone(
+                this.#browserProfilePackage.manifest.permissions,
+              ),
+            }
+          : entry.pluginId === "computer" &&
+              this.#computerProfilePackage !== undefined
+            ? {
+                permissions: structuredClone(
+                  this.#computerProfilePackage.manifest.permissions,
+                ),
+              }
+            : {}),
         available,
         ...(available || diagnostic?.reason === undefined
           ? {}
@@ -887,6 +915,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       pnpmCliPath,
       pnpmEnvironment: this.#pnpmEnvironment,
       currentGeneration: this.#registry.profileGeneration(),
+      bundledManifests: this.#bundledProfileManifests(),
       expectedPackageName: expectedDescriptor?.profilePackageName,
       removeGeneration: this.#removeProfileGeneration,
       trustedLoaders: this.#trustedProfileLoaders,
@@ -928,6 +957,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
             pnpmCliPath,
             pnpmEnvironment: this.#pnpmEnvironment,
             currentGeneration: staged.generation,
+            bundledManifests: this.#bundledProfileManifests(),
             removeGeneration: this.#removeProfileGeneration,
           });
           generation = removed.generation;
@@ -1056,6 +1086,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         pnpmCliPath,
         pnpmEnvironment: this.#pnpmEnvironment,
         currentGeneration: generation,
+        bundledManifests: this.#bundledProfileManifests(),
         removeGeneration: this.#removeProfileGeneration,
       });
       try {
@@ -1094,6 +1125,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         pnpmCliPath: await this.#resolvePnpm(),
         pnpmEnvironment: this.#pnpmEnvironment,
         currentGeneration: this.#registry.profileGeneration(),
+        bundledManifests: this.#bundledProfileManifests(),
         expectedPackageName: descriptor.profilePackageName,
         removeGeneration: this.#removeProfileGeneration,
         trustedLoaders: this.#trustedProfileLoaders,
@@ -1118,6 +1150,42 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       }
       return this.pluginSnapshot();
     });
+  }
+
+  #bundledProfileManifests(): Record<string, ZenXPluginManifestV2> {
+    return Object.fromEntries(
+      Object.values(this.#registry.packageDescriptors())
+        .filter(
+          (descriptor) =>
+            descriptor.source === "bundled" &&
+            descriptor.profileSource?.mode === "bundled" &&
+            descriptor.profilePackageName !== undefined,
+        )
+        .map((descriptor) => [
+          descriptor.profilePackageName!,
+          descriptor.manifest,
+        ]),
+    );
+  }
+
+  /** Compare replaceable App Resources with the admitted archive identity. */
+  async bundledPluginPackageCurrent(
+    pluginId: string,
+    tarballPath: string,
+  ): Promise<boolean> {
+    const installed = this.pluginSnapshot().plugins.find(
+      (plugin) => plugin.id === pluginId,
+    );
+    const source = installed?.profileSource;
+    if (!installed?.available || source?.mode !== "bundled") return false;
+    const trusted = await this.#trustedBundledSource(tarballPath);
+    if (trusted.packageSpec !== source.packageSpec) return false;
+    const digest = createHash("sha256")
+      .update(await readFile(trusted.packageSpec))
+      .digest("hex");
+    // Legacy file specs have no immutable identity and are refreshed once
+    // through the installer, which creates the existing archive snapshot.
+    return source.resolvedSpec === `file:.zenx-sources/bundled/${digest}.tgz`;
   }
 
   async #trustedBundledSource(
@@ -1168,6 +1236,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         packageName = ZENX_ROOMS_PACKAGE_NAME;
         tarball = ZENX_ROOMS_TARBALL;
         break;
+      case "zenx-subagents":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.subagents.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.subagents.tarball;
+        break;
       case "zenx-self-control":
         packageName = FIRST_PARTY_PLUGIN_PACKAGES.selfControl.packageName;
         tarball = FIRST_PARTY_PLUGIN_PACKAGES.selfControl.tarball;
@@ -1186,9 +1258,11 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async deletePluginData(pluginId: string): Promise<void> {
-    await this.#serializeServiceMutation(
-      async () => await this.#registry.deleteData(pluginId),
-    );
+    await this.#serializeServiceMutation(async () => {
+      await this.#registry.deleteData(pluginId);
+      if (pluginId === "zenx-rooms")
+        await clearBundledAutomationRoomsData(this.#userDataDirectory);
+    });
   }
 
   async resetTransient(): Promise<void> {
@@ -1295,8 +1369,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         selection.diagnostics,
       );
     } catch (error) {
-      this.#registry.recordDiscoveryError(
-        `${pluginId === "browser" ? "Browser" : "Computer"} provider variant: ${describeError(error)}`,
+      this.recordBundledPluginStartupError(
+        `${pluginId === "browser" ? "Browser" : "Computer"} provider variant`,
+        error,
       );
       throw error;
     }
@@ -1360,6 +1435,27 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     }
     this.#registry.setForegroundRequiredAllowed(allowed);
     return true;
+  }
+
+  async executeTarget(
+    invocation: ToolInvocation,
+  ): Promise<ToolExecutionResult> {
+    const required =
+      invocation.name === "zenx_fleet_tools"
+        ? "zenx_fleet_tools"
+        : "zenx_fleet_execute";
+    if (
+      !this.#registry
+        .hostSnapshot()
+        .definitions.some((tool) => tool.name === required)
+    )
+      throw new Error(
+        "Fleet generic tool plugin is unavailable or its tools permission is not granted",
+      );
+    this.#registry.assertToolExposed(required);
+    if (!this.#toolTargetTransport)
+      throw new Error("Fleet execution-target transport is unavailable");
+    return await this.#toolTargetTransport(invocation);
   }
 
   async execute(invocation: ToolInvocation, generationToken?: string) {

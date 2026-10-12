@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Select } from "./ui/controls.js";
 import {
   CONTEXT_COMPACTION_SUMMARY_INSTRUCTION,
@@ -11,6 +12,7 @@ export function ContextCompactionPanel({
   config: ContextCompactionConfig | undefined;
   onChange(config: ContextCompactionConfig | undefined): void;
 }) {
+  const { t } = useTranslation("settings");
   const mode = config?.retention?.mode ?? "budget";
   const finals = config?.retention?.finalMessages ?? "none";
   const retention = (
@@ -20,26 +22,31 @@ export function ContextCompactionPanel({
   return (
     <>
       <header className="settings-section-header">
-        <h2>Context compaction</h2>
+        <h2>{t("contextCompactionPanel.contextCompaction")}</h2>
         <p>
-          Control when history is summarized and which original items the model
-          keeps.
+          {t(
+            "contextCompactionPanel.controlWhenHistoryIsSummarizedAndWhichOriginalItems",
+          )}
         </p>
       </header>
       <section
         className="settings-card compaction-settings"
-        aria-label="Agentic compaction experiment"
+        aria-label={t("contextCompactionPanel.agenticCompactionExperiment")}
       >
-        <h3>Agentic compaction · Experimental</h3>
+        <h3>{t("contextCompactionPanel.agenticCompactionExperimental")}</h3>
         <div className="settings-row">
           <div>
-            <strong>Enable Agentic compaction</strong>
+            <strong>
+              {t("contextCompactionPanel.enableAgenticCompaction")}
+            </strong>
           </div>
           <button
             className="plugin-switch"
             type="button"
             role="switch"
-            aria-label="Enable Agentic compaction (experimental)"
+            aria-label={t(
+              "contextCompactionPanel.enableAgenticCompactionExperimental",
+            )}
             aria-describedby="agentic-compaction-description"
             aria-checked={config?.agenticEnabled ?? false}
             onClick={() =>
@@ -48,25 +55,22 @@ export function ContextCompactionPanel({
           />
         </div>
         <p id="agentic-compaction-description" className="settings-note">
-          Let the agent choose when to replace its working context during a
-          task. It writes continuation notes, saves details to files, and reads
-          them when needed. Complete conversation history stays available to
-          you.
+          {t("contextCompactionPanel.letTheAgentChooseWhenToReplaceItsWorking")}
         </p>
         <p className="settings-note">
-          The summary prompt and retention rules below apply to generated
-          summaries, not to the agent’s own continuation text. Automatic
-          compaction keeps its existing behavior.
+          {t(
+            "contextCompactionPanel.theSummaryPromptAndRetentionRulesBelowApplyTo",
+          )}
         </p>
       </section>
       <section
         className="settings-card compaction-settings"
-        aria-label="Compaction budget"
+        aria-label={t("contextCompactionPanel.compactionBudget")}
       >
-        <h3>Trigger and budget</h3>
+        <h3>{t("contextCompactionPanel.triggerAndBudget")}</h3>
         <div className="compaction-field-grid">
           <label className="field">
-            <span>Compaction trigger (%)</span>
+            <span>{t("contextCompactionPanel.compactionTrigger")}</span>
             <input
               type="number"
               min="1"
@@ -85,7 +89,7 @@ export function ContextCompactionPanel({
             />
           </label>
           <label className="field">
-            <span>Post-compaction budget (%)</span>
+            <span>{t("contextCompactionPanel.postCompactionBudget")}</span>
             <input
               type="number"
               min="1"
@@ -105,24 +109,23 @@ export function ContextCompactionPanel({
           </label>
         </div>
         <p className="settings-note">
-          Percentages use the selected model’s context window. The
-          post-compaction budget covers both the summary and retained original
-          items and cannot exceed the trigger. Token and image costs are
-          estimates.
+          {t(
+            "contextCompactionPanel.percentagesUseTheSelectedModelSContextWindowThe",
+          )}
         </p>
         <p className="settings-note">
-          Automatic compaction runs at completed-turn boundaries or before the
-          next turn, not during an unfinished turn. Complete history stays
-          available in the conversation.
+          {t(
+            "contextCompactionPanel.automaticCompactionRunsAtCompletedTurnBoundariesOrBefore",
+          )}
         </p>
       </section>
       <section
         className="settings-card compaction-settings"
-        aria-label="Retention rules"
+        aria-label={t("contextCompactionPanel.retentionRules")}
       >
-        <h3>Original items to retain</h3>
+        <h3>{t("contextCompactionPanel.originalItemsToRetain")}</h3>
         <label className="field">
-          <span>Retention mode</span>
+          <span>{t("contextCompactionPanel.retentionMode")}</span>
           <Select
             value={mode}
             onValueChange={(value) =>
@@ -132,18 +135,20 @@ export function ContextCompactionPanel({
             }
           >
             <option value="budget">
-              Fill the token budget with recent items
+              {t("contextCompactionPanel.fillTheTokenBudgetWithRecentItems")}
             </option>
-            <option value="recent-items">Keep the most recent N items</option>
+            <option value="recent-items">
+              {t("contextCompactionPanel.keepTheMostRecentNItems")}
+            </option>
             <option value="selected-items">
-              Keep only the types selected below
+              {t("contextCompactionPanel.keepOnlyTheTypesSelectedBelow")}
             </option>
           </Select>
         </label>
         {mode === "recent-items" ? (
           <div className="compaction-count-control">
             <label className="field">
-              <span>Number of recent items</span>
+              <span>{t("contextCompactionPanel.numberOfRecentItems")}</span>
               <input
                 type="number"
                 min="1"
@@ -165,41 +170,41 @@ export function ContextCompactionPanel({
                 className="quiet-button"
                 onClick={() => retention({ recentItemCount: 10 })}
               >
-                Last 10 items
+                {t("contextCompactionPanel.last10Items")}
               </button>
               <button
                 type="button"
                 className="quiet-button"
                 onClick={() => retention({ recentItemCount: 20 })}
               >
-                Last 20 items
+                {t("contextCompactionPanel.last20Items")}
               </button>
             </div>
           </div>
         ) : null}
         <details className="settings-explanation">
-          <summary>How original items are counted</summary>
+          <summary>
+            {t("contextCompactionPanel.howOriginalItemsAreCounted")}
+          </summary>
           <p className="settings-note">
-            Items include user and agent messages, reasoning, tool calls, and
-            tool results. Execution markers do not count. Related tool items are
-            kept together, so the actual count can be higher. Budget mode fills
-            from the latest completed turn; the count and type rules consider
-            the full history.
+            {t(
+              "contextCompactionPanel.itemsIncludeUserAndAgentMessagesReasoningToolCalls",
+            )}
           </p>
         </details>
         <label className="compaction-checkbox">
           <input
             type="checkbox"
-            aria-label="Preserve all user messages"
+            aria-label={t("contextCompactionPanel.preserveAllUserMessages")}
             checked={config?.retention?.preserveUserMessages ?? false}
             onChange={(event) =>
               retention({ preserveUserMessages: event.target.checked })
             }
           />
-          <span>Preserve all user messages</span>
+          <span>{t("contextCompactionPanel.preserveAllUserMessages2")}</span>
         </label>
         <label className="field">
-          <span>Agent final messages</span>
+          <span>{t("contextCompactionPanel.agentFinalMessages")}</span>
           <Select
             value={finals}
             onValueChange={(value) =>
@@ -208,16 +213,20 @@ export function ContextCompactionPanel({
               })
             }
           >
-            <option value="none">No additional final messages</option>
-            <option value="all">Preserve all final messages</option>
+            <option value="none">
+              {t("contextCompactionPanel.noAdditionalFinalMessages")}
+            </option>
+            <option value="all">
+              {t("contextCompactionPanel.preserveAllFinalMessages")}
+            </option>
             <option value="recent">
-              Preserve the most recent N final messages
+              {t("contextCompactionPanel.preserveTheMostRecentNFinalMessages")}
             </option>
           </Select>
         </label>
         {finals === "recent" ? (
           <label className="field">
-            <span>Number of final messages</span>
+            <span>{t("contextCompactionPanel.numberOfFinalMessages")}</span>
             <input
               type="number"
               min="1"
@@ -235,28 +244,26 @@ export function ContextCompactionPanel({
           </label>
         ) : null}
         <p className="settings-note">
-          A final message is the final agent reply of a successfully completed
-          turn. Intermediate tool commentary and partial replies from failed
-          turns do not count.
+          {t("contextCompactionPanel.aFinalMessageIsTheFinalAgentReplyOf")}
         </p>
         <details className="settings-explanation">
-          <summary>How retention rules combine</summary>
+          <summary>
+            {t("contextCompactionPanel.howRetentionRulesCombine")}
+          </summary>
           <p className="settings-note">
-            These rules combine: selecting user messages or final replies adds
-            them to the retained items. Explicitly retained items will not be
-            silently dropped to fit the budget; if they cannot fit, compaction
-            reports a failure. Selecting no types in the last mode keeps only
-            the summary.
+            {t(
+              "contextCompactionPanel.theseRulesCombineSelectingUserMessagesOrFinalReplies",
+            )}
           </p>
         </details>
       </section>
       <section
         className="settings-card compaction-settings"
-        aria-label="Compaction instruction"
+        aria-label={t("contextCompactionPanel.compactionInstruction")}
       >
-        <h3>Summary instruction</h3>
+        <h3>{t("contextCompactionPanel.summaryInstruction")}</h3>
         <label className="field">
-          <span>Compaction prompt</span>
+          <span>{t("contextCompactionPanel.compactionPrompt")}</span>
           <textarea
             rows={9}
             maxLength={32768}
@@ -270,9 +277,9 @@ export function ContextCompactionPanel({
           />
         </label>
         <p className="settings-note">
-          Replaces the default instruction. Preserve goals, decisions,
-          constraints, unfinished work, identifiers, and important tool
-          outcomes. Ask for a summary without tool calls.
+          {t(
+            "contextCompactionPanel.replacesTheDefaultInstructionPreserveGoalsDecisionsConstraintsUnfinished",
+          )}
         </p>
         <button
           type="button"
@@ -282,7 +289,7 @@ export function ContextCompactionPanel({
             onChange(rest);
           }}
         >
-          Restore default prompt
+          {t("contextCompactionPanel.restoreDefaultPrompt")}
         </button>
       </section>
       <button
@@ -290,7 +297,7 @@ export function ContextCompactionPanel({
         className="quiet-button"
         onClick={() => onChange(undefined)}
       >
-        Reset all compaction settings
+        {t("contextCompactionPanel.resetAllCompactionSettings")}
       </button>
     </>
   );

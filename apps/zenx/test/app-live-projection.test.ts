@@ -22,10 +22,99 @@ import type {
   Thread,
 } from "../src/protocol-client/index.js";
 import { App } from "../src/renderer/src/App.js";
+import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
+
+test("canonical image tool completion refreshes the visible attachment projection", async () => {
+  let notify: NotificationListener | undefined;
+  const image = {
+    type: "attachment" as const,
+    sha256: "a".repeat(64),
+    mediaType: "image/png" as const,
+    byteLength: 68,
+    width: 1,
+    height: 1,
+  };
+  let images: ZenXThreadAttachmentProjection = {};
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(thread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    attachments: async () => images,
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    await waitFor(() =>
+      document.querySelector("#thread-browser-toggle:not(:disabled)"),
+    );
+    await act(async () => {
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      );
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(2, {
+          type: "item_completed",
+          item: {
+            id: "image-call",
+            type: "tool_call",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(20_000).toISOString(),
+            callId: "image-call-id",
+            name: "view_image",
+            arguments: { path: "/tmp/image.png" },
+          },
+        }),
+      );
+      images = { "image-call": [image] };
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(3, {
+          type: "item_completed",
+          item: {
+            id: "image-result",
+            type: "tool_result",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(21_000).toISOString(),
+            callId: "image-call-id",
+            output: "Viewed image",
+            exitCode: 0,
+            modelContent: [{ type: "image", attachment: image }],
+          },
+        }),
+      );
+    });
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".trace-item-toggle")?.click(),
+    );
+    await waitFor(() =>
+      document.querySelector('[aria-label="Preview Tool image 1"]'),
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
 
 test("thread exposes one working side panel instead of the legacy workspace drawer", async () => {
   const harness = await mountApp({
@@ -44,7 +133,10 @@ test("thread exposes one working side panel instead of the legacy workspace draw
         "#thread-browser-toggle:not(:disabled)",
       ),
     );
-    assert.equal(document.querySelectorAll(".top-actions button").length, 1);
+    assert.equal(
+      document.querySelectorAll(".app-shell > #thread-browser-toggle").length,
+      1,
+    );
     assert.equal(
       document.querySelector('[aria-label="Open workspace panel"]'),
       null,
@@ -59,6 +151,19 @@ test("thread exposes one working side panel instead of the legacy workspace draw
       "true",
     );
     assert.equal(document.querySelector(".workspace-drawer"), null);
+    assert.equal(
+      document.querySelector(".app-shell > #thread-browser-toggle"),
+      null,
+    );
+    const close = document.querySelector<HTMLButtonElement>(
+      ".auxiliary-close-button",
+    )!;
+    await act(async () => close.click());
+    assert.equal(
+      document.querySelector(".auxiliary-panel")?.getAttribute("data-open"),
+      "false",
+    );
+    assert.ok(document.querySelector(".app-shell > #thread-browser-toggle"));
   } finally {
     await harness.unmount();
   }
@@ -150,7 +255,7 @@ test("resume commits canonical state before auxiliary reads and replays catch-up
     assert.ok(contextUsage);
     assert.equal(
       contextUsage.getAttribute("aria-label"),
-      "Open context details. Context 10% · 7 / 70\nThread cache unknown",
+      "Open context details. Context 10% · 7 / 70 tokens\nThread cache unknown",
     );
   } finally {
     await harness.unmount();
@@ -550,7 +655,119 @@ type NotificationListener = <M extends ServerNotificationMethod>(
   params: ServerNotificationParams[M],
 ) => void;
 
+test("plugin query intent stays on its owned page and preserves the sidebar selection", async () => {
+  const route = "/plugins/route-harness/home";
+  const dispose = pluginUiRegistry.registerTrusted("route-harness-ui", {
+    overview: ({ sdk }) =>
+      createElement(
+        "div",
+        {},
+        createElement(
+          "p",
+          { "data-testid": "plugin-route" },
+          String(sdk.context.route),
+        ),
+        createElement(
+          "button",
+          {
+            onClick: () =>
+              sdk.navigation.navigate(`${route}?setup=room-reply&roomId=one`),
+          },
+          "Open setup intent",
+        ),
+      ),
+  });
+  const pluginSnapshot = {
+    plugins: [
+      {
+        id: "route-harness",
+        displayName: "Route harness",
+        enabled: true,
+        available: true,
+        lifecycle: "enabled",
+        contributionCount: 1,
+        version: "1",
+        source: "bundled",
+      },
+    ],
+    pages: [
+      {
+        key: "route-harness:home",
+        pluginId: "route-harness",
+        id: "home",
+        title: "Route harness",
+        route,
+        surfaceId: "overview",
+      },
+    ],
+    sidebar: [
+      {
+        key: "route-harness:home",
+        pluginId: "route-harness",
+        id: "home",
+        label: "Route harness",
+        icon: "plug",
+        pageId: "home",
+      },
+    ],
+    bundles: [
+      {
+        key: "route-harness:main",
+        pluginId: "route-harness",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "route-harness-ui",
+      },
+    ],
+    surfaces: [
+      {
+        key: "route-harness:overview",
+        pluginId: "route-harness",
+        id: "overview",
+        bundleId: "main",
+        exportName: "overview",
+      },
+    ],
+    subroutes: [],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
+  } as ZenXPluginSnapshot;
+  const harness = await mountApp({
+    request: async () => {
+      throw Error("No Thread request expected");
+    },
+    pluginSnapshot,
+  });
+  try {
+    const entry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Route harness",
+      ),
+    );
+    await act(async () => entry.click());
+    const setup = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Open setup intent",
+      ),
+    );
+    await act(async () => setup.click());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    assert.equal(
+      document.querySelector('[data-testid="plugin-route"]')?.textContent,
+      `${route}?setup=room-reply&roomId=one`,
+    );
+    assert.equal(entry.getAttribute("aria-current"), "page");
+  } finally {
+    await harness.unmount();
+    dispose();
+  }
+});
+
 interface MountOptions {
+  pluginSnapshot?: ZenXPluginSnapshot;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
   usage?(threadId: string): Promise<ModelUsageProjection>;
@@ -693,7 +910,14 @@ async function mountApp(options: MountOptions) {
       onChange: () => () => undefined,
     },
     plugins: {
-      get: async () => ({ plugins: [], sidebar: [], pages: [] }),
+      get: async () =>
+        options.pluginSnapshot ?? {
+          plugins: [],
+          sidebar: [],
+          pages: [],
+          surfaces: [],
+          bundles: [],
+        },
       onChange: () => () => undefined,
     },
   };

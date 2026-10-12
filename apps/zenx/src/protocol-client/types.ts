@@ -6,13 +6,18 @@ import type {
 } from "../../../../src/protocol/codex/mapper.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { CanonicalItem } from "../../../../src/item.js";
-import type { ThreadSnapshot } from "../../../../src/app-server.js";
+import type {
+  CreateChildThreadInput,
+  ThreadSnapshot,
+} from "../../../../src/app-server.js";
 import type {
   NativeProjectedThreadEvent,
   NativeThreadRecoverySnapshot,
 } from "../../../../src/protocol/native/recovery.js";
 
-export type Thread = CodexThread & {
+export type Thread = Omit<CodexThread, "parentThreadId"> & {
+  /** Native-only creation relation; CAS continues to project null. */
+  parentThreadId: string | null;
   /** Native product projection input; absent on CAS-only compatibility data. */
   canonicalItems?: readonly CanonicalItem[];
 };
@@ -127,15 +132,12 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
-  "zen/turn/send": {
+  "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
+  "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
+  "zen/thread/queue/cancel": {
     threadId: string;
-    mode: "start" | "queue" | "steer" | "replace";
-    expectedTurnId?: string;
-    clientUserMessageId: string;
-    input: readonly (
-      | import("../../../../src/item.js").UserInputPart
-      | import("../../../../src/skill-input.js").SkillReference
-    )[];
+    items: readonly { queuedItemId: string; clientId: string }[];
   };
   initialize: InitializeParams;
   "zen/initialize": Record<string, never>;
@@ -151,6 +153,7 @@ export interface ClientRequestParams {
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
   "zen/thread/read": { threadId: string };
+  "zen/thread/create-child": CreateChildThreadInput;
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
     limit?: number;
@@ -169,7 +172,26 @@ export interface ClientRequestParams {
     model: string;
     effort?: string;
   };
-  "thread/compact": { threadId: string };
+  "thread/original/read": {
+    threadId: string;
+    throughItemId: string;
+    beforeItemId?: string;
+    limit?: number;
+  };
+  "thread/compact": {
+    threadId: string;
+    includeOriginalReference?: boolean;
+    retention?: {
+      mode?: "budget" | "recent-items" | "selected-items";
+      recentItemCount?: number;
+      recentTurnCount?: number;
+      itemIds?: string[];
+      itemRanges?: { fromItemId: string; toItemId: string }[];
+      preserveUserMessages?: boolean;
+      finalMessages?: "none" | "all" | "recent";
+      finalMessageCount?: number;
+    };
+  };
   "thread/unsubscribe": { threadId: string };
   "turn/start": {
     threadId: string;
@@ -199,7 +221,12 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
-  "zen/turn/send": { turnId?: string };
+  "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
+  "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
+  "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
+  "zen/thread/queue/cancel": {
+    results: import("../../../../src/app-server.js").QueuedCancellationResult[];
+  };
   initialize: InitializeResult;
   "zen/initialize": { processEpoch: string };
   "account/read": { account: null; requiresOpenaiAuth: false };
@@ -212,6 +239,7 @@ export interface ClientRequestResults {
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
   "zen/thread/read": { thread: ThreadSnapshot };
+  "zen/thread/create-child": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];
@@ -223,6 +251,10 @@ export interface ClientRequestResults {
   "thread/unarchive": { thread: Thread };
   "thread/permissions/update": Record<string, never>;
   "thread/settings/update": Record<string, never>;
+  "thread/original/read": {
+    items: Thread["turns"][number]["items"];
+    nextBeforeItemId: string | null;
+  };
   "thread/compact": { compactionItemId: string };
   "thread/unsubscribe": {
     status: "unsubscribed" | "notSubscribed";

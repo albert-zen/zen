@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Popover, PopoverTrigger, PopoverContent } from "./ui/controls.js";
 import {
   useEffect,
@@ -39,6 +41,7 @@ export function ComposerModelMenu({
   selectedReasoningEffort: string | null;
   switching: boolean;
 }) {
+  useTranslation("shell");
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -61,7 +64,8 @@ export function ComposerModelMenu({
     }))
     .filter((group) => group.models.length > 0);
   const efforts = reasoningOptions(models, selectedModel);
-  const currentModelLabel = selected?.displayName ?? "Unavailable model";
+  const currentModelLabel =
+    selected?.displayName ?? i18n.t("shell:unavailableModel");
   const selectedReasoningLabel =
     selected === undefined ||
     efforts.length === 0 ||
@@ -74,10 +78,10 @@ export function ComposerModelMenu({
       : `${currentModelLabel} ${selectedReasoningLabel}`;
   const reasoningLabel =
     selected === undefined
-      ? "Unknown"
+      ? i18n.t("shell:unknown")
       : efforts.length === 0
-        ? "Text only"
-        : (selectedReasoningLabel ?? "Choose");
+        ? i18n.t("shell:textOnly")
+        : (selectedReasoningLabel ?? i18n.t("shell:choose"));
   const close = (restoreFocus = true) => {
     restoreFocusRef.current = restoreFocus;
     setPanel(null);
@@ -122,7 +126,9 @@ export function ComposerModelMenu({
             }
             aria-expanded={panel !== null}
             aria-haspopup="menu"
-            aria-label={`Model and reasoning: ${currentSelectionLabel}`}
+            aria-label={i18n.t("shell:modelAndReasoningSelection", {
+              selection: currentSelectionLabel,
+            })}
             title={currentSelectionLabel}
             disabled={disabled || switching}
             onClick={() => {
@@ -134,7 +140,9 @@ export function ComposerModelMenu({
               setPanel("root");
             }}
           >
-            <span>{switching ? "Changing…" : currentSelectionLabel}</span>
+            <span>
+              {switching ? i18n.t("shell:changing") : currentSelectionLabel}
+            </span>
             <Icon name="chevron-down" size={12} />
           </button>
         </PopoverTrigger>
@@ -149,10 +157,10 @@ export function ComposerModelMenu({
           role="menu"
           aria-label={
             visiblePanel === "root"
-              ? "Model and reasoning"
+              ? i18n.t("shell:modelAndReasoning")
               : visiblePanel === "model"
-                ? "Choose model"
-                : "Choose reasoning effort"
+                ? i18n.t("shell:chooseModel")
+                : i18n.t("shell:chooseReasoningEffort")
           }
           onKeyDown={(event) => {
             if (event.key === "Tab") triggerRef.current?.focus();
@@ -162,32 +170,34 @@ export function ComposerModelMenu({
           {visiblePanel === "root" ? (
             <>
               <MenuEntry
-                label="Model"
+                label={i18n.t("shell:model")}
                 value={currentModelLabel}
                 onClick={() => setPanel("model")}
               />
               <MenuEntry
                 disabled={efforts.length === 0}
-                label="Reasoning"
+                label={i18n.t("shell:reasoning")}
                 value={reasoningLabel}
                 onClick={() => setPanel("reasoning")}
               />
               {available ? (
                 <p className="composer-menu-note">
                   {efforts.length === 0
-                    ? "This model sends text without a Provider-specific reasoning control. Configure or detect capabilities to enable one."
-                    : "Changes apply to the next turn."}
+                    ? i18n.t(
+                        "shell:thisModelSendsTextWithoutAProviderSpecificReasoningControlConfigureOrDetectCapabilitiesToEnableOne",
+                      )
+                    : i18n.t("shell:changesApplyToTheNextTurn")}
                 </p>
               ) : (
                 <p className="composer-menu-warning" role="alert">
-                  This model cannot run. Choose another model before sending.
+                  {i18n.t("shell:cannotRunModel")}
                 </p>
               )}
             </>
           ) : visiblePanel === "model" ? (
             <>
               <MenuBack
-                label="Model"
+                label={i18n.t("shell:model")}
                 onClick={() => {
                   setQuery("");
                   setPanel("root");
@@ -195,8 +205,8 @@ export function ComposerModelMenu({
               />
               <input
                 className="composer-model-search"
-                aria-label="Search models"
-                placeholder="Search models…"
+                aria-label={i18n.t("shell:searchModels")}
+                placeholder={i18n.t("shell:searchModelsPlaceholder")}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={(event) => {
@@ -211,7 +221,7 @@ export function ComposerModelMenu({
               />
               {groups.length === 0 ? (
                 <p className="composer-menu-note" role="status">
-                  No matching models.
+                  {i18n.t("shell:noMatchingModels")}
                 </p>
               ) : null}
               <div className="composer-menu-scroll">
@@ -246,7 +256,10 @@ export function ComposerModelMenu({
             </>
           ) : (
             <>
-              <MenuBack label="Reasoning" onClick={() => setPanel("root")} />
+              <MenuBack
+                label={i18n.t("shell:reasoning")}
+                onClick={() => setPanel("root")}
+              />
               {efforts.map((effort) => (
                 <button
                   className="composer-effort-option"
@@ -323,15 +336,24 @@ function MenuBack({ label, onClick }: { label: string; onClick(): void }) {
 
 function capabilityLabel(model: ModelSummary): string {
   const modalities = model.inputModalities.includes("image")
-    ? "Text + images"
-    : "Text";
-  return `${modalities} · ${model.supportedReasoningEfforts.length} reasoning ${
-    model.supportedReasoningEfforts.length === 1 ? "level" : "levels"
-  }`;
+    ? i18n.t("shell:textAndImages")
+    : i18n.t("shell:text");
+  return `${modalities} · ${i18n.t("shell:reasoningLevels", { count: model.supportedReasoningEfforts.length })}`;
 }
 
 function formatReasoningEffort(effort: string): string {
-  if (effort === "xhigh") return "Extra High";
+  if (effort === "xhigh") return i18n.t("shell:extraHigh");
+  const known = {
+    none: "effortNone",
+    minimal: "effortMinimal",
+    low: "effortLow",
+    medium: "effortMedium",
+    high: "effortHigh",
+    max: "effortMax",
+    ultra: "effortUltra",
+  } as const;
+  if (effort in known)
+    return i18n.t(`shell:${known[effort as keyof typeof known]}`);
   return effort
     .split(/[-_\s]+/u)
     .filter(Boolean)

@@ -19,6 +19,7 @@ const ALLOWED_TAB_COMMANDS = new Set([
   "Page.createIsolatedWorld",
   "Page.enable",
   "Page.getFrameTree",
+  "Page.getLayoutMetrics",
   "Page.navigate",
   "Page.screencastFrameAck",
   "Page.startScreencast",
@@ -45,7 +46,7 @@ export const ZENX_CHROME_NATIVE_HOST_NAME = "com.zenx.chrome_bridge";
 
 export interface ChromeExtensionBridgeStatus {
   state: "waiting" | "connected";
-  connectedTab?: { id: number; title: string; url: string };
+  tabCount: number;
 }
 
 export interface ChromeBridgeSettingsSnapshot {
@@ -74,7 +75,8 @@ interface CdpSession {
 interface PendingCommand {
   socket: WebSocket;
   id: number;
-  sessionId: string;
+  sessionId?: string;
+  tabId?: number;
   navigatedUrl?: string;
 }
 
@@ -89,7 +91,9 @@ export class ChromeExtensionBridge {
   readonly #sessions = new Map<string, CdpSession>();
   readonly #pending = new Map<string, PendingCommand>();
   #native?: WebSocket;
-  #tab?: ConnectedTab;
+  readonly #tabs = new Map<number, ConnectedTab>();
+  #browserConnected = false;
+  #nativeReady = false;
   #closed = false;
 
   private constructor(options: {
@@ -170,9 +174,10 @@ export class ChromeExtensionBridge {
   }
 
   status(): ChromeExtensionBridgeStatus {
-    return this.#tab === undefined
-      ? { state: "waiting" }
-      : { state: "connected", connectedTab: { ...this.#tab } };
+    return {
+      state: this.#browserConnected ? "connected" : "waiting",
+      tabCount: this.#tabs.size,
+    };
   }
 
   async connectProvider(signal?: AbortSignal): Promise<UserBrowserConnection> {
@@ -219,9 +224,7 @@ export class ChromeExtensionBridge {
       return;
     }
     if (request.url === "/json/list") {
-      response.end(
-        JSON.stringify(this.#tab === undefined ? [] : [target(this.#tab)]),
-      );
+      response.end(JSON.stringify([...this.#tabs.values()].map(target)));
       return;
     }
     response.writeHead(404).end();
@@ -231,7 +234,7 @@ export class ChromeExtensionBridge {
     const previous = this.#native;
     if (previous !== undefined) {
       this.#native = undefined;
-      this.#detachTab("Extension connection was replaced");
+      this.#disconnectBrowser("Extension connection was replaced");
       previous.close(1008, "Replaced by a new ZenX extension connection");
     }
     this.#native = socket;
@@ -241,7 +244,7 @@ export class ChromeExtensionBridge {
     socket.once("close", () => {
       if (this.#native !== socket) return;
       this.#native = undefined;
-      this.#detachTab("Extension disconnected");
+      this.#disconnectBrowser("Extension disconnected");
     });
     socket.once("error", () => socket.close());
   }
@@ -255,36 +258,45 @@ export class ChromeExtensionBridge {
       socket.close(1007, "Invalid JSON");
       return;
     }
-    if (message.type === "hello" && message.protocolVersion === 1) {
-      socket.send(JSON.stringify({ type: "ready", protocolVersion: 1 }));
+    if (message.type === "hello") {
+      if (message.protocolVersion !== 2 || message.scope !== "browser") {
+        socket.close(
+          1008,
+          "Reload the ZenX Browser Bridge extension to connect Chrome",
+        );
+        return;
+      }
+      this.#nativeReady = true;
+      socket.send(
+        JSON.stringify({ type: "ready", protocolVersion: 2, scope: "browser" }),
+      );
       return;
     }
-    if (message.type === "tab-attached") {
-      const tab = readTab(message.tab);
-      if (tab === undefined) {
+    if (!this.#nativeReady) return;
+    if (message.type === "browser-connected") {
+      if (this.#browserConnected || !Array.isArray(message.tabs)) {
+        socket.close(1007, "Invalid browser connection");
+        return;
+      }
+      const tabs = message.tabs.map(readTab);
+      if (tabs.some((tab) => tab === undefined)) {
         socket.close(1007, "Invalid tab metadata");
         return;
       }
-      this.#detachTab("A different tab was selected");
-      this.#tab = tab;
-      this.#broadcast({
-        method: "Target.targetCreated",
-        params: { targetInfo: targetInfo(tab) },
-      });
+      this.#browserConnected = true;
+      for (const tab of tabs) this.#updateTab(tab!);
       return;
     }
+    if (!this.#browserConnected) return;
     if (message.type === "tab-updated") {
       const tab = readTab(message.tab);
-      if (tab === undefined || this.#tab?.id !== tab.id) return;
-      this.#tab = tab;
-      this.#broadcast({
-        method: "Target.targetInfoChanged",
-        params: { targetInfo: targetInfo(tab) },
-      });
+      if (tab !== undefined) this.#updateTab(tab);
       return;
     }
-    if (message.type === "tab-detached") {
-      this.#detachTab("Tab was disconnected");
+    if (message.type === "tab-removed") {
+      const tabId = numberValue(message.tabId);
+      if (tabId !== undefined)
+        this.#detachTab(tabId, "Chrome tab is unavailable");
       return;
     }
     if (message.type === "cdp-result") {
@@ -309,12 +321,12 @@ export class ChromeExtensionBridge {
           pending.sessionId,
         );
       } else {
-        if (pending.navigatedUrl !== undefined && this.#tab !== undefined) {
-          this.#tab = { ...this.#tab, url: pending.navigatedUrl };
-          this.#broadcast({
-            method: "Target.targetInfoChanged",
-            params: { targetInfo: targetInfo(this.#tab) },
-          });
+        const tab =
+          pending.tabId === undefined
+            ? undefined
+            : this.#tabs.get(pending.tabId);
+        if (pending.navigatedUrl !== undefined && tab !== undefined) {
+          this.#updateTab({ ...tab, url: pending.navigatedUrl });
         }
         this.#reply(
           pending.socket,
@@ -330,7 +342,8 @@ export class ChromeExtensionBridge {
       const tabId = numberValue(message.tabId);
       const method = stringValue(message.method);
       const params = asRecord(message.params) ?? {};
-      const currentTab = this.#tab;
+      const currentTab =
+        tabId === undefined ? undefined : this.#tabs.get(tabId);
       if (
         currentTab === undefined ||
         tabId !== currentTab.id ||
@@ -339,13 +352,8 @@ export class ChromeExtensionBridge {
       )
         return;
       const navigatedUrl = mainFrameUrlFromEvent(method, params);
-      if (navigatedUrl !== undefined && this.#tab !== undefined) {
-        this.#tab = { ...this.#tab, url: navigatedUrl };
-        this.#broadcast({
-          method: "Target.targetInfoChanged",
-          params: { targetInfo: targetInfo(this.#tab) },
-        });
-      }
+      if (navigatedUrl !== undefined)
+        this.#updateTab({ ...currentTab, url: navigatedUrl });
       for (const [sessionId, session] of this.#sessions) {
         if (session.targetId !== targetId(currentTab)) continue;
         sendJson(session.socket, { method, params, sessionId });
@@ -382,21 +390,51 @@ export class ChromeExtensionBridge {
     }
     if (method === "Target.getTargets") {
       this.#reply(socket, id, {
-        targetInfos: this.#tab === undefined ? [] : [targetInfo(this.#tab)],
+        targetInfos: [...this.#tabs.values()].map(targetInfo),
       });
       return;
     }
     if (method === "Target.createTarget") {
-      this.#reply(socket, id, undefined, {
-        code: -32000,
-        message:
-          "Select the tab explicitly from the ZenX Chrome extension before using it",
-      });
+      if (
+        !this.#browserConnected ||
+        this.#native?.readyState !== WebSocket.OPEN
+      ) {
+        this.#reply(socket, id, undefined, {
+          code: -32000,
+          message: "Chrome browser is not connected",
+        });
+        return;
+      }
+      if (
+        typeof params.url !== "string" ||
+        !/^about:blank#zenx-pending-[a-f0-9-]+$/u.test(params.url)
+      ) {
+        this.#reply(socket, id, undefined, {
+          code: -32000,
+          message: "Invalid ZenX browser creation marker",
+        });
+        return;
+      }
+      const requestId = randomUUID();
+      this.#pending.set(requestId, { socket, id });
+      this.#native.send(
+        JSON.stringify({
+          type: "cdp-command",
+          requestId,
+          method,
+          params: { url: params.url },
+        }),
+      );
       return;
     }
     if (method === "Target.attachToTarget") {
       const requestedTarget = stringValue(params.targetId);
-      if (this.#tab === undefined || requestedTarget !== targetId(this.#tab)) {
+      if (
+        requestedTarget === undefined ||
+        ![...this.#tabs.values()].some(
+          (tab) => targetId(tab) === requestedTarget,
+        )
+      ) {
         this.#reply(socket, id, undefined, {
           code: -32000,
           message: "Chrome tab is not connected",
@@ -425,11 +463,13 @@ export class ChromeExtensionBridge {
     }
     const session =
       sessionId === undefined ? undefined : this.#sessions.get(sessionId);
+    const tab = [...this.#tabs.values()].find(
+      (tab) => targetId(tab) === session?.targetId,
+    );
     if (
       sessionId === undefined ||
       session?.socket !== socket ||
-      this.#tab === undefined ||
-      session.targetId !== targetId(this.#tab) ||
+      tab === undefined ||
       this.#native?.readyState !== WebSocket.OPEN
     ) {
       this.#reply(
@@ -459,6 +499,7 @@ export class ChromeExtensionBridge {
       socket,
       id,
       sessionId,
+      tabId: tab.id,
       ...(method === "Page.navigate" && typeof params.url === "string"
         ? { navigatedUrl: params.url }
         : {}),
@@ -467,7 +508,7 @@ export class ChromeExtensionBridge {
       JSON.stringify({
         type: "cdp-command",
         requestId,
-        tabId: this.#tab.id,
+        tabId: tab.id,
         method,
         params,
       }),
@@ -488,11 +529,11 @@ export class ChromeExtensionBridge {
     });
   }
 
-  #detachTab(reason: string): void {
-    const previous = this.#tab;
+  #detachTab(tabId: number, reason: string): void {
+    const previous = this.#tabs.get(tabId);
     if (previous === undefined) return;
     const previousTargetId = targetId(previous);
-    this.#tab = undefined;
+    this.#tabs.delete(tabId);
     for (const [sessionId, session] of [...this.#sessions]) {
       if (session.targetId !== previousTargetId) continue;
       this.#sessions.delete(sessionId);
@@ -502,6 +543,7 @@ export class ChromeExtensionBridge {
       });
     }
     for (const [requestId, pending] of [...this.#pending]) {
+      if (pending.tabId !== tabId) continue;
       this.#pending.delete(requestId);
       this.#reply(
         pending.socket,
@@ -518,6 +560,31 @@ export class ChromeExtensionBridge {
       method: "Target.targetDestroyed",
       params: { targetId: previousTargetId },
     });
+  }
+
+  #updateTab(tab: ConnectedTab): void {
+    const existed = this.#tabs.has(tab.id);
+    this.#tabs.set(tab.id, tab);
+    this.#broadcast({
+      method: existed ? "Target.targetInfoChanged" : "Target.targetCreated",
+      params: { targetInfo: targetInfo(tab) },
+    });
+  }
+
+  #disconnectBrowser(reason: string): void {
+    this.#browserConnected = false;
+    this.#nativeReady = false;
+    for (const tabId of [...this.#tabs.keys()]) this.#detachTab(tabId, reason);
+    for (const [requestId, pending] of this.#pending) {
+      this.#pending.delete(requestId);
+      this.#reply(
+        pending.socket,
+        pending.id,
+        undefined,
+        { code: -32000, message: reason },
+        pending.sessionId,
+      );
+    }
   }
 
   #dropCdp(socket: WebSocket): void {

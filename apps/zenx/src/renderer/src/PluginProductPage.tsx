@@ -1,8 +1,11 @@
+import { registerSubagentsUi } from "./subagents-ui.js";
 import { registerImZenXUi } from "./imzenx-ui.js";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import { Icon } from "./icons.js";
+import { pluginRoutePath } from "./plugin-contributions.js";
 import {
   GenericPluginUiHost,
   createPluginUiRegistry,
@@ -15,22 +18,28 @@ export const pluginUiRegistry = createPluginUiRegistry();
 registerBundledAutomationUi(pluginUiRegistry);
 registerBundledBrowserUi(pluginUiRegistry);
 registerImZenXUi(pluginUiRegistry);
+registerSubagentsUi(pluginUiRegistry);
 
 export function PluginProductPage({
   snapshot,
   route,
   navigate,
   registry = pluginUiRegistry,
+  context,
 }: {
   snapshot: ZenXPluginSnapshot;
   route: string;
   navigate(route: string): void;
   onOpenSidebar?(): void;
   registry?: PluginUiRegistry;
+  context?: Readonly<Record<string, unknown>>;
 }) {
+  const { t } = useTranslation("settings");
   const target =
-    snapshot.pages.find((page) => page.route === route) ??
-    snapshot.subroutes.find((subroute) => subroute.route === route);
+    snapshot.pages.find((page) => page.route === pluginRoutePath(route)) ??
+    snapshot.subroutes.find(
+      (subroute) => subroute.route === pluginRoutePath(route),
+    );
   const theme = useAppearance();
   if (target?.surfaceId === undefined) return null;
   const panels = (snapshot.panels ?? []).filter(
@@ -55,7 +64,9 @@ export function PluginProductPage({
           <div
             className="plugin-menu"
             role="toolbar"
-            aria-label={`${target.title} commands`}
+            aria-label={t("pluginProductPage.namedCommands", {
+              name: target.title,
+            })}
           >
             {menus.map((menu) => (
               <button
@@ -80,7 +91,11 @@ export function PluginProductPage({
           snapshot={snapshot}
           pluginId={target.pluginId}
           surfaceId={target.surfaceId}
-          context={{ route, handleId: `${target.pluginId}:context` }}
+          context={{
+            ...context,
+            route,
+            handleId: `${target.pluginId}:context`,
+          }}
           theme={theme}
           navigate={navigate}
           executeCommand={window.zenx.plugins.executeCommand}
@@ -120,6 +135,7 @@ export function PluginSettingsSurfaces({
   snapshot: ZenXPluginSnapshot;
   registry?: PluginUiRegistry;
 }) {
+  const { t } = useTranslation("settings");
   const theme = useAppearance();
   return (snapshot.settings ?? []).map((settings) => (
     <section key={settings.key} aria-label={settings.title}>
@@ -127,7 +143,7 @@ export function PluginSettingsSurfaces({
         snapshot={snapshot}
         pluginId={settings.pluginId}
         location="settings"
-        label={`${settings.title} commands`}
+        label={t("pluginProductPage.namedCommands", { name: settings.title })}
       />
       <GenericPluginUiHost
         registry={registry}

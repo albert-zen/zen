@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { publicItemValue } from "../../public-item.js";
 import React, {
   useCallback,
@@ -42,6 +44,16 @@ export function Cockpit({
   onRefresh,
   onOpenThread,
 }: CockpitProps) {
+  const { t } = useTranslation("cockpit");
+  const groupLabel = (group: (typeof groups)[number]) =>
+    t(
+      {
+        "Needs attention": "needsAttention",
+        Unknown: "unknown",
+        Running: "running",
+        Idle: "idle",
+      }[group],
+    );
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -63,51 +75,57 @@ export function Cockpit({
         .includes(query.toLowerCase()),
   );
   return (
-    <section className="cockpit" aria-label="Experimental Cockpit">
+    <section className="cockpit" aria-label={t("experimentalCockpit")}>
       <header className="cockpit-heading">
         <div>
-          <span className="cockpit-eyebrow">ZEN / EXPERIMENTAL</span>
+          <span className="cockpit-eyebrow">{t("experimentalEyebrow")}</span>
           <h1>
-            Work in view<span>.</span>
+            {t("workInView")}
+            <span>.</span>
           </h1>
-          <p>Follow the work. Act where it matters.</p>
+          <p>{t("followTheWorkActWhereItMatters")}</p>
         </div>
         <div className="cockpit-connection">
           <span className={connected ? "cockpit-dot" : "cockpit-dot offline"} />
-          {connected ? "Host connected" : "Host unavailable · state unknown"}
-          <button onClick={onRefresh}>Refresh overview</button>
+          {connected ? t("hostConnected") : t("hostUnavailableStateUnknown")}
+          <button onClick={onRefresh}>{t("refreshOverview")}</button>
           <small role="status">
             {overviewReadAt === null
-              ? "Overview not yet read"
-              : `Overview read ${Math.max(0, Math.floor((now - overviewReadAt) / 1000))}s ago`}
+              ? t("overviewNotYetRead")
+              : t("overviewReadAge", {
+                  seconds: Math.max(
+                    0,
+                    Math.floor((now - overviewReadAt) / 1000),
+                  ),
+                })}
             {overviewStale
-              ? " · Unknown / stale"
-              : " · refreshes every 5s while visible"}
+              ? t("unknownStale")
+              : t("refreshesEvery5sWhileVisible")}
           </small>
         </div>
       </header>
       {error && (
         <p className="cockpit-warning" role="alert">
-          Overview refresh failed: {error}. Displayed tasks may be stale.
+          {t("overviewFailed", { error })}
         </p>
       )}
       <div className="cockpit-layout">
-        <nav className="cockpit-rail" aria-label="Work overview">
+        <nav className="cockpit-rail" aria-label={t("workOverview")}>
           <label className="cockpit-search">
-            Find a task or workspace
+            {t("findATaskOrWorkspace")}
             <input
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter work…"
+              placeholder={t("filterWork")}
             />
           </label>
-          {loading && <p role="status">Loading tasks from Host…</p>}
+          {loading && <p role="status">{t("loadingTasksFromHost")}</p>}
           {!loading && !visible.length && (
             <p className="cockpit-empty">
               {query
-                ? "No tasks match this filter."
-                : "No tasks yet. Start a conversation to bring work into view."}
+                ? t("noTasksMatchThisFilter")
+                : t("noTasksYetStartAConversationToBringWorkIntoView")}
             </p>
           )}
           {groups.map((group) => {
@@ -117,7 +135,9 @@ export function Cockpit({
             return tasks.length ? (
               <section className="cockpit-group" key={group}>
                 <h2>
-                  {overviewStale ? `Last known · ${group}` : group}
+                  {overviewStale
+                    ? t("lastKnown", { group: groupLabel(group) })
+                    : groupLabel(group)}
                   <span>{tasks.length}</span>
                 </h2>
                 {tasks.map((summary) => (
@@ -130,18 +150,20 @@ export function Cockpit({
                     <span className="cockpit-task-project">
                       {"currentMetadata" in summary
                         ? workspaceLabel(summary.currentMetadata.cwd)
-                        : "Workspace unknown"}
+                        : t("workspaceUnknown")}
                     </span>
-                    <strong>{summary.name || "Untitled task"}</strong>
+                    <strong>{summary.name || t("untitledTask")}</strong>
                     <span className="cockpit-preview">
                       {summary.status === "systemError"
                         ? summary.error
-                        : summary.preview || "No message preview"}
+                        : summary.preview || t("noMessagePreview")}
                     </span>
                     <small>
                       {summary.updatedAt
-                        ? `Last activity ${formatTime(summary.updatedAt)}`
-                        : "Activity time unknown"}
+                        ? t("lastActivity", {
+                            time: formatTime(summary.updatedAt),
+                          })
+                        : t("activityTimeUnknown")}
                     </small>
                   </button>
                 ))}
@@ -160,19 +182,21 @@ export function Cockpit({
             />
           ) : (
             <div className="cockpit-welcome">
-              <span className="cockpit-eyebrow">FOCUS</span>
+              <span className="cockpit-eyebrow">{t("focus")}</span>
               <h2>
-                A clear view starts
+                {t("aClearViewStarts")}
                 <br />
-                with one task.
+                {t("withOneTask")}
               </h2>
               <p>
-                Select work to inspect its events, review sources and direct the
-                Agent.
+                {t(
+                  "selectWorkToInspectItsEventsReviewSourcesAndDirectTheAgent",
+                )}
               </p>
               <p className="cockpit-footnote">
-                Opening this view creates no Turn. Idle means no active Turn,
-                not a completed goal.
+                {t(
+                  "openingThisViewCreatesNoTurnIdleMeansNoActiveTurnNotACompletedGoal",
+                )}
               </p>
             </div>
           )}
@@ -193,6 +217,7 @@ function CockpitFocus({
   approval: boolean;
   onOpenThread(id: string): void;
 }) {
+  const { t } = useTranslation("cockpit");
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
   const [readAt, setReadAt] = useState<number | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
@@ -226,8 +251,10 @@ function CockpitFocus({
   const alive = useRef(true);
   const reading = useRef(false);
   const acting = useRef(false);
-  const read = useCallback(async () => {
+  const refreshAfterAction = useRef(false);
+  const read = useCallback(async (): Promise<void> => {
     if (reading.current || !connected) return;
+    refreshAfterAction.current = false;
     reading.current = true;
     const generation = readGeneration.current;
     try {
@@ -243,6 +270,7 @@ function CockpitFocus({
         setReadError(describe(error));
     } finally {
       reading.current = false;
+      if (alive.current && refreshAfterAction.current) void read();
     }
   }, [summary.threadId, connected]);
   useEffect(() => {
@@ -284,19 +312,22 @@ function CockpitFocus({
         );
       else await cockpitInterrupt(window.zenx.protocol.request, snapshot);
       if (!alive.current) return;
+      // Acceptance makes any earlier snapshot obsolete. A pending read drains
+      // before exactly one trailing read; ordinary polling never queues work.
+      readGeneration.current++;
+      setReadAt(null);
+      refreshAfterAction.current = true;
       if (operation === "send")
         setDraft((current) => (current === submitted ? "" : current));
       setNotice(
         operation === "send"
-          ? "Message accepted by Host."
-          : "Interrupt accepted by Host.",
+          ? t("messageAcceptedByHost")
+          : t("interruptAcceptedByHost"),
       );
       await read();
     } catch (error) {
       if (alive.current)
-        setActionError(
-          `${describe(error)} No automatic retry was made. Inspect the conversation before retrying an uncertain result.`,
-        );
+        setActionError(t("actionFailed", { error: describe(error) }));
     } finally {
       acting.current = false;
       if (alive.current) setBusy(false);
@@ -328,52 +359,55 @@ function CockpitFocus({
     <>
       <header className="cockpit-focus-header">
         <span className="cockpit-eyebrow">
-          FOCUS /{" "}
+          {t("focusPrefix")}{" "}
           {"currentMetadata" in summary
             ? workspaceLabel(summary.currentMetadata.cwd)
-            : "UNKNOWN WORKSPACE"}
+            : t("unknownWorkspace")}
         </span>
-        <h2>{summary.name || "Untitled task"}</h2>
+        <h2>{summary.name || t("untitledTask")}</h2>
         <div className="cockpit-toolbar">
           <span className="cockpit-status">
             {stale
-              ? "Unknown / stale"
+              ? t("unknownStaleLabel")
               : active
-                ? "Running"
+                ? t("running")
                 : lastTurn
-                  ? `Last Turn ${lastTurn.status}`
-                  : "No Turns"}
+                  ? t("lastTurn", { status: lastTurn.status })
+                  : t("noTurns")}
           </span>
           <button onClick={() => onOpenThread(summary.threadId)}>
-            Open conversation ↗
+            {t("openConversation")}
           </button>
           <button onClick={() => void read()} disabled={!connected}>
-            Refresh task
+            {t("refreshTask")}
           </button>
         </div>
         <p className="cockpit-freshness">
           {readAt
-            ? `Snapshot read ${Math.max(0, Math.floor((now - readAt) / 1000))}s ago · ${connected ? "refreshes every 5s while visible" : "refresh paused while Host is unavailable"}`
-            : "Snapshot not yet read"}
+            ? t("snapshotAge", {
+                seconds: Math.max(0, Math.floor((now - readAt) / 1000)),
+                refresh: connected
+                  ? t("refreshesEvery5sWhileVisibleLabel")
+                  : t("refreshPausedWhileHostIsUnavailable"),
+              })
+            : t("snapshotNotYetRead")}
         </p>
       </header>
       {readError && (
         <p className="cockpit-warning" role="alert">
-          Could not read task: {readError}.{" "}
-          {snapshot
-            ? "Previous evidence is stale."
-            : "No snapshot is available."}
+          {t("readFailed", { error: readError })}{" "}
+          {snapshot ? t("previousEvidenceIsStale") : t("noSnapshotIsAvailable")}
         </p>
       )}
       {!snapshot && connected && !readError && (
-        <p role="status">Reading canonical events…</p>
+        <p role="status">{t("readingCanonicalEvents")}</p>
       )}
       {approval && (
         <div className="cockpit-warning">
-          <strong>Your decision is needed.</strong>
-          <p>Review the pending request in the conversation.</p>
+          <strong>{t("yourDecisionIsNeeded")}</strong>
+          <p>{t("reviewThePendingRequestInTheConversation")}</p>
           <button onClick={() => onOpenThread(summary.threadId)}>
-            Review request
+            {t("reviewRequest")}
           </button>
         </div>
       )}
@@ -387,12 +421,12 @@ function CockpitFocus({
             }}
           >
             <label htmlFor={`cockpit-message-${summary.threadId}`}>
-              Direct this task
+              {t("directThisTask")}
               <textarea
                 id={`cockpit-message-${summary.threadId}`}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                placeholder="What should the Agent do next?"
+                placeholder={t("whatShouldTheAgentDoNext")}
                 rows={3}
               />
             </label>
@@ -403,10 +437,10 @@ function CockpitFocus({
                 disabled={!enabled || !draft.trim()}
               >
                 {busy
-                  ? "Sending request…"
+                  ? t("sendingRequest")
                   : active
-                    ? "Guide active Turn"
-                    : "Run Agent"}
+                    ? t("guideActiveTurn")
+                    : t("runAgent")}
               </button>
               {active && (
                 <button
@@ -414,15 +448,15 @@ function CockpitFocus({
                   disabled={!enabled}
                   onClick={() => void act("interrupt")}
                 >
-                  Interrupt Turn
+                  {t("interruptTurn")}
                 </button>
               )}
             </div>
             <small>
-              Uses this task’s current model, reasoning and permissions.{" "}
+              {t("usesThisTaskSCurrentModelReasoningAndPermissions")}{" "}
               {active
-                ? "Guidance targets the observed active Turn."
-                : "Run Agent starts a new Turn."}
+                ? t("guidanceTargetsTheObservedActiveTurn")
+                : t("runAgentStartsANewTurn")}
             </small>
             {actionError && (
               <p className="cockpit-warning" role="alert">
@@ -439,15 +473,15 @@ function CockpitFocus({
               onSource={inspectSource}
             />
           ))}
-          <section className="cockpit-events" aria-label="Canonical events">
+          <section className="cockpit-events" aria-label={t("canonicalEvents")}>
             <div className="cockpit-section-heading">
-              <h3>Event trail</h3>
-              <span>{events.length} canonical events</span>
+              <h3>{t("eventTrail")}</h3>
+              <span>{t("eventCount", { count: events.length })}</span>
             </div>
-            {events.length === 0 && <p>No canonical events yet.</p>}
+            {events.length === 0 && <p>{t("noCanonicalEventsYet")}</p>}
             {!allEvents && events.length > 12 && (
               <button onClick={() => setAllEvents(true)}>
-                Show earlier events ({events.length - 12})
+                {t("showEarlier", { count: events.length - 12 })}
               </button>
             )}
             <ol>
@@ -464,7 +498,7 @@ function CockpitFocus({
                     {cockpitEventText(item).length > 480 ? "…" : ""}
                   </p>
                   <button onClick={() => inspectSource(item)}>
-                    Inspect source
+                    {t("inspectSource")}
                   </button>
                 </li>
               ))}
@@ -475,16 +509,16 @@ function CockpitFocus({
               ref={sourcePanel}
               tabIndex={-1}
               className="cockpit-source"
-              aria-label="Canonical source"
+              aria-label={t("canonicalSource")}
             >
               <div className="cockpit-section-heading">
-                <h3>Canonical source</h3>
-                <button onClick={closeSource}>Close source</button>
+                <h3>{t("canonicalSource")}</h3>
+                <button onClick={closeSource}>{t("closeSource")}</button>
               </div>
               <p>
-                Thread / {snapshot.id}
+                {t("threadLabel", { id: snapshot.id })}
                 <br />
-                Item / {source.id}
+                {t("itemLabel", { id: source.id })}
               </p>
               <pre tabIndex={0}>{JSON.stringify(source, null, 2)}</pre>
             </section>
@@ -504,6 +538,7 @@ function ComponentCard({
   snapshot: ThreadSnapshot;
   onSource(item: CanonicalItem): void;
 }) {
+  const { t } = useTranslation("cockpit");
   const [open, setOpen] = useState(false);
   const appearance = usePluginTheme();
   const parsed = useMemo(() => {
@@ -526,38 +561,35 @@ function ComponentCard({
       navigation: {
         navigate() {
           throw new Error(
-            "Component navigation is disabled. Use Host source controls.",
+            t("componentNavigationIsDisabledUseHostSourceControls"),
           );
         },
       },
       commands: {
         async execute() {
-          throw new Error("Generated components cannot execute Host commands.");
+          throw new Error(t("generatedComponentsCannotExecuteHostCommands"));
         },
       },
       handles: {
         async read(id) {
           const source = component?.sources.find((item) => item.id === id);
           if (!source)
-            throw new Error(
-              "Source is outside this component’s declared scope.",
-            );
+            throw new Error(t("sourceIsOutsideThisComponentSDeclaredScope"));
           return publicItemValue(source);
         },
       },
     }),
-    [component, appearance],
+    [component, appearance, t],
   );
   return (
     <section className="cockpit-component">
       <div className="cockpit-section-heading">
-        <span className="cockpit-eyebrow">AGENT-AUTHORED / ISOLATED</span>
-        <button onClick={() => onSource(result)}>Inspect result</button>
+        <span className="cockpit-eyebrow">{t("componentEyebrow")}</span>
+        <button onClick={() => onSource(result)}>{t("inspectResult")}</button>
       </div>
-      <h3>{component?.title ?? "Component unavailable"}</h3>
+      <h3>{component?.title ?? t("componentUnavailable")}</h3>
       <p className="cockpit-footnote">
-        Read-only component · no Host actions. Agent interpretation, not
-        verified Host status. Saved {formatTime(result.createdAt)}.
+        {t("componentNotice", { time: formatTime(result.createdAt) })}
       </p>
       {parsed.error && (
         <p className="cockpit-warning" role="alert">
@@ -572,12 +604,15 @@ function ComponentCard({
                 key={`${source.id}-${index}`}
                 onClick={() => onSource(source)}
               >
-                Source {index + 1} · {source.type.replaceAll("_", " ")}
+                {t("sourceLabel", {
+                  index: index + 1,
+                  type: source.type.replaceAll("_", " "),
+                })}
               </button>
             ))}
           </div>
           <button onClick={() => setOpen((value) => !value)}>
-            {open ? "Close component" : "Open isolated component"}
+            {open ? t("closeComponent") : t("openIsolatedComponent")}
           </button>
           {open && (
             <IsolatedPluginSurface
@@ -606,8 +641,8 @@ function workspaceLabel(value: string) {
 function formatTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
-    ? "Unknown time"
-    : date.toLocaleString(undefined, {
+    ? i18n.t("cockpit:unknownTime")
+    : date.toLocaleString(i18n.resolvedLanguage, {
         month: "short",
         day: "numeric",
         hour: "2-digit",

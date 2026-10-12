@@ -130,7 +130,7 @@ async function withView(
     sends: string[];
     reads: string[];
     scrolled: string[];
-    setThread(id: string): Promise<void>;
+    setThread(id: string | null): Promise<void>;
     setDraft(text: string): Promise<void>;
     api: {
       skills: {
@@ -234,13 +234,13 @@ async function withView(
   Object.assign(window, { zenx: api });
   const root = createRoot(document.getElementById("root")!);
   let composer = emptyComposerState();
-  let activeThread = "current-thread";
+  let activeThread: string | null = "current-thread";
   const render = () =>
     root.render(
       createElement(ThreadView, {
         approvals: [],
         composer,
-        thread: thread(activeThread),
+        thread: activeThread === null ? null : thread(activeThread),
         onDraftChange: (text: string) => {
           composer = editComposer(composer, text);
           render();
@@ -354,7 +354,11 @@ test("duplicate thread names select canonical ID with keyboard, preserve tail, f
       document.getElementById(active)?.getAttribute("aria-selected"),
       "true",
     );
-    assert.ok(scrolled.includes(active));
+    assert.deepEqual(
+      scrolled,
+      [],
+      "selection does not scroll the outer viewport",
+    );
     await key("Enter");
     assert.deepEqual(reads, ["bbbbbbbb-second"]);
     assert.equal(getDraft().references[0]?.kind, "thread");
@@ -513,5 +517,113 @@ test("same-name Skills distinguish source and select the second native ID", asyn
     assert.deepEqual(getDraft().skills, [{ id: second.id, name: "sample" }]);
     assert.equal(getDraft().text, "");
     assert.deepEqual(sends, []);
+  });
+});
+
+test("Thread suggestions render outside the clipping bottom-zone", async () => {
+  await withView(async ({ api }) => {
+    api.workspaceFiles.search = async () => fileResult("visible.txt");
+    await input("@visible");
+    await settleSearch();
+    const menu = document.querySelector('[role="listbox"]');
+    assert.ok(menu);
+    assert.ok(menu.closest(".bottom-zone") === null);
+    assert.ok(
+      menu.closest(".workflow-command-menu")?.parentElement === document.body,
+    );
+  });
+});
+
+test("fresh Thread suggestions list other Threads without a workspace or plugin dependency", async () => {
+  await withView(async ({ api, setThread, reads, sends }) => {
+    await setThread(null);
+    let fileSearches = 0;
+    api.workspaceFiles.search = async () => {
+      fileSearches += 1;
+      return fileResult("unused.txt");
+    };
+    api.threads.list = async () => [
+      {
+        threadId: "hello-thread",
+        name: "hello",
+        preview: "",
+        status: "idle",
+        currentMetadata: { cwd: "/work" },
+      },
+    ];
+    await input("@h");
+    await settleSearch();
+    assert.match(options()[0]?.textContent ?? "", /hello/);
+    assert.match(
+      document.querySelector(".workflow-command-menu")?.textContent ?? "",
+      /after this thread is created/,
+    );
+    assert.equal(fileSearches, 0);
+    await key("Enter");
+    assert.deepEqual(reads, ["hello-thread"]);
+    assert.deepEqual(sends, []);
+  });
+});
+
+test("portaled suggestions stay anchored and bounded when viewport space changes", async () => {
+  await withView(async ({ api }) => {
+    Object.defineProperty(window, "innerWidth", {
+      value: 420,
+      configurable: true,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      value: 600,
+      configurable: true,
+    });
+    let top = 500;
+    const anchor = textarea().closest(".composer")!;
+    anchor.getBoundingClientRect = () => ({
+      left: 30,
+      right: 390,
+      top,
+      bottom: top + 90,
+      width: 360,
+      height: 90,
+      x: 30,
+      y: top,
+      toJSON: () => ({}),
+    });
+    api.workspaceFiles.search = async () => fileResult("visible.txt");
+    await input("@visible");
+    await settleSearch();
+    const panel = document.querySelector<HTMLElement>(
+      ".composer-suggestion-menu",
+    )!;
+    assert.equal(panel.style.position, "fixed");
+    assert.equal(panel.style.bottom, "108px");
+    assert.equal(panel.style.top, "auto");
+    assert.equal(panel.style.width, "344px");
+    top = 8;
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    assert.equal(panel.style.top, "106px");
+    assert.equal(panel.style.bottom, "auto");
+    assert.equal(panel.style.maxHeight, "360px");
+  });
+});
+
+test("keyboard selection scrolls only the portaled candidate list", async () => {
+  await withView(async ({ api, scrolled }) => {
+    api.threads.list = async () =>
+      ["first", "second"].map((threadId) => ({
+        threadId,
+        name: threadId,
+        preview: "",
+        status: "idle",
+        currentMetadata: { cwd: "/work" },
+      }));
+    await input("@");
+    await settleSearch();
+    const list = document.querySelector<HTMLElement>(".selector-results")!;
+    list.getBoundingClientRect = () => ({ top: 100, bottom: 300 }) as DOMRect;
+    options()[1]!.getBoundingClientRect = () =>
+      ({ top: 320, bottom: 360 }) as DOMRect;
+    await key("ArrowDown");
+    assert.equal(list.scrollTop, 60);
+    assert.deepEqual(scrolled, []);
   });
 });

@@ -1,3 +1,4 @@
+import { installScrollbarVisibility } from "../../src/renderer/src/scrollbar-visibility.js";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -9,6 +10,7 @@ import { PermissionSelect } from "../../src/renderer/src/PermissionSelect.js";
 import { ContextCompactionEvent } from "../../src/renderer/src/ThreadView.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+installScrollbarVisibility(document);
 document.documentElement.dataset.appearance =
   new URLSearchParams(location.search).get("theme") ?? "light";
 function Preview() {

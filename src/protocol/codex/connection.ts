@@ -12,6 +12,7 @@ import {
 import {
   AppServerError,
   type AppServerEvent,
+  type CompactThreadOptions,
   type ListedProviderModel,
   type ThreadSnapshot,
   ZenAppServer,
@@ -444,11 +445,94 @@ export class CodexConnection {
         return;
       }
       case "thread/compact": {
-        rejectUnsupportedValues(params, ["threadId"]);
+        rejectUnsupportedValues(params, [
+          "threadId",
+          "includeOriginalReference",
+          "retention",
+        ]);
+        const includeOriginalReference = optionalBoolean(
+          params.includeOriginalReference,
+          "includeOriginalReference",
+        );
         const result = await this.#appServer.compactThread(
           requiredString(params, "threadId"),
+          {
+            ...(includeOriginalReference === undefined
+              ? {}
+              : { includeOriginalReference }),
+            ...(params.retention === undefined
+              ? {}
+              : {
+                  retention:
+                    params.retention as CompactThreadOptions["retention"],
+                }),
+          },
         );
         this.#send({ id: request.id, result });
+        return;
+      }
+      case "thread/original/read": {
+        rejectUnsupportedValues(params, [
+          "threadId",
+          "throughItemId",
+          "beforeItemId",
+          "limit",
+        ]);
+        const threadId = requiredString(params, "threadId");
+        const throughItemId = requiredString(params, "throughItemId");
+        const snapshot = await this.#appServer.readThread(threadId);
+        const boundary = snapshot.items.findIndex(
+          (item) => item.id === throughItemId,
+        );
+        if (
+          boundary < 0 ||
+          !snapshot.items.some(
+            (item) =>
+              item.type === "context_compaction" &&
+              item.coveredThroughItemId === throughItemId &&
+              item.includeOriginalReference === true,
+          )
+        ) {
+          throw new InvalidParamsError(
+            "Original ItemList reference is not enabled for this boundary",
+          );
+        }
+        const limit = optionalListLimit(params.limit, 50);
+        if (limit < 1 || limit > 50)
+          throw new InvalidParamsError("limit must be between 1 and 50");
+        const beforeItemId = optionalNonEmptyString(
+          params.beforeItemId,
+          "beforeItemId",
+        );
+        const beforeIndex =
+          beforeItemId === undefined
+            ? boundary + 1
+            : snapshot.items.findIndex((item) => item.id === beforeItemId);
+        if (
+          beforeIndex < 0 ||
+          (beforeItemId !== undefined && beforeIndex > boundary)
+        )
+          throw new InvalidParamsError("Invalid original ItemList cursor");
+        const projected = projectThread(snapshot, {
+          includeTurns: true,
+        }).turns.flatMap((turn) => turn.items);
+        const projectedById = new Map(
+          projected
+            .filter((item) => item.type !== "reasoning")
+            .map((item) => [item.id, item]),
+        );
+        const visible = snapshot.items
+          .slice(0, beforeIndex)
+          .filter((item) => projectedById.has(item.id));
+        const page = visible.slice(-limit);
+        this.#send({
+          id: request.id,
+          result: {
+            items: page.map((item) => projectedById.get(item.id)),
+            nextBeforeItemId:
+              visible.length > page.length ? (page[0]?.id ?? null) : null,
+          },
+        });
         return;
       }
       case "thread/read": {
@@ -567,6 +651,10 @@ export class CodexConnection {
           ...(requestedSelectionInput === undefined
             ? {}
             : { selection: requestedSelectionInput }),
+          requirePermissions: {
+            sandbox: snapshot.sandbox,
+            approvalPolicy: snapshot.approvalPolicy,
+          },
           requestApproval: async (approval) =>
             await this.requestApproval(approval),
         });
@@ -772,7 +860,13 @@ export class CodexConnection {
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
-    if (event.type === "model_catalog_updated") return;
+    // Native queue admission diagnostics have no CAS equivalent.
+    if (
+      event.type === "model_catalog_updated" ||
+      event.type === "queue_failed" ||
+      event.type === "queue_admission_started"
+    )
+      return;
     if (event.type === "thread_started") {
       this.#send({
         method: "thread/started",
@@ -929,6 +1023,8 @@ export class CodexConnection {
     if (event.type === "item_completed") {
       if (
         event.item.type === "user_message_queued" ||
+        event.item.type === "user_message_queue_cancelled" ||
+        event.item.type === "user_message_queue_edited" ||
         (event.item.type === "user_message" &&
           event.item.clientId !== undefined)
       ) {
@@ -1219,7 +1315,9 @@ export class CodexConnection {
       event.type === "thread_name_updated" ||
       event.type === "thread_settings_updated" ||
       event.type === "thread_archived_updated" ||
-      event.type === "model_catalog_updated"
+      event.type === "model_catalog_updated" ||
+      event.type === "queue_failed" ||
+      event.type === "queue_admission_started"
     ) {
       console.warn(`Could not project ${event.type} notification`, error);
       return;
@@ -1278,6 +1376,9 @@ function eventRepresentedInSnapshot(
   snapshot: ThreadSnapshot,
 ): boolean {
   switch (event.type) {
+    case "queue_failed":
+    case "queue_admission_started":
+      return true;
     case "thread_started":
       return snapshot.id === event.threadId;
     case "thread_archived_updated":

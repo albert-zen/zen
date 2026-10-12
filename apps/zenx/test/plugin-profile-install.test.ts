@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -38,6 +39,7 @@ import {
   marketplacePackageSource,
 } from "../src/main/marketplace-catalog.js";
 import { ZenXPluginDevControlServer } from "../src/main/plugin-dev-control.js";
+import { installZenXBundledPluginsAtStartup } from "../src/main/bundled-plugin-startup.js";
 
 const run = promisify(execFile);
 const pnpmCli = fileURLToPath(
@@ -49,6 +51,160 @@ const pluginSdkCli = fileURLToPath(
 const pluginSdkRoot = fileURLToPath(
   new URL("../../../packages/zenx-plugin-sdk", import.meta.url),
 );
+
+test("startup repairs unavailable bundled content at the same path and version through the profile installer", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-drift-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  const fixture = {
+    id: "zenx-self-control",
+    packageName: "@zenx/self-control-plugin",
+    version: "1.0.0",
+  };
+  const packed = await createTarballFixture(pluginResources, {
+    ...fixture,
+    description: "before",
+  });
+  const tarball = path.join(
+    pluginResources,
+    "zenx-self-control-plugin-1.0.1.tgz",
+  );
+  await copyFile(packed, tarball);
+  let service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    resourcesDirectory,
+  });
+  try {
+    await service.initialize();
+    await service.installBundledPluginPackage(tarball, {
+      pluginId: fixture.id,
+      packageName: fixture.packageName,
+    });
+    const before = await readCatalog(userData);
+    assert.equal(
+      await service.bundledPluginPackageCurrent(fixture.id, tarball),
+      true,
+    );
+    const overwritten = await createTarballFixture(pluginResources, {
+      ...fixture,
+      description: "after",
+    });
+    await copyFile(overwritten, tarball);
+    assert.equal(
+      await service.bundledPluginPackageCurrent(fixture.id, tarball),
+      false,
+    );
+    const manifestFile = path.join(
+      userData,
+      "plugin-profile",
+      "generations",
+      before.profileGeneration,
+      "node_modules",
+      fixture.packageName,
+      "zenx.plugin.json",
+    );
+    const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
+    await writeFile(
+      manifestFile,
+      JSON.stringify({ ...manifest, description: "after" }),
+    );
+    await service.close();
+    service = profileService(userData, {
+      pnpmCliPath: pnpmCli,
+      resourcesDirectory,
+    });
+    await service.initialize();
+    assert.equal(service.pluginSnapshot().plugins[0]?.enabled, true);
+    assert.equal(service.pluginSnapshot().plugins[0]?.available, false);
+    assert.match(
+      service.pluginSnapshot().plugins[0]?.unavailableReason ?? "",
+      /does not match its Catalog descriptor/u,
+    );
+    const startup = {
+      pluginCatalogAvailable: () => service.pluginCatalogAvailable(),
+      pluginSnapshot: () => ({
+        plugins: [
+          ...service.pluginSnapshot().plugins,
+          { id: "zenx-rooms", lifecycle: "uninstalled" },
+          { id: "zenx-triggers", lifecycle: "uninstalled" },
+          { id: "zenx-subagents", lifecycle: "uninstalled" },
+          { id: "zenx-fleet", lifecycle: "uninstalled" },
+        ],
+      }),
+      bundledPluginPackageCurrent: (
+        ...args: Parameters<
+          ZenXCapabilityService["bundledPluginPackageCurrent"]
+        >
+      ) => service.bundledPluginPackageCurrent(...args),
+      installBundledPluginPackage: (
+        ...args: Parameters<
+          ZenXCapabilityService["installBundledPluginPackage"]
+        >
+      ) => service.installBundledPluginPackage(...args),
+      browserProfilePackage: () => {
+        throw new Error("unavailable");
+      },
+      computerProfilePackage: () => {
+        throw new Error("unavailable");
+      },
+      recordBundledPluginStartupError: (_id: string, error: unknown) => {
+        throw error;
+      },
+    } as unknown as ZenXCapabilityService;
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.equal(service.pluginSnapshot().plugins[0]?.available, true);
+    assert.equal(
+      service.pluginSnapshot().plugins[0]?.unavailableReason,
+      undefined,
+    );
+    assert.equal(service.pluginSnapshot().plugins[0]?.description, "after");
+    const repaired = await readCatalog(userData);
+    assert.notEqual(repaired.profileGeneration, before.profileGeneration);
+    assert.deepEqual(repaired.disabled, before.disabled);
+    assert.deepEqual(repaired.uninstalled, before.uninstalled);
+    assert.equal(
+      await service.bundledPluginPackageCurrent(fixture.id, tarball),
+      true,
+    );
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.equal(
+      (await readCatalog(userData)).profileGeneration,
+      repaired.profileGeneration,
+    );
+    await service.setEnabled(fixture.id, false);
+    await copyFile(
+      await createTarballFixture(pluginResources, {
+        ...fixture,
+        description: "disabled update",
+      }),
+      tarball,
+    );
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.equal(service.pluginSnapshot().plugins[0]?.enabled, false);
+    assert.equal(
+      service.pluginSnapshot().plugins[0]?.description,
+      "disabled update",
+    );
+    assert.deepEqual(service.hostSnapshot().plugins, []);
+    await service.uninstall(fixture.id);
+    const uninstalled = await readCatalog(userData);
+    await copyFile(
+      await createTarballFixture(pluginResources, {
+        ...fixture,
+        description: "uninstalled update",
+      }),
+      tarball,
+    );
+    await installZenXBundledPluginsAtStartup(startup, resourcesDirectory);
+    assert.deepEqual(await readCatalog(userData), uninstalled);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("plugin profile npm fixtures never invoke a Windows command shim directly", async () => {
   const source = await readFile(fileURLToPath(import.meta.url), "utf8");
@@ -258,6 +414,186 @@ test("a plugin upgrade succeeds after the previous App Resource tarball is remov
       "1.0.0",
     );
     assert.equal(await readFile(previousPackagePath, "utf8"), previousPackage);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("two removed bundled resources preserve committed siblings across upgrade and restart", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-two-removed-"));
+  const userData = path.join(directory, "user-data");
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  const names = ["removed-browser", "removed-computer"];
+  const old = await Promise.all(
+    names.map((id) =>
+      createTarballFixture(pluginResources, {
+        id,
+        packageName: `@zenx-test/${id}`,
+        version: "1.0.0",
+      }),
+    ),
+  );
+  const updated = await Promise.all(
+    names.map((id) =>
+      createTarballFixture(pluginResources, {
+        id,
+        packageName: `@zenx-test/${id}`,
+        version: "1.0.1",
+      }),
+    ),
+  );
+  let service = profileService(userData, {
+    pnpmCliPath: pnpmCli,
+    resourcesDirectory,
+  });
+  try {
+    await service.initialize();
+    for (const [index, id] of names.entries()) {
+      await service.installBundledPluginPackage(old[index]!, {
+        pluginId: id,
+        packageName: `@zenx-test/${id}`,
+      });
+    }
+    await service.setEnabled(names[1]!, false);
+    const previousCatalog = await readCatalog(userData);
+    const previousGeneration = path.join(
+      userData,
+      "plugin-profile",
+      "generations",
+      previousCatalog.profileGeneration,
+    );
+    // Simulate a pre-fix installation: its dependency specs still reference
+    // App Resources, with no generation-owned copy of either archive.
+    const packageFile = path.join(previousGeneration, "package.json");
+    const profile = JSON.parse(await readFile(packageFile, "utf8"));
+    for (const [index, id] of names.entries())
+      profile.dependencies[`@zenx-test/${id}`] = `file:${old[index]}`;
+    await writeFile(packageFile, JSON.stringify(profile));
+    await rm(path.join(previousGeneration, ".zenx-sources"), {
+      recursive: true,
+      force: true,
+    });
+    const before = await readFile(packageFile, "utf8");
+    await Promise.all(old.map((tarball) => rm(tarball)));
+    const siblingManifestFile = path.join(
+      previousGeneration,
+      "node_modules",
+      "@zenx-test",
+      names[1]!,
+      "zenx.plugin.json",
+    );
+    const siblingManifest = await readFile(siblingManifestFile, "utf8");
+    await writeFile(
+      siblingManifestFile,
+      JSON.stringify({
+        ...JSON.parse(siblingManifest),
+        description: "uncommitted replacement",
+      }),
+    );
+    await assert.rejects(
+      service.installBundledPluginPackage(updated[0]!, {
+        pluginId: names[0]!,
+        packageName: `@zenx-test/${names[0]}`,
+      }),
+      /does not match its Catalog manifest/u,
+    );
+    assert.deepEqual(await readCatalog(userData), previousCatalog);
+    assert.equal(await readFile(packageFile, "utf8"), before);
+    await writeFile(siblingManifestFile, siblingManifest);
+    await service.installBundledPluginPackage(updated[0]!, {
+      pluginId: names[0]!,
+      packageName: `@zenx-test/${names[0]}`,
+    });
+    assert.equal(await readFile(packageFile, "utf8"), before);
+    assert.deepEqual(
+      (await readCatalog(userData)).packages[names[1]!],
+      previousCatalog.packages[names[1]!],
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.version,
+      "1.0.0",
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.lifecycle,
+      "installed",
+    );
+    await service.close();
+    service = profileService(userData, {
+      pnpmCliPath: pnpmCli,
+      resourcesDirectory,
+    });
+    await service.initialize();
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.lifecycle,
+      "installed",
+    );
+    await service.installBundledPluginPackage(updated[1]!, {
+      pluginId: names[1]!,
+      packageName: `@zenx-test/${names[1]}`,
+    });
+    await Promise.all(updated.map((tarball) => rm(tarball)));
+    // Newly installed bundled packages must be portable even when a later
+    // application update removes all their original tarballs again.
+    await service.uninstall(names[0]!);
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[0])
+        ?.lifecycle,
+      "uninstalled",
+    );
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.version,
+      "1.0.1",
+    );
+    await service.close();
+    service = profileService(userData, {
+      pnpmCliPath: pnpmCli,
+      resourcesDirectory,
+    });
+    await service.initialize();
+    assert.equal(
+      service.pluginSnapshot().plugins.find((plugin) => plugin.id === names[1])
+        ?.lifecycle,
+      "installed",
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("missing user-selected tarballs are not silently replaced with bundled snapshots", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-missing-override-"),
+  );
+  const userData = path.join(directory, "user-data");
+  const override = await createTarballFixture(directory, {
+    id: "user-override",
+    packageName: "@zenx-test/user-override",
+  });
+  const candidate = await createTarballFixture(directory, {
+    id: "unrelated-plugin",
+    packageName: "@zenx-test/unrelated-plugin",
+  });
+  const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  try {
+    await service.initialize();
+    await service.installPluginTarball(override);
+    const previous = await readCatalog(userData);
+    await rm(override);
+    await assert.rejects(service.installPluginTarball(candidate), /ENOENT/u);
+    assert.deepEqual(await readCatalog(userData), previous);
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "user-override")?.version,
+      "1.0.0",
+    );
   } finally {
     await service.close();
     await rm(directory, { recursive: true, force: true });
@@ -1246,22 +1582,22 @@ test("dev abort after runtime admission begins rolls back before Catalog commit"
     path.join(os.tmpdir(), "zenx-profile-dev-precommit-"),
   );
   const userData = path.join(directory, "user-data");
-  const marker = path.join(directory, "runtime-started");
-  await createTarballFixture(directory, {
-    id: "precommit-target",
-    packageName: "@zenx-test/precommit-target",
-    runtimeTimeoutMs: 500,
-    runtimeModule: delayedReadyRuntime("precommit-target", marker, 80),
-  });
+  const runtime = await gatedReadyRuntime("precommit-target");
   const projectDirectory = path.join(
     directory,
     "fixture-package-precommit-target-1.0.0",
   );
   const controller = new AbortController();
   const service = profileService(userData, { pnpmCliPath: pnpmCli });
+  let mutation: ReturnType<typeof service.devPluginPackage> | undefined;
   try {
+    await createTarballFixture(directory, {
+      id: "precommit-target",
+      packageName: "@zenx-test/precommit-target",
+      runtimeModule: runtime.module,
+    });
     await service.initialize();
-    const mutation = service.devPluginPackage(
+    mutation = service.devPluginPackage(
       projectDirectory,
       {
         pluginId: "precommit-target",
@@ -1269,21 +1605,28 @@ test("dev abort after runtime admission begins rolls back before Catalog commit"
       },
       { signal: controller.signal },
     );
-    await waitForFile(marker);
+    await waitForProfilePhase(runtime.started, mutation, "runtime admission");
     controller.abort(new Error("fixture precommit deadline"));
+    runtime.release();
     await assert.rejects(mutation, /fixture precommit deadline/u);
+    await assert.rejects(readCatalog(userData), /ENOENT/u);
     assert.deepEqual(service.pluginSnapshot().plugins, []);
     assert.deepEqual(
       await readdir(path.join(userData, "plugin-profile", "generations")),
       [],
     );
   } finally {
+    controller.abort(new Error("fixture cleanup"));
+    runtime.release();
+    // Staging must settle before its files are removed, even if admission fails.
+    await mutation?.catch(() => undefined);
     await service.close();
+    await runtime.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("dev install timeout and close after its Catalog fence wait for the committed result", async () => {
+test("dev install close after its Catalog fence waits for the committed result", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-profile-dev-install-fence-"),
   );
@@ -1303,15 +1646,14 @@ test("dev install timeout and close after its Catalog fence wait for the committ
   });
   let fences = 0;
   let devControl: ZenXPluginDevControlServer | undefined;
-  const transactionTimeoutMs = 3_000;
   try {
     await service.initialize();
     const blocked = catalog.blockNext(() => assert.equal(fences, 1));
     const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    const tokenFile = path.join(userData, "runtime", "plugin-dev.token");
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
-      tokenFile: path.join(userData, "runtime", "plugin-dev.token"),
-      transactionTimeoutMs,
+      tokenFile,
       install: async (request, signal, enterCommitPhase) =>
         await service.devPluginPackage(
           request.projectDirectory,
@@ -1329,22 +1671,24 @@ test("dev install timeout and close after its Catalog fence wait for the committ
         ),
       reload: async () => ({ status: "reloaded" }),
     });
-    const startedAt = Date.now();
-    const requested = requestPluginDevLink(
+    // Transaction timer behavior is covered in plugin-dev-control.test.ts.
+    // This integration check waits for the real installer to enter its fence.
+    const clientRequest = await rawProfileDevRequest(
       descriptorFile,
+      tokenFile,
       {
         version: 1,
         projectDirectory,
         pluginId: "install-fence",
         packageName: "@zenx-test/install-fence",
       },
-      { timeoutMs: 5_000 },
     );
-    await blocked.started;
+    await waitForProfilePhase(
+      blocked.started,
+      clientRequest.response,
+      "Catalog commit fence",
+    );
     const closing = devControl.close();
-    await delay(
-      Math.max(0, transactionTimeoutMs - (Date.now() - startedAt) + 25),
-    );
     assert.equal(
       await Promise.race([
         closing.then(() => "closed"),
@@ -1353,14 +1697,17 @@ test("dev install timeout and close after its Catalog fence wait for the committ
       "waiting",
     );
     blocked.release();
-    const result = await requested;
+    const response = await clientRequest.response;
     await closing;
-    assert.equal(result.reload.status, "reloaded");
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(response.body), {
+      version: 1,
+      pluginId: "install-fence",
+      packageName: "@zenx-test/install-fence",
+      generation: (await readCatalog(userData)).profileGeneration,
+      reload: { status: "reloaded" },
+    });
     assert.equal(fences, 1);
-    assert.equal(
-      (await readCatalog(userData)).profileGeneration,
-      result.generation,
-    );
     assert.equal(service.pluginSnapshot().plugins[0]?.id, "install-fence");
   } finally {
     catalog.release();
@@ -1387,12 +1734,14 @@ test("dev Catalog save rejection after the fence reports failure without a commi
     path.join(userData, "capability-grants.json"),
   );
   let fences = 0;
+  const saving = deferred<void>();
   const service = profileService(userData, {
     pnpmCliPath: pnpmCli,
     catalogStore: {
       load: async () => await delegate.load(),
       save: async () => {
         assert.equal(fences, 1);
+        saving.resolve();
         throw new Error("fixture fenced Catalog failure");
       },
     },
@@ -1401,9 +1750,10 @@ test("dev Catalog save rejection after the fence reports failure without a commi
   try {
     await service.initialize();
     const descriptorFile = path.join(userData, "runtime", "plugin-dev.json");
+    const tokenFile = path.join(userData, "runtime", "plugin-dev.token");
     devControl = await ZenXPluginDevControlServer.start({
       descriptorFile,
-      tokenFile: path.join(userData, "runtime", "plugin-dev.token"),
+      tokenFile,
       install: async (request, signal, enterCommitPhase) =>
         await service.devPluginPackage(
           request.projectDirectory,
@@ -1421,19 +1771,28 @@ test("dev Catalog save rejection after the fence reports failure without a commi
         ),
       reload: async () => ({ status: "reloaded" }),
     });
-    await assert.rejects(
-      requestPluginDevLink(
-        descriptorFile,
-        {
-          version: 1,
-          projectDirectory,
-          pluginId: "save-fail",
-          packageName: "@zenx-test/save-fail",
-        },
-        { timeoutMs: 1_000 },
-      ),
-      /fixture fenced Catalog failure/u,
+    // Observe the Catalog fence rather than racing real package preparation
+    // against a client deadline unrelated to the failure under test.
+    const clientRequest = await rawProfileDevRequest(
+      descriptorFile,
+      tokenFile,
+      {
+        version: 1,
+        projectDirectory,
+        pluginId: "save-fail",
+        packageName: "@zenx-test/save-fail",
+      },
     );
+    await waitForProfilePhase(
+      saving.promise,
+      clientRequest.response,
+      "Catalog commit fence",
+    );
+    const response = await clientRequest.response;
+    assert.equal(response.status, 400);
+    assert.deepEqual(JSON.parse(response.body), {
+      message: "fixture fenced Catalog failure",
+    });
     assert.equal(fences, 1);
     assert.deepEqual(service.pluginSnapshot().plugins, []);
     assert.deepEqual(
@@ -1513,7 +1872,11 @@ test("dev same-version update commits after a post-fence client disconnect", asy
     );
     const client = clientRequest.request;
     client.once("error", () => undefined);
-    await waitForDevCommitFence(blocked.started, clientRequest.response);
+    await waitForProfilePhase(
+      blocked.started,
+      clientRequest.response,
+      "Catalog commit fence",
+    );
     client.destroy();
     const closing = devControl.close();
     assert.equal(
@@ -1572,11 +1935,12 @@ test("a profile dev failure before the commit fence remains observable", async (
     client = clientRequest.request;
     client.once("error", () => undefined);
     await assert.rejects(
-      waitForDevCommitFence(
+      waitForProfilePhase(
         new Promise<void>(() => undefined),
         clientRequest.response,
+        "Catalog commit fence",
       ),
-      /settled before its commit fence \(HTTP 400\):.*fixture pre-fence rejection/u,
+      /settled before Catalog commit fence:.*"status":400.*fixture pre-fence rejection/u,
     );
   } finally {
     client?.destroy();
@@ -2215,23 +2579,24 @@ async function rawProfileDevRequest(
   return { request, response };
 }
 
-async function waitForDevCommitFence(
+async function waitForProfilePhase<T>(
   started: Promise<void>,
-  response: Promise<{ status: number; body: string }>,
+  operation: Promise<T>,
+  phase: string,
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       started,
-      response.then(({ status, body }) => {
+      operation.then((result) => {
         throw new Error(
-          `Plugin dev request settled before its commit fence (HTTP ${String(status)}): ${body}`,
+          `Plugin profile operation settled before ${phase}: ${JSON.stringify(result)}`,
         );
       }),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () =>
-            reject(new Error("Timed out waiting for plugin dev commit fence")),
+            reject(new Error(`Timed out waiting for plugin profile ${phase}`)),
           15_000,
         );
       }),
@@ -2242,6 +2607,8 @@ async function waitForDevCommitFence(
 }
 
 async function readCatalog(userDataDirectory: string): Promise<{
+  disabled: string[];
+  uninstalled: string[];
   profileGeneration: string;
   packages: Record<string, { profilePackageName?: string }>;
 }> {
@@ -2251,6 +2618,8 @@ async function readCatalog(userDataDirectory: string): Promise<{
       "utf8",
     ),
   ) as {
+    disabled: string[];
+    uninstalled: string[];
     profileGeneration: string;
     packages: Record<string, { profilePackageName?: string }>;
   };
@@ -2303,18 +2672,48 @@ async function waitForFile(filePath: string): Promise<void> {
   }
 }
 
-function delayedReadyRuntime(
-  pluginId: string,
-  marker: string,
-  delayMs: number,
-): string {
-  return `import { writeFileSync } from "node:fs";
+async function gatedReadyRuntime(pluginId: string) {
+  const started = deferred<void>();
+  const released = deferred<void>();
+  const server = createServer(async (_request, response) => {
+    started.resolve();
+    await released.promise;
+    response.setHeader("connection", "close");
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== "string");
+  const url = `http://127.0.0.1:${String(address.port)}/ready`;
+  return {
+    started: started.promise,
+    release: () => released.resolve(),
+    close: async () => {
+      released.resolve();
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) =>
+          error === undefined ? resolve() : reject(error),
+        );
+      });
+    },
+    module: `import { get } from "node:http";
 import readline from "node:readline";
-writeFileSync(${JSON.stringify(marker)}, "started");
-setTimeout(() => process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:${JSON.stringify(pluginId)},packageVersion:"1.0.0"})+"\\n"), ${String(delayMs)});
+await new Promise((resolve, reject) => {
+  get(${JSON.stringify(url)}, (response) => {
+    response.resume();
+    response.once("end", resolve);
+    response.once("error", reject);
+  }).once("error", reject);
+});
+process.stdout.write(JSON.stringify({version:1,type:"ready",pluginId:${JSON.stringify(pluginId)},packageVersion:"1.0.0"})+"\\n");
 const lines = readline.createInterface({input:process.stdin});
 lines.on("line", (line) => { if (JSON.parse(line).type === "close") process.exit(0); });
-`;
+`,
+  };
 }
 
 async function createPluginTarball(directory: string): Promise<string> {

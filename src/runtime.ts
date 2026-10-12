@@ -31,6 +31,9 @@ import {
   AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
   AGENTIC_CONTEXT_COMPACTION_TOOL,
   AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+  compactionSummaryText,
+  normalizeContextCompactionConfig,
+  planCompactionRetention,
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
 } from "./context-compaction.js";
 import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
@@ -141,6 +144,8 @@ export interface RunTurnOptions {
   turnId?: string;
   input: UserInput;
   clientId?: string;
+  /** Fixed FIFO admission snapshot; each entry retains a canonical identity. */
+  initialMessages?: readonly { input: UserInput; clientId: string }[];
   configuration: RuntimeConfiguration;
   modelAdapter: ModelAdapter;
   signal: AbortSignal;
@@ -155,6 +160,10 @@ export interface RunTurnOptions {
   emit: (event: RuntimeEvent) => void;
   initialInputCommitted?: () => void;
   agenticCompactionCommitted?: () => void;
+  afterToolBatch?: (usage: {
+    inputTokens: number | undefined;
+    agenticCompaction: boolean;
+  }) => Promise<void>;
   requestApproval?: ApprovalHandler;
 }
 
@@ -273,18 +282,22 @@ export class AgentRuntime {
     let initialInputCommitted = false;
     try {
       this.#assertSandbox(options.configuration.sandbox);
-      const userItem: UserMessageItem = {
-        id: this.#id(),
-        threadId: options.thread.id,
-        turnId,
-        createdAt: this.#now(),
-        type: "user_message",
-        content: options.input,
-        ...(options.clientId === undefined
-          ? {}
-          : { clientId: options.clientId }),
-      };
-      await this.#completeItem(userItem, options);
+      for (const message of options.initialMessages ?? [
+        { input: options.input, clientId: options.clientId },
+      ]) {
+        const userItem: UserMessageItem = {
+          id: this.#id(),
+          threadId: options.thread.id,
+          turnId,
+          createdAt: this.#now(),
+          type: "user_message",
+          content: message.input,
+          ...(message.clientId === undefined
+            ? {}
+            : { clientId: message.clientId }),
+        };
+        await this.#completeItem(userItem, options);
+      }
       initialInputCommitted = true;
       options.initialInputCommitted?.();
 
@@ -356,6 +369,13 @@ export class AgentRuntime {
           options,
           scheduler,
         );
+        await options.afterToolBatch?.({
+          inputTokens: result.inputTokens,
+          agenticCompaction: result.toolCalls.some(
+            (toolCall) =>
+              toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+          ),
+        });
       }
     } catch (error) {
       if (!initialInputCommitted) throw error;
@@ -428,6 +448,7 @@ export class AgentRuntime {
     text: string;
     presentation: ToolPresentationSnapshot;
     contextBoundaryItemId: string;
+    inputTokens: number | undefined;
     toolCalls: Array<{
       callId: string;
       name: string;
@@ -689,6 +710,7 @@ export class AgentRuntime {
       toolCalls,
       presentation,
       contextBoundaryItemId,
+      inputTokens: latestUsage?.inputTokens,
     };
   }
 
@@ -842,15 +864,64 @@ export class AgentRuntime {
     }
     const argumentKeys = Object.keys(toolCall.arguments);
     const text = toolCall.arguments.text;
+    const includeOriginalReference =
+      toolCall.arguments.includeOriginalReference ?? true;
+    const rawRetention = toolCall.arguments.retention;
     if (
-      argumentKeys.length !== 1 ||
-      argumentKeys[0] !== "text" ||
+      argumentKeys.some(
+        (key) =>
+          !["text", "retention", "includeOriginalReference"].includes(key),
+      ) ||
       typeof text !== "string" ||
-      text.trim().length === 0
+      text.trim().length === 0 ||
+      typeof includeOriginalReference !== "boolean"
     ) {
       return immediateScheduledExecution({
         output:
-          "compact_context requires exactly one non-empty string argument named text.",
+          "compact_context requires text and optional retention/includeOriginalReference.",
+        exitCode: 1,
+      });
+    }
+    let retention;
+    try {
+      if (
+        rawRetention !== undefined &&
+        (typeof rawRetention !== "object" ||
+          rawRetention === null ||
+          Array.isArray(rawRetention))
+      ) {
+        throw new Error("retention must be an object");
+      }
+      const supplied = rawRetention as Record<string, unknown> | undefined;
+      if (
+        supplied !== undefined &&
+        Object.keys(supplied).some(
+          (key) =>
+            ![
+              "recentItemCount",
+              "recentTurnCount",
+              "itemIds",
+              "itemRanges",
+              "preserveUserMessages",
+              "finalMessages",
+              "finalMessageCount",
+            ].includes(key),
+        )
+      ) {
+        throw new Error("unsupported retention option");
+      }
+      retention = normalizeContextCompactionConfig({
+        retention: {
+          mode:
+            supplied?.recentItemCount === undefined
+              ? "selected-items"
+              : "recent-items",
+          ...supplied,
+        },
+      } as Parameters<typeof normalizeContextCompactionConfig>[0]).retention;
+    } catch (error) {
+      return immediateScheduledExecution({
+        output: `compact_context invalid retention: ${describeError(error)}`,
         exitCode: 1,
       });
     }
@@ -860,19 +931,6 @@ export class AgentRuntime {
         exitCode: 1,
       });
     }
-    const projectedTokens = estimateModelMessageInputTokens([
-      {
-        role: "user",
-        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${text}`,
-      },
-    ]);
-    if (projectedTokens > configuration.contextWindow) {
-      return immediateScheduledExecution({
-        output: `compact_context text exceeds the selected model context window (${String(projectedTokens)} > ${String(configuration.contextWindow)} estimated input tokens).`,
-        exitCode: 1,
-      });
-    }
-
     const compaction: AgenticContextCompactionItem = {
       id: this.#id(),
       threadId: options.thread.id,
@@ -884,6 +942,7 @@ export class AgentRuntime {
       coveredThroughItemId: agentic.contextBoundaryItemId,
       summary: text,
       retainedItemIds: [],
+      includeOriginalReference,
       callId: toolCall.callId,
       sourceModelResponseId: toolCall.modelResponseId,
       algorithmVersion: AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
@@ -899,15 +958,54 @@ export class AgentRuntime {
             workspaceInstructions === undefined
               ? compaction
               : { ...compaction, workspaceInstructions };
+          const cutoff = options.thread.items.findIndex(
+            (item) => item.id === agentic.contextBoundaryItemId,
+          );
+          if (cutoff < 0)
+            throw new Error("Context compaction sample boundary is missing");
+          const boundaryItem = options.thread.items[cutoff]!;
+          const summaryTokens = estimateModelMessageInputTokens([
+            {
+              role: "user",
+              text: compactionSummaryText(compaction),
+            },
+          ]);
           const instructionTokens = estimateModelMessageInputTokens(
             compileWorkspaceInstructionMessages(workspaceInstructions),
           );
-          if (
-            projectedTokens + instructionTokens >
-            configuration.contextWindow
-          ) {
+          if (summaryTokens + instructionTokens > configuration.contextWindow) {
             throw new Error(
               "Compacted context and repository instructions exceed the selected model context window",
+            );
+          }
+          const planned = planCompactionRetention(
+            options.thread.items,
+            {
+              item: boundaryItem,
+              index: cutoff,
+              retainedItemIds: [],
+            },
+            {
+              retainedTokenBudget:
+                configuration.contextWindow - summaryTokens - instructionTokens,
+              retention,
+              estimateRetainedTokens: (retainedItems) =>
+                estimateModelMessageInputTokens(
+                  compileModelMessages(retainedItems),
+                ),
+            },
+          );
+          refreshed.retainedItemIds = planned.retainedItemIds;
+          const fullProjectionTokens = estimateModelMessageInputTokens(
+            compileModelMessages(
+              [...options.thread.items, refreshed],
+              undefined,
+              workspaceInstructions,
+            ),
+          );
+          if (fullProjectionTokens > configuration.contextWindow) {
+            throw new Error(
+              `Compacted projection exceeds the selected model context window (${String(fullProjectionTokens)} > ${String(configuration.contextWindow)} estimated input tokens)`,
             );
           }
           options.signal.throwIfAborted();

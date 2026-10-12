@@ -58,6 +58,22 @@ test("Computer shares the workspace tabs and captures only while selected and op
     await act(async () =>
       root.render(React.createElement(Harness, { threadId: "a" })),
     );
+    const expand = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Expand side panel"]',
+    );
+    assert.equal(
+      expand?.querySelector("svg")?.getAttribute("data-icon"),
+      "maximize",
+    );
+    await act(async () => expand?.click());
+    const restore = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Restore side panel"]',
+    );
+    assert.equal(
+      restore?.querySelector("svg")?.getAttribute("data-icon"),
+      "minimize",
+    );
+    await act(async () => restore?.click());
     assert.deepEqual(requests, []);
     await act(async () =>
       document

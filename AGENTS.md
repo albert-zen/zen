@@ -26,3 +26,7 @@ LESSONS.md（非目标与教训）、PRODUCTS.md（接入端与里程碑）。
 npm test        # Node Core / protocol / CLI + IMZen 单测
 npm run check   # format + lint + typecheck + unit
 ```
+
+## ZenX UI 改动
+
+修改 ZenX 页面、组件、样式或交互前，读取 `apps/zenx/docs/ui-ux.md`。它是持久产品设计规则的唯一权威；验收遵循其中的页面清单、共享组件、平台标题栏与真实操作要求，不从历史截图反推当前合同。

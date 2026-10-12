@@ -19,10 +19,17 @@ const rendererAssets = path.join(
   "brand",
 );
 const iconAssets = path.join(zenxRoot, "resources", "icons");
+const chromeExtensionIconAssets = path.join(
+  zenxRoot,
+  "resources",
+  "chrome-extension",
+  "icons",
+);
 const docsAssets = path.join(zenxRoot, "docs", "assets", "brand");
 const expectedIcnsSha256 =
   "092be1243492780cd0a75882434e4f269c00430c1f38eb29c70421b5569701b2";
 const windowsIconSizes = [16, 24, 32, 48, 64, 128, 256];
+const chromeExtensionIconSizes = [16, 24, 32, 48, 128];
 
 export const geometryVersion = "zenx-board04-mechanical-v1";
 export const wordmarkPaths = [
@@ -125,6 +132,12 @@ async function writeGeneratedAssets() {
   );
   const ico = generateWindowsIco(appIconSvg());
   await writeFile(path.join(iconAssets, "zenx.ico"), ico);
+  await mkdir(chromeExtensionIconAssets, { recursive: true });
+  await Promise.all(
+    chromeExtensionIconSizes.map((size) =>
+      writeFile(chromeExtensionIconPath(size), renderPng(appIconSvg(), size)),
+    ),
+  );
   let nativeIconMessage = "kept the checked-in macOS icon";
   if (process.platform === "darwin") {
     const icns = await generateNativeIcns(appIconSvg());
@@ -132,7 +145,7 @@ async function writeGeneratedAssets() {
     nativeIconMessage = `generated ${icns.length} byte macOS icon`;
   }
   console.log(
-    `Generated ${generatedTextAssets.size} ZenX SVG assets, ${ico.length} byte Windows icon, and ${nativeIconMessage}`,
+    `Generated ${generatedTextAssets.size} ZenX SVG assets, ${chromeExtensionIconSizes.length} Chrome extension icons, ${ico.length} byte Windows icon, and ${nativeIconMessage}`,
   );
 }
 
@@ -156,6 +169,13 @@ async function checkGeneratedAssets() {
   if (!actualWindowsIcon.equals(generateWindowsIco(appIconSvg()))) {
     mismatches.push(path.relative(zenxRoot, windowsIconTarget));
   }
+  for (const size of chromeExtensionIconSizes) {
+    const target = chromeExtensionIconPath(size);
+    const actual = await readFile(target).catch(() => Buffer.alloc(0));
+    if (!actual.equals(renderPng(appIconSvg(), size))) {
+      mismatches.push(path.relative(zenxRoot, target));
+    }
+  }
   if (mismatches.length > 0) {
     throw new Error(
       `Generated brand assets are stale: ${mismatches.join(", ")}`,
@@ -165,15 +185,7 @@ async function checkGeneratedAssets() {
 }
 
 function generateWindowsIco(source) {
-  const images = windowsIconSizes.map((size) =>
-    Buffer.from(
-      new Resvg(source, {
-        fitTo: { mode: "width", value: size },
-      })
-        .render()
-        .asPng(),
-    ),
-  );
+  const images = windowsIconSizes.map((size) => renderPng(source, size));
   const directorySize = 6 + images.length * 16;
   const header = Buffer.alloc(directorySize);
   header.writeUInt16LE(0, 0);
@@ -194,6 +206,18 @@ function generateWindowsIco(source) {
     offset += image.length;
   }
   return Buffer.concat([header, ...images]);
+}
+
+function chromeExtensionIconPath(size) {
+  return path.join(chromeExtensionIconAssets, `zenx-${String(size)}.png`);
+}
+
+function renderPng(source, size) {
+  return Buffer.from(
+    new Resvg(source, { fitTo: { mode: "width", value: size } })
+      .render()
+      .asPng(),
+  );
 }
 
 async function generateNativeIcns(source) {

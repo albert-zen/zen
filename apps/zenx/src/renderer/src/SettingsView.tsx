@@ -1,8 +1,17 @@
+import { i18n } from "./i18n.js";
+import { useTranslation } from "react-i18next";
 import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
 import { Select, Combobox } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
-import { Activity, useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  useEffect,
+  useLayoutEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { normalizeContextCompactionConfig } from "../../../../../src/context-compaction.js";
 import { ContextCompactionPanel } from "./ContextCompactionPanel.js";
 import { WorkflowSettingsPanel } from "./WorkflowSettingsPanel.js";
@@ -46,6 +55,17 @@ import { ProviderLogo, providerLogoKindForIdentity } from "./ProviderLogo.js";
 import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 import { ChromeConnectionSettings } from "./ChromeConnectionSettings.js";
+import { FleetSettings } from "./FleetSettings.js";
+import { LanguageSettings } from "./LanguageSettings.js";
+import {
+  MAX_MODELS_PER_PROVIDER,
+  appendProviderModelRows,
+  remainingProviderModelSlots,
+} from "./provider-model-admission.js";
+import {
+  ProviderModelAddControl,
+  ProviderModelDiscoveryOption,
+} from "./ProviderModelAdmissionControls.js";
 
 export type SettingsTab =
   | "account"
@@ -56,6 +76,7 @@ export type SettingsTab =
   | "compaction"
   | "skills"
   | "workflows"
+  | "fleet"
   | "archived";
 
 export function SettingsView({
@@ -70,6 +91,7 @@ export function SettingsView({
   tab,
   pluginSnapshot = null,
   active = true,
+  browserSettingsFocusRequest = 0,
 }: {
   archivedError: string | null;
   archivedLoading: boolean;
@@ -82,7 +104,9 @@ export function SettingsView({
   tab: SettingsTab;
   pluginSnapshot?: ZenXPluginSnapshot | null;
   active?: boolean;
+  browserSettingsFocusRequest?: number;
 }) {
+  const { t } = useTranslation("settings");
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -105,11 +129,17 @@ export function SettingsView({
     setStatusState(message === null ? null : { message });
   };
   const [manualCode, setManualCode] = useState(false);
+  const [localBrowserFocusRequest, setLocalBrowserFocusRequest] = useState(0);
+  const handledBrowserFocusRequest = useRef("0:0");
   const [pluginsVisited, setPluginsVisited] = useState(
     active && tab === "plugins",
   );
   if (active && tab === "plugins" && !pluginsVisited) setPluginsVisited(true);
   const navRef = useRef<HTMLElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [tab]);
   const draftSnapshot = useRef({ settings, draft });
   draftSnapshot.current = { settings, draft };
 
@@ -155,6 +185,25 @@ export function SettingsView({
 
   useEffect(() => setStatusState(null), [tab]);
 
+  useEffect(() => {
+    if (!active || tab !== "general" || settings === null || draft === null)
+      return;
+    const request = `${browserSettingsFocusRequest}:${localBrowserFocusRequest}`;
+    if (handledBrowserFocusRequest.current === request) return;
+    const section = document.getElementById("browser-settings");
+    if (section === null) return;
+    handledBrowserFocusRequest.current = request;
+    section.scrollIntoView?.({ block: "start" });
+    section.focus({ preventScroll: true });
+  }, [
+    active,
+    tab,
+    settings,
+    draft,
+    browserSettingsFocusRequest,
+    localBrowserFocusRequest,
+  ]);
+
   const save = async () => {
     if (draft === null) return;
     setBusy("save");
@@ -176,7 +225,9 @@ export function SettingsView({
         approvalPolicy: draft.approvalPolicy,
         toolPresentation: draft.toolPresentation ?? "both",
         experimentalRtkEnabled: draft.experimentalRtkEnabled === true,
-        composerSendMode: draft.composerSendMode ?? "queue",
+        composerSendMode: draft.composerSendMode ?? "soft",
+        composerSendModeExplicit: draft.composerSendModeExplicit,
+        composerSendModeMigration: draft.composerSendModeMigration,
         maxToolRounds: draft.maxToolRounds,
         contextCompaction: draft.contextCompaction,
         workflowCommands: draft.workflowCommands ?? [],
@@ -213,7 +264,7 @@ export function SettingsView({
       >
         <div className="page-loading">
           <div className="loading-ring" />
-          <p>{error ?? "Loading local settings…"}</p>
+          <p>{error ?? t("settingsView.loadingLocalSettings")}</p>
         </div>
       </section>
     );
@@ -234,29 +285,78 @@ export function SettingsView({
   const hostDirty = JSON.stringify(draft) !== JSON.stringify(settings.profile);
   const sendModeOnly =
     hostDirty &&
-    JSON.stringify({ ...draft, composerSendMode: undefined }) ===
-      JSON.stringify({ ...settings.profile, composerSendMode: undefined });
+    JSON.stringify({
+      ...draft,
+      composerSendMode: undefined,
+      composerSendModeExplicit: undefined,
+    }) ===
+      JSON.stringify({
+        ...settings.profile,
+        composerSendMode: undefined,
+        composerSendModeExplicit: undefined,
+      });
   const tabs: Array<{
     id: SettingsTab;
     label: string;
     icon: IconName;
   }> = [
-    { id: "account", label: "Account", icon: "users" },
-    { id: "models", label: "Models & provider", icon: "chip" },
-    { id: "plugins", label: "Plugins", icon: "trigger" },
-    { id: "appearance", label: "Appearance", icon: "moon" },
-    { id: "general", label: "General", icon: "settings" },
-    { id: "compaction", label: "Context compaction", icon: "compress" },
-    { id: "skills", label: "Skills", icon: "compose" },
-    { id: "workflows", label: "Workflows", icon: "compose" },
-    { id: "archived", label: "Archived threads", icon: "archive" },
+    {
+      id: "account",
+      label: i18n.t("settings:settingsView.account"),
+      icon: "users",
+    },
+    {
+      id: "models",
+      label: i18n.t("settings:settingsView.modelsProvider"),
+      icon: "chip",
+    },
+    {
+      id: "plugins",
+      label: i18n.t("settings:settingsView.plugins"),
+      icon: "trigger",
+    },
+    {
+      id: "appearance",
+      label: i18n.t("settings:settingsView.appearance"),
+      icon: "moon",
+    },
+    {
+      id: "general",
+      label: i18n.t("settings:settingsView.general"),
+      icon: "settings",
+    },
+    {
+      id: "compaction",
+      label: i18n.t("settings:settingsView.contextCompaction"),
+      icon: "compress",
+    },
+    {
+      id: "skills",
+      label: i18n.t("settings:settingsView.skills"),
+      icon: "book",
+    },
+    {
+      id: "workflows",
+      label: i18n.t("settings:settingsView.workflows"),
+      icon: "compose",
+    },
+    {
+      id: "fleet",
+      label: i18n.t("settings:settingsView.fleet"),
+      icon: "computer",
+    },
+    {
+      id: "archived",
+      label: i18n.t("settings:settingsView.archivedThreads"),
+      icon: "archive",
+    },
   ];
   return (
     <section
       hidden={!active}
       inert={!active}
       className={`product-page settings-view${showHeader ? "" : " settings-view-embedded"}`}
-      aria-label="ZenX settings"
+      aria-label={t("settingsView.zenxSettings")}
     >
       {showHeader ? (
         <header className="page-header">
@@ -264,25 +364,25 @@ export function SettingsView({
             <button
               className="icon-button mobile-menu"
               type="button"
-              aria-label="Open sidebar"
+              aria-label={t("settingsView.openSidebar")}
               onClick={onOpenSidebar}
             >
               <Icon name="tree" />
             </button>
             <div>
-              <h1>Settings</h1>
-              <p>Make ZenX your own</p>
+              <h1>{t("settingsView.settings")}</h1>
+              <p>{t("settingsView.makeZenxYourOwn")}</p>
             </div>
           </div>
         </header>
       ) : null}
-      <div className="page-scroll">
+      <div ref={scrollRef} className="page-scroll">
         <div className="settings-layout">
           <nav
             ref={navRef}
             className="settings-nav"
             role="tablist"
-            aria-label="Settings sections"
+            aria-label={t("settingsView.settingsSections")}
             onKeyDown={(event) => {
               if (
                 ![
@@ -371,17 +471,18 @@ export function SettingsView({
               >
                 <>
                   <header>
-                    <h2>Plugins</h2>
-                    <p>
-                      Install, update, disable, or remove trusted packages.
-                      Uninstall keeps plugin data until you explicitly delete
-                      it.
-                    </p>
+                    <h2>{t("settingsView.plugins")}</h2>
+                    <p>{t("settingsView.manageThePluginsAvailableInZenx")}</p>
                   </header>
                   <Activity
                     mode={active && tab === "plugins" ? "visible" : "hidden"}
                   >
                     <PluginSettings
+                      onOpenGeneral={(pluginId) => {
+                        onTabChange("general");
+                        if (pluginId === "browser")
+                          setLocalBrowserFocusRequest((value) => value + 1);
+                      }}
                       onFeedback={(message) => {
                         if (feedbackScope.current.version !== feedbackVersion)
                           return;
@@ -397,6 +498,7 @@ export function SettingsView({
               </div>
             ) : null}
             {active && tab === "appearance" ? <AppearancePanel /> : null}
+            {active && tab === "fleet" ? <FleetSettings /> : null}
             <Activity mode={active && tab === "general" ? "visible" : "hidden"}>
               <>
                 <GeneralPanel draft={draft} setDraft={setDraft} />
@@ -458,6 +560,8 @@ export function SettingsView({
                 onRetry={onRetryArchived}
                 onUnarchive={onUnarchive}
                 threads={archivedThreads}
+                providerLogoDataUrls={settings.providerLogoDataUrls}
+                providerProfiles={settings.profile.providerProfiles}
               />
             </Activity>
             {settings.configuration?.status === "unconfirmed" ? (
@@ -481,7 +585,7 @@ export function SettingsView({
                       .finally(() => setBusy(null));
                   }}
                 >
-                  Check application status
+                  {t("settingsView.checkApplicationStatus")}
                 </button>
                 <button
                   type="button"
@@ -501,22 +605,22 @@ export function SettingsView({
                       .finally(() => setBusy(null));
                   }}
                 >
-                  Retry applying saved settings
+                  {t("settingsView.retryApplyingSavedSettings")}
                 </button>
               </div>
             ) : null}
             {settings.configuration?.pendingRestart.length ? (
               <div className="settings-note" role="status">
                 <p>
-                  Saved ·{" "}
-                  {settings.configuration.pendingRestart
-                    .map((domain) =>
-                      domain === "experimentalRtk"
-                        ? "Compact shell output"
-                        : domain,
-                    )
-                    .join(", ")}{" "}
-                  takes effect next launch
+                  {t("settingsView.savedPendingRestart", {
+                    fields: settings.configuration.pendingRestart
+                      .map((domain) =>
+                        domain === "experimentalRtk"
+                          ? t("settingsView.compactShellOutput")
+                          : domain,
+                      )
+                      .join(", "),
+                  })}
                 </p>
                 <button
                   type="button"
@@ -543,7 +647,7 @@ export function SettingsView({
                       .finally(() => setBusy(null));
                   }}
                 >
-                  Safe restart
+                  {t("settingsView.safeRestart")}
                 </button>
               </div>
             ) : null}
@@ -604,16 +708,25 @@ export function SettingsApplyBar({
   dirty: boolean;
   onApply(): void;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <div className={`settings-apply-bar${dirty ? " dirty" : ""}`}>
       <div>
-        <strong>{requiresRestart ? "App settings" : "Message sending"}</strong>
+        <strong>
+          {requiresRestart
+            ? t("settingsView.appSettings")
+            : t("settingsView.messageSending")}
+        </strong>
         <span>
           {dirty
             ? requiresRestart
-              ? "Unsaved changes across settings. Running turns keep their current configuration."
-              : "Unsaved sending preference. Running turns continue uninterrupted."
-            : "Your settings are up to date."}
+              ? t(
+                  "settingsView.unsavedChangesAcrossSettingsRunningTurnsKeepTheirCurrent",
+                )
+              : t(
+                  "settingsView.unsavedSendingPreferenceRunningTurnsContinueUninterrupted",
+                )
+            : t("settingsView.yourSettingsAreUpToDate")}
         </span>
       </div>
       <button
@@ -624,11 +737,11 @@ export function SettingsApplyBar({
       >
         {requiresRestart
           ? busy
-            ? "Applying…"
-            : "Apply"
+            ? t("settingsView.applying")
+            : t("settingsView.apply")
           : busy
-            ? "Applying…"
-            : "Apply"}
+            ? t("settingsView.applying")
+            : t("settingsView.apply")}
       </button>
     </div>
   );
@@ -640,13 +753,18 @@ export function ArchivedThreadsPanel({
   onRetry,
   onUnarchive,
   threads,
+  providerLogoDataUrls,
+  providerProfiles,
 }: {
   error: string | null;
   loading: boolean;
   onRetry(): void;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
   threads: readonly NativeThreadSummary[];
+  providerLogoDataUrls?: Readonly<Record<string, string>>;
+  providerProfiles?: readonly ZenXProviderProfile[];
 }) {
+  const { t } = useTranslation("settings");
   const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const unarchive = async (thread: NativeThreadSummary) => {
@@ -663,35 +781,41 @@ export function ArchivedThreadsPanel({
   return (
     <>
       <header>
-        <h2>Archived threads</h2>
-        <p>
-          Archived conversations remain canonical Threads. Restore one to return
-          it to the active Sidebar.
-        </p>
+        <h2>{t("settingsView.archivedThreads")}</h2>
+        <p>{t("settingsView.restoreAnArchivedConversationToReturnItToThe")}</p>
       </header>
       {loading ? (
         <div className="settings-empty" role="status">
-          Loading archived Threads…
+          {t("settingsView.loadingArchivedConversations")}
         </div>
       ) : error !== null ? (
         <div className="settings-empty settings-error" role="alert">
           <span>{error}</span>
           <button className="quiet-button" type="button" onClick={onRetry}>
-            Try again
+            {t("settingsView.tryAgain")}
           </button>
         </div>
       ) : threads.length === 0 ? (
         <div className="settings-empty">
-          No archived Threads. Conversations you archive will appear here.
+          {t(
+            "settingsView.noArchivedConversationsConversationsYouArchiveWillAppearHere",
+          )}
         </div>
       ) : (
         <div className="archived-thread-list">
           {threads.map((thread) => {
             const identity = threadModelIdentity(thread);
+            const providerProfileId =
+              thread.status === "systemError"
+                ? undefined
+                : thread.currentMetadata.providerProfileId;
+            const providerProfile = providerProfiles?.find(
+              (candidate) => candidate.providerProfileId === providerProfileId,
+            );
             const busy = busyThreadId === thread.threadId;
             const workspace =
               thread.status === "systemError"
-                ? "Unavailable journal"
+                ? t("settingsView.unavailableJournal")
                 : thread.currentMetadata.cwd;
             return (
               <article className="archived-thread-row" key={thread.threadId}>
@@ -700,7 +824,20 @@ export function ArchivedThreadsPanel({
                   <span title={workspace}>{workspace}</span>
                   {identity === null ? null : (
                     <small>
-                      <ProviderLogo kind={identity.providerKind} />
+                      <ProviderLogo
+                        kind={
+                          providerProfileId !== undefined &&
+                          (providerProfile === undefined ||
+                            providerProfile.logoResource !== undefined)
+                            ? "generic"
+                            : identity.providerKind
+                        }
+                        customSrc={
+                          providerProfileId === undefined
+                            ? undefined
+                            : providerLogoDataUrls?.[providerProfileId]
+                        }
+                      />
                       {identity.label}
                     </small>
                   )}
@@ -711,7 +848,9 @@ export function ArchivedThreadsPanel({
                   disabled={busyThreadId !== null}
                   onClick={() => void unarchive(thread)}
                 >
-                  {busy ? "Restoring…" : "Unarchive"}
+                  {busy
+                    ? t("settingsView.restoring")
+                    : t("settingsView.unarchive")}
                 </button>
               </article>
             );
@@ -745,6 +884,7 @@ function AccountPanel({
   setManualCode(value: boolean): void;
   setSettings(value: PublicHostSettings): void;
 }) {
+  const { t } = useTranslation("settings");
   const subscriptionConfigured =
     settings.subscriptionProviderProfileId !== null;
   const login = () => {
@@ -762,18 +902,14 @@ function AccountPanel({
   return (
     <>
       <header>
-        <h2>Account</h2>
-        <p>
-          Credentials remain in the local ZenX vault and never enter the Thread
-          Item stream.
-        </p>
+        <h2>{t("settingsView.account")}</h2>
       </header>
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>OpenAI subscription</h3>
+            <h3>{t("settingsView.openaiSubscription")}</h3>
             <p>
-              Use an authenticated ChatGPT subscription for ZenX model access.
+              {t("settingsView.connectYourChatgptSubscriptionToUseItsModels")}
             </p>
           </div>
           <span
@@ -786,23 +922,25 @@ function AccountPanel({
             }
           >
             {!subscriptionConfigured
-              ? "No profile configured"
+              ? t("settingsView.notConfigured")
               : settings.subscription.authenticated
-                ? "Signed in"
-                : "Not signed in"}
+                ? t("settingsView.signedIn")
+                : t("settingsView.notSignedIn")}
           </span>
         </div>
         <div className="settings-row">
           <div>
             <strong>
-              {settings.subscription.accountId ?? "No account connected"}
+              {settings.subscription.authenticated
+                ? t("settingsView.accountConnected")
+                : t("settingsView.connectAnAccount")}
             </strong>
             <span>
               {!subscriptionConfigured
-                ? "Add an OpenAI subscription profile from Models & providers to connect an account."
+                ? t("settingsView.addAnOpenaiSubscriptionInModelsProviderToGet")
                 : settings.subscription.authenticated
-                  ? "Authentication is stored in the operating system credential boundary."
-                  : "Sign in to use the configured subscription profile."}
+                  ? t("settingsView.yourSignInDetailsAreStoredSecurelyOnThis")
+                  : t("settingsView.signInToConnectYourSubscription")}
             </span>
           </div>
           {!subscriptionConfigured ? null : settings.subscription
@@ -817,7 +955,7 @@ function AccountPanel({
                   .catch((reason: unknown) => setError(describeError(reason)))
               }
             >
-              Sign out
+              {t("settingsView.signOut")}
             </button>
           ) : (
             <button
@@ -827,8 +965,8 @@ function AccountPanel({
               onClick={login}
             >
               {busy === "login"
-                ? "Waiting for browser…"
-                : "Sign in with OpenAI"}
+                ? t("settingsView.waitingForBrowser")
+                : t("settingsView.signInWithOpenai")}
             </button>
           )}
         </div>
@@ -839,19 +977,6 @@ function AccountPanel({
         accountId={settings.subscription.accountId}
         authenticated={settings.subscription.authenticated}
       />
-      <div className="page-card settings-card">
-        <div className="settings-row">
-          <div>
-            <strong>Privacy boundary</strong>
-            <span>
-              Thread history stores only effective runtime settings.
-              Subscription identity and provider secrets remain outside
-              canonical Items.
-            </span>
-          </div>
-          <Icon name="lock" />
-        </div>
-      </div>
     </>
   );
 }
@@ -877,6 +1002,7 @@ function ModelsPanel({
   setSettings(value: PublicHostSettings): void;
   setStatus(value: string | null): void;
 }) {
+  const { t } = useTranslation("settings");
   const [showAddChoices, setShowAddChoices] = useState(false);
   const [editor, setEditor] = useState<{
     mode: "add" | "edit";
@@ -935,16 +1061,88 @@ function ModelsPanel({
           setDraft(authoritative.profile);
           setStatus(configurationSaveToast(authoritative));
           setError(
-            `Settings were saved, but finalization failed: ${originalError}`,
+            i18n.t("settings:settingsView.settingsFinalizationFailed", {
+              error: originalError,
+            }),
           );
           return "committed-error";
         }
         setError(originalError);
       } catch (reconciliationReason) {
         setError(
-          `Settings mutation failed: ${originalError}. Authoritative state could not be reconciled: ${describeError(reconciliationReason)}. Outcome is unknown.`,
+          i18n.t("settings:settingsView.settingsMutationOutcomeUnknown", {
+            error: originalError,
+            reason: describeError(reconciliationReason),
+          }),
         );
       }
+      return "failed";
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runProviderMutation = async (
+    operation: "provider-add" | "provider-edit",
+    message: string,
+    mutation: () => ReturnType<Window["zenx"]["settings"]["addProvider"]>,
+  ): Promise<"success" | "committed-error" | "failed"> => {
+    setBusy(operation);
+    setError(null);
+    setStatus(null);
+    try {
+      const reply = await mutation();
+      if (reply.ok) {
+        acceptSettings(reply.settings, message);
+        if (reply.outcome === "unconfirmed")
+          setError(
+            i18n.t(
+              "settings:settingsView.providerSettingsWereSavedButApplyingThemIsUnconfirmed",
+            ),
+          );
+        return "success";
+      }
+      if (reply.outcome === "committed-error") {
+        try {
+          const authoritative = await window.zenx.settings.get();
+          setSettings(authoritative);
+          setDraft(authoritative.profile);
+          setStatus(configurationSaveToast(authoritative));
+        } catch {
+          // Host confirmed the commit; a failed refresh does not undo it.
+        }
+        setError(
+          i18n.t(
+            "settings:settingsView.providerSettingsWereSavedButFinalizationFailedCheckApplication",
+          ),
+        );
+        return "committed-error";
+      }
+      const messageByCode = {
+        "revision-conflict": i18n.t(
+          "settings:settingsView.anotherWindowChangedSettingsThisProviderWasNotSaved",
+        ),
+        "validation-rejected": i18n.t(
+          "settings:settingsView.thisProviderWasNotSavedReviewItsConnectionAnd",
+        ),
+        "save-rejected": i18n.t(
+          "settings:settingsView.thisProviderWasNotSavedCheckApplicationStatusThen",
+        ),
+        "save-finalization-failed": i18n.t(
+          "settings:settingsView.providerSettingsWereSavedButFinalizationFailedCheckApplication",
+        ),
+        "save-unconfirmed": i18n.t(
+          "settings:settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck",
+        ),
+      } as const;
+      setError(messageByCode[reply.code]);
+      return "failed";
+    } catch {
+      setError(
+        i18n.t(
+          "settings:settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck",
+        ),
+      );
       return "failed";
     } finally {
       setBusy(null);
@@ -958,7 +1156,7 @@ function ModelsPanel({
         ? {
             providerProfileId,
             type,
-            displayName: "Local demo",
+            displayName: i18n.t("settings:settingsView.localDemo"),
             models: [legacyModelCatalogEntry("fake")],
           }
         : type === "openai-subscription"
@@ -1012,10 +1210,8 @@ function ModelsPanel({
   return (
     <>
       <header>
-        <h2>Models & providers</h2>
-        <p>
-          Connect your providers and choose the models you want to work with.
-        </p>
+        <h2>{t("settingsView.modelsProviders")}</h2>
+        <p>{t("settingsView.connectYourProvidersAndChooseTheModelsYouWant")}</p>
       </header>
       {error === null ? null : (
         <div className="settings-error" role="alert">
@@ -1026,30 +1222,29 @@ function ModelsPanel({
       <div className="page-card settings-card model-routing-card">
         <div className="settings-card-head">
           <div>
-            <h3>Default models</h3>
+            <h3>{t("settingsView.defaultModels")}</h3>
             <p>
-              Choose a model for new conversations and another for naming them.
+              {t("settingsView.chooseAModelForNewConversationsAndAnotherFor")}
             </p>
           </div>
-          <span className="status-muted">New work</span>
+          <span className="status-muted">{t("settingsView.newWork")}</span>
         </div>
         <div className="form-grid">
           <ModelReferenceSelect
-            label="Default model"
+            label={t("settingsView.defaultModel")}
             profiles={settings.profile.providerProfiles}
             value={draft.defaultModel}
             onChange={(defaultModel) => setDraft({ ...draft, defaultModel })}
           />
           <ModelReferenceSelect
-            label="Title model"
+            label={t("settingsView.titleModel")}
             profiles={settings.profile.providerProfiles}
             value={draft.titleModel}
             onChange={(titleModel) => setDraft({ ...draft, titleModel })}
           />
         </div>
         <p className="settings-note">
-          Existing conversations keep their model. You can change it from the
-          message box at any time.
+          {t("settingsView.existingConversationsKeepTheirModelYouCanChangeIt")}
         </p>
       </div>
       <section
@@ -1058,8 +1253,10 @@ function ModelsPanel({
       >
         <div className="provider-section-head">
           <div>
-            <h3 id="provider-list-title">Provider profiles</h3>
-            <p>Manage each connection and its available models.</p>
+            <h3 id="provider-list-title">
+              {t("settingsView.providerProfiles")}
+            </h3>
+            <p>{t("settingsView.manageEachConnectionAndItsAvailableModels")}</p>
           </div>
           {editor === null ? (
             <div className="provider-section-actions">
@@ -1072,14 +1269,14 @@ function ModelsPanel({
                   setError(null);
                 }}
               >
-                Add provider
+                {t("settingsView.addProvider")}
               </button>
               <button
                 className="primary-button"
                 type="button"
                 onClick={() => openAddEditor("openai-compatible")}
               >
-                Add custom provider
+                {t("settingsView.addCustomProvider")}
               </button>
             </div>
           ) : null}
@@ -1087,28 +1284,27 @@ function ModelsPanel({
         {showAddChoices && editor === null ? (
           <div className="page-card provider-add-choices">
             <div>
-              <strong>Add a known Provider</strong>
+              <strong>{t("settingsView.addAKnownProvider")}</strong>
               <span>
-                Choose a built-in connection preset. Custom APIs use the
-                separate custom flow.
+                {t("settingsView.chooseABuiltInConnectionPresetCustomApisUse")}
               </span>
             </div>
             <button
               type="button"
-              aria-label="Add OpenAI subscription"
+              aria-label={t("settingsView.addOpenaiSubscription")}
               onClick={() => openAddEditor("openai-subscription")}
               disabled={settings.profile.providerProfiles.some(
                 (provider) => provider.type === "openai-subscription",
               )}
             >
               <ProviderLogo kind="openai" />
-              <strong>OpenAI subscription</strong>
+              <strong>{t("settingsView.openaiSubscription2")}</strong>
               <span>
                 {settings.profile.providerProfiles.some(
                   (provider) => provider.type === "openai-subscription",
                 )
-                  ? "One subscription account is already configured"
-                  : "Uses the sign-in managed in Account"}
+                  ? t("settingsView.oneSubscriptionAccountIsAlreadyConfigured")
+                  : t("settingsView.usesTheSignInManagedInAccount")}
               </span>
             </button>
             {KNOWN_PROVIDER_PRESETS.map((preset) => {
@@ -1120,7 +1316,9 @@ function ModelsPanel({
                 <button
                   key={preset.providerProfileId}
                   type="button"
-                  aria-label={`Add ${preset.displayName}`}
+                  aria-label={t("settingsView.addNamedProvider", {
+                    name: preset.displayName,
+                  })}
                   onClick={() => openKnownProviderEditor(preset)}
                   disabled={configured}
                 >
@@ -1133,27 +1331,29 @@ function ModelsPanel({
                   <strong>{preset.displayName}</strong>
                   <span>
                     {configured
-                      ? "This built-in Provider is already configured"
-                      : "OpenAI-compatible API preset"}
+                      ? t("settingsView.thisBuiltInProviderIsAlreadyConfigured")
+                      : t("settingsView.openaiCompatibleApiPreset")}
                   </span>
                 </button>
               );
             })}
             <button
               type="button"
-              aria-label="Add Local demo"
+              aria-label={t("settingsView.addLocalDemo")}
               onClick={() => openAddEditor("fake")}
             >
               <ProviderLogo kind="local" />
-              <strong>Local demo</strong>
-              <span>Deterministic fake/dev Provider for local testing</span>
+              <strong>{t("settingsView.localDemo")}</strong>
+              <span>
+                {t("settingsView.deterministicFakeDevProviderForLocalTesting")}
+              </span>
             </button>
             <button
               className="quiet-button provider-choice-cancel"
               type="button"
               onClick={() => setShowAddChoices(false)}
             >
-              Cancel
+              {t("settingsView.cancel")}
             </button>
           </div>
         ) : null}
@@ -1168,18 +1368,31 @@ function ModelsPanel({
             )}
             mode={editor.mode}
             provider={editor.provider}
+            logoDataUrl={
+              settings.providerLogoDataUrls?.[editor.provider.providerProfileId]
+            }
             titleModel={settings.profile.titleModel}
             onCancel={() => setEditor(null)}
-            onSubmit={async (provider, apiKey, replacements) => {
-              const success = await runMutation(
+            onSubmit={async (
+              provider,
+              apiKey,
+              replacements,
+              logoUpload,
+              diagnosticAttemptId,
+            ) => {
+              const success = await runProviderMutation(
                 editor.mode === "add" ? "provider-add" : "provider-edit",
-                editor.mode === "add" ? "Provider added" : "Provider saved",
+                editor.mode === "add"
+                  ? t("settingsView.providerAdded")
+                  : t("settingsView.providerSaved"),
                 async () =>
                   editor.mode === "add"
                     ? await window.zenx.settings.addProvider(
                         provider,
                         apiKey,
                         editor.baseRevision,
+                        logoUpload ?? undefined,
+                        diagnosticAttemptId,
                       )
                     : await window.zenx.settings.editProvider(
                         editor.provider.providerProfileId,
@@ -1188,19 +1401,10 @@ function ModelsPanel({
                           ...replacements,
                           baseRevision: editor.baseRevision,
                           ...(apiKey === undefined ? {} : { apiKey }),
+                          ...(logoUpload === undefined ? {} : { logoUpload }),
                         },
+                        diagnosticAttemptId,
                       ),
-                (authoritative) => {
-                  const current = authoritative.profile.providerProfiles.find(
-                    (candidate) =>
-                      candidate.providerProfileId ===
-                      provider.providerProfileId,
-                  );
-                  return (
-                    current !== undefined &&
-                    providerProfilesEquivalent(current, provider)
-                  );
-                },
               );
               if (success !== "failed") setEditor(null);
               return success;
@@ -1247,7 +1451,7 @@ function ModelsPanel({
             onDelete={async (replacements) => {
               const success = await runMutation(
                 "provider-delete",
-                "Provider deleted",
+                t("settingsView.providerDeleted"),
                 async () =>
                   await window.zenx.settings.deleteProvider(
                     deletingProvider.providerProfileId,
@@ -1298,6 +1502,7 @@ function ProviderProfileCard({
   settings: PublicHostSettings;
   titleModel: ZenXModelReference;
 }) {
+  const { t } = useTranslation("settings");
   const ownsDefault =
     defaultModel.providerProfileId === provider.providerProfileId;
   const ownsTitle = titleModel.providerProfileId === provider.providerProfileId;
@@ -1305,7 +1510,16 @@ function ProviderProfileCard({
   return (
     <article className="page-card provider-profile-card">
       <div className="provider-profile-main">
-        <ProviderLogo kind={providerLogoKind(provider)} />
+        <ProviderLogo
+          kind={
+            provider.logoResource === undefined
+              ? providerLogoKind(provider)
+              : "generic"
+          }
+          customSrc={
+            settings.providerLogoDataUrls?.[provider.providerProfileId]
+          }
+        />
         <div>
           <div className="provider-profile-name">
             <strong>{provider.displayName}</strong>
@@ -1324,27 +1538,33 @@ function ProviderProfileCard({
       </div>
       <div
         className="provider-profile-roles"
-        aria-label={`${provider.displayName} global roles`}
+        aria-label={t("settingsView.providerGlobalRoles", {
+          name: provider.displayName,
+        })}
       >
-        {ownsDefault ? <span>Default</span> : null}
-        {ownsTitle ? <span>Title</span> : null}
+        {ownsDefault ? <span>{t("settingsView.default")}</span> : null}
+        {ownsTitle ? <span>{t("settingsView.title")}</span> : null}
       </div>
       <div className="provider-profile-actions">
         <button
           className="quiet-button"
           type="button"
-          aria-label={`Edit ${provider.displayName}`}
+          aria-label={t("settingsView.editNamedProvider", {
+            name: provider.displayName,
+          })}
           onClick={onEdit}
         >
-          Edit
+          {t("settingsView.edit")}
         </button>
         <button
           className="danger-button"
           type="button"
-          aria-label={`Delete ${provider.displayName}`}
+          aria-label={t("settingsView.deleteNamedProvider", {
+            name: provider.displayName,
+          })}
           onClick={onDelete}
         >
-          Delete
+          {t("settingsView.delete")}
         </button>
       </div>
     </article>
@@ -1360,6 +1580,7 @@ function ProviderEditor({
   onCancel,
   onSubmit,
   provider: initialProvider,
+  logoDataUrl,
   titleModel,
 }: {
   allProfiles: readonly ZenXProviderProfile[];
@@ -1372,14 +1593,24 @@ function ProviderEditor({
     provider: ZenXProviderProfile,
     apiKey: string | undefined,
     replacements: ZenXProviderEditOptions,
+    logoUpload: Uint8Array | null | undefined,
+    diagnosticAttemptId?: string,
   ): Promise<"success" | "committed-error" | "failed">;
   provider: ZenXProviderProfile;
+  logoDataUrl?: string;
   titleModel: ZenXModelReference;
 }) {
+  const { t } = useTranslation("settings");
   const [provider, setProvider] = useState(initialProvider);
-  const [models, setModels] = useState(
-    initialProvider.models.map((model) => ({ ...model })),
+  const [modelRows, setModelRows] = useState(() =>
+    initialProvider.models.map((model) => ({
+      key: globalThis.crypto.randomUUID(),
+      model: { ...model },
+    })),
   );
+  const models = modelRows.map((row) => row.model);
+  const modelIds = new Set(models.map((model) => model.id));
+  const remainingModelSlots = remainingProviderModelSlots(models.length);
   const [discovering, setDiscovering] = useState(false);
   const [availableModels, setAvailableModels] = useState<
     ZenXModelCatalogEntry[] | null
@@ -1387,17 +1618,77 @@ function ProviderEditor({
   const [selectedAvailableModels, setSelectedAvailableModels] = useState<
     string[]
   >([]);
+  const selectedAvailableModelIds = new Set(selectedAvailableModels);
+  const selectedNewModels =
+    availableModels?.filter(
+      (model) =>
+        selectedAvailableModelIds.has(model.id) && !modelIds.has(model.id),
+    ) ?? [];
   const [modelSearch, setModelSearch] = useState("");
   const [probingModel, setProbingModel] = useState<string | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [logoUpload, setLogoUpload] = useState<Uint8Array | null | undefined>();
+  const [logoFilename, setLogoFilename] = useState<string | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [logoSelectionError, setLogoSelectionError] = useState<string | null>(
+    null,
+  );
+  const [logoReading, setLogoReading] = useState(false);
+  const logoReadVersion = useRef(0);
+  const logoFileInput = useRef<HTMLInputElement>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationAttempt, setValidationAttempt] = useState(0);
+  const validationSummary = useRef<HTMLDivElement>(null);
+  const editorId = useId();
   const [defaultReplacement, setDefaultReplacement] = useState("");
   const [titleReplacement, setTitleReplacement] = useState("");
   const normalizedProvider = {
     ...provider,
     models: models.map(normalizedDraftModel),
   } as ZenXProviderProfile;
+  const validationIssues =
+    validationAttempt === 0
+      ? []
+      : validateProviderEditor(normalizedProvider, apiKey, mode, hasApiKey);
+  const validationIssueByField = new Map(
+    validationIssues.map((issue) => [
+      `${issue.modelIndex ?? -1}:${issue.field}`,
+      issue.message,
+    ]),
+  );
+  const fieldId = (field: ProviderEditorIssue["field"], modelIndex?: number) =>
+    `${editorId}-${modelIndex === undefined ? "provider" : `model-${modelIndex}`}-${field}`;
+  const issueFor = (field: ProviderEditorIssue["field"], modelIndex?: number) =>
+    validationIssueByField.get(`${modelIndex ?? -1}:${field}`);
+  const recordValidationRejection = (
+    attemptId: string,
+    reason:
+      | ProviderEditorIssue["code"]
+      | "logo_invalid"
+      | "logo_loading"
+      | "replacement_default_missing"
+      | "replacement_title_missing"
+      | "validation_issues_truncated",
+    modelIndex?: number,
+  ) => {
+    try {
+      void window.zenx.settings
+        .recordDiagnostic({
+          event: "provider-validation-rejected",
+          attemptId,
+          operation: mode,
+          reason,
+          ...(modelIndex === undefined ? {} : { modelIndex }),
+        })
+        .catch(() => undefined);
+    } catch {
+      // Diagnostics must not interrupt editing.
+    }
+  };
+  useEffect(() => {
+    if (validationAttempt > 0) validationSummary.current?.focus();
+  }, [validationAttempt]);
   const replacementProfiles =
     mode === "edit"
       ? allProfiles.map((candidate) =>
@@ -1421,9 +1712,9 @@ function ProviderEditor({
     index: number,
     update: (model: ZenXModelCatalogEntry) => ZenXModelCatalogEntry,
   ) => {
-    setModels((current) =>
-      current.map((model, candidate) =>
-        candidate === index ? update(model) : model,
+    setModelRows((current) =>
+      current.map((row, candidate) =>
+        candidate === index ? { ...row, model: update(row.model) } : row,
       ),
     );
     setValidationError(null);
@@ -1434,34 +1725,69 @@ function ProviderEditor({
       className="page-card provider-editor"
       aria-label={
         mode === "add"
-          ? "Add Provider profile"
-          : `Edit ${initialProvider.displayName}`
+          ? t("settingsView.addProviderProfile")
+          : t("settingsView.editNamedProvider", {
+              name: initialProvider.displayName,
+            })
       }
     >
       <div className="provider-editor-head">
         <div>
           <strong>
             {mode === "add"
-              ? "Add Provider profile"
-              : `Edit ${initialProvider.displayName}`}
+              ? t("settingsView.addProviderProfile")
+              : t("settingsView.editNamedProvider", {
+                  name: initialProvider.displayName,
+                })}
           </strong>
           <span>{providerTypeLabel(provider)}</span>
         </div>
         <button className="quiet-button" type="button" onClick={onCancel}>
-          Cancel
+          {t("settingsView.cancel2")}
         </button>
       </div>
       <form
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          const error = validateProviderEditor(
+          const diagnosticAttemptId = globalThis.crypto.randomUUID();
+          if (models.length > MAX_MODELS_PER_PROVIDER) {
+            setValidationError(
+              t("settingsView.aProviderCanHaveAtMost1024Models"),
+            );
+            return;
+          }
+          if (logoSelectionError !== null || logoReading) {
+            recordValidationRejection(
+              diagnosticAttemptId,
+              logoSelectionError === null ? "logo_loading" : "logo_invalid",
+            );
+            setValidationError(
+              logoSelectionError ??
+                t("settingsView.waitForTheProviderLogoToFinishLoading"),
+            );
+            return;
+          }
+          const issues = validateProviderEditor(
             normalizedProvider,
             apiKey,
             mode,
             hasApiKey,
           );
-          if (error !== null) {
-            setValidationError(error);
+          if (issues.length > 0) {
+            for (const issue of issues.slice(0, 16))
+              recordValidationRejection(
+                diagnosticAttemptId,
+                issue.code,
+                issue.modelIndex,
+              );
+            if (issues.length > 16)
+              recordValidationRejection(
+                diagnosticAttemptId,
+                "validation_issues_truncated",
+              );
+            setValidationError(null);
+            setValidationAttempt((current) => current + 1);
             return;
           }
           const replacements: ZenXProviderEditOptions = {};
@@ -1471,7 +1797,13 @@ function ProviderEditor({
               replacementProfiles,
             );
             if (reference === undefined) {
-              setValidationError("Choose a replacement default model");
+              recordValidationRejection(
+                diagnosticAttemptId,
+                "replacement_default_missing",
+              );
+              setValidationError(
+                t("settingsView.chooseAReplacementDefaultModel"),
+              );
               return;
             }
             replacements.defaultModel = reference;
@@ -1482,7 +1814,13 @@ function ProviderEditor({
               replacementProfiles,
             );
             if (reference === undefined) {
-              setValidationError("Choose a replacement title model");
+              recordValidationRejection(
+                diagnosticAttemptId,
+                "replacement_title_missing",
+              );
+              setValidationError(
+                t("settingsView.chooseAReplacementTitleModel"),
+              );
               return;
             }
             replacements.titleModel = reference;
@@ -1491,13 +1829,53 @@ function ProviderEditor({
             normalizedProvider,
             apiKey.trim().length === 0 ? undefined : apiKey,
             replacements,
+            logoUpload,
+            diagnosticAttemptId,
           );
         }}
       >
+        {validationIssues.length === 0 ? null : (
+          <div
+            ref={validationSummary}
+            className="settings-error provider-editor-error-summary"
+            role="alert"
+            tabIndex={-1}
+          >
+            <Icon name="warning" />
+            <div>
+              <strong>{t("settingsView.checkTheseFields")}</strong>
+              <ul>
+                {validationIssues.map((issue) => {
+                  const targetId = fieldId(issue.field, issue.modelIndex);
+                  return (
+                    <li key={`${targetId}-${issue.code}`}>
+                      <a
+                        href={`#${targetId}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          const target = document.getElementById(targetId);
+                          const details = target?.closest("details");
+                          if (details !== null && details !== undefined)
+                            details.open = true;
+                          target?.scrollIntoView?.({ block: "center" });
+                          target?.focus();
+                        }}
+                      >
+                        {issue.message}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </div>
+        )}
         <div className="form-grid">
           <Field
             autoFocus
-            label="Display name"
+            id={fieldId("displayName")}
+            error={issueFor("displayName")}
+            label={t("settingsView.displayName")}
             value={provider.displayName}
             onChange={(displayName) => {
               setProvider({ ...provider, displayName });
@@ -1507,7 +1885,9 @@ function ProviderEditor({
           {provider.type === "openai-compatible" ? (
             <>
               <Field
-                label="Provider name"
+                id={fieldId("providerName")}
+                error={issueFor("providerName")}
+                label={t("settingsView.providerName")}
                 value={provider.name}
                 onChange={(name) => {
                   setProvider({ ...provider, name });
@@ -1516,7 +1896,9 @@ function ProviderEditor({
               />
               <Field
                 wide
-                label="Base URL"
+                id={fieldId("baseUrl")}
+                error={issueFor("baseUrl")}
+                label={t("settingsView.baseUrl")}
                 value={provider.baseUrl}
                 onChange={(baseUrl) => {
                   setProvider({ ...provider, baseUrl });
@@ -1526,11 +1908,13 @@ function ProviderEditor({
               <Field
                 wide
                 secret
-                label="API key"
+                id={fieldId("apiKey")}
+                error={issueFor("apiKey")}
+                label={t("settingsView.apiKey")}
                 placeholder={
                   mode === "edit" && hasApiKey
-                    ? "API key saved — leave blank to keep"
-                    : "Required"
+                    ? t("settingsView.apiKeySavedLeaveBlankToKeep")
+                    : t("settingsView.required")
                 }
                 value={apiKey}
                 onChange={(value) => {
@@ -1542,26 +1926,123 @@ function ProviderEditor({
           ) : null}
         </div>
         {provider.type === "openai-compatible" ? (
+          <div
+            className="settings-note"
+            aria-label={t("settingsView.providerLogo")}
+          >
+            <ProviderLogo
+              kind={
+                provider.logoResource === undefined
+                  ? providerLogoKind(provider)
+                  : "generic"
+              }
+              customSrc={
+                logoUpload === null ? undefined : (logoPreview ?? logoDataUrl)
+              }
+            />
+            <label className="field">
+              <span>{t("settingsView.providerLogoPngJpegOrWebpUpTo512")}</span>
+              <input
+                ref={logoFileInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file === undefined) return;
+                  const version = ++logoReadVersion.current;
+                  setLogoUpload(undefined);
+                  setLogoFilename(null);
+                  setLogoPreview(null);
+                  setLogoSelectionError(null);
+                  setLogoReading(false);
+                  if (
+                    !["image/png", "image/jpeg", "image/webp"].includes(
+                      file.type,
+                    )
+                  ) {
+                    const message = t(
+                      "settingsView.chooseAPngJpegOrWebpProviderLogo",
+                    );
+                    setLogoSelectionError(message);
+                    setValidationError(message);
+                    return;
+                  }
+                  if (file.size > 512 * 1024) {
+                    const message = t(
+                      "settingsView.providerLogoMustBeAtMost512Kib",
+                    );
+                    setLogoSelectionError(message);
+                    setValidationError(message);
+                    return;
+                  }
+                  setLogoReading(true);
+                  void file
+                    .arrayBuffer()
+                    .then((bytes) => {
+                      if (version !== logoReadVersion.current) return;
+                      setLogoUpload(new Uint8Array(bytes));
+                      setLogoFilename(file.name);
+                      setLogoPreview(
+                        `data:${file.type};base64,${base64FromBytes(new Uint8Array(bytes))}`,
+                      );
+                      setValidationError(null);
+                    })
+                    .catch((reason) => {
+                      if (version !== logoReadVersion.current) return;
+                      const message = describeError(reason);
+                      setLogoSelectionError(message);
+                      setValidationError(message);
+                    })
+                    .finally(() => {
+                      if (version === logoReadVersion.current)
+                        setLogoReading(false);
+                    });
+                }}
+              />
+            </label>
+            {logoFilename === null ? null : <span>{logoFilename}</span>}
+            {logoUpload !== null &&
+            (logoUpload !== undefined ||
+              logoDataUrl !== undefined ||
+              initialProvider.logoResource !== undefined) ? (
+              <button
+                className="quiet-button"
+                type="button"
+                onClick={() => {
+                  logoReadVersion.current += 1;
+                  if (logoFileInput.current !== null)
+                    logoFileInput.current.value = "";
+                  setLogoUpload(null);
+                  setLogoFilename(null);
+                  setLogoPreview(null);
+                  setLogoSelectionError(null);
+                  setLogoReading(false);
+                  setValidationError(null);
+                }}
+              >
+                {t("settingsView.removeLogo")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {provider.type === "openai-compatible" ? (
           <p className="settings-note credential-note">
-            Stored keys are never shown. Enter a value only to add or replace
-            this profile&apos;s key.
+            {t("settingsView.storedKeysAreNeverShownEnterAValueOnly")}
           </p>
         ) : provider.type === "openai-subscription" ? (
           <p className="settings-note credential-note">
-            Authentication is managed by the existing OpenAI sign-in in Account.
+            {t("settingsView.authenticationIsManagedByTheExistingOpenaiSignIn")}
           </p>
         ) : (
           <p className="settings-note credential-note">
-            Local demo is deterministic and does not use a network credential.
+            {t("settingsView.localDemoWorksOfflineAndDoesNotNeedAn")}
           </p>
         )}
         <fieldset className="provider-model-editor">
-          <legend>Model catalog</legend>
+          <legend>{t("settingsView.modelCatalog")}</legend>
           <div className="model-catalog-head">
             <p>
-              Model IDs are Provider-scoped. OpenAI subscription metadata comes
-              from the official Codex catalog; compatible Providers use their
-              standard model endpoint.
+              {t("settingsView.chooseTheModelsAvailableFromThisProviderOrAdd")}
             </p>
             {(provider.type === "openai-compatible" ||
               provider.type === "openai-subscription") &&
@@ -1575,10 +2056,10 @@ function ProviderEditor({
                 }
                 title={
                   provider.type === "openai-subscription"
-                    ? "Fetch the official Codex model catalog"
+                    ? t("settingsView.fetchTheOfficialCodexModelCatalog")
                     : hasApiKey
-                      ? "Fetch model IDs from this Provider"
-                      : "Save an API key before discovery"
+                      ? t("settingsView.fetchModelIdsFromThisProvider")
+                      : t("settingsView.saveAnApiKeyBeforeDiscovery")
                 }
                 onClick={() => {
                   setDiscovering(true);
@@ -1589,15 +2070,16 @@ function ProviderEditor({
                     .then((snapshot) => {
                       setAvailableModels(snapshot.models);
                       if (provider.type === "openai-subscription") {
-                        setModels((current) =>
-                          current.map((model) => {
-                            if (model.source === "manual") return model;
+                        setModelRows((current) =>
+                          current.map((row) => {
+                            const model = row.model;
+                            if (model.source === "manual") return row;
                             const discovered = snapshot.models.find(
                               (entry) => entry.id === model.id,
                             );
                             return discovered === undefined
-                              ? model
-                              : { ...discovered };
+                              ? row
+                              : { ...row, model: { ...discovered } };
                           }),
                         );
                       }
@@ -1606,9 +2088,13 @@ function ProviderEditor({
                       setCatalogStatus(
                         snapshot.warning ??
                           (snapshot.source === "cache"
-                            ? "Official catalog is unchanged; using the local cache."
+                            ? t(
+                                "settingsView.officialCatalogIsUnchangedUsingTheLocalCache",
+                              )
                             : snapshot.source === "remote"
-                              ? "Official metadata updated in the draft. Save provider to apply."
+                              ? t(
+                                  "settingsView.officialMetadataUpdatedInTheDraftSaveProviderTo",
+                                )
                               : null),
                       );
                     })
@@ -1618,7 +2104,9 @@ function ProviderEditor({
                     .finally(() => setDiscovering(false));
                 }}
               >
-                {discovering ? "Fetching models…" : "Get available models"}
+                {discovering
+                  ? t("settingsView.fetchingModels")
+                  : t("settingsView.getAvailableModels")}
               </button>
             ) : null}
           </div>
@@ -1630,16 +2118,29 @@ function ProviderEditor({
           {availableModels === null ? null : (
             <section
               className="available-model-picker"
-              aria-label="Available models"
+              aria-label={t("settingsView.availableModels")}
             >
-              <h4>Choose models to add</h4>
+              <h4>{t("settingsView.chooseModelsToAdd")}</h4>
               <p className="settings-note">
                 {provider.type === "openai-subscription"
-                  ? "Choose additional models. Official metadata is updated in the draft; manual settings are preserved. Save provider to apply."
-                  : "Select the models you want. Existing models and their settings stay unchanged."}
+                  ? t(
+                      "settingsView.chooseAdditionalModelsOfficialMetadataIsUpdatedInThe",
+                    )
+                  : t(
+                      "settingsView.selectTheModelsYouWantExistingModelsAndTheir",
+                    )}
               </p>
+              {remainingModelSlots <= 10 ? (
+                <p className="settings-note" role="status">
+                  {remainingModelSlots === 0
+                    ? i18n.t("settings:settingsView.modelLimitReached")
+                    : t("settingsView.moreModels", {
+                        count: remainingModelSlots,
+                      })}
+                </p>
+              ) : null}
               <label className="field">
-                <span>Search available models</span>
+                <span>{t("settingsView.searchAvailableModels")}</span>
                 <input
                   type="search"
                   value={modelSearch}
@@ -1654,29 +2155,24 @@ function ProviderEditor({
                       .includes(modelSearch.trim().toLowerCase()),
                   )
                   .map((model) => {
-                    const exists = models.some(
-                      (entry) => entry.id === model.id,
-                    );
+                    const exists = modelIds.has(model.id);
+                    const selected = selectedAvailableModelIds.has(model.id);
                     return (
-                      <label className="available-model-option" key={model.id}>
-                        <input
-                          type="checkbox"
-                          aria-label={`Select ${model.id}`}
-                          disabled={exists}
-                          checked={
-                            exists || selectedAvailableModels.includes(model.id)
-                          }
-                          onChange={(event) =>
-                            setSelectedAvailableModels((current) =>
-                              event.target.checked
-                                ? [...current, model.id]
-                                : current.filter((id) => id !== model.id),
-                            )
-                          }
-                        />
-                        <span>{model.id}</span>
-                        {exists ? <small>Already added</small> : null}
-                      </label>
+                      <ProviderModelDiscoveryOption
+                        key={model.id}
+                        modelId={model.id}
+                        exists={exists}
+                        selected={selected}
+                        selectedCount={selectedNewModels.length}
+                        modelCount={models.length}
+                        onCheckedChange={(checked) =>
+                          setSelectedAvailableModels((current) =>
+                            checked
+                              ? [...current, model.id]
+                              : current.filter((id) => id !== model.id),
+                          )
+                        }
+                      />
                     );
                   })}
                 {availableModels.every(
@@ -1685,7 +2181,9 @@ function ProviderEditor({
                       .toLowerCase()
                       .includes(modelSearch.trim().toLowerCase()),
                 ) ? (
-                  <p className="settings-note">No matching models.</p>
+                  <p className="settings-note">
+                    {t("settingsView.noMatchingModels")}
+                  </p>
                 ) : null}
               </div>
               <div className="available-model-actions">
@@ -1697,39 +2195,58 @@ function ProviderEditor({
                     setSelectedAvailableModels([]);
                   }}
                 >
-                  Cancel selection
+                  {t("settingsView.cancelSelection")}
                 </button>
                 <button
                   type="button"
                   className="primary-button"
-                  disabled={selectedAvailableModels.length === 0}
+                  disabled={
+                    selectedNewModels.length === 0 ||
+                    selectedNewModels.length > remainingModelSlots
+                  }
                   onClick={() => {
-                    const additions = availableModels.filter(
-                      (entry) =>
-                        selectedAvailableModels.includes(entry.id) &&
-                        !models.some((model) => model.id === entry.id),
+                    const additions = selectedNewModels.slice(
+                      0,
+                      remainingModelSlots,
                     );
-                    setModels((current) => [
-                      ...current,
-                      ...additions.map((model) => ({ ...model })),
-                    ]);
+                    setModelRows((current) =>
+                      appendProviderModelRows(
+                        current,
+                        additions.map((model) => ({
+                          key: globalThis.crypto.randomUUID(),
+                          model: { ...model },
+                        })),
+                      ),
+                    );
                     setAvailableModels(null);
                     setSelectedAvailableModels([]);
                     setCatalogStatus(
-                      `Added ${additions.length} models to the draft. Save provider to apply.`,
+                      t("settingsView.addedModels", {
+                        count: additions.length,
+                      }),
                     );
                   }}
                 >
-                  Add selected models ({selectedAvailableModels.length})
+                  {t("settingsView.addSelectedModels")}
+                  {selectedAvailableModels.length})
                 </button>
               </div>
             </section>
           )}
-          {models.map((model, index) => (
-            <div className="provider-model-row" key={index}>
+          {modelRows.map(({ key, model }, index) => (
+            <div className="provider-model-row" key={key}>
               <label className="field">
-                <span>{`Model ${index + 1}`}</span>
+                <span>
+                  {t("settingsView.modelNumber", { number: index + 1 })}
+                </span>
                 <input
+                  id={fieldId("modelId", index)}
+                  aria-invalid={issueFor("modelId", index) ? true : undefined}
+                  aria-describedby={
+                    issueFor("modelId", index)
+                      ? `${fieldId("modelId", index)}-error`
+                      : undefined
+                  }
                   value={model.id}
                   onChange={(event) => {
                     const id = event.target.value;
@@ -1744,24 +2261,36 @@ function ProviderEditor({
                     }));
                   }}
                 />
+                {issueFor("modelId", index) === undefined ? null : (
+                  <small
+                    id={`${fieldId("modelId", index)}-error`}
+                    className="provider-field-error"
+                  >
+                    {issueFor("modelId", index)}
+                  </small>
+                )}
               </label>
               <button
                 className="quiet-button"
                 type="button"
-                aria-label={`Remove model ${index + 1}`}
+                aria-label={t("settingsView.removeModelNumber", {
+                  number: index + 1,
+                })}
                 disabled={models.length === 1}
                 onClick={() => {
-                  setModels((current) =>
+                  setModelRows((current) =>
                     current.filter((_, candidate) => candidate !== index),
                   );
                   setValidationError(null);
                 }}
               >
-                Remove
+                {t("settingsView.remove")}
               </button>
               <ModelCapabilityEditor
                 index={index}
                 model={model}
+                fieldId={(field) => fieldId(field, index)}
+                issueFor={(field) => issueFor(field, index)}
                 onChange={(next) => updateModel(index, () => next)}
                 probing={probingModel === model.id}
                 onProbe={
@@ -1779,7 +2308,9 @@ function ProviderEditor({
                         setProbingModel(model.id);
                         setValidationError(null);
                         setCatalogStatus(
-                          "Sending one tiny image test request; Provider charges may apply…",
+                          t(
+                            "settingsView.sendingOneTinyImageTestRequestProviderChargesMay",
+                          ),
                         );
                         try {
                           const result =
@@ -1790,10 +2321,16 @@ function ProviderEditor({
                           updateModel(index, () => ({ ...result.model }));
                           setCatalogStatus(
                             result.outcome === "supported"
-                              ? "Image probe succeeded; support was saved."
+                              ? t(
+                                  "settingsView.imageProbeSucceededSupportWasSaved",
+                                )
                               : result.outcome === "unsupported"
-                                ? "Provider explicitly rejected image input; unsupported was saved."
-                                : "Image probe was inconclusive; capability remains Unknown.",
+                                ? t(
+                                    "settingsView.providerExplicitlyRejectedImageInputUnsupportedWasSaved",
+                                  )
+                                : t(
+                                    "settingsView.imageProbeWasInconclusiveCapabilityRemainsUnknown",
+                                  ),
                           );
                         } catch (reason) {
                           setValidationError(describeError(reason));
@@ -1807,20 +2344,25 @@ function ProviderEditor({
               />
             </div>
           ))}
-          <button
-            className="quiet-button add-model-button"
-            type="button"
-            onClick={() =>
-              setModels((current) => [...current, manualModelCatalogEntry("")])
+          <ProviderModelAddControl
+            modelCount={models.length}
+            buttonId={fieldId("addModel")}
+            onAdd={() =>
+              setModelRows((current) =>
+                appendProviderModelRows(current, [
+                  {
+                    key: globalThis.crypto.randomUUID(),
+                    model: manualModelCatalogEntry(""),
+                  },
+                ]),
+              )
             }
-          >
-            Add model
-          </button>
+          />
         </fieldset>
         {replacesDefault ? (
           <ModelReferenceSelect
-            label="Replacement default model"
-            placeholder="Select a model"
+            label={t("settingsView.replacementDefaultModel")}
+            placeholder={t("settingsView.selectAModel")}
             profiles={replacementProfiles}
             value={defaultReplacement}
             onChangeValue={setDefaultReplacement}
@@ -1828,31 +2370,35 @@ function ProviderEditor({
         ) : null}
         {replacesTitle ? (
           <ModelReferenceSelect
-            label="Replacement title model"
-            placeholder="Select a model"
+            label={t("settingsView.replacementTitleModel")}
+            placeholder={t("settingsView.selectAModel2")}
             profiles={replacementProfiles}
             value={titleReplacement}
             onChangeValue={setTitleReplacement}
           />
         ) : null}
-        {validationError === null ? null : (
+        {logoSelectionError === null && validationError === null ? null : (
           <div className="settings-error provider-editor-error" role="alert">
             <Icon name="warning" />
-            {validationError}
+            {logoSelectionError ?? validationError}
           </div>
         )}
         <div className="provider-editor-actions">
           <button className="quiet-button" type="button" onClick={onCancel}>
-            Cancel
+            {t("settingsView.cancel3")}
           </button>
-          <button className="primary-button" type="submit" disabled={busy}>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={busy || logoReading}
+          >
             {busy
               ? mode === "add"
-                ? "Adding…"
-                : "Saving…"
+                ? t("settingsView.adding")
+                : t("settingsView.saving")
               : mode === "add"
-                ? "Add provider"
-                : "Save provider"}
+                ? t("settingsView.addProvider")
+                : t("settingsView.saveProvider")}
           </button>
         </div>
       </form>
@@ -1863,16 +2409,21 @@ function ProviderEditor({
 function ModelCapabilityEditor({
   index,
   model,
+  fieldId,
+  issueFor,
   onChange,
   onProbe,
   probing = false,
 }: {
   index: number;
   model: ZenXModelCatalogEntry;
+  fieldId(field: ProviderEditorIssue["field"]): string;
+  issueFor(field: ProviderEditorIssue["field"]): string | undefined;
   onChange(model: ZenXModelCatalogEntry): void;
   onProbe?(): Promise<void>;
   probing?: boolean;
 }) {
+  const { t } = useTranslation("settings");
   const [configuringReasoning, setConfiguringReasoning] = useState(false);
   const savedReasoning = useRef<Pick<
     ZenXModelCatalogEntry,
@@ -1882,29 +2433,39 @@ function ModelCapabilityEditor({
     update: Partial<ZenXModelCatalogEntry>,
   ): ZenXModelCatalogEntry => ({ ...model, ...update, source: "manual" });
   const reasoningMode =
-    model.supportedReasoningEfforts === null
-      ? "unknown"
-      : model.supportedReasoningEfforts.length === 0
-        ? configuringReasoning
-          ? "configured"
-          : "text-only"
-        : "configured";
+    model.reasoningConfiguration === "manual"
+      ? "configured"
+      : model.supportedReasoningEfforts === null
+        ? "unknown"
+        : model.supportedReasoningEfforts.length === 0
+          ? configuringReasoning
+            ? "configured"
+            : "text-only"
+          : "configured";
   return (
     <details className="provider-model-capabilities">
       <summary>{modelCapabilitySummary(model)}</summary>
       <div className="model-capability-grid">
         <Field
-          label={`Model ${index + 1} display name`}
+          label={t("settingsView.modelNumberDisplayName", {
+            number: index + 1,
+          })}
           value={model.displayName}
           onChange={(displayName) => onChange(manual({ displayName }))}
         />
         <Field
-          label={`Model ${index + 1} description`}
+          label={t("settingsView.modelNumberDescription", {
+            number: index + 1,
+          })}
           value={model.description}
           onChange={(description) => onChange(manual({ description }))}
         />
         <label className="field">
-          <span>{`Model ${index + 1} reasoning metadata`}</span>
+          <span>
+            {t("settingsView.modelNumberReasoningMetadata", {
+              number: index + 1,
+            })}
+          </span>
           <Select
             value={reasoningMode}
             onValueChange={(value) => {
@@ -1945,9 +2506,13 @@ function ModelCapabilityEditor({
               );
             }}
           >
-            <option value="unknown">Unknown</option>
-            <option value="text-only">No reasoning strength control</option>
-            <option value="configured">Manual configuration</option>
+            <option value="unknown">{t("settingsView.unknown")}</option>
+            <option value="text-only">
+              {t("settingsView.noReasoningStrengthControl")}
+            </option>
+            <option value="configured">
+              {t("settingsView.manualConfiguration")}
+            </option>
           </Select>
         </label>
         {onProbe === undefined ? null : (
@@ -1957,14 +2522,20 @@ function ModelCapabilityEditor({
             disabled={probing}
             onClick={() => void onProbe()}
           >
-            {probing ? "Testing image support…" : "Test image support"}
+            {probing
+              ? t("settingsView.testingImageSupport")
+              : t("settingsView.testImageSupport")}
           </button>
         )}
         {reasoningMode === "configured" ? (
           <>
             <Field
-              label={`Model ${index + 1} reasoning efforts`}
-              placeholder="low, medium, high"
+              id={fieldId("reasoningEfforts")}
+              error={issueFor("reasoningEfforts")}
+              label={t("settingsView.modelNumberReasoningEfforts", {
+                number: index + 1,
+              })}
+              placeholder={t("settingsView.lowMediumHigh")}
               value={model.supportedReasoningEfforts?.join(", ") ?? ""}
               onChange={(value) =>
                 onChange(
@@ -1976,9 +2547,25 @@ function ModelCapabilityEditor({
               }
             />
             <label className="field">
-              <span>{`Model ${index + 1} default reasoning effort`}</span>
+              <span>
+                {t("settingsView.modelNumberDefaultReasoningEffort", {
+                  number: index + 1,
+                })}
+              </span>
               <Select
-                aria-label={`Model ${index + 1} default reasoning effort`}
+                id={fieldId("defaultReasoningEffort")}
+                aria-invalid={
+                  issueFor("defaultReasoningEffort") ? true : undefined
+                }
+                aria-describedby={
+                  issueFor("defaultReasoningEffort")
+                    ? `${fieldId("defaultReasoningEffort")}-error`
+                    : undefined
+                }
+                aria-label={t(
+                  "settingsView.modelNumberDefaultReasoningEffort",
+                  { number: index + 1 },
+                )}
                 value={model.defaultReasoningEffort ?? ""}
                 onValueChange={(value) =>
                   onChange(
@@ -1988,27 +2575,32 @@ function ModelCapabilityEditor({
                   )
                 }
               >
-                <option value="">Choose a default</option>
-                {(model.supportedReasoningEfforts ?? []).map((effort) => (
-                  <option key={effort} value={effort}>
-                    {effort}
-                  </option>
-                ))}
+                <option value="">{t("settingsView.chooseADefault")}</option>
+                {[...new Set(model.supportedReasoningEfforts ?? [])].map(
+                  (effort) => (
+                    <option key={effort} value={effort}>
+                      {effort}
+                    </option>
+                  ),
+                )}
               </Select>
+              {issueFor("defaultReasoningEffort") === undefined ? null : (
+                <small
+                  id={`${fieldId("defaultReasoningEffort")}-error`}
+                  className="provider-field-error"
+                >
+                  {issueFor("defaultReasoningEffort")}
+                </small>
+              )}
             </label>
-            {!model.supportedReasoningEfforts?.length ||
-            !model.supportedReasoningEfforts.includes(
-              model.defaultReasoningEffort ?? "",
-            ) ? (
-              <p className="settings-error" role="alert">
-                Enter at least one supported effort and choose its default
-                before applying.
-              </p>
-            ) : null}
           </>
         ) : null}
         <label className="field">
-          <span>{`Model ${index + 1} input modalities`}</span>
+          <span>
+            {t("settingsView.modelNumberInputModalities", {
+              number: index + 1,
+            })}
+          </span>
           <Select
             value={inputModalityValue(model.inputModalities)}
             onValueChange={(value) =>
@@ -2019,20 +2611,31 @@ function ModelCapabilityEditor({
               )
             }
           >
-            <option value="unknown">Unknown</option>
-            <option value="text">Text</option>
-            <option value="text-image">Text + image</option>
-            <option value="image">Image only</option>
-            <option value="none">Known unsupported</option>
+            <option value="unknown">{t("settingsView.unknown2")}</option>
+            <option value="text">{t("settingsView.text")}</option>
+            <option value="text-image">{t("settingsView.textImage")}</option>
+            <option value="image">{t("settingsView.imageOnly")}</option>
+            <option value="none">{t("settingsView.knownUnsupported")}</option>
           </Select>
         </label>
         <label className="field">
-          <span>{`Model ${index + 1} context window (Required)`}</span>
+          <span>
+            {t("settingsView.modelNumberContextWindowRequired", {
+              number: index + 1,
+            })}
+          </span>
           <input
+            id={fieldId("contextWindow")}
+            aria-invalid={issueFor("contextWindow") ? true : undefined}
+            aria-describedby={
+              issueFor("contextWindow")
+                ? `${fieldId("contextWindow")}-error`
+                : undefined
+            }
             min="1"
             step="1"
             type="number"
-            placeholder="Required"
+            placeholder={t("settingsView.eG128000")}
             value={model.contextWindow ?? ""}
             onChange={(event) =>
               onChange(
@@ -2045,6 +2648,17 @@ function ModelCapabilityEditor({
               )
             }
           />
+          <small className="provider-field-hint">
+            {t("settingsView.useTheModelProviderSPublishedTokenLimit")}
+          </small>
+          {issueFor("contextWindow") === undefined ? null : (
+            <small
+              id={`${fieldId("contextWindow")}-error`}
+              className="provider-field-error"
+            >
+              {issueFor("contextWindow")}
+            </small>
+          )}
         </label>
         <label className="model-hidden-control">
           <input
@@ -2054,7 +2668,7 @@ function ModelCapabilityEditor({
               onChange(manual({ hidden: event.target.checked }))
             }
           />
-          Hide this model from normal selection
+          {t("settingsView.hideThisModelFromNormalSelection")}
         </label>
       </div>
     </details>
@@ -2080,6 +2694,7 @@ function DeleteProviderPanel({
   provider: ZenXProviderProfile;
   titleModel: ZenXModelReference;
 }) {
+  const { t } = useTranslation("settings");
   const [defaultReplacement, setDefaultReplacement] = useState("");
   const [titleReplacement, setTitleReplacement] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -2094,26 +2709,31 @@ function DeleteProviderPanel({
   return (
     <section
       className="page-card delete-provider-panel"
-      aria-label={`Delete ${provider.displayName}`}
+      aria-label={t("settingsView.deleteNamedProvider", {
+        name: provider.displayName,
+      })}
     >
       <div>
-        <strong>Delete {provider.displayName}?</strong>
+        <strong>
+          {t("settingsView.delete2")} {provider.displayName}?
+        </strong>
         <p>
-          This removes its host profile and credential. Existing Threads keep
-          their recorded model selection.
+          {t(
+            "settingsView.removeThisProviderAndItsSavedCredentialsExistingConversations",
+          )}
         </p>
       </div>
       {!hasReplacement ? (
         <div className="settings-error" role="alert">
           <Icon name="warning" />
-          Add another Provider before deleting the only profile.
+          {t("settingsView.addAnotherProviderBeforeDeletingTheOnlyProfile")}
         </div>
       ) : null}
       {hasReplacement && replacesDefault ? (
         <ModelReferenceSelect
           autoFocus
-          label="Replacement default model"
-          placeholder="Select a model"
+          label={t("settingsView.replacementDefaultModel")}
+          placeholder={t("settingsView.selectAModel3")}
           profiles={remainingProfiles}
           value={defaultReplacement}
           onChangeValue={(value) => {
@@ -2125,8 +2745,8 @@ function DeleteProviderPanel({
       {hasReplacement && replacesTitle ? (
         <ModelReferenceSelect
           autoFocus={!replacesDefault}
-          label="Replacement title model"
-          placeholder="Select a model"
+          label={t("settingsView.replacementTitleModel")}
+          placeholder={t("settingsView.selectAModel4")}
           profiles={remainingProfiles}
           value={titleReplacement}
           onChangeValue={(value) => {
@@ -2143,7 +2763,7 @@ function DeleteProviderPanel({
       )}
       <div className="provider-editor-actions">
         <button className="quiet-button" type="button" onClick={onCancel}>
-          Cancel
+          {t("settingsView.cancel4")}
         </button>
         <button
           autoFocus={!replacesDefault && !replacesTitle}
@@ -2158,7 +2778,9 @@ function DeleteProviderPanel({
                 remainingProfiles,
               );
               if (reference === undefined) {
-                setValidationError("Choose a replacement default model");
+                setValidationError(
+                  t("settingsView.chooseAReplacementDefaultModel"),
+                );
                 return;
               }
               replacements.defaultModel = reference;
@@ -2169,7 +2791,9 @@ function DeleteProviderPanel({
                 remainingProfiles,
               );
               if (reference === undefined) {
-                setValidationError("Choose a replacement title model");
+                setValidationError(
+                  t("settingsView.chooseAReplacementTitleModel"),
+                );
                 return;
               }
               replacements.titleModel = reference;
@@ -2179,7 +2803,7 @@ function DeleteProviderPanel({
             );
           }}
         >
-          {busy ? "Deleting…" : "Delete provider"}
+          {busy ? t("settingsView.deleting") : t("settingsView.deleteProvider")}
         </button>
       </div>
     </section>
@@ -2245,72 +2869,202 @@ function ModelReferenceSelect({
   );
 }
 
+interface ProviderEditorIssue {
+  code:
+    | "display_name_missing"
+    | "model_id_missing"
+    | "model_id_too_long"
+    | "model_id_duplicate"
+    | "reasoning_efforts_missing"
+    | "reasoning_efforts_duplicate"
+    | "reasoning_default_invalid"
+    | "context_window_invalid"
+    | "provider_name_missing"
+    | "api_key_missing"
+    | "base_url_invalid"
+    | "base_url_scheme_invalid"
+    | "base_url_credentials"
+    | "base_url_query_fragment";
+  field:
+    | "displayName"
+    | "addModel"
+    | "modelId"
+    | "reasoningEfforts"
+    | "defaultReasoningEffort"
+    | "contextWindow"
+    | "providerName"
+    | "apiKey"
+    | "baseUrl";
+  modelIndex?: number;
+  message: string;
+}
+
 function validateProviderEditor(
   provider: ZenXProviderProfile,
   apiKey: string,
   mode: "add" | "edit",
   hasApiKey: boolean,
-): string | null {
+): ProviderEditorIssue[] {
+  const issues: ProviderEditorIssue[] = [];
   if (provider.displayName.trim().length === 0)
-    return "Display name is required";
-  if (
-    provider.models.length === 0 ||
-    provider.models.some((model) => model.id.length === 0)
-  ) {
-    return "Every configured model row needs a model ID";
-  }
-  if (
-    new Set(provider.models.map((model) => model.id)).size !==
-    provider.models.length
-  ) {
-    return "Model IDs must be unique within this Provider profile";
-  }
-  if (
-    provider.models.some(
-      (model) =>
-        model.reasoningConfiguration === "manual" &&
-        (!model.supportedReasoningEfforts?.length ||
-          !model.supportedReasoningEfforts.includes(
-            model.defaultReasoningEffort ?? "",
-          )),
-    )
-  )
-    return "Manual reasoning configuration requires supported efforts and a valid default";
-  const missingContext = provider.models.find(
-    (model) =>
+    issues.push({
+      code: "display_name_missing",
+      field: "displayName",
+      message: i18n.t("settings:settingsView.enterADisplayName"),
+    });
+  const seenModelIds = new Set<string>();
+  if (provider.models.length === 0)
+    issues.push({
+      code: "model_id_missing",
+      field: "addModel",
+      message: i18n.t("settings:settingsView.addAtLeastOneModel"),
+    });
+  provider.models.forEach((model, modelIndex) => {
+    const shortModelId =
+      model.id.length > 48 ? `${model.id.slice(0, 45)}…` : model.id;
+    const row = i18n.t("settings:settingsView.modelRow", {
+      number: modelIndex + 1,
+      id: shortModelId || i18n.t("settings:settingsView.noId"),
+    });
+    if (model.id.length === 0) {
+      issues.push({
+        code: "model_id_missing",
+        field: "modelId",
+        modelIndex,
+        message: i18n.t("settings:settingsView.modelNumberEnterId", {
+          number: modelIndex + 1,
+        }),
+      });
+    } else if (model.id.length > 512) {
+      issues.push({
+        code: "model_id_too_long",
+        field: "modelId",
+        modelIndex,
+        message: i18n.t("settings:settingsView.modelNumberIdTooLong", {
+          number: modelIndex + 1,
+        }),
+      });
+    } else if (seenModelIds.has(model.id)) {
+      issues.push({
+        code: "model_id_duplicate",
+        field: "modelId",
+        modelIndex,
+        message: i18n.t("settings:settingsView.modelRowUniqueId", { row }),
+      });
+    }
+    seenModelIds.add(model.id);
+    if (model.reasoningConfiguration === "manual") {
+      if (!model.supportedReasoningEfforts?.length) {
+        issues.push({
+          code: "reasoning_efforts_missing",
+          field: "reasoningEfforts",
+          modelIndex,
+          message: i18n.t("settings:settingsView.modelRowNeedReasoning", {
+            row,
+          }),
+        });
+      } else if (
+        new Set(model.supportedReasoningEfforts).size !==
+        model.supportedReasoningEfforts.length
+      ) {
+        issues.push({
+          code: "reasoning_efforts_duplicate",
+          field: "reasoningEfforts",
+          modelIndex,
+          message: i18n.t("settings:settingsView.modelRowUniqueReasoning", {
+            row,
+          }),
+        });
+      } else if (
+        !model.supportedReasoningEfforts.includes(
+          model.defaultReasoningEffort ?? "",
+        )
+      ) {
+        issues.push({
+          code: "reasoning_default_invalid",
+          field: "defaultReasoningEffort",
+          modelIndex,
+          message: i18n.t("settings:settingsView.modelRowDefaultReasoning", {
+            row,
+          }),
+        });
+      }
+    }
+    if (
       model.contextWindow === null ||
       !Number.isSafeInteger(model.contextWindow) ||
-      model.contextWindow <= 0,
-  );
-  if (missingContext !== undefined) {
-    return `Provider profile ${provider.providerProfileId} model ${missingContext.id} requires a positive context window`;
-  }
-  if (provider.type !== "openai-compatible") return null;
-  if (provider.name.trim().length === 0) return "Provider name is required";
+      model.contextWindow <= 0
+    ) {
+      issues.push({
+        code: "context_window_invalid",
+        field: "contextWindow",
+        modelIndex,
+        message: i18n.t("settings:settingsView.modelRowPositiveContext", {
+          row,
+        }),
+      });
+    }
+  });
+  if (provider.type !== "openai-compatible") return issues;
+  if (provider.name.trim().length === 0)
+    issues.push({
+      code: "provider_name_missing",
+      field: "providerName",
+      message: i18n.t("settings:settingsView.enterAProviderName"),
+    });
   if (mode === "add" && apiKey.trim().length === 0)
-    return "API key is required";
+    issues.push({
+      code: "api_key_missing",
+      field: "apiKey",
+      message: i18n.t("settings:settingsView.enterAnApiKey"),
+    });
   if (mode === "edit" && !hasApiKey && apiKey.trim().length === 0) {
-    return "API key is required because this profile has no saved key";
+    issues.push({
+      code: "api_key_missing",
+      field: "apiKey",
+      message: i18n.t(
+        "settings:settingsView.enterAnApiKeyBecauseThisProfileHasNo",
+      ),
+    });
   }
   let url: URL;
   try {
     url = new URL(provider.baseUrl);
   } catch {
-    return "Base URL must be a valid URL";
+    issues.push({
+      code: "base_url_invalid",
+      field: "baseUrl",
+      message: i18n.t("settings:settingsView.enterAValidBaseUrl"),
+    });
+    return issues;
   }
   const loopbackHttp =
     url.protocol === "http:" &&
     (url.hostname === "127.0.0.1" || url.hostname === "localhost");
   if (url.protocol !== "https:" && !loopbackHttp) {
-    return "Base URL must use HTTPS (loopback HTTP is allowed)";
+    issues.push({
+      code: "base_url_scheme_invalid",
+      field: "baseUrl",
+      message: i18n.t(
+        "settings:settingsView.baseUrlMustUseHttpsLoopbackHttpIsAllowed",
+      ),
+    });
+  } else if (url.username.length > 0 || url.password.length > 0) {
+    issues.push({
+      code: "base_url_credentials",
+      field: "baseUrl",
+      message: i18n.t("settings:settingsView.removeCredentialsFromTheBaseUrl"),
+    });
+  } else if (url.search.length > 0 || url.hash.length > 0) {
+    issues.push({
+      code: "base_url_query_fragment",
+      field: "baseUrl",
+      message: i18n.t(
+        "settings:settingsView.removeTheQueryOrFragmentFromTheBaseUrl",
+      ),
+    });
   }
-  if (url.username.length > 0 || url.password.length > 0) {
-    return "Base URL must not contain credentials";
-  }
-  if (url.search.length > 0 || url.hash.length > 0) {
-    return "Base URL must not contain a query or fragment";
-  }
-  return null;
+  return issues;
 }
 
 function providerStatus(
@@ -2318,63 +3072,51 @@ function providerStatus(
   settings: PublicHostSettings,
 ): { className: "status-good" | "status-muted"; label: string } {
   if (provider.type === "fake") {
-    return { className: "status-muted", label: "Local testing" };
+    return {
+      className: "status-muted",
+      label: i18n.t("settings:settingsView.localTesting"),
+    };
   }
   if (provider.type === "openai-subscription") {
     return settings.subscription.authenticated
-      ? { className: "status-good", label: "Signed in" }
-      : { className: "status-muted", label: "Not signed in" };
+      ? {
+          className: "status-good",
+          label: i18n.t("settings:settingsView.signedIn"),
+        }
+      : {
+          className: "status-muted",
+          label: i18n.t("settings:settingsView.notSignedIn"),
+        };
   }
   return settings.apiKeyProviderProfileIds.includes(provider.providerProfileId)
-    ? { className: "status-muted", label: "API key saved" }
-    : { className: "status-muted", label: "API key not saved" };
+    ? {
+        className: "status-muted",
+        label: i18n.t("settings:settingsView.apiKeySaved"),
+      }
+    : {
+        className: "status-muted",
+        label: i18n.t("settings:settingsView.apiKeyNotSaved"),
+      };
 }
 
 function providerTypeLabel(provider: ZenXProviderProfile): string {
-  if (provider.type === "fake") return "Local demo";
-  if (provider.type === "openai-subscription") return "OpenAI subscription";
-  return "OpenAI-compatible API";
+  if (provider.type === "fake")
+    return i18n.t("settings:settingsView.localDemo");
+  if (provider.type === "openai-subscription")
+    return i18n.t("settings:settingsView.openaiSubscription");
+  return i18n.t("settings:settingsView.openaiCompatibleApi");
+}
+
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function providerLogoKind(provider: ZenXProviderProfile) {
   if (provider.type === "fake") return "local";
   if (provider.type === "openai-subscription") return "openai";
   return providerLogoKindForIdentity(provider.name, provider.displayName);
-}
-
-function providerProfilesEquivalent(
-  left: ZenXProviderProfile,
-  right: ZenXProviderProfile,
-): boolean {
-  const normalize = (provider: ZenXProviderProfile): ZenXProviderProfile => {
-    if (provider.type === "openai-compatible") {
-      return {
-        ...provider,
-        providerProfileId: provider.providerProfileId.trim(),
-        displayName: provider.displayName.trim(),
-        models: provider.models.map((model) => ({
-          ...model,
-          id: model.id.trim(),
-          displayName: model.displayName.trim(),
-          description: model.description.trim(),
-        })),
-        name: provider.name.trim(),
-        baseUrl: provider.baseUrl.trim().replace(/\/$/u, ""),
-      };
-    }
-    return {
-      ...provider,
-      providerProfileId: provider.providerProfileId.trim(),
-      displayName: provider.displayName.trim(),
-      models: provider.models.map((model) => ({
-        ...model,
-        id: model.id.trim(),
-        displayName: model.displayName.trim(),
-        description: model.description.trim(),
-      })),
-    };
-  };
-  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
 function modelReferenceValue(reference: ZenXModelReference): string {
@@ -2420,6 +3162,7 @@ function isRunnableModel(model: ZenXModelCatalogEntry): boolean {
 }
 
 function AppearancePanel() {
+  const { t } = useTranslation("settings");
   const appearanceController = getAppearanceController();
   const [appearance, setAppearance] = useState<AppearancePreference>(() =>
     appearanceController.getPreference(),
@@ -2435,19 +3178,23 @@ function AppearancePanel() {
   return (
     <>
       <header>
-        <h2>Appearance</h2>
-        <p>Theme, color, and contrast.</p>
+        <h2>{t("settingsView.appearance")}</h2>
+        <p>{t("settingsView.themeColorAndContrast")}</p>
       </header>
       <div className="page-card settings-card appearance-settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>Theme and color</h3>
-            <p>Choose how ZenX feels while keeping every surface in sync.</p>
+            <h3>{t("settingsView.themeAndColor")}</h3>
+            <p>
+              {t("settingsView.chooseHowZenxFeelsWhileKeepingEverySurfaceIn")}
+            </p>
           </div>
-          <span className="status-muted">Local</span>
+          <span className="status-muted">{t("settingsView.local")}</span>
         </div>
         <fieldset className="appearance-options appearance-mode-options">
-          <legend className="sr-only">Appearance mode</legend>
+          <legend className="sr-only">
+            {t("settingsView.appearanceMode")}
+          </legend>
           {APPEARANCE_MODES.map((option: AppearanceMode) => (
             <label key={option}>
               <input
@@ -2464,7 +3211,7 @@ function AppearancePanel() {
         <div
           className="appearance-preview"
           role="img"
-          aria-label="Live appearance preview"
+          aria-label={t("settingsView.liveAppearancePreview")}
         >
           <div className="appearance-preview-sidebar">
             <span />
@@ -2475,25 +3222,27 @@ function AppearancePanel() {
             <span className="appearance-preview-heading" />
             <span />
             <span />
-            <span className="appearance-preview-accent">Accent</span>
+            <span className="appearance-preview-accent">
+              {t("settingsView.accent")}
+            </span>
           </div>
         </div>
         <div className="appearance-editor-grid">
           <PresetFieldset
-            label="Light preset"
+            label={t("settingsView.lightPreset")}
             name="light-preset"
             value={appearance.lightPreset}
             onChange={(lightPreset) => updateAppearance({ lightPreset })}
           />
           <PresetFieldset
-            label="Dark preset"
+            label={t("settingsView.darkPreset")}
             name="dark-preset"
             value={appearance.darkPreset}
             onChange={(darkPreset) => updateAppearance({ darkPreset })}
           />
         </div>
         <fieldset className="appearance-accent-group">
-          <legend>Accent</legend>
+          <legend>{t("settingsView.accent2")}</legend>
           <div className="appearance-accent-options">
             {APPEARANCE_ACCENTS.map((option: AppearanceAccent) => (
               <label key={option}>
@@ -2508,7 +3257,7 @@ function AppearancePanel() {
                   <i aria-hidden="true" />
                   <span>
                     <strong>{appearanceLabel(option)}</strong>
-                    <small>{appearanceAccentIntent[option]}</small>
+                    <small>{t(appearanceAccentIntent[option])}</small>
                   </span>
                 </span>
               </label>
@@ -2517,7 +3266,7 @@ function AppearancePanel() {
         </fieldset>
         <div className="appearance-control-list">
           <fieldset className="appearance-control-row">
-            <legend>Contrast</legend>
+            <legend>{t("settingsView.contrast")}</legend>
             <div className="appearance-inline-options compact">
               {APPEARANCE_CONTRASTS.map((option: AppearanceContrast) => (
                 <label key={option}>
@@ -2536,8 +3285,9 @@ function AppearancePanel() {
         </div>
         <div className="appearance-card-footer">
           <p className="settings-note">
-            Changes apply immediately. System follows your operating system;
-            Light and Dark remember separate presets.
+            {t(
+              "settingsView.changesApplyImmediatelySystemFollowsYourOperatingSystemLight",
+            )}
           </p>
           <button
             className="secondary-button"
@@ -2548,7 +3298,7 @@ function AppearancePanel() {
               setAppearance(appearanceController.getPreference());
             }}
           >
-            Reset appearance
+            {t("settingsView.resetAppearance")}
           </button>
         </div>
       </div>
@@ -2563,70 +3313,90 @@ function GeneralPanel({
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
 }) {
+  const { t } = useTranslation("settings");
   const [maximumInput, setMaximumInput] = useState(
     draft.maxToolRounds?.toString() ?? "",
   );
   const [maximumError, setMaximumError] = useState<string | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   useEffect(() => {
     setMaximumInput(draft.maxToolRounds?.toString() ?? "");
   }, [draft.maxToolRounds]);
   return (
     <>
       <header>
-        <h2>General</h2>
-        <p>Choose how ZenX works with you and your projects.</p>
+        <h2>{t("settingsView.general")}</h2>
+        <p>{t("settingsView.chooseHowZenxWorksWithYouAndYourProjects")}</p>
       </header>
+      <LanguageSettings />
       <section className="settings-card">
-        <h3>Interaction</h3>{" "}
+        <h3>{t("settingsView.interaction")}</h3>{" "}
         <label className="field">
-          <span id="composer-send-label">Send during a running turn</span>
+          <span id="composer-send-label">
+            {t("settingsView.sendWhileAReplyIsRunning")}
+          </span>
           <Select
             aria-labelledby="composer-send-label"
-            value={draft.composerSendMode ?? "queue"}
+            value={draft.composerSendMode ?? "soft"}
             onValueChange={(value) =>
               setDraft({
                 ...draft,
-                composerSendMode: value as "queue" | "soft" | "hard",
+                composerSendMode: value as "batch" | "queue" | "soft" | "hard",
+                composerSendModeExplicit: true,
+                ...(draft.composerSendModeMigration === undefined
+                  ? {}
+                  : {
+                      composerSendModeMigration: {
+                        ...draft.composerSendModeMigration,
+                        acknowledged: true,
+                      },
+                    }),
               })
             }
             aria-describedby="composer-send-help"
           >
-            <option value="queue">Queue</option>
-            <option value="soft">Soft steer</option>
-            <option value="hard">Hard steer (interrupt and send)</option>
+            <option value="batch">
+              {t("settingsView.sendQueuedMessagesTogether")}
+            </option>
+            <option value="queue">
+              {t("settingsView.runEachQueuedMessageSeparately")}
+            </option>
+            <option value="soft">
+              {t("settingsView.guideTheCurrentReplyDefault")}
+            </option>
+            <option value="hard">{t("settingsView.interruptAndSend")}</option>
           </Select>
           <small id="composer-send-help" className="settings-note">
-            Enter and the send button use this choice. Cmd/Ctrl+Enter uses soft
-            steer when Queue is selected, and Queue when either steer mode is
-            selected. Shift+Enter adds a new line.
+            {t("settingsView.enterAndTheSendButtonUseThisChoiceCmd")}
           </small>
         </label>
       </section>
       <div className="page-card settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>Foreground computer control</h3>
-            <p>High-impact access to the desktop you are actively using.</p>
+            <h3>{t("settingsView.foregroundComputerControl")}</h3>
+            <p>
+              {t("settingsView.highImpactAccessToTheDesktopYouAreActively")}
+            </p>
           </div>
           <span className="status-muted">
             {draft.computerForegroundControlEnabled === true
-              ? "Opted in"
-              : "Blocked"}
+              ? t("settingsView.optedIn")
+              : t("settingsView.blocked")}
           </span>
         </div>
         <div className="settings-row">
           <div>
-            <strong>Allow foreground takeover</strong>
+            <strong>{t("settingsView.allowForegroundTakeover")}</strong>
             <span>
-              This lets ZenX agents move the pointer, type keys, change focus,
-              or scroll the app you are currently using.
+              {t("settingsView.thisLetsZenxAgentsMoveThePointerTypeKeys")}
             </span>
           </div>
           <button
             className="plugin-switch"
             type="button"
             role="switch"
-            aria-label="Allow foreground computer control"
+            aria-label={t("settingsView.allowForegroundComputerControl")}
             aria-checked={draft.computerForegroundControlEnabled === true}
             onClick={() =>
               setDraft({
@@ -2638,25 +3408,25 @@ function GeneralPanel({
           />
         </div>
         <p className="settings-note">
-          Off by default. Browser automation and background-safe Computer tools
-          do not need this permission. Apply to change which tools agents can
-          use.
+          {t(
+            "settingsView.offByDefaultBrowserAutomationAndBackgroundSafeComputer",
+          )}
         </p>
       </div>
       <div className="page-card settings-card">
-        <h3>Execution and permissions</h3>
+        <h3>{t("settingsView.executionAndPermissions")}</h3>
         <div className="form-grid">
           <div className="field wide">
-            <span>Default project</span>
+            <span>{t("settingsView.defaultProject")}</span>
             <div
               className="readonly-field"
               title={draft.workspace ?? undefined}
             >
-              {draft.workspace ?? "No project configured"}
+              {draft.workspace ?? t("settingsView.noProjectConfigured")}
             </div>
           </div>
           <label className="field">
-            <span>Approval policy</span>
+            <span>{t("settingsView.approvalPolicy")}</span>
             <Select
               value={draft.approvalPolicy}
               onValueChange={(value) =>
@@ -2666,13 +3436,17 @@ function GeneralPanel({
                 })
               }
             >
-              <option value="always">Approval required</option>
-              <option value="never">Full access</option>
+              <option value="always">
+                {t("settingsView.approvalRequired")}
+              </option>
+              <option value="never">{t("settingsView.fullAccess")}</option>
             </Select>
           </label>
 
           <label className="field">
-            <span id="tool-presentation-label">Tool presentation</span>
+            <span id="tool-presentation-label">
+              {t("settingsView.toolPresentation")}
+            </span>
             <Select
               aria-labelledby="tool-presentation-label"
               aria-describedby="tool-presentation-help"
@@ -2684,19 +3458,22 @@ function GeneralPanel({
                 })
               }
             >
-              <option value="both">Direct and code (recommended)</option>
-              <option value="direct">Direct tools only</option>
-              <option value="code">Code only</option>
+              <option value="both">
+                {t("settingsView.directAndCodeRecommended")}
+              </option>
+              <option value="direct">
+                {t("settingsView.directToolsOnly")}
+              </option>
+              <option value="code">{t("settingsView.codeOnly")}</option>
             </Select>
             <small id="tool-presentation-help" className="settings-note">
-              Both is the default. Code runs shell-equivalent erasable
-              TypeScript through the same tools and history. Direct is the
-              rollback path and does not delete providers or rewrite existing
-              Threads.
+              {t("settingsView.chooseHowAgentsUseToolsCallThemDirectlyWrite")}
             </small>
           </label>
           <label className="field">
-            <span id="max-tool-rounds-label">Maximum tool rounds</span>
+            <span id="max-tool-rounds-label">
+              {t("settingsView.maximumToolRounds")}
+            </span>
             <input
               aria-labelledby="max-tool-rounds-label"
               type="number"
@@ -2730,7 +3507,7 @@ function GeneralPanel({
                     !Number.isSafeInteger(Number(maximumInput)) ||
                     Number(maximumInput) < 1)
                 ) {
-                  setMaximumError("Enter a whole number of 1 or more.");
+                  setMaximumError(t("settingsView.enterAWholeNumberOf1OrMore"));
                 }
               }}
             />
@@ -2740,42 +3517,61 @@ function GeneralPanel({
               </small>
             )}
             <small id="max-tool-rounds-help" className="settings-note">
-              Leave blank for unlimited. A finite maximum stops a Turn that
-              keeps requesting tools after that many model rounds.
+              {t("settingsView.leaveBlankForUnlimitedStopAReplyAfterThis")}
             </small>
           </label>
         </div>
 
         <p className="settings-note">
-          Add, remove, and select Projects from the Projects sidebar. Folder
-          selection always uses the ZenX directory picker.
+          {t("settingsView.manageProjectsFromTheSidebar")}
+        </p>
+        <p className="settings-note">
+          {t("settingsView.defaultsApplyToNewRepliesRunningRepliesKeepTheir")}
         </p>
         <div className="settings-row">
           <div>
-            <strong>Zen App Server</strong>
+            <strong>{t("settingsView.localDiagnostics")}</strong>
             <span>
-              Runtime defaults apply to new turns. Running turns keep their
-              admitted configuration. Existing Thread settings remain
-              authoritative.
+              {t("settingsView.storedOnThisDeviceAndNeverSharedAutomatically")}
             </span>
           </div>
-          <span className="status-good">Local</span>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => {
+              setDiagnosticsError(null);
+              void window.zenx.settings
+                .openDiagnosticsFolder()
+                .catch(() =>
+                  setDiagnosticsError(
+                    t("settingsView.couldNotOpenDiagnosticsFolder"),
+                  ),
+                );
+            }}
+          >
+            {t("settingsView.openDiagnosticsFolder")}
+          </button>
         </div>
+        {diagnosticsError === null ? null : (
+          <p className="settings-error" role="alert">
+            {diagnosticsError}
+          </p>
+        )}
       </div>
     </>
   );
 }
 
 const appearancePresetIntent: Record<AppearancePreset, string> = {
-  graphite: "Neutral",
-  cobalt: "Cool",
-  ember: "Warm",
+  graphite: "settingsView.neutral",
+  cobalt: "settingsView.cool",
+  ember: "settingsView.warm",
 };
 
 const appearanceAccentIntent: Record<AppearanceAccent, string> = {
-  azure: "Clear blue",
-  iris: "Soft violet",
-  jade: "Fresh green",
+  azure: "settingsView.clearBlue",
+  iris: "settingsView.softViolet",
+  jade: "settingsView.freshGreen",
 };
 
 function PresetFieldset({
@@ -2789,6 +3585,7 @@ function PresetFieldset({
   onChange(value: AppearancePreset): void;
   value: AppearancePreset;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <fieldset className="appearance-preset-group">
       <legend>{label}</legend>
@@ -2804,7 +3601,7 @@ function PresetFieldset({
             />
             <span>
               <strong>{appearanceLabel(option)}</strong>
-              <small>{appearancePresetIntent[option]}</small>
+              <small>{t(appearancePresetIntent[option])}</small>
             </span>
           </label>
         ))}
@@ -2903,25 +3700,29 @@ function inputModalities(
 function modelCapabilitySummary(model: ZenXModelCatalogEntry): string {
   const reasoning =
     model.supportedReasoningEfforts === null
-      ? "reasoning unknown"
+      ? i18n.t("settings:settingsView.reasoningUnknown")
       : model.supportedReasoningEfforts.length === 0
-        ? "no reasoning strength control"
+        ? i18n.t("settings:settingsView.noReasoningStrengthControl2")
         : model.supportedReasoningEfforts.join(" / ");
   const modalities =
     model.inputModalities === null
-      ? "input unknown"
+      ? i18n.t("settings:settingsView.inputUnknown")
       : model.inputModalities.length === 0
-        ? "no input modalities"
+        ? i18n.t("settings:settingsView.noInputModalities")
         : model.inputModalities.join(" + ");
   const context =
     model.contextWindow === null
-      ? "context required"
-      : `${model.contextWindow.toLocaleString()} context`;
+      ? i18n.t("settings:settingsView.contextRequired")
+      : i18n.t("settings:settingsView.contextTokens", {
+          value: model.contextWindow.toLocaleString(i18n.resolvedLanguage),
+        });
   return `${reasoning} · ${modalities} · ${context}`;
 }
 
 function Field({
   autoFocus = false,
+  error,
+  id,
   label,
   value,
   onChange,
@@ -2930,6 +3731,8 @@ function Field({
   wide = false,
 }: {
   autoFocus?: boolean;
+  error?: string;
+  id?: string;
   label: string;
   value: string;
   onChange(value: string): void;
@@ -2942,21 +3745,30 @@ function Field({
       <span>{label}</span>
       <input
         autoFocus={autoFocus}
+        id={id}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error && id ? `${id}-error` : undefined}
         type={secret ? "password" : "text"}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
+      {error === undefined || id === undefined ? null : (
+        <small id={`${id}-error`} className="provider-field-error">
+          {error}
+        </small>
+      )}
     </label>
   );
 }
 
 function ManualCode() {
+  const { t } = useTranslation("settings");
   const [value, setValue] = useState("");
   return (
     <div className="manual-code">
       <label className="field">
-        <span>Authorization code or redirect URL</span>
+        <span>{t("settingsView.authorizationCodeOrRedirectUrl")}</span>
         <input
           value={value}
           onChange={(event) => setValue(event.target.value)}
@@ -2967,7 +3779,7 @@ function ManualCode() {
         disabled={!value.trim()}
         onClick={() => void window.zenx.settings.submitManualCode(value)}
       >
-        Continue
+        {t("settingsView.continue")}
       </button>
     </div>
   );
@@ -2979,16 +3791,22 @@ function describeError(error: unknown): string {
 
 export function configurationSaveMessage(value: PublicHostSettings): string {
   const result = value.configuration;
-  if (!result) return "Settings saved";
+  if (!result) return i18n.t("settings:settingsView.settingsSaved");
   switch (result.status) {
     case "unchanged":
-      return "No changes";
+      return i18n.t("settings:settingsView.noChanges");
     case "applied":
-      return "Changes applied · running turns keep their current configuration";
+      return i18n.t(
+        "settings:settingsView.changesAppliedRunningTurnsKeepTheirCurrentConfiguration",
+      );
     case "pending-restart":
-      return `Saved · ${result.pendingRestart.join(", ")} takes effect next launch`;
+      return i18n.t("settings:settingsView.savedPendingRestart", {
+        fields: result.pendingRestart.join(", "),
+      });
     case "unconfirmed":
-      return "Saved · application not yet confirmed. Check application status before saving more changes.";
+      return i18n.t(
+        "settings:settingsView.savedApplicationNotYetConfirmedCheckApplicationStatusBefore",
+      );
   }
 }
 
@@ -2996,5 +3814,5 @@ export function configurationSaveMessage(value: PublicHostSettings): string {
 function configurationSaveToast(value: PublicHostSettings): string | null {
   if (value.configuration && value.configuration.status !== "applied")
     return null;
-  return "Settings saved";
+  return i18n.t("settings:settingsView.settingsSaved");
 }

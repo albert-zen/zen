@@ -2051,10 +2051,609 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   }
 });
 
+for (const committed of [true, false] as const) {
+  test(`uncertain native cancel ${committed ? "reads its committed fact" : "keeps its pending row"} without replay`, async () => {
+    const base = nativeRecoveryForThread(runningThread());
+    const queued = {
+      id: "qa-queued",
+      clientId: "qa-client",
+      threadId: "thread-1",
+      type: "user_message_queued" as const,
+      createdAt: new Date(20_000).toISOString(),
+      input: [{ type: "text" as const, text: "keep identity" }],
+    };
+    const cancellation = {
+      id: "qa-cancelled",
+      type: "user_message_queue_cancelled" as const,
+      threadId: "thread-1",
+      queuedItemId: queued.id,
+      clientId: queued.clientId,
+      createdAt: new Date(21_000).toISOString(),
+    };
+    let cancelCalls = 0;
+    let readCalls = 0;
+    const recovery = () => ({
+      ...base,
+      thread: {
+        ...base.thread,
+        items: [
+          ...base.thread.items,
+          queued,
+          ...(committed && cancelCalls > 0 ? [cancellation] : []),
+        ],
+      },
+    });
+    const harness = await mountThreadApp({
+      request: async (method) => {
+        if (method === "zen/thread/resume") return recovery();
+        if (method === "zen/thread/queue/cancel") {
+          cancelCalls++;
+          throw new Error("Transport closed after request; outcome unknown");
+        }
+        if (method === "zen/thread/read") {
+          readCalls++;
+          return { thread: recovery().thread };
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+    try {
+      await selectedComposer();
+      const button = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Cancel queued message 1"]',
+        ),
+      );
+      await act(async () => {
+        button.click();
+        await Promise.resolve();
+      });
+      await waitFor(() => (readCalls === 1 ? true : undefined));
+      assert.equal(cancelCalls, 1);
+      assert.equal(readCalls, 1);
+      if (committed) {
+        await waitFor(() =>
+          document.querySelector(".queue-shelf") === null ? true : undefined,
+        );
+      } else {
+        assert.match(
+          document.querySelector(".queue-shelf")?.textContent ?? "",
+          /Pending send · 1/u,
+        );
+        await waitFor(() =>
+          (
+            document.querySelector(".queued-cancel-notice")?.textContent ?? ""
+          ).includes("unconfirmed")
+            ? true
+            : undefined,
+        );
+      }
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("queue editor draft and pending request survive actual App loading unmount and do not steal another thread", async () => {
+  type EditParams =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  type EditResult =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditResult;
+  const makeRecovery = (id: string, name: string) => {
+    const base = nativeRecoveryForThread({
+      ...liveThread(),
+      id,
+      sessionId: id,
+      name,
+    });
+    return {
+      ...base,
+      thread: {
+        ...base.thread,
+        items: [
+          ...base.thread.items,
+          {
+            id: `queued-${id}`,
+            clientId: `client-${id}`,
+            threadId: id,
+            type: "user_message_queued" as const,
+            createdAt: new Date(20_000).toISOString(),
+            input: [{ type: "text" as const, text: `Original queued ${id}` }],
+          },
+        ],
+      },
+    };
+  };
+  const a = makeRecovery("thread-1", "Thread one");
+  const b = makeRecovery("thread-2", "Thread two");
+  const bLoading = deferred<typeof b>();
+  const saving = deferred<EditResult>();
+  const calls: EditParams[] = [];
+  let bRequested = false;
+  const harness = await mountApp(
+    {
+      ...oneProject(),
+      projects: [
+        { ...oneProject().projects[0]!, threadIds: ["thread-1", "thread-2"] },
+      ],
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          if ((params as { threadId: string }).threadId === "thread-2") {
+            bRequested = true;
+            return await bLoading.promise;
+          }
+          return a;
+        }
+        if (method === "zen/thread/queue/edit") {
+          calls.push(params as EditParams);
+          return await saving.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  const editorText = () =>
+    document.querySelector<HTMLTextAreaElement>(
+      ".queued-message-editor textarea",
+    );
+  const selectThread = async (name: string) => {
+    const row = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (x) => x.textContent?.includes(name),
+      ),
+    );
+    await act(async () => row.click());
+  };
+  const openEditor = async () => {
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit"),
+    );
+    await act(async () => button.click());
+    return await waitFor(editorText);
+  };
+  try {
+    await selectThread("Thread one");
+    const mainA = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(mainA, "Independent main draft A");
+    const editA = await openEditor();
+    await setTextareaValue(editA, "Preserved queue draft A");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.click(),
+    );
+    await waitFor(() => calls.length === 1);
+    const firstId = calls[0]!.editId;
+    const oldView = document.querySelector(".thread-view")!;
+    await selectThread("Thread two");
+    await waitFor(() => bRequested);
+    assert.equal(
+      oldView.isConnected,
+      false,
+      "uncached navigation must really unmount ThreadView",
+    );
+    assert.equal(editA.isConnected, false);
+    assert.equal(document.querySelector(".thread-view"), null);
+    await act(async () => bLoading.resolve(b));
+    const mainB = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(mainB, "Independent main draft B");
+    await selectThread("Thread one");
+    const reopened = await openEditor();
+    assert.equal(reopened.value, "Preserved queue draft A");
+    const save =
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!;
+    assert.equal(save.disabled, true);
+    await act(async () => save.click());
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.editId, firstId);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft A",
+    );
+    await selectThread("Thread two");
+    const editB = await openEditor();
+    await setTextareaValue(editB, "Independent queue draft B");
+    await act(async () => editB.focus());
+    await act(async () =>
+      saving.resolve({
+        status: "edited",
+        queuedItemId: calls[0]!.queuedItemId,
+        clientId: calls[0]!.clientId,
+        revision: 1,
+        editItemId: `edit-${firstId}`,
+      }),
+    );
+    assert.equal(editorText(), editB);
+    assert.equal(editB.value, "Independent queue draft B");
+    assert.equal(document.activeElement, editB);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft B",
+    );
+    await selectThread("Thread one");
+    const savedDraft = await openEditor();
+    assert.equal(savedDraft.value, "Preserved queue draft A");
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.disabled,
+      true,
+      "receipt awaits exact canonical fact before another revision can be saved",
+    );
+    assert.match(
+      document.querySelector(".queue-row")!.textContent!,
+      /Original queued thread-1/u,
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft A",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("persisted queue edit recovers a lost event and response into the actual App projection without replay", async () => {
+  type Params =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  const base = nativeRecoveryForThread(liveThread());
+  const queued = {
+    id: "recover-edit-queue",
+    clientId: "recover-edit-client",
+    threadId: "thread-1",
+    type: "user_message_queued" as const,
+    createdAt: new Date(20_000).toISOString(),
+    input: [{ type: "text" as const, text: "Original before uncertain edit" }],
+  };
+  let recovery = {
+    ...base,
+    thread: { ...base.thread, items: [...base.thread.items, queued] },
+  };
+  const calls: Params[] = [];
+  let reads = 0;
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") return recovery;
+      if (method === "zen/thread/queue/edit") {
+        const edit = params as Params;
+        calls.push(edit);
+        recovery = {
+          ...recovery,
+          thread: {
+            ...recovery.thread,
+            items: [
+              ...recovery.thread.items,
+              {
+                type: "user_message_queue_edited" as const,
+                id: `edit-${edit.editId}`,
+                threadId: edit.threadId,
+                queuedItemId: edit.queuedItemId,
+                clientId: edit.clientId,
+                editId: edit.editId,
+                revision: edit.expectedRevision + 1,
+                input: edit.input,
+                createdAt: new Date(21_000).toISOString(),
+              },
+            ],
+          },
+        };
+        throw new Error(
+          "Transport closed after durable append; event and response were lost",
+        );
+      }
+      if (method === "zen/thread/read") {
+        reads++;
+        return { thread: recovery.thread };
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Main draft must survive recovery");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit")!.click(),
+    );
+    const edited = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".queued-message-editor textarea",
+      ),
+    );
+    await setTextareaValue(edited, "Recovered canonical edited input");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.click(),
+    );
+    await waitFor(() =>
+      document
+        .querySelector(".queue-row")
+        ?.textContent?.includes("Recovered canonical edited input"),
+    );
+    assert.equal(
+      calls.length,
+      1,
+      "uncertain response is read back, never replayed",
+    );
+    assert.equal(reads, 1);
+    assert.equal(calls[0]!.expectedRevision, 0);
+    assert.equal(document.querySelectorAll(".queue-row").length, 1);
+    assert.equal(
+      document.querySelector(".queue-row")!.getAttribute("data-queue-id"),
+      queued.id,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Main draft must survive recovery",
+    );
+    await waitFor(
+      () => document.querySelector(".queued-message-editor") === null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit")!.click(),
+    );
+    const fresh = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".queued-message-editor textarea",
+      ),
+    );
+    assert.equal(fresh.value, "Recovered canonical edited input");
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.disabled,
+      false,
+      "observed recovered revision retires old syncing cache",
+    );
+    assert.equal(calls.length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("ambiguous historic Queue warns on current Thread, restores explicitly, and does not repeat", async () => {
+  const migrated = {
+    composerSendMode: "soft" as const,
+    composerSendModeExplicit: false,
+    composerSendModeMigration: {
+      version: 1 as const,
+      previousMode: "queue" as const,
+      acknowledged: false,
+    },
+  };
+  const savedUpdates: import("../src/main/host-profile.js").ZenXSettingsUpdate[] =
+    [];
+  const options = {
+    initialProfile: migrated,
+    onSettingsSave: (
+      update: import("../src/main/host-profile.js").ZenXSettingsUpdate,
+    ) => {
+      savedUpdates.push(update);
+    },
+    request: async (method: string) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  };
+  const harness = await mountThreadApp(options);
+  try {
+    await selectedComposer();
+    const notice = await waitFor(() =>
+      document.querySelector(".composer-migration-notice"),
+    );
+    assert.match(notice.textContent ?? "", /older Queue preference/u);
+    const restore = [...notice.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Restore per-message Queue"),
+    );
+    assert.ok(restore);
+    await act(async () => restore.click());
+    await waitFor(() =>
+      savedUpdates.at(-1)?.composerSendMode === "queue" ? true : undefined,
+    );
+    assert.equal(savedUpdates.at(-1)?.composerSendModeExplicit, true);
+    assert.equal(
+      savedUpdates.at(-1)?.composerSendModeMigration?.acknowledged,
+      true,
+    );
+    await waitFor(() =>
+      document.querySelector(".composer-migration-notice") === null
+        ? true
+        : undefined,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+  const reopened = await mountThreadApp({
+    ...options,
+    initialProfile: savedUpdates.at(-1) ?? migrated,
+  });
+  try {
+    await selectedComposer();
+    assert.equal(document.querySelector(".composer-migration-notice"), null);
+  } finally {
+    await unmountApp(reopened);
+  }
+});
+
+test("acknowledging migrated Steer does not change implicit automation preference", async () => {
+  const saved: import("../src/main/host-profile.js").ZenXSettingsUpdate[] = [];
+  const harness = await mountThreadApp({
+    initialProfile: {
+      composerSendMode: "soft",
+      composerSendModeExplicit: false,
+      composerSendModeMigration: {
+        version: 1,
+        previousMode: "queue",
+        acknowledged: false,
+      },
+    },
+    onSettingsSave: (update) => saved.push(update),
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    const notice = await waitFor(() =>
+      document.querySelector(".composer-migration-notice"),
+    );
+    const keep = [...notice.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Keep Steer"),
+    );
+    assert.ok(keep);
+    await act(async () => keep.click());
+    await waitFor(() => (saved.length === 1 ? true : undefined));
+    assert.equal(saved[0]?.composerSendMode, "soft");
+    assert.equal(saved[0]?.composerSendModeExplicit, false);
+    assert.equal(saved[0]?.composerSendModeMigration?.acknowledged, true);
+    await waitFor(() =>
+      document.querySelector(".composer-migration-notice") === null
+        ? true
+        : undefined,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("native queue admission failure belongs to its queued Item and latest attempt", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const harness = await mountThreadApp({
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    assert.ok(notify);
+    let watermark = 0;
+    const send = async (
+      event: import("../../../src/app-server.js").AppServerEvent,
+      threadId = "thread-1",
+    ) => {
+      await act(async () => {
+        notify?.("zen/thread/event", {
+          threadId,
+          processEpoch: "test-process-epoch",
+          watermark: ++watermark,
+          event,
+        });
+        await Promise.resolve();
+      });
+    };
+    const image = {
+      type: "attachment" as const,
+      sha256: "0".repeat(64),
+      mediaType: "image/png" as const,
+      width: 1,
+      height: 1,
+      byteLength: 68,
+    };
+    for (const [id, clientId, input] of [
+      ["queued-first", "first", [{ type: "text", text: "same" }]],
+      ["queued-second", "second", [{ type: "image", attachment: image }]],
+    ] as const) {
+      await send({
+        type: "item_completed",
+        item: {
+          id,
+          clientId,
+          input,
+          type: "user_message_queued",
+          threadId: "thread-1",
+          createdAt: new Date(20_000).toISOString(),
+        },
+      });
+    }
+    const firstAttempt = "admission-one";
+    const secondAttempt = "admission-two";
+    const begun = (
+      attemptId: string,
+    ): import("../../../src/app-server.js").AppServerEvent => ({
+      type: "queue_admission_started",
+      threadId: "thread-1",
+      queuedItemId: "queued-second",
+      clientId: "second",
+      attemptId,
+    });
+    const rejected = (
+      attemptId: string,
+    ): import("../../../src/app-server.js").AppServerEvent => ({
+      type: "queue_failed",
+      threadId: "thread-1",
+      queuedItemId: "queued-second",
+      clientId: "second",
+      attemptId,
+      code: "image_input_unsupported",
+      message: "Choose an image-capable model, then Continue queue.",
+    });
+    await send(begun(firstAttempt));
+    await send(rejected(firstAttempt));
+    assert.match(
+      document.querySelector(".queue-row-error")?.textContent ?? "",
+      /image-capable model/u,
+    );
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
+    assert.equal(
+      document
+        .querySelector(".queue-row-error")
+        ?.closest(".queue-row")
+        ?.getAttribute("data-queue-id"),
+      "queued-second",
+    );
+    assert.equal(
+      document.querySelector('[data-queue-id="queued-first"] .queue-row-error'),
+      null,
+    );
+    await send(begun(secondAttempt));
+    assert.equal(document.querySelector(".queue-row-error"), null);
+    await send(rejected(firstAttempt)); // stale first attempt cannot override the new one
+    assert.equal(document.querySelector(".queue-row-error"), null);
+    await send(rejected(secondAttempt), "another-thread");
+    assert.equal(document.querySelector(".queue-row-error"), null);
+    await send(rejected(secondAttempt));
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
+    await send(rejected(secondAttempt)); // duplicate notification does not duplicate a card
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
+    await send({
+      type: "item_completed",
+      item: {
+        id: "accepted-second",
+        type: "user_message",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        clientId: "second",
+        content: [{ type: "image", attachment: image }],
+        createdAt: new Date(21_000).toISOString(),
+      },
+    });
+    assert.equal(document.querySelector(".queue-row-error"), null);
+    assert.match(
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 1/u,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("running queue, soft steer and hard steer each own one pending admission", async () => {
   for (const [mode, method, label] of [
-    ["queue", "turn/queue", "Queue message"],
-    ["soft", "turn/steer", "Soft steer"],
+    ["batch", "zen/turn/send", "Next turn"],
+    ["queue", "turn/queue", "Each turn"],
+    ["soft", "turn/steer", "Steer now"],
     ["hard", "turn/replace", "Interrupt and send"],
   ] as const) {
     const response = deferred<unknown>();
@@ -2088,6 +2687,318 @@ test("running queue, soft steer and hard steer each own one pending admission", 
     } finally {
       await unmountApp(harness);
     }
+  }
+});
+
+for (const path of [
+  "rpc",
+  "canonical",
+  "canonical-before-error-with-mode-return",
+  "unknown-then-edit",
+] as const) {
+  test(`React App ${path}: late old admission cannot clear a new draft generation`, async () => {
+    const response = deferred<unknown>();
+    let clientId: string | undefined;
+    let notify:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    let settingsChanged:
+      ((value: ReturnType<typeof publicSettings>) => void) | undefined;
+    const harness = await mountThreadApp({
+      onSettingsChanged: (listener) => {
+        settingsChanged = listener;
+        return () => {
+          settingsChanged = undefined;
+        };
+      },
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") return resumed(runningThread());
+        if (method === "turn/queue") {
+          clientId = (params as { clientUserMessageId: string })
+            .clientUserMessageId;
+          return await response.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "original");
+      await invokeFormSubmit(
+        document.querySelector<HTMLFormElement>("form.composer")!,
+      );
+      await waitFor(() => clientId !== undefined);
+      if (path === "unknown-then-edit") {
+        await act(async () => {
+          response.reject(new Error("request outcome unknown"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await waitFor(() => document.querySelector(".composer-error"));
+      }
+      if (path !== "canonical-before-error-with-mode-return") {
+        await setTextareaValue(composer, "changed");
+        await setTextareaValue(composer, "original");
+      }
+      if (path === "unknown-then-edit")
+        assert.equal(document.querySelector(".composer-error"), null);
+      if (path === "canonical-before-error-with-mode-return") {
+        assert.ok(settingsChanged);
+        await act(async () => {
+          const soft = publicSettings([]);
+          soft.profile.composerSendMode = "soft";
+          settingsChanged?.(soft);
+          const back = publicSettings([]);
+          back.profile.composerSendMode = "queue";
+          settingsChanged?.(back);
+          await Promise.resolve();
+        });
+      }
+      const confirm = () =>
+        notify?.("zen/thread/event", {
+          threadId: "thread-1",
+          processEpoch: "test-process-epoch",
+          watermark: 1,
+          event: {
+            type: "item_completed",
+            item: {
+              type: "user_message_queued",
+              id: "qa-queued",
+              clientId: clientId!,
+              threadId: "thread-1",
+              createdAt: new Date().toISOString(),
+              input: [{ type: "text", text: "original" }],
+            },
+          },
+        });
+      if (path === "rpc") {
+        await act(async () => {
+          response.resolve({});
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      } else if (path === "canonical") {
+        await act(async () => {
+          response.reject(new Error("request outcome unknown"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await act(async () => confirm());
+      } else if (path === "unknown-then-edit") {
+        await act(async () => confirm());
+      } else {
+        await act(async () => confirm());
+        await act(async () => {
+          response.reject(new Error("request outcome unknown"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      assert.equal(composer.value, "original");
+      if (path !== "rpc")
+        assert.match(
+          document.querySelector(".queue-shelf")?.textContent ?? "",
+          /Pending send · 1/u,
+        );
+      assert.equal(document.querySelector(".composer-error"), null);
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("late canonical queue ID settles only the original unknown submission, not another Thread's draft", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const sends: Array<{ clientUserMessageId: string }> = [];
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "thread-2"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const threadId = (params as { threadId: string }).threadId;
+          return resumed({
+            ...runningThread(),
+            id: threadId,
+            sessionId: threadId,
+          });
+        }
+        if (method === "turn/queue" || method === "turn/start") {
+          sends.push(params as { clientUserMessageId: string });
+          throw new Error(
+            "Input admission reply timed out; request outcome unknown. No request was resent.",
+          );
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "identical text");
+    await invokeFormSubmit(
+      document.querySelector<HTMLFormElement>("form.composer")!,
+    );
+    await waitFor(() => document.querySelector(".composer-error"));
+    assert.equal(sends.length, 1);
+    const clientId = sends[0]!.clientUserMessageId;
+    assert.match(document.body.textContent ?? "", /outcome unknown/u);
+    assert.equal(composer.value, "identical text");
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 1,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message_queued",
+            id: "other-item",
+            clientId: "other-client-id",
+            threadId: "thread-1",
+            createdAt: new Date().toISOString(),
+            input: [{ type: "text", text: "identical text" }],
+          },
+        },
+      }),
+    );
+    assert.equal(composer.value, "identical text");
+    const rowTwo = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((row) => row.textContent?.includes("Thread two"));
+    assert.ok(rowTwo);
+    await invokeButtonClick(rowTwo);
+    const otherComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(otherComposer, "different thread draft");
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 2,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message_queued",
+            id: "admitted-item",
+            clientId,
+            threadId: "thread-1",
+            createdAt: new Date().toISOString(),
+            input: [{ type: "text", text: "identical text" }],
+          },
+        },
+      }),
+    );
+    assert.equal(otherComposer.value, "different thread draft");
+    const rowOne = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((row) => row.textContent?.includes("Thread one"));
+    assert.ok(rowOne);
+    await invokeButtonClick(rowOne);
+    await waitFor(
+      () =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")
+          ?.value === "",
+    );
+    // The matching receipt clears the unknown-send error and original draft;
+    // it does not leave an implementation-level success note in the composer.
+    assert.equal(document.querySelector(".composer-error"), null);
+    assert.equal(document.querySelector(".composer-note"), null);
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 3,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message",
+            id: "delivered-item",
+            clientId,
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date().toISOString(),
+            text: "identical text",
+          },
+        },
+      }),
+    );
+    assert.ok(document.querySelector(".turn.inProgress"));
+    assert.equal(document.querySelector(".composer-note"), null);
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 4,
+        event: {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        },
+      }),
+    );
+    assert.ok(document.querySelector(".turn.completed"));
+    assert.equal(document.querySelector(".composer-note"), null);
+    await setTextareaValue(composer, "new draft after reconnect");
+    await invokeFormSubmit(
+      document.querySelector<HTMLFormElement>("form.composer")!,
+    );
+    await waitFor(() => sends.length === 2);
+    assert.notEqual(sends[1]!.clientUserMessageId, clientId);
+    await waitFor(() => document.querySelector(".composer-error"));
+    await act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: 5,
+        event: {
+          type: "item_completed",
+          item: {
+            type: "user_message",
+            id: "late-old-message",
+            clientId,
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date().toISOString(),
+            text: "identical text",
+          },
+        },
+      }),
+    );
+    assert.equal(composer.value, "new draft after reconnect");
+    assert.match(document.body.textContent ?? "", /outcome unknown/u);
+    assert.equal(sends.length, 2);
+  } finally {
+    await unmountApp(harness);
   }
 });
 
@@ -2321,12 +3232,12 @@ test("conversation header omits usage while Composer owns context indicator and 
       null,
     );
     const workspaceAction = document.querySelector(
-      '.workspace-header [aria-label="Open side panel"]',
+      '.app-shell > [aria-label="Open side panel"]',
     );
     assert.ok(workspaceAction);
     assert.equal(
       document
-        .querySelector('.workspace-header [aria-label="Open side panel"]')
+        .querySelector('.app-shell > [aria-label="Open side panel"]')
         ?.getAttribute("disabled"),
       null,
     );
@@ -2930,7 +3841,16 @@ async function mountApp(
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
-    composerSendMode?: "queue" | "soft" | "hard";
+    composerSendMode?: "batch" | "queue" | "soft" | "hard";
+    initialProfile?: Partial<
+      import("../src/main/host-profile.js").ZenXHostProfile
+    >;
+    onSettingsSave?(
+      settings: import("../src/main/host-profile.js").ZenXSettingsUpdate,
+    ): void;
+    onSettingsChanged?(
+      listener: (value: ReturnType<typeof publicSettings>) => void,
+    ): () => void;
     onNotification?: Window["zenx"]["protocol"]["onNotification"];
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
@@ -2974,6 +3894,7 @@ async function mountApp(
   let currentSettings = publicSettings(options.initialPinnedThreadIds ?? []);
   currentSettings.profile.composerSendMode =
     options.composerSendMode ?? "queue";
+  Object.assign(currentSettings.profile, options.initialProfile);
   const zenx = {
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
@@ -3074,6 +3995,16 @@ async function mountApp(
     },
     settings: {
       get: async () => currentSettings,
+      onChanged: (
+        listener: (value: ReturnType<typeof publicSettings>) => void,
+      ) => options.onSettingsChanged?.(listener) ?? (() => undefined),
+      save: async (
+        update: import("../src/main/host-profile.js").ZenXSettingsUpdate,
+      ) => {
+        options.onSettingsSave?.(update);
+        Object.assign(currentSettings.profile, update);
+        return currentSettings;
+      },
       setPinnedThreadIds: async (threadIds: readonly string[]) => {
         if (options.setPinnedThreadIds !== undefined)
           return await options.setPinnedThreadIds(threadIds);
@@ -3135,7 +4066,7 @@ function publicSettings(pinnedThreadIds: string[]) {
   return {
     profile: {
       version: 3 as const,
-      composerSendMode: "queue" as "queue" | "soft" | "hard",
+      composerSendMode: "queue" as "batch" | "queue" | "soft" | "hard",
       onboardingComplete: true,
       providerProfiles: [
         {
@@ -4001,5 +4932,60 @@ test("reference selector sends exact locators through App with and without nativ
     } finally {
       await unmountApp(harness);
     }
+  }
+});
+
+test("composer default save cannot roll back a newer settings notification", async () => {
+  let notify: ((value: ReturnType<typeof publicSettings>) => void) | undefined;
+  const harness = await mountApp(oneProject(), {
+    initialProfile: { revision: 1, composerSendMode: "soft" },
+    onSettingsChanged: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+  });
+  try {
+    await waitFor(() => document.querySelector(".composer-send-control"));
+    const reply = deferred<ReturnType<typeof publicSettings>>();
+    const writes: import("../src/main/host-profile.js").ZenXSettingsUpdate[] =
+      [];
+    window.zenx.settings.save = async (update) => {
+      writes.push(update);
+      return reply.promise;
+    };
+    await act(async () =>
+      document
+        .querySelector<HTMLElement>(".composer-send-control")!
+        .dispatchEvent(new window.MouseEvent("pointerover", { bubbles: true })),
+    );
+    const select = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Default send mode"]',
+      ),
+    );
+    await act(async () => select.click());
+    const queueOption = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        '[role="option"][data-value="queue"]',
+      ),
+    );
+    await act(async () => queueOption.click());
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0]?.baseRevision, 1);
+    assert.equal(writes[0]?.composerSendModeExplicit, true);
+    const latest = publicSettings([]);
+    Object.assign(latest.profile, { revision: 3, composerSendMode: "hard" });
+    await act(async () => notify?.(latest));
+    assert.equal(select.getAttribute("data-value"), "hard");
+    const old = publicSettings([]);
+    Object.assign(old.profile, { revision: 2, composerSendMode: "queue" });
+    await act(async () => reply.resolve(old));
+    assert.equal(select.getAttribute("data-value"), "hard");
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("textarea")?.value,
+      "",
+    );
+  } finally {
+    await unmountApp(harness);
   }
 });

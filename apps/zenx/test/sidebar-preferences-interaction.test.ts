@@ -235,9 +235,17 @@ test("project pins reorder the list, retain collapse through reload, and unpin r
   });
 });
 
-test("plugin navigation stays visible while Projects retains disclosure choices across remount", async () => {
+test("only New thread stays above one scroll area while Projects retains disclosure choices", async () => {
   await harness(async ({ remount }) => {
-    assert.ok(document.querySelector(".plugin-space-link"));
+    assert.ok(document.querySelector(".sidebar-header .new-thread-action"));
+    assert.equal(
+      document.querySelector(".sidebar-header .plugin-space-link"),
+      null,
+    );
+    assert.ok(document.querySelector(".sidebar-scroll .plugin-space-link"));
+    assert.ok(
+      document.querySelector(".sidebar-scroll .projects-section-toggle"),
+    );
     await click(".projects-section-toggle");
     await remount();
     assert.equal(document.querySelector(".plugin-spaces-toggle"), null);
@@ -247,6 +255,68 @@ test("plugin navigation stays visible while Projects retains disclosure choices 
       "false",
     );
     assert.equal(document.querySelector(".project-group"), null);
+  });
+});
+
+test("Thread rows default to detailed model metadata and persist compact density locally", async () => {
+  await harness(async ({ remount }) => {
+    const sidebar = document.querySelector("#primary-sidebar")!;
+    assert.equal(sidebar.getAttribute("data-thread-density"), "detailed");
+    assert.match(
+      document.querySelector(".thread-model")?.textContent ?? "",
+      /^Local demo$/,
+    );
+    await click(".sidebar-density-toggle");
+    assert.equal(sidebar.getAttribute("data-thread-density"), "compact");
+    assert.equal(
+      window.localStorage.getItem("zenx.sidebar.thread-density"),
+      "compact",
+    );
+    await remount();
+    assert.equal(
+      document
+        .querySelector("#primary-sidebar")
+        ?.getAttribute("data-thread-density"),
+      "compact",
+    );
+  });
+});
+
+test("holding the platform modifier labels only the real New and visible Thread targets", async () => {
+  await harness(async () => {
+    await act(async () => {
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Meta",
+          metaKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+    assert.equal(
+      button(".new-thread-action").getAttribute("data-shortcut-key"),
+      "N",
+    );
+    assert.deepEqual(
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".thread-row[data-shortcut-key]",
+        ),
+      ].map((row) => row.getAttribute("data-shortcut-key")),
+      ["1", "2", "3"],
+    );
+    assert.equal(
+      document
+        .querySelector(".plugin-space-link")
+        ?.hasAttribute("data-shortcut-key"),
+      false,
+    );
+    await act(async () => {
+      document.dispatchEvent(
+        new window.KeyboardEvent("keyup", { key: "Meta", bubbles: true }),
+      );
+    });
+    assert.equal(document.querySelector("[data-shortcut-key]"), null);
   });
 });
 

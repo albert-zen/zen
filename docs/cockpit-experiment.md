@@ -6,7 +6,7 @@ Cockpit answers one question: which parallel work deserves my attention, and wha
 
 L0 groups current ThreadSummary projections by attention, active and idle, retaining workspace labels and explicit unknowns. Idle does not imply success. Pending approvals lead to the existing conversation approval controls. L1 reads `zen/thread/read` without subscribing or resuming; canonical events and their raw source remain inspectable. Opening or selecting never sends input. Explicit Run Agent starts a normal Turn; Guide active Turn uses its observed fence; Interrupt uses its observed Turn ID. Configuration overrides are omitted. Errors and stale read times remain visible; no automatic action retry.
 
-While Cockpit is visible and connected, App refreshes existing summary lists every five seconds with at most one polling read pending. Overview read time, failures and stale groups remain explicit. Only the selected task has its full canonical snapshot read. A periodic read while this page is visible updates its snapshot; an unavailable Host disables actions, and failed refreshes retain old evidence marked stale. Requests from a previously selected task cannot replace the current task. External workspace Inbox stays outside this product.
+While Cockpit is visible and connected, App refreshes existing summary lists every five seconds with at most one polling read pending. Overview read time, failures and stale groups remain explicit. Only the selected task has its full canonical snapshot read. A periodic read while this page is visible updates its snapshot; an unavailable Host disables actions, and failed refreshes retain old evidence marked stale. Requests from a previously selected task cannot replace the current task. An accepted Run, Guide or Interrupt invalidates any pre-action read immediately. Controls stay stale until an authoritative post-action read succeeds; a pending read drains before exactly one trailing refresh, including while polling is paused. Failed post-action reads remain stale and allow explicit retry. External workspace Inbox stays outside this product.
 
 ## Generated component boundary
 
@@ -30,7 +30,7 @@ From the repository root after `npm ci`:
 
 ```sh
 npm run build --workspace @zenx/plugin-sdk
-node --import tsx --test apps/zenx/test/cockpit.test.ts apps/zenx/test/cockpit-host.test.ts apps/zenx/test/cockpit-ui.test.ts apps/zenx/test/cockpit-publish.test.mjs
+node --import tsx --test apps/zenx/test/cockpit.test.ts apps/zenx/test/cockpit-host.test.ts apps/zenx/test/cockpit-ui.test.ts apps/zenx/test/cockpit-publish.test.mjs apps/zenx/test/cockpit-action-refresh.test.ts
 node --import tsx apps/zenx/scripts/cockpit-fixture.ts
 ```
 
