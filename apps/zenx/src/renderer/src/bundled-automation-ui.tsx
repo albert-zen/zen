@@ -2061,13 +2061,28 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     const text = i18n.t("panels:pawIntroductionRequest");
     try {
       if (explicitRestart) {
-        const previous = (await sdk.commands
-          .execute("operation", { roomId: created.id, operationId })
-          .catch(() => null)) as { state?: string } | null;
-        // Only a confirmed cancellation plus a new explicit click starts a new
-        // operation. Unknown outcomes keep the original idempotency receipt.
-        if (previous?.state === "cancelled")
-          operationId = `${created.operationEpoch ?? "legacy"}:${crypto.randomUUID()}`;
+        while (true) {
+          const previous = (await sdk.commands
+            .execute("operation", { roomId: created.id, operationId })
+            .catch(() => null)) as { state?: string } | null;
+          // Unknown outcomes retain this receipt. Confirmed cancellations have
+          // a deterministic successor so remounted/late continuations converge.
+          if (previous?.state !== "cancelled") break;
+          const digest = new Uint8Array(
+            await crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(
+                `paw-introduction:${created.id}:${operationId}`,
+              ),
+            ),
+          );
+          digest[6] = (digest[6]! & 0x0f) | 0x50;
+          digest[8] = (digest[8]! & 0x3f) | 0x80;
+          const hex = Array.from(digest.slice(0, 16), (byte) =>
+            byte.toString(16).padStart(2, "0"),
+          ).join("");
+          operationId = `${created.operationEpoch ?? "legacy"}:${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        }
       }
       // Retain the chosen receipt before any uncertain transport result. A retry
       // must inspect this attempt, not the previously cancelled introduction.
@@ -3547,7 +3562,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       onClick={() => {
                         setPanel(null);
                         sdk.navigation.navigate(
-                          `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "instructions" })}`,
+                          `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "instructions", request: crypto.randomUUID() })}`,
                         );
                       }}
                     >

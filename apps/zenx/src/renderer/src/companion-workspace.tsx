@@ -24,6 +24,7 @@ export function CompanionWorkspace({
   threads,
   snapshot,
   section,
+  sectionRequest,
   navigate,
   onClose,
   fileDrafts,
@@ -43,6 +44,7 @@ export function CompanionWorkspace({
   fileDrafts: WorkspaceFileDrafts;
   onWidthChange(width: number): void;
   section: string;
+  sectionRequest?: string;
   navigate(route: string): void;
   onClose(): void;
 }) {
@@ -88,7 +90,7 @@ export function CompanionWorkspace({
   useEffect(() => {
     if (section) setSelected(`custom:${section}`);
     if (section === "instructions") setInstructionsRequest((id) => id + 1);
-  }, [section]);
+  }, [section, sectionRequest]);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;

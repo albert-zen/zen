@@ -2972,6 +2972,7 @@ export function App() {
               threads={[...activeSummaries, ...archivedSummaries]}
               snapshot={pluginSnapshot}
               section={roomPanel === "open" ? "" : roomPanel}
+              sectionRequest={roomQuery.get("request") ?? undefined}
               navigate={openPage}
               onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
             />

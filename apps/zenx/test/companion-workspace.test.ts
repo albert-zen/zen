@@ -184,6 +184,40 @@ for (const existingInstructions of [false, true]) {
         existingInstructions ? 1 : 0,
         "opening missing instructions does not invent a file or alternate identity store",
       );
+      if (existingInstructions) {
+        const close = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Close tab AGENTS.md"]',
+        );
+        assert.ok(close);
+        await act(async () => close.click());
+        assert.equal(
+          document.querySelector('[aria-label="Edit AGENTS.md"]'),
+          null,
+        );
+        await act(async () =>
+          root.render(
+            React.createElement(CompanionWorkspace, {
+              ...props,
+              section: "instructions",
+              sectionRequest: "second-explicit-open",
+              threads: [
+                {
+                  threadId: "assistant",
+                  name: "Assistant",
+                  preview: "",
+                  status: "idle",
+                  archived: false,
+                  currentMetadata: { cwd: "/actual-workspace" },
+                } as any,
+              ],
+            }),
+          ),
+        );
+        assert.ok(
+          document.querySelector('[aria-label="Edit AGENTS.md"]'),
+          "a repeated explicit entry reopens the existing editor",
+        );
+      }
     } finally {
       await act(async () => root.unmount());
       dom.window.close();

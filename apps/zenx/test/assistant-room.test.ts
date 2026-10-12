@@ -683,3 +683,107 @@ test("restarted introduction retains its new operation when delivery and refresh
     await f.close();
   }
 });
+
+test("restarted introduction lookup across remount retains one admission", async () => {
+  const f = await fixture();
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  });
+  dom.window.HTMLElement.prototype.scrollTo = () => {};
+  Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+  const root = createRoot(document.getElementById("root")!);
+  let releaseLookup!: () => void;
+  const heldLookup = new Promise<void>((resolve) => (releaseLookup = resolve));
+  let lookupHeld = false;
+  let acks = 0;
+  const prepared: string[] = [];
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const originalId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    const text =
+      "[Automatic start] Please say hello and ask what I’d like to call you. I can skip naming and start working.";
+    await f.service.prepareRoomMessage(room.id, originalId, text);
+    await f.service.cancelPreparedRoomOperation(room.id, originalId);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    const sdk = {
+      context: {
+        route: `/plugins/zenx-rooms/rooms?roomId=${room.id}`,
+        primaryNavigation: true,
+      },
+      navigation: { navigate: () => {} },
+      commands: {
+        execute: async (id: string, input: any = {}) => {
+          if (id === "prepare-message") prepared.push(input.operationId);
+          const result = await runtime.invoke(
+            `zenx_rooms_${id.replaceAll("-", "_")}`,
+            {
+              callId: randomUUID(),
+              trustedPluginUi: true,
+              cwd: "/project",
+              signal: new AbortController().signal,
+              arguments: { input },
+            },
+          );
+          if (id === "operation" && !lookupHeld) {
+            lookupHeld = true;
+            await heldLookup;
+          }
+          if (id === "ack-operation") acks++;
+          return result;
+        },
+      },
+    };
+    const render = () =>
+      act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+      );
+    const start = () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent === "Start introduction",
+      );
+    const until = async (condition: () => boolean) => {
+      for (let i = 0; i < 100 && !condition(); i++)
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 10));
+        });
+      assert.ok(condition());
+    };
+    await render();
+    await act(async () => start()!.click());
+    await until(() => lookupHeld);
+    assert.equal(f.model.requests.length, 0);
+    // Leaving the plugin surface and returning remounts RoomsPage, while its
+    // existing command promise still settles normally through PluginUiHost.
+    await act(async () => root.render(null));
+    await render();
+    assert.ok(
+      start() && !start()!.disabled,
+      "the new viewport offers Start while the old read is pending",
+    );
+    await act(async () => start()!.click());
+    await until(() => acks === 1);
+    assert.equal(f.model.requests.length, 1);
+    await act(async () => releaseLookup());
+    await until(() => acks === 2);
+    assert.equal(
+      f.model.requests.length,
+      1,
+      `the old viewport must not independently send a second introduction: ${prepared.join(", ")}`,
+    );
+  } finally {
+    releaseLookup();
+    await act(async () => root.unmount());
+    dom.window.close();
+    await f.close();
+  }
+});
