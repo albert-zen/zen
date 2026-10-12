@@ -1567,6 +1567,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     input: unknown;
   } | null>(null);
   const [assistantCreationFailed, setAssistantCreationFailed] = useState(false);
+  const greetingAdmission = useRef<{ cancelled: boolean } | null>(null);
   const assistantNameTooLong =
     new TextEncoder().encode(name.trim()).length > 128;
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
@@ -1958,6 +1959,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     else if (panel !== null) dialogClose.current?.focus();
   }, [panel, assistantMode, assistantProjectPicker]);
   const closeDialog = () => {
+    if (panel === "create" && assistantMode && greetingAdmission.current)
+      greetingAdmission.current.cancelled = true;
     dialogEpoch.current += 1;
     setPanel(null);
     if (primaryNavigation && (createIntent || manageIntent))
@@ -2040,16 +2043,28 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     lastRoom.current = selected;
     lastMessage.current = tail;
   }, [selected, tail]);
-  const introduce = async (created: {
-    id: string;
-    operationEpoch?: string;
-  }) => {
+  const introduce = async (
+    created: {
+      id: string;
+      operationEpoch?: string;
+    },
+    explicitRestart = false,
+  ) => {
     if (sending.current[created.id]) return;
     sending.current[created.id] = true;
     setSendingRooms((current) => ({ ...current, [created.id]: true }));
-    const operationId = `${created.operationEpoch ?? "legacy"}:00000000-0000-4000-8000-000000000001`;
+    let operationId = `${created.operationEpoch ?? "legacy"}:00000000-0000-4000-8000-000000000001`;
     const text = i18n.t("panels:pawIntroductionRequest");
     try {
+      if (explicitRestart) {
+        const previous = (await sdk.commands
+          .execute("operation", { roomId: created.id, operationId })
+          .catch(() => null)) as { state?: string } | null;
+        // Only a confirmed cancellation plus a new explicit click starts a new
+        // operation. Unknown outcomes keep the original idempotency receipt.
+        if (previous?.state === "cancelled")
+          operationId = `${created.operationEpoch ?? "legacy"}:${crypto.randomUUID()}`;
+      }
       await sdk.commands.execute("prepare-message", {
         roomId: created.id,
         operationId,
@@ -2081,6 +2096,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     const epoch = viewEpoch.current;
     const creation = command === "create" || command === "create-assistant";
     const dialogToken = dialogEpoch.current;
+    const greeting =
+      command === "create-assistant" ? { cancelled: false } : null;
+    if (greeting) greetingAdmission.current = greeting;
     const current = () =>
       epoch === viewEpoch.current &&
       (!creation || dialogToken === dialogEpoch.current);
@@ -2089,6 +2107,34 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     setError(null);
     try {
       const result = await sdk.commands.execute(command, input);
+      if (
+        creation &&
+        result &&
+        typeof result === "object" &&
+        "id" in result &&
+        typeof result.id === "string"
+      ) {
+        const ownsView = current();
+        if (ownsView) {
+          setSelected(result.id);
+          setPanel(null);
+          if (primaryNavigation)
+            sdk.navigation.navigate(
+              `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: result.id })}`,
+            );
+        }
+        if (greeting && !greeting.cancelled) {
+          // Publish the confirmed Room immediately. This explicit action owns
+          // the kickoff even if navigation changes while admission is pending;
+          // its completion must never navigate back over a newer user intent.
+          void introduce(result as { id: string; operationEpoch?: string })
+            .then(() => refresh())
+            .catch(() => {});
+        } else if (ownsView) {
+          void refresh().catch(() => {});
+        }
+        return ownsView;
+      }
       if (!current()) return false;
       try {
         await refresh();
@@ -2099,27 +2145,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           );
       }
       if (!current()) return false;
-      if (
-        creation &&
-        result &&
-        typeof result === "object" &&
-        "id" in result &&
-        typeof result.id === "string"
-      ) {
-        setSelected(result.id);
-        if (primaryNavigation)
-          sdk.navigation.navigate(
-            `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: result.id })}`,
-          );
-        if (command === "create-assistant") {
-          // Publish the confirmed Room immediately. This explicit action owns
-          // the kickoff even if navigation changes while admission is pending;
-          // its completion must never navigate back over a newer user intent.
-          void introduce(result as { id: string; operationEpoch?: string })
-            .then(() => refresh())
-            .catch(() => {});
-        }
-      }
       return true;
     } catch (reason) {
       if (!current()) return false;
@@ -2574,7 +2599,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     if (actionBusy.current) return;
                     actionBusy.current = true;
                     setBusy(true);
-                    void introduce(room)
+                    void introduce(room, true)
                       .then(() => refresh())
                       .catch((reason: unknown) =>
                         setRoomErrors((current) => ({

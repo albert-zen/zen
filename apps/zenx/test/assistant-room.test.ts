@@ -1,3 +1,8 @@
+import "./dom-primitives.js";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import { JSDOM } from "jsdom";
+import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
 import { createZenXRoomsProfileLoader } from "../src/main/rooms-profile-loader.js";
 import { ALWAYS_ON_ASSISTANT_PROMPT } from "../src/main/assistant-preset.js";
 import assert from "node:assert/strict";
@@ -459,6 +464,101 @@ test("conversation introduction receipt survives restart and the bound naming to
     );
     assert.equal(f.service.snapshot().rooms[0]!.name, "Nova");
   } finally {
+    await f.close();
+  }
+});
+
+test("explicit Start introduction works after cancelling an unsent introduction", async () => {
+  const f = await fixture();
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  });
+  dom.window.HTMLElement.prototype.scrollTo = () => {};
+  Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    await f.service.prepareRoomMessage(
+      room.id,
+      operationId,
+      "[Automatic start] Please say hello and ask what I’d like to call you. I can skip naming and start working.",
+    );
+    await f.service.cancelPreparedRoomOperation(room.id, operationId);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    let settleIntroduction!: () => void;
+    const introductionSettled = new Promise<void>((resolve) => {
+      settleIntroduction = resolve;
+    });
+    const sdk = {
+      context: {
+        route: `/plugins/zenx-rooms/rooms?roomId=${room.id}`,
+        primaryNavigation: true,
+      },
+      navigation: { navigate: () => {} },
+      commands: {
+        execute: async (id: string, input: any = {}) => {
+          try {
+            const result = await runtime.invoke(
+              `zenx_rooms_${id.replaceAll("-", "_")}`,
+              {
+                callId: randomUUID(),
+                trustedPluginUi: true,
+                cwd: "/project",
+                signal: new AbortController().signal,
+                arguments: { input },
+              },
+            );
+            if (id === "ack-operation") settleIntroduction();
+            return result;
+          } catch (error) {
+            if (id === "prepare-message" || id === "post-message")
+              settleIntroduction();
+            throw error;
+          }
+        },
+      },
+    };
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    const start = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((b) => b.textContent === "Start introduction")!;
+    assert.ok(
+      start,
+      "cancelled operation is acknowledged and the start button is offered again",
+    );
+    await act(async () => {
+      start.click();
+      await introductionSettled;
+    });
+    assert.equal(f.model.requests.length, 1, document.body.textContent!);
+    assert.equal(
+      f.service.roomOperation(room.id, operationId).state,
+      "cancelled",
+    );
+    assert.equal(f.service.snapshot().rooms[0]!.messages.length, 1);
+    assert.equal(
+      f.service
+        .snapshot()
+        .rooms[0]!.operations?.filter((entry) => entry.messageId !== null)
+        .length,
+      1,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
     await f.close();
   }
 });

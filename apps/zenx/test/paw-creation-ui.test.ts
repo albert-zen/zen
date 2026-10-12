@@ -279,6 +279,8 @@ async function withForm(
     release: (value: unknown) => void;
     reject: (reason: unknown) => void;
     failRefresh: () => void;
+    delayRefresh: () => void;
+    releaseRefresh: () => void;
     failIntroduction: () => void;
     delayIntroduction: () => void;
     releaseIntroduction: () => void;
@@ -327,6 +329,11 @@ async function withForm(
   const routes: string[] = [];
   let release!: (value: unknown) => void, reject!: (reason: unknown) => void;
   let refreshFails = false;
+  let refreshDelayed = false;
+  let releaseRefresh!: () => void;
+  const refreshWait = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
   let introductionFails = false;
   let introductionDelayed = false;
   let releaseIntroduction!: () => void;
@@ -351,6 +358,7 @@ async function withForm(
           calls.push({ id, input });
           if (id === "list") {
             if (refreshFails) throw Error("List unavailable");
+            if (refreshDelayed) await refreshWait;
             return { rooms: [] };
           }
           if (id === "workspaces") {
@@ -401,6 +409,10 @@ async function withForm(
       failIntroduction: () => {
         introductionFails = true;
       },
+      delayRefresh: () => {
+        refreshDelayed = true;
+      },
+      releaseRefresh,
       failRefresh: () => {
         refreshFails = true;
       },
@@ -551,4 +563,47 @@ test("confirmed creation opens chat before introduction admission, and a newer r
       );
     },
   );
+});
+
+test("admission opens new PAW before unrelated list refresh settles", async () => {
+  await withForm(
+    async ({ calls, routes, release, delayRefresh, releaseRefresh }) => {
+      await act(async () => createButton().click());
+      delayRefresh();
+      await act(async () =>
+        release({ id: "accepted-paw", operationEpoch: "epoch" }),
+      );
+      try {
+        assert.deepEqual(
+          [...routes],
+          ["/plugins/zenx-rooms/rooms?roomId=accepted-paw"],
+        );
+        assert.equal(calls.filter((c) => c.id === "prepare-message").length, 1);
+      } finally {
+        await act(async () => releaseRefresh());
+      }
+    },
+  );
+});
+
+test("accepted explicit greeting survives navigation during create admission", async () => {
+  await withForm(async ({ root, sdk, calls, routes, release }) => {
+    await act(async () => createButton().click());
+    await act(async () =>
+      root.render(
+        React.createElement(RoomsPage, {
+          sdk: sdk("/plugins/zenx-rooms/rooms?roomId=other"),
+        }),
+      ),
+    );
+    await act(async () =>
+      release({ id: "accepted-paw", operationEpoch: "epoch" }),
+    );
+    assert.deepEqual(routes, []);
+    assert.equal(
+      calls.filter((c) => c.id === "prepare-message").length,
+      1,
+      "create-and-greet owns its accepted request even when navigation changes",
+    );
+  });
 });

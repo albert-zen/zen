@@ -67,6 +67,7 @@ export function CompanionWorkspace({
   const [triggerError, setTriggerError] = useState<string | null>(null);
   const [triggersLoaded, setTriggersLoaded] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [instructionsRequest, setInstructionsRequest] = useState(0);
   const memberExists = room.members.some((value) => value.threadId === member);
   const execution = memberExists
     ? threads.find(
@@ -86,6 +87,7 @@ export function CompanionWorkspace({
   );
   useEffect(() => {
     if (section) setSelected(`custom:${section}`);
+    if (section === "instructions") setInstructionsRequest((id) => id + 1);
   }, [section]);
   useEffect(() => {
     let active = true;
@@ -527,8 +529,11 @@ export function CompanionWorkspace({
       }
       fileDrafts={fileDrafts}
       messageLinkRequest={
-        section === "instructions" && resource
-          ? { id: 1, kind: "file", value: "AGENTS.md" }
+        section === "instructions" &&
+        selected === "custom:instructions" &&
+        instructionsRequest > 0 &&
+        resource
+          ? { id: instructionsRequest, kind: "file", value: "AGENTS.md" }
           : null
       }
       onWidthChange={onWidthChange}
