@@ -1293,8 +1293,15 @@ export class ZenXSettingsService {
             : await this.#providerLogos.import(logoUpload);
         const withLogo =
           imported === undefined
-            ? provider
-            : { ...provider, logoResource: imported.resource };
+            ? stampSubscriptionModelOwnership(current.providerProfiles, [
+                provider,
+              ])[0]!
+            : {
+                ...stampSubscriptionModelOwnership(current.providerProfiles, [
+                  provider,
+                ])[0]!,
+                logoResource: imported.resource,
+              };
         try {
           let next: ZenXHostProfile;
           try {
