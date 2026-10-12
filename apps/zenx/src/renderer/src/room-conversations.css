@@ -163,7 +163,7 @@
   border: 1px solid var(--border-soft);
   border-radius: 16px;
   padding: 24px;
-  box-shadow: 0 16px 60px rgb(0 0 0 / 12%);
+  box-shadow: 0 16px 60px var(--shadow-color);
 }
 @media (max-width: 600px) {
   .rooms-chat-overlay.paw-setup-overlay {
