@@ -15,30 +15,7 @@ New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 $report = @{ environment = @{ os = [Environment]::OSVersion.VersionString; runner = $env:RUNNER_NAME; workflowCommit = $env:GITHUB_SHA; arch = $env:PROCESSOR_ARCHITECTURE }; instrumentedPackage = $true; samples = @(); complete = $false }
 $oldEnvironment = @{}
-foreach ($key in @("ZENX_DATA_DIR", "ELECTRON_RENDERER_URL", "ZENX_PROJECT_ACCEPTANCE_CONFIG", "ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG")) {
-  $oldEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
-  [Environment]::SetEnvironmentVariable($key, $null)
-}
-Add-Type -TypeDefinition @'
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-public static class StartupWindows {
-  private delegate bool EnumCallback(IntPtr hwnd, IntPtr data);
-  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumCallback callback, IntPtr data);
-  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
-  public static long[] Visible(uint pid) {
-    var result = new List<long>();
-    EnumWindows((hwnd, data) => { uint owner; GetWindowThreadProcessId(hwnd, out owner);
-      if (owner == pid && IsWindowVisible(hwnd)) result.Add(hwnd.ToInt64()); return true; }, IntPtr.Zero);
-    return result.ToArray();
-  }
-}
-'@
+
 function Write-Json($Path, $Value) { [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 12), $utf8) }
 function Read-Events($Directory, $ProcessId) {
   $file = Join-Path $Directory "events-$ProcessId.jsonl"
@@ -63,12 +40,64 @@ function Wait-Event($Directory, $Process, $Type) {
   }
   throw "Timed out waiting for $Type"
 }
+function Assert-SoleVisibleWindow($ProcessId, [IntPtr] $Handle) {
+  $visible = @([StartupWindows]::Visible($ProcessId))
+  if ($visible.Count -ne 1 -or $visible[0] -ne $Handle.ToInt64() -or [StartupWindows]::IsIconic($Handle)) {
+    throw "Expected the original sole, visible, non-minimized physical window"
+  }
+}
 function Stop-Fixture($Process, $Directory) {
   if ($null -eq $Process -or $Process.HasExited) { return }
-  [IO.File]::WriteAllText((Join-Path $Directory "quit"), "quit", $utf8)
-  if (!$Process.WaitForExit(15000)) { & taskkill /PID $Process.Id /T /F | Out-Null }
+  $errors = @()
+  try { [IO.File]::WriteAllText((Join-Path $Directory "quit"), "quit", $utf8) }
+  catch { $errors += "Quit signal: $($_.Exception.Message)" }
+  $exited = $false
+  try { $exited = $Process.WaitForExit(15000) }
+  catch { $errors += "Owned PID $($Process.Id) graceful wait: $($_.Exception.Message)" }
+  if (!$exited) {
+    try {
+      & taskkill /PID $Process.Id /T /F | Out-Null
+      if ($LASTEXITCODE -ne 0) { $errors += "taskkill exited with $LASTEXITCODE for owned PID $($Process.Id)" }
+    } catch { $errors += "Owned PID $($Process.Id) taskkill: $($_.Exception.Message)" }
+    try {
+      if (!$Process.WaitForExit(5000)) { $errors += "Owned PID $($Process.Id) is still running after taskkill" }
+    } catch { $errors += "Owned PID $($Process.Id) final wait: $($_.Exception.Message)" }
+  }
+  if ($errors.Count) { throw ($errors -join "; ") }
 }
+function Stop-OwnedFixtures($Processes, $Directory) {
+  foreach ($owned in $Processes) {
+    try { Stop-Fixture $owned $Directory }
+    catch { $_.Exception.Message }
+  }
+}
+$runFailure = $null
+$finalizationErrors = @()
 try {
+  foreach ($key in @("ZENX_DATA_DIR", "ELECTRON_RENDERER_URL", "ZENX_PROJECT_ACCEPTANCE_CONFIG", "ZENX_EXTERNAL_ZAS_ACCEPTANCE_CONFIG")) {
+    $oldEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+    [Environment]::SetEnvironmentVariable($key, $null)
+  }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class StartupWindows {
+  private delegate bool EnumCallback(IntPtr hwnd, IntPtr data);
+  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumCallback callback, IntPtr data);
+  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
+  public static long[] Visible(uint pid) {
+    var result = new List<long>();
+    EnumWindows((hwnd, data) => { uint owner; GetWindowThreadProcessId(hwnd, out owner);
+      if (owner == pid && IsWindowVisible(hwnd)) result.Add(hwnd.ToInt64()); return true; }, IntPtr.Zero);
+    return result.ToArray();
+  }
+}
+'@
   foreach ($mode in @("success", "failure")) {
     $directory = Join-Path $EvidenceDirectory $mode
     New-Item -ItemType Directory -Path $directory | Out-Null
@@ -84,7 +113,8 @@ try {
     $env:ZENX_DATA_DIR = Join-Path $fixtureRoot "$mode-data"
     $primary = $null
     $secondary = $null
-    $sample = @{ mode = $mode; passed = $false; targetMilliseconds = 1000; focus = "not-observed" }
+    $sample = @{ mode = $mode; passed = $false; targetMilliseconds = 1000; firstVisibleMilliseconds = $null; withinOneSecond = $null; focus = "not-observed" }
+    $scenarioFailure = $null
     $report.samples += $sample
     try {
       $executable = Join-Path $artifact "ZenX.exe"
@@ -98,6 +128,7 @@ try {
         if ($primary.HasExited) { throw "Process exited before a visible native window" }
         Start-Sleep -Milliseconds 20
       }
+      if ($visible.Count -eq 0) { throw "No native visible HWND was observed before timeout" }
       $sample.firstVisibleMilliseconds = [math]::Round(([DateTime]::UtcNow - $primary.StartTime.ToUniversalTime()).TotalMilliseconds, 1)
       $sample.processStartedAt = $primary.StartTime.ToUniversalTime().ToString("o")
       $sample.withinOneSecond = $sample.firstVisibleMilliseconds -le 1000
@@ -107,6 +138,7 @@ try {
       $startup = Wait-Event $directory $primary "startup-loaded"
       $gate = Wait-Event $directory $primary "gate-entered"
       if ($startup.hwnd -ne $sample.hwnd -or $startup.windowsCreated -ne 1 -or $startup.role -ne "status") { throw "Startup is not the sole visible physical window" }
+      if ([string]::IsNullOrWhiteSpace($startup.text)) { throw "Startup status has no visible text" }
       $sample.startupText = $startup.text
       $sample.electron = (@(Read-Events $directory $primary.Id) | Where-Object type -eq "observer" | Select-Object -First 1).electron
       # Keep bootstrap held for a real native second launch, not a mocked event.
@@ -132,33 +164,53 @@ try {
       # Deliberately slow bootstrap for at least three seconds after gate entry.
       $holdUntil = [DateTime]::Parse($gate.at).ToUniversalTime().AddSeconds(3)
       while ([DateTime]::UtcNow -lt $holdUntil) { Start-Sleep -Milliseconds 20 }
-      $sample.visibleDuringDelayedBootstrap = [StartupWindows]::IsWindowVisible($hwnd)
+      Assert-SoleVisibleWindow $primary.Id $hwnd
+      $sample.visibleDuringDelayedBootstrap = $true
       $sample.gateHeldMilliseconds = [math]::Round(([DateTime]::UtcNow - [DateTime]::Parse($gate.at).ToUniversalTime()).TotalMilliseconds, 1)
       [IO.File]::WriteAllText((Join-Path $directory "release"), "release", $utf8)
       $type = if ($mode -eq "success") { "renderer-loaded" } else { "failure-loaded" }
       $result = Wait-Event $directory $primary $type
+      Assert-SoleVisibleWindow $primary.Id $hwnd
       if ($result.hwnd -ne $sample.hwnd -or $result.windowsCreated -ne 1 -or ![StartupWindows]::IsWindowVisible($hwnd)) { throw "Completion did not retain the same visible physical window" }
       if ($mode -eq "success" -and $result.hostStatus -ne "ready") { throw "Real Host startup was not ready: $($result.hostStatus)" }
       if ($mode -eq "failure" -and ($result.role -ne "alert" -or !$result.text.Contains("Synthetic startup acceptance failure <inert> & visible"))) { throw "Actual bootstrap failure is not visible as inert error text" }
       $sample.result = $result
       $sample.passed = $true
     } catch {
+      $scenarioFailure = $_
       $sample.error = $_.Exception.Message
-      throw
     } finally {
-      Stop-Fixture $secondary $directory
-      Stop-Fixture $primary $directory
-      Write-Json (Join-Path $EvidenceDirectory "report.json") $report
+      $sample.cleanupErrors = @(Stop-OwnedFixtures @($secondary, $primary) $directory)
+      try { Write-Json (Join-Path $EvidenceDirectory "report.json") $report }
+      catch { $sample.cleanupErrors += "Report write: $($_.Exception.Message)" }
+      if ($sample.cleanupErrors.Count) { $sample.passed = $false }
     }
+    if ($null -ne $scenarioFailure) { throw $scenarioFailure }
+    if ($sample.cleanupErrors.Count) { throw ($sample.cleanupErrors -join "; ") }
   }
   $report.complete = $true
   $report.nativeSampleGaps = @($report.samples | ForEach-Object {
     if (!$_.withinOneSecond) { "$($_.mode): observed visibility exceeded the approximate 1000ms target" }
     if ($_.focus -ne "observed") { "$($_.mode): foreground focus was not observed; OS policy or regression remains unresolved" }
   })
+} catch {
+  $runFailure = $_
+  $report.error = $_.Exception.Message
 } finally {
-  Write-Json (Join-Path $EvidenceDirectory "report.json") $report
-  Get-Content -Raw -LiteralPath (Join-Path $EvidenceDirectory "report.json") | Write-Host
-  foreach ($key in $oldEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key, $oldEnvironment[$key]) }
-  Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+  foreach ($key in $oldEnvironment.Keys) {
+    try { [Environment]::SetEnvironmentVariable($key, $oldEnvironment[$key]) }
+    catch { $finalizationErrors += "Restore environment $key`: $($_.Exception.Message)" }
+  }
+  try { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction Stop }
+  catch { $finalizationErrors += "Remove temporary fixture: $($_.Exception.Message)" }
+  $report.finalizationErrors = $finalizationErrors
+  try { Write-Json (Join-Path $EvidenceDirectory "report.json") $report }
+  catch { $finalizationErrors += "Final report write: $($_.Exception.Message)" }
+  $report.finalizationErrors = $finalizationErrors
+  # Console evidence remains available if the artifact file could not be written.
+  try { $report | ConvertTo-Json -Depth 12 | Write-Host }
+  catch { $finalizationErrors += "Console report: $($_.Exception.Message)" }
+  foreach ($errorText in $finalizationErrors) { Write-Warning $errorText }
 }
+if ($null -ne $runFailure) { throw $runFailure }
+if ($finalizationErrors.Count) { throw ($finalizationErrors -join "; ") }

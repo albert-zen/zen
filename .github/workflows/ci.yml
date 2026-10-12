@@ -186,6 +186,8 @@ jobs:
       - run: npm ci
       - run: npm --workspace apps/zenx run test:project-identity
       - run: npm --workspace apps/zenx run smoke:windows-projects
+      - name: Verify startup harness failure and cleanup assertions
+        run: node --test apps/zenx/test/windows-startup-harness.test.mjs
       - name: Observe native startup with delayed and failed bootstrap
         shell: pwsh
         run: ./apps/zenx/scripts/windows-startup-acceptance.ps1
