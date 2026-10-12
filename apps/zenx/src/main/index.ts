@@ -1,6 +1,5 @@
 import { readProjectConversationNavigation } from "./conversation-navigation.js";
 import { OpenCodeAgentProviderAdapter } from "./agent-providers/opencode-adapter.js";
-import { ZenAgentAdapter } from "./agent-providers/zen-adapter.js";
 import { AgentProviderService } from "./agent-providers/service.js";
 import { CodexAgentAdapter } from "./agent-providers/codex-adapter.js";
 import { registerAgentProviderIpc } from "./agent-providers/ipc.js";
@@ -8,6 +7,9 @@ import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { deliverAssistantInput } from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
+import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
+import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
+import { FleetProductService } from "./fleet-product.js";
 import { realpath } from "node:fs/promises";
 import { ZenXSubagentsCapabilityPackage } from "./capabilities/subagents-package.js";
 import { attachMainWindowDiagnostics } from "./main-window-diagnostics.js";
@@ -39,6 +41,7 @@ import { ipcChannels } from "../preload/ipc.js";
 import { AppServerManager } from "./app-server-manager.js";
 import type { ApprovalDecision } from "./app-server-manager.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
+import { secureLocalEncryption } from "./secure-local-encryption.js";
 import type {
   PublicHostSettings,
   ZenXProviderDeleteReplacements,
@@ -93,6 +96,8 @@ import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
 } from "./capabilities/self-control-package.js";
+import { nativeText, setNativeLanguage } from "./native-locale.js";
+import { resolveLanguage } from "../locale.js";
 import { installApplicationMenu } from "./application-menu.js";
 import { ZenXDirectoryBrowser } from "./directory-browser.js";
 import {
@@ -130,6 +135,9 @@ import {
 import { ZenXPluginDevControlServer } from "./plugin-dev-control.js";
 import { createDelegatingFirstPartyProfileLoader } from "./first-party-profile-loader.js";
 import { installZenXBundledPluginsAtStartup } from "./bundled-plugin-startup.js";
+import { ImZenXSetupService } from "./imzenx-setup-service.js";
+import { isTrustedImZenXSetupSender } from "./imzenx-setup-ipc.js";
+import { pathToFileURL } from "node:url";
 import { BrowserLiveObservationIpcBridge } from "./browser-live-observation-ipc.js";
 import { ComputerLiveObservationIpcBridge } from "./computer-live-observation-ipc.js";
 import { createElectronWorkspaceBrowser } from "./workspace-browser-electron.js";
@@ -207,6 +215,7 @@ let fleetSettingsService: FleetSettingsService | undefined;
 let agentProviderService: AgentProviderService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
+let imZenXSetupService: ImZenXSetupService | undefined;
 let chromeExtensionBridge: ChromeExtensionBridge | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
 const workspaceBrowser = createElectronWorkspaceBrowser();
@@ -248,6 +257,7 @@ const externalZasAcceptancePath = externalZasAcceptanceConfigPath(
 );
 
 let rendererReady = false;
+const ownedAppWindowIds = new Set<number>();
 let bootstrapFailure: string | undefined;
 
 function loadAppRenderer(window: BrowserWindow): void {
@@ -259,11 +269,12 @@ function loadAppRenderer(window: BrowserWindow): void {
 function loadStartupPage(window: BrowserWindow): void {
   const query: Record<string, string> =
     bootstrapFailure === undefined ? {} : { error: bootstrapFailure };
+  query.language = resolveLanguage("system", app.getPreferredSystemLanguages());
   const rendererUrl = process.env["ELECTRON_RENDERER_URL"];
   if (rendererUrl) {
     const url = new URL("/startup.html", rendererUrl);
-    if (bootstrapFailure !== undefined)
-      url.searchParams.set("error", bootstrapFailure);
+    for (const [key, value] of Object.entries(query))
+      url.searchParams.set(key, value);
     void window.loadURL(url.href);
   } else {
     void window.loadFile(join(__dirname, "../renderer/startup.html"), {
@@ -295,6 +306,8 @@ function createWindow(): BrowserWindow {
       sandbox: true,
     },
   });
+  ownedAppWindowIds.add(window.id);
+  window.once("closed", () => ownedAppWindowIds.delete(window.id));
 
   mainWindowDiagnostics ??= new OperationalDiagnosticLog(
     app.getPath("userData"),
@@ -312,12 +325,11 @@ function createWindow(): BrowserWindow {
     }
     const response = dialog.showMessageBoxSync(window, {
       type: "warning",
-      buttons: ["Keep editing", "Leave window"],
+      buttons: [nativeText("keepEditing"), nativeText("leaveWindow")],
       defaultId: 0,
       cancelId: 0,
-      message: "Leave with unsaved file edits?",
-      detail:
-        "Unsaved drafts will be lost. A save already in progress may still finish.",
+      message: nativeText("leaveUnsaved"),
+      detail: nativeText("unsavedDetail"),
     });
     if (response === 1) event.preventDefault();
   });
@@ -339,6 +351,10 @@ async function bootstrapZenX(): Promise<void> {
   if (!ownsSingleInstance) return;
   bootstrapFence.throwIfCancelled();
   const userDataDirectory = app.getPath("userData");
+  imZenXSetupService = new ImZenXSetupService({
+    directory: join(userDataDirectory, "plugin-data", "imzenx", "setup"),
+    encryption: safeStorage,
+  });
   const entryPath = join(__dirname, "app-server-host.js");
   const tokenFile = join(userDataDirectory, "runtime", "app-server.token");
   const connectionDescriptorFile = join(
@@ -370,7 +386,18 @@ async function bootstrapZenX(): Promise<void> {
     home: app.getPath("home"),
     documents: app.getPath("documents"),
   });
+  setNativeLanguage(
+    resolveLanguage("system", app.getPreferredSystemLanguages()),
+  );
   installApplicationMenu();
+  ipcMain.handle(ipcChannels.localeSystemLanguages, () =>
+    app.getPreferredSystemLanguages(),
+  );
+  ipcMain.handle(ipcChannels.localeSetLanguage, (_event, language: unknown) => {
+    if (language !== "en" && language !== "zh-CN")
+      throw new Error("Unsupported interface language");
+    if (setNativeLanguage(language)) installApplicationMenu();
+  });
   let automationService:
     | Awaited<ReturnType<typeof createBundledAutomationPluginService>>
     | undefined;
@@ -431,7 +458,7 @@ async function bootstrapZenX(): Promise<void> {
     }
     fleetSettingsService = new FleetSettingsService({
       directory: userDataDirectory,
-      encryption: safeStorage,
+      encryption: secureLocalEncryption(safeStorage),
       manager: () => {
         if (!appServerManager) throw new Error("Host unavailable");
         return appServerManager;
@@ -456,11 +483,35 @@ async function bootstrapZenX(): Promise<void> {
       },
     });
     ipcMain.removeHandler(ipcChannels.fleetControl);
+    const fleetProduct = new FleetProductService(fleetSettingsService);
     ipcMain.handle(
       ipcChannels.fleetControl,
       async (_event, action: unknown, input: unknown, revision?: number) => {
         const fleet = fleetSettingsService!;
         if (action === "status") return await fleet.status();
+        if (action === "readiness") return await fleet.readiness();
+        if (action === "catalog" && typeof input === "string")
+          return await fleetProduct.catalog(input);
+        if (action === "listThreads")
+          return await fleetProduct.list(
+            input as Parameters<typeof fleetProduct.list>[0],
+          );
+        if (action === "createThread")
+          return await fleetProduct.create(
+            input as Parameters<typeof fleetProduct.create>[0],
+          );
+        if (action === "readThread")
+          return await fleetProduct.read(
+            input as Parameters<typeof fleetProduct.read>[0],
+          );
+        if (action === "threadStatus")
+          return await fleetProduct.status(
+            input as Parameters<typeof fleetProduct.status>[0],
+          );
+        if (action === "sendThread")
+          return await fleetProduct.send(
+            input as Parameters<typeof fleetProduct.send>[0],
+          );
         if (action === "save") return await fleet.save(input, revision);
         if (action === "pair") return await fleet.pair(input);
         if (action === "remove" && typeof input === "string")
@@ -472,6 +523,8 @@ async function bootstrapZenX(): Promise<void> {
             input as Parameters<typeof fleet.invoke>[0],
           );
         if (action === "hostPair") return await fleet.hostPair();
+        if (action === "hostInvitation")
+          return await fleet.hostInvitation(input);
         if (action === "revoke" && typeof input === "string")
           return await fleet.revoke(input);
         throw new Error("Unsupported Fleet operation");
@@ -504,6 +557,10 @@ async function bootstrapZenX(): Promise<void> {
         },
       },
     });
+    const fleetPackage = new ZenXFleetCapabilityPackage({
+      threads: selfControlPackage,
+      fleet: fleetSettingsService,
+    });
     const subagentsPackage = new ZenXSubagentsCapabilityPackage({
       appServer: selfControlPort,
       threads: selfControlPackage,
@@ -521,7 +578,13 @@ async function bootstrapZenX(): Promise<void> {
       process.env,
       savedBrowserMode,
     );
+    const fleetToolTransport = new FleetToolTransportAdapter(
+      fleetSettingsService,
+      () => {},
+    );
     capabilityService = new ZenXCapabilityService({
+      toolTargetTransport: (invocation) =>
+        fleetToolTransport.invoke(invocation),
       userDataDirectory,
       ...(useSharedWorkspaceBrowser
         ? {
@@ -548,6 +611,14 @@ async function bootstrapZenX(): Promise<void> {
       trustedProfileLoaders: {
         imzenx: createImZenXProfileLoader({
           dataDirectory: join(userDataDirectory, "plugin-data", "imzenx"),
+          setRuntimeProject: (directory) =>
+            imZenXSetupService!.setRuntimeProject(directory),
+          inspectManagedChannels: (filename) =>
+            imZenXSetupService!.inspectManagedChannels(filename),
+          readManagedChannels: (filename) =>
+            imZenXSetupService!.readManagedChannels(filename),
+          registerManagedEdit: (edit) =>
+            imZenXSetupService!.registerManagedEdit(edit),
           pawRequest: (cwd, operation, params) => {
             if (!appServerManager)
               throw new Error("ZAS manager is not attached");
@@ -571,6 +642,9 @@ async function bootstrapZenX(): Promise<void> {
         ),
         computer: createDelegatingFirstPartyProfileLoader(() =>
           capabilityService!.computerProfilePackage(),
+        ),
+        "zenx-fleet": createDelegatingFirstPartyProfileLoader(
+          () => fleetPackage,
         ),
         "zenx-subagents": createDelegatingFirstPartyProfileLoader(
           () => subagentsPackage,
@@ -810,6 +884,7 @@ async function bootstrapZenX(): Promise<void> {
     );
     bootstrapFence.throwIfCancelled();
     installCapabilityIpc(capabilityService, appServerManager, marketplace);
+    installImZenXSetupIpc(imZenXSetupService);
     installChromeBridgeIpc({
       settings: settingsService,
       bridge: chromeExtensionBridge,
@@ -1006,12 +1081,11 @@ app.on("before-quit", (event) => {
     dirtyFileWindows.size > 0 &&
     dialog.showMessageBoxSync({
       type: "warning",
-      buttons: ["Keep editing", "Quit"],
+      buttons: [nativeText("keepEditing"), nativeText("quit")],
       defaultId: 0,
       cancelId: 0,
-      message: "Quit with unsaved file edits?",
-      detail:
-        "Unsaved drafts will be lost. A save already in progress may still finish.",
+      message: nativeText("quitUnsaved"),
+      detail: nativeText("unsavedDetail"),
     }) !== 1
   ) {
     event.preventDefault();
@@ -1038,6 +1112,11 @@ app.on("second-instance", () => {
 
 async function stopZenXHost(): Promise<void> {
   const errors: Error[] = [];
+  try {
+    await imZenXSetupService?.close();
+  } catch {
+    errors.push(new Error("Could not stop IM runtime preparation"));
+  }
   try {
     await agentProviderService?.dispose();
   } catch (error) {
@@ -1154,7 +1233,7 @@ function installProtocolIpc(
         `${instance.name}: this Agent Provider adapter is not installed`,
       );
     },
-    () => new ZenAgentAdapter(manager).models(),
+    async () => (await manager.request("model/list", {})).data,
     () => fleetSettingsService!.hostIdentity(),
   );
   registerAgentProviderIpc(agentProviderService);
@@ -1225,10 +1304,13 @@ function installProtocolIpc(
   ipcMain.handle(ipcChannels.imageAttachmentsPick, async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options = {
-      title: "Choose images",
+      title: nativeText("chooseImages"),
       properties: ["openFile", "multiSelections"],
       filters: [
-        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
+        {
+          name: nativeText("images"),
+          extensions: ["png", "jpg", "jpeg", "gif", "webp"],
+        },
       ],
     } satisfies Electron.OpenDialogOptions;
     const result =
@@ -1997,6 +2079,48 @@ async function syncProjectProjection(
   );
 }
 
+function installImZenXSetupIpc(setup: ImZenXSetupService): void {
+  const requireTrustedUi = (event: Electron.IpcMainInvokeEvent) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const rendererUrl =
+      process.env["ELECTRON_RENDERER_URL"] ??
+      pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+    if (
+      !isTrustedImZenXSetupSender(
+        {
+          ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+          mainFrame: event.senderFrame === event.sender.mainFrame,
+          url: event.senderFrame?.url ?? "",
+        },
+        rendererUrl,
+      )
+    )
+      throw new Error("IM setup requires the trusted ZenX window");
+    const plugin = capabilityService
+      ?.pluginSnapshot()
+      .plugins.find((entry) => entry.id === "imzenx");
+    if (!plugin?.enabled || !plugin.available)
+      throw new Error("Enable the IMZenX plugin before configuring IM");
+  };
+  ipcMain.handle(ipcChannels.imzenxSetupInspect, async (event) => {
+    requireTrustedUi(event);
+    return setup.inspect();
+  });
+  ipcMain.handle(
+    ipcChannels.imzenxSetupSaveChannel,
+    async (event, value: unknown) => {
+      requireTrustedUi(event);
+      // The admitted runtime gates the current configuration inside its own
+      // queue. Never read then re-save a possibly stale settings snapshot here.
+      return setup.saveChannel(value);
+    },
+  );
+  ipcMain.handle(ipcChannels.imzenxSetupPrepareRuntime, async (event) => {
+    requireTrustedUi(event);
+    return setup.prepareRuntime();
+  });
+}
+
 function installCapabilityIpc(
   capabilities: ZenXCapabilityService,
   manager: AppServerManager,
@@ -2061,9 +2185,9 @@ function installCapabilityIpc(
   ipcMain.handle(ipcChannels.pluginsSelectTarball, async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options = {
-      title: "Install ZenX plugin tarball",
+      title: nativeText("installPlugin"),
       properties: ["openFile"],
-      filters: [{ name: "npm package tarball", extensions: ["tgz"] }],
+      filters: [{ name: nativeText("pluginTarball"), extensions: ["tgz"] }],
     } satisfies Electron.OpenDialogOptions;
     const result =
       owner === null

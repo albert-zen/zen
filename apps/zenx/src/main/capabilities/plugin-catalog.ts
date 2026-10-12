@@ -1003,6 +1003,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
     const definitions: ModelTool[] = [];
+    const remoteToolNames: string[] = [];
     for (const registered of this.#registered.values()) {
       const manifest = registered.package.manifest;
       if (this.#disabled.has(manifest.id)) continue;
@@ -1014,10 +1015,26 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
             description: tool.description,
             inputSchema: structuredClone(tool.inputSchema),
           });
+          if (tool.remoteExecution === "text-json")
+            remoteToolNames.push(tool.name);
         }
       }
     }
-    return { definitions, plugins: this.availablePlugins() };
+    return {
+      definitions,
+      remoteToolNames,
+      plugins: this.availablePlugins(),
+      pluginCatalogAvailable: this.#catalogAvailable,
+      pluginReadiness: this.pluginSnapshot().plugins.map(
+        ({ id, displayName, lifecycle, enabled, available }) => ({
+          id,
+          displayName,
+          lifecycle,
+          enabled,
+          available,
+        }),
+      ),
+    };
   }
 
   setForegroundRequiredAllowed(allowed: boolean): void {
@@ -1446,6 +1463,14 @@ function validateManifest(
     if (tool.capabilities.length === 0) {
       throw new Error(`Capability tool ${tool.name} declares no capabilities`);
     }
+    if (
+      tool.remoteExecution !== undefined &&
+      (tool.remoteExecution !== "text-json" ||
+        tool.interactionMode !== "background_safe")
+    )
+      throw new Error(
+        `Capability tool ${tool.name} remoteExecution requires a background_safe text-json tool`,
+      );
     if (
       tool.maxOutputBytes !== undefined &&
       (!Number.isSafeInteger(tool.maxOutputBytes) ||

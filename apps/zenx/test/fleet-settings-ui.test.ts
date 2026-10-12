@@ -28,6 +28,36 @@ const sshDevice = {
   access: "read" as const,
 };
 
+test("Fleet editor persists machine descriptions and cancels unpublished changes", async () => {
+  const view = await mount();
+  try {
+    await machineAction(view, "Build machine", "Edit");
+    await fill(
+      view.input("Machine description"),
+      "Use this Linux machine for builds and tests",
+    );
+    await click(view.button("Save device"));
+    assert.equal(
+      view.saved[0]!.devices[0]!.description,
+      "Use this Linux machine for builds and tests",
+    );
+    await machineAction(view, "Build machine", "Edit");
+    assert.equal(
+      view.input("Machine description").value,
+      "Use this Linux machine for builds and tests",
+    );
+    await fill(view.input("Machine description"), "Discard this change");
+    await click(view.button("Cancel"));
+    assert.equal(view.saved.length, 1);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Discard this change/u,
+    );
+  } finally {
+    await view.close();
+  }
+});
+
 async function mount(
   overrides: Partial<Api> = {},
   devices: Snapshot["config"]["devices"] = [sshDevice],
@@ -107,6 +137,20 @@ async function mount(
     revoke: async () => {},
     ...overrides,
   };
+  const originalStatus = api.status;
+  api.status = async () => {
+    const value = await originalStatus();
+    return {
+      ...value,
+      devices:
+        value.devices ??
+        value.config.devices.map((device) => ({
+          id: device.id,
+          key: routeKey(device),
+          check: { state: "not_checked" as const, live: false as const },
+        })),
+    };
+  };
   Object.defineProperty(dom.window, "zenx", { value: { fleet: api } });
   beforeRender?.(dom);
   const root = createRoot(dom.window.document.getElementById("root")!);
@@ -147,6 +191,62 @@ async function mount(
     getSnapshot: () => snapshot,
   };
 }
+
+test("shell setup requires separate client opt-in and explicit Host exposure consent", async () => {
+  const view = await mount({}, [sshDevice], {
+    config: {
+      version: 1,
+      devices: [sshDevice],
+      hosting: {
+        enabled: true,
+        bindAddress: "127.0.0.1",
+        port: 9443,
+        tlsCertificateFile: "/tls/cert.pem",
+        tlsKeyFile: "/tls/key.pem",
+        access: "control",
+      },
+    },
+  });
+  const check = (text: string) => {
+    const node = [...document.querySelectorAll("label")]
+      .find((entry) => entry.textContent?.includes(text))
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    assert.ok(node, text);
+    return node;
+  };
+  try {
+    await click(check("Allow separately paired shell clients"));
+    assert.equal(view.button("Apply hosting").disabled, true);
+    assert.match(
+      document.body.textContent ?? "",
+      /including separately authorized target-owned shell execution/u,
+    );
+    await click(check("I allow this Host to listen"));
+    await click(view.button("Apply hosting"));
+    assert.equal(view.saved[0]!.hosting!.shellEnabled, true);
+    await click(view.button("Connect machine"));
+    await click(view.button("Manual pairing"));
+
+    assert.equal(
+      check("Request target-owned remote shell execution").disabled,
+      true,
+    );
+    await choose("Access", "control");
+    await fill(view.input("Device ID"), "shell-target");
+    await fill(view.input("Machine name"), "Shell target");
+    await fill(view.input("HTTPS endpoint"), "https://target.example:9443");
+    await fill(view.input("Remote Host ID"), "host-target");
+    await fill(view.input("One-time pairing code"), "FIXTURE-CODE");
+    await click(check("Request target-owned remote shell execution"));
+    assert.equal(view.button("Pair device").disabled, true);
+    await click(check("I allow ZenX to create Threads"));
+    await click(view.button("Pair device"));
+    assert.equal(view.paired[0]!.shellEnabled, true);
+    assert.doesNotMatch(JSON.stringify(view.getSnapshot()), /FIXTURE-CODE/u);
+  } finally {
+    await view.close();
+  }
+});
 
 async function click(node: HTMLElement) {
   await act(async () => {
@@ -212,7 +312,7 @@ test("Host status failure without a clients array keeps Fleet visible and can re
       document.querySelector('[role="alert"]')?.textContent ?? "",
       /Host status connection is unavailable/u,
     );
-    assert.equal(view.button("Add device").disabled, false);
+    assert.equal(view.button("Connect machine").disabled, false);
     assert.match(document.body.textContent ?? "", /Build machine/u);
     unavailable = false;
     await click(view.button("Refresh Fleet"));
@@ -238,7 +338,7 @@ test("Android-facing endpoint requires explicit hosting consent and survives con
   });
   try {
     await fill(
-      view.input("Android-facing HTTPS endpoint"),
+      view.input("Client-facing HTTPS endpoint"),
       "https://device.example:9443",
     );
     assert.match(
@@ -261,7 +361,7 @@ test("Android-facing endpoint requires explicit hosting consent and survives con
     );
     await click(view.button("Refresh Fleet"));
     assert.equal(
-      view.input("Android-facing HTTPS endpoint").value,
+      view.input("Client-facing HTTPS endpoint").value,
       "https://device.example:9443",
     );
   } finally {
@@ -272,9 +372,10 @@ test("Android-facing endpoint requires explicit hosting consent and survives con
 test("Fleet adds an SSH route, rereads configuration, and removes only the named route", async () => {
   const view = await mount();
   try {
-    await click(view.button("Add device"));
+    await click(view.button("Connect machine"));
+    await click(view.button("SSH"));
     await fill(view.input("Device ID"), "laptop");
-    await fill(view.input("Label"), "My laptop");
+    await fill(view.input("Machine name"), "My laptop");
     await fill(view.input("SSH host"), "me@laptop.example");
     await fill(
       view.input("Command arguments (one per line)"),
@@ -291,7 +392,7 @@ test("Fleet adds an SSH route, rereads configuration, and removes only the named
       transport: "ssh",
     });
     assert.match(document.body.textContent ?? "", /My laptop/u);
-    await click(view.button("Remove My laptop"));
+    await machineAction(view, "My laptop", "Remove");
     assert.equal(view.removed.length, 0);
     await click(view.button("Remove device"));
     assert.deepEqual(view.removed, ["laptop"]);
@@ -305,19 +406,26 @@ test("Fleet adds an SSH route, rereads configuration, and removes only the named
 test("Fleet editor Cancel and Escape discard changes and restore the initiating button", async () => {
   const view = await mount();
   try {
-    await click(view.button("Edit Build machine"));
-    await fill(view.input("Label"), "Changed label");
+    await machineAction(view, "Build machine", "Edit");
+    await fill(view.input("Machine name"), "Changed label");
     await click(view.button("Cancel"));
     assert.equal(view.saved.length, 0);
-    assert.equal(document.activeElement, view.button("Edit Build machine"));
-    await click(view.button("Add device"));
+    assert.ok(
+      document.activeElement === view.button("Build machine actions"),
+      `Focus returned to ${document.activeElement?.tagName}`,
+    );
+    await click(view.button("Connect machine"));
+    await click(view.button("Manual pairing"));
     await act(async () =>
       document.activeElement?.dispatchEvent(
         new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
       ),
     );
     assert.equal(view.saved.length, 0);
-    assert.equal(document.activeElement, view.button("Add device"));
+    assert.ok(
+      document.activeElement === view.button("Connect machine"),
+      `Focus returned to ${document.activeElement?.tagName}`,
+    );
     assert.equal(document.querySelector('[aria-label="Device editor"]'), null);
   } finally {
     await view.close();
@@ -336,10 +444,10 @@ test("Failed connection is visible and can be retried without changing a device"
     await click(view.button("Test Build machine"));
     assert.match(
       document.body.textContent ?? "",
-      /Connection failed.*SSH host unreachable/su,
+      /SSH host unreachable.*Connection failed/su,
     );
     await click(view.button("Test Build machine"));
-    assert.match(document.body.textContent ?? "", /Connected/u);
+    assert.match(document.body.textContent ?? "", /Reachable · checked/u);
     assert.equal(document.querySelector('[role="alert"]'), null);
     assert.equal(view.saved.length, 0);
   } finally {
@@ -350,10 +458,11 @@ test("Failed connection is visible and can be retried without changing a device"
 test("HTTPS pairing passes a transient code without saving it in the public configuration", async () => {
   const view = await mount();
   try {
-    await click(view.button("Add device"));
-    await choose("Connection", "https");
+    await click(view.button("Connect machine"));
+    await click(view.button("Manual pairing"));
+
     await fill(view.input("Device ID"), "desktop");
-    await fill(view.input("Label"), "Home desktop");
+    await fill(view.input("Machine name"), "Home desktop");
     await fill(view.input("HTTPS endpoint"), "https://desktop.example:3940");
     await fill(view.input("Remote Host ID"), "host-desktop");
     await fill(view.input("One-time pairing code"), "TEMPORARY-CODE");
@@ -379,7 +488,7 @@ test("HTTPS pairing passes a transient code without saving it in the public conf
       null,
     );
     assert.match(document.body.textContent ?? "", /Device paired/u);
-    await click(view.button("Edit Home desktop"));
+    await machineAction(view, "Home desktop", "Edit");
     assert.equal(view.input("HTTPS endpoint").disabled, true);
     assert.equal(view.input("Remote Host ID").disabled, true);
     await click(view.button("Cancel"));
@@ -391,7 +500,7 @@ test("HTTPS pairing passes a transient code without saving it in the public conf
 test("Remote control is not saved until its explicit acknowledgment is checked", async () => {
   const view = await mount();
   try {
-    await click(view.button("Edit Build machine"));
+    await machineAction(view, "Build machine", "Edit");
     await choose("Access", "control");
     assert.equal(view.button("Save device").disabled, true);
     const acknowledgment = document.querySelector<HTMLInputElement>(
@@ -579,6 +688,7 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     await choose("Remote workspace", "workspace-1");
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(device),
       name: "zenx_threads_list",
       arguments: { workspace: "workspace-1", limit: 50 },
     });
@@ -586,9 +696,10 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     assert.match(document.body.textContent ?? "", /Remote reply/u);
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(device),
       name: "zenx_threads_read",
       arguments: {
-        target: "thread-1",
+        threadId: "thread-1",
         workspace: "workspace-1",
         granularity: "items",
         maxItemsPerTurn: 25,
@@ -599,9 +710,10 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     await click(view.button("Send to remote Thread"));
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(device),
       name: "zenx_threads_send",
       arguments: {
-        target: "thread-1",
+        threadId: "thread-1",
         workspace: "workspace-1",
         text: "Continue the task",
         messageType: "follow_up",
@@ -613,8 +725,8 @@ test("Remote browser uses workspace IDs, reads bounded history, and sends an exp
     );
     await click(view.button("Use selected workspace"));
     assert.equal(view.saved[0]!.devices[0]!.workspace, "workspace-1");
-    await click(view.button("Close browser"));
-    assert.equal(document.activeElement, view.button("Browse Home desktop"));
+    assert.equal(document.querySelector('[aria-label="Remote Thread"]'), null);
+    assert.match(document.body.textContent ?? "", /Reopen Browse/u);
     assert.equal(document.querySelector('[aria-label="Remote Thread"]'), null);
   } finally {
     await view.close();
@@ -628,10 +740,11 @@ test("Failed pairing preserves the editor for review, and Cancel leaves no confi
     },
   });
   try {
-    await click(view.button("Add device"));
-    await choose("Connection", "https");
+    await click(view.button("Connect machine"));
+    await click(view.button("Manual pairing"));
+
     await fill(view.input("Device ID"), "desktop");
-    await fill(view.input("Label"), "Home desktop");
+    await fill(view.input("Machine name"), "Home desktop");
     await fill(view.input("HTTPS endpoint"), "https://desktop.example:3940");
     await fill(view.input("Remote Host ID"), "host-desktop");
     await fill(view.input("One-time pairing code"), "EXPIRED-CODE");
@@ -692,6 +805,7 @@ test("Fresh HTTPS peers with multiple workspaces wait for explicit workspace sel
     await choose("Remote workspace", "two");
     assert.deepEqual(calls.at(-1), {
       device: "desktop",
+      expectedDeviceKey: routeKey(view.getSnapshot().config.devices[0]!),
       name: "zenx_threads_list",
       arguments: { workspace: "two", limit: 50 },
     });
@@ -711,8 +825,8 @@ test("Refresh Fleet preserves unsaved edits and requires reload after a revision
   };
   const view = await mount({ status: async () => latest });
   try {
-    await click(view.button("Edit Build machine"));
-    await fill(view.input("Label"), "Unsaved name");
+    await machineAction(view, "Build machine", "Edit");
+    await fill(view.input("Machine name"), "Unsaved name");
     latest = {
       ...latest,
       revision: 2,
@@ -722,7 +836,7 @@ test("Refresh Fleet preserves unsaved edits and requires reload after a revision
       },
     };
     await click(view.button("Refresh Fleet"));
-    assert.equal(view.input("Label").value, "Unsaved name");
+    assert.equal(view.input("Machine name").value, "Unsaved name");
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
       /configuration changed while you were editing/u,
@@ -788,8 +902,8 @@ test("Visible pairing code rechecks only status, preserves revision-bound edits,
   );
   try {
     await click(view.button("Create pairing code"));
-    await click(view.button("Edit Build machine"));
-    await fill(view.input("Label"), "Unsaved name");
+    await machineAction(view, "Build machine", "Edit");
+    await fill(view.input("Machine name"), "Unsaved name");
     latest = {
       ...first,
       revision: 2,
@@ -812,7 +926,7 @@ test("Visible pairing code rechecks only status, preserves revision-bound edits,
     });
     assert.equal(reads, 2);
     assert.match(document.body.textContent ?? "", /New phone/u);
-    assert.equal(view.input("Label").value, "Unsaved name");
+    assert.equal(view.input("Machine name").value, "Unsaved name");
     assert.equal(view.calls.length, 0);
     await click(view.button("Save device"));
     assert.equal(expectedRevision, 1);
@@ -826,7 +940,7 @@ test("Visible pairing code rechecks only status, preserves revision-bound edits,
       poll!();
       await Promise.resolve();
     });
-    assert.equal(view.input("Label").value, "Unsaved name");
+    assert.equal(view.input("Machine name").value, "Unsaved name");
     assert.doesNotMatch(document.body.textContent ?? "", /TRANSIENT/u);
   } finally {
     await view.close();
@@ -895,6 +1009,339 @@ test("Relay registration sends its token only on Apply and clears it after save 
     await click(view.button("Discard changes"));
     assert.equal(view.input("Relay registration token").value, "");
     assert.equal(view.saved.length, 1);
+  } finally {
+    await view.close();
+  }
+});
+
+test("device action failure appears beside its submit action without CSP inline styles", async () => {
+  const view = await mount({
+    save: async () => {
+      throw new Error("Operating-system credential encryption is unavailable");
+    },
+  });
+  try {
+    await machineAction(view, "Build machine", "Edit");
+    await click(view.button("Save device"));
+    const editor = document.querySelector('[aria-label="Device editor"]');
+    assert.match(
+      editor?.querySelector('[role="alert"]')?.textContent ?? "",
+      /credential encryption is unavailable/u,
+    );
+    assert.equal(
+      document.querySelectorAll(
+        ".fleet-fieldset[style], .fleet-confirmation[style], .fleet-actions[style], .fleet-history-text[style]",
+      ).length,
+      0,
+    );
+    await click(view.button("Cancel"));
+    assert.equal(document.querySelector('[role="alert"]'), null);
+  } finally {
+    await view.close();
+  }
+});
+
+function routeKey(device: Snapshot["config"]["devices"][number]): string {
+  return JSON.stringify(
+    device.transport === "https"
+      ? [
+          device.id,
+          device.transport,
+          device.endpoint,
+          device.hostId,
+          device.workspace,
+          device.access,
+          device.shellEnabled,
+        ]
+      : [device.id, device.sshHost, device.command, device.access],
+  );
+}
+
+test("an inspected SSH route edit closes stale history, invalidates its check, and never sends to the replacement", async () => {
+  const effects: Parameters<Api["invoke"]>[0][] = [];
+  const device = { ...sshDevice, access: "control" as const };
+  const view = await mount(
+    {
+      invoke: async (input) => {
+        effects.push(input);
+        const result =
+          input.name === "zenx_projects_list"
+            ? { projects: [{ project: "/work", name: "Work" }] }
+            : input.name === "zenx_threads_list"
+              ? {
+                  threads: [
+                    {
+                      threadId: "shared-thread-id",
+                      name: "Original task",
+                      status: "idle",
+                    },
+                  ],
+                }
+              : input.name === "zenx_threads_read"
+                ? {
+                    threadId: "shared-thread-id",
+                    items: [
+                      { type: "agent_message", text: "Original host reply" },
+                    ],
+                  }
+                : { threadId: "shared-thread-id" };
+        return { device: input.device, result };
+      },
+    },
+    [device],
+  );
+  try {
+    await click(view.button("Test Build machine"));
+    await click(view.button("Browse Build machine"));
+    await click(view.button("Read Original task"));
+    const inspected = effects.at(-1)!;
+    assert.equal(inspected.expectedDeviceKey, routeKey(device));
+    assert.deepEqual(inspected.arguments, {
+      threadId: "shared-thread-id",
+      workspace: "/work",
+      granularity: "items",
+      maxItemsPerTurn: 25,
+    });
+    assert.match(document.body.textContent ?? "", /Original host reply/u);
+    await fill(view.input("Message to remote Thread"), "Unsent inspected task");
+    await machineAction(view, "Build machine", "Edit");
+    await fill(view.input("SSH host"), "other.example");
+    await click(
+      document.querySelector<HTMLInputElement>(
+        '[aria-label="Device editor"] input[type="checkbox"]',
+      )!,
+    );
+    await click(view.button("Save device"));
+    assert.equal(document.querySelector('[aria-label="Remote Thread"]'), null);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Original host reply|Reachable · checked/u,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /route or access changed.*old remote Thread was not retargeted/su,
+    );
+    assert.equal(
+      effects.some((effect) => effect.name === "zenx_threads_send"),
+      false,
+    );
+  } finally {
+    await view.close();
+  }
+});
+
+async function machineAction(
+  view: Awaited<ReturnType<typeof mount>>,
+  name: string,
+  action: string,
+) {
+  await click(view.button(`${name} actions`));
+  await click(view.button(`${action} ${name}`));
+}
+
+test("Connect starts with invitation; hosting and machine details stay on demand", async () => {
+  const view = await mount({}, []);
+  try {
+    assert.equal(
+      document.querySelector<HTMLDetailsElement>(".fleet-hosting")?.open,
+      false,
+    );
+    await click(view.button("Connect machine"));
+    assert.ok(document.querySelector('[role="dialog"]'));
+    assert.ok(view.input("Invitation"));
+    assert.equal(document.querySelector('[aria-label="Device editor"]'), null);
+    assert.equal(view.paired.length, 0);
+    assert.equal(view.saved.length, 0);
+    await click(view.button("Close connection"));
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+  } finally {
+    await view.close();
+  }
+});
+
+test("manual connection keeps ordinary edits across mode changes and reopen, but clears bearers", async () => {
+  const view = await mount({}, []);
+  try {
+    await click(view.button("Connect machine"));
+    await click(view.button("Manual pairing"));
+    await fill(view.input("Machine name"), "Home desktop");
+    await fill(view.input("HTTPS endpoint"), "https://desktop.example:3940");
+    await fill(view.input("Remote Host ID"), "home-host");
+    await fill(view.input("One-time pairing code"), "BEARER");
+    await click(view.button("SSH"));
+    assert.equal(view.input("Machine name").value, "Home desktop");
+    await fill(view.input("SSH host"), "home");
+    await click(view.button("Manual pairing"));
+    assert.equal(
+      view.input("HTTPS endpoint").value,
+      "https://desktop.example:3940",
+    );
+    assert.equal(view.input("One-time pairing code").value, "");
+    await click(view.button("Cancel"));
+    await click(view.button("Connect machine"));
+    await click(view.button("Manual pairing"));
+    assert.equal(view.input("Machine name").value, "Home desktop");
+    assert.equal(view.input("Remote Host ID").value, "home-host");
+    assert.equal(view.input("One-time pairing code").value, "");
+    assert.equal(view.saved.length, 0);
+    assert.equal(view.paired.length, 0);
+  } finally {
+    await view.close();
+  }
+});
+
+test("manual pairing suppresses repeated clicks and retains failure beside cleared code", async () => {
+  let requests = 0;
+  let reject!: (reason: Error) => void;
+  const view = await mount(
+    {
+      pair: async () => {
+        requests++;
+        await new Promise<void>((_resolve, fail) => {
+          reject = fail;
+        });
+      },
+    },
+    [],
+  );
+  try {
+    await click(view.button("Connect machine"));
+    await click(view.button("Manual pairing"));
+    await fill(view.input("Machine name"), "Home desktop");
+    await fill(view.input("HTTPS endpoint"), "https://desktop.example:3940");
+    await fill(view.input("Remote Host ID"), "home-host");
+    await fill(view.input("One-time pairing code"), "BEARER");
+    const pair = view.button("Pair device");
+    await click(pair);
+    await click(pair);
+    assert.equal(requests, 1);
+    assert.equal(view.input("One-time pairing code").value, "");
+    assert.equal(view.button("Close connection").disabled, true);
+    await act(async () => reject(new Error("Pairing receipt unavailable")));
+    assert.match(
+      document.querySelector('[aria-label="Device editor"] [role="alert"]')
+        ?.textContent ?? "",
+      /receipt unavailable/u,
+    );
+    assert.equal(view.input("Machine name").value, "Home desktop");
+    assert.equal(view.getSnapshot().config.devices.length, 0);
+  } finally {
+    await view.close();
+  }
+});
+
+test("SSH save derives a unique machine identity when optional ID is blank", async () => {
+  const view = await mount();
+  try {
+    await click(view.button("Connect machine"));
+    await click(view.button("SSH"));
+    await fill(view.input("Machine name"), "Build");
+    await fill(view.input("SSH host"), "build-two");
+    await fill(
+      view.input("Command arguments (one per line)"),
+      "node\n/bridge.js",
+    );
+    await click(view.button("Save device"));
+    assert.equal(view.saved[0]!.devices.at(-1)!.id, "build-2");
+    assert.equal(view.saved[0]!.devices.at(-1)!.access, "read");
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+  } finally {
+    await view.close();
+  }
+});
+
+test("removal menu moves focus into confirmation and Cancel or Escape restores the machine action", async () => {
+  const view = await mount();
+  try {
+    const trigger = view.button("Build machine actions");
+    await machineAction(view, "Build machine", "Remove");
+    assert.ok(document.activeElement === view.button("Cancel"));
+    await click(view.button("Cancel"));
+    assert.ok(document.activeElement === trigger);
+    await machineAction(view, "Build machine", "Remove");
+    await act(async () =>
+      view
+        .button("Cancel")
+        .dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+    );
+    assert.equal(document.querySelector('[role="alertdialog"]'), null);
+    assert.ok(document.activeElement === trigger);
+    assert.equal(view.removed.length, 0);
+  } finally {
+    await view.close();
+  }
+});
+
+test("editing an existing machine does not clear the separate unfinished new connection", async () => {
+  const view = await mount();
+  try {
+    await click(view.button("Connect machine"));
+    await click(view.button("SSH"));
+    await fill(view.input("Machine name"), "Pending machine");
+    await fill(view.input("SSH host"), "pending.example");
+    await click(view.button("Cancel"));
+    await machineAction(view, "Build machine", "Edit");
+    await click(view.button("Save device"));
+    await click(view.button("Connect machine"));
+    await click(view.button("SSH"));
+    assert.equal(view.input("Machine name").value, "Pending machine");
+    assert.equal(view.input("SSH host").value, "pending.example");
+    assert.equal(view.getSnapshot().config.devices.length, 1);
+  } finally {
+    await view.close();
+  }
+});
+
+test("Escape dismisses the nested Access choice before the connection dialog", async () => {
+  const view = await mount();
+  try {
+    await click(view.button("Connect machine"));
+    await click(view.button("SSH"));
+    await fill(view.input("Machine name"), "Unfinished SSH");
+    const access = [...document.querySelectorAll("label")]
+      .find(
+        (label) =>
+          label.querySelector("span")?.textContent?.trim() === "Access",
+      )
+      ?.querySelector<HTMLButtonElement>("button.ui-select");
+    assert.ok(access);
+    await act(async () => {
+      access.focus();
+      access.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    const option = document.querySelector<HTMLElement>('[role="option"]');
+    assert.ok(option);
+    await act(async () => {
+      option.focus();
+      option.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    assert.equal(document.querySelector('[role="listbox"]'), null);
+    assert.ok(document.querySelector('[role="dialog"]'));
+    assert.equal(view.input("Machine name").value, "Unfinished SSH");
+    await act(async () =>
+      access.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(view.saved.length, 0);
   } finally {
     await view.close();
   }

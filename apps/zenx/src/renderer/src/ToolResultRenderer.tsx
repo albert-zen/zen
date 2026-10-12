@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import React from "react";
 
 import type { CommandItem } from "../../protocol-client/index.js";
@@ -18,6 +20,7 @@ export function ToolResultRenderer({
   registry: PluginUiRegistry | null;
   theme: "light" | "dark";
 }) {
+  useTranslation("panels");
   const renderer = (snapshot?.resultRenderers ?? []).find(
     (candidate) => candidate.contentType === item.contentType,
   );
@@ -70,15 +73,23 @@ export function ToolResultRenderer({
 }
 
 export function ToolResultFallback({ item }: { item: CommandItem }) {
+  useTranslation("panels");
   const json =
     item.structuredContent === undefined
       ? null
       : JSON.stringify(item.structuredContent, null, 2);
   return (
-    <section className="tool-result-fallback" aria-label="Tool result">
+    <section
+      className="tool-result-fallback"
+      aria-label={i18n.t("panels:toolResult")}
+    >
       {json === null ? null : <pre>{json}</pre>}
       {item.aggregatedOutput ? <pre>{item.aggregatedOutput}</pre> : null}
-      {item.exitCode === null ? null : <small>Exit code {item.exitCode}</small>}
+      {item.exitCode === null ? null : (
+        <small>
+          {i18n.t("panels:exitCode")} {item.exitCode}
+        </small>
+      )}
     </section>
   );
 }

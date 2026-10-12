@@ -1,4 +1,4 @@
-import type { Turn } from "../../protocol-client/index.js";
+import { i18n } from "./i18n.js";
 import {
   compileModelMessages,
   type ModelMessage,
@@ -13,7 +13,7 @@ export interface ContextCompactionProjection {
   item: ContextCompactionItem;
   canonicalIndex: number;
   effectiveMessages: readonly ModelMessage[] | null;
-  /** A partial display history cannot reconstruct the original snapshot. */
+  /** Display history can arrive before the authoritative canonical read. */
   snapshotError?: string;
 }
 
@@ -36,58 +36,28 @@ export function projectContextCompactions(
         },
       ];
     } catch (error) {
+      // Core compilation requires a complete canonical prefix. A live event or
+      // paged display history may not contain that prefix; keep the committed
+      // summary visible without inventing a retained-context snapshot.
       return [
         {
           item,
           canonicalIndex,
           effectiveMessages: null,
-          snapshotError: `Retained context snapshot is unavailable in this view. ${error instanceof Error ? error.message : String(error)}`,
+          snapshotError: error instanceof Error ? error.message : String(error),
         },
       ];
     }
   });
 }
 
-/** Associate a committed reset with its exact displayed call, never by nearby text or timing. */
-export function groupContextCompactions(
-  compactions: readonly ContextCompactionProjection[],
-  turns: readonly Turn[],
-): {
-  independent: ContextCompactionProjection[];
-  byToolItemId: ReadonlyMap<string, readonly ContextCompactionProjection[]>;
-} {
-  const independent: ContextCompactionProjection[] = [];
-  const byToolItemId = new Map<string, ContextCompactionProjection[]>();
-  for (const projection of compactions) {
-    const { item } = projection;
-    const tool =
-      item.provenance === "agentic"
-        ? turns
-            .find((turn) => turn.id === item.turnId)
-            ?.items.find(
-              (candidate) =>
-                candidate.type === "commandExecution" &&
-                candidate.callId === item.callId,
-            )
-        : undefined;
-    if (tool === undefined) {
-      independent.push(projection);
-      continue;
-    }
-    const entries = byToolItemId.get(tool.id) ?? [];
-    entries.push(projection);
-    byToolItemId.set(tool.id, entries);
-  }
-  return { independent, byToolItemId };
-}
-
 export function compactionInitiatorLabel(item: ContextCompactionItem): string {
   const initiator =
     item.initiator ?? (item.provenance === "agentic" ? "agent" : undefined);
-  if (initiator === "human") return "Human initiated";
-  if (initiator === "agent") return "Agent initiated";
-  if (initiator === "automatic") return "Automatic";
-  return "Initiator unavailable";
+  if (initiator === "human") return i18n.t("shell:humanInitiated");
+  if (initiator === "agent") return i18n.t("shell:agentInitiated");
+  if (initiator === "automatic") return i18n.t("shell:automatic");
+  return i18n.t("shell:initiatorUnavailable");
 }
 
 function compactionSelection(

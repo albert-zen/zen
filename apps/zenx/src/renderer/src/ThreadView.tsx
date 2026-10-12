@@ -1,25 +1,34 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import type { SkillEntry } from "../../../../cli/src/skills.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 import {
   commandStatus,
+  commandPhaseLabel,
+  commandPhase,
   toolPresentation,
   commandTitle,
 } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
-  createContext,
-  useContext,
   useEffect,
+  useCallback,
   useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
+import type {
+  NativeQueueEditParams,
+  NativeQueueEditResult,
+} from "../../../../../src/protocol/native/wire.js";
 import type {
   QueuedCancellationResult,
   QueuedCancellationTarget,
@@ -48,6 +57,7 @@ import {
   type ComposerDraftImage,
   type ComposerIntent,
   type ComposerState,
+  type ComposerDraft,
 } from "./composer-state.js";
 import type { ZenXThreadAttachmentProjection } from "../../main/image-attachments.js";
 import { ComposerShell, ComposerEditor, ComposerAction } from "./Composer.js";
@@ -55,6 +65,20 @@ import { handleComposerSuggestionKey } from "./ComposerSuggestions.js";
 import { ComposerSendControl } from "./ComposerSendControl.js";
 import { ComposerModelMenu } from "./ComposerModelMenu.js";
 import { Icon } from "./icons.js";
+import { ActivityText } from "./ActivityText.js";
+import { ApprovalRequestCard } from "./ApprovalRequestCard.js";
+import { QueuedMessages } from "./QueuedMessages.js";
+import { QueuedMessageEditor } from "./QueuedMessageEditor.js";
+import { queuedInputDraft, queuedDraftInput } from "./queue-edit-draft.js";
+import {
+  createQueueEditStore,
+  type QueueEditStore,
+  type QueueEditSession,
+} from "./queue-edit-state.js";
+import {
+  projectQueuedImages,
+  sameImageAttachment,
+} from "./queued-message-images.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import type { ModelMessage } from "../../../../../src/model.js";
@@ -71,6 +95,12 @@ import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import {
   groupReasoningWithoutDetailsRows,
   projectTurn,
+  createTraceObservationIndex,
+  summarizeTraceActivity,
+  observedCommandPhase,
+  traceSummary,
+  type TraceObservationIndex,
+  type TraceActivity,
   traceDisplayRows,
   type TurnDisplayNode,
 } from "./turn-projection.js";
@@ -78,24 +108,15 @@ import { WorkflowCommandMenu } from "./WorkflowCommandMenu.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
 import { useComposerSelector } from "./use-composer-selector.js";
 import { Dialog } from "./ui/controls.js";
-import { useConversationDetailPreference } from "./conversation-presentation.js";
 import {
   compactionInitiatorLabel,
   projectContextCompactions,
-  groupContextCompactions,
   type ContextCompactionProjection,
 } from "./context-compaction-projection.js";
-
-/** Presentation only: never saved or sent to an agent engine. */
-const TraceDebugContext = createContext(false);
-const TraceCompactionsContext = createContext<
-  ReadonlyMap<string, readonly ContextCompactionProjection[]>
->(new Map());
 
 interface ThreadViewProps {
   /** External engines use their own controls and text semantics. */
   zenFeatures?: boolean;
-  /** External native status can precede a projected Turn; canonical Zen still targets an exact Turn. */
   nativeSessionControl?: { running: boolean; interrupt(): Promise<void> };
   sendDisabled?: boolean;
   interruptDisabled?: boolean;
@@ -105,16 +126,24 @@ interface ThreadViewProps {
   onComposerSendModeChange?(mode: ComposerSendMode): Promise<void>;
   queueFailure?: {
     queuedItemId: string;
+    clientId?: string;
+    attemptId?: string;
+    revision?: number;
     code: string;
     message: string;
   } | null;
   onResumeQueue?(): Promise<void>;
+  queueEditStore?: QueueEditStore;
+  onEditQueued?(params: NativeQueueEditParams): Promise<NativeQueueEditResult>;
+  onImportQueueImages?(files: readonly File[]): Promise<ComposerDraftImage[]>;
+  onPickQueueImages?(): Promise<ComposerDraftImage[]>;
   onCancelQueued?(
     targets: readonly QueuedCancellationTarget[],
   ): Promise<{ results: QueuedCancellationResult[] }>;
   approvals: readonly ApprovalCardState[];
   composer: ComposerState;
   composerContext?: ReactNode;
+  composerContextPosition?: "before" | "after";
   composerDisabled?: boolean;
   emptyContent?: ReactNode;
   modelDisabled?: boolean;
@@ -169,12 +198,17 @@ export function ThreadView({
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
-  queueFailure = null,
+  queueFailure: suppliedQueueFailure = null,
   onResumeQueue,
   onCancelQueued,
+  onEditQueued,
+  queueEditStore,
+  onImportQueueImages,
+  onPickQueueImages,
   approvals,
   composer,
   composerContext = null,
+  composerContextPosition = "before",
   composerDisabled = false,
   emptyContent = null,
   modelDisabled = false,
@@ -182,7 +216,7 @@ export function ThreadView({
   imageCapabilityError = null,
   imageCapabilityNotice = null,
   models = [],
-  permissionLabel = "Full access",
+  permissionLabel = i18n.t("shell:fullAccess"),
   permissionMode = "danger-full-access",
   permissionError,
   switchingPermission,
@@ -204,7 +238,7 @@ export function ThreadView({
   onPickImages = async () => undefined,
   onRemoveImage = () => undefined,
   onReadAttachment = async () => {
-    throw new Error("Image payload reader is unavailable");
+    throw new Error(i18n.t("shell:imageReaderUnavailable"));
   },
   onInterrupt,
   onCompact,
@@ -215,24 +249,113 @@ export function ThreadView({
   onSubmit,
   onOpenMessageLink,
 }: ThreadViewProps) {
-  const [conversationDetail] = useConversationDetailPreference();
-  const debugTrace = conversationDetail === "debug";
-  const [debugVisited, setDebugVisited] = useState(debugTrace);
-  useEffect(() => {
-    if (debugTrace) setDebugVisited(true);
-  }, [debugTrace]);
-  const [interrupting, setInterrupting] = useState(false);
+  useTranslation("shell");
+  const queueFailure =
+    suppliedQueueFailure &&
+    thread?.queuedMessages?.some(
+      (message) =>
+        message.id === suppliedQueueFailure.queuedItemId &&
+        (suppliedQueueFailure.clientId === undefined ||
+          message.clientId === suppliedQueueFailure.clientId) &&
+        (message.revision ?? 0) === (suppliedQueueFailure.revision ?? 0),
+    )
+      ? suppliedQueueFailure
+      : null;
+  const [stoppingRun, setStoppingRun] = useState<string | null>(null);
+  const stopRequestRef = useRef<object | null>(null);
+  const activeRunRef = useRef<string | null>(null);
+  const currentThreadRef = useRef<string | null>(null);
+  currentThreadRef.current = thread?.id ?? null;
   const [interruptError, setInterruptError] = useState<string | null>(null);
   const [queueResumeError, setQueueResumeError] = useState<{
     threadId: string;
     queuedItemId: string;
+    clientId: string;
+    revision: number;
+    matchingFailureAttemptId: string | null;
     message: string;
   } | null>(null);
-  const [cancelingQueue, setCancelingQueue] = useState(false);
+  const currentQueueFailureRef = useRef(queueFailure);
+  currentQueueFailureRef.current = queueFailure;
+  const cancelLocks = useRef(new Map<string, Set<string>>());
+  const resumeLocks = useRef(new Set<string>());
+  const editLocks = useRef(new Set<string>());
+  const editOwner = useRef(Symbol("queue editor viewport"));
+  const [localEditStore] = useState(createQueueEditStore);
+  const editStore = queueEditStore ?? localEditStore;
+  const editSessions = useSyncExternalStore(
+    editStore.subscribe,
+    editStore.getSnapshot,
+    editStore.getSnapshot,
+  );
+  // Async callbacks from an unmounted viewport still address the App-owned cache.
+  const editSessionsRef = useMemo(
+    () => ({
+      get current() {
+        return editStore.getSnapshot();
+      },
+    }),
+    [editStore],
+  );
+  const [openEditKey, setOpenEditKey] = useState<string | null>(null);
+  const updateEditSession = editStore.set;
+  useEffect(() => {
+    const owner = editOwner.current;
+    return () => {
+      for (const [key, session] of Object.entries(editStore.getSnapshot())) {
+        if (session.owner === owner)
+          editStore.set(key, { ...session, owner: undefined });
+      }
+    };
+  }, [editStore, thread?.id]);
+  const nativeQueue = useMemo(
+    () => pendingQueuedMessages(thread?.canonicalItems ?? []),
+    [thread?.canonicalItems],
+  );
+  const observedEdit = (session: QueueEditSession) =>
+    session.confirmed !== undefined &&
+    thread?.id === session.threadId &&
+    thread.canonicalItems?.some(
+      (item) =>
+        item.type === "user_message_queue_edited" &&
+        item.id === session.confirmed!.editItemId &&
+        item.threadId === session.threadId &&
+        item.queuedItemId === session.queuedItemId &&
+        item.clientId === session.clientId &&
+        item.revision === session.confirmed!.revision &&
+        item.editId === session.attempt?.editId &&
+        JSON.stringify(item.input) === session.attempt?.fingerprint,
+    ) === true;
+  useEffect(() => {
+    for (const [key, session] of Object.entries(editSessionsRef.current)) {
+      if (session.owner === undefined && observedEdit(session))
+        updateEditSession(key, null);
+    }
+  }, [thread?.canonicalItems, thread?.id, openEditKey, editSessions]);
+  const editableQueue = new Map(
+    nativeQueue.flatMap((item) => {
+      if (
+        !thread?.queuedMessages?.some(
+          (message) =>
+            message.id === item.id && message.clientId === item.clientId,
+        )
+      )
+        return [];
+      const draft = queuedInputDraft(item.input, item.id);
+      return draft === null ? [] : [[item.id, { item, draft }] as const];
+    }),
+  );
+  const [, invalidateQueue] = useState(0);
+  const cancelingQueue = thread !== null && cancelLocks.current.has(thread.id);
+  const resumingQueue = thread !== null && resumeLocks.current.has(thread.id);
+  const editingQueue =
+    thread !== null &&
+    (editLocks.current.has(thread.id) || editStore.isPending(thread.id));
   const [cancelConfirmation, setCancelConfirmation] = useState<{
     threadId: string;
     targets: QueuedCancellationTarget[];
     previews: string[];
+    trigger: HTMLButtonElement;
   } | null>(null);
   const [cancelNotice, setCancelNotice] = useState<{
     threadId: string;
@@ -248,7 +371,46 @@ export function ThreadView({
     attachment: AttachmentRef;
     name: string;
     trigger: HTMLButtonElement;
+    queueOwner?: { threadId: string; queuedItemId: string; clientId: string };
   } | null>(null);
+  const queuedImages = useMemo(
+    () => projectQueuedImages(thread),
+    [thread?.canonicalItems, thread?.queuedMessages],
+  );
+  const queuedImageScope = useRef({
+    threadId: thread?.id,
+    images: queuedImages,
+  });
+  queuedImageScope.current = { threadId: thread?.id, images: queuedImages };
+  const readQueuedImage = useCallback(
+    async (attachment: AttachmentRef) => {
+      const scope = queuedImageScope.current;
+      if (
+        scope.threadId !== thread?.id ||
+        !Object.values(scope.images).some((images) =>
+          images.some((image) => sameImageAttachment(image, attachment)),
+        )
+      ) {
+        throw new Error(i18n.t("panels:imageUnavailable"));
+      }
+      return await onReadAttachment(attachment);
+    },
+    [thread?.id, onReadAttachment],
+  );
+  const queuePreviewCurrent =
+    preview?.queueOwner === undefined ||
+    (preview.queueOwner.threadId === thread?.id &&
+      thread.queuedMessages?.some(
+        (message) =>
+          message.id === preview.queueOwner!.queuedItemId &&
+          message.clientId === preview.queueOwner!.clientId,
+      ) === true &&
+      queuedImages[preview.queueOwner.queuedItemId]?.some((image) =>
+        sameImageAttachment(image, preview.attachment),
+      ) === true);
+  useEffect(() => {
+    if (!queuePreviewCurrent) setPreview(null);
+  }, [queuePreviewCurrent]);
   const [atLive, setAtLive] = useState(true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
@@ -277,26 +439,27 @@ export function ThreadView({
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const runningTurn = thread === null ? null : activeTurn(thread);
+  const runKey =
+    thread && runningTurn ? JSON.stringify([thread.id, runningTurn.id]) : null;
+  activeRunRef.current = runKey;
+  const interrupting = runKey !== null && stoppingRun === runKey;
+  useEffect(() => {
+    stopRequestRef.current = null;
+    setStoppingRun(null);
+    setInterruptError(null);
+  }, [runKey]);
   const turns = thread?.turns ?? [];
   const contextCompactions = useMemo(
     () => projectContextCompactions(thread?.canonicalItems),
     [thread?.canonicalItems],
   );
-  const compactionGroups = useMemo(
-    () => groupContextCompactions(contextCompactions, turns),
-    [contextCompactions, turns],
-  );
   const transcriptRows = useMemo(
     () =>
-      buildTranscriptRows(
-        turns,
-        thread?.canonicalItems,
-        compactionGroups.independent,
-      ),
-    [compactionGroups.independent, thread?.canonicalItems, turns],
+      buildTranscriptRows(turns, thread?.canonicalItems, contextCompactions),
+    [contextCompactions, thread?.canonicalItems, turns],
   );
   const pendingApprovals = approvals.filter(
-    (approval) => approval.status === "pending",
+    (approval) => approval.params.threadId === thread?.id,
   );
   const compactRequested = zenFeatures && isCompactCommand(composer.draft.text);
   const submitting =
@@ -319,11 +482,37 @@ export function ThreadView({
 
   useEffect(() => {
     const scroll = scrollRef.current;
-    if (scroll !== null && shouldFollowRef.current) {
+    if (
+      scroll !== null &&
+      shouldFollowRef.current &&
+      !transcriptHasSelection(scroll)
+    ) {
       scroll.scrollTop = scroll.scrollHeight;
       setAtLive(true);
     }
   }, [approvals, composer.compaction, thread?.canonicalItems, thread?.turns]);
+
+  useEffect(() => {
+    const selection = () => {
+      if (transcriptHasSelection(scrollRef.current)) {
+        shouldFollowRef.current = false;
+        setAtLive(false);
+      }
+    };
+    document.addEventListener("selectionchange", selection);
+    return () => document.removeEventListener("selectionchange", selection);
+  }, []);
+  useLayoutEffect(() => {
+    const content = scrollRef.current?.firstElementChild;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const scroll = scrollRef.current;
+      if (scroll && shouldFollowRef.current && !transcriptHasSelection(scroll))
+        scroll.scrollTop = scroll.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   // Keep a newly failed request visible when approvals, queued messages and a
   // long draft overflow the bottom zone. User scrolling afterwards is left
@@ -348,7 +537,11 @@ export function ThreadView({
         return;
       view.style.setProperty("--bottom-zone-height", height);
       const scroll = scrollRef.current;
-      if (shouldFollowRef.current && scroll !== null)
+      if (
+        shouldFollowRef.current &&
+        scroll !== null &&
+        !transcriptHasSelection(scroll)
+      )
         scroll.scrollTop = scroll.scrollHeight;
     };
     publish();
@@ -374,24 +567,71 @@ export function ThreadView({
     void onSubmit(intent, runningTurn?.id ?? null);
   };
 
+  const [nativeInterrupting, setNativeInterrupting] = useState(false);
+  const nativeInterruptRef = useRef<object | null>(null);
+  const nativeIdentityRef = useRef(thread?.id);
+  nativeIdentityRef.current = thread?.id;
+  useEffect(() => {
+    nativeInterruptRef.current = null;
+    setNativeInterrupting(false);
+  }, [thread?.id]);
   const interrupt = async () => {
+    if (nativeSessionControl) {
+      if (
+        !nativeSessionControl.running ||
+        interruptDisabled ||
+        composerDisabled ||
+        submitting ||
+        nativeInterruptRef.current
+      )
+        return;
+      const token = {};
+      const id = thread?.id;
+      nativeInterruptRef.current = token;
+      setNativeInterrupting(true);
+      setInterruptError(null);
+      try {
+        await nativeSessionControl.interrupt();
+      } catch (error) {
+        if (
+          nativeIdentityRef.current === id &&
+          nativeInterruptRef.current === token
+        )
+          setInterruptError(describeError(error));
+      } finally {
+        if (
+          nativeIdentityRef.current === id &&
+          nativeInterruptRef.current === token
+        ) {
+          nativeInterruptRef.current = null;
+          setNativeInterrupting(false);
+        }
+      }
+      return;
+    }
     if (
-      interruptDisabled ||
       composerDisabled ||
-      (runningTurn === null && !nativeSessionControl?.running) ||
+      runningTurn === null ||
+      runKey === null ||
       interrupting ||
-      submitting
+      submitting ||
+      stopRequestRef.current !== null
     )
       return;
-    setInterrupting(true);
+    const token = {};
+    stopRequestRef.current = token;
+    const key = runKey;
+    setStoppingRun(key);
     setInterruptError(null);
     try {
-      if (nativeSessionControl) await nativeSessionControl.interrupt();
-      else if (runningTurn !== null) await onInterrupt(runningTurn.id);
+      await onInterrupt(runningTurn.id);
+      // The acknowledgement only accepts the request. Canonical terminal evidence ends it.
     } catch (error) {
+      if (activeRunRef.current !== key || stopRequestRef.current !== token)
+        return;
       setInterruptError(describeError(error));
-    } finally {
-      setInterrupting(false);
+      setStoppingRun(null);
+      stopRequestRef.current = null;
     }
   };
 
@@ -407,28 +647,116 @@ export function ThreadView({
         : sendIntent;
   const intentLabel = (intent: ComposerIntent) =>
     intent === "batch-next"
-      ? "Next turn"
+      ? i18n.t("shell:nextTurn")
       : intent === "queue"
-        ? "Each turn"
+        ? i18n.t("shell:eachTurn")
         : intent === "steer"
-          ? "Steer now"
+          ? i18n.t("shell:steerNow")
           : intent === "replace"
-            ? "Interrupt and send"
-            : "Send";
+            ? i18n.t("shell:interruptAndSend")
+            : i18n.t("shell:send");
   const primaryLabel = compactRequested
-    ? "Compact context"
+    ? i18n.t("shell:compactContext")
     : primaryMode === "stop"
-      ? "Stop"
+      ? i18n.t(interrupting ? "shell:stopping" : "shell:stop")
       : intentLabel(sendIntent);
   const primary = () => {
     if (primaryMode === "stop") void interrupt();
     else submit(sendIntent);
   };
+  const saveQueuedEdit = async (key: string, draft: ComposerDraft) => {
+    const session = editSessionsRef.current[key];
+    if (
+      !session ||
+      session.owner !== editOwner.current ||
+      session.confirmed ||
+      session.pending ||
+      !onEditQueued ||
+      composerDisabled ||
+      currentThreadRef.current !== session.threadId ||
+      editLocks.current.has(session.threadId) ||
+      editStore.isPending(session.threadId) ||
+      cancelLocks.current.has(session.threadId) ||
+      resumeLocks.current.has(session.threadId)
+    ) {
+      throw new Error(i18n.t("shell:queueEditBusy"));
+    }
+    const input = queuedDraftInput(draft);
+    const fingerprint = JSON.stringify(input);
+    const attempt =
+      session.attempt?.fingerprint === fingerprint
+        ? session.attempt
+        : { editId: crypto.randomUUID(), fingerprint };
+    editLocks.current.add(session.threadId);
+    updateEditSession(key, {
+      ...session,
+      draft,
+      attempt,
+      pending: true,
+      error: null,
+    });
+    try {
+      const result = await onEditQueued({
+        threadId: session.threadId,
+        queuedItemId: session.queuedItemId,
+        clientId: session.clientId,
+        expectedRevision: session.expectedRevision,
+        editId: attempt.editId,
+        input,
+      });
+      if (
+        typeof result.editItemId !== "string" ||
+        result.editItemId.length === 0 ||
+        result.queuedItemId !== session.queuedItemId ||
+        result.clientId !== session.clientId ||
+        result.revision !== session.expectedRevision + 1 ||
+        !["edited", "already_edited"].includes(result.status)
+      )
+        throw new Error(i18n.t("shell:queueEditUnconfirmed"));
+      const current = editSessionsRef.current[key];
+      if (current?.identity === session.identity)
+        updateEditSession(key, {
+          ...current,
+          pending: false,
+          error: null,
+          confirmed: {
+            editItemId: result.editItemId,
+            revision: result.revision,
+          },
+        });
+    } catch (error) {
+      const current = editSessionsRef.current[key];
+      if (current?.identity === session.identity)
+        updateEditSession(key, {
+          ...current,
+          pending: false,
+          error: describeError(error),
+        });
+      throw error;
+    } finally {
+      editLocks.current.delete(session.threadId);
+      invalidateQueue((n) => n + 1);
+    }
+  };
   const cancelQueued = async (targets: readonly QueuedCancellationTarget[]) => {
-    if (thread === null || onCancelQueued === undefined || cancelingQueue)
+    if (
+      thread === null ||
+      onCancelQueued === undefined ||
+      composerDisabled ||
+      currentThreadRef.current !== thread.id ||
+      targets.length === 0 ||
+      cancelLocks.current.has(thread.id) ||
+      resumeLocks.current.has(thread.id) ||
+      editLocks.current.has(thread.id) ||
+      editStore.isPending(thread.id)
+    )
       return;
     const threadId = thread.id;
-    setCancelingQueue(true);
+    cancelLocks.current.set(
+      threadId,
+      new Set(targets.map((target) => target.queuedItemId)),
+    );
+    invalidateQueue((n) => n + 1);
     setCancelNotice(null);
     try {
       const result = await onCancelQueued(targets);
@@ -438,29 +766,151 @@ export function ThreadView({
       const missing = result.results.filter(
         (entry) => entry.status === "not_found",
       ).length;
-      if (started > 0 || missing > 0)
+      if ((started > 0 || missing > 0) && currentThreadRef.current === threadId)
         setCancelNotice({
           threadId,
-          message: `${started} message(s) already starting or delivered and cannot be canceled; ${missing} no longer match this Thread. Only still-pending entries were canceled. Use Stop separately if you need to interrupt the active Turn.`,
+          message: i18n.t("shell:queueCancelPartial", { started, missing }),
         });
     } catch (error) {
-      setCancelNotice({ threadId, message: describeError(error) });
+      if (currentThreadRef.current === threadId)
+        setCancelNotice({ threadId, message: describeError(error) });
     } finally {
-      setCancelingQueue(false);
+      cancelLocks.current.delete(threadId);
+      invalidateQueue((n) => n + 1);
+    }
+  };
+  const resumeQueue = async () => {
+    if (
+      !thread ||
+      !onResumeQueue ||
+      composerDisabled ||
+      runningTurn !== null ||
+      currentThreadRef.current !== thread.id ||
+      resumeLocks.current.has(thread.id) ||
+      cancelLocks.current.has(thread.id) ||
+      editLocks.current.has(thread.id) ||
+      editStore.isPending(thread.id)
+    )
+      return;
+    const threadId = thread.id;
+    const head = thread.queuedMessages?.[0];
+    if (!head) return;
+    const attemptedMessages = thread.queuedMessages ?? [];
+    const previousFailureAttemptId = currentQueueFailureRef.current?.attemptId;
+    resumeLocks.current.add(threadId);
+    invalidateQueue((n) => n + 1);
+    setQueueResumeError(null);
+    try {
+      await onResumeQueue();
+    } catch (error) {
+      if (currentThreadRef.current === threadId) {
+        const message = describeError(error);
+        const failure = currentQueueFailureRef.current;
+        // Correlate only a new native attempt observed during this request.
+        // An old failure with identical wording must not hide a new transport error.
+        const matchingFailureAttemptId =
+          failure?.attemptId &&
+          failure.attemptId !== previousFailureAttemptId &&
+          failure.message === message &&
+          attemptedMessages.some(
+            (entry) =>
+              entry.id === failure.queuedItemId &&
+              (failure.clientId === undefined ||
+                entry.clientId === failure.clientId),
+          )
+            ? failure.attemptId
+            : null;
+        setQueueResumeError({
+          threadId,
+          queuedItemId: head.id,
+          clientId: head.clientId,
+          revision: head.revision ?? 0,
+          matchingFailureAttemptId,
+          message,
+        });
+      }
+    } finally {
+      resumeLocks.current.delete(threadId);
+      invalidateQueue((n) => n + 1);
     }
   };
   const visibleResumeError =
     queueResumeError !== null &&
-    thread !== null &&
-    queueResumeError.threadId === thread.id &&
-    thread.queuedMessages?.some(
-      (entry) => entry.id === queueResumeError.queuedItemId,
+    queueResumeError.threadId === thread?.id &&
+    thread?.queuedMessages?.some(
+      (entry) =>
+        entry.id === queueResumeError.queuedItemId &&
+        entry.clientId === queueResumeError.clientId &&
+        (entry.revision ?? 0) === queueResumeError.revision,
+    ) &&
+    !(
+      queueResumeError.matchingFailureAttemptId !== null &&
+      queueResumeError.matchingFailureAttemptId === queueFailure?.attemptId &&
+      queueResumeError.message === queueFailure.message
     )
-      ? queueResumeError.message
+      ? (queueResumeError?.message ?? null)
       : null;
+  const respondToApproval = async (
+    requestId: string,
+    decision: ApprovalDecision,
+  ) => {
+    const threadId = thread?.id;
+    const ownsFocus = (element: EventTarget | null) => {
+      const request =
+        element instanceof Element
+          ? element.closest("[data-approval-request]")
+          : null;
+      return (
+        request?.getAttribute("data-approval-request") === requestId &&
+        request.getAttribute("data-approval-thread") === threadId
+      );
+    };
+    const owned = ownsFocus(document.activeElement);
+    const composer = composerTextareaRef.current;
+    const knownRequests = new Set(
+      pendingApprovals.map((item) => item.requestId),
+    );
+    let focusMoved = false;
+    const trackFocus = (event: FocusEvent) => {
+      if (event.target !== document.body && !ownsFocus(event.target))
+        focusMoved = true;
+    };
+    if (owned) document.addEventListener("focusin", trackFocus);
+    try {
+      await onRespondToApproval(requestId, decision);
+    } catch (error) {
+      document.removeEventListener("focusin", trackFocus);
+      throw error;
+    }
+    if (!owned) return;
+    // Let the card close its modal before moving focus outside Radix's trap.
+    // Recheck ownership after that commit rather than trusting the click time.
+    requestAnimationFrame(() => {
+      document.removeEventListener("focusin", trackFocus);
+      if (
+        focusMoved ||
+        currentThreadRef.current !== threadId ||
+        !composer?.isConnected ||
+        composerTextareaRef.current !== composer ||
+        document.getSelection()?.isCollapsed === false
+      )
+        return;
+      const active = document.activeElement;
+      const replaced = [
+        ...document.querySelectorAll("[data-approval-request]"),
+      ].some(
+        (element) =>
+          element.getAttribute("data-approval-thread") === threadId &&
+          !knownRequests.has(
+            element.getAttribute("data-approval-request") ?? "",
+          ),
+      );
+      if (ownsFocus(active) || (active === document.body && !replaced))
+        composer.focus({ preventScroll: true });
+    });
+  };
   const composerError =
     interruptError ??
-    (queueFailure === null ? visibleResumeError : null) ??
     attachmentError ??
     (blockedByImageCapability ? imageCapabilityError : null) ??
     (composer.submission?.draftRevision === composer.draftRevision
@@ -502,91 +952,89 @@ export function ThreadView({
       <div
         className="messages"
         ref={scrollRef}
+        onWheel={(event) => {
+          if (
+            event.deltaY >= 0 ||
+            isNestedTranscriptScroll(event.target, event.currentTarget)
+          )
+            return;
+          shouldFollowRef.current = false;
+          setAtLive(false);
+        }}
         onScroll={(event) => {
           const target = event.currentTarget;
           const live =
+            !transcriptHasSelection(target) &&
             target.scrollHeight - target.scrollTop - target.clientHeight < 80;
           shouldFollowRef.current = live;
           setAtLive(live);
         }}
       >
-        <TraceDebugContext.Provider value={debugTrace}>
-          <TraceCompactionsContext.Provider
-            value={compactionGroups.byToolItemId}
+        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+          <ThreadImagesContext.Provider
+            value={{
+              cwd: thread?.cwd,
+              attachments: threadAttachments,
+              read: onReadAttachment,
+              open: (attachment, name, trigger) =>
+                setPreview({ attachment, name, trigger }),
+            }}
           >
-            <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
-              <ThreadImagesContext.Provider
-                value={{
-                  cwd: thread?.cwd,
-                  attachments: threadAttachments,
-                  read: onReadAttachment,
-                  open: (attachment, name, trigger) =>
-                    setPreview({ attachment, name, trigger }),
-                }}
-              >
-                <div className="messages-inner">
-                  {thread !== null &&
-                  transcriptRows.length > 0 &&
-                  (debugTrace || debugVisited) ? (
-                    <div className="trace-debug-source" hidden={!debugTrace}>
-                      <p>
-                        {thread.canonicalItems === undefined
-                          ? "Only the current display projection is available."
-                          : "Available committed items and the live display projection. Earlier history may be unavailable; streaming updates are display-only until committed."}
-                      </p>
-                      {thread.canonicalItems === undefined ? null : (
-                        <TraceRawDetails
-                          label="Available canonical items"
-                          data={thread.canonicalItems}
-                        />
-                      )}
-                      <TraceRawDetails
-                        label="Live display projection"
-                        data={turns}
-                      />
+            <div className="messages-inner">
+              {transcriptRows.length === 0
+                ? (emptyContent ?? (
+                    <div className="thread-empty">
+                      <h2>{i18n.t("shell:startANewThread")}</h2>
+                      <p>{i18n.t("shell:describeOutcome")}</p>
                     </div>
-                  ) : null}
-                  {transcriptRows.length === 0
-                    ? (emptyContent ?? (
-                        <div className="thread-empty">
-                          <h2>Start a new thread</h2>
-                          <p>
-                            Describe the outcome you want. ZenX will use this
-                            Thread’s workspace, model, and permission policy.
-                          </p>
-                        </div>
-                      ))
-                    : transcriptRows.map((row) =>
-                        row.type === "turn" ? (
-                          <TurnBlock
-                            index={row.index}
-                            key={row.turn.id}
-                            turn={row.turn}
-                            usage={threadUsage?.turns[row.turn.id]}
-                            wakeups={wakeups}
-                            attachments={threadAttachments}
-                            onOpenImage={(attachment, name, trigger) =>
-                              setPreview({ attachment, name, trigger })
-                            }
-                            onReadAttachment={onReadAttachment}
-                            pluginSnapshot={pluginSnapshot}
-                            pluginUiRegistry={pluginUiRegistry}
-                          />
-                        ) : (
-                          <ContextCompactionEvent
-                            key={row.compaction.item.id}
-                            projection={row.compaction}
-                          />
-                        ),
-                      )}
-                  {composer.compaction?.status === "pending" ? (
-                    <ContextCompactionProgress state={composer.compaction} />
-                  ) : null}
-                </div>
-              </ThreadImagesContext.Provider>
-            </MessageLinkContext.Provider>
-          </TraceCompactionsContext.Provider>
-        </TraceDebugContext.Provider>
+                  ))
+                : transcriptRows.map((row) =>
+                    row.type === "turn" ? (
+                      <TurnBlock
+                        index={row.index}
+                        key={row.turn.id}
+                        turn={row.turn}
+                        stopping={
+                          interrupting && row.turn.id === runningTurn?.id
+                        }
+                        approvals={pendingApprovals.filter(
+                          (approval) => approval.params.turnId === row.turn.id,
+                        )}
+                        confirmedStopped={
+                          thread?.canonicalItems?.some(
+                            (item) =>
+                              item.type === "turn_aborted" &&
+                              item.turnId === row.turn.id,
+                          ) ?? false
+                        }
+                        onContinue={() =>
+                          composerTextareaRef.current?.focus({
+                            preventScroll: true,
+                          })
+                        }
+                        usage={threadUsage?.turns[row.turn.id]}
+                        wakeups={wakeups}
+                        attachments={threadAttachments}
+                        onOpenImage={(attachment, name, trigger) =>
+                          setPreview({ attachment, name, trigger })
+                        }
+                        onReadAttachment={onReadAttachment}
+                        pluginSnapshot={pluginSnapshot}
+                        pluginUiRegistry={pluginUiRegistry}
+                      />
+                    ) : (
+                      <ContextCompactionEvent
+                        key={row.compaction.item.id}
+                        projection={row.compaction}
+                      />
+                    ),
+                  )}
+              {composer.compaction?.status === "pending" ? (
+                <ContextCompactionProgress state={composer.compaction} />
+              ) : null}
+            </div>
+          </ThreadImagesContext.Provider>
+        </MessageLinkContext.Provider>
       </div>
 
       {atLive ? null : (
@@ -597,115 +1045,164 @@ export function ThreadView({
             const scroll = scrollRef.current;
             if (scroll === null) return;
             shouldFollowRef.current = true;
-            scroll.scrollTo({ top: scroll.scrollHeight, behavior: "smooth" });
+            document.getSelection()?.removeAllRanges();
+            scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
             setAtLive(true);
           }}
         >
           <Icon name="arrow-down" size={14} />
-          Back to live
+          {i18n.t("shell:backToLive")}
         </button>
       )}
 
-      <div className="bottom-zone" ref={bottomZoneRef}>
-        {composerContext}
+      <div
+        className={`bottom-zone${pendingApprovals.length ? " has-approval" : ""}${thread?.queuedMessages?.length ? " has-queue" : ""}`}
+        ref={bottomZoneRef}
+      >
+        {composerContextPosition === "before" ? composerContext : null}
         {pendingApprovals.map((approval) => (
-          <ApprovalBar
+          <ApprovalRequestCard
             composerId={composerId}
+            threadId={thread!.id}
             approval={approval}
-            key={approval.requestId}
-            onRespond={onRespondToApproval}
+            key={`${thread!.id}:${approval.requestId}`}
+            onRespond={respondToApproval}
           />
         ))}
-        {(thread?.queuedMessages?.length ?? 0) > 0 ? (
-          <div
-            className={`queued-messages${onCancelQueued === undefined ? "" : " cancellable"}`}
-            aria-label="Message queue"
-          >
-            <strong role="status" aria-live="polite" aria-atomic="true">
-              {thread!.queuedMessages!.length} queued
-            </strong>
-            <ol>
-              {thread!.queuedMessages!.map((message, index) => (
-                <li key={message.id}>
-                  {message.text || `${message.imageCount} image(s)`}
-                  {onCancelQueued === undefined ? null : (
-                    <button
-                      className="queued-cancel-button"
-                      type="button"
-                      aria-label={`Cancel queued message ${index + 1}`}
-                      title="Cancel this pending message only"
-                      disabled={cancelingQueue || composerDisabled}
-                      onClick={() =>
-                        void cancelQueued([
-                          {
-                            queuedItemId: message.id,
-                            clientId: message.clientId,
-                          },
-                        ])
-                      }
-                    >
-                      Cancel
-                    </button>
-                  )}
-                  {queueFailure?.queuedItemId === message.id ? (
-                    <p className="queued-failure" role="alert">
-                      Not delivered ({queueFailure.code}):{" "}
-                      {queueFailure.message}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-            {onCancelQueued !== undefined &&
-            thread!.queuedMessages!.length > 1 ? (
-              <button
-                type="button"
-                disabled={
-                  cancelingQueue ||
-                  composerDisabled ||
-                  thread!.queuedMessages!.length > 128
-                }
-                title={
-                  thread!.queuedMessages!.length > 128
-                    ? "Too many messages for one cancellation; cancel individual messages"
-                    : undefined
-                }
-                onClick={() =>
-                  setCancelConfirmation({
-                    threadId: thread!.id,
-                    targets: thread!.queuedMessages!.map((message) => ({
-                      queuedItemId: message.id,
-                      clientId: message.clientId,
-                    })),
-                    previews: thread!.queuedMessages!.map(
-                      (message) =>
-                        message.text || `${message.imageCount} image(s)`,
-                    ),
-                  })
-                }
-              >
-                Cancel these {thread!.queuedMessages!.length} queued messages…
-              </button>
-            ) : null}
-            {runningTurn === null && onResumeQueue !== undefined ? (
-              <button
-                type="button"
-                onClick={() =>
-                  void onResumeQueue()
-                    .then(() => setQueueResumeError(null))
-                    .catch((error: unknown) =>
-                      setQueueResumeError({
-                        threadId: thread!.id,
-                        queuedItemId: thread!.queuedMessages![0]!.id,
-                        message: describeError(error),
-                      }),
+        {thread ? (
+          <QueuedMessages
+            threadId={thread.id}
+            messages={thread.queuedMessages ?? []}
+            attachments={queuedImages}
+            onReadAttachment={readQueuedImage}
+            onOpenImage={(message, attachment, name, trigger) => {
+              if (
+                currentThreadRef.current !== thread.id ||
+                !thread.queuedMessages?.some(
+                  (current) =>
+                    current.id === message.id &&
+                    current.clientId === message.clientId,
+                ) ||
+                !queuedImages[message.id]?.some((image) =>
+                  sameImageAttachment(image, attachment),
+                )
+              )
+                return;
+              setPreview({
+                attachment,
+                name,
+                trigger,
+                queueOwner: {
+                  threadId: thread.id,
+                  queuedItemId: message.id,
+                  clientId: message.clientId,
+                },
+              });
+            }}
+            queueFailure={queueFailure}
+            pendingIds={cancelLocks.current.get(thread.id)}
+            busy={cancelingQueue || editingQueue || composerDisabled}
+            editableIds={new Set(editableQueue.keys())}
+            editingIds={
+              new Set(
+                Object.values(editSessions)
+                  .filter(
+                    (session) =>
+                      session.threadId === thread.id && session.pending,
+                  )
+                  .map((session) => session.queuedItemId),
+              )
+            }
+            onEdit={
+              onEditQueued
+                ? (target, trigger) => {
+                    const candidate = editableQueue.get(target.id);
+                    const key = JSON.stringify([
+                      thread.id,
+                      target.id,
+                      target.clientId,
+                    ]);
+                    const previous = editSessionsRef.current[key];
+                    const inspectingPending = previous?.pending === true;
+                    if (
+                      !candidate ||
+                      candidate.item.clientId !== target.clientId ||
+                      currentThreadRef.current !== thread.id ||
+                      (!inspectingPending &&
+                        (composerDisabled ||
+                          cancelingQueue ||
+                          resumingQueue ||
+                          editStore.isPending(thread.id))) ||
+                      (previous?.owner !== undefined &&
+                        previous.owner !== editOwner.current)
                     )
-                }
-              >
-                Continue queue
-              </button>
-            ) : null}
-          </div>
+                      return;
+                    updateEditSession(
+                      key,
+                      previous && !observedEdit(previous)
+                        ? { ...previous, trigger, owner: editOwner.current }
+                        : {
+                            owner: editOwner.current,
+                            identity: JSON.stringify([
+                              key,
+                              candidate.item.revision,
+                            ]),
+                            threadId: thread.id,
+                            queuedItemId: target.id,
+                            clientId: target.clientId,
+                            expectedRevision: candidate.item.revision,
+                            draft: candidate.draft,
+                            trigger,
+                            pending: false,
+                            error: null,
+                          },
+                    );
+                    setOpenEditKey(key);
+                  }
+                : undefined
+            }
+            resuming={resumingQueue}
+            resumeError={visibleResumeError}
+            compact={pendingApprovals.length > 0}
+            onCancel={
+              onCancelQueued
+                ? (target) => void cancelQueued([target])
+                : undefined
+            }
+            onCancelAll={
+              onCancelQueued
+                ? (trigger) =>
+                    setCancelConfirmation({
+                      threadId: thread.id,
+                      trigger,
+                      targets: (thread.queuedMessages ?? []).map((message) => ({
+                        queuedItemId: message.id,
+                        clientId: message.clientId,
+                      })),
+                      previews: (thread.queuedMessages ?? []).map((message) =>
+                        [
+                          message.text,
+                          message.imageCount > 0
+                            ? i18n.t("shell:imageCount", {
+                                count: message.imageCount,
+                              })
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · "),
+                      ),
+                    })
+                : undefined
+            }
+            onResume={
+              runningTurn === null && onResumeQueue
+                ? () => void resumeQueue()
+                : undefined
+            }
+            focusComposer={() =>
+              composerTextareaRef.current?.focus({ preventScroll: true })
+            }
+          />
         ) : null}
         {composer.compaction?.status === "failed" ? (
           <ContextCompactionProgress
@@ -730,13 +1227,16 @@ export function ThreadView({
             </p>
           )}
           {skillDraft.skills.length > 0 && (
-            <div className="composer-images" aria-label="Skills to send">
+            <div
+              className="composer-images"
+              aria-label={i18n.t("shell:skillsToSend")}
+            >
               {skillDraft.skills.map((skill) => (
                 <button
                   type="button"
                   className="quiet-button"
                   key={skill.id}
-                  aria-label={`Remove Skill ${skill.name}`}
+                  aria-label={i18n.t("shell:removeSkill", { name: skill.name })}
                   onClick={() =>
                     onDraftChange(
                       withSkillDraft(
@@ -757,7 +1257,7 @@ export function ThreadView({
           {skillDraft.references.length > 0 && (
             <div
               className="composer-skills composer-references"
-              aria-label="References to send"
+              aria-label={i18n.t("shell:referencesToSend")}
             >
               {skillDraft.references.map((reference, index) => (
                 <span
@@ -769,7 +1269,9 @@ export function ThreadView({
                   <span>{reference.name}</span>
                   <button
                     type="button"
-                    aria-label={`Remove reference ${reference.name}`}
+                    aria-label={i18n.t("shell:removeReference", {
+                      name: reference.name,
+                    })}
                     onClick={() =>
                       onDraftChange(
                         withSkillDraft(
@@ -794,10 +1296,13 @@ export function ThreadView({
             />
           ) : null}
           <label className="sr-only" htmlFor={composerId}>
-            Message ZenX
+            {i18n.t("panels:messageZenx")}
           </label>
           {composer.draft.images.length === 0 ? null : (
-            <div className="composer-images" aria-label="Images to send">
+            <div
+              className="composer-images"
+              aria-label={i18n.t("shell:imagesToSend")}
+            >
               {composer.draft.images.map((image) => (
                 <DraftImage
                   image={image}
@@ -817,7 +1322,7 @@ export function ThreadView({
           )}
           <ComposerEditor
             id={composerId}
-            aria-label="Message"
+            aria-label={i18n.t("shell:message")}
             aria-controls={selector.open ? selectorId : undefined}
             aria-activedescendant={
               selector.open && selector.rows.length
@@ -867,16 +1372,18 @@ export function ThreadView({
             }}
             placeholder={
               !zenFeatures
-                ? runningTurn === null
-                  ? "Message the agent…"
-                  : "Wait for this turn, or stop it…"
+                ? i18n.t(
+                    nativeSessionControl?.running
+                      ? "shell:nativeWaitOrStop"
+                      : "shell:nativeMessage",
+                  )
                 : runningTurn === null
                   ? watching
-                    ? "Send a message to wake this thread…"
-                    : "Ask ZenX anything…"
+                    ? i18n.t("shell:sendAMessageToWakeThisThread")
+                    : i18n.t("shell:askZenxAnything")
                   : composerSendMode === "queue" || composerSendMode === "batch"
-                    ? "Message for the next turn…"
-                    : "Steer the current run…"
+                    ? i18n.t("shell:messageForTheNextTurn")
+                    : i18n.t("shell:steerTheCurrentRun")
             }
             textareaRef={composerTextareaRef}
             rows={1}
@@ -889,8 +1396,8 @@ export function ThreadView({
                 <button
                   className="composer-tool icon-only"
                   type="button"
-                  aria-label="Add images"
-                  title="Add images"
+                  aria-label={i18n.t("shell:addImages")}
+                  title={i18n.t("shell:addImages")}
                   disabled={composerDisabled || submitting}
                   onClick={() => {
                     setAttachmentError(null);
@@ -928,7 +1435,9 @@ export function ThreadView({
               {permissionLabel === null ? null : (
                 <PermissionSelect
                   errorId={`${composerId}-permission-error`}
-                  legacyApproval={permissionLabel === "Approval required"}
+                  legacyApproval={
+                    permissionLabel === i18n.t("shell:approvalRequired")
+                  }
                   value={permissionMode}
                   disabled={
                     runningTurn !== null ||
@@ -956,7 +1465,7 @@ export function ThreadView({
                   }
                   disabled={
                     composerDisabled ||
-                    interrupting ||
+                    (interrupting && primaryMode === "stop") ||
                     submitting ||
                     (primaryMode === "send" && !hasDraft) ||
                     blockedByImageCapability
@@ -973,10 +1482,10 @@ export function ThreadView({
                   disabled={
                     composerDisabled ||
                     submitting ||
-                    interrupting ||
-                    (primaryMode !== "stop"
-                      ? sendDisabled || !hasDraft
-                      : interruptDisabled)
+                    nativeInterrupting ||
+                    (primaryMode === "stop"
+                      ? interruptDisabled
+                      : sendDisabled || !hasDraft)
                   }
                   onClick={primary}
                 />
@@ -1000,22 +1509,44 @@ export function ThreadView({
             </p>
           ) : null}
         </ComposerShell>
+        {composerContextPosition === "after" ? composerContext : null}
       </div>
       {cancelConfirmation === null ? null : (
         <Dialog
           open={cancelConfirmation.threadId === thread?.id}
+          restoreFocus={() => {
+            if (currentThreadRef.current !== cancelConfirmation.threadId)
+              return false;
+            const active = document.activeElement;
+            const trigger = cancelConfirmation.trigger;
+            if (
+              active === document.body ||
+              active === trigger ||
+              (active instanceof Element &&
+                active.closest(".queued-cancel-confirmation"))
+            ) {
+              const target =
+                trigger.isConnected && !trigger.disabled
+                  ? trigger
+                  : composerTextareaRef.current;
+              target?.focus({ preventScroll: true });
+            }
+            return false;
+          }}
           onOpenChange={(open) => {
             if (!open) setCancelConfirmation(null);
           }}
-          title={`Cancel ${cancelConfirmation.targets.length} queued messages?`}
+          title={i18n.t("shell:cancelQueuedMessagesQuestion", {
+            count: cancelConfirmation.targets.length,
+          })}
         >
           <div className="queued-cancel-confirmation">
-            <h2>Cancel {cancelConfirmation.targets.length} queued messages?</h2>
-            <p>
-              Only these pending messages are requested. Messages queued later
-              are not included. A message already starting or delivered cannot
-              be recalled or stopped by this action.
-            </p>
+            <h2>
+              {i18n.t("shell:cancelQueuedMessagesQuestion", {
+                count: cancelConfirmation.targets.length,
+              })}
+            </h2>
+            <p>{i18n.t("shell:cancelQueuedMessagesDetail")}</p>
             <ol>
               {cancelConfirmation.previews.map((preview, index) => (
                 <li key={cancelConfirmation.targets[index]?.queuedItemId}>
@@ -1025,30 +1556,122 @@ export function ThreadView({
             </ol>
             <div className="queued-cancel-confirmation-actions">
               <button type="button" onClick={() => setCancelConfirmation(null)}>
-                Keep messages
+                {i18n.t("shell:keepMessages")}
               </button>
               <button
                 type="button"
-                disabled={cancelingQueue}
+                disabled={cancelingQueue || resumingQueue || composerDisabled}
                 onClick={() => {
                   const targets = cancelConfirmation.targets;
                   setCancelConfirmation(null);
                   void cancelQueued(targets);
                 }}
               >
-                Confirm cancel {cancelConfirmation.targets.length}
+                {i18n.t("shell:cancelTheseQueuedMessages", {
+                  count: cancelConfirmation.targets.length,
+                })}
               </button>
             </div>
           </div>
         </Dialog>
       )}
-      {preview === null ? null : (
+      {Object.entries(editSessions).map(([key, session]) => (
+        <QueuedMessageEditor
+          key={session.identity}
+          identity={session.identity}
+          open={
+            openEditKey === key &&
+            session.owner === editOwner.current &&
+            thread?.id === session.threadId
+          }
+          initialDraft={session.draft}
+          pending={session.pending}
+          error={session.error}
+          trigger={session.trigger}
+          canRestoreFocus={() =>
+            currentThreadRef.current === session.threadId &&
+            document.getSelection()?.isCollapsed !== false
+          }
+          onRestoreFocus={() => {
+            if (
+              currentThreadRef.current === session.threadId &&
+              !document.querySelector('[role="dialog"]') &&
+              document.getSelection()?.isCollapsed !== false
+            )
+              composerTextareaRef.current?.focus({ preventScroll: true });
+          }}
+          disabledReason={
+            session.confirmed
+              ? i18n.t("shell:queueEditSyncing")
+              : composerDisabled
+                ? i18n.t("shell:queueEditBusy")
+                : undefined
+          }
+          onDraftChange={(draft) => {
+            const current = editSessionsRef.current[key];
+            if (
+              current?.owner === editOwner.current &&
+              !current.pending &&
+              !current.confirmed
+            )
+              updateEditSession(key, { ...current, draft });
+          }}
+          onSave={(draft) => saveQueuedEdit(key, draft)}
+          onClose={(_reason) => {
+            const current = editSessionsRef.current[key];
+            if (current?.owner === editOwner.current) {
+              if (
+                !current.pending &&
+                (!current.confirmed || observedEdit(current))
+              )
+                updateEditSession(key, null);
+              else updateEditSession(key, { ...current, owner: undefined });
+            }
+            setOpenEditKey((value) => (value === key ? null : value));
+          }}
+          onReadAttachment={onReadAttachment}
+          onImportImages={
+            onImportQueueImages ??
+            (async () => {
+              throw new Error(i18n.t("shell:imageReaderUnavailable"));
+            })
+          }
+          onPickImages={
+            onPickQueueImages ??
+            (async () => {
+              throw new Error(i18n.t("shell:imageReaderUnavailable"));
+            })
+          }
+        />
+      ))}
+      {preview === null || !queuePreviewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}
           name={preview.name}
           onClose={() => setPreview(null)}
-          onReadAttachment={onReadAttachment}
+          onReadAttachment={
+            preview.queueOwner ? readQueuedImage : onReadAttachment
+          }
           trigger={preview.trigger}
+          safeError={preview.queueOwner !== undefined}
+          restoreFocus={
+            preview.queueOwner
+              ? () => {
+                  if (
+                    currentThreadRef.current !== preview.queueOwner!.threadId ||
+                    !document.getSelection()?.isCollapsed
+                  )
+                    return;
+                  if (
+                    preview.trigger.isConnected &&
+                    !preview.trigger.closest("[hidden]")
+                  )
+                    preview.trigger.focus({ preventScroll: true });
+                  else
+                    composerTextareaRef.current?.focus({ preventScroll: true });
+                }
+              : undefined
+          }
         />
       )}
     </div>
@@ -1105,6 +1728,7 @@ function ContextCompactionProgress({
   state: NonNullable<ComposerState["compaction"]>;
   onDismiss?(): void;
 }) {
+  useTranslation("shell");
   const failed = state.status === "failed";
   return (
     <div
@@ -1122,7 +1746,9 @@ function ContextCompactionProgress({
           <div className="context-compaction-error-actions">
             {state.detail ? (
               <details className="context-compaction-error-detail">
-                <summary tabIndex={0}>Technical details</summary>
+                <summary tabIndex={0}>
+                  {i18n.t("shell:technicalDetails")}
+                </summary>
                 <p>{state.detail}</p>
               </details>
             ) : null}
@@ -1130,9 +1756,9 @@ function ContextCompactionProgress({
               <button
                 type="button"
                 onClick={onDismiss}
-                aria-label="Dismiss compaction error"
+                aria-label={i18n.t("shell:dismissCompactionError")}
               >
-                Dismiss
+                {i18n.t("shell:dismiss")}
               </button>
             ) : null}
           </div>
@@ -1148,141 +1774,103 @@ export function ContextCompactionEvent({
   projection: ContextCompactionProjection;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [visited, setVisited] = useState(false);
-  const label = compactionSummaryLabel(projection);
+  const { item, effectiveMessages } = projection;
+  const [copyState, setCopyState] = useState("");
   return (
     <section
-      className="context-compaction-event trace-item trace-singleton"
-      aria-label="Context compacted"
+      className="context-compaction-event"
+      aria-label={i18n.t("shell:contextCompacted")}
     >
       <button
-        className="trace-item-toggle context-compaction-toggle"
+        className="context-compaction-toggle"
         type="button"
         aria-expanded={expanded}
-        onClick={() => {
-          setVisited(true);
-          setExpanded((current) => !current);
-        }}
+        onClick={() => setExpanded((current) => !current)}
       >
-        <Icon name="compress" size={14} />
-        <span title={label}>{label}</span>
-        <span className="trace-item-chevron">
-          <Icon name="chevron-down" size={13} />
+        <span className="context-compaction-mark" aria-hidden="true">
+          <Icon name="compress" size={14} />
         </span>
+        <span>
+          <strong>{i18n.t("shell:contextCompacted")}</strong>
+          <small>
+            {compactionInitiatorLabel(item)} ·{" "}
+            {i18n.t("shell:summaryCharacters", {
+              count: new Intl.NumberFormat(i18n.resolvedLanguage).format(
+                Array.from(item.summary).length,
+              ),
+            })}
+          </small>
+        </span>
+        <Icon name="chevron-down" size={13} />
       </button>
-      <TraceReveal open={expanded}>
-        {visited ? <ContextCompactionDetails projection={projection} /> : null}
-      </TraceReveal>
+      {expanded ? (
+        <div className="context-compaction-detail">
+          <div className="compaction-summary-heading">
+            <h3>{i18n.t("shell:savedSummary")}</h3>
+            <button
+              type="button"
+              className="quiet-button"
+              onClick={() => {
+                void navigator.clipboard.writeText(item.summary).then(
+                  () => setCopyState(i18n.t("shell:summaryCopied")),
+                  () =>
+                    setCopyState(
+                      i18n.t("shell:couldNotCopySelectTheSummaryTextToCopyIt"),
+                    ),
+                );
+              }}
+            >
+              {i18n.t("shell:copySummary")}
+            </button>
+          </div>
+          <span role="status">{copyState}</span>
+          <div className="compaction-summary">
+            <Markdown text={item.summary} />
+          </div>
+          <p>
+            {i18n.t("shell:retainedItemsDetail", {
+              count: item.retainedItemIds.length,
+            })}
+          </p>
+          <details className="compaction-projection">
+            <summary>{i18n.t("shell:retainedContextAndDiagnostics")}</summary>
+            {effectiveMessages === null ? (
+              <p role="status">
+                {i18n.t("shell:retainedContextUnavailable")}
+                {projection.snapshotError
+                  ? ` ${projection.snapshotError}`
+                  : null}
+              </p>
+            ) : (
+              <>
+                <p>
+                  {i18n.t("shell:projectedHistoryDetail", {
+                    count: effectiveMessages.length,
+                  })}
+                </p>
+                <ol>
+                  {effectiveMessages.map((message, index) => (
+                    <li key={`${item.id}:${String(index)}`}>
+                      <span>{modelMessageRole(message)}</span>
+                      <pre>{formatModelMessage(message)}</pre>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </details>
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function compactionSummaryLabel({ item }: ContextCompactionProjection): string {
-  return `Context compacted · ${compactionInitiatorLabel(item)} · ${Array.from(item.summary).length.toLocaleString()} summary characters · Full input size unknown`;
-}
-
-function ToolCompactionSummary({
-  projection,
-}: {
-  projection: ContextCompactionProjection;
-}) {
-  const [visited, setVisited] = useState(false);
-  return (
-    <details
-      className="trace-compaction-summary"
-      onToggle={(event) => {
-        if (event.currentTarget.open) setVisited(true);
-      }}
-    >
-      <summary>{compactionSummaryLabel(projection)}</summary>
-      {visited ? <ContextCompactionDetails projection={projection} /> : null}
-    </details>
-  );
-}
-
-function ContextCompactionDetails({
-  projection,
-}: {
-  projection: ContextCompactionProjection;
-}) {
-  const { item, effectiveMessages } = projection;
-  const [copyState, setCopyState] = useState("");
-  const [diagnosticsVisited, setDiagnosticsVisited] = useState(false);
-  const debugTrace = useContext(TraceDebugContext);
-  return (
-    <div className="context-compaction-detail">
-      <div className="compaction-summary-heading">
-        <h3>Saved summary</h3>
-        <button
-          type="button"
-          className="quiet-button"
-          onClick={() => {
-            void navigator.clipboard.writeText(item.summary).then(
-              () => setCopyState("Summary copied"),
-              () =>
-                setCopyState(
-                  "Could not copy. Select the summary text to copy it.",
-                ),
-            );
-          }}
-        >
-          Copy summary
-        </button>
-      </div>
-      {copyState ? <span role="status">{copyState}</span> : null}
-      <div className="compaction-summary">
-        <Markdown text={item.summary} />
-      </div>
-      <p>
-        {item.retainedItemIds.length} original items retained alongside the
-        summary. This snapshot is from the time of compaction; later
-        conversation adds to it.
-      </p>
-      <details
-        className="compaction-projection"
-        onToggle={(event) => {
-          if (event.currentTarget.open) setDiagnosticsVisited(true);
-        }}
-      >
-        <summary>Retained context and diagnostics</summary>
-        {diagnosticsVisited && effectiveMessages === null ? (
-          <p role="status">
-            {projection.snapshotError ??
-              "Retained context snapshot is unavailable in this view."}
-          </p>
-        ) : diagnosticsVisited && effectiveMessages !== null ? (
-          <>
-            <p>
-              {effectiveMessages.length} projected history messages, not tokens.
-              This includes the summary and retained conversation. Rules, tool
-              definitions and other request inputs may be added separately. Full
-              model input size was not recorded. The summary generation usage is
-              not the post-compaction context size.
-            </p>
-            <ol>
-              {effectiveMessages.map((message, index) => (
-                <li key={`${item.id}:${String(index)}`}>
-                  <span>{modelMessageRole(message)}</span>
-                  <pre>{formatModelMessage(message)}</pre>
-                </li>
-              ))}
-            </ol>
-          </>
-        ) : null}
-      </details>
-      <TraceRawDetails
-        label="Canonical compaction item"
-        data={item}
-        hidden={!debugTrace}
-      />
-    </div>
-  );
-}
-
 function modelMessageRole(message: ModelMessage): string {
-  if (message.role === "tool") return "Tool";
-  if (message.role === "reasoning") return "Reasoning";
-  return message.role === "assistant" ? "Assistant" : "User";
+  if (message.role === "tool") return i18n.t("shell:tool");
+  if (message.role === "reasoning") return i18n.t("shell:reasoning");
+  return message.role === "assistant"
+    ? i18n.t("shell:assistant")
+    : i18n.t("shell:user");
 }
 
 function formatModelMessage(message: ModelMessage): string {
@@ -1303,27 +1891,136 @@ function formatModelMessage(message: ModelMessage): string {
   return message.text;
 }
 
-function RunningTurnLabel({ startedAt }: { startedAt: number | null }) {
+function TraceCounts({
+  activity,
+  terminal = false,
+}: {
+  activity: TraceActivity;
+  terminal?: boolean;
+}) {
+  return (
+    <span className="trace-counts">
+      {!terminal && activity.total > 0 ? (
+        <small>
+          {activity.categories
+            .slice(0, 2)
+            .map(({ label, count }) => `${label} ${count}`)
+            .join(" · ")}
+          {activity.categories.length > 2
+            ? ` +${activity.categories.length - 2}`
+            : ""}
+        </small>
+      ) : null}
+      {activity.failed > 0 ? (
+        <small className="trace-failed">
+          {i18n.t("shell:toolFailures", { count: activity.failed })}
+        </small>
+      ) : null}
+      {activity.cancelled > 0 ? (
+        <small>
+          {i18n.t("shell:toolCancelled", { count: activity.cancelled })}
+        </small>
+      ) : null}
+      {terminal && activity.outstanding > 0 ? (
+        <small className="trace-pending">
+          {i18n.t("shell:lastKnownPending", { count: activity.outstanding })}
+        </small>
+      ) : null}
+    </span>
+  );
+}
+function RunningTurnLabel({
+  startedAt,
+  activity,
+  stopping,
+  approval,
+}: {
+  startedAt: number | null;
+  activity: TraceActivity;
+  stopping: boolean;
+  approval: boolean;
+}) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const duration = startedAt === null ? null : now - startedAt * 1_000;
+  const phase = stopping
+    ? "stopping"
+    : approval
+      ? "approval"
+      : activity.phase === "idle" && startedAt === null
+        ? "admitting"
+        : activity.phase;
+  const label =
+    phase === "stopping"
+      ? i18n.t("shell:stopping")
+      : phase === "approval"
+        ? i18n.t("shell:approvalRequired")
+        : phase === "thinking" || phase === "idle"
+          ? i18n.t("shell:working")
+          : phase === "requested"
+            ? i18n.t("shell:awaitingToolResult")
+            : commandPhaseLabel(phase);
+  const busy = phase === "running" || phase === "thinking" || phase === "idle";
   return (
-    <div className="turn-running-label" role="status" aria-label="Working">
-      <span className="mini-spinner" aria-hidden="true" />
-      <span aria-hidden="true">
-        {duration === null
-          ? "Working"
-          : `Working for ${formatDuration(duration)}`}
+    <div className="turn-running-label" data-phase={phase}>
+      <Icon
+        name={
+          phase === "approval"
+            ? "lock"
+            : phase === "stopping"
+              ? "stop"
+              : "reasoning"
+        }
+        size={14}
+      />
+      <span role="status" aria-live="polite" aria-atomic="true">
+        <ActivityText active={busy}>{label}</ActivityText>
       </span>
+      {startedAt === null ? null : (
+        <span className="turn-duration" aria-hidden="true">
+          {formatDuration(now - startedAt * 1000)}
+        </span>
+      )}
     </div>
   );
+}
+function transcriptHasSelection(element: Element | null): boolean {
+  const selection = document.getSelection();
+  return (
+    !!element &&
+    !!selection &&
+    !selection.isCollapsed &&
+    ((selection.anchorNode !== null &&
+      element.contains(selection.anchorNode)) ||
+      (selection.focusNode !== null && element.contains(selection.focusNode)))
+  );
+}
+function isNestedTranscriptScroll(
+  target: EventTarget | null,
+  transcript: HTMLElement,
+): boolean {
+  for (
+    let element = target instanceof Element ? target : null;
+    element && element !== transcript;
+    element = element.parentElement
+  ) {
+    if (
+      element.scrollHeight > element.clientHeight &&
+      /auto|scroll/.test(getComputedStyle(element).overflowY)
+    )
+      return true;
+  }
+  return false;
 }
 
 function TurnBlock({
   turn,
+  stopping,
+  approvals,
+  confirmedStopped,
+  onContinue,
   index,
   wakeups,
   attachments,
@@ -1334,6 +2031,10 @@ function TurnBlock({
   usage,
 }: {
   turn: Turn;
+  stopping: boolean;
+  approvals: readonly ApprovalCardState[];
+  confirmedStopped: boolean;
+  onContinue(): void;
   index: number;
   wakeups: readonly TriggerHistoryEntry[];
   attachments: ZenXThreadAttachmentProjection;
@@ -1347,25 +2048,78 @@ function TurnBlock({
   pluginUiRegistry: PluginUiRegistry | null;
   usage?: ModelUsageAggregate;
 }) {
-  const debugTrace = useContext(TraceDebugContext);
-  const projection = useMemo(() => projectTurn(turn), [turn]);
+  const { i18n: activeI18n } = useTranslation("shell");
+  const observations = useMemo(
+    () => createTraceObservationIndex(turn.items),
+    [turn.items],
+  );
+  const projection = useMemo(
+    () => projectTurn(turn, observations),
+    [turn, observations, activeI18n.resolvedLanguage],
+  );
+  const activity = useMemo(
+    () => summarizeTraceActivity(turn.items, observations),
+    [turn.items, observations, activeI18n.resolvedLanguage],
+  );
+  const sectionRef = useRef<HTMLElement>(null);
+  const historyId = useId();
   const [expandedOverride, setExpanded] = useState<boolean | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const previousStatus = useRef(turn.status);
+  // selectionchange is queued by browsers. Observe the still-mounted history
+  // before a terminal render could remove the user's selected/focused node.
+  if (previousStatus.current !== turn.status) {
+    const wasRunning = previousStatus.current === "inProgress";
+    previousStatus.current = turn.status;
+    const active = document.activeElement;
+    if (
+      wasRunning &&
+      turn.status !== "inProgress" &&
+      (transcriptHasSelection(sectionRef.current) ||
+        (active instanceof Element &&
+          !!active.closest(".turn-history") &&
+          !!sectionRef.current?.contains(active)))
+    ) {
+      setInspecting(true);
+      setExpanded(true);
+    }
+  }
   const expanded =
     expandedOverride ??
-    (debugTrace || turn.status === "failed" || turn.status === "interrupted");
+    (turn.status === "failed" || turn.status === "interrupted" || inspecting);
   const complete = turn.status !== "inProgress";
-  const historyVisible = !complete || expanded;
-  const [historyVisited, setHistoryVisited] = useState(historyVisible);
-  const previousComplete = useRef(complete);
   useEffect(() => {
-    if (historyVisible) setHistoryVisited(true);
-  }, [historyVisible]);
-  // Normal terminal settlement still resets the intermediate trace. Mode changes alone preserve it.
-  useEffect(() => {
-    if (complete && !previousComplete.current && !debugTrace)
-      setHistoryVisited(false);
-    previousComplete.current = complete;
-  }, [complete]);
+    const preserve = () => {
+      const active = document.activeElement;
+      setInspecting(
+        transcriptHasSelection(sectionRef.current) ||
+          (active instanceof Element &&
+            !!active.closest(".turn-history") &&
+            !!sectionRef.current?.contains(active)),
+      );
+    };
+    document.addEventListener("selectionchange", preserve);
+    document.addEventListener("focusin", preserve);
+    document.addEventListener("focusout", preserve);
+    return () => {
+      document.removeEventListener("selectionchange", preserve);
+      document.removeEventListener("focusin", preserve);
+      document.removeEventListener("focusout", preserve);
+    };
+  }, []);
+  const reviewActivity = () => {
+    setExpanded(true);
+    requestAnimationFrame(() => {
+      const section = sectionRef.current;
+      const trace =
+        section?.querySelector<HTMLElement>('[data-unsettled="true"]') ??
+        section?.querySelector<HTMLElement>(".trace-group, .trace-singleton");
+      const toggle = trace?.querySelector<HTMLButtonElement>(":scope > button");
+      if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+      toggle?.focus({ preventScroll: true });
+      toggle?.scrollIntoView?.({ block: "nearest" });
+    });
+  };
   const renderUserItem = (
     item: Extract<ThreadItem, { type: "userMessage" }>,
   ) => {
@@ -1386,49 +2140,64 @@ function TurnBlock({
     );
   };
   return (
-    <section className={`turn ${turn.status}`} aria-label={`Turn ${index + 1}`}>
+    <section
+      ref={sectionRef}
+      className={`turn ${turn.status}`}
+      aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
+    >
       {projection.userItems.map(renderUserItem)}
       {complete ? (
         <button
           className="turn-toggle"
           type="button"
           aria-expanded={expanded}
+          aria-controls={historyId}
           onClick={() => setExpanded(!expanded)}
         >
-          <span>{completedTurnLabel(turn)}</span>
+          <span>
+            {confirmedStopped
+              ? i18n.t("shell:stopped")
+              : completedTurnLabel(turn)}
+          </span>
+          <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
       ) : (
-        <RunningTurnLabel startedAt={turn.startedAt} />
+        <RunningTurnLabel
+          startedAt={turn.startedAt}
+          activity={activity}
+          stopping={stopping}
+          approval={approvals.length > 0}
+        />
       )}
-      <TraceReveal open={historyVisible}>
-        {historyVisited || historyVisible ? (
-          <div className="turn-history">
-            {projection.history.map((node) =>
-              node.kind === "user" ? (
-                renderUserItem(node.item)
-              ) : (
-                <DisplayNode
-                  key={node.kind === "agent" ? node.item.id : node.id}
-                  node={node}
-                  turn={turn}
-                  usage={usage}
-                  pluginSnapshot={pluginSnapshot}
-                  pluginUiRegistry={pluginUiRegistry}
-                />
-              ),
-            )}
-            {!complete && projection.finalItem !== null ? (
-              <AgentMessage
-                item={projection.finalItem}
-                showActions={false}
+      {!complete || expanded ? (
+        <div className="turn-history" id={historyId}>
+          {projection.history.map((node) =>
+            node.kind === "user" ? (
+              renderUserItem(node.item)
+            ) : (
+              <DisplayNode
+                key={node.kind === "agent" ? node.item.id : node.id}
+                node={node}
                 turn={turn}
+                observations={observations}
+                approvals={approvals}
                 usage={usage}
+                pluginSnapshot={pluginSnapshot}
+                pluginUiRegistry={pluginUiRegistry}
               />
-            ) : null}
-          </div>
-        ) : null}
-      </TraceReveal>
+            ),
+          )}
+          {!complete && projection.finalItem !== null ? (
+            <AgentMessage
+              item={projection.finalItem}
+              showActions={false}
+              turn={turn}
+              usage={usage}
+            />
+          ) : null}
+        </div>
+      ) : null}
       {complete && !expanded
         ? projection.history
             .filter(
@@ -1447,8 +2216,50 @@ function TurnBlock({
           />
         </div>
       ) : projection.terminalFallback === null ? null : (
-        <div className="turn-terminal" role="status">
-          {projection.terminalFallback}
+        <div
+          className={`turn-outcome${activity.outstanding > 0 ? " uncertain" : ""}`}
+          role="status"
+        >
+          <div className="turn-outcome-heading">
+            <Icon
+              name={activity.outstanding > 0 ? "warning" : "stop"}
+              size={14}
+            />
+            <strong>
+              {activity.outstanding > 0
+                ? i18n.t("shell:stopUnconfirmed")
+                : confirmedStopped
+                  ? i18n.t("shell:stopped")
+                  : turn.status === "failed"
+                    ? i18n.t("shell:failed")
+                    : i18n.t("shell:interrupted")}
+            </strong>
+          </div>
+          <p>
+            {activity.outstanding > 0
+              ? i18n.t("shell:stopUnconfirmedNote")
+              : confirmedStopped
+                ? i18n.t("shell:stoppedNote")
+                : turn.status === "failed"
+                  ? projection.terminalFallback
+                  : i18n.t("shell:interruptedNote")}
+          </p>
+          {activity.outstanding > 0 && turn.error?.message ? (
+            <p className="turn-outcome-error" role="alert">
+              {turn.error.message}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className="quiet-button"
+            onClick={activity.outstanding > 0 ? reviewActivity : onContinue}
+          >
+            {i18n.t(
+              activity.outstanding > 0
+                ? "shell:reviewActivity"
+                : "shell:continueWriting",
+            )}
+          </button>
         </div>
       )}
     </section>
@@ -1458,9 +2269,13 @@ function TurnBlock({
 export function usageLabel(usage: ModelUsageAggregate, prefix: string): string {
   const cache =
     usage.cacheHitRate === undefined
-      ? `${prefix} unknown`
+      ? i18n.t("shell:usageUnknownForPrefix", { prefix })
       : `${prefix} ${String(Math.round(usage.cacheHitRate * 100))}%`;
-  return `${cache} · ${formatTokenCount(usage.inputTokens)} in · ${formatTokenCount(usage.outputTokens)} out`;
+  return i18n.t("shell:usageWithCache", {
+    cache,
+    input: formatTokenCount(usage.inputTokens),
+    output: formatTokenCount(usage.outputTokens),
+  });
 }
 
 export function contextUsageLabel(
@@ -1473,25 +2288,34 @@ export function contextUsageLabel(
     const window = context.contextWindow;
     return window === null
       ? null
-      : `Context unknown · ${formatTokenCount(window)} configured window`;
+      : i18n.t("shell:contextUnknownWindow", {
+          window: formatTokenCount(window),
+        });
   }
   const input = formatTokenCount(context.inputTokens);
   const source =
     context.inputTokenSource === "estimated"
-      ? "estimated next input"
-      : "last provider input";
+      ? i18n.t("shell:estimatedNextInput")
+      : i18n.t("shell:lastProviderInput");
   if (context.contextWindow === null || context.ratio === null) {
-    return `Context unknown · ${input} ${source}`;
+    return i18n.t("shell:contextUnknownInput", { input, source });
   }
-  return `Context ${String(Math.round(context.ratio * 100))}% · ${input} ${source} / ${formatTokenCount(context.contextWindow)} configured window`;
+  return i18n.t("shell:contextUsageFull", {
+    percent: Math.round(context.ratio * 100),
+    input,
+    source,
+    window: formatTokenCount(context.contextWindow),
+  });
 }
 
 export function threadCacheUsageLabel(
   cacheHitRate: number | undefined,
 ): string {
   return cacheHitRate === undefined
-    ? "Thread cache unknown"
-    : `Thread cache ${String(Math.round(cacheHitRate * 100))}%`;
+    ? i18n.t("shell:threadCacheUnknown")
+    : i18n.t("shell:threadCachePercent", {
+        percent: Math.round(cacheHitRate * 100),
+      });
 }
 
 export function ContextUsageIndicator({
@@ -1604,9 +2428,14 @@ export function ContextUsageIndicator({
   const visualPercent = Math.round(visualRatio * 100);
   const tokenUsage =
     context.inputTokens === null
-      ? "Usage unknown"
-      : `${formatTokenCount(context.inputTokens)}${context.contextWindow === null ? "" : ` / ${formatTokenCount(context.contextWindow)}`} tokens`;
-  const contextLabel = `Context ${String(percent)}% · ${tokenUsage}`;
+      ? i18n.t("shell:usageUnknown")
+      : i18n.t("shell:tokenCount", {
+          count: `${formatTokenCount(context.inputTokens)}${context.contextWindow === null ? "" : ` / ${formatTokenCount(context.contextWindow)}`}`,
+        });
+  const contextLabel = i18n.t("shell:contextPercentUsage", {
+    percent,
+    usage: tokenUsage,
+  });
   const tooltip = `${contextLabel}\n${threadCacheUsageLabel(threadCacheHitRate)}`;
   const radius = 7;
   return (
@@ -1634,7 +2463,7 @@ export function ContextUsageIndicator({
         aria-controls={popoverId}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label={`Open context details. ${tooltip}`}
+        aria-label={i18n.t("shell:openContextDetails", { details: tooltip })}
         onClick={() => setOpen(true)}
         onFocus={() => setOpen(true)}
       >
@@ -1664,10 +2493,10 @@ export function ContextUsageIndicator({
             data-placement={popoverPosition.placement}
             id={popoverId}
             role="dialog"
-            aria-label="Context details"
+            aria-label={i18n.t("shell:contextDetails")}
           >
             <div className="context-usage-heading">
-              <span>Context window used</span>
+              <span>{i18n.t("shell:contextWindowUsed")}</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
@@ -1692,7 +2521,7 @@ export function ContextUsageIndicator({
                 void onCompact?.();
               }}
             >
-              Compact context
+              {i18n.t("shell:compactContext")}
             </button>
           </div>
         </>
@@ -1703,7 +2532,7 @@ export function ContextUsageIndicator({
 
 function formatTokenCount(value: number): string {
   if (value < 1_000) return String(value);
-  return new Intl.NumberFormat("en", {
+  return new Intl.NumberFormat(i18n.resolvedLanguage, {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
@@ -1711,12 +2540,16 @@ function formatTokenCount(value: number): string {
 
 function DisplayNode({
   node,
+  observations,
+  approvals,
   turn,
   usage,
   pluginSnapshot,
   pluginUiRegistry,
 }: {
   node: Exclude<TurnDisplayNode, { kind: "user" }>;
+  observations: TraceObservationIndex;
+  approvals: readonly ApprovalCardState[];
   turn: Turn;
   usage?: ModelUsageAggregate;
   pluginSnapshot: ZenXPluginSnapshot | null;
@@ -1739,6 +2572,9 @@ function DisplayNode({
   ) : (
     <TraceSequence
       node={node}
+      turn={turn}
+      observations={observations}
+      approvals={approvals}
       pluginSnapshot={pluginSnapshot}
       pluginUiRegistry={pluginUiRegistry}
     />
@@ -1748,13 +2584,16 @@ function DisplayNode({
 /** Keep content mounted for a height-independent transition; inert removes hidden controls from tab order. */
 function TraceReveal({
   open,
+  id,
   children,
 }: {
   open: boolean;
+  id?: string;
   children: ReactNode;
 }) {
   return (
     <div
+      id={id}
       className="trace-reveal"
       data-open={open}
       aria-hidden={!open}
@@ -1767,43 +2606,52 @@ function TraceReveal({
 
 function TraceSequence({
   node,
+  turn,
+  observations,
+  approvals,
   pluginSnapshot,
   pluginUiRegistry,
 }: {
   node: Extract<TurnDisplayNode, { kind: "traceItem" | "traceGroup" }>;
+  turn: Turn;
+  observations: TraceObservationIndex;
+  approvals: readonly ApprovalCardState[];
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
-  const debugTrace = useContext(TraceDebugContext);
-  const grouped = node.kind === "traceGroup";
-  const [expandedOverride, setExpanded] = useState<boolean | null>(null);
-  const expanded = expandedOverride ?? (debugTrace && grouped);
+  const [expanded, setExpanded] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
   const [visited, setVisited] = useState(false);
   const [visitedItems, setVisitedItems] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    if (debugTrace && grouped) setVisited(true);
-  }, [debugTrace, grouped]);
+  const grouped = node.kind === "traceGroup";
+  const activity = summarizeTraceActivity(
+    node.kind === "traceGroup" ? node.items : [node.item],
+    observations,
+  );
+  const busy =
+    turn.status === "inProgress" &&
+    (activity.phase === "running" || activity.phase === "thinking");
+  const detailsId = useId();
   const singleton = node.kind === "traceItem" ? node.item : null;
   const singletonExpandable =
-    singleton !== null && traceItemExpandable(singleton, debugTrace);
+    singleton !== null && traceItemExpandable(singleton);
   const toggleExpanded = () => {
     if (expanded && sectionRef.current?.contains(document.activeElement)) {
       toggleRef.current?.focus();
     }
     setVisited(true);
-    if (expanded) setOpenItems(new Set());
-    else if (singleton !== null && singletonExpandable) {
+    if (!expanded && singleton !== null && singletonExpandable) {
       setVisitedItems((seen) => new Set(seen).add(singleton.id));
       setOpenItems(new Set([singleton.id]));
     }
-    setExpanded((current) => !(current ?? (debugTrace && grouped)));
+    setExpanded((current) => !current);
   };
   return (
     <section
       ref={sectionRef}
+      data-unsettled={activity.active > 0}
       className={grouped ? "trace-group" : "trace-item trace-singleton"}
     >
       {grouped ? (
@@ -1812,6 +2660,7 @@ function TraceSequence({
           className="trace-toggle"
           type="button"
           aria-expanded={expanded}
+          aria-controls={detailsId}
           onClick={toggleExpanded}
         >
           <Icon
@@ -1825,8 +2674,15 @@ function TraceSequence({
             })()}
             size={15}
           />
-          <span>{node.summary}</span>
-          <small className="sr-only">{node.items.length} items</small>
+          <span className="trace-activity-title">
+            <ActivityText active={busy}>
+              {traceSummary(node.items, observations)}
+            </ActivityText>
+          </span>
+          <TraceCounts activity={activity} />
+          <small className="sr-only">
+            {i18n.t("shell:executionItems", { count: node.items.length })}
+          </small>
           <Icon name="chevron-down" size={13} />
         </button>
       ) : singletonExpandable ? (
@@ -1835,17 +2691,32 @@ function TraceSequence({
           className="trace-item-toggle"
           type="button"
           aria-expanded={expanded}
+          aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <TraceItemHeader item={singleton} expandable />
+          <TraceItemHeader
+            item={singleton}
+            expandable
+            observations={observations}
+            approvalPending={approvals.some(
+              (approval) => approval.params.itemId === singleton.id,
+            )}
+          />
         </button>
       ) : (
         <div className="trace-item-static">
-          <TraceItemHeader item={singleton!} expandable={false} />
+          <TraceItemHeader
+            item={singleton!}
+            expandable={false}
+            observations={observations}
+            approvalPending={approvals.some(
+              (approval) => approval.params.itemId === singleton!.id,
+            )}
+          />
         </div>
       )}
       {!grouped && singletonExpandable ? (
-        <TraceReveal open={expanded}>
+        <TraceReveal open={expanded} id={detailsId}>
           {visited ? (
             <TraceDetail
               item={singleton}
@@ -1856,22 +2727,18 @@ function TraceSequence({
         </TraceReveal>
       ) : null}
       {grouped ? (
-        <TraceReveal open={expanded}>
-          {visited || debugTrace ? (
+        <TraceReveal open={expanded} id={detailsId}>
+          {visited ? (
             <div
               className="trace-items"
               role="region"
-              aria-label="Execution details"
+              aria-label={i18n.t("shell:executionDetails")}
               tabIndex={0}
             >
-              {(debugTrace
-                ? traceDisplayRows(node.items)
-                : groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
-              )
+              {groupReasoningWithoutDetailsRows(traceDisplayRows(node.items))
                 // Models that do not expose reasoning should leave no
                 // completed "Think" heading behind in the transcript.
                 .filter((row) => {
-                  if (debugTrace) return true;
                   if ("kind" in row) {
                     return node.items.some(
                       (item) =>
@@ -1898,20 +2765,23 @@ function TraceSequence({
                       >
                         <div className="trace-item-static">
                           <Icon name="reasoning" size={14} />
-                          <span>Thinking</span>
+                          <span>{i18n.t("shell:thinking")}</span>
                         </div>
                       </div>
                     );
                   }
                   const { item, nested, parentToolName } = row;
                   const open = openItems.has(item.id);
-                  const expandable = traceItemExpandable(item, debugTrace);
+                  const expandable = traceItemExpandable(item);
                   return (
                     <div
                       className={`trace-item${nested ? " trace-item-nested" : ""}`}
                       aria-label={
                         nested
-                          ? `Nested tool invoked by ${parentToolName ?? "parent code"}`
+                          ? i18n.t("shell:nestedToolInvokedBy", {
+                              tool:
+                                parentToolName ?? i18n.t("shell:parentCode"),
+                            })
                           : undefined
                       }
                       key={item.id}
@@ -1933,11 +2803,25 @@ function TraceSequence({
                             });
                           }}
                         >
-                          <TraceItemHeader item={item} expandable />
+                          <TraceItemHeader
+                            item={item}
+                            expandable
+                            observations={observations}
+                            approvalPending={approvals.some(
+                              (approval) => approval.params.itemId === item.id,
+                            )}
+                          />
                         </button>
                       ) : (
                         <div className="trace-item-static">
-                          <TraceItemHeader item={item} expandable={false} />
+                          <TraceItemHeader
+                            item={item}
+                            expandable={false}
+                            observations={observations}
+                            approvalPending={approvals.some(
+                              (approval) => approval.params.itemId === item.id,
+                            )}
+                          />
                         </div>
                       )}
                       {expandable ? (
@@ -1964,13 +2848,17 @@ function TraceSequence({
 
 function TraceItemHeader({
   item,
+  observations,
   expandable,
+  approvalPending,
 }: {
   item: Extract<
     ThreadItem,
     { type: "reasoning" | "commandExecution" | "nativeItem" }
   >;
   expandable: boolean;
+  observations: TraceObservationIndex;
+  approvalPending: boolean;
 }) {
   return (
     <>
@@ -1993,7 +2881,13 @@ function TraceItemHeader({
       )}
       <span title={traceItemLabel(item)}>{traceItemLabel(item)}</span>
       <span className="trace-item-status">
-        <StatusMark item={item} />
+        {approvalPending ? (
+          <small className="tool-status">
+            {i18n.t("shell:approvalRequired")}
+          </small>
+        ) : (
+          <StatusMark item={item} observations={observations} />
+        )}
       </span>
       <span className="trace-item-chevron">
         {expandable ? <Icon name="chevron-down" size={13} /> : null}
@@ -2007,32 +2901,47 @@ function traceItemExpandable(
     ThreadItem,
     { type: "reasoning" | "commandExecution" | "nativeItem" }
   >,
-  debugTrace = false,
 ): boolean {
   return (
-    debugTrace ||
-    item.type !== "reasoning" ||
-    reasoningContentText(item).trim().length > 0
+    item.type !== "reasoning" || reasoningContentText(item).trim().length > 0
   );
 }
 
-function StatusMark({ item }: { item: ThreadItem }) {
+function StatusMark({
+  item,
+  observations,
+}: {
+  item: ThreadItem;
+  observations: TraceObservationIndex;
+}) {
   if (item.type === "reasoning") {
     if (item.status === "inProgress")
-      return <span className="mini-spinner" aria-label="Thinking" />;
+      return (
+        <span className="mini-spinner" aria-label={i18n.t("shell:thinking")} />
+      );
     if (item.status === "interrupted")
-      return <small className="tool-status interrupted">Interrupted</small>;
+      return (
+        <small className="tool-status interrupted">
+          {i18n.t("shell:interrupted")}
+        </small>
+      );
     return null;
   }
   if (item.type === "nativeItem")
     return item.status === "inProgress" ? (
-      <span className="mini-spinner" aria-label="Working" />
+      <span className="mini-spinner" aria-label={i18n.t("shell:working")} />
     ) : item.status === "failed" || item.status === "declined" ? (
-      <small className={`tool-status ${item.status}`}>{item.status}</small>
+      <small className={`tool-status ${item.status}`}>
+        {i18n.t(item.status === "failed" ? "shell:failed" : "shell:declined")}
+      </small>
     ) : null;
   if (item.type !== "commandExecution") return null;
-  const status = commandStatus(item);
-  if (status === "Completed") return null;
+  const phase = observedCommandPhase(item, observations);
+  const status =
+    phase === commandPhase(item)
+      ? commandStatus(item)
+      : commandPhaseLabel(phase);
+  if (status === i18n.t("shell:completed")) return null;
   return <small className={`tool-status ${item.status}`}>{status}</small>;
 }
 
@@ -2045,23 +2954,16 @@ function TraceDetail({
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
-  const debugTrace = useContext(TraceDebugContext);
-  const compactions = useContext(TraceCompactionsContext).get(item.id) ?? [];
   if (item.type === "reasoning") {
     return (
       <div className="trace-detail trace-detail-markdown">
         <Markdown text={reasoningContentText(item)} />
-        <TraceRawDetails
-          label="Item display data"
-          data={item}
-          hidden={!debugTrace}
-        />
       </div>
     );
   }
   if (item.type === "nativeItem")
     return (
-      <pre className="trace-detail" tabIndex={0}>
+      <pre className="trace-detail native-item-detail" tabIndex={0}>
         {item.detail}
       </pre>
     );
@@ -2074,7 +2976,7 @@ function TraceDetail({
         <div
           className="trace-output"
           role="region"
-          aria-label="Tool output"
+          aria-label={i18n.t("shell:toolOutput")}
           tabIndex={0}
         >
           <ToolResultRenderer
@@ -2089,47 +2991,7 @@ function TraceDetail({
           />
         </div>
       </div>
-      {compactions.map((projection) => (
-        <ToolCompactionSummary
-          key={projection.item.id}
-          projection={projection}
-        />
-      ))}
-      <TraceRawDetails
-        label="Item display data"
-        data={item}
-        hidden={!debugTrace}
-      />
     </div>
-  );
-}
-
-function TraceRawDetails({
-  label,
-  data,
-  hidden = false,
-}: {
-  label: string;
-  data: unknown;
-  hidden?: boolean;
-}) {
-  const [visited, setVisited] = useState(false);
-  const [available, setAvailable] = useState(!hidden);
-  useEffect(() => {
-    if (!hidden) setAvailable(true);
-  }, [hidden]);
-  if (hidden && !available) return null;
-  return (
-    <details
-      className="trace-debug-raw"
-      hidden={hidden}
-      onToggle={(event) => {
-        if (event.currentTarget.open) setVisited(true);
-      }}
-    >
-      <summary>{label}</summary>
-      {visited ? <pre tabIndex={0}>{JSON.stringify(data, null, 2)}</pre> : null}
-    </details>
   );
 }
 
@@ -2159,7 +3021,8 @@ function ToolInput({ command }: { command: string }) {
     <>
       <Heading className="trace-input-summary">
         <span className="trace-input-heading">
-          Input {overflows ? <Icon name="chevron-down" size={13} /> : null}
+          {i18n.t("shell:input")}
+          {overflows ? <Icon name="chevron-down" size={13} /> : null}
         </span>
         <span
           className="trace-input-preview"
@@ -2216,12 +3079,15 @@ function UserMessage({
   return (
     <article className="user-row">
       {attachments.length === 0 ? null : (
-        <div className="message-images" aria-label="Attached images">
+        <div
+          className="message-images"
+          aria-label={i18n.t("shell:attachedImages")}
+        >
           {attachments.map((attachment, index) => (
             <AttachmentImage
               attachment={attachment}
               key={`${attachment.sha256}-${String(index)}`}
-              name={`Attached image ${String(index + 1)}`}
+              name={i18n.t("shell:attachedImageName", { number: index + 1 })}
               onOpen={onOpenImage}
               onReadAttachment={onReadAttachment}
             />
@@ -2235,7 +3101,8 @@ function UserMessage({
       )}
       <MessageActions
         className="user-message-actions"
-        copyLabel="Copy user message"
+        copyLabel={i18n.t("shell:copyUserMessage")}
+        copiedLabel={i18n.t("shell:copiedUserMessage")}
         text={text}
         turn={turn}
       />
@@ -2265,8 +3132,8 @@ function DraftImage({
       <button
         className="remove-draft-image"
         type="button"
-        aria-label={`Remove ${image.name}`}
-        title={`Remove ${image.name}`}
+        aria-label={i18n.t("shell:removeImageName", { name: image.name })}
+        title={i18n.t("shell:removeImageName", { name: image.name })}
         onClick={onRemove}
       >
         <Icon name="x" size={12} />
@@ -2303,7 +3170,8 @@ function AgentMessage({
       {showActions ? (
         <MessageActions
           className="assistant-message-actions"
-          copyLabel="Copy assistant message"
+          copyLabel={i18n.t("shell:copyAssistantMessage")}
+          copiedLabel={i18n.t("shell:copiedAssistantMessage")}
           text={item.text}
           turn={turn}
           usage={usage}
@@ -2316,12 +3184,14 @@ function AgentMessage({
 function MessageActions({
   className,
   copyLabel,
+  copiedLabel,
   text,
   turn,
   usage,
 }: {
   className: string;
   copyLabel: string;
+  copiedLabel: string;
   text: string;
   turn: Turn;
   usage?: ModelUsageAggregate;
@@ -2347,15 +3217,18 @@ function MessageActions({
         </time>
       )}
       {usage === undefined ? null : (
-        <span className="message-cache" title="Turn cache telemetry">
-          {usageLabel(usage, "Cache")}
+        <span
+          className="message-cache"
+          title={i18n.t("shell:turnCacheTelemetry")}
+        >
+          {usageLabel(usage, i18n.t("shell:cache"))}
         </span>
       )}
       <button
         className="message-copy"
         type="button"
-        aria-label={copied ? copyLabel.replace(/^Copy/u, "Copied") : copyLabel}
-        title={copied ? "Copied" : "Copy"}
+        aria-label={copied ? copiedLabel : copyLabel}
+        title={copied ? i18n.t("shell:copied") : i18n.t("shell:copy")}
         onClick={() => void copy()}
       >
         <Icon name={copied ? "check" : "copy"} size={14} />
@@ -2369,7 +3242,7 @@ function WakeupCard({ entry }: { entry: TriggerHistoryEntry }) {
     <article className={`wakeup-card ${entry.status}`}>
       <header>
         <Icon name="trigger" size={14} />
-        <strong>Trigger wakeup</strong>
+        <strong>{i18n.t("shell:triggerWakeup")}</strong>
         <span>{entry.kind}</span>
       </header>
       <p>{entry.reason}</p>
@@ -2379,106 +3252,41 @@ function WakeupCard({ entry }: { entry: TriggerHistoryEntry }) {
   );
 }
 
-function ApprovalBar({
-  composerId,
-  approval,
-  onRespond,
-}: {
-  composerId: string;
-  approval: ApprovalCardState;
-  onRespond(requestId: string, decision: ApprovalDecision): Promise<void>;
-}) {
-  const [error, setError] = useState<string | null>(null);
-  const respond = async (decision: "accept" | "decline") => {
-    setError(null);
-    try {
-      await onRespond(approval.requestId, decision);
-      document.getElementById(composerId)?.focus();
-    } catch (reason) {
-      setError(describeError(reason));
-    }
-  };
-  const once = approval.params.approvalScope === "once";
-  const runCode = approval.params.toolName === "run_code";
-  const toolName = approval.params.toolName ?? "tool";
-  const code =
-    runCode && typeof approval.params.toolArguments?.code === "string"
-      ? approval.params.toolArguments.code
-      : approval.params.command;
-  return (
-    <section className="approval-bar" aria-label={`${toolName} approval`}>
-      <span className="approval-icon" aria-hidden="true">
-        <Icon name="warning" size={15} />
-      </span>
-      <div>
-        <strong>
-          {once
-            ? `Allow ${toolName} with full file access once?`
-            : runCode
-              ? "Allow the shell-equivalent run_code capability?"
-              : `Allow the ${toolName} capability?`}
-        </strong>
-        <p>
-          {once
-            ? "This call runs outside the file sandbox. Approval applies only to this call and its nested operations."
-            : `Approval is remembered for the stable ${toolName} capability, not granted per command or code segment.`}
-        </p>
-        <pre className="approval-command">
-          <code>{code}</code>
-        </pre>
-        <code className="approval-cwd">
-          Working directory: {approval.params.cwd}
-        </code>
-        {error ? <small role="alert">{error}</small> : null}
-      </div>
-      <div className="approval-actions">
-        <button type="button" onClick={() => void respond("decline")}>
-          Deny
-        </button>
-        <button
-          className="allow"
-          type="button"
-          onClick={() => void respond("accept")}
-        >
-          {once ? "Allow once" : "Allow capability"}
-        </button>
-      </div>
-    </section>
-  );
-}
-
 function traceItemLabel(item: ThreadItem): string {
   if (item.type === "reasoning") {
     const summary = item.summary.join("\n").trim();
     return summary.length > 0
       ? summary
       : item.status === "inProgress"
-        ? "Thinking"
-        : "Thought";
+        ? i18n.t("shell:thinking")
+        : i18n.t("shell:thought");
   }
   return item.type === "nativeItem"
     ? item.title
     : item.type === "commandExecution"
       ? commandTitle(item)
-      : "Item details";
+      : i18n.t("shell:itemDetails");
 }
 
 function completedTurnLabel(turn: Turn): string {
   const duration = turn.durationMs;
   const result =
     turn.status === "completed"
-      ? "Worked"
+      ? i18n.t("shell:worked")
       : turn.status === "interrupted"
-        ? "Interrupted"
-        : "Failed";
+        ? i18n.t("shell:interrupted")
+        : i18n.t("shell:failed");
   if (duration === null) return result;
-  return `${result} for ${formatDuration(duration)}`;
+  return i18n.t("shell:statusForDuration", {
+    status: result,
+    duration: formatDuration(duration),
+  });
 }
 
 function formatCompletedAt(seconds: number): string {
   const completed = new Date(seconds * 1_000);
   const now = new Date();
-  const time = new Intl.DateTimeFormat(undefined, {
+  const time = new Intl.DateTimeFormat(i18n.resolvedLanguage, {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
@@ -2491,7 +3299,7 @@ function formatCompletedAt(seconds: number): string {
     return time;
   }
   const date = new Intl.DateTimeFormat(
-    undefined,
+    i18n.resolvedLanguage,
     completed.getFullYear() === now.getFullYear()
       ? { month: "short", day: "numeric" }
       : { year: "numeric", month: "short", day: "numeric" },
@@ -2501,10 +3309,15 @@ function formatCompletedAt(seconds: number): string {
 
 function formatDuration(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return i18n.t("shell:secondsDuration", { count: seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${seconds % 60}s`;
+  if (minutes < 60)
+    return i18n.t("shell:minutesDuration", { minutes, seconds: seconds % 60 });
+  return i18n.t("shell:hoursDuration", {
+    hours: Math.floor(minutes / 60),
+    minutes: minutes % 60,
+    seconds: seconds % 60,
+  });
 }
 
 function describeError(error: unknown): string {

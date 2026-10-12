@@ -1,3 +1,4 @@
+import { i18n } from "./i18n.js";
 import React, { useEffect, useRef, useState } from "react";
 import type { NativeProjectedThreadEvent } from "../../../../../src/protocol/native/recovery.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
@@ -20,6 +21,8 @@ import type { ZenXThreadAttachmentProjection } from "../../main/image-attachment
 import type { ModelSummary, Thread } from "../../protocol-client/index.js";
 import type { ApprovalCardState } from "./approval-state.js";
 import { ThreadView } from "./ThreadView.js";
+import { requestQueuedEdit, importQueuedImages } from "./queue-edit-request.js";
+import type { QueueEditStore } from "./queue-edit-state.js";
 import {
   applyNativeThreadEvent,
   projectNativeRecovery,
@@ -69,6 +72,7 @@ function nativeSettings(
 
 /** A transient viewport onto the existing native Thread, never a new session. */
 export function ThreadConversationViewport({
+  queueEditStore,
   threadId,
   composer,
   readComposer,
@@ -87,6 +91,7 @@ export function ThreadConversationViewport({
   workflowCommands,
   archived = false,
 }: {
+  queueEditStore?: QueueEditStore;
   threadId: string;
   composer: ComposerState;
   readComposer(): ComposerState;
@@ -122,6 +127,7 @@ export function ThreadConversationViewport({
   const [revision, setRevision] = useState(0);
   const [queueFailure, setQueueFailure] = useState<{
     queuedItemId: string;
+    revision?: number;
     code: string;
     message: string;
   } | null>(null);
@@ -175,8 +181,35 @@ export function ThreadConversationViewport({
       setThread(projection);
       if (event.event.type === "thread_settings_updated")
         setSettings(nativeSettings(threadId, event.event.settings));
-      if (event.event.type === "queue_failed") setQueueFailure(event.event);
-      if (event.event.type === "queue_admission_started") setQueueFailure(null);
+      if (
+        event.event.type === "queue_failed" ||
+        event.event.type === "queue_admission_started"
+      ) {
+        const queueEvent = event.event;
+        if (
+          projection.queuedMessages?.some(
+            (item) =>
+              item.id === queueEvent.queuedItemId &&
+              item.clientId === queueEvent.clientId &&
+              (item.revision ?? 0) === (queueEvent.revision ?? 0),
+          )
+        )
+          setQueueFailure(
+            queueEvent.type === "queue_failed" ? queueEvent : null,
+          );
+      }
+      if (
+        event.event.type === "item_completed" &&
+        event.event.item.type === "user_message_queue_edited"
+      ) {
+        const edited = event.event.item;
+        setQueueFailure((current) =>
+          current?.queuedItemId === edited.queuedItemId &&
+          (current.revision ?? 0) < edited.revision
+            ? null
+            : current,
+        );
+      }
       if (projection.canonicalItems !== undefined)
         callbacks.current.updateComposer((state) =>
           reconcileCanonicalAdmission(
@@ -287,7 +320,7 @@ export function ThreadConversationViewport({
         !hasValidReasoningSelection(models, settings))
     ) {
       setError(
-        "Choose an available model and reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableModelAndReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -316,16 +349,16 @@ export function ThreadConversationViewport({
     return (
       <div className="conversation-viewport-status" role="status">
         {serverStatus.type === "ready"
-          ? "Loading conversation…"
-          : "Reconnecting…"}
+          ? i18n.t("shell:loadingConversationDots")
+          : i18n.t("shell:reconnecting")}
       </div>
     );
   if (thread === null || settings === null)
     return (
       <div className="conversation-viewport-status" role="alert">
-        {error ?? "Conversation unavailable"}
+        {error ?? i18n.t("shell:conversationUnavailable")}
         <button type="button" onClick={reload}>
-          Retry
+          {i18n.t("panels:retry")}
         </button>
       </div>
     );
@@ -367,6 +400,17 @@ export function ThreadConversationViewport({
           updateComposer((value) => editComposer(value, text))
         }
         onRespondToApproval={respondToApproval}
+        queueEditStore={queueEditStore}
+        onEditQueued={(params) => {
+          const epoch = generation.current;
+          return requestQueuedEdit(params, () => {
+            // Reload uses the existing read-only native resume barrier.
+            if (generation.current === epoch && params.threadId === threadId)
+              reload();
+          });
+        }}
+        onImportQueueImages={importQueuedImages}
+        onPickQueueImages={() => window.zenx.imageAttachments.pick()}
         onSubmit={submit}
         onOpenMessageLink={onOpenMessageLink}
         onModelChange={(model) =>

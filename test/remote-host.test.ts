@@ -98,6 +98,11 @@ test("pairing is host-bound, one-shot, rejects unauthorized and revokes connecte
       (await f.remote.hello("phone", enrolled.token, "desktop-a", 1)).hostId,
       "desktop-a",
     );
+    assert.ok(
+      (
+        await f.remote.hello("phone", enrolled.token, "desktop-a", 1)
+      ).capabilities.includes("send-unarchived"),
+    );
     await errorCode(
       () => f.remote.hello("phone", enrolled.token, "wrong", 1),
       "wrong_host",

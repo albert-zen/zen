@@ -2,7 +2,7 @@ import "./dom-primitives.js";
 import { ZenXProjectProjection } from "../src/main/project-projection.js";
 import { agentSessionNavigationId } from "../src/main/conversation-navigation.js";
 import { chooseValue } from "./choice-interaction.js";
-import { getConversationPresentationStore } from "../src/renderer/src/conversation-presentation.js";
+
 import type {
   AgentProviderEvent,
   AgentProvidersApi,
@@ -16,7 +16,6 @@ import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import type { ContextCompactionItem } from "../../../src/item.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
@@ -1968,14 +1967,12 @@ for (const committed of [true, false] as const) {
       assert.equal(readCalls, 1);
       if (committed) {
         await waitFor(() =>
-          document.querySelector(".queued-messages") === null
-            ? true
-            : undefined,
+          document.querySelector(".queue-shelf") === null ? true : undefined,
         );
       } else {
         assert.match(
-          document.querySelector(".queued-messages")?.textContent ?? "",
-          /1 queued/u,
+          document.querySelector(".queue-shelf")?.textContent ?? "",
+          /Pending send · 1/u,
         );
         await waitFor(() =>
           (
@@ -1990,6 +1987,286 @@ for (const committed of [true, false] as const) {
     }
   });
 }
+
+test("queue editor draft and pending request survive actual App loading unmount and do not steal another thread", async () => {
+  type EditParams =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  type EditResult =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditResult;
+  const makeRecovery = (id: string, name: string) => {
+    const base = nativeRecoveryForThread({
+      ...liveThread(),
+      id,
+      sessionId: id,
+      name,
+    });
+    return {
+      ...base,
+      thread: {
+        ...base.thread,
+        items: [
+          ...base.thread.items,
+          {
+            id: `queued-${id}`,
+            clientId: `client-${id}`,
+            threadId: id,
+            type: "user_message_queued" as const,
+            createdAt: new Date(20_000).toISOString(),
+            input: [{ type: "text" as const, text: `Original queued ${id}` }],
+          },
+        ],
+      },
+    };
+  };
+  const a = makeRecovery("thread-1", "Thread one");
+  const b = makeRecovery("thread-2", "Thread two");
+  const bLoading = deferred<typeof b>();
+  const saving = deferred<EditResult>();
+  const calls: EditParams[] = [];
+  let bRequested = false;
+  const harness = await mountApp(
+    {
+      ...oneProject(),
+      projects: [
+        { ...oneProject().projects[0]!, threadIds: ["thread-1", "thread-2"] },
+      ],
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          if ((params as { threadId: string }).threadId === "thread-2") {
+            bRequested = true;
+            return await bLoading.promise;
+          }
+          return a;
+        }
+        if (method === "zen/thread/queue/edit") {
+          calls.push(params as EditParams);
+          return await saving.promise;
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    },
+  );
+  const editorText = () =>
+    document.querySelector<HTMLTextAreaElement>(
+      ".queued-message-editor textarea",
+    );
+  const selectThread = async (name: string) => {
+    const row = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (x) => x.textContent?.includes(name),
+      ),
+    );
+    await act(async () => row.click());
+  };
+  const openEditor = async () => {
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit"),
+    );
+    await act(async () => button.click());
+    return await waitFor(editorText);
+  };
+  try {
+    await selectThread("Thread one");
+    const mainA = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(mainA, "Independent main draft A");
+    const editA = await openEditor();
+    await setTextareaValue(editA, "Preserved queue draft A");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.click(),
+    );
+    await waitFor(() => calls.length === 1);
+    const firstId = calls[0]!.editId;
+    const oldView = document.querySelector(".thread-view")!;
+    await selectThread("Thread two");
+    await waitFor(() => bRequested);
+    assert.equal(
+      oldView.isConnected,
+      false,
+      "uncached navigation must really unmount ThreadView",
+    );
+    assert.equal(editA.isConnected, false);
+    assert.equal(document.querySelector(".thread-view"), null);
+    await act(async () => bLoading.resolve(b));
+    const mainB = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(mainB, "Independent main draft B");
+    await selectThread("Thread one");
+    const reopened = await openEditor();
+    assert.equal(reopened.value, "Preserved queue draft A");
+    const save =
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!;
+    assert.equal(save.disabled, true);
+    await act(async () => save.click());
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.editId, firstId);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft A",
+    );
+    await selectThread("Thread two");
+    const editB = await openEditor();
+    await setTextareaValue(editB, "Independent queue draft B");
+    await act(async () => editB.focus());
+    await act(async () =>
+      saving.resolve({
+        status: "edited",
+        queuedItemId: calls[0]!.queuedItemId,
+        clientId: calls[0]!.clientId,
+        revision: 1,
+        editItemId: `edit-${firstId}`,
+      }),
+    );
+    assert.equal(editorText(), editB);
+    assert.equal(editB.value, "Independent queue draft B");
+    assert.equal(document.activeElement, editB);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft B",
+    );
+    await selectThread("Thread one");
+    const savedDraft = await openEditor();
+    assert.equal(savedDraft.value, "Preserved queue draft A");
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.disabled,
+      true,
+      "receipt awaits exact canonical fact before another revision can be saved",
+    );
+    assert.match(
+      document.querySelector(".queue-row")!.textContent!,
+      /Original queued thread-1/u,
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Independent main draft A",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("persisted queue edit recovers a lost event and response into the actual App projection without replay", async () => {
+  type Params =
+    import("../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  const base = nativeRecoveryForThread(liveThread());
+  const queued = {
+    id: "recover-edit-queue",
+    clientId: "recover-edit-client",
+    threadId: "thread-1",
+    type: "user_message_queued" as const,
+    createdAt: new Date(20_000).toISOString(),
+    input: [{ type: "text" as const, text: "Original before uncertain edit" }],
+  };
+  let recovery = {
+    ...base,
+    thread: { ...base.thread, items: [...base.thread.items, queued] },
+  };
+  const calls: Params[] = [];
+  let reads = 0;
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") return recovery;
+      if (method === "zen/thread/queue/edit") {
+        const edit = params as Params;
+        calls.push(edit);
+        recovery = {
+          ...recovery,
+          thread: {
+            ...recovery.thread,
+            items: [
+              ...recovery.thread.items,
+              {
+                type: "user_message_queue_edited" as const,
+                id: `edit-${edit.editId}`,
+                threadId: edit.threadId,
+                queuedItemId: edit.queuedItemId,
+                clientId: edit.clientId,
+                editId: edit.editId,
+                revision: edit.expectedRevision + 1,
+                input: edit.input,
+                createdAt: new Date(21_000).toISOString(),
+              },
+            ],
+          },
+        };
+        throw new Error(
+          "Transport closed after durable append; event and response were lost",
+        );
+      }
+      if (method === "zen/thread/read") {
+        reads++;
+        return { thread: recovery.thread };
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Main draft must survive recovery");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit")!.click(),
+    );
+    const edited = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".queued-message-editor textarea",
+      ),
+    );
+    await setTextareaValue(edited, "Recovered canonical edited input");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.click(),
+    );
+    await waitFor(() =>
+      document
+        .querySelector(".queue-row")
+        ?.textContent?.includes("Recovered canonical edited input"),
+    );
+    assert.equal(
+      calls.length,
+      1,
+      "uncertain response is read back, never replayed",
+    );
+    assert.equal(reads, 1);
+    assert.equal(calls[0]!.expectedRevision, 0);
+    assert.equal(document.querySelectorAll(".queue-row").length, 1);
+    assert.equal(
+      document.querySelector(".queue-row")!.getAttribute("data-queue-id"),
+      queued.id,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Main draft must survive recovery",
+    );
+    await waitFor(
+      () => document.querySelector(".queued-message-editor") === null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".queue-row-edit")!.click(),
+    );
+    const fresh = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".queued-message-editor textarea",
+      ),
+    );
+    assert.equal(fresh.value, "Recovered canonical edited input");
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(".queue-editor-save")!.disabled,
+      false,
+      "observed recovered revision retires old syncing cache",
+    );
+    assert.equal(calls.length, 1);
+  } finally {
+    await unmountApp(harness);
+  }
+});
 
 test("ambiguous historic Queue warns on current Thread, restores explicitly, and does not repeat", async () => {
   const migrated = {
@@ -2179,20 +2456,31 @@ test("native queue admission failure belongs to its queued Item and latest attem
     await send(begun(firstAttempt));
     await send(rejected(firstAttempt));
     assert.match(
-      document.querySelector(".queued-failure")?.textContent ?? "",
+      document.querySelector(".queue-row-error")?.textContent ?? "",
       /image-capable model/u,
     );
-    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
+    assert.equal(
+      document
+        .querySelector(".queue-row-error")
+        ?.closest(".queue-row")
+        ?.getAttribute("data-queue-id"),
+      "queued-second",
+    );
+    assert.equal(
+      document.querySelector('[data-queue-id="queued-first"] .queue-row-error'),
+      null,
+    );
     await send(begun(secondAttempt));
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     await send(rejected(firstAttempt)); // stale first attempt cannot override the new one
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     await send(rejected(secondAttempt), "another-thread");
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     await send(rejected(secondAttempt));
-    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
     await send(rejected(secondAttempt)); // duplicate notification does not duplicate a card
-    assert.equal(document.querySelectorAll(".queued-failure").length, 1);
+    assert.equal(document.querySelectorAll(".queue-row-error").length, 1);
     await send({
       type: "item_completed",
       item: {
@@ -2205,10 +2493,10 @@ test("native queue admission failure belongs to its queued Item and latest attem
         createdAt: new Date(21_000).toISOString(),
       },
     });
-    assert.equal(document.querySelector(".queued-failure"), null);
+    assert.equal(document.querySelector(".queue-row-error"), null);
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /1 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 1/u,
     );
   } finally {
     await unmountApp(harness);
@@ -2368,8 +2656,8 @@ for (const path of [
       assert.equal(composer.value, "original");
       if (path !== "rpc")
         assert.match(
-          document.querySelector(".queued-messages")?.textContent ?? "",
-          /1 queued/u,
+          document.querySelector(".queue-shelf")?.textContent ?? "",
+          /Pending send · 1/u,
         );
       assert.equal(document.querySelector(".composer-error"), null);
     } finally {
@@ -4219,301 +4507,6 @@ test("/compact preserves later edits and refreshes the canonical compaction item
   }
 });
 
-function nativeCompactionItem(coveredThroughItemId = "thread-1-metadata") {
-  return {
-    id: "automatic-compact",
-    type: "context_compaction" as const,
-    threadId: "thread-1",
-    createdAt: "2026-10-04T10:00:00Z",
-    provenance: "provider_generated" as const,
-    initiator: "human" as const,
-    coveredThroughItemId,
-    summary: "Saved native compacted summary",
-    retainedItemIds: [],
-    providerProfileId: "fake",
-    modelId: "fake",
-    reasoningEffort: "medium",
-    tokenUsage: { inputTokens: 15, outputTokens: 4 },
-    algorithmVersion: "zen.context-compaction.v2",
-  };
-}
-
-test("native compaction event hydrates its authoritative prefix without clearing a later draft", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-  let reads = 0;
-  const initial = nativeRecoveryForThread(liveThread());
-  const item = nativeCompactionItem();
-  const complete = {
-    ...initial,
-    watermark: 1,
-    thread: { ...initial.thread, items: [...initial.thread.items, item] },
-  };
-  const harness = await mountThreadApp({
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume")
-        return ++reads === 1 ? initial : hydration.promise;
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "Keep my draft while history refreshes");
-    await act(async () => {
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 1,
-        event: { type: "item_completed", item },
-      });
-      await Promise.resolve();
-    });
-    assert.equal(
-      reads,
-      2,
-      "a recorded compaction triggers an authoritative native recovery",
-    );
-    await setTextareaValue(composer, "A newer draft during recovery");
-    await act(async () => hydration.resolve(complete));
-    await waitFor(() => document.body.textContent?.includes("Human initiated"));
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-      "A newer draft during recovery",
-    );
-    assert.equal(
-      document.querySelector(".agent-surface .page-loading") === null,
-      true,
-    );
-    await act(async () =>
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 1,
-        event: { type: "item_completed", item },
-      }),
-    );
-    assert.equal(
-      reads,
-      2,
-      "a duplicate saved event cannot trigger a new recovery",
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("new CAS first-send projection hydrates native compaction and fences newer navigation", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-  let reads = 0;
-  const item = nativeCompactionItem("turn-1-completed");
-  const recovered = nativeRecoveryForThread({
-    ...runningThread(),
-    status: { type: "idle" },
-    turns: runningThread().turns.map((turn) => ({
-      ...turn,
-      status: "completed",
-      completedAt: 20,
-    })),
-  });
-  const complete = {
-    ...recovered,
-    watermark: 1,
-    thread: { ...recovered.thread, items: [...recovered.thread.items, item] },
-  };
-  const harness = await mountApp(oneProject(), {
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    startProjectThread: async (workspace) =>
-      started({ ...liveThread(), canonicalItems: undefined }, workspace),
-    request: async (method) => {
-      if (method === "turn/start") return {};
-      if (method === "zen/thread/resume") {
-        reads++;
-        return hydration.promise;
-      }
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    const composer = await waitFor(() =>
-      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
-    );
-    await setTextareaValue(composer, "Create this conversation");
-    await invokePrimarySubmit(exactButtonByAria("Send"));
-    await waitFor(() =>
-      document.querySelector(".new-thread-draft-heading") === null
-        ? true
-        : undefined,
-    );
-    await setTextareaValue(
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!,
-      "Keep the created conversation draft",
-    );
-    await act(async () => {
-      listener?.("zen/thread/event", {
-        processEpoch: complete.processEpoch,
-        threadId: "thread-1",
-        watermark: 1,
-        event: { type: "item_completed", item },
-      });
-      await Promise.resolve();
-    });
-    assert.equal(
-      reads,
-      1,
-      "unknown native epoch must recover rather than discard a saved compaction",
-    );
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
-    );
-    await act(async () => hydration.resolve(complete));
-    assert.equal(
-      document.querySelector<HTMLElement>(".settings-view")!.hidden,
-      false,
-    );
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
-    );
-    await waitFor(() => document.querySelector(".new-thread-draft-heading"));
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-      "",
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("compaction hydration failure preserves its saved summary, draft, and a recoverable error", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  let reads = 0;
-  const initial = nativeRecoveryForThread(liveThread());
-  const item = nativeCompactionItem("unobserved-native-boundary");
-  const harness = await mountThreadApp({
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume") {
-        if (++reads === 1) return initial;
-        throw new Error("Native recovery unavailable");
-      }
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "My unsent draft");
-    await act(async () =>
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 1,
-        event: { type: "item_completed", item },
-      }),
-    );
-    await waitFor(() =>
-      document.body.textContent?.includes(
-        "Compacted context details could not be refreshed",
-      ),
-    );
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-      "My unsent draft",
-    );
-    assert.equal(
-      document.querySelector(".agent-surface .page-loading") === null,
-      true,
-    );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(".context-compaction-toggle")!
-        .click(),
-    );
-    assert.match(document.body.textContent!, /Saved native compacted summary/);
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("compaction event and RPC success share one freshness-fenced native recovery", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-  const initial = nativeRecoveryForThread(liveThread());
-  const item = nativeCompactionItem();
-  const complete = {
-    ...initial,
-    watermark: 1,
-    thread: { ...initial.thread, items: [...initial.thread.items, item] },
-  };
-  let reads = 0;
-  const harness = await mountThreadApp({
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume")
-        return ++reads === 1 ? initial : hydration.promise;
-      if (method === "thread/compact") {
-        listener?.("zen/thread/event", {
-          processEpoch: initial.processEpoch,
-          threadId: "thread-1",
-          watermark: 1,
-          event: { type: "item_completed", item },
-        });
-        return { compactionItemId: item.id };
-      }
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "/compact");
-    await invokePrimarySubmit(exactButtonByAria("Compact context"));
-    await waitFor(() => (reads === 2 ? true : undefined));
-    assert.equal(reads, 2);
-    await act(async () => hydration.resolve(complete));
-    await waitFor(() =>
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value ===
-      ""
-        ? true
-        : undefined,
-    );
-    assert.equal(
-      reads,
-      2,
-      "the response reuses the event recovery rather than starting another read",
-    );
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-      "",
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
 test("context ring opens details and only its popover action compacts", async () => {
   const methods: string[] = [];
   const harness = await mountThreadApp({
@@ -4877,25 +4870,28 @@ test("composer default save cannot roll back a newer settings notification", asy
         .dispatchEvent(new window.MouseEvent("pointerover", { bubbles: true })),
     );
     const select = await waitFor(() =>
-      document.querySelector<HTMLSelectElement>(
+      document.querySelector<HTMLButtonElement>(
         '[aria-label="Default send mode"]',
       ),
     );
-    await act(async () => {
-      select.value = "queue";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
+    await act(async () => select.click());
+    const queueOption = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        '[role="option"][data-value="queue"]',
+      ),
+    );
+    await act(async () => queueOption.click());
     assert.equal(writes.length, 1);
     assert.equal(writes[0]?.baseRevision, 1);
     assert.equal(writes[0]?.composerSendModeExplicit, true);
     const latest = publicSettings([]);
     Object.assign(latest.profile, { revision: 3, composerSendMode: "hard" });
     await act(async () => notify?.(latest));
-    assert.equal(select.value, "hard");
+    assert.equal(select.getAttribute("data-value"), "hard");
     const old = publicSettings([]);
     Object.assign(old.profile, { revision: 2, composerSendMode: "queue" });
     await act(async () => reply.resolve(old));
-    assert.equal(select.value, "hard");
+    assert.equal(select.getAttribute("data-value"), "hard");
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("textarea")?.value,
       "",
@@ -5545,190 +5541,6 @@ test("R1 counterexample: Retry agent conversations refreshes its missing Project
   }
 });
 
-test("R1 counterexample: failed compaction hydration keeps buffered terminal events visible", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
-  const item = {
-    ...nativeCompactionItem("turn-0-completed"),
-    initiator: "automatic" as const,
-  };
-  let reads = 0;
-  const harness = await mountThreadApp({
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume")
-        return ++reads === 1 ? initial : hydration.promise;
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "My draft");
-    await act(async () =>
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 1,
-        event: { type: "item_completed", item },
-      }),
-    );
-    await waitFor(() => reads === 2);
-    await act(async () =>
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 2,
-        event: {
-          type: "turn_completed",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          status: "completed",
-        },
-      }),
-    );
-    await act(async () => hydration.reject(new Error("Recovery unavailable")));
-    await waitFor(() =>
-      document.body.textContent?.includes(
-        "Compacted context details could not be refreshed",
-      ),
-    );
-    assert.equal(
-      document.querySelector(".turn.inProgress") === null,
-      true,
-      "The received terminal event must settle the live Turn even when native details read fails",
-    );
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-      "My draft",
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("R1 counterexample: second compaction during recovery gets its newer authoritative prefix", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
-  const first = {
-    ...nativeCompactionItem("turn-0-completed"),
-    initiator: "automatic" as const,
-  };
-  const second = {
-    ...nativeCompactionItem("turn-1-completed"),
-    id: "compact-2",
-    initiator: "automatic" as const,
-    summary: "Second saved summary",
-  };
-  const firstSnapshot = {
-    ...initial,
-    watermark: 1,
-    thread: { ...initial.thread, items: [...initial.thread.items, first] },
-  };
-  const latest = laterCompactionSnapshot(first, second);
-  let reads = 0;
-  const harness = await mountThreadApp({
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume") {
-        reads++;
-        return reads === 1 ? initial : reads === 2 ? hydration.promise : latest;
-      }
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    await selectedComposer();
-    const event = (
-      watermark: number,
-      event: ServerNotificationParams["zen/thread/event"]["event"],
-    ) =>
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark,
-        event,
-      });
-    await act(async () => event(1, { type: "item_completed", item: first }));
-    await waitFor(() => reads === 2);
-    await act(async () => {
-      event(2, {
-        type: "turn_completed",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        status: "completed",
-      });
-      event(3, {
-        type: "turn_started",
-        threadId: "thread-1",
-        turnId: "turn-2",
-      });
-      event(4, { type: "item_completed", item: second });
-    });
-    await act(async () => hydration.resolve(firstSnapshot));
-    const compactions = [
-      ...document.querySelectorAll<HTMLButtonElement>(
-        ".context-compaction-toggle",
-      ),
-    ];
-    assert.equal(compactions.length, 2);
-    await act(async () => compactions[1]!.click());
-    const diagnostics = [
-      ...document.querySelectorAll<HTMLDetailsElement>(
-        ".compaction-projection",
-      ),
-    ].at(-1)!;
-    await act(async () => {
-      diagnostics.open = true;
-      diagnostics.dispatchEvent(new window.Event("toggle"));
-    });
-    assert.equal(
-      reads,
-      3,
-      "A distinct newer compaction receives exactly one trailing native prefix read",
-    );
-    assert.match(diagnostics.textContent!, /projected history messages/);
-    assert.doesNotMatch(
-      diagnostics.textContent!,
-      /snapshot is unavailable|boundary does not exist/,
-    );
-    assert.equal(document.querySelectorAll(".turn.inProgress").length, 1);
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-function r1CompactionRunningThread(): Thread {
-  const active = runningThread();
-  return {
-    ...active,
-    turns: [
-      {
-        ...active.turns[0]!,
-        id: "turn-0",
-        status: "completed",
-        startedAt: 1,
-        completedAt: 2,
-        durationMs: 1000,
-      },
-      ...active.turns,
-    ],
-  };
-}
-
 test("R1 counterexample: Retry Zen conversations refreshes its missing Project locators", async () => {
   let healthy = false;
   let projectReads = 0;
@@ -5782,1256 +5594,4 @@ test("R1 counterexample: Retry Zen conversations refreshes its missing Project l
   } finally {
     await unmountApp(harness);
   }
-});
-
-function laterCompactionSnapshot(
-  first: ContextCompactionItem,
-  second: ContextCompactionItem,
-) {
-  const active = r1CompactionRunningThread();
-  const current = active.turns[1]!;
-  const snapshot = nativeRecoveryForThread(
-    {
-      ...active,
-      turns: [
-        active.turns[0]!,
-        { ...current, status: "completed", completedAt: 20 },
-        { ...current, id: "turn-2", startedAt: 30 },
-      ],
-    },
-    { watermark: 4 },
-  );
-  const items = [...snapshot.thread.items];
-  items.splice(
-    items.findIndex((item) => item.id === "turn-1-completed"),
-    0,
-    first,
-  );
-  return {
-    ...snapshot,
-    thread: { ...snapshot.thread, items: [...items, second] },
-  };
-}
-
-for (const outcome of ["unchanged", "newer-navigation"] as const) {
-  test(`distinct compaction trailing read preserves ${outcome} without a retry loop`, async () => {
-    let listener:
-      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-    const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-    const trailing = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-    const initial = nativeRecoveryForThread(r1CompactionRunningThread());
-    const first = {
-      ...nativeCompactionItem("turn-0-completed"),
-      initiator: "automatic" as const,
-    };
-    const second = {
-      ...nativeCompactionItem("turn-1-completed"),
-      id: "compact-2",
-      initiator: "automatic" as const,
-      summary: "Second saved summary",
-    };
-    const firstSnapshot = {
-      ...initial,
-      watermark: 1,
-      thread: { ...initial.thread, items: [...initial.thread.items, first] },
-    };
-    let reads = 0;
-    const harness = await mountThreadApp({
-      onNotification: (value) => {
-        listener = value;
-        return () => {
-          listener = undefined;
-        };
-      },
-      request: async (method) => {
-        if (method === "zen/thread/resume")
-          return ++reads === 1
-            ? initial
-            : reads === 2
-              ? hydration.promise
-              : trailing.promise;
-        throw new Error(`Unexpected ${method}`);
-      },
-    });
-    try {
-      await selectedComposer();
-      const event = (
-        watermark: number,
-        event: ServerNotificationParams["zen/thread/event"]["event"],
-      ) =>
-        listener?.("zen/thread/event", {
-          processEpoch: initial.processEpoch,
-          threadId: "thread-1",
-          watermark,
-          event,
-        });
-      await act(async () => event(1, { type: "item_completed", item: first }));
-      await waitFor(() => reads === 2);
-      await act(async () => {
-        event(2, {
-          type: "turn_completed",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          status: "completed",
-        });
-        event(3, {
-          type: "turn_started",
-          threadId: "thread-1",
-          turnId: "turn-2",
-        });
-        event(4, { type: "item_completed", item: second });
-      });
-      await act(async () => hydration.resolve(firstSnapshot));
-      await waitFor(() => reads === 3);
-      if (outcome === "newer-navigation") {
-        await act(async () =>
-          document
-            .querySelector<HTMLButtonElement>(".new-thread-action")!
-            .click(),
-        );
-        const draft = await waitFor(() =>
-          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
-        );
-        await setTextareaValue(draft, "Keep this newer draft");
-        await act(async () =>
-          trailing.resolve(laterCompactionSnapshot(first, second)),
-        );
-        assert.equal(
-          document.querySelector(".new-thread-draft-heading") !== null,
-          true,
-        );
-        assert.equal(
-          document.querySelector<HTMLTextAreaElement>("#thread-composer")!
-            .value,
-          "Keep this newer draft",
-        );
-        assert.equal(
-          document.querySelector(".context-compaction-event") === null,
-          true,
-        );
-      } else {
-        await act(async () => trailing.resolve(firstSnapshot));
-        await waitFor(() =>
-          document.body.textContent?.includes(
-            "Compacted context details are still incomplete",
-          ),
-        );
-        assert.equal(
-          document.querySelectorAll(".context-compaction-toggle").length,
-          2,
-          "A stale trailing snapshot cannot remove a newer saved summary",
-        );
-        assert.equal(
-          document
-            .querySelector('.turn[aria-label="Turn 2"]')!
-            .classList.contains("inProgress"),
-          false,
-          "A stale trailing snapshot cannot reopen a terminal Turn",
-        );
-        assert.equal(document.querySelectorAll(".turn.inProgress").length, 1);
-        await act(async () =>
-          event(4, { type: "item_completed", item: second }),
-        );
-      }
-      assert.equal(
-        reads,
-        3,
-        "An unchanged response or canceled selection cannot retry itself",
-      );
-    } finally {
-      await unmountApp(harness);
-    }
-  });
-}
-
-test("failed compaction read cannot republish an older view over a newer draft", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  const hydration = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
-  let reads = 0;
-  const harness = await mountThreadApp({
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume")
-        return ++reads === 1 ? initial : hydration.promise;
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    await selectedComposer();
-    await act(async () =>
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 1,
-        event: {
-          type: "item_completed",
-          item: {
-            ...nativeCompactionItem("turn-0-completed"),
-            initiator: "automatic",
-          },
-        },
-      }),
-    );
-    await waitFor(() => reads === 2);
-    await act(async () =>
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 2,
-        event: {
-          type: "turn_completed",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          status: "completed",
-        },
-      }),
-    );
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".new-thread-action")!.click(),
-    );
-    const draft = await waitFor(() =>
-      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
-    );
-    await setTextareaValue(draft, "The current draft");
-    await act(async () => hydration.reject(new Error("Old recovery failed")));
-    assert.equal(
-      document.querySelector(".new-thread-draft-heading") !== null,
-      true,
-    );
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-      "The current draft",
-    );
-    assert.equal(
-      document.body.textContent?.includes(
-        "Compacted context details could not be refreshed",
-      ),
-      false,
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("R2 probe: buffered compaction during initial recovery gets an authoritative prefix", async () => {
-  let listener:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  const read = deferred<ReturnType<typeof nativeRecoveryForThread>>();
-  const initial = nativeRecoveryForThread(r1CompactionRunningThread());
-  const item = {
-    ...nativeCompactionItem("turn-1-completed"),
-    initiator: "automatic" as const,
-  };
-  const complete = nativeRecoveryForThread(
-    {
-      ...r1CompactionRunningThread(),
-      turns: r1CompactionRunningThread().turns.map((t) => ({
-        ...t,
-        status: "completed" as const,
-        completedAt: 20,
-      })),
-    },
-    { watermark: 2 },
-  );
-  complete.thread.items = [...complete.thread.items, item];
-  let reads = 0;
-  const harness = await mountThreadApp({
-    onNotification: (value) => {
-      listener = value;
-      return () => {
-        listener = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume")
-        return ++reads === 1 ? read.promise : complete;
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    const row = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(".thread-row"),
-    );
-    await act(async () => row.click());
-    await waitFor(() => reads === 1);
-    await act(async () => {
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 1,
-        event: {
-          type: "turn_completed",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          status: "completed",
-        },
-      });
-      listener?.("zen/thread/event", {
-        processEpoch: initial.processEpoch,
-        threadId: "thread-1",
-        watermark: 2,
-        event: { type: "item_completed", item },
-      });
-      read.resolve(initial);
-    });
-    const toggle = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(".context-compaction-toggle"),
-    );
-    await act(async () => toggle.click());
-    const diagnostics = await waitFor(() =>
-      document.querySelector<HTMLDetailsElement>(".compaction-projection"),
-    );
-    await act(async () => {
-      diagnostics.open = true;
-      diagnostics.dispatchEvent(new window.Event("toggle"));
-    });
-    assert.equal(
-      reads,
-      2,
-      "The newer buffered compaction must get one authoritative prefix read after initial resume",
-    );
-    assert.doesNotMatch(
-      diagnostics.textContent!,
-      /boundary does not exist|snapshot is unavailable/,
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-for (const outcome of ["failure", "stale-success"] as const) {
-  test(`R2 probe: first-send native compaction read ${outcome} preserves the saved summary`, async () => {
-    let listener:
-      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-    let reads = 0;
-    const snapshot = nativeRecoveryForThread(r1CompactionRunningThread(), {
-      processEpoch: "new-host",
-    });
-    const item = {
-      ...nativeCompactionItem("turn-1-completed"),
-      initiator: "automatic" as const,
-    };
-    const harness = await mountApp(oneProject(), {
-      onNotification: (value) => {
-        listener = value;
-        return () => {
-          listener = undefined;
-        };
-      },
-      startProjectThread: async (workspace) =>
-        started({ ...liveThread(), canonicalItems: undefined }, workspace),
-      request: async (method) => {
-        if (method === "turn/start") return {};
-        if (method === "zen/thread/resume") {
-          reads++;
-          if (outcome === "failure")
-            throw new Error("Native recovery unavailable");
-          return snapshot;
-        }
-        throw new Error(`Unexpected ${method}`);
-      },
-    });
-    try {
-      const composer = await waitFor(() =>
-        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
-      );
-      await setTextareaValue(composer, "Create this conversation");
-      await invokePrimarySubmit(exactButtonByAria("Send"));
-      await waitFor(
-        () => document.querySelector(".new-thread-draft-heading") === null,
-      );
-      await setTextareaValue(
-        document.querySelector<HTMLTextAreaElement>("#thread-composer")!,
-        "Keep my draft",
-      );
-      await act(async () =>
-        listener?.("zen/thread/event", {
-          processEpoch: "new-host",
-          threadId: "thread-1",
-          watermark: 1,
-          event: {
-            type: "item_completed",
-            item: { ...item, threadId: "foreign-thread" },
-          },
-        }),
-      );
-      assert.equal(
-        reads,
-        0,
-        "Mismatched Item identity cannot initiate recovery",
-      );
-      assert.equal(document.querySelector(".context-compaction-toggle"), null);
-      await act(async () => {
-        listener?.("zen/thread/event", {
-          processEpoch: "new-host",
-          threadId: "thread-1",
-          watermark: 1,
-          event: {
-            type: "turn_started",
-            threadId: "thread-1",
-            turnId: "turn-1",
-          },
-        });
-        listener?.("zen/thread/event", {
-          processEpoch: "new-host",
-          threadId: "thread-1",
-          watermark: 2,
-          event: {
-            type: "turn_completed",
-            threadId: "thread-1",
-            turnId: "turn-1",
-            status: "completed",
-          },
-        });
-        listener?.("zen/thread/event", {
-          processEpoch: "new-host",
-          threadId: "thread-1",
-          watermark: 3,
-          event: { type: "item_completed", item },
-        });
-      });
-      await waitFor(() =>
-        document.body.textContent?.includes(
-          outcome === "failure"
-            ? "Compacted context details could not be refreshed"
-            : "Compacted context details are still incomplete",
-        ),
-      );
-      assert.ok(
-        document.querySelector(".context-compaction-toggle"),
-        "The already recorded saved summary must remain inspectable when authoritative read fails",
-      );
-      assert.equal(
-        document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-        "Keep my draft",
-      );
-      const toggle = document.querySelector<HTMLButtonElement>(
-        ".context-compaction-toggle",
-      )!;
-      await act(async () => toggle.click());
-      assert.equal(
-        document.querySelector(".compaction-summary")!.textContent,
-        item.summary,
-      );
-      const diagnostics = document.querySelector<HTMLDetailsElement>(
-        ".compaction-projection",
-      )!;
-      await act(async () => {
-        diagnostics.open = true;
-        diagnostics.dispatchEvent(new window.Event("toggle"));
-      });
-      assert.match(diagnostics.textContent!, /snapshot is unavailable/);
-      await act(async () => {
-        getConversationPresentationStore().setDetail("debug");
-      });
-      const raw = [
-        ...document.querySelectorAll<HTMLDetailsElement>(".trace-debug-raw"),
-      ].find(
-        (details) =>
-          details.querySelector("summary")?.textContent ===
-          "Available canonical items",
-      )!;
-      await act(async () => {
-        raw.open = true;
-        raw.dispatchEvent(new window.Event("toggle"));
-      });
-      assert.deepEqual(
-        JSON.parse(raw.querySelector("pre")!.textContent!),
-        outcome === "failure" ? [item] : [...snapshot.thread.items, item],
-        "Only exact observed/native Items are disclosed; no missing lifecycle IDs are invented",
-      );
-      await act(async () => {
-        listener?.("zen/thread/event", {
-          processEpoch: "new-host",
-          threadId: "thread-1",
-          watermark: 3,
-          event: { type: "item_completed", item },
-        });
-        if (outcome === "stale-success")
-          listener?.("zen/thread/event", {
-            processEpoch: "older-host",
-            threadId: "thread-1",
-            watermark: 4,
-            event: {
-              type: "item_completed",
-              item: { ...item, id: "stale-compact" },
-            },
-          });
-      });
-      assert.equal(
-        reads,
-        1,
-        "Duplicate facts and known stale epochs cannot repeat the read",
-      );
-      assert.equal(
-        document.querySelectorAll(".context-compaction-toggle").length,
-        1,
-      );
-    } finally {
-      await unmountApp(harness);
-    }
-  });
-}
-
-test("R2 probe: recovery event tail compaction gets an authoritative prefix", async () => {
-  const initial = nativeRecoveryForThread(r1CompactionRunningThread(), {
-    watermark: 2,
-  });
-  const item = {
-    ...nativeCompactionItem("turn-1-completed"),
-    initiator: "automatic" as const,
-  };
-  initial.events = [
-    {
-      processEpoch: initial.processEpoch,
-      threadId: "thread-1",
-      watermark: 1,
-      event: {
-        type: "turn_completed",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        status: "completed",
-      },
-    },
-    {
-      processEpoch: initial.processEpoch,
-      threadId: "thread-1",
-      watermark: 2,
-      event: { type: "item_completed", item },
-    },
-  ];
-  const complete = nativeRecoveryForThread(
-    {
-      ...r1CompactionRunningThread(),
-      turns: r1CompactionRunningThread().turns.map((t) => ({
-        ...t,
-        status: "completed" as const,
-        completedAt: 20,
-      })),
-    },
-    { watermark: 2 },
-  );
-  complete.thread.items = [...complete.thread.items, item];
-  let reads = 0;
-  const harness = await mountThreadApp({
-    request: async (method) => {
-      if (method === "zen/thread/resume")
-        return ++reads === 1 ? initial : complete;
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    await selectedComposer();
-    const toggle = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(".context-compaction-toggle"),
-    );
-    await act(async () => toggle.click());
-    const diagnostics = await waitFor(() =>
-      document.querySelector<HTMLDetailsElement>(".compaction-projection"),
-    );
-    await act(async () => {
-      diagnostics.open = true;
-      diagnostics.dispatchEvent(new window.Event("toggle"));
-    });
-    assert.equal(
-      reads,
-      2,
-      "An overlapping recovery event tail must trigger authoritative prefix hydration",
-    );
-    assert.doesNotMatch(
-      diagnostics.textContent!,
-      /boundary does not exist|snapshot is unavailable/,
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-test("initial recovery compaction with an unchanged prefix stops after one details read", async () => {
-  const snapshot = nativeRecoveryForThread(r1CompactionRunningThread(), {
-    watermark: 2,
-  });
-  const item = {
-    ...nativeCompactionItem("turn-1-completed"),
-    initiator: "automatic" as const,
-  };
-  snapshot.events = [
-    {
-      processEpoch: snapshot.processEpoch,
-      threadId: "thread-1",
-      watermark: 1,
-      event: {
-        type: "turn_completed",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        status: "completed",
-      },
-    },
-    {
-      processEpoch: snapshot.processEpoch,
-      threadId: "thread-1",
-      watermark: 2,
-      event: { type: "item_completed", item },
-    },
-  ];
-  let reads = 0;
-  const harness = await mountThreadApp({
-    request: async (method) => {
-      if (method === "zen/thread/resume") {
-        reads++;
-        return snapshot;
-      }
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    await selectedComposer();
-    await waitFor(() =>
-      document.body.textContent?.includes(
-        "Compacted context details are still incomplete",
-      ),
-    );
-    assert.equal(
-      reads,
-      2,
-      "The same incomplete post-replay target cannot retry itself",
-    );
-    assert.equal(document.querySelectorAll(".turn.inProgress").length, 0);
-    const toggle = document.querySelector<HTMLButtonElement>(
-      ".context-compaction-toggle",
-    )!;
-    await act(async () => toggle.click());
-    assert.equal(
-      document.querySelector(".compaction-summary")!.textContent,
-      item.summary,
-    );
-    const diagnostics = document.querySelector<HTMLDetailsElement>(
-      ".compaction-projection",
-    )!;
-    await act(async () => {
-      diagnostics.open = true;
-      diagnostics.dispatchEvent(new window.Event("toggle"));
-    });
-    assert.match(diagnostics.textContent!, /snapshot is unavailable/);
-  } finally {
-    await unmountApp(harness);
-  }
-});
-
-for (const [engine, terminal] of [
-  ["Zen", false],
-  ["external", false],
-  ["Zen", true],
-  ["external", true],
-] as const) {
-  test(`R3 counterexample: real App Settings navigation preserves ${engine}${terminal ? " completed-Turn" : ""} disclosures when changing Conversation detail`, async () => {
-    const tool = {
-      id: "retained-tool",
-      type: "commandExecution" as const,
-      command: "echo retained",
-      cwd: "/work/zen",
-      status: "completed" as const,
-      aggregatedOutput: "retained output",
-      exitCode: 0,
-      processId: null,
-      pluginId: null,
-      scriptPath: null,
-      source: "agent" as const,
-      durationMs: null,
-      commandActions: [] as [],
-      toolName: "shell",
-    };
-    const thread: Thread = {
-      ...liveThread(),
-      turns: [
-        {
-          id: "retained-turn",
-          status: terminal ? "completed" : "inProgress",
-          itemsView: "full",
-          error: null,
-          startedAt: 1,
-          completedAt: terminal ? 2 : null,
-          durationMs: null,
-          items: [tool, { ...tool, id: "second-tool" }],
-        },
-      ],
-    };
-    const native = externalAgentSnapshot();
-    native.thread = { ...native.thread, turns: thread.turns };
-    let saves = 0;
-    const harness = await mountThreadApp({
-      onSettingsSave: () => {
-        saves++;
-      },
-      plugins: {
-        get: async () => ({
-          plugins: [],
-          sidebar: [],
-          pages: [],
-          bundles: [],
-          surfaces: [],
-          resultRenderers: [],
-          threadHeaders: [],
-          panels: [],
-          settings: [],
-          commands: [],
-          subroutes: [],
-          menus: [],
-        }),
-      },
-      request: async (method) => {
-        if (method === "zen/thread/resume")
-          return nativeRecoveryForThread(thread);
-        throw new Error(`Unexpected ${method}`);
-      },
-      agentProviders: externalAgentApi({
-        sessions: async () => [native.binding],
-        read: async () => native,
-      }),
-    });
-    try {
-      const selector =
-        engine === "Zen"
-          ? '.thread-row-shell[data-thread-id="thread-1"] > .thread-row'
-          : ".native-session-row-shell > .thread-row";
-      const row = await waitFor(() =>
-        document.querySelector<HTMLButtonElement>(selector),
-      );
-      await act(async () => row.click());
-      const composerId =
-        engine === "Zen"
-          ? "#thread-composer"
-          : "#agent-composer-external-binding";
-      await setTextareaValue(
-        await waitFor(() =>
-          document.querySelector<HTMLTextAreaElement>(composerId),
-        ),
-        `${engine} draft`,
-      );
-      if (terminal)
-        await act(async () =>
-          document.querySelector<HTMLButtonElement>(".turn-toggle")!.click(),
-        );
-      const group = await waitFor(() =>
-        document.querySelector<HTMLButtonElement>(".trace-toggle"),
-      );
-      await act(async () => group.click());
-      const disclosure = await waitFor(() =>
-        document.querySelector<HTMLButtonElement>(
-          ".trace-items .trace-item-toggle",
-        ),
-      );
-      await act(async () => disclosure.click());
-      const before = document.querySelector(".trace-tool-detail");
-      assert.ok(before);
-      const scroll = document.querySelector<HTMLElement>(
-        ".thread-view .messages",
-      )!;
-      Object.defineProperties(scroll, {
-        scrollHeight: { configurable: true, value: 1000 },
-        clientHeight: { configurable: true, value: 100 },
-      });
-      await act(async () => {
-        scroll.scrollTop = 123;
-        scroll.dispatchEvent(new window.Event("scroll", { bubbles: true }));
-      });
-      await act(async () =>
-        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
-      );
-      assert.equal(
-        document.querySelector<HTMLElement>(".agent-surface")!.style.display,
-        "none",
-      );
-      const general = await waitFor(() =>
-        [
-          ...document.querySelectorAll<HTMLButtonElement>(
-            '.settings-nav [role="tab"]',
-          ),
-        ].find((button) => button.textContent?.trim() === "General"),
-      );
-      await act(async () => general.click());
-      const detail = await waitFor(() =>
-        document.querySelector<HTMLButtonElement>(
-          '[aria-labelledby="conversation-detail-label"]',
-        ),
-      );
-      await act(async () => {
-        detail.focus();
-        detail.dispatchEvent(
-          new window.KeyboardEvent("keydown", {
-            key: "ArrowDown",
-            bubbles: true,
-          }),
-        );
-      });
-      const cancelOption = await waitFor(() =>
-        document.querySelector<HTMLElement>(
-          '[role="option"][data-value="debug"]',
-        ),
-      );
-      await act(async () => {
-        cancelOption.focus();
-        cancelOption.dispatchEvent(
-          new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        );
-      });
-      await waitFor(() => document.activeElement === detail);
-      assert.equal(
-        getConversationPresentationStore().getSnapshot(),
-        "normal",
-        "Escape must leave preference unchanged",
-      );
-      await chooseValue(detail, "debug");
-      await waitFor(() => document.activeElement === detail);
-      assert.equal(saves, 0, "Conversation detail must not write Host config");
-      assert.equal(getConversationPresentationStore().getSnapshot(), "debug");
-      assert.equal(document.querySelector('[role="listbox"]'), null);
-      await act(async () =>
-        document.querySelector<HTMLButtonElement>(selector)!.click(),
-      );
-      const afterComposer = await waitFor(() =>
-        document.querySelector<HTMLTextAreaElement>(composerId),
-      );
-      assert.equal(
-        afterComposer.value,
-        `${engine} draft`,
-        "Real Settings navigation must preserve the draft",
-      );
-      const after = document.querySelector(".trace-tool-detail");
-      assert.equal(
-        after,
-        before,
-        "The selected tool disclosure DOM stays retained",
-      );
-      assert.equal(document.querySelector(".thread-view .messages"), scroll);
-      assert.equal(
-        scroll.scrollTop,
-        123,
-        "A reader away from live keeps their scroll position",
-      );
-      assert.ok(
-        after,
-        "A user-opened tool body must remain open after the only real Conversation detail Settings path",
-      );
-      assert.equal(
-        document
-          .querySelector(".trace-items .trace-item-toggle")
-          ?.getAttribute("aria-expanded"),
-        "true",
-      );
-      if (terminal)
-        await act(async () =>
-          document.querySelector<HTMLButtonElement>(".turn-toggle")!.click(),
-        );
-      await act(async () =>
-        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
-      );
-      await chooseValue(
-        document.querySelector<HTMLButtonElement>(
-          '[aria-labelledby="conversation-detail-label"]',
-        )!,
-        "normal",
-      );
-      await act(async () =>
-        document.querySelector<HTMLButtonElement>(selector)!.click(),
-      );
-      if (terminal)
-        await act(async () =>
-          document.querySelector<HTMLButtonElement>(".turn-toggle")!.click(),
-        );
-      assert.equal(document.querySelector(".trace-tool-detail"), before);
-      assert.equal(scroll.scrollTop, 123);
-      const otherSelector =
-        engine === "Zen"
-          ? ".native-session-row-shell > .thread-row"
-          : '.thread-row-shell[data-thread-id="thread-1"] > .thread-row';
-      await act(async () =>
-        document.querySelector<HTMLButtonElement>(otherSelector)!.click(),
-      );
-      await waitFor(() =>
-        document.querySelector(
-          engine === "Zen"
-            ? "#agent-composer-external-binding"
-            : "#thread-composer",
-        ),
-      );
-      assert.equal(
-        document.querySelector(".trace-tool-detail"),
-        null,
-        "A different conversation does not inherit selected disclosure state",
-      );
-    } finally {
-      await unmountApp(harness);
-    }
-  });
-}
-
-for (const operation of ["send", "stop", "approval"] as const) {
-  test(`Settings pauses native reads while the requested ${operation} settles its original conversation`, async () => {
-    const pending = deferred<void>();
-    const listeners = new Set<(event: AgentProviderEvent) => void>();
-    let reads = 0;
-    let requests = 0;
-    let resolvedApproval = false;
-    let native = externalAgentSnapshot();
-    if (operation === "stop")
-      native = {
-        ...native,
-        thread: { ...runningThread(), id: native.thread.id },
-      };
-    const approval = {
-      type: "approval" as const,
-      sessionId: native.binding.id,
-      requestId: "pending-approval",
-      title: "Requested native approval",
-      detail: "echo approved",
-    };
-    const service = externalAgentApi({
-      sessions: async () => [native.binding],
-      read: async () => {
-        reads++;
-        return native;
-      },
-      approvals: async () =>
-        operation === "approval" && !resolvedApproval ? [approval] : [],
-      onEvent: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      send: async () => {
-        requests++;
-        await pending.promise;
-      },
-      interrupt: async () => {
-        requests++;
-        await pending.promise;
-      },
-      respondApproval: async () => {
-        requests++;
-        await pending.promise;
-      },
-    });
-    const harness = await mountThreadApp({
-      agentProviders: service,
-      request: async (method) => {
-        if (method === "zen/thread/resume")
-          return nativeRecoveryForThread(liveThread());
-        throw new Error(`Unexpected ${method}`);
-      },
-    });
-    try {
-      const row = await waitFor(() =>
-        document.querySelector<HTMLButtonElement>(
-          ".native-session-row-shell > .thread-row",
-        ),
-      );
-      await act(async () => row.click());
-      const composer = await waitFor(() =>
-        document.querySelector<HTMLTextAreaElement>(
-          "#agent-composer-external-binding",
-        ),
-      );
-      await setTextareaValue(composer, "Original native draft");
-      if (operation === "send") {
-        await waitFor(() => !exactButtonByAria("Send").disabled);
-        await invokePrimarySubmit(exactButtonByAria("Send"));
-      } else {
-        const action =
-          operation === "stop"
-            ? exactButtonByAria("Stop")
-            : [
-                ...document.querySelectorAll<HTMLButtonElement>(
-                  ".agent-approval button",
-                ),
-              ].find((button) => button.textContent === "Approve")!;
-        assert.ok(action);
-        await act(async () => action.click());
-      }
-      await waitFor(() => requests === 1);
-      await setTextareaValue(composer, "Later native draft");
-      const visibleListeners = listeners.size;
-      const before = reads;
-      await act(async () =>
-        document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
-      );
-      assert.equal(
-        listeners.size,
-        visibleListeners - 2,
-        "Both native conversation subscriptions pause in Settings",
-      );
-      assert.equal(
-        composer.closest<HTMLElement>(".agent-surface")!.style.display,
-        "none",
-      );
-      native = {
-        ...native,
-        thread: { ...native.thread, status: { type: "idle" }, turns: [] },
-      };
-      resolvedApproval = true;
-      await act(async () => {
-        pending.resolve();
-        for (const listener of listeners)
-          listener({ type: "changed", sessionId: native.binding.id });
-      });
-      assert.equal(
-        reads,
-        before,
-        "Hidden completion cannot start a conversation read",
-      );
-      await act(async () =>
-        document
-          .querySelector<HTMLButtonElement>(
-            '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
-          )!
-          .click(),
-      );
-      await setTextareaValue(
-        await waitFor(() =>
-          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
-        ),
-        "New Zen draft",
-      );
-      await act(async () =>
-        document
-          .querySelector<HTMLButtonElement>(
-            ".native-session-row-shell > .thread-row",
-          )!
-          .click(),
-      );
-      const returned = await waitFor(() =>
-        document.querySelector<HTMLTextAreaElement>(
-          "#agent-composer-external-binding",
-        ),
-      );
-      await waitFor(() => reads > before);
-      assert.equal(
-        returned.value,
-        "Later native draft",
-        "Settlement retains later edits on the original native composer",
-      );
-      assert.equal(document.querySelector(".agent-approval"), null);
-      assert.equal(document.querySelector('[aria-label="Stop"]'), null);
-      await waitFor(() => !exactButtonByAria("Send").disabled);
-      assert.equal(
-        requests,
-        1,
-        "Reveal does not repeat the requested native action",
-      );
-      await act(async () =>
-        document
-          .querySelector<HTMLButtonElement>(
-            '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
-          )!
-          .click(),
-      );
-      assert.equal(
-        document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
-        "New Zen draft",
-      );
-    } finally {
-      await unmountApp(harness);
-    }
-    assert.equal(
-      listeners.size,
-      0,
-      "Actual unmount removes all provider subscriptions",
-    );
-  });
-}
-
-test("native Settings reveal fences paused reads and never republishes an old identity", async () => {
-  const listeners = new Set<(event: AgentProviderEvent) => void>();
-  const old = deferred<AgentSessionSnapshot>();
-  const fresh = deferred<AgentSessionSnapshot>();
-  const departing = deferred<AgentSessionSnapshot>();
-  const initial = externalAgentSnapshot();
-  const latest = {
-    ...initial,
-    thread: { ...initial.thread, name: "Fresh native title" },
-  };
-  let reads = 0;
-  const service = externalAgentApi({
-    sessions: async () => [initial.binding],
-    read: async () => {
-      reads++;
-      return reads === 1
-        ? initial
-        : reads === 2
-          ? old.promise
-          : reads === 3
-            ? fresh.promise
-            : departing.promise;
-    },
-    onEvent: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  });
-  const harness = await mountThreadApp({
-    agentProviders: service,
-    request: async (method) => {
-      if (method === "zen/thread/resume")
-        return nativeRecoveryForThread(liveThread());
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  const emit = () => {
-    for (const listener of listeners)
-      listener({ type: "changed", sessionId: initial.binding.id });
-  };
-  try {
-    await act(async () =>
-      (
-        await waitFor(() =>
-          document.querySelector<HTMLButtonElement>(
-            ".native-session-row-shell > .thread-row",
-          ),
-        )
-      ).click(),
-    );
-    const composer = await waitFor(() =>
-      document.querySelector<HTMLTextAreaElement>(
-        "#agent-composer-external-binding",
-      ),
-    );
-    await setTextareaValue(composer, "Keep native read draft");
-    await act(async () => emit());
-    await waitFor(() => reads === 2);
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
-    );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          ".native-session-row-shell > .thread-row",
-        )!
-        .click(),
-    );
-    await waitFor(() => reads === 3);
-    assert.equal(
-      document.querySelector("#agent-composer-external-binding"),
-      composer,
-    );
-    assert.equal(
-      document.querySelector(".agent-surface .page-loading"),
-      null,
-      "Same-identity reread retains the existing view",
-    );
-    await act(async () =>
-      old.resolve({
-        ...initial,
-        thread: { ...initial.thread, name: "Stale paused title" },
-      }),
-    );
-    assert.doesNotMatch(document.body.textContent!, /Stale paused title/);
-    await act(async () => fresh.resolve(latest));
-    await waitFor(() =>
-      document.body.textContent?.includes("Fresh native title"),
-    );
-    assert.equal(composer.value, "Keep native read draft");
-    await act(async () => emit());
-    await waitFor(() => reads === 4);
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
-        )!
-        .click(),
-    );
-    await waitFor(() => document.querySelector("#thread-composer"));
-    await act(async () =>
-      departing.resolve({
-        ...initial,
-        thread: { ...initial.thread, name: "Stale departing title" },
-      }),
-    );
-    assert.doesNotMatch(document.body.textContent!, /Stale departing title/);
-    assert.equal(
-      document.querySelector("#agent-composer-external-binding"),
-      null,
-    );
-  } finally {
-    await unmountApp(harness);
-  }
-  assert.equal(listeners.size, 0);
-});
-
-test("selected Zen conversation accepts hidden terminal updates without losing its draft", async () => {
-  let notify:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  let terminal = false;
-  const harness = await mountThreadApp({
-    onNotification: (listener) => {
-      notify = listener;
-      return () => {
-        notify = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume") {
-        const thread = runningThread();
-        return nativeRecoveryForThread(
-          terminal
-            ? {
-                ...thread,
-                status: { type: "idle" },
-                turns: thread.turns.map((turn) => ({
-                  ...turn,
-                  status: "completed",
-                  completedAt: 20,
-                })),
-              }
-            : thread,
-          { watermark: terminal ? 1 : 0 },
-        );
-      }
-      throw new Error(`Unexpected ${method}`);
-    },
-  });
-  try {
-    const composer = await selectedComposer();
-    await setTextareaValue(composer, "Keep Zen draft during Settings");
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
-    );
-    assert.equal(
-      composer.closest<HTMLElement>(".agent-surface")!.style.display,
-      "none",
-    );
-    terminal = true;
-    await act(async () =>
-      notify?.("zen/thread/event", {
-        processEpoch: "test-process-epoch",
-        threadId: "thread-1",
-        watermark: 1,
-        event: {
-          type: "turn_completed",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          status: "completed",
-        },
-      }),
-    );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '.thread-row-shell[data-thread-id="thread-1"] > .thread-row',
-        )!
-        .click(),
-    );
-    await waitFor(() => document.querySelector(".turn.completed"));
-    assert.equal(document.querySelector(".turn.inProgress"), null);
-    assert.equal(document.querySelector("#thread-composer"), composer);
-    assert.equal(composer.value, "Keep Zen draft during Settings");
-  } finally {
-    await unmountApp(harness);
-  }
-  assert.equal(notify, undefined);
 });

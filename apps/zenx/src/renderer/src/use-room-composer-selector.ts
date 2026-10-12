@@ -1,4 +1,6 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { replaceTrigger, selectorTrigger } from "./composer-selector.js";
 import type { ComposerSuggestionState } from "./ComposerSuggestions.js";
 
@@ -15,6 +17,7 @@ export function useRoomComposerSelector({
   textarea: RefObject<HTMLTextAreaElement | null>;
   onChange(text: string): void;
 }) {
+  useTranslation("selector");
   const [selection, setSelection] = useState<{
     roomId: string | undefined;
     text: string;
@@ -60,7 +63,7 @@ export function useRoomComposerSelector({
       key: member.threadId,
       kind: "member" as const,
       name: `@${member.name}`,
-      description: "Address this room member",
+      description: i18n.t("selector:addressRoomMember"),
       member,
     }));
   const active =

@@ -34,6 +34,7 @@ import type {
   UpdateTriggerInput,
   AssistantWorkspace,
   UpdateAssistantWorkspaceInput,
+  ZenXRoom,
 } from "./trigger-types.js";
 
 export interface AutomationTargetPreview {
@@ -48,6 +49,18 @@ export interface AutomationTargetPreview {
   processEpoch: string;
   revision: number;
 }
+
+/** Host setup intent; the Room service only receives a real Thread binding. */
+export interface CreateAssistantRoomInput {
+  name: string;
+  memberName: string;
+  operationId: string;
+  target:
+    | { kind: "new"; workspace: string; expected: AutomationTargetPreview }
+    | { kind: "existing"; threadId: string };
+}
+
+const MAX_ASSISTANT_CREATION_OPERATIONS = 256;
 
 /** Remove the Room portion of the shared container when plugin data is deleted. */
 export async function clearBundledAutomationRoomsData(
@@ -336,6 +349,12 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     Parameters<typeof createBundledAutomationPluginService>[0]["startThread"]
   >;
   #lifecycle: Promise<void> = Promise.resolve();
+  // Bounded Host-lifetime UI receipts. Never retry an attempted thread/start,
+  // including unknown transport outcomes; no durable recovery workflow.
+  readonly #assistantCreations = new Map<
+    string,
+    { signature: string; result: Promise<ZenXRoom> }
+  >();
 
   constructor(
     appServer: ZenXTriggerAppServerPort,
@@ -582,6 +601,14 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     workspace: string,
     expected: AutomationTargetPreview,
   ): Promise<{ threadId: string; effective: AutomationTargetPreview }> {
+    return await this.#createTarget(workspace, expected);
+  }
+
+  async #createTarget(
+    workspace: string,
+    expected: AutomationTargetPreview,
+    onStart?: () => void,
+  ): Promise<{ threadId: string; effective: AutomationTargetPreview }> {
     if (this.#targets === undefined || this.#startThread === undefined)
       throw new Error("Creating a target Thread is unavailable");
     const current = await this.previewTarget(workspace);
@@ -605,6 +632,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error(
         "Workspace directory changed; review its actual location again",
       );
+    onStart?.();
     const result = await this.#startThread(current);
     const sandboxType =
       current.sandbox === "danger-full-access"
@@ -825,12 +853,114 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   ): Promise<void> {
     await this.#service.acknowledgeRoomOperation(roomId, operationId);
   }
-  async createAssistantRoom(input: CreateRoomInput) {
+  async createAssistantRoom(
+    input: CreateAssistantRoomInput | CreateRoomInput,
+  ): Promise<ZenXRoom> {
+    const captured = structuredClone(input);
+    // Cached 1.0.x Rooms runtimes explicitly supply their existing binding.
+    if ("members" in captured) {
+      if ("target" in captured)
+        throw new Error("Choose either a new or existing PAW Thread");
+      return await this.#serialize(async () => {
+        this.#requireAssistantSetup();
+        const validated = this.#service.validateAssistantRoom(captured);
+        return await this.#bindAssistantRoom(validated);
+      });
+    }
+    const operationId = captured.operationId;
     if (
+      typeof operationId !== "string" ||
+      !operationId.trim() ||
+      Buffer.byteLength(operationId, "utf8") > 512
+    )
+      throw new Error("PAW creation operation ID is required and bounded");
+    const signature = JSON.stringify(captured);
+    const previous = this.#assistantCreations.get(operationId);
+    if (previous !== undefined) {
+      if (previous.signature !== signature)
+        throw new Error(
+          "PAW creation operation was already used with different input",
+        );
+      return structuredClone(await previous.result);
+    }
+    if (this.#assistantCreations.size >= MAX_ASSISTANT_CREATION_OPERATIONS)
+      throw new Error(
+        "PAW setup operation limit reached; restart Host before creating another",
+      );
+    let threadStartAttempted = false;
+    const result = this.#serialize(async () => {
+      this.#requireAssistantSetup();
+      if (
+        !captured.target ||
+        !["new", "existing"].includes(captured.target.kind)
+      )
+        throw new Error("Choose a new or existing PAW Thread");
+      const validated = this.#service.validateAssistantRoom({
+        name: captured.name,
+        members: [
+          {
+            name: captured.memberName,
+            threadId:
+              captured.target.kind === "existing"
+                ? captured.target.threadId
+                : "pending-new-thread",
+          },
+        ],
+      });
+      if (captured.target.kind === "existing")
+        return await this.#bindAssistantRoom(validated);
+      let threadId: string | undefined;
+      try {
+        const created = await this.#createTarget(
+          captured.target.workspace,
+          captured.target.expected,
+          () => {
+            threadStartAttempted = true;
+          },
+        );
+        threadId = created.threadId;
+        this.#requireAssistantSetup();
+        return await this.#service.createAssistantRoom({
+          name: validated.name,
+          members: [{ name: validated.members[0]!.name, threadId }],
+        });
+      } catch (error) {
+        if (!threadStartAttempted) throw error;
+        if (threadId !== undefined)
+          throw new Error(
+            `Thread ${threadId} was created, but PAW setup failed: ${describeError(error)}. Inspect it and explicitly bind that existing Thread; this operation will not create another Thread`,
+          );
+        throw new Error(
+          `PAW Thread creation could not be confirmed: ${describeError(error)}. Inspect Threads before trying again; this operation will not retry Thread creation`,
+        );
+      }
+    });
+    const receipt = { signature, result };
+    this.#assistantCreations.set(operationId, receipt);
+    try {
+      return structuredClone(await result);
+    } catch (error) {
+      // Pure validation/binding failures can be corrected with the same draft.
+      // Once creation was attempted, retain failure to fence duplicate Threads.
+      if (
+        !threadStartAttempted &&
+        this.#assistantCreations.get(operationId) === receipt
+      )
+        this.#assistantCreations.delete(operationId);
+      throw error;
+    }
+  }
+
+  #requireAssistantSetup(): void {
+    if (
+      !this.#serviceRunning ||
       !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
       !this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
     )
       throw new Error("Enable Rooms and Triggers before creating an assistant");
+  }
+
+  async #bindAssistantRoom(input: CreateRoomInput): Promise<ZenXRoom> {
     if (input.members.length !== 1 || this.#targets === undefined)
       throw new Error("Select one available existing Thread");
     const member = input.members[0]!;
@@ -839,11 +969,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     });
     if (target.status !== "resolved" || target.candidate.archived)
       throw new Error("Assistant Thread is unavailable or archived");
-    if (
-      !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
-      !this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
-    )
-      throw new Error("Rooms or Triggers stopped during setup");
+    this.#requireAssistantSetup();
     return await this.#service.createAssistantRoom({
       name: input.name,
       members: [{ name: member.name, threadId: target.threadId }],

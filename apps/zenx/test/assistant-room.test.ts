@@ -329,6 +329,8 @@ test("assistant includes the complete current message beyond the bounded context
 
 // Prompt contracts are explicit product guidance, not proof of model compliance.
 test("PAW preset separates direct conversation and closes follow-up lifecycle", () => {
+  assert.ok(Buffer.byteLength(ALWAYS_ON_ASSISTANT_PROMPT, "utf8") <= 4096);
+  assert.match(ALWAYS_ON_ASSISTANT_PROMPT, /PAW owns no special tools/);
   assert.match(ALWAYS_ON_ASSISTANT_PROMPT, /PAW is a preset label/);
   assert.match(ALWAYS_ON_ASSISTANT_PROMPT, /Use their chosen name/);
   assert.match(

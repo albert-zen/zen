@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { Select } from "./ui/controls.js";
 import type { ModelSummary } from "../../protocol-client/index.js";
 import { modelOptions } from "./model-settings";
@@ -19,10 +21,11 @@ export function ModelSelector({
   selectedModel,
   switching,
 }: ModelSelectorProps) {
+  useTranslation("shell");
   const options = modelOptions(models, selectedModel);
   return (
     <div className="model-control">
-      <label htmlFor="thread-model">Model</label>
+      <label htmlFor="thread-model">{i18n.t("shell:model")}</label>
       <Select
         aria-describedby={error === null ? undefined : "model-error"}
         disabled={disabled || switching}
@@ -33,8 +36,8 @@ export function ModelSelector({
         {options.map((model) => (
           <option disabled={model.unavailable} key={model.id} value={model.id}>
             {model.displayName}
-            {model.isDefault ? " · Default" : ""}
-            {model.unavailable ? " · Unavailable" : ""}
+            {model.isDefault ? i18n.t("shell:defaultModel") : ""}
+            {model.unavailable ? i18n.t("shell:unavailableModelSuffix") : ""}
           </option>
         ))}
       </Select>

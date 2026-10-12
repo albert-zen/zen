@@ -265,7 +265,12 @@ test("startup digest-replaces cached Subagents 1.0.0 header with current panel-o
       pluginSnapshot: () => ({
         plugins: [
           ...host.pluginSnapshot().plugins,
-          ...["zenx-rooms", "zenx-self-control", "zenx-triggers"].map((id) => ({
+          ...[
+            "zenx-rooms",
+            "zenx-self-control",
+            "zenx-triggers",
+            "zenx-fleet",
+          ].map((id) => ({
             id,
             lifecycle: "uninstalled",
           })),

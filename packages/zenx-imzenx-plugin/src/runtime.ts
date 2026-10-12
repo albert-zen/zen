@@ -1,5 +1,9 @@
 import { attachPawPipe, type PawRequest } from "./paw-pipe.js";
+import { configuration, type Configuration } from "./configuration.js";
+import type { ManagedChannelInspection } from "./channel-schema.js";
+import { inspectReadiness, type ReadinessCheck } from "./readiness.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +11,19 @@ import type { ZenXPluginHostSdkV1 } from "@zenx/plugin-sdk";
 
 export interface ImZenXHost {
   readonly dataDirectory: string;
+  setRuntimeProject?(directory: string): void;
+  registerManagedEdit?(
+    edit: (
+      configFile: string,
+      action: () => Promise<unknown>,
+    ) => Promise<unknown>,
+  ): () => void;
+  readManagedChannels?(
+    channelsConfigFile: string,
+  ): Promise<Record<string, unknown> | undefined>;
+  inspectManagedChannels?(
+    channelsConfigFile: string,
+  ): Promise<ManagedChannelInspection | undefined>;
   pawRequest?(
     cwd: string,
     operation: Parameters<PawRequest>[0],
@@ -19,14 +36,6 @@ export interface ImZenXHost {
     authentication: { tokenFile: string };
   }>;
 }
-interface Configuration {
-  pythonExecutable: string;
-  channelsConfigFile: string;
-  cwd: string;
-  sharedFilesystemRoot?: string;
-  permissionMode: "full-access" | "approval-required";
-  allowUnrestrictedFullAccess: boolean;
-}
 interface Invocation {
   arguments: Readonly<Record<string, unknown>>;
   signal: AbortSignal;
@@ -34,6 +43,7 @@ interface Invocation {
 type State =
   | "waiting-for-activation"
   | "unconfigured"
+  | "prepared"
   | "waiting-for-zas"
   | "starting"
   | "connected"
@@ -46,13 +56,22 @@ export class ImZenXRuntime {
   readonly #host: ImZenXHost;
   #sdk: ZenXPluginHostSdkV1 | undefined;
   #config: Configuration | undefined;
+  #activeConfig: Configuration | undefined;
+  #explicitConnectRequired = false;
+  #singleConsumerConfirmationRequired = false;
   #child: ChildProcessWithoutNullStreams | undefined;
   #unsubscribe: (() => void) | undefined;
+  #unregisterManagedEdit: (() => void) | undefined;
   #detachPaw: (() => void) | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #closed = false;
   #activated = false;
   #generation = 0;
+  // Transient admission fence only; persisted configuration remains authoritative.
+  readonly #revisionNamespace = randomUUID();
+  #configurationEpoch = 0;
+  #managedEditEpoch = 0;
+  readonly #managedContentEpochs = new Map<string, number>();
   #state: State = "unconfigured";
   #error: string | undefined;
 
@@ -72,6 +91,10 @@ export class ImZenXRuntime {
       value["configuration"] === undefined
         ? undefined
         : configuration(value["configuration"]);
+    this.#explicitConnectRequired = value["explicitConnectRequired"] === true;
+    this.#singleConsumerConfirmationRequired =
+      value["singleConsumerConfirmationRequired"] === true;
+    this.#configurationEpoch += 1;
   }
 
   /** Preparation has no IM side effects; replacement waits for the old consumer. */
@@ -81,6 +104,44 @@ export class ImZenXRuntime {
       () => {
         if (this.#closed || generation !== this.#generation) return;
         this.#activated = true;
+        this.#host.setRuntimeProject?.(
+          fileURLToPath(new URL("../python/", import.meta.url)),
+        );
+        this.#unregisterManagedEdit = this.#host.registerManagedEdit?.(
+          (configFile, action) =>
+            this.#serialize(async () => {
+              if (
+                this.#closed ||
+                !this.#activated ||
+                this.#sdk === undefined ||
+                generation !== this.#generation
+              )
+                throw new Error("IMZenX is stopped");
+              const matchesCurrentConfiguration =
+                this.#config !== undefined &&
+                path.resolve(this.#config.channelsConfigFile) ===
+                  path.resolve(configFile);
+              if (matchesCurrentConfiguration)
+                await this.#prepare(this.#config!);
+              // Keep the same queue until the trusted native vault edit completes.
+              // It is not a model tool argument or an exposed generic callback API.
+              try {
+                return await action();
+              } finally {
+                // A queued acknowledgement made during this edit is stale even
+                // after a failed/partial write. Review and explicitly connect again.
+                if (matchesCurrentConfiguration) this.#configurationEpoch += 1;
+                // Configure can select this marker for the first time, so edits
+                // also invalidate pending Configure admissions before selection.
+                this.#managedEditEpoch += 1;
+                const marker = path.resolve(configFile);
+                this.#managedContentEpochs.set(
+                  marker,
+                  (this.#managedContentEpochs.get(marker) ?? 0) + 1,
+                );
+              }
+            }),
+        );
         this.#unsubscribe = this.#host.onServerStatus(() => {
           void this.#serialize(async () => {
             await this.#stop();
@@ -102,20 +163,161 @@ export class ImZenXRuntime {
   async invoke(name: string, invocation: Invocation): Promise<unknown> {
     invocation.signal.throwIfAborted();
     if (name === "imzenx_status") return this.status();
+    const admittedGeneration = this.#generation;
+    const admittedConfigurationEpoch = this.#configurationEpoch;
+    const admittedManagedEditEpoch = this.#managedEditEpoch;
     return await this.#serialize(async () => {
       invocation.signal.throwIfAborted();
       if (this.#closed || this.#sdk === undefined)
         throw new Error("IMZenX is stopped");
+      if (
+        (name === "imzenx_connect" || name === "imzenx_configure") &&
+        (admittedGeneration !== this.#generation ||
+          admittedConfigurationEpoch !== this.#configurationEpoch ||
+          (name === "imzenx_configure" &&
+            admittedManagedEditEpoch !== this.#managedEditEpoch))
+      )
+        throw new Error(
+          "IM settings changed while this connection was waiting. Review the saved settings, confirm other bot consumers are stopped, then Connect again.",
+        );
+      if (name === "imzenx_readiness") {
+        const input = invocation.arguments["input"] ?? invocation.arguments;
+        if (typeof input !== "object" || input === null || Array.isArray(input))
+          throw new Error("IMZenX readiness arguments must be an object");
+        const selected =
+          Object.keys(input as Record<string, unknown>).length === 0
+            ? this.#config
+            : configuration(input, "approval-required");
+        let managed: ManagedChannelInspection | undefined;
+        if (
+          selected !== undefined &&
+          this.#host.inspectManagedChannels !== undefined
+        ) {
+          try {
+            managed = await this.#host.inspectManagedChannels(
+              selected.channelsConfigFile,
+            );
+          } catch {
+            throw new Error(
+              "Unable to inspect this IMZenX managed configuration",
+            );
+          }
+        }
+        const inspected =
+          selected === undefined
+            ? {
+                checks: [
+                  {
+                    id: "configuration",
+                    status: "blocked",
+                    message:
+                      "Choose your own Python executable, private channel file and workspace first.",
+                  } satisfies ReadinessCheck,
+                ],
+                enabledChannels: [],
+              }
+            : await inspectReadiness(selected, invocation.signal, managed);
+        const serverReady = this.#host.isServerReady();
+        const checks: ReadinessCheck[] = [
+          ...inspected.checks,
+          {
+            id: "server",
+            status: serverReady ? "ready" : "blocked",
+            message: serverReady
+              ? "This Host's local Zen App Server is ready."
+              : "This Host's local Zen App Server is not ready.",
+            ...(serverReady
+              ? {}
+              : {
+                  action:
+                    "Start the local Zen App Server in ZenX, then check again.",
+                }),
+          },
+          {
+            id: "single-consumer",
+            status: "warning",
+            message:
+              "Readiness cannot prove that another client is not using this bot. Confirm that other consumers are stopped before connecting.",
+          },
+        ];
+        return {
+          configurationRevision: this.#configurationRevision(selected),
+          ready: checks.every((check) => check.status !== "blocked"),
+          checks,
+          enabledChannels: inspected.enabledChannels,
+          singleConsumerConfirmationRequired: true,
+          connectionState: this.#state,
+        };
+      }
       if (!this.#activated)
         throw new Error("IMZenX is waiting for runtime activation");
-      if (name === "imzenx_configure") {
-        const input = invocation.arguments["input"] ?? invocation.arguments;
-        const next = configuration(input);
-        await this.#sdk.storage.set({ configuration: next });
-        this.#config = next;
-      } else if (name !== "imzenx_connect") {
-        throw new Error(`Unknown IMZenX tool: ${name}`);
+      const input = invocation.arguments["input"] ?? invocation.arguments;
+      if (name === "imzenx_prepare") {
+        const next = configuration(input, "approval-required");
+        await this.#prepare(next);
+        return this.status();
       }
+      if (name !== "imzenx_configure" && name !== "imzenx_connect")
+        throw new Error(`Unknown IMZenX tool: ${name}`);
+      if (typeof input !== "object" || input === null || Array.isArray(input))
+        throw new Error("IMZenX connection arguments must be an object");
+      const {
+        singleConsumerConfirmed,
+        expectedConfigurationRevision,
+        ...fields
+      } = input as Record<string, unknown>;
+      if (
+        singleConsumerConfirmed !== undefined &&
+        typeof singleConsumerConfirmed !== "boolean"
+      )
+        throw new Error("singleConsumerConfirmed must be boolean");
+      const reviewedConfiguration =
+        name === "imzenx_configure" ? configuration(fields) : this.#config;
+      const managedSelection =
+        reviewedConfiguration === undefined
+          ? undefined
+          : await this.#host.inspectManagedChannels?.(
+              reviewedConfiguration.channelsConfigFile,
+            );
+      const confirmationRequired =
+        this.#singleConsumerConfirmationRequired ||
+        managedSelection !== undefined;
+      if (confirmationRequired && singleConsumerConfirmed !== true)
+        throw new Error(
+          "Confirm that other consumers of this bot are stopped, then Connect with singleConsumerConfirmed=true.",
+        );
+      if (
+        (confirmationRequired || expectedConfigurationRevision !== undefined) &&
+        (typeof expectedConfigurationRevision !== "string" ||
+          expectedConfigurationRevision !==
+            this.#configurationRevision(reviewedConfiguration))
+      )
+        throw new Error(
+          "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again.",
+        );
+      if (name === "imzenx_configure") {
+        const next = reviewedConfiguration!;
+        await this.#sdk.storage.set({
+          configuration: next,
+          explicitConnectRequired: false,
+          singleConsumerConfirmationRequired: confirmationRequired,
+        });
+        this.#config = next;
+        this.#configurationEpoch += 1;
+      } else {
+        if (Object.keys(fields).length > 0)
+          throw new Error(
+            "IMZenX Connect accepts only singleConsumerConfirmed and expectedConfigurationRevision",
+          );
+        if (this.#config !== undefined)
+          await this.#sdk.storage.set({
+            configuration: this.#config,
+            explicitConnectRequired: false,
+            singleConsumerConfirmationRequired: confirmationRequired,
+          });
+      }
+      this.#singleConsumerConfirmationRequired = confirmationRequired;
+      this.#explicitConnectRequired = false;
       await this.#stop();
       invocation.signal.throwIfAborted();
       await this.#connect();
@@ -126,8 +328,15 @@ export class ImZenXRuntime {
   status() {
     return {
       state: this.#state,
+      configurationRevision: this.#configurationRevision(this.#config),
       ...(this.#error === undefined ? {} : { error: this.#error }),
       configuration: this.#config ?? null,
+      activeConfiguration: this.#activeConfig ?? null,
+      explicitConnectRequired: this.#explicitConnectRequired,
+      singleConsumerConfirmationRequired:
+        this.#singleConsumerConfirmationRequired,
+      connectionMeaning:
+        "Connected means the SDK Gateway started; real bot delivery is not verified.",
       subscriptions:
         "One selected Thread per IM conversation. Use /threads then /pick <number> to select and receive replies; /new clears selection. Bindings survive restart; list again before using a number.",
     };
@@ -137,12 +346,52 @@ export class ImZenXRuntime {
     this.#closed = true;
     this.#generation += 1;
     this.#activated = false;
+    this.#unregisterManagedEdit?.();
+    this.#unregisterManagedEdit = undefined;
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     // Stop promptly even if the queue is waiting for the child's ready message.
     await this.#stop();
     await this.#queue.catch(() => {});
     this.#state = "stopped";
+  }
+
+  async #prepare(next: Configuration): Promise<void> {
+    if (this.#sdk === undefined) throw new Error("IMZenX is stopped");
+    await this.#sdk.storage.set({
+      configuration: next,
+      explicitConnectRequired: true,
+      singleConsumerConfirmationRequired: true,
+    });
+    this.#config = next;
+    this.#configurationEpoch += 1;
+    this.#explicitConnectRequired = true;
+    this.#singleConsumerConfirmationRequired = true;
+    // Saving never changes the running consumer. Pending paths need Connect.
+    if (this.#child === undefined) {
+      this.#state = "prepared";
+      this.#error = undefined;
+    }
+  }
+
+  /** Opaque, nonsecret acknowledgement revision; never a credential or durable state. */
+  #configurationRevision(selected: Configuration | undefined): string {
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          namespace: this.#revisionNamespace,
+          generation: this.#generation,
+          configuration: this.#configurationEpoch,
+          managedEdit:
+            selected === undefined
+              ? 0
+              : (this.#managedContentEpochs.get(
+                  path.resolve(selected.channelsConfigFile),
+                ) ?? 0),
+          selected: selected ?? null,
+        }),
+      )
+      .digest("hex");
   }
 
   #serialize<T>(action: () => Promise<T>): Promise<T> {
@@ -158,6 +407,10 @@ export class ImZenXRuntime {
       this.#state = "unconfigured";
       return;
     }
+    if (this.#explicitConnectRequired) {
+      this.#state = "prepared";
+      return;
+    }
     if (!this.#host.isServerReady()) {
       this.#state = "waiting-for-zas";
       return;
@@ -165,25 +418,40 @@ export class ImZenXRuntime {
     this.#state = "starting";
     try {
       const descriptor = await this.#host.readConnection();
+      // Only the Host-owned exact configuration reference can resolve private
+      // values. They go solely to the trusted Gateway's existing private pipe.
+      const managedChannels = await this.#host.readManagedChannels?.(
+        this.#config.channelsConfigFile,
+      );
       await mkdir(this.#host.dataDirectory, { recursive: true, mode: 0o700 });
       if (this.#closed || !this.#host.isServerReady()) return;
       const config = this.#config;
       const sourceRoot = fileURLToPath(
         new URL("../python/src", import.meta.url),
       );
-      const child = spawn(config.pythonExecutable, ["-u", "-m", "imzen.zenx"], {
-        shell: false,
-        cwd: config.cwd,
-        env: { ...process.env, PYTHONPATH: sourceRoot, PYTHONUNBUFFERED: "1" },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      // A workspace package must never shadow the trusted Gateway and receive
+      // decrypted channel values. Isolated mode excludes cwd, PYTHON* and user
+      // site startup paths; only this admitted package's source is added back.
+      const bootstrap = `import runpy, sys; sys.path.insert(0, ${JSON.stringify(sourceRoot)}); runpy.run_module("imzen.zenx", run_name="__main__")`;
+      const child = spawn(
+        config.pythonExecutable,
+        ["-I", "-u", "-c", bootstrap],
+        {
+          shell: false,
+          cwd: config.cwd,
+          env: { ...process.env, PYTHONUNBUFFERED: "1" },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
       this.#child = child;
+      this.#activeConfig = config;
       // SDK/channel stdout cannot be interpreted as model output or a transcript.
       child.stderr.resume();
       child.stdin.on("error", () => {});
       child.once("exit", () => {
         if (this.#child !== child) return;
         this.#child = undefined;
+        this.#activeConfig = undefined;
         this.#state = "failed";
         this.#error =
           "IM Gateway exited. Check configuration, then Connect again.";
@@ -204,6 +472,9 @@ export class ImZenXRuntime {
           IMZEN_APP_SERVER_AUTH_TOKEN_FILE: descriptor.authentication.tokenFile,
           IMZEN_CWD: config.cwd,
           IMZEN_CHANNELS_CONFIG_FILE: config.channelsConfigFile,
+          ...(managedChannels === undefined
+            ? {}
+            : { IMZEN_CHANNELS_CONFIG: managedChannels }),
           IMZEN_GATEWAY_STATE_FILE: path.join(
             this.#host.dataDirectory,
             "gateway.sqlite3",
@@ -226,9 +497,14 @@ export class ImZenXRuntime {
       await this.#stop();
       if (this.#closed) return;
       this.#state = "failed";
+      // Host, SDK and filesystem diagnostics may contain private data. Only our
+      // fixed startup failures belong in status or a tool's exception message.
       this.#error =
-        error instanceof Error ? error.message : "IM Gateway failed";
-      throw error;
+        error instanceof Error &&
+        error.message === "IM Gateway startup timed out"
+          ? "IM Gateway startup timed out"
+          : "IM Gateway failed to start. Check Python and channel configuration.";
+      throw new Error(this.#error);
     }
   }
 
@@ -237,6 +513,7 @@ export class ImZenXRuntime {
     this.#detachPaw?.();
     this.#detachPaw = undefined;
     this.#child = undefined;
+    this.#activeConfig = undefined;
     if (
       child === undefined ||
       child.pid === undefined ||
@@ -308,42 +585,6 @@ function waitForReady(child: ChildProcessWithoutNullStreams): Promise<void> {
     child.once("error", failed);
     child.once("exit", failed);
   });
-}
-
-function configuration(value: unknown): Configuration {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error("IMZenX configuration must be an object");
-  const input = value as Record<string, unknown>;
-  const absolute = (key: string) => {
-    const candidate = input[key];
-    if (
-      typeof candidate !== "string" ||
-      !path.isAbsolute(candidate) ||
-      candidate.includes("\0")
-    )
-      throw new Error(`${key} must be an absolute path`);
-    return candidate;
-  };
-  const permissionMode = input["permissionMode"] ?? "full-access";
-  if (
-    permissionMode !== "full-access" &&
-    permissionMode !== "approval-required"
-  )
-    throw new Error("Invalid permissionMode");
-  const unrestricted = input["allowUnrestrictedFullAccess"] ?? false;
-  if (typeof unrestricted !== "boolean")
-    throw new Error("allowUnrestrictedFullAccess must be boolean");
-  return {
-    pythonExecutable: absolute("pythonExecutable"),
-    channelsConfigFile: absolute("channelsConfigFile"),
-    cwd: absolute("cwd"),
-    ...(input["sharedFilesystemRoot"] === undefined ||
-    input["sharedFilesystemRoot"] === ""
-      ? {}
-      : { sharedFilesystemRoot: absolute("sharedFilesystemRoot") }),
-    permissionMode,
-    allowUnrestrictedFullAccess: unrestricted,
-  };
 }
 
 export function createZenXTrustedPlugin(host: ImZenXHost): ImZenXRuntime {

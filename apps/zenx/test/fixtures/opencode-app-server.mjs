@@ -87,7 +87,38 @@ if (behavior === "bad-url") {
       emit({ type: "server.connected", properties: {} });
       return;
     }
+    if (
+      behavior === "scoped-models" &&
+      (p === "/config" || p === "/provider")
+    ) {
+      const directory = url.searchParams.get("directory");
+      const selected = directory?.endsWith("project-b")
+        ? "model-two"
+        : "model-one";
+      if (p === "/config") return json({ model: `test/${selected}` });
+      return json(
+        directory
+          ? {
+              all: [
+                {
+                  id: "test",
+                  name: "Test",
+                  models: { [selected]: { id: selected, name: selected } },
+                },
+              ],
+              connected: ["test"],
+              default: { test: selected },
+            }
+          : { all: [], connected: [], default: {} },
+      );
+    }
     if (p === "/config") return json({ model: "test/model-one" });
+    if (
+      p === "/provider" &&
+      behavior === "scoped-models" &&
+      !url.searchParams.get("directory")
+    )
+      return json({ all: [], connected: [], default: {} });
     if (p === "/provider")
       return json(
         behavior === "bad-catalog"
@@ -127,7 +158,21 @@ if (behavior === "bad-url") {
           ],
         },
       ]);
-    if (p === "/permission") return json(state.permissions);
+    if (p === "/permission") {
+      if (behavior === "stale-permission" && state.permissions.length > 0) {
+        const snapshot = structuredClone(state.permissions);
+        fs.writeFileSync(path.join(home, "permission-read-pending"), "ready");
+        const timer = setInterval(() => {
+          if (fs.existsSync(path.join(home, "release-permission-read"))) {
+            clearInterval(timer);
+            json(snapshot);
+          }
+        }, 5);
+        res.once("close", () => clearInterval(timer));
+        return;
+      }
+      return json(state.permissions);
+    }
     if (p === "/session/status") return json(state.status);
     if (p === "/session" && req.method === "POST") {
       const id = "native-" + (Object.keys(state.sessions).length + 1);

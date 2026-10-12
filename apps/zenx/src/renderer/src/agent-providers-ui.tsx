@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import {
   AgentProviderModelScope,
   agentProviderLabel,
@@ -235,7 +237,7 @@ export function useAgentModels(
       setState({
         id: scope,
         models: [],
-        error: "Agent Providers are unavailable",
+        error: i18n.t("shell:providerUnavailable"),
         loading: false,
         capabilities: null,
         capabilityError: null,
@@ -324,6 +326,7 @@ export function ExternalAgentSession({
   onDraftModelChange?(model: string): void;
   onSnapshot?(snapshot: AgentSessionSnapshot): void;
 }) {
+  useTranslation("shell");
   const [snapshot, setSnapshot] = useState<AgentSessionSnapshot | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [eventError, setEventError] = useState<string | null>(null);
@@ -614,22 +617,22 @@ export function ExternalAgentSession({
       activeTurn(visibleSnapshot.thread) !== null);
   const issue =
     instance === undefined
-      ? "This Agent Provider instance is unavailable"
+      ? i18n.t("shell:providerInstanceUnavailable")
       : (projectError ??
         eventError ??
         readError ??
         (composer.draft.images.length > 0
-          ? "This Agent Provider cannot send attached images. Remove them or switch to Zen."
+          ? i18n.t("shell:providerImagesUnsupported")
           : null) ??
         models.error ??
         (models.loading
-          ? "Loading models…"
+          ? i18n.t("shell:providerLoadingModels")
           : !permissionValid
-            ? "Choose a supported file permission mode"
+            ? i18n.t("shell:providerChoosePermission")
             : selectedModel === ""
-              ? "No models available"
+              ? i18n.t("shell:providerNoModels")
               : !models.models.some((entry) => entry.id === selectedModel)
-                ? "The selected model is unavailable"
+                ? i18n.t("shell:providerModelUnavailable")
                 : null));
   return (
     <section
@@ -638,7 +641,7 @@ export function ExternalAgentSession({
       {loading ? (
         <div className="page-loading">
           <div className="loading-ring" />
-          <p>Loading conversation…</p>
+          <p>{i18n.t("shell:providerLoadingConversation")}</p>
         </div>
       ) : (
         <AgentProviderModelScope
@@ -669,7 +672,9 @@ export function ExternalAgentSession({
             sendDisabled={running || workspace === null || issue !== null}
             interruptDisabled={models.capabilities?.interrupt !== true}
             modelError={issue}
-            imageCapabilityError="This Agent Provider cannot send image attachments"
+            imageCapabilityError={i18n.t(
+              "shell:providerImageAttachmentsUnsupported",
+            )}
             onReadAttachment={(attachment) =>
               window.zenx.imageAttachments.read(attachment)
             }
@@ -705,7 +710,7 @@ export function ExternalAgentSession({
                 />
                 {sessionId === null ? (
                   <Select
-                    aria-label="File permissions"
+                    aria-label={i18n.t("shell:filePermissions")}
                     value={permissionMode}
                     disabled={operation || models.loading}
                     onValueChange={(value) =>
@@ -713,15 +718,17 @@ export function ExternalAgentSession({
                     }
                   >
                     {permissions.includes(permissionMode) ? null : (
-                      <option value={permissionMode}>Choose permissions</option>
+                      <option value={permissionMode}>
+                        {i18n.t("shell:providerChoosePermissions")}
+                      </option>
                     )}
                     {permissions.map((mode) => (
                       <option key={mode} value={mode}>
                         {mode === "danger-full-access"
-                          ? "Full access"
+                          ? i18n.t("shell:fullAccess")
                           : mode === "read-only"
-                            ? "Read only"
-                            : "Workspace write"}
+                            ? i18n.t("shell:readOnly")
+                            : i18n.t("shell:workspaceWrite")}
                       </option>
                     ))}
                   </Select>
@@ -732,7 +739,7 @@ export function ExternalAgentSession({
                     type="button"
                     onClick={models.retry}
                   >
-                    Retry models
+                    {i18n.t("shell:providerRetryModels")}
                   </button>
                 )}
               </>
@@ -741,8 +748,7 @@ export function ExternalAgentSession({
               <>
                 {instance?.kind === "opencode" && sessionId === null ? (
                   <p className="agent-provider-warning">
-                    OpenCode has no filesystem sandbox. Full access permits
-                    tools to access files outside this Project.
+                    {i18n.t("shell:providerOpenCodeWarning")}
                   </p>
                 ) : null}
                 {approvals.map((approval) => (
@@ -766,7 +772,7 @@ export function ExternalAgentSession({
                           void respond(approval.requestId, "decline")
                         }
                       >
-                        Decline
+                        {i18n.t("shell:providerDecline")}
                       </button>
                       <button
                         className="primary-button"
@@ -776,7 +782,9 @@ export function ExternalAgentSession({
                           void respond(approval.requestId, "accept")
                         }
                       >
-                        {approval.busy ? "Responding…" : "Approve"}
+                        {approval.busy
+                          ? i18n.t("shell:providerResponding")
+                          : i18n.t("shell:providerApprove")}
                       </button>
                     </div>
                   </div>
@@ -806,7 +814,7 @@ export function ExternalAgentSession({
             void refresh();
           }}
         >
-          Retry conversation
+          {i18n.t("shell:providerRetryConversation")}
         </button>
       )}
     </section>

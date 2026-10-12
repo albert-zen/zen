@@ -1,9 +1,11 @@
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { Select } from "./ui/controls.js";
 import type { SkillsSnapshot, SkillMode } from "../../../../cli/src/skills.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 
 export function SkillsSettingsPanel() {
+  const { t } = useTranslation("settings");
   const [snapshot, setSnapshot] = useState<SkillsSnapshot | null>(null);
   const [directory, setDirectory] = useState("");
   const [picker, setPicker] = useState(false);
@@ -39,28 +41,30 @@ export function SkillsSettingsPanel() {
   return (
     <>
       <header>
-        <h2>Skills</h2>
+        <h2>{t("skillsSettingsPanel.skills")}</h2>
         <p className="settings-note">
-          Import instructions and their resources. Manual Skills stay out of
-          model context until you choose them from the slash menu.
+          {t(
+            "skillsSettingsPanel.importInstructionsAndTheirResourcesManualSkillsStayOut",
+          )}
         </p>
       </header>
       <section className="settings-card">
         <div className="settings-card-head">
           <div>
-            <h3>Import a Skill</h3>
+            <h3>{t("skillsSettingsPanel.importASkill")}</h3>
             <span>
-              Choose a directory containing SKILL.md. Zen keeps a complete local
-              copy; the original is never modified.
+              {t(
+                "skillsSettingsPanel.chooseADirectoryContainingSkillMdZenKeepsA",
+              )}
             </span>
           </div>
         </div>
         <label className="field settings-field">
-          <span>Skill directory</span>
+          <span>{t("skillsSettingsPanel.skillDirectory")}</span>
           <input
             value={directory}
             onChange={(event) => setDirectory(event.target.value)}
-            placeholder="Absolute directory path"
+            placeholder={t("skillsSettingsPanel.absoluteDirectoryPath")}
           />
         </label>
         <div className="settings-actions">
@@ -70,7 +74,7 @@ export function SkillsSettingsPanel() {
             onClick={() => setPicker(true)}
             disabled={busy}
           >
-            Browse…
+            {t("skillsSettingsPanel.browse")}
           </button>
           <button
             type="button"
@@ -80,10 +84,12 @@ export function SkillsSettingsPanel() {
               void perform(async () => {
                 await window.zenx.skills.importDirectory(directory.trim());
                 setDirectory("");
-              }, "Skill imported. Check its effective mode below.")
+              }, t("skillsSettingsPanel.skillImportedCheckItsEffectiveModeBelow"))
             }
           >
-            {busy ? "Saving…" : "Import Skill"}
+            {busy
+              ? t("skillsSettingsPanel.saving")
+              : t("skillsSettingsPanel.importSkill")}
           </button>
         </div>
       </section>
@@ -94,22 +100,26 @@ export function SkillsSettingsPanel() {
       )}
       {status !== null && <p role="status">{status}</p>}
       {snapshot === null ? (
-        <p role="status">Loading Skills…</p>
+        <p role="status">{t("skillsSettingsPanel.loadingSkills")}</p>
       ) : (
         <>
           <label className="field settings-field">
-            <span>Find a Skill · {snapshot.skills.length} imported</span>
+            <span>
+              {t("skillsSettingsPanel.findImportedSkills", {
+                count: snapshot.skills.length,
+              })}
+            </span>
             <input
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Name, description or source"
+              placeholder={t("skillsSettingsPanel.nameDescriptionOrSource")}
             />
           </label>
           <p>
-            Automatic mode shares only name, description and location (up to{" "}
-            {snapshot.catalogBudgetBytes / 1024} KiB total). Instructions load
-            when used. Disabled Skills cannot be selected or loaded.
+            {t("skillsSettingsPanel.automaticModeHelp", {
+              kib: snapshot.catalogBudgetBytes / 1024,
+            })}
           </p>
           {snapshot.errors.map((message) => (
             <p key={message} className="settings-error" role="alert">
@@ -118,10 +128,11 @@ export function SkillsSettingsPanel() {
           ))}
           {snapshot.skills.length === 0 && (
             <section className="settings-card">
-              <h3>No Skills imported</h3>
+              <h3>{t("skillsSettingsPanel.noSkillsImported")}</h3>
               <p>
-                Your model receives no Skills metadata. Import a directory to
-                make it available in the slash menu.
+                {t(
+                  "skillsSettingsPanel.yourModelReceivesNoSkillsMetadataImportADirectory",
+                )}
               </p>
             </section>
           )}
@@ -141,15 +152,18 @@ export function SkillsSettingsPanel() {
                 </div>
                 <label className="field settings-field">
                   <span>
-                    Effective mode ·{" "}
+                    {t("skillsSettingsPanel.effectiveMode")}{" "}
                     {skill.configurationSource === "user"
-                      ? "Your override"
+                      ? t("skillsSettingsPanel.yourOverride")
                       : skill.configurationSource === "package"
-                        ? "Package policy"
-                        : "Default"}
+                        ? t("skillsSettingsPanel.packagePolicy")
+                        : t("skillsSettingsPanel.default")}
                   </span>
                   <Select
-                    aria-label={`Mode for ${skill.name} (${skill.id})`}
+                    aria-label={t("skillsSettingsPanel.modeForSkill", {
+                      name: skill.name,
+                      id: skill.id,
+                    })}
                     disabled={busy}
                     value={skill.mode}
                     onValueChange={(value) =>
@@ -159,23 +173,37 @@ export function SkillsSettingsPanel() {
                             skill.id,
                             value as SkillMode,
                           ),
-                        `${skill.name} mode saved.`,
+                        t("skillsSettingsPanel.namedModeSaved", {
+                          name: skill.name,
+                        }),
                       )
                     }
                   >
-                    <option value="manual">Manual use</option>
-                    <option value="auto">Automatically visible</option>
-                    <option value="disabled">Disabled</option>
+                    <option value="manual">
+                      {t("skillsSettingsPanel.manualUse")}
+                    </option>
+                    <option value="auto">
+                      {t("skillsSettingsPanel.automaticallyVisible")}
+                    </option>
+                    <option value="disabled">
+                      {t("skillsSettingsPanel.disabled")}
+                    </option>
                   </Select>
                 </label>
                 <details>
-                  <summary>Source and configuration</summary>
-                  <p className="skills-source">Imported from: {skill.source}</p>
-                  <p className="skills-source">Local copy: {skill.directory}</p>
+                  <summary>
+                    {t("skillsSettingsPanel.sourceAndConfiguration")}
+                  </summary>
+                  <p className="skills-source">
+                    {t("skillsSettingsPanel.importedFrom")} {skill.source}
+                  </p>
+                  <p className="skills-source">
+                    {t("skillsSettingsPanel.localCopy")} {skill.directory}
+                  </p>
                   <p>
-                    Your override takes precedence over agents/zen.yaml, then
-                    the manual default. Changes apply to future sends;
-                    previously loaded history stays intact.
+                    {t(
+                      "skillsSettingsPanel.yourOverrideTakesPrecedenceOverAgentsZenYamlThen",
+                    )}
                   </p>
                   <button
                     type="button"
@@ -184,11 +212,11 @@ export function SkillsSettingsPanel() {
                     onClick={() =>
                       void perform(
                         () => window.zenx.skills.setMode(skill.id, null),
-                        "User override removed.",
+                        t("skillsSettingsPanel.userOverrideRemoved"),
                       )
                     }
                   >
-                    Use package default
+                    {t("skillsSettingsPanel.usePackageDefault")}
                   </button>
                 </details>
               </section>

@@ -28,7 +28,6 @@ test("completed Codex webSearch preserves query and terminal truth", async (t) =
   });
   const result = await a.read("native-thread");
   const item = result.thread.turns[0]!.items[0]!;
-  console.log("NATIVE_WEBSEARCH_PROJECTION", JSON.stringify(item));
   assert.notEqual(
     (item as any).status,
     "inProgress",

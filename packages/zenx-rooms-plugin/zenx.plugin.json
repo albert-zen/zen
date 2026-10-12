@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Manage shared ZenX Room collaboration.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -390,7 +390,7 @@
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536,
       "name": "zenx_rooms_create_assistant",
-      "description": "Trusted UI only: create a single-member Always On Assistant preset Room and its input Trigger. Setup does not start a Turn; future human messages can start model execution.",
+      "description": "Trusted UI only: create a named PAW with a new idle Thread using confirmed Host defaults and Project, or explicitly bind an existing Thread. Commit its Room and owned input Trigger together. Setup does not start a Turn.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -417,10 +417,125 @@
               "required": ["name", "threadId"],
               "additionalProperties": false
             }
+          },
+          "memberName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["new"]
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "expected": {
+                    "type": "object",
+                    "properties": {
+                      "workspace": {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      "resolvedWorkspace": {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      "model": {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
+                      "providerProfileId": {
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      "modelId": {
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      "reasoningEffort": {
+                        "type": ["string", "null"]
+                      },
+                      "sandbox": {
+                        "type": "string",
+                        "enum": [
+                          "read-only",
+                          "workspace-write",
+                          "danger-full-access"
+                        ]
+                      },
+                      "approvalPolicy": {
+                        "type": "string",
+                        "enum": ["never", "on-request"]
+                      },
+                      "processEpoch": {
+                        "type": "string",
+                        "maxLength": 128
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "workspace",
+                      "resolvedWorkspace",
+                      "model",
+                      "providerProfileId",
+                      "modelId",
+                      "reasoningEffort",
+                      "sandbox",
+                      "approvalPolicy",
+                      "processEpoch",
+                      "revision"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["kind", "workspace", "expected"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["existing"]
+                  },
+                  "threadId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                },
+                "required": ["kind", "threadId"],
+                "additionalProperties": false
+              }
+            ]
           }
         },
-        "required": ["name", "members"],
-        "additionalProperties": false
+        "required": ["name"],
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": ["members"]
+          },
+          {
+            "required": ["memberName", "operationId", "target"]
+          }
+        ]
       }
     },
     {
@@ -644,6 +759,40 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_rooms_workspaces",
+      "description": "Trusted UI only: list configured Projects eligible for a new PAW Thread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_preview_target",
+      "description": "Trusted UI only: preview Host defaults and configured Project for a new PAW Thread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "required": ["workspace"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
     }
   ],
   "ui": {
@@ -776,6 +925,16 @@
         "id": "react",
         "title": "Set a Room message reaction",
         "tool": "zenx_rooms_react"
+      },
+      {
+        "id": "workspaces",
+        "title": "List configured Projects for PAW creation",
+        "tool": "zenx_rooms_workspaces"
+      },
+      {
+        "id": "preview-target",
+        "title": "Preview PAW Thread settings",
+        "tool": "zenx_rooms_preview_target"
       }
     ]
   }

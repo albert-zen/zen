@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -32,8 +33,8 @@ async function fixture(behavior = "normal", home?: string) {
   const adapter = new OpenCodeAgentProviderAdapter({
     spawnProcess,
     processCwd: directory,
-    startupTimeoutMs: 1500,
-    requestTimeoutMs: 300,
+    startupTimeoutMs: 5000,
+    requestTimeoutMs: 1500,
   });
   const events: AgentProviderEvent[] = [];
   adapter.onEvent((event) => events.push(event));
@@ -345,3 +346,92 @@ test(
     }
   },
 );
+
+test("two Projects keep distinct native OpenCode models and defaults in one process", async () => {
+  const f = await fixture("scoped-models");
+  const a = path.join(f.directory, "project-a"),
+    b = path.join(f.directory, "project-b");
+  await Promise.all([mkdir(a), mkdir(b)]);
+  try {
+    assert.deepEqual(
+      (await f.adapter.models(a)).map((model) => [model.id, model.isDefault]),
+      [["test/model-one", true]],
+    );
+    assert.deepEqual(
+      (await f.adapter.models(b)).map((model) => [model.id, model.isDefault]),
+      [["test/model-two", true]],
+    );
+    const first = await f.adapter.create({
+      cwd: a,
+      permissionMode: "danger-full-access",
+      model: "test/model-one",
+    });
+    const second = await f.adapter.create({
+      cwd: b,
+      permissionMode: "danger-full-access",
+    });
+    assert.equal(first.model, "test/model-one");
+    assert.equal(second.model, "test/model-two");
+    await assert.rejects(
+      f.adapter.create({
+        cwd: b,
+        permissionMode: "danger-full-access",
+        model: "test/model-one",
+      }),
+      /Select an available/,
+    );
+    await f.adapter.send(second.nativeSessionId, {
+      text: "project scoped prompt",
+      model: "test/model-two",
+    });
+    assert.equal(f.children.length, 1);
+    const requests = await f.requests();
+    assert.equal(
+      requests.filter(
+        (request) => request.path === "/session" && request.method === "POST",
+      ).length,
+      2,
+    );
+    assert.ok(
+      requests
+        .filter(
+          (request) =>
+            request.path === "/provider" || request.path === "/config",
+        )
+        .every((request) => request.directory === a || request.directory === b),
+    );
+  } finally {
+    await f.adapter.dispose();
+  }
+});
+test("stale native permission read must not revive replied approval", async () => {
+  const f = await fixture("stale-permission");
+  try {
+    const native = await f.adapter.create({
+      cwd: f.directory,
+      permissionMode: "danger-full-access",
+    });
+    await f.adapter.send(native.nativeSessionId, {
+      text: "test approval race",
+    });
+    await until(() => f.events.some((e) => e.type === "approval"));
+    const a = f.events.find((e) => e.type === "approval")!;
+    if (a.type !== "approval") throw Error("fixture");
+    const oldRead = f.adapter.read(native.nativeSessionId);
+    await until(() =>
+      existsSync(path.join(f.directory, "permission-read-pending")),
+    );
+    await f.adapter.respondApproval(a.requestId, "accept");
+    await writeFile(
+      path.join(f.directory, "release-permission-read"),
+      "release",
+    );
+    await oldRead;
+    const approvals = f.events.filter(
+      (e) => e.type === "approval" || e.type === "approvalResolved",
+    );
+    assert.equal(approvals.at(-1)?.type, "approvalResolved");
+  } finally {
+    await f.adapter.dispose();
+  }
+});

@@ -1,5 +1,11 @@
 # ARCHITECTURE
 
+- **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
+- **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
+- **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.
+
+- **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
+
 ## Agent Provider ownership (experimental product integration)
 
 ZenX can select an **Agent Provider instance**, a Host-local configured engine such as Zen or Codex, before selecting that instance's model. Model-service providers remain configuration beneath Zen; they are not agent engines. **Agent Provider adapters** own native process/protocol lifecycle, approvals and transient display projections. They do not implement another agent loop or silently translate unsupported capabilities.
@@ -8,25 +14,40 @@ The existing append-only ItemList invariant applies to Zen-native Threads. Exter
 
 The desktop Host lifecycle owns external engine processes alongside the existing Zen connection; closing a window does not close an engine, explicit application Quit does. Background catalog inspection never logs in or starts a model Turn. External credentials stay in the native engine's own configuration. UI is a consumer of these Host adapters, never a session authority.
 
-Mixed-engine sidebar navigation is a product projection: the Host feeds Zen thread locators and namespaced external session locators through the same canonical Project identity resolver. Sharing a Project group and row geometry does not grant Zen operations over an external session or convert its history to canonical Items. Trace/debug display modes and compaction disclosures are renderer-local views over available history, not new execution or context state.
+Mixed-engine sidebar navigation is a product projection: the Host feeds Zen thread locators and namespaced external session locators through the same canonical Project identity resolver. Sharing a Project group and row geometry does not grant Zen operations over an external session or convert its history to canonical Items.
 
-`projectConversationLocators` combines Zen summaries and `agent:<bindingId>` locators only as inputs to that existing Project resolver. `AgentProviderModelScope` supplies the shared Composer model menu with its renderer-local engine selection; it is not an adapter registry or routing authority, and native model IDs remain opaque to Zen model-profile decoding. Transient native row title/status caches never replace the engine's history or claim a status before a native read.
+`projectConversationLocators` combines Zen summaries and `agent:<bindingId>` locators only as inputs to that existing Project resolver. `AgentProviderModelScope` supplies the shared Composer model menu with its renderer-local engine selection; it is not an adapter registry or routing authority, and native model IDs remain opaque to Zen model-profile decoding. Transient native row title/status caches never replace the engine's history or claim a status before a native read. A later native event invalidates an older status, without eagerly starting saved engines or polling their transcripts.
 
 `readProjectConversationNavigation` isolates the two locator-source reads and reports any unavailable source in the Project snapshot, so a failing engine source cannot hide the other owner's conversations or masquerade as a successful empty catalog.
 
 External native item projections use a ZenX-only `nativeItem` display shape when the engine reports a non-command activity. Public native details remain readable; lifecycle comes from explicit item status, item notifications, or terminal native history, and unsupported items never become fabricated running commands. This shape does not expand canonical Items or the inbound CAS facade.
 
-`conversation-presentation` owns only the renderer-local Normal / Debug trace preference, using local storage and window subscriptions like other display preferences. It never writes the Host profile or canonical history; unavailable storage keeps the explicit in-window choice, while missing or invalid saved values default to Normal.
-
 ## 核心概念
 
+- **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
+- **IMZenX managed configuration** — Its trusted local form uses provider-declared pinned field contracts and the existing OS-encrypted vault to save write-only channel credentials; model tools see only nonsecret references/readiness, explicit connection validates a transient nonsecret reviewed-configuration revision under the runtime queue before decrypting the chosen configuration into the existing private child pipe, and explicit runtime preparation copies the locked packaged project to an IM-owned runtime directory without modifying App Resources or enrolling credentials.
+
 - **Fleet** — 用户配置的 SSH/HTTPS 设备目录将既有线程工具按可选 device 路由到远端同一工具实现；远端 Host 持有唯一会话权威，Fleet 不同步 journal、不新建调度器。
+- **Fleet 产品插件** — 独立的一方插件通过目标限定的 Fleet port 发现机器、用途描述、当前检查事实、工作空间和 Zen 模型目录，并调用已有线程能力；机器描述只是用户写的用途指导，不授予权限、不成为执行命令。
+- **Fleet 就绪与邀请** — 普通插件的只读就绪检查只披露当前配置的准备步骤与已知设备；人工界面为已有可信 HTTPS 路径创建短时单用邀请，发送确认绑定所见 Host、配置 revision 与授权范围，接收方核对目标并明确确认后复用既有配对授权，秘密不进入模型发现、配置或会话状态。
+- **OS 凭证保护适配** — 复用既有 credential vault 的加解密接口，Linux 仅接受已知 OS secret-store backend，拒绝 Electron basic_text / unknown fallback；该判断不配置 keychain 或更改系统安全设置。
+- **Fleet 新线程目标** — 新稿显式选择 machine、目标工作空间和该目标的 Zen 模型；创建后机器/Host/工作空间/Thread 定位不可被本机同 ID 替代，界面只保留定位与易失显示投影，默认仍是本机。 远端消息可要求目标未归档，该条件在既有 Thread mutation lock 下核对，默认调用行为不变。
+- **Fleet Shell** — 既有独立 shell opt-in 保持窄授权；它不因新增通用工具能力而扩张。
+- **Fleet Tool Gateway** — 独立 Host/client/device 通用工具授权按精确 Host epoch、工具 generation 和已有 targetThreadId 的当前权限复用目标 ToolEnvironment；执行、资源、期限与任务均由目标拥有，远端 timing 预算只收紧同一目标任务管理器解析的领域参数、runtime policy 或 manager 默认值，不创建目标 Agent Turn 或第二份 journal。
+- **Tool Target Router** — Host 在同一 ToolEnvironment 为可表达的普通工具投影可选 device 和目标上下文，默认本机；已路由的调用与 qualified wait 只消耗有界传输预算，不另建本机执行任务，明确远端失败不回退本机或任意 SSH。
+- **Fleet Tool Receipt** — 目标对有界 admission ID 和增量 receipt/cursor ACK 保留易失去重与重放，终态 receipt 在 ACK 或过期前可观察；授权在 destructive wait 开始前失败时保留同一 ACK 的重试能力，开始后即使结果未知也不重复 drain。它不是持久执行账本，断连不自动重跑副作用，epoch 改变后明确报告未知或失效。
+- **Fleet Tool Eligibility** — 首个通用传输只接受显式 text-json 普通 runtime；组合/run_code、compaction、可信 UI 和尚无 origin-aware transfer 的媒体/page/artifact 工具不参与，远端文本/JSON 路径始终保留所属 Host。
+- **Target Tool Dispatch Fence** — 目标 Host 用已有 root-operation admission 和 Thread mutation lock 核对最新上下文、权限、归档与注册，在异步 Thread 读取前固定 canonical cwd，并在同一同步 launch fence 内重新核对当前 workspace 映射、真实目录与设备 scope 后注册已有目标工具任务；无法同步提供 workspace 权威的 provider 对新通用执行 fail closed，短 admission lease 随后释放，不等待工具 body、不创建 Turn 或 Item。
+- **Target Result Envelope** — 可信 external target route 只对已验证的工具任务 envelope 分别计量原始 1 MiB JSON payload 与有界 16 KiB Host 控制字段；普通 plugin 结果的 namespace 与大小规则保持原样。
+- **Capability Discovery Receipt** — builtin 的 zen/plugin-disclosure 只保存 version/read/pluginId，Host 的 zen/fleet-tool-catalog-disclosure 保存严格解析的 catalog/binding；它们复用既有普通 tool_result 的有界 structuredContent，不另注入模型指令，原始文本仍由 spool 展示且不成为 capability projection 权威。
+- **Disclosure History Matching** — Host 请求投影按 canonical call/result 的时间顺序、Thread/Turn 与根调用的 model response 边界匹配披露；未结算嵌套调用跨 response 保留，重叠复用的 callId 在全部结算前不授予能力，不保存第二份历史。
+- **Fleet 无界面 Host** — 显式生产进程入口沿用现有 provider/model 配置及受保护 durable grants；配对授权可跨进程重启保留，监听和执行只在该进程存活时存在，不安装服务或自动启动。
 - **Fleet Settings / Host** — 桌面设置保存设备定位与加密凭证，App Server 所在 Host 子进程持有原生 TLS gateway；授权摘要持久化且可撤销，进程重启不自动撤销配对，关闭进程停止服务。
 - **Fleet Relay** — 可选自托管 TLS relay 按预授权 Host 身份转发出站连接中的原生配对、请求与事件；relay 是可见消息与 grant 的受信任 TLS 终止端，不提供端到端加密、不拥有会话状态。
 - **Fleet Rooms** — Host 对已授权 workspace 内的助手 Room 投影有限消息与原生 Room 操作，客户端沿用 operation epoch 和幂等键，不复制 Room 状态机。
 - **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。
 
-- **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。
+- **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。共享工具 ownership identity 定义于无 runtime 依赖的纯类型模块，原生 wire 的 TypeScript import graph 不进入 Node/Host 工具实现。
 - **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
 
 - **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。
@@ -44,6 +65,7 @@ External native item projections use a ZenX-only `nativeItem` display shape when
 
 - **ZenX 共享浏览器** — Host 拥有的 WebContentsView 标签按 Thread 分组，以独立持久 profile 承载用户与 Agent 对同一页面 target 的操作；可信 Tool invocation 把 provider session 绑定到 Thread，窗口只挂载该 target 的实时视图，页面和绑定都不成为会话权威。
 - **ZenX Computer 实时观察** — Host 以 Thread、Tool invocation 与精确窗口 target 关联最近八次 Computer 操作，并只在可见订阅期间串行捕获有界、可取消且带时间戳的窗口帧；观察失败不改变工具结果或建立桌面接管状态。
+- **ZenX Agent 操作指针** — Browser 在已校验动作的页面内用不可交互的短时 shadow overlay 指示语义目标，Computer 在精确窗口的观察投影中显示已完成动作的有效几何；轨迹仅为有界、易失的动作位置说明，不驱动系统鼠标、不授予前台输入权限、不成为会话历史或成功判据。
 - **ZenX macOS Computer 原生 helper** — macOS 打包在签名前把 AX 与前台输入 helper 编译为固定 App Resource，运行时只执行该资源；显式开发运行才允许在临时目录编译同源 fallback，权限拒绝须报告实际 helper 路径和当前 App 的重新授权方法。
 - **ZenX 文件草稿** — Renderer 在窗口生命周期内按 Thread/path 保存易失编辑草稿，独立于会话历史；Host 以读取版本检测外部冲突并原子替换现有 UTF-8 文件，人工编辑不作为 Agent 工具执行，不更改线程权限策略。
 - **ZenX 辅助右栏** — Host 将线程 Browser observation、cwd 文本预览与显式编辑保存与已注册 Plugin panel 放入统一 tab 容器，选择与打开请求仅为易失 UI 状态，不拥有会话执行或持久历史。消息 Markdown 链接只是该容器的点击入口：本地路径由既有 Host 工作区文件读取边界校验，HTTP(S) 由既有 Host Browser 导航边界校验，不建立独立路由或文件权限权威。
@@ -341,6 +363,7 @@ External native item projections use a ZenX-only `nativeItem` display shape when
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
   Browser observations additionally project bounded current non-password control state and native select options; mutations consume the prior observation, and an explicitly requested follow-up observation is a new fail-closed inspect result.
+  Observation presentation retains an owner-scoped, bounded, short-lived capture for explicit cursor reads and optional base-referenced diffs. Stable browser node references identify surviving DOM objects; Computer references express only unique exact-fingerprint presentation continuity, never native object identity or renewed action authority. Every action remains bound to its fresh observation and native revalidation. Cursor pages retain the same immutable capture, disclose native capture omissions separately from available pages, and expire explicitly on mutation, scope change, eviction or provider retirement. Omitting a diff base (including after context compaction) requests a self-contained full bounded view; this adds no durable journal or automatic recovery authority.
 
 - **ZenXUserBrowserAttachmentEpoch** — ZenX user-browser provider 用实际 CDP sessionId、target、逻辑 session owner 与
   attach attempt/incarnation 关联一次瞬时 attachment ownership，并在移除任何映射前把无法证明闭合的生命周期证据
@@ -734,6 +757,8 @@ telemetry。`inputTokens` 始终是包含 cached 部分的 total input，uncache
 重放旧的重复 response usage 时 projection 也按 journal 顺序取最后一份，避免重复计数。即使 usage
 之后 request 失败，已经报告的最后一份 usage 仍须先落盘。Turn/Thread cache hit rate 只对报告
 cached 数据的 response 做 token-weighted 归约：`sum(cachedInputTokens) / sum(inputTokens)`。
+ZenX 的压缩摘要来自已提交的 canonical Item；即时事件或分页展示历史缺少压缩边界或保留条目时，保留摘要并明确显示上下文快照不可用，不以不完整历史编造模型投影，也不让诊断编译异常终止 Renderer。后续完整 canonical 读取恢复精确诊断；Core 的完整性校验保持不变。
+
 ZenX 的上下文占比读模型不能使用 Thread 累计 input tokens；它用最新未被 compaction 覆盖的
 Provider `inputTokens`，若 compaction 已经使该样本代表旧上下文，则用当前 `compileModelMessages`
 的固定轻量估算并在展示中标记 estimated。同一估算也为 compaction v2 提供保守且确定的
@@ -916,6 +941,12 @@ claim，不得被称为 Codex extension 或因固定 CAS schema 缺失而删除�
 - **强制握手**：每个连接先 `initialize` → `initialized`，之后才接受其他方法。
   原生 `zen/turn/send` 复用该就绪状态或显式 `zen/initialize`；既有原生 resume
   读取不授予发送就绪状态，发送本身不得隐式初始化连接。
+- **原生 active-thread 接纳**：`zen/turn/send-unarchived` 固定传递既有 `requireUnarchived` 条件，
+  exact-ID Fleet SSH / self-control 的 start、steer、queue、replace 及确定性接纳重试
+  都在 Core 既有 mutation lock 下核验；旧 Host 对未知方法拒绝，不回退到无 fence 的发送。
+  exact-ID SSH 发送使用 bridge request v2，让旧版 bridge 在执行前拒绝；HTTPS 发送要求
+  当前 hello 的 `send-unarchived` capability，缺失时明确要求升级，不持久化 capability。
+  普通发送与 fuzzy selector 保留旧语义，不扩展固定 CAS 的参数 shape。
 - **WebSocket 访问控制在宿主侧**：loopback listener 拒绝浏览器 `Origin`，可选
   bearer credential 仅用于 transport 握手，不进入 Zen Core、Thread 或 journal。
 - **远程 Host 单一可信对外 Origin 是显式部署配置**：仅为直连 TLS WebSocket 握手核验配置证书 SAN、HTTP Host 和严格 Origin，不是设备身份或会话权威，缺省仍拒 Origin。
@@ -1050,6 +1081,12 @@ Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
 
+原生排队输入编辑通过 append-only `user_message_queue_edited` 保存绑定原 queuedItemId/clientId 的连续 revision、editId 与完整文本/图片输入；ItemList 投影在原位置取最新版本，editId 仅从已提交 Item 派生幂等收据，修改与取消/接纳共享同 Thread mutation fence 并核验 expectedRevision，编辑不恢复队列，包含 Host skill 快照或音频的输入明确拒绝编辑而不丢失内容。
+
+队列图片只从同 Thread pending native input 的精确 queuedItemId/clientId 引用复用既有附件 read/viewer，不存新 payload 或外部路径。
+
+ZenX queued-message edit drafts and pending edit receipts live in one App-owned, memory-only UI store shared by its viewports, so loading/navigation does not lose an in-flight edit identity; only exact canonical edit facts reconcile displayed queue content and retire confirmed drafts. Explicit discard clears an unsent local draft without mutating the queue. The Electron bridge carries only a whitelisted native rejection code in an edit-only serializable envelope so renderer feedback survives IPC/contextBridge; this transport detail adds no queue state or protocol authority. An uncertain edit response is read back once; a recovered snapshot triggers the existing read-only native resume barrier for the still-owning viewport, never queue resume or an automatic edit retry.
+
 显式取消排队输入通过 append-only `user_message_queue_cancelled` 按原 `queuedItemId/clientId` 标记未接纳的输入，同一Host进程在同一Thread mutation fence 内与首批launch瞬时占用裁定输赢，取消成功不再由该Host交付，已占用或已有 canonical 用户消息不得假撤回；占用不是第二套持久会话权威，进程重启后仅由ItemList恢复待发/已取消事实，此锁不宣称解决两个独立Host共用journal目录的跨进程所有权问题。
 
 Context pressure estimation includes tool `modelContent` as the additional user content sent by adapters; image dimensions contribute a provider-neutral patch estimate, not an exact provider token count.
@@ -1100,8 +1137,15 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 
 ### Always On Assistant preset
 
-An assistant Room binds one existing Thread to an owned roomMention Trigger.
-Trusted setup creates both atomically in the existing automation store. It adds
+An assistant Room binds one real Thread to an owned roomMention Trigger.
+Trusted setup defaults to creating an idle Thread through the existing Host
+Project/thread-start boundary with confirmed settings; explicit existing-Thread
+binding remains available. The Room and its Trigger commit atomically in the
+existing automation store, after the Thread exists. A bounded Host-lifetime
+setup receipt joins duplicate requests and retains attempted creation failures;
+it is ephemeral request idempotency, not an execution ledger or automatic recovery
+workflow. A partial failure identifies a known created Thread for explicit binding
+and never silently starts another. Setup adds
 no Runtime, Thread authority, scheduler or journal. The reusable preset composes
 Rooms, Triggers and Fleet-enabled self-control; it has no personal Work dependency.
 Human Room posts wake the assistant; event/timer Triggers targeting its Thread

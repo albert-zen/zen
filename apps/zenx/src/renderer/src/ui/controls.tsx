@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "../i18n.js";
 import React, {
   Children,
   isValidElement,
@@ -15,6 +17,7 @@ import { Icon } from "../icons.js";
 interface Choice {
   value: string;
   label: ReactNode;
+  lang?: string;
   title?: string;
   disabled?: boolean;
   group?: string;
@@ -36,6 +39,7 @@ function choices(children: ReactNode, group?: string): Choice[] {
         children?: ReactNode;
         disabled?: boolean;
         label?: string;
+        lang?: string;
         title?: string;
       }>(child)
     )
@@ -45,6 +49,7 @@ function choices(children: ReactNode, group?: string): Choice[] {
         {
           value: String(child.props.value ?? ""),
           label: child.props.children,
+          lang: child.props.lang,
           title: child.props.title,
           disabled: child.props.disabled,
           group,
@@ -73,6 +78,7 @@ export function Select({
   onValueChange(value: string): void;
   children: ReactNode;
 }) {
+  useTranslation("panels");
   const items = choices(children);
   const selected = items.find((item) => item.value === String(value));
   const id = useId();
@@ -93,7 +99,7 @@ export function Select({
         }
       >
         <SelectPrimitive.Value>
-          {selected?.label ?? "Unavailable selection"}
+          {selected?.label ?? i18n.t("panels:unavailableSelection")}
         </SelectPrimitive.Value>
         <SelectPrimitive.Icon>
           <Icon name="chevron-down" size={14} />
@@ -120,6 +126,7 @@ export function Select({
                 <SelectPrimitive.Item
                   data-value={item.value}
                   value={`value:${item.value}`}
+                  lang={item.lang}
                   disabled={item.disabled}
                   className="ui-select-option"
                 >
@@ -150,6 +157,7 @@ export function PopoverContent({
   className = "",
   ...props
 }: ComponentProps<typeof PopoverPrimitive.Content>) {
+  useTranslation("panels");
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
@@ -169,16 +177,19 @@ export function PopoverContent({
 export function ActionMenu({
   label,
   items,
+  compact = false,
 }: {
   label: string;
+  compact?: boolean;
   items: Array<{
     label: string;
     disabled?: boolean;
     danger?: boolean;
     description?: string;
-    onSelect(): void;
+    onSelect(trigger: HTMLButtonElement | null): void;
   }>;
 }) {
+  useTranslation("panels");
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -199,8 +210,14 @@ export function ActionMenu({
             }
           }}
         >
-          More actions
-          <Icon name="chevron-down" size={12} />
+          {compact ? (
+            <Icon name="more" size={16} />
+          ) : (
+            <>
+              {i18n.t("panels:moreActions")}
+              <Icon name="chevron-down" size={12} />
+            </>
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -261,7 +278,7 @@ export function ActionMenu({
             onClick={() => {
               selected.current = true;
               setOpen(false);
-              item.onSelect();
+              item.onSelect(trigger.current);
             }}
           >
             <strong>{item.label}</strong>
@@ -289,6 +306,7 @@ export function Combobox({
   disabled?: boolean;
   autoFocus?: boolean;
 }) {
+  useTranslation("panels");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const trigger = useRef<HTMLButtonElement>(null);
@@ -342,7 +360,9 @@ export function Combobox({
         >
           <span id={`${id}-value`}>
             {items.find((item) => item.value === value)?.label ??
-              (value ? "Unavailable selection" : "Choose…")}
+              (value
+                ? i18n.t("panels:unavailableSelection")
+                : i18n.t("panels:choose"))}
           </span>
           <Icon name="chevron-down" size={14} />
         </button>
@@ -375,7 +395,7 @@ export function Combobox({
             filtered[cursor] ? `${id}-${cursor}` : undefined
           }
           value={query}
-          placeholder="Search…"
+          placeholder={i18n.t("panels:search")}
           onChange={(event) => {
             setQuery(event.target.value);
             setCursor(0);
@@ -432,7 +452,9 @@ export function Combobox({
             </div>
           ))}
         </div>
-        {!filtered.length ? <p role="status">No matching options.</p> : null}
+        {!filtered.length ? (
+          <p role="status">{i18n.t("panels:noMatchingOptions")}</p>
+        ) : null}
       </PopoverContent>
     </Popover>
   );
@@ -445,20 +467,32 @@ export function Dialog({
   title,
   children,
   className = "",
+  restoreFocus: allowRestoreFocus = true,
+  ...contentProps
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
   title: string;
   children: ReactNode;
   className?: string;
-}) {
+  restoreFocus?: boolean | (() => boolean);
+} & Omit<
+  ComponentProps<typeof DialogPrimitive.Content>,
+  "children" | "title" | "onOpenAutoFocus" | "onCloseAutoFocus"
+>) {
+  useTranslation("panels");
   const restoreFocus = useRef<HTMLElement | null>(null);
+  const allowRestore = useRef(allowRestoreFocus);
+  allowRestore.current = allowRestoreFocus;
+  const content = useRef<HTMLDivElement>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="ui-dialog-overlay" />
         <DialogPrimitive.Content
-          className={`ui-dialog ${className}`}
+          {...contentProps}
+          ref={content}
+          className={`ui-dialog ui-dialog-surface ${className}`}
           aria-describedby={undefined}
           onOpenAutoFocus={(event) => {
             restoreFocus.current = document.activeElement as HTMLElement | null;
@@ -472,7 +506,19 @@ export function Dialog({
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            restoreFocus.current?.focus();
+            const allowed = allowRestore.current;
+            const target = restoreFocus.current;
+            const active = document.activeElement;
+            // A dismissed or replaced dialog cannot take focus from a newer
+            // dialog, input, or navigation target when its exit animation ends.
+            if (
+              (typeof allowed === "function" ? allowed() : allowed) &&
+              target?.isConnected &&
+              (active === document.body ||
+                active === target ||
+                content.current?.contains(active))
+            )
+              target.focus();
           }}
         >
           <DialogPrimitive.Title className="sr-only">

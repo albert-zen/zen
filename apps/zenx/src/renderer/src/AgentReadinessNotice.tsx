@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { useEffect, useState } from "react";
 
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
@@ -31,6 +33,7 @@ export function AgentReadinessNotice({
   pluginSnapshot: ZenXPluginSnapshot | null;
   onOpenBrowserSettings(): void;
 }) {
+  useTranslation("shell");
   const computerEnabled =
     pluginSnapshot?.plugins.some(
       (plugin) => plugin.id === "computer" && plugin.enabled,
@@ -156,7 +159,9 @@ export function AgentReadinessNotice({
       else await window.zenx.computerReadiness.openSettings(kind);
     } catch (error) {
       setActionError(
-        `Could not open settings: ${error instanceof Error ? error.message : String(error)}`,
+        i18n.t("shell:couldNotOpenSettings", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
       );
     } finally {
       setOpeningSettings(null);
@@ -164,18 +169,23 @@ export function AgentReadinessNotice({
   };
 
   return (
-    <aside className="agent-readiness-notice" aria-label="Tool setup">
+    <aside
+      className="agent-readiness-notice"
+      aria-label={i18n.t("shell:toolSetup")}
+    >
       <div className="agent-readiness-heading">
         <div>
-          <span className="agent-readiness-eyebrow">TOOL ACCESS</span>
+          <span className="agent-readiness-eyebrow">
+            {i18n.t("shell:toolAccess")}
+          </span>
           <h2>
             {issues.some(
               (issue) =>
-                issue.status === "Check failed" ||
-                issue.status === "Could not verify",
+                issue.status === i18n.t("shell:checkFailed") ||
+                issue.status === i18n.t("shell:couldNotVerify"),
             )
-              ? "Check tool access"
-              : "Finish tool setup"}
+              ? i18n.t("shell:checkToolAccess")
+              : i18n.t("shell:finishToolSetup")}
           </h2>
         </div>
         <button
@@ -185,7 +195,9 @@ export function AgentReadinessNotice({
           onClick={recheck}
         >
           <Icon name="reload" size={14} aria-hidden="true" />
-          {checkingComputer || checkingBrowser ? "Checking…" : "Check again"}
+          {checkingComputer || checkingBrowser
+            ? i18n.t("shell:checking")
+            : i18n.t("shell:checkAgain")}
         </button>
       </div>
       <ul className="agent-readiness-issues">
@@ -211,7 +223,7 @@ export function AgentReadinessNotice({
                 onClick={() => void openSettings(issue.action!.kind)}
               >
                 {openingSettings === issue.action.kind
-                  ? "Opening…"
+                  ? i18n.t("shell:opening")
                   : issue.action.label}
                 <Icon name="arrow-right" size={14} aria-hidden="true" />
               </button>
@@ -236,10 +248,11 @@ function computerIssues(
     return [
       {
         id: "computer-check",
-        title: "Computer",
-        status: "Check failed",
-        detail:
-          "ZenX could not check Computer access. Select Check again to retry.",
+        title: i18n.t("shell:computer"),
+        status: i18n.t("shell:checkFailed"),
+        detail: i18n.t(
+          "shell:zenxCouldNotCheckComputerAccessSelectCheckAgainToRetry",
+        ),
         icon: "computer",
       },
     ];
@@ -253,19 +266,21 @@ function computerIssues(
   return [
     ...computerIssue(
       "accessibility",
-      "Accessibility",
+      i18n.t("shell:accessibility"),
       accessibility,
-      "In macOS Accessibility, enable this ZenX app and any separate ZenX helper entry. If absent, add the ZenX.app you launched, then check again.",
-      "ZenX could not complete the native window check. Select Check again; the error details may help diagnose it.",
-      "Open Accessibility settings",
+      i18n.t(
+        "shell:inMacosAccessibilityEnableThisZenxAppAndAnySeparateZenxHelperEntryIfAbsentAddTheZenxAppYouLaunchedThenCheckAgain",
+      ),
+      i18n.t("shell:nativeWindowCheckFailed"),
+      i18n.t("shell:openAccessibilitySettings"),
     ),
     ...computerIssue(
       "screen-recording",
-      "Screen Recording",
+      i18n.t("shell:screenRecording"),
       screenCapture,
-      "Enable ZenX in macOS Screen Recording. Already on? Reopen ZenX; if still blocked, remove its old entry and add this ZenX.app again.",
-      "ZenX could not complete the window preview check. Select Check again; the error details may help diagnose it.",
-      "Open Screen Recording settings",
+      i18n.t("shell:screenRecordingGuidance"),
+      i18n.t("shell:windowPreviewCheckFailed"),
+      i18n.t("shell:openScreenRecordingSettings"),
     ),
   ];
 }
@@ -283,11 +298,11 @@ function computerIssue(
   const status =
     verification.state === "needs-setup"
       ? kind === "screen-recording"
-        ? "Check permission or restart"
-        : "Needs permission"
+        ? i18n.t("shell:checkPermissionOrRestart")
+        : i18n.t("shell:needsPermission")
       : verification.state === "failed"
-        ? "Check failed"
-        : "Could not verify";
+        ? i18n.t("shell:checkFailed")
+        : i18n.t("shell:couldNotVerify");
   return [
     {
       id: kind,
@@ -297,7 +312,10 @@ function computerIssue(
         verification.state === "needs-setup"
           ? setupDetail
           : verification.detail
-            ? `${failureDetail} Details: ${verification.detail}`
+            ? i18n.t("shell:readinessDetails", {
+                failure: failureDetail,
+                detail: verification.detail,
+              })
             : failureDetail,
       icon: kind === "accessibility" ? "lock" : "image",
       action:
@@ -336,12 +354,13 @@ function browserIssues(
     return [
       {
         id: "chrome-check",
-        title: "Connected Chrome",
-        status: "Could not verify",
-        detail:
-          "ZenX could not read the Chrome connection. Check again or review Browser settings.",
+        title: i18n.t("shell:connectedChrome"),
+        status: i18n.t("shell:couldNotVerify"),
+        detail: i18n.t(
+          "shell:zenxCouldNotReadTheChromeConnectionCheckAgainOrReviewBrowserSettings",
+        ),
         icon: "browser",
-        action: { label: "Open Browser settings", kind: "browser" },
+        action: { label: i18n.t("shell:openBrowserSettings"), kind: "browser" },
       },
     ];
   const value = status.value;
@@ -353,31 +372,39 @@ function browserIssues(
   const [connectionStatus, detail] =
     value.connector === "external-cdp"
       ? [
-          "Endpoint disconnected",
-          "Start the configured Chrome debugging endpoint or change it in Browser settings.",
+          i18n.t("shell:endpointDisconnected"),
+          i18n.t(
+            "shell:startTheConfiguredChromeDebuggingEndpointOrChangeItInBrowserSettings",
+          ),
         ]
       : value.connector === "inactive"
         ? [
-            "Connector not active",
-            "Open Browser settings to apply Connected Chrome, then restart ZenX.",
+            i18n.t("shell:connectorNotActive"),
+            i18n.t(
+              "shell:openBrowserSettingsToApplyConnectedChromeThenRestartZenx",
+            ),
           ]
         : value.nativeHostRegistered
           ? [
-              "Connect a tab",
-              "In Chrome, click the ZenX extension on a tab, then select Check again.",
+              i18n.t("shell:connectATab"),
+              i18n.t(
+                "shell:inChromeClickTheZenxExtensionOnATabThenSelectCheckAgain",
+              ),
             ]
           : [
-              "Connector needs setup",
-              "Open Browser settings to register the connector and load the ZenX extension.",
+              i18n.t("shell:connectorNeedsSetup"),
+              i18n.t(
+                "shell:openBrowserSettingsToRegisterTheConnectorAndLoadTheZenxExtension",
+              ),
             ];
   return [
     {
       id: "chrome-connection",
-      title: "Connected Chrome",
+      title: i18n.t("shell:connectedChrome"),
       status: connectionStatus,
       detail,
       icon: "browser",
-      action: { label: "Open Browser settings", kind: "browser" },
+      action: { label: i18n.t("shell:openBrowserSettings"), kind: "browser" },
     },
   ];
 }

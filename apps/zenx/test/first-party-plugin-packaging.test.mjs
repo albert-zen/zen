@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,53 +9,154 @@ import { pathToFileURL } from "node:url";
 
 import {
   firstPartyPluginStagingPrefix,
-  packZenXFirstPartyPlugins,
+  FIRST_PARTY_PLUGINS,
 } from "../scripts/pack-first-party-plugins.mjs";
 import { firstPartyProviderTarball } from "../src/main/first-party-profile-loader.ts";
+import { browserCapabilityManifest } from "../src/main/capabilities/browser-provider.ts";
+import { computerCapabilityManifest } from "../src/main/capabilities/computer-provider.ts";
+import { windowsComputerCapabilityManifest } from "../src/main/capabilities/windows-computer-provider.ts";
+import {
+  selectBrowserProviderVariant,
+  selectComputerProvider,
+} from "../src/main/capabilities/provider-catalog.ts";
 
 const run = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+const preparedPluginsDirectory = path.resolve(
+  import.meta.dirname,
+  "..",
+  "resources",
+  "plugins",
+);
 
 const expected = [
+  ["@zenx/fleet-plugin", "zenx-fleet-plugin-1.0.0.tgz"],
   ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
-  ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.1.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.3.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.3.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.3.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.1.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.0.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.1.tgz"],
-  ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.5.tgz"],
+  ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.2.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.4.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.4.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.4.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.2.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.1.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.2.tgz"],
+  ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.6.tgz"],
   ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.0.tgz"],
 ];
 
 const providerVariants = new Map([
   [
-    "zenx-browser-plugin-electron-1.0.3.tgz",
-    ["browser", "1.0.3", "electron-dedicated-browser", 10],
+    "zenx-browser-plugin-electron-1.0.4.tgz",
+    ["browser", "1.0.4", "electron-dedicated-browser", 10],
   ],
   [
-    "zenx-browser-plugin-playwright-1.0.3.tgz",
-    ["browser", "1.0.3", "playwright-cli", 10],
+    "zenx-browser-plugin-playwright-1.0.4.tgz",
+    ["browser", "1.0.4", "playwright-cli", 10],
   ],
   [
-    "zenx-browser-plugin-user-session-1.0.3.tgz",
-    ["browser", "1.0.3", "user-browser-cdp", 10],
+    "zenx-browser-plugin-user-session-1.0.4.tgz",
+    ["browser", "1.0.4", "user-browser-cdp", 10],
   ],
   [
-    "zenx-computer-plugin-macos-1.0.1.tgz",
-    ["computer", "1.0.1", "macos-desktop", 8],
+    "zenx-computer-plugin-macos-1.0.2.tgz",
+    ["computer", "1.0.2", "macos-desktop", 8],
   ],
   [
-    "zenx-computer-plugin-peekaboo-1.0.0.tgz",
-    ["computer", "1.0.0", "peekaboo-cli", 7],
+    "zenx-computer-plugin-peekaboo-1.0.1.tgz",
+    ["computer", "1.0.1", "peekaboo-cli", 7],
   ],
   [
-    "zenx-computer-plugin-win32-1.1.1.tgz",
-    ["computer", "1.1.1", "microsoft-winapp-cli", 5],
+    "zenx-computer-plugin-win32-1.1.2.tgz",
+    ["computer", "1.1.2", "microsoft-winapp-cli", 5],
   ],
 ]);
+
+test("all packaged Browser and Computer manifests match their runtime observation contracts", async (t) => {
+  const options = {
+    userDataDirectory: path.join(os.tmpdir(), "zenx-manifest-parity"),
+    environment: { PATH: "" },
+    platform: "darwin",
+    electronBrowserFactory: () => ({ close() {} }),
+  };
+  const playwright = await selectBrowserProviderVariant(
+    "playwright-cli",
+    options,
+  );
+  const userSession = await selectBrowserProviderVariant(
+    "user-browser-cdp",
+    options,
+  );
+  const peekaboo = await selectComputerProvider({
+    ...options,
+    environment: { PATH: "", ZENX_PEEKABOO_CLI: process.execPath },
+    runner: {
+      async run(_executable, args) {
+        if (args[0] === "--version")
+          return { stdout: "Peekaboo 3.1.2", stderr: "" };
+        const data =
+          args[0] === "tools"
+            ? {
+                tools: ["see", "click", "set_value", "image"].map((name) => ({
+                  name,
+                  description: name,
+                })),
+              }
+            : { permissions: [] };
+        return { stdout: JSON.stringify({ success: true, data }), stderr: "" };
+      },
+    },
+  });
+  for (const selection of [playwright, userSession, peekaboo]) {
+    t.after(() => selection.backend?.close());
+  }
+  assert.equal(peekaboo.manifest.provider.id, "peekaboo-cli");
+  for (const [relative, runtime] of [
+    ["zenx-browser-plugin/zenx.plugin.json", browserCapabilityManifest],
+    [
+      "zenx-browser-plugin/variants/playwright.zenx.plugin.json",
+      playwright.manifest,
+    ],
+    [
+      "zenx-browser-plugin/variants/user-session.zenx.plugin.json",
+      userSession.manifest,
+    ],
+    ["zenx-computer-plugin/zenx.plugin.json", computerCapabilityManifest],
+    [
+      "zenx-computer-plugin/variants/peekaboo.zenx.plugin.json",
+      peekaboo.manifest,
+    ],
+    [
+      "zenx-computer-plugin/variants/win32.zenx.plugin.json",
+      windowsComputerCapabilityManifest,
+    ],
+  ]) {
+    const manifest = JSON.parse(
+      await readFile(path.join(repositoryRoot, "packages", relative), "utf8"),
+    );
+    for (const field of [
+      "version",
+      "description",
+      "mainDocument",
+      "provider",
+      "permissions",
+      "tools",
+    ]) {
+      assert.deepEqual(
+        manifest[field],
+        JSON.parse(JSON.stringify(runtime[field])),
+        `${relative}: ${field}`,
+      );
+    }
+    const inspect = manifest.tools.find(({ name }) =>
+      name.endsWith("_inspect"),
+    );
+    assert.equal(inspect.maxOutputBytes, 128 * 1024);
+    assert.ok(inspect.inputSchema.properties.cursor);
+    assert.ok(inspect.inputSchema.properties.baseObservationId);
+    assert.ok(inspect.inputSchema.properties.full);
+    assert.match(manifest.mainDocument, /Discard.*prior continuation pages/u);
+  }
+});
 
 test("first-party plugin staging shares the destination volume", () => {
   const pluginsDirectory = path.join(
@@ -70,14 +171,23 @@ test("first-party plugin staging shares the destination volume", () => {
   );
 });
 
-test("all first-party plugins validate and pack as self-contained ordinary npm tarballs", async () => {
+test("all prepared first-party plugins are self-contained ordinary npm tarballs", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-first-party-packaging-"),
   );
   try {
-    const packed = await packZenXFirstPartyPlugins({
-      outputDirectory: directory,
+    // npm test/check has just run the real packer for every variant. Inspect
+    // those same artifacts instead of rebuilding and packing all packages twice.
+    // The clean-source test below still covers standalone packer preparation.
+    await cp(preparedPluginsDirectory, path.join(directory, "plugins"), {
+      recursive: true,
+    }).catch((cause) => {
+      throw new Error(
+        "First-party test artifacts are missing; run npm run prepare:first-party-plugins --workspace @zen/zenx",
+        { cause },
+      );
     });
+    const packed = FIRST_PARTY_PLUGINS;
     assert.deepEqual(
       packed.map(({ packageName, tarball }) => [
         packageName,
@@ -196,7 +306,7 @@ test("direct packaging establishes the plugin SDK clean-output prerequisite", as
 
     const tarball = await packZenXRoomsPlugin({ outputDirectory: output });
 
-    assert.equal(path.basename(tarball), "zenx-rooms-plugin-1.0.5.tgz");
+    assert.equal(path.basename(tarball), "zenx-rooms-plugin-1.0.6.tgz");
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
@@ -213,12 +323,12 @@ test("Host provider selection maps every real manifest variant deterministically
       firstPartyProviderTarball("computer", "microsoft-winapp-cli"),
     ],
     [
-      "zenx-browser-plugin-electron-1.0.3.tgz",
-      "zenx-browser-plugin-playwright-1.0.3.tgz",
-      "zenx-browser-plugin-user-session-1.0.3.tgz",
-      "zenx-computer-plugin-macos-1.0.1.tgz",
-      "zenx-computer-plugin-peekaboo-1.0.0.tgz",
-      "zenx-computer-plugin-win32-1.1.1.tgz",
+      "zenx-browser-plugin-electron-1.0.4.tgz",
+      "zenx-browser-plugin-playwright-1.0.4.tgz",
+      "zenx-browser-plugin-user-session-1.0.4.tgz",
+      "zenx-computer-plugin-macos-1.0.2.tgz",
+      "zenx-computer-plugin-peekaboo-1.0.1.tgz",
+      "zenx-computer-plugin-win32-1.1.2.tgz",
     ],
   );
   assert.throws(

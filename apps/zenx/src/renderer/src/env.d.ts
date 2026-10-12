@@ -1,5 +1,10 @@
+import type { ProtocolIpcResult } from "../../preload/queue-edit-ipc.js";
 import type { AgentProvidersApi } from "../../main/agent-providers/types.js";
 import type { SubscriptionUsage } from "../../main/subscription-usage.js";
+import type {
+  ImZenXSetupView,
+  ImZenXChannelSave,
+} from "../../main/imzenx-setup-service.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import type {
   ApprovalDecision,
@@ -64,8 +69,19 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      imzenx: {
+        inspect(): Promise<ImZenXSetupView>;
+        saveChannel(input: ImZenXChannelSave): Promise<ImZenXSetupView>;
+        prepareRuntime(): Promise<ImZenXSetupView>;
+      };
       agentProviders: AgentProvidersApi;
       platform: NodeJS.Platform;
+      locale: {
+        getSystemLanguages(): Promise<string[]>;
+        setLanguage(
+          language: import("../../locale.js").SupportedLanguage,
+        ): Promise<void>;
+      };
       skills: {
         list(): Promise<import("../../../../cli/src/skills.js").SkillsSnapshot>;
         importDirectory(
@@ -145,7 +161,7 @@ declare global {
         request<M extends ClientRequestMethod>(
           method: M,
           params: ClientRequestParams[M],
-        ): Promise<ClientRequestResults[M]>;
+        ): Promise<ProtocolIpcResult<M>>;
         respondToApproval(
           requestId: string,
           decision: ApprovalDecision,

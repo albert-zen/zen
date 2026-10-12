@@ -7,15 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { appendProviderModelRows } from "../src/renderer/src/provider-model-admission.js";
 import * as React from "react";
 import type { Root } from "react-dom/client";
 
-import type { Thread, ThreadItem } from "../src/protocol-client/index.js";
-import { CONVERSATION_DETAIL_STORAGE_KEY } from "../src/renderer/src/conversation-presentation.js";
-import {
-  editComposer,
-  emptyComposerState,
-} from "../src/renderer/src/composer-state.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type {
   PublicHostSettings,
@@ -136,7 +131,8 @@ Object.assign(globalThis, {
 });
 const { createRoot } = await import("react-dom/client");
 const { SettingsView } = await import("../src/renderer/src/SettingsView.js");
-const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
+const { ProviderModelAddControl, ProviderModelDiscoveryOption } =
+  await import("../src/renderer/src/ProviderModelAdmissionControls.js");
 
 test("Settings send mode choice forwards explicit provenance through save", async () => {
   const submitted: ZenXSettingsUpdate[] = [];
@@ -392,7 +388,7 @@ test("A save completed after leaving its section does not show a stale toast", a
     await changeControl(control, control.options[1]!.value);
     await click(exactButtonRequired("Apply"));
     await click(exactButtonRequired("General"));
-    await click(exactButtonRequired("Zen · Models & providers"));
+    await click(exactButtonRequired("Models & provider"));
     await act(async () => finish(settings));
     assert.equal(document.querySelector(".settings-toast"), null);
   } finally {
@@ -614,43 +610,86 @@ test("Provider discovery starts text-only and manual overrides persist", async (
   }
 });
 
-test("model discovery and manual addition stop at the Host limit of 1024 rows", async () => {
-  const initial = structuredClone(multiProviderSettings);
-  initial.profile.providerProfiles[0]!.models.push(
-    ...Array.from({ length: 1021 }, (_, index) => model(`extra-${index}`)),
-  );
-  const harness = await mountSettings("models", {
-    initialSettings: initial,
-    discoverProvider: async () => ({
-      providerProfileId: "profile-alpha",
-      models: [model("new-one"), model("new-two")],
-    }),
-  });
-  try {
-    await waitFor(() => labeledButton("Edit Alpha"));
-    await click(labeledButtonRequired("Edit Alpha"));
-    await click(exactButtonRequired("Get available models"));
-    const first = await waitFor(() =>
-      document.querySelector<HTMLInputElement>(
-        'input[aria-label="Select new-one"]',
+test("model discovery and manual controls enforce the Host limit without mounting 1024 editors", async () => {
+  // Exercise the actual limit-dependent controls with the real Host count.
+  // Full-editor discovery/save interactions are covered with small catalogs;
+  // the append boundary and stale-state guard have direct array-level tests.
+  const harness = await mountSettings("models");
+  let liveRows: string[] = [];
+  let manualAddCalls = 0;
+  function AdmissionHarness() {
+    const [rows, setRows] = useState(() =>
+      Array.from({ length: 1_023 }, (_, index) => `existing-${index}`),
+    );
+    const [selected, setSelected] = useState<string[]>([]);
+    liveRows = rows;
+    return createElement(
+      React.Fragment,
+      null,
+      ...["existing-0", "new-one", "new-two"].map((modelId) =>
+        createElement(ProviderModelDiscoveryOption, {
+          key: modelId,
+          modelId,
+          exists: rows.includes(modelId),
+          selected: selected.includes(modelId),
+          selectedCount: selected.length,
+          modelCount: rows.length,
+          onCheckedChange: (checked: boolean) =>
+            setSelected((current) =>
+              checked
+                ? [...current, modelId]
+                : current.filter((id) => id !== modelId),
+            ),
+        }),
       ),
+      createElement(ProviderModelAddControl, {
+        modelCount: rows.length,
+        buttonId: "add-model",
+        onAdd: () => {
+          manualAddCalls += 1;
+          setRows((current) => appendProviderModelRows(current, ["manual"]));
+        },
+      }),
     );
-    await click(first);
-    const second = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Select new-two"]',
-    );
-    assert.ok(second);
-    assert.equal(second.disabled, true);
-    await click(exactButtonRequired("Add selected models (1)"));
-    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+  }
+  try {
+    await act(async () => harness.root.render(createElement(AdmissionHarness)));
+    const choice = (modelId: string) => {
+      const input = document.querySelector<HTMLInputElement>(
+        `input[aria-label="Select ${modelId}"]`,
+      );
+      assert.ok(input);
+      return input;
+    };
+    assert.equal(choice("existing-0").checked, true);
+    assert.equal(choice("existing-0").disabled, true);
+    assert.equal(choice("new-one").disabled, false);
+    assert.equal(choice("new-two").disabled, false);
+    await click(choice("new-one"));
+    assert.equal(choice("new-one").checked, true);
+    assert.equal(choice("new-one").disabled, false, "selection can be undone");
+    assert.equal(choice("new-two").disabled, true);
+    await click(choice("new-two"));
+    assert.equal(choice("new-two").checked, false);
+    await click(choice("new-one"));
+    assert.equal(choice("new-two").disabled, false);
+
     const addModel = exactButtonRequired("Add model");
+    assert.equal(addModel.disabled, false);
+    assert.equal(addModel.tabIndex, 0);
+    await click(addModel);
+    assert.equal(liveRows.length, 1_024);
+    assert.equal(manualAddCalls, 1);
     assert.equal(addModel.disabled, true);
+    assert.equal(choice("new-one").disabled, true);
+    assert.equal(choice("new-two").disabled, true);
     assert.match(
-      document.body.textContent ?? "",
+      document.querySelector('[role="status"]')?.textContent ?? "",
       /Model limit reached.*1,024/u,
     );
     await click(addModel);
-    assert.equal(document.querySelectorAll(".provider-model-row").length, 1024);
+    assert.equal(manualAddCalls, 1);
+    assert.equal(liveRows.length, 1_024);
   } finally {
     await unmount(harness);
   }
@@ -1703,9 +1742,8 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
     assert.deepEqual(
       tabs.map((tab) => tab.textContent?.trim()),
       [
-        "Agent Providers",
-        "Zen · Models & providers",
-        "Zen · Account",
+        "Account",
+        "Models & provider",
         "Plugins",
         "Appearance",
         "General",
@@ -1742,10 +1780,7 @@ test("every Settings tab remains keyboard reachable after narrow-screen reflow",
       );
       await Promise.resolve();
     });
-    assert.equal(
-      document.activeElement?.textContent?.trim(),
-      "Agent Providers",
-    );
+    assert.equal(document.activeElement?.textContent?.trim(), "Account");
     assert.equal(tabs[0]?.getAttribute("aria-selected"), "true");
   } finally {
     await unmount(harness);
@@ -1951,174 +1986,6 @@ test("General reports a browser connection with multiple available tabs", async 
       /one current tab|only to the selected tab/u,
     );
   } finally {
-    await unmount(harness);
-  }
-});
-
-test("Settings Conversation detail keyboard choice immediately updates retained Zen and external views without Host Apply", async () => {
-  let saves = 0;
-  const harness = await mountSettings("general", {
-    save: async () => {
-      saves++;
-      return settings;
-    },
-  });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const conversations = createRoot(container);
-  const tool: Extract<ThreadItem, { type: "commandExecution" }> = {
-    id: "existing-tool",
-    type: "commandExecution",
-    command: "echo retained",
-    cwd: "/workspace",
-    status: "completed",
-    aggregatedOutput: "unchanged output",
-    exitCode: 0,
-    processId: null,
-    pluginId: null,
-    scriptPath: null,
-    source: "agent",
-    durationMs: null,
-    commandActions: [],
-    toolName: "shell",
-  };
-  const fixture: Thread = {
-    id: "existing-thread",
-    sessionId: "existing-thread",
-    forkedFromId: null,
-    parentThreadId: null,
-    preview: "",
-    ephemeral: false,
-    isPinned: false,
-    modelProvider: "fake",
-    createdAt: 1,
-    updatedAt: 1,
-    recencyAt: null,
-    status: { type: "idle" },
-    path: null,
-    cwd: "/workspace",
-    cliVersion: "zen/0.1.0",
-    source: "appServer",
-    threadSource: null,
-    agentNickname: null,
-    agentRole: null,
-    gitInfo: null,
-    name: "Existing conversation",
-    turns: [
-      {
-        id: "existing-turn",
-        items: [tool, { ...tool, id: "second-tool" }],
-        itemsView: "full",
-        status: "inProgress",
-        error: null,
-        startedAt: 1,
-        completedAt: null,
-        durationMs: null,
-      },
-    ],
-  };
-  const noop = async () => undefined;
-  try {
-    await act(async () =>
-      conversations.render(
-        createElement(
-          React.Fragment,
-          null,
-          ...[true, false].map((zenFeatures) =>
-            createElement(
-              "section",
-              {
-                key: String(zenFeatures),
-                "data-test-conversation": zenFeatures ? "zen" : "external",
-              },
-              createElement(ThreadView, {
-                zenFeatures,
-                approvals: [],
-                composer: editComposer(
-                  emptyComposerState(),
-                  zenFeatures ? "Zen draft" : "External draft",
-                ),
-                thread: fixture,
-                onDraftChange: () => undefined,
-                onInterrupt: noop,
-                onRespondToApproval: noop,
-                onSubmit: noop,
-              }),
-            ),
-          ),
-        ),
-      ),
-    );
-    const rows = [
-      ...container.querySelectorAll<HTMLElement>("[data-test-conversation]"),
-    ];
-    for (const view of rows) {
-      const group = view.querySelector<HTMLButtonElement>(".trace-toggle")!;
-      await click(group);
-      await click(
-        view.querySelector<HTMLButtonElement>(
-          ".trace-items .trace-item-toggle",
-        )!,
-      );
-    }
-    const details = rows.map((view) =>
-      view.querySelector(".trace-tool-detail"),
-    );
-    container.hidden = true; // Existing conversations remain mounted while Settings is open.
-    const detail = await labeledSelect("Conversation detail");
-    assert.ok(detail);
-    assert.equal(detail.value, "normal");
-    assert.deepEqual(
-      detail.options.map((option) => option.textContent.trim()),
-      ["Normal", "Debug trace"],
-    );
-    assert.match(
-      document.getElementById("conversation-detail-help")?.textContent ?? "",
-      /Applies immediately.*don't need to press Apply/su,
-    );
-    await changeControl(detail, "debug"); // ArrowDown opens the shared Select; Enter confirms the focused option.
-    assert.equal(
-      harness.dom.window.localStorage.getItem(CONVERSATION_DETAIL_STORAGE_KEY),
-      "debug",
-    );
-    assert.equal(saves, 0);
-    await click(exactButtonRequired("Toggle settings visibility"));
-    container.hidden = false;
-    assert.equal(document.querySelector('[role="listbox"]'), null);
-    rows.forEach((view, index) => {
-      assert.equal(view.querySelector(".trace-tool-detail"), details[index]);
-      assert.equal(
-        view.querySelector(".trace-item-toggle")?.getAttribute("aria-expanded"),
-        "true",
-      );
-      assert.equal(
-        view.querySelector<HTMLTextAreaElement>("textarea")?.value,
-        index === 0 ? "Zen draft" : "External draft",
-      );
-      assert.ok(view.querySelector(".trace-debug-source"));
-      assert.equal(view.querySelector(".trace-presentation-controls"), null);
-    });
-    await click(exactButtonRequired("Toggle settings visibility"));
-    const normal = await labeledSelect("Conversation detail");
-    assert.ok(normal);
-    assert.equal(normal.value, "debug");
-    await changeControl(normal, "normal");
-    await click(exactButtonRequired("Toggle settings visibility"));
-    rows.forEach((view, index) => {
-      assert.equal(view.querySelector(".trace-tool-detail"), details[index]);
-      assert.equal(
-        view.querySelector<HTMLElement>(".trace-debug-source")?.hidden,
-        true,
-      );
-      assert.equal(
-        view.querySelector<HTMLTextAreaElement>("textarea")?.value,
-        index === 0 ? "Zen draft" : "External draft",
-      );
-    });
-    assert.equal(saves, 0);
-  } finally {
-    await act(async () => conversations.unmount());
-    container.remove();
     await unmount(harness);
   }
 });
@@ -3462,7 +3329,7 @@ for (const completeAfterNavigation of [false, true]) {
       await click(exactButtonRequired("Install from source…"));
       await click(exactButtonRequired("Choose tarball…"));
       if (completeAfterNavigation) {
-        await click(exactButtonRequired("Zen · Models & providers"));
+        await click(exactButtonRequired("Models & provider"));
         await click(exactButtonRequired("Apply"));
         await act(async () => finish(result));
         assert.match(

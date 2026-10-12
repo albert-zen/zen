@@ -14,9 +14,11 @@ The Composer uses one model menu with engine-instance choice inside it for a new
 
 ## Reading execution details
 
-Normal trace remains compact. Choose **Conversation detail → Debug trace** in **Settings → General → Interaction** for an optional local view that exposes process groups and offers the available canonical items or external display projection on demand. This presentation preference applies immediately; it does not alter prompts, permissions or execution and does not imply that an external engine's complete native history is available. Normal conversations have no extra debug toolbar.
+Native engines use the shared conversation reading column and current trace disclosures. Non-command Codex items preserve their available public details in a display-only native item. An unsupported kind is explicitly labelled; missing item status does not imply a running command. Native active session status keeps Stop available even when its current Turn has not appeared in history yet. Codex interruption requires the native Turn ID; if it is unavailable, the UI refreshes and reports that uncertainty without inventing a target.
 
-A tool-associated context compaction shares that tool's details when its exact recorded call identity is available. Independent compaction uses a lightweight disclosure with its saved summary. If the display history is incomplete, the summary remains readable and retained-context diagnostics say why reconstruction is unavailable; the renderer does not invent missing history.
+Sidebar status is a disposable observation. An event invalidates an older hidden-session status until the next read rather than polling every transcript or treating a transport acknowledgement as completion. Provider-wide failures stay visible. The current Zen queue, approval, runtime-activity and compaction presentation remain unchanged.
+
+OpenCode models and defaults are read for the selected Project directory, and sends validate against the bound native directory. The Settings model check is explicitly connection-wide and does not represent a Project-specific catalog. Native permission events and overlapping snapshots share a process-local freshness fence; old reads cannot revive resolved requests.
 
 ## Ownership and compatibility
 

@@ -1,3 +1,5 @@
+import { i18n } from "./i18n.js";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   SubscriptionUsage,
@@ -16,6 +18,7 @@ export function SubscriptionUsageCard({
   accountId: string | undefined;
   authenticated: boolean;
 }) {
+  const { t } = useTranslation("settings");
   const identity = `${providerProfileId ?? ""}:${accountId ?? ""}:${authenticated}`;
   const available = authenticated && !!providerProfileId && !!accountId;
   const [query, setQuery] = useState<Query | null>(null);
@@ -53,45 +56,59 @@ export function SubscriptionUsageCard({
   return (
     <section
       className="page-card settings-card subscription-usage-card"
-      aria-label="Subscription usage"
+      aria-label={t("subscriptionUsageCard.subscriptionUsage")}
     >
       <div className="settings-card-head">
         <div>
-          <h3>Subscription usage</h3>
-          <p>Quota windows for the ChatGPT account signed in to ZenX.</p>
+          <h3>{t("subscriptionUsageCard.subscriptionUsage2")}</h3>
+          <p>
+            {t(
+              "subscriptionUsageCard.quotaWindowsForTheChatgptAccountSignedInTo",
+            )}
+          </p>
         </div>
         <button
           type="button"
           className="quiet-button"
           disabled={!available || loading}
           onClick={refresh}
-          aria-label="Refresh subscription usage"
+          aria-label={t("subscriptionUsageCard.refreshSubscriptionUsage")}
         >
-          {loading ? "Refreshing…" : "Refresh"}
+          {loading
+            ? t("subscriptionUsageCard.refreshing")
+            : t("subscriptionUsageCard.refresh")}
         </button>
       </div>
       {!available ? (
         <p className="settings-note">
-          Sign in with OpenAI to view your subscription usage.
+          {t(
+            "subscriptionUsageCard.signInWithOpenaiToViewYourSubscriptionUsage",
+          )}
         </p>
       ) : loading ? (
         <p className="settings-note" role="status">
-          Loading subscription usage…
+          {t("subscriptionUsageCard.loadingSubscriptionUsage")}
         </p>
       ) : current?.status === "error" ? (
         <p className="quota-error" role="alert">
-          Could not load usage. Check your connection or sign in again, then
-          refresh.
+          {t(
+            "subscriptionUsageCard.couldNotLoadUsageCheckYourConnectionOrSign",
+          )}
         </p>
       ) : current?.status === "ready" ? (
         <>
           <div className="quota-meta">
             <span>
               {current.usage.planType
-                ? `${current.usage.planType} plan`
-                : "Plan not provided"}
+                ? t("subscriptionUsageCard.plan", {
+                    name: current.usage.planType,
+                  })
+                : t("subscriptionUsageCard.planNotProvided")}
             </span>
-            <span>Updated {formatTime(current.usage.fetchedAt)}</span>
+            <span>
+              {t("subscriptionUsageCard.updated")}{" "}
+              {formatTime(current.usage.fetchedAt)}
+            </span>
           </div>
           <div className="quota-limits">
             {current.usage.limits
@@ -120,6 +137,7 @@ export function SubscriptionUsageCard({
   );
 }
 function QuotaWindow({ window }: { window: SubscriptionQuotaWindow }) {
+  const { t } = useTranslation("settings");
   const remaining =
     window.usedPercent === null
       ? null
@@ -131,13 +149,17 @@ function QuotaWindow({ window }: { window: SubscriptionQuotaWindow }) {
       <div className="quota-amount">
         <strong>
           {remaining === null
-            ? "Remaining not provided"
-            : `${formatPercent(remaining)}% remaining`}
+            ? t("subscriptionUsageCard.remainingNotProvided")
+            : t("subscriptionUsageCard.percentRemaining", {
+                value: formatPercent(remaining),
+              })}
         </strong>
         <span>
           {window.usedPercent === null
-            ? "Usage not provided"
-            : `${formatPercent(window.usedPercent)}% used`}
+            ? t("subscriptionUsageCard.usageNotProvided")
+            : t("subscriptionUsageCard.percentUsed", {
+                value: formatPercent(window.usedPercent),
+              })}
         </span>
       </div>
       {remaining === null ? (
@@ -146,31 +168,47 @@ function QuotaWindow({ window }: { window: SubscriptionQuotaWindow }) {
         <progress
           max={100}
           value={remaining}
-          aria-label={`${label} remaining`}
+          aria-label={t("subscriptionUsageCard.windowRemaining", {
+            name: label,
+          })}
         />
       )}
       <span className="quota-reset">
         {window.resetsAt === null
-          ? "Reset time not provided"
-          : `Resets ${formatTime(window.resetsAt * 1000)}`}
+          ? t("subscriptionUsageCard.resetTimeNotProvided")
+          : t("subscriptionUsageCard.resets", {
+              time: formatTime(window.resetsAt * 1000),
+            })}
       </span>
     </div>
   );
 }
 function windowLabel(seconds: number | null): string {
-  if (seconds === null) return "Quota window";
-  if (seconds % 86400 === 0) return `${seconds / 86400}-day window`;
-  if (seconds % 3600 === 0) return `${seconds / 3600}-hour window`;
-  if (seconds % 60 === 0) return `${seconds / 60}-minute window`;
-  return `${seconds}-second window`;
+  if (seconds === null)
+    return i18n.t("settings:subscriptionUsageCard.quotaWindow");
+  if (seconds % 86400 === 0)
+    return i18n.t("settings:subscriptionUsageCard.dayWindow", {
+      count: seconds / 86400,
+    });
+  if (seconds % 3600 === 0)
+    return i18n.t("settings:subscriptionUsageCard.hourWindow", {
+      count: seconds / 3600,
+    });
+  if (seconds % 60 === 0)
+    return i18n.t("settings:subscriptionUsageCard.minuteWindow", {
+      count: seconds / 60,
+    });
+  return i18n.t("settings:subscriptionUsageCard.secondWindow", {
+    count: seconds,
+  });
 }
 function formatPercent(value: number): string {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(
-    value,
-  );
+  return new Intl.NumberFormat(i18n.resolvedLanguage, {
+    maximumFractionDigits: 1,
+  }).format(value);
 }
 function formatTime(milliseconds: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(i18n.resolvedLanguage, {
     month: "short",
     day: "numeric",
     hour: "numeric",

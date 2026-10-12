@@ -6,7 +6,10 @@ import {
 } from "./skill-input.js";
 import { loadWorkspaceInstructions } from "./workspace-instructions.js";
 import type { WorkspaceInstructionFile } from "./item.js";
-import { pendingQueuedMessages } from "./input-queue.js";
+import {
+  pendingQueuedMessages,
+  type PendingQueuedUserMessage,
+} from "./input-queue.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -45,11 +48,13 @@ import type {
   UserMessageItem,
   QueuedUserMessageItem,
   QueuedUserMessageCancelledItem,
+  QueuedUserMessageEditedItem,
 } from "./item.js";
 import {
   contentFromUserMessage,
   SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   normalizeUserInput,
+  validateUserInput,
   previewFromUserMessage,
   sameUserInput,
 } from "./item.js";
@@ -157,6 +162,18 @@ export interface QueuedCancellationResult extends QueuedCancellationTarget {
   status: "cancelled" | "already_cancelled" | "already_started" | "not_found";
 }
 
+export interface QueuedEditTarget extends QueuedCancellationTarget {
+  expectedRevision: number;
+  /** Unique per Save; an exact retry reuses this ID and original request. */
+  editId: string;
+}
+
+export interface QueuedEditResult extends QueuedCancellationTarget {
+  revision: number;
+  editItemId: string;
+  status: "edited" | "already_edited";
+}
+
 export interface CompactThreadOptions {
   signal?: AbortSignal;
   includeOriginalReference?: boolean;
@@ -180,11 +197,13 @@ export interface CreateChildThreadInput {
 
 export interface SteerTurnOptions {
   clientId?: string;
+  requireUnarchived?: boolean;
 }
 
 export interface ReplaceTurnOptions {
   clientId: string;
   requestApproval?: ApprovalHandler;
+  requireUnarchived?: boolean;
 }
 
 export interface ReplaceTurnResult {
@@ -225,6 +244,8 @@ export type AppServerEvent =
   | RuntimeEvent
   | {
       type: "queue_admission_started";
+      /** Missing only on events from older Hosts. */
+      revision?: number;
       threadId: string;
       queuedItemId: string;
       clientId: string;
@@ -232,6 +253,8 @@ export type AppServerEvent =
     }
   | {
       type: "queue_failed";
+      /** Missing only on events from older Hosts. */
+      revision?: number;
       threadId: string;
       queuedItemId: string;
       clientId: string;
@@ -775,6 +798,44 @@ export class ZenAppServer {
     return await this.#snapshot(thread);
   }
 
+  /** Host-only launch fence; the existing task manager registers before unlock. */
+  async dispatchHostTool<T>(
+    expected: Pick<
+      ThreadSnapshot,
+      "id" | "cwd" | "sandbox" | "approvalPolicy" | "archived"
+    >,
+    launch: () => Promise<T>,
+  ): Promise<{ result: Promise<T> }> {
+    return await this.#withThreadMutation(expected.id, async () => {
+      if (!this.#acceptingRootOperations)
+        throw new AppServerError(
+          "host_restarting",
+          "The Zen host is restarting",
+        );
+      const thread = await this.#requireThread(expected.id);
+      const metadata = await this.#threadMetadata.read(expected.id);
+      const current = thread.effectiveConfiguration();
+      if (
+        current.cwd !== expected.cwd ||
+        current.sandbox !== expected.sandbox ||
+        current.approvalPolicy !== expected.approvalPolicy ||
+        (metadata.archived ?? false) !== expected.archived ||
+        expected.archived
+      )
+        throw new AppServerError(
+          "stale_thread",
+          "Target execution permissions or archival changed before dispatch",
+        );
+      if (!this.#acceptingRootOperations)
+        throw new AppServerError(
+          "host_restarting",
+          "The Zen host is restarting",
+        );
+      // Do not await (or async-flatten) the execution body under this lock.
+      return { result: launch() };
+    });
+  }
+
   async updateThreadSettings(
     threadId: string,
     input: UpdateThreadSettingsInput,
@@ -925,12 +986,15 @@ export class ZenAppServer {
     options: {
       requestApproval?: ApprovalHandler;
       deliveryMode?: "batch-next";
+      requireUnarchived?: boolean;
     } = {},
   ): Promise<void> {
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
     await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -996,6 +1060,146 @@ export class ZenAppServer {
       this.#emit({ type: "item_completed", item: queued });
     });
     await this.resumeQueue(threadId, options);
+  }
+
+  /** Edits append a revision without moving, admitting, or resuming the queue. */
+  async editQueuedMessage(
+    threadId: string,
+    target: QueuedEditTarget,
+    requestedInput: UserInput,
+  ): Promise<QueuedEditResult> {
+    target = { ...target }; // Freeze request identity before any asynchronous work.
+    if (
+      [target.queuedItemId, target.clientId, target.editId].some(
+        (value) =>
+          typeof value !== "string" ||
+          value.trim().length === 0 ||
+          value.length > 512,
+      ) ||
+      !Number.isSafeInteger(target.expectedRevision) ||
+      target.expectedRevision < 0 ||
+      target.expectedRevision >= Number.MAX_SAFE_INTEGER
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Queue identity, edit ID and a nonnegative expected revision are required",
+      );
+    let input: UserInput;
+    try {
+      validateUserInput(requestedInput, "input");
+      input = normalizeUserInput(requestedInput);
+    } catch {
+      throw new AppServerError(
+        "invalid_input",
+        "Provide valid text and image attachment input",
+      );
+    }
+    if (
+      input.some(
+        (part) =>
+          part.type === "audio" ||
+          (part.type === "text" && part.skillSource !== undefined),
+      )
+    )
+      throw new AppServerError(
+        "queue_edit_unsupported_input",
+        "Queued edits support ordinary text and images only",
+      );
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const previous = thread.items.find(
+        (item): item is QueuedUserMessageEditedItem =>
+          item.type === "user_message_queue_edited" &&
+          item.editId === target.editId,
+      );
+      if (previous !== undefined) {
+        if (
+          previous.queuedItemId !== target.queuedItemId ||
+          previous.clientId !== target.clientId ||
+          previous.revision !== target.expectedRevision + 1 ||
+          !sameUserInput(previous.input, input)
+        )
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Queue edit ID was already used for a different edit",
+          );
+        return {
+          queuedItemId: previous.queuedItemId,
+          clientId: previous.clientId,
+          revision: previous.revision,
+          editItemId: previous.id,
+          status: "already_edited",
+        };
+      }
+      const original = thread.items.find(
+        (item): item is QueuedUserMessageItem =>
+          item.type === "user_message_queued" &&
+          item.id === target.queuedItemId &&
+          item.clientId === target.clientId,
+      );
+      if (original === undefined)
+        throw new AppServerError(
+          "queue_not_found",
+          "Queued message was not found",
+        );
+      if (
+        this.#reservedQueuedItems.get(threadId)?.has(original.id) ||
+        thread.items.some(
+          (item) =>
+            item.type === "user_message" && item.clientId === target.clientId,
+        )
+      )
+        throw new AppServerError(
+          "queue_already_started",
+          "This queued message has already started and cannot be edited",
+        );
+      const current = pendingQueuedMessages(thread.items).find(
+        (item) => item.id === original.id,
+      );
+      if (current === undefined)
+        throw new AppServerError(
+          "queue_cancelled",
+          "This queued message was cancelled and cannot be edited",
+        );
+      if (current.revision !== target.expectedRevision)
+        throw new AppServerError(
+          "queue_revision_conflict",
+          "This queued message changed. Review the current version before saving again",
+        );
+      if (
+        current.input.some(
+          (part) =>
+            part.type === "audio" ||
+            (part.type === "text" && part.skillSource !== undefined),
+        )
+      )
+        throw new AppServerError(
+          "queue_edit_unsupported_input",
+          "Queued messages containing audio or Host skill snapshots cannot be edited",
+        );
+      const resolved = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(input, resolved.model.inputModalities);
+      const edited: QueuedUserMessageEditedItem = {
+        id: this.#id(),
+        type: "user_message_queue_edited",
+        threadId,
+        createdAt: this.#now(),
+        queuedItemId: current.id,
+        clientId: current.clientId,
+        editId: target.editId,
+        revision: current.revision + 1,
+        input,
+      };
+      await this.#commit(thread, edited);
+      this.#emit({ type: "item_completed", item: edited });
+      return {
+        queuedItemId: current.id,
+        clientId: current.clientId,
+        revision: edited.revision,
+        editItemId: edited.id,
+        status: "edited",
+      };
+    });
   }
 
   /** A canonical cancellation cannot undo a launched or delivered input. */
@@ -1078,7 +1282,10 @@ export class ZenAppServer {
 
   async resumeQueue(
     threadId: string,
-    options: { requestApproval?: ApprovalHandler } = {},
+    options: {
+      requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
+    } = {},
   ): Promise<void> {
     const thread = await this.#requireThread(threadId);
     const admissionInProgress = this.#queueAdmissions.get(threadId);
@@ -1120,7 +1327,7 @@ export class ZenAppServer {
       }
     };
     let attemptId: string;
-    let batch: QueuedUserMessageItem[];
+    let batch: PendingQueuedUserMessage[];
     while (true) {
       const pending = pendingQueuedMessages(thread.items)[0];
       if (pending === undefined) {
@@ -1169,9 +1376,13 @@ export class ZenAppServer {
   readonly #drainingQueues = new Set<string>();
   readonly #queueAdmissions = new Map<string, Promise<void>>();
 
-  #announceQueueAttempt(item: QueuedUserMessageItem, attemptId: string): void {
+  #announceQueueAttempt(
+    item: PendingQueuedUserMessage,
+    attemptId: string,
+  ): void {
     this.#emit({
       type: "queue_admission_started",
+      revision: item.revision,
       threadId: item.threadId,
       queuedItemId: item.id,
       clientId: item.clientId,
@@ -1184,9 +1395,13 @@ export class ZenAppServer {
       console.error("Queue admission failed without a known queued Item");
       return;
     }
+    const thread = this.#threads.get(threadId);
+    if (thread !== undefined && !this.#queueBatchCurrent(thread, [error.item]))
+      return;
     const { code, message } = safeQueueFailure(error.reason);
     this.#emit({
       type: "queue_failed",
+      revision: error.item.revision,
       threadId,
       queuedItemId: error.item.id,
       clientId: error.item.clientId,
@@ -1196,18 +1411,33 @@ export class ZenAppServer {
     });
   }
 
+  #queueBatchCurrent(
+    thread: Thread,
+    batch: readonly PendingQueuedUserMessage[],
+  ): boolean {
+    const pending = pendingQueuedMessages(thread.items);
+    return batch.every((item) =>
+      pending.some(
+        (current) =>
+          current.id === item.id &&
+          current.clientId === item.clientId &&
+          current.revision === item.revision,
+      ),
+    );
+  }
+
   async #preflightQueue(
     thread: Thread,
-    first: QueuedUserMessageItem,
+    first: PendingQueuedUserMessage,
     attemptId: string,
-  ): Promise<QueuedUserMessageItem[]> {
+  ): Promise<PendingQueuedUserMessage[]> {
     let selection: ResolvedProviderSelection;
     try {
       selection = this.#requireSelection(thread.effectiveConfiguration());
     } catch (error) {
       if (
         !pendingQueuedMessages(thread.items).some(
-          (item) => item.id === first.id,
+          (item) => item.id === first.id && item.revision === first.revision,
         )
       )
         throw new QueueBatchChanged();
@@ -1236,19 +1466,11 @@ export class ZenAppServer {
       try {
         await this.#validateInput(item.input, selection.model.inputModalities);
       } catch (error) {
-        if (
-          !pendingQueuedMessages(thread.items).some(
-            (entry) => entry.id === item.id,
-          )
-        )
+        if (!this.#queueBatchCurrent(thread, batch))
           throw new QueueBatchChanged();
         throw new QueueAdmissionRejection(item, attemptId, error);
       }
-      if (
-        !pendingQueuedMessages(thread.items).some(
-          (entry) => entry.id === item.id,
-        )
-      )
+      if (!this.#queueBatchCurrent(thread, batch))
         throw new QueueBatchChanged();
     }
     return batch;
@@ -1256,8 +1478,11 @@ export class ZenAppServer {
 
   async #drainQueue(
     threadId: string,
-    options: { requestApproval?: ApprovalHandler },
-    firstAttempt?: { batch: QueuedUserMessageItem[]; attemptId: string },
+    options: {
+      requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
+    },
+    firstAttempt?: { batch: PendingQueuedUserMessage[]; attemptId: string },
     onFirstAdmission?: (
       outcome: { type: "admitted" } | { type: "rejected"; reason: unknown },
     ) => void,
@@ -1299,10 +1524,11 @@ export class ZenAppServer {
         const attemptId = nextAttempt?.attemptId ?? randomUUID();
         if (nextAttempt === undefined)
           this.#announceQueueAttempt(queued, attemptId);
-        let batch: QueuedUserMessageItem[];
+        let batch: PendingQueuedUserMessage[];
         if (
           nextAttempt !== undefined &&
-          nextAttempt.batch[0]?.id === queued.id
+          nextAttempt.batch[0]?.id === queued.id &&
+          this.#queueBatchCurrent(thread, nextAttempt.batch)
         ) {
           batch = nextAttempt.batch;
         } else {
@@ -1379,6 +1605,8 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      /** Host admission fence, checked under the Thread mutation lock. */
+      requireUnarchived?: boolean;
       /** Host admission fence, checked under the Thread mutation lock. */
       requirePermissions?: {
         sandbox: SandboxMode;
@@ -1503,6 +1731,7 @@ export class ZenAppServer {
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
+      requireUnarchived?: boolean;
       requirePermissions?: {
         sandbox: SandboxMode;
         approvalPolicy: ApprovalPolicy;
@@ -1514,21 +1743,18 @@ export class ZenAppServer {
       replacementClientId?: string;
       initialMessages?: readonly { input: UserInput; clientId: string }[];
       queuedAdmission?: {
-        items: readonly QueuedUserMessageItem[];
+        items: readonly PendingQueuedUserMessage[];
         attemptId: string;
       };
     } = {},
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       if (
         internal.queuedAdmission !== undefined &&
-        !internal.queuedAdmission.items.every((item) =>
-          pendingQueuedMessages(thread.items).some(
-            (candidate) =>
-              candidate.id === item.id && candidate.clientId === item.clientId,
-          ),
-        )
+        !this.#queueBatchCurrent(thread, internal.queuedAdmission.items)
       )
         throw new QueueBatchChanged();
       if (
@@ -1583,7 +1809,9 @@ export class ZenAppServer {
             !matchesSkillInputSnapshot(
               requestedInput,
               intent.type === "user_message_queued"
-                ? intent.input
+                ? (pendingQueuedMessages(thread.items).find(
+                    (item) => item.id === intent.id,
+                  )?.input ?? intent.input)
                 : inputFromReplacement(intent),
             )
           ) {
@@ -1972,6 +2200,8 @@ export class ZenAppServer {
 
     const planned = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -2141,6 +2371,9 @@ export class ZenAppServer {
           inputFromReplacement(replacementIntent),
           {
             clientId: replacementIntent.clientId,
+            ...(options.requireUnarchived === undefined
+              ? {}
+              : { requireUnarchived: options.requireUnarchived }),
             ...(options.requestApproval === undefined
               ? {}
               : { requestApproval: options.requestApproval }),
@@ -2180,6 +2413,8 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     return await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
       const input = await this.#prepareSkillInput(
         thread,
         requestedInput,
@@ -2831,6 +3066,16 @@ export class ZenAppServer {
     return thread;
   }
 
+  /** Call under the same mutation lock used by setThreadArchived. */
+  async #requireUnarchived(threadId: string): Promise<void> {
+    if ((await this.#threadMetadata.read(threadId)).archived === true) {
+      throw new AppServerError(
+        "operation_forbidden",
+        `Thread ${threadId} is archived. Unarchive it before sending a message`,
+      );
+    }
+  }
+
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
     if (this.#threads.get(thread.id) !== thread) {
       throw new ThreadJournalAppendOutcomeUnknownError(
@@ -3453,7 +3698,10 @@ function remapForkItems(
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
     if (copied.type === "thread_metadata") delete copied.parentThreadId;
-    if (copied.type === "user_message_queue_cancelled") {
+    if (
+      copied.type === "user_message_queue_cancelled" ||
+      copied.type === "user_message_queue_edited"
+    ) {
       copied.queuedItemId = remap(copied.queuedItemId);
     }
     if (copied.type === "user_message" && copied.deliveryAfter !== undefined) {
@@ -3503,7 +3751,7 @@ class QueueBatchChanged extends Error {
 
 class QueueAdmissionRejection extends Error {
   constructor(
-    readonly item: QueuedUserMessageItem,
+    readonly item: PendingQueuedUserMessage,
     readonly attemptId: string,
     readonly reason: unknown,
   ) {
@@ -3515,6 +3763,12 @@ function safeQueueFailure(error: unknown): { code: string; message: string } {
   const code =
     error instanceof AppServerError ? error.code : "queue_admission_failed";
   switch (code) {
+    case "operation_forbidden":
+      return {
+        code,
+        message:
+          "This Thread is archived. Unarchive it before using Continue queue; the queued input was not sent.",
+      };
     case "image_input_unsupported":
       return {
         code,

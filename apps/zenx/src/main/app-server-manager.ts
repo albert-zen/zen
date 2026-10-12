@@ -1677,13 +1677,18 @@ export class AppServerManager {
       const execution = Promise.resolve()
         .then(
           async () =>
-            await host.execute(
-              {
-                ...hostEvent.invocation,
-                signal: controller.signal,
-              },
-              hostEvent.generationToken,
-            ),
+            await (hostEvent.targetRoute === true
+              ? (host.executeTarget?.({
+                  ...hostEvent.invocation,
+                  signal: controller.signal,
+                }) ??
+                Promise.reject(
+                  new Error("Fleet execution-target transport is unavailable"),
+                ))
+              : host.execute(
+                  { ...hostEvent.invocation, signal: controller.signal },
+                  hostEvent.generationToken,
+                )),
         )
         .then((result) => {
           if (this.#child === child && child.connected) {
@@ -1973,6 +1978,10 @@ function assertTargetOnlyCapabilityChange(
     plugins: (snapshot.plugins ?? [])
       .filter((plugin) => plugin.id !== targetPluginId)
       .toSorted((left, right) => left.id.localeCompare(right.id)),
+    pluginReadiness: (snapshot.pluginReadiness ?? [])
+      .filter((plugin) => plugin.id !== targetPluginId)
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
+    pluginCatalogAvailable: snapshot.pluginCatalogAvailable,
   });
   if (
     JSON.stringify(withoutTarget(previous)) !==

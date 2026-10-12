@@ -4,7 +4,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import {
   REMOTE_HOST_VERSION,
+  REMOTE_UNARCHIVED_SEND_CAPABILITY,
   REMOTE_METHODS,
+  REMOTE_SHELL_MAX_COMMAND_BYTES,
+  REMOTE_SHELL_MAX_TIMEOUT_MS,
+  REMOTE_SHELL_MAX_OUTPUT_BYTES,
   isConfirmedRemoteRejection,
   type RemoteEventView,
   type RemoteItemView,
@@ -15,6 +19,7 @@ import {
   type RemoteWorkspaceView,
 } from "../../../../src/protocol/native/remote-wire.js";
 import {
+  fleetDeviceKey,
   fleetReadTools,
   fleetTools,
   normalizeFleetEndpoint,
@@ -22,6 +27,48 @@ import {
   type NativeFleetDevice,
   type NativeFleetPort,
 } from "./fleet.js";
+
+import {
+  REMOTE_TOOL_VERSION,
+  REMOTE_TOOL_CAPABILITY,
+  parseRemoteToolCatalogRequest,
+  parseRemoteToolExecuteRequest,
+  parseRemoteToolWaitRequest,
+  parseRemoteToolStatusRequest,
+  parseRemoteToolCancelRequest,
+  parseRemoteToolCatalogResult,
+  parseRemoteToolResult,
+  parseRemoteToolStatusResult,
+  type RemoteToolCatalogRequest,
+  type RemoteToolCatalogResult,
+  type RemoteToolExecuteRequest,
+  type RemoteToolWaitRequest,
+  type RemoteToolStatusRequest,
+  type RemoteToolCancelRequest,
+  type RemoteToolResult,
+  type RemoteToolStatusResult,
+} from "../../../../src/protocol/native/remote-tool-wire.js";
+
+export type NativeFleetCatalogInput = Omit<
+  RemoteToolCatalogRequest,
+  "version" | "hostId" | "processEpoch"
+> & { processEpoch?: string };
+export type NativeFleetExecuteInput = Omit<
+  RemoteToolExecuteRequest,
+  "version" | "hostId"
+>;
+export type NativeFleetWaitInput = Omit<
+  RemoteToolWaitRequest,
+  "version" | "hostId"
+>;
+export type NativeFleetStatusInput = Omit<
+  RemoteToolStatusRequest,
+  "version" | "hostId"
+>;
+export type NativeFleetCancelInput = Omit<
+  RemoteToolCancelRequest,
+  "version" | "hostId"
+>;
 
 export interface NativeFleetCredential {
   hostId: string;
@@ -42,8 +89,24 @@ export interface NativeFleetClientOptions {
 }
 export class NativeFleetRejectedError extends Error {
   readonly confirmedRejection = true;
-  constructor(readonly code: string) {
-    super(`Fleet remote error: ${code}`);
+  constructor(
+    readonly code: string,
+    message?: string,
+  ) {
+    super(
+      message ??
+        (code === "approval_required"
+          ? "Fleet tool approval is required on the target Host. Approve there before retrying; remote tools cannot answer target approval requests."
+          : `Fleet remote error: ${code}`),
+    );
+  }
+}
+/** Validation/setup failed before the generic operation could be sent. */
+export class NativeFleetPreAdmissionError extends Error {
+  readonly confirmedRejection = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "NativeFleetPreAdmissionError";
   }
 }
 class NativeFleetCancelledError extends Error {
@@ -417,6 +480,7 @@ class NativeSession {
     params: Record<string, unknown>,
     signal: AbortSignal,
     mutation = false,
+    options: { timeoutMs?: number; cancelShellOnAbort?: boolean } = {},
   ): Promise<unknown> {
     signal.throwIfAborted();
     if (this.#closed || this.socket.readyState !== WebSocket.OPEN)
@@ -438,21 +502,46 @@ class NativeSession {
       const uncertain = mutation
         ? "; remote admission may be unknown. Inspect the target before retrying. No automatic retry."
         : "";
-      const abort = () =>
+      const abort = () => {
+        if (
+          options.cancelShellOnAbort &&
+          this.socket.readyState === WebSocket.OPEN
+        ) {
+          this.socket.send(
+            JSON.stringify({
+              id: `cancel:${id}`,
+              method: REMOTE_METHODS.shellCancel,
+              params: { requestId: id },
+            }),
+          );
+          clearTimeout(timer);
+          timer = setTimeout(
+            () =>
+              finish(
+                new NativeFleetCancelledError(
+                  `Fleet shell cancellation could not be confirmed${uncertain}`,
+                  signal.reason,
+                ),
+              ),
+            5_000,
+          );
+          return;
+        }
         finish(
           new NativeFleetCancelledError(
             `Fleet request cancelled${uncertain}`,
             signal.reason,
           ),
         );
-      const timer = setTimeout(
+      };
+      let timer = setTimeout(
         () =>
           finish(
             mutation
               ? new Error(`Fleet request timed out${uncertain}`)
               : new NativeFleetConnectionError("Fleet request timed out", true),
           ),
-        10_000,
+        options.timeoutMs ?? 10_000,
       );
       const dispose = () => {
         clearTimeout(timer);
@@ -623,6 +712,8 @@ export interface NativeFleetSubscriptionOptions {
 }
 /** Desktop controller only: the remote Host remains the sole Thread/Turn authority. */
 export class NativeFleetClient implements NativeFleetPort {
+  readonly #toolRequests = new Map<string, number>();
+  #activeToolRequests = 0;
   constructor(readonly options: NativeFleetClientOptions) {}
   #peer(peer: NativeFleetDevice): NativeFleetDevice {
     if (peer.transport !== "https")
@@ -684,6 +775,8 @@ export class NativeFleetClient implements NativeFleetPort {
       deviceId,
       code: string(code, "pair code", 256).trim(),
       access: peer.access,
+      shellEnabled: peer.shellEnabled === true,
+      toolsEnabled: peer.toolsEnabled === true,
     });
     const raw: unknown = await new Promise((resolve, reject) => {
       signal.throwIfAborted();
@@ -804,6 +897,212 @@ export class NativeFleetClient implements NativeFleetPort {
       session.close();
     }
   }
+  /** Dedicated native transport, separate from legacy plugin facade dispatch. */
+  async catalog(
+    device: NativeFleetDevice,
+    request: NativeFleetCatalogInput,
+    signal: AbortSignal = AbortSignal.timeout(10_000),
+  ): Promise<RemoteToolCatalogResult> {
+    return await this.#toolCall(
+      device,
+      request,
+      REMOTE_METHODS.toolsCatalog,
+      parseRemoteToolCatalogRequest,
+      parseRemoteToolCatalogResult,
+      signal,
+      false,
+    );
+  }
+  async execute(
+    device: NativeFleetDevice,
+    request: NativeFleetExecuteInput,
+    signal: AbortSignal = AbortSignal.timeout(40_000),
+  ): Promise<RemoteToolResult> {
+    return await this.#toolCall(
+      device,
+      request,
+      REMOTE_METHODS.toolsExecute,
+      parseRemoteToolExecuteRequest,
+      parseRemoteToolResult,
+      signal,
+      true,
+    );
+  }
+  async wait(
+    device: NativeFleetDevice,
+    request: NativeFleetWaitInput,
+    signal: AbortSignal = AbortSignal.timeout(40_000),
+  ): Promise<RemoteToolResult> {
+    return await this.#toolCall(
+      device,
+      request,
+      REMOTE_METHODS.toolsWait,
+      parseRemoteToolWaitRequest,
+      parseRemoteToolResult,
+      signal,
+      request.terminate === true,
+    );
+  }
+  async status(
+    device: NativeFleetDevice,
+    request: NativeFleetStatusInput,
+    signal: AbortSignal = AbortSignal.timeout(10_000),
+  ): Promise<RemoteToolStatusResult> {
+    return await this.#toolCall(
+      device,
+      request,
+      REMOTE_METHODS.toolsStatus,
+      parseRemoteToolStatusRequest,
+      parseRemoteToolStatusResult,
+      signal,
+      false,
+    );
+  }
+  async cancel(
+    device: NativeFleetDevice,
+    request: NativeFleetCancelInput,
+    signal: AbortSignal = AbortSignal.timeout(40_000),
+  ): Promise<RemoteToolResult> {
+    return await this.#toolCall(
+      device,
+      request,
+      REMOTE_METHODS.toolsCancel,
+      parseRemoteToolCancelRequest,
+      parseRemoteToolResult,
+      signal,
+      true,
+    );
+  }
+  async #toolCall<
+    TRequest extends RemoteToolCatalogRequest,
+    TResult extends
+      RemoteToolCatalogResult | RemoteToolResult | RemoteToolStatusResult,
+  >(
+    input: NativeFleetDevice,
+    value: { processEpoch?: string },
+    method: string,
+    parseRequest: (value: unknown) => TRequest,
+    parseResult: (value: unknown) => TResult,
+    signal: AbortSignal,
+    mutation: boolean,
+  ): Promise<TResult> {
+    let peer: NativeFleetDevice;
+    try {
+      peer = this.#peer(input);
+    } catch (error) {
+      throw new NativeFleetPreAdmissionError(
+        `${error instanceof Error ? error.message : "Invalid Fleet destination"}; no operation was sent`,
+      );
+    }
+    if (Object.hasOwn(value, "hostId") || Object.hasOwn(value, "version"))
+      throw new NativeFleetPreAdmissionError(
+        "Fleet generic tool identity is selected by the Host transport; no operation was sent",
+      );
+    if (peer.access !== "control" || peer.toolsEnabled !== true)
+      throw new NativeFleetPreAdmissionError(
+        "Fleet generic tools require separate tools permission and a fresh control grant; no operation was sent",
+      );
+    const key = fleetDeviceKey(peer);
+    const count = this.#toolRequests.get(key) ?? 0;
+    if (count >= 4 || this.#activeToolRequests >= 8)
+      throw new NativeFleetPreAdmissionError(
+        "Fleet generic tool transport is busy; no operation was sent",
+      );
+    this.#toolRequests.set(key, count + 1);
+    this.#activeToolRequests += 1;
+    let session: NativeSession | undefined;
+    let dispatched = false;
+    try {
+      // Validate caller fields before opening a connection. Only the initial
+      // catalog may omit the epoch; later calls preserve the catalog identity.
+      const request = parseRequest({
+        ...value,
+        version: REMOTE_TOOL_VERSION,
+        hostId: peer.hostId,
+        processEpoch:
+          value.processEpoch ??
+          (method === REMOTE_METHODS.toolsCatalog
+            ? "pending-hello"
+            : undefined),
+      });
+      session = await this.#connect(peer, signal);
+      if (!session.capabilities.includes(REMOTE_TOOL_CAPABILITY))
+        throw new Error(
+          "Fleet target does not expose tools-v1 or this pairing has no tools permission; update the Host and pair again with tools enabled",
+        );
+      if (
+        value.processEpoch !== undefined &&
+        value.processEpoch !== session.epoch
+      )
+        throw new NativeFleetRejectedError("resync_required");
+      const bound = parseRequest({ ...request, processEpoch: session.epoch });
+      const yieldTimeMs =
+        "yieldTimeMs" in bound ? Number(bound.yieldTimeMs) : 0;
+      signal.throwIfAborted();
+      dispatched = true;
+      const raw = await session.request(
+        method,
+        Object.fromEntries(Object.entries(bound)),
+        signal,
+        mutation,
+        { timeoutMs: yieldTimeMs + 10_000 },
+      );
+      let result: TResult;
+      try {
+        result = parseResult(raw);
+      } catch {
+        throw new Error(
+          "Invalid Fleet generic tool result; inspect admission status before retrying. No automatic retry.",
+        );
+      }
+      if ("tools" in result) {
+        if (
+          result.hostId !== peer.hostId ||
+          result.processEpoch !== session.epoch
+        )
+          throw new Error("Fleet tool catalog identity mismatch");
+      } else {
+        const origin = result.origin;
+        if (
+          origin.hostId !== peer.hostId ||
+          origin.processEpoch !== session.epoch ||
+          origin.workspaceId !== bound.workspaceId ||
+          origin.threadId !== bound.targetThreadId ||
+          ("admissionId" in bound &&
+            result.admissionId !== bound.admissionId) ||
+          ("taskId" in bound &&
+            bound.taskId !== undefined &&
+            result.taskId !== bound.taskId) ||
+          ("name" in bound && origin.toolName !== bound.name) ||
+          ("toolGeneration" in bound &&
+            origin.toolGeneration !== bound.toolGeneration) ||
+          ("maxOutputBytes" in bound &&
+            "output" in result &&
+            Buffer.byteLength(result.output) > Number(bound.maxOutputBytes))
+        )
+          throw new Error(
+            "Fleet tool result target mismatch; inspect admission status before retrying. No automatic retry.",
+          );
+      }
+      return result;
+    } catch (error) {
+      if (
+        !dispatched &&
+        !(error instanceof NativeFleetRejectedError) &&
+        !(error instanceof NativeFleetPreAdmissionError)
+      )
+        throw new NativeFleetPreAdmissionError(
+          `${error instanceof Error ? error.message : "Fleet transport setup failed"}; no operation was sent`,
+        );
+      throw error;
+    } finally {
+      session?.close();
+      this.#activeToolRequests -= 1;
+      const remaining = (this.#toolRequests.get(key) ?? 1) - 1;
+      if (remaining > 0) this.#toolRequests.set(key, remaining);
+      else this.#toolRequests.delete(key);
+    }
+  }
   async #workspaces(
     session: NativeSession,
     signal: AbortSignal,
@@ -905,6 +1204,13 @@ export class NativeFleetClient implements NativeFleetPort {
     const args = request.arguments;
     // Validate before connecting or admitting any mutation.
     const supported: Record<string, string[]> = {
+      zenx_fleet_shell: [
+        "workspace",
+        "targetThreadId",
+        "command",
+        "timeout_ms",
+        "max_output_bytes",
+      ],
       zenx_projects_list: ["limit"],
       zenx_models_list: [],
       zenx_threads_list: [
@@ -944,6 +1250,38 @@ export class NativeFleetClient implements NativeFleetPort {
       ],
     };
     only(args, supported[request.name] ?? []);
+    const shell =
+      request.name === "zenx_fleet_shell"
+        ? {
+            workspaceId: string(args.workspace, "explicit workspace ID", 128),
+            targetThreadId: string(
+              args.targetThreadId,
+              "explicit target Thread ID",
+            ),
+            command: text(args.command),
+            timeoutMs: integer(
+              args.timeout_ms,
+              "timeout_ms",
+              30_000,
+              REMOTE_SHELL_MAX_TIMEOUT_MS,
+            ),
+            maxOutputBytes: integer(
+              args.max_output_bytes,
+              "max_output_bytes",
+              16_384,
+              REMOTE_SHELL_MAX_OUTPUT_BYTES,
+            ),
+          }
+        : undefined;
+    if (
+      shell &&
+      (peer.shellEnabled !== true ||
+        shell.command.includes("\0") ||
+        Buffer.byteLength(shell.command) > REMOTE_SHELL_MAX_COMMAND_BYTES)
+    )
+      throw new Error(
+        "Fleet shell requires explicit shell permission and a bounded command",
+      );
     const waitDeadline =
       request.name === "zenx_self_control_threads_wait"
         ? AbortSignal.timeout(
@@ -956,6 +1294,41 @@ export class NativeFleetClient implements NativeFleetPort {
     requestSignal.throwIfAborted();
     const session = await this.#connect(peer, requestSignal);
     try {
+      if (shell) {
+        if (!session.capabilities.includes("shell"))
+          throw new Error(
+            "Fleet target shell is disabled or this pairing has no shell permission. Enable shell on the target Host and pair again with shell permission.",
+          );
+        const result = await session.request(
+          REMOTE_METHODS.shell,
+          shell,
+          requestSignal,
+          true,
+          {
+            timeoutMs: shell.timeoutMs + 10_000,
+            cancelShellOnAbort: true,
+          },
+        );
+        if (
+          !record(result) ||
+          typeof result.output !== "string" ||
+          Buffer.byteLength(result.output) > shell.maxOutputBytes ||
+          !Number.isSafeInteger(result.exitCode) ||
+          !["completed", "timed_out", "cancelled"].includes(
+            String(result.status),
+          ) ||
+          typeof result.sourceTruncated !== "boolean"
+        )
+          throw new Error(
+            "Invalid Fleet shell result; remote admission may be unknown. No automatic retry.",
+          );
+        return {
+          source: SOURCE,
+          workspace: shell.workspaceId,
+          targetThreadId: shell.targetThreadId,
+          ...result,
+        };
+      }
       if (request.name === "zenx_projects_list") {
         const limit = integer(args.limit, "limit", 50, 100);
         const workspaces = await this.#workspaces(session, requestSignal);
@@ -1078,11 +1451,16 @@ export class NativeFleetClient implements NativeFleetPort {
         throw new Error("Specify only target");
       const target = string(args.target ?? args.threadId, "Thread target");
       const exact = threads.find((view) => view.threadId === target);
+      // `threadId` is an exact locator; only the explicit `target` selector
+      // permits title/prefix resolution. A missing exact ID must never retarget.
       const candidates = exact
         ? [exact]
-        : threads.filter(
-            (view) => view.threadId.startsWith(target) || view.name === target,
-          );
+        : args.threadId !== undefined
+          ? []
+          : threads.filter(
+              (view) =>
+                view.threadId.startsWith(target) || view.name === target,
+            );
       if (candidates.length !== 1)
         return {
           source: SOURCE,
@@ -1095,6 +1473,13 @@ export class NativeFleetClient implements NativeFleetPort {
         };
       const threadId = candidates[0]!.threadId;
       if (request.name === "zenx_threads_send") {
+        if (
+          args.threadId !== undefined &&
+          !session.capabilities.includes(REMOTE_UNARCHIVED_SEND_CAPABILITY)
+        )
+          throw new Error(
+            "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
+          );
         const messageType = args.messageType ?? "guidance";
         if (
           !["guidance", "follow_up", "replacement"].includes(

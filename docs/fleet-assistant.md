@@ -1,22 +1,29 @@
 # Fleet and Always On Assistant
 
-Fleet lets the same thread tools work across configured desktop Hosts. The
-Always On Assistant preset combines Rooms, Triggers and self-control. It has no
-private workspace convention or personal workflow dependency.
+Fleet lets ordinary plugin tools work across configured desktop Hosts for any
+Agent. The PAW (Always On Assistant) preset supplies default behavior and a memory
+location; Rooms own messages, Triggers own wakeups, and Fleet owns device routing.
+It has no privileged capability, private workspace convention or personal workflow
+dependency.
 
 ## Desktop connection setup
 
 Open Settings → Fleet. Use this UI for live changes; restart ZenX after manual
 edits to fleet.json. Add an SSH device with an existing trusted SSH alias and
 the remote packaged `fleet-bridge.js` command, or pair a native HTTPS Host using
-its endpoint, Host ID and one-time code. Test the device and inspect its available
+the target user's reviewed single-use invitation. The invitation fills in its
+endpoint and Host ID; the receiving user confirms trust and requested access.
+Agents use `zenx_fleet_readiness` for nonsecret preparation checks and known-device
+discovery. They never receive invitations, permanent tokens or authorization to
+change trust silently. See [the invitation flow](fleet.md#connect-with-an-invitation).
+Test the device and inspect its available
 workspaces before choosing one. The remote workspace identity is returned by the
 Host; a local path is not a remote workspace ID.
 
 To expose this desktop, enable Fleet hosting, choose the bind address and port,
 and supply a certificate and private key. Certificates must be trusted by the
 connecting device; there is no certificate-warning bypass. For Android direct
-connections, set the Android-facing HTTPS endpoint with an explicit port matching
+connections, set the client-facing HTTPS endpoint with an explicit port matching
 the listener and a hostname in the certificate SAN. This narrowly admits the
 Origin emitted by React Native; it does not enable pairing CORS. Prefer a loopback
 listener unless remote network access is intended. Read-only hosting cannot
@@ -40,17 +47,39 @@ forwarded grants and messages. No public relay service/account is required.
 
 ## Agent tools
 
+Fresh desktop profiles install the ordinary Rooms, Triggers, self-control,
+Subagents and Fleet packages through the same startup path. Explicit disabled or
+uninstalled choices are preserved; preparation/configuration and tool permissions
+still apply. IM is an optional independent plugin, not owned by the PAW preset.
+
 Use `zenx_plugin` to discover/read `zenx-self-control`, `zenx-rooms` and
-`zenx-triggers` before calling their undisclosed tools.
+`zenx-triggers`, and the ordinary `zenx-fleet` package before calling their
+undisclosed tools. Fleet's `mainDocument` owns the remote machine, transport,
+capability and task HOWTO for every Agent. PAW only recommends reading that
+guidance and respecting the user's requested machine; there is no second
+Fleet instruction corpus in the preset.
 
 - `zenx_self_control_devices` lists configured devices
 - `zenx_threads_list`, `zenx_threads_read`, `zenx_threads_create`,
   `zenx_threads_send`, `zenx_threads_status` and
   `zenx_self_control_threads_wait` accept optional `device`; omission stays local
 - Remote agents execute their own tools on their own Hosts
+- Generic direct target tools are discovered lazily with `zenx_fleet_tools` for
+  an explicit device/workspace/target Thread; `zenx_fleet_execute` uses that exact
+  discovered device key, process epoch and selected tool generation
+- Generic catalog/execute/task status need a separate tools grant; shell and
+  existing invitation grants do not confer it. The initial grant uses typed
+  configuration/enrollment rather than the current invitation/settings UI
 - Read-only inspection does not create tasks
 - Unknown delivery is not completion, and lost responses must not cause automatic
   replay of a mutation
+
+For eligible text/JSON results and qualified target-owned tasks, follow
+[the generic Fleet workflow](fleet.md#lazy-target-tool-catalog-and-execution).
+Unsupported result contexts remain excluded from execution/callable projection;
+the catalog reports their ineligible status and reason. Ordinary `wait` and
+`zenx_fleet_tool_status` observe the same target admission; disconnection or Host
+restart must not create a local duplicate or automatically rerun target work.
 
 For a remote Thread completion Trigger, record `sourceDevice`, canonical
 `sourceWorkspace` and the exact watched Thread. The existing Trigger service owns

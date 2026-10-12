@@ -28,6 +28,44 @@ const { requestContextCompaction } =
 
 const noop = async () => undefined;
 
+test("new-thread execution context can sit beneath input while existing conversations keep their context before it", () => {
+  for (const position of ["before", "after"] as const) {
+    const html = renderToStaticMarkup(
+      createElement(ThreadView, {
+        approvals: [],
+        composer: emptyComposerState(),
+        composerContext: createElement(
+          "div",
+          { "data-context": "target" },
+          "Run on This machine",
+        ),
+        composerContextPosition: position,
+        thread: null,
+        onDraftChange: () => {},
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+      }),
+    );
+    const dom = new JSDOM(html);
+    const children = [
+      ...dom.window.document.querySelector(".bottom-zone")!.children,
+    ];
+    const formIndex = children.findIndex((child) =>
+      child.classList.contains("composer"),
+    );
+    const contextIndex = children.findIndex((child) =>
+      child.hasAttribute("data-context"),
+    );
+    assert.ok(
+      position === "before"
+        ? contextIndex < formIndex
+        : contextIndex > formIndex,
+    );
+    dom.window.close();
+  }
+});
+
 test("manual Skills are slash candidates and selection stays removable without sending", async () => {
   await withDom(async (root) => {
     let composer = editComposer(emptyComposerState(), "/sample");
@@ -352,15 +390,6 @@ test("compaction progress is a transcript item and completed items reveal exact 
     assert.match(event.textContent ?? "", /Full input size unknown/u);
     assert.doesNotMatch(event.textContent ?? "", /effective messages/u);
     await act(async () => requiredButton(".context-compaction-toggle").click());
-    const diagnostics = requiredElement<HTMLDetailsElement>(
-      ".compaction-projection",
-    );
-    assert.equal(diagnostics.open, false);
-    assert.equal(diagnostics.querySelector("ol"), null);
-    await act(async () => {
-      diagnostics.open = true;
-      diagnostics.dispatchEvent(new window.Event("toggle"));
-    });
     assert.match(event.textContent ?? "", /Keep this request/u);
     assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
@@ -370,7 +399,7 @@ test("compaction progress is a transcript item and completed items reveal exact 
     );
     assert.equal(
       requiredElement(".compaction-projection").hasAttribute("open"),
-      true,
+      false,
     );
     assert.match(event.textContent ?? "", /not tokens/u);
     assert.match(
@@ -399,6 +428,169 @@ test("compaction progress is a transcript item and completed items reveal exact 
       /Compacting context/u,
     );
     assert.equal(document.querySelector(".composer-command-status"), null);
+  });
+});
+
+for (const provenance of ["human", "automatic", "agent"] as const) {
+  test(`${provenance} compaction arriving before canonical hydration keeps the conversation usable`, async () => {
+    await withDom(async (root) => {
+      const history = compactionHistory();
+      const generated = history.at(-1)!;
+      assert.equal(generated.type, "context_compaction");
+      const compact: CanonicalItem =
+        provenance === "agent"
+          ? {
+              id: generated.id,
+              type: "context_compaction",
+              threadId: generated.threadId,
+              turnId: "turn-1",
+              callId: "compact-call",
+              sourceModelResponseId: "response-1",
+              createdAt: generated.createdAt,
+              provenance: "agentic",
+              initiator: "agent",
+              coveredThroughItemId: generated.coveredThroughItemId,
+              summary: generated.summary,
+              retainedItemIds: generated.retainedItemIds,
+              algorithmVersion: generated.algorithmVersion,
+            }
+          : { ...generated, initiator: provenance };
+      const original = thread([
+        turnWithItems("completed", [
+          user("Keep this request"),
+          agent("Kept answer"),
+        ]),
+      ]);
+      const composer = editComposer(emptyComposerState(), "Unsent draft");
+      const renderView = (value: Thread) =>
+        act(async () =>
+          root.render(
+            createElement(ThreadView, {
+              approvals: [],
+              composer,
+              thread: value,
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          ),
+        );
+      await renderView(original);
+      const partial = applyNativeThreadEvent(original, {
+        type: "item_completed",
+        item: compact,
+      });
+      await renderView(partial);
+      assert.equal(
+        document.querySelectorAll(".context-compaction-event").length,
+        1,
+      );
+      await act(async () =>
+        requiredButton(".context-compaction-toggle").click(),
+      );
+      assert.match(
+        requiredElement(".compaction-summary").textContent ?? "",
+        /Continue with the accepted plan/u,
+      );
+      const diagnostics = requiredElement(".compaction-projection");
+      assert.match(diagnostics.textContent ?? "", /unavailable/u);
+      assert.match(diagnostics.textContent ?? "", /boundary does not exist/u);
+      assert.equal(diagnostics.querySelector("ol"), null);
+      assert.equal(
+        requiredElement<HTMLTextAreaElement>("textarea").value,
+        "Unsent draft",
+      );
+
+      // Duplicate delivery and a status update must not remove the committed summary.
+      const duplicate = applyNativeThreadEvent(partial, {
+        type: "item_completed",
+        item: compact,
+      });
+      await renderView({ ...duplicate, status: { type: "idle" } });
+      assert.equal(
+        document.querySelectorAll(".context-compaction-event").length,
+        1,
+      );
+      assert.equal(
+        requiredElement(".compaction-projection").querySelector("ol"),
+        null,
+      );
+      const unrelated = {
+        ...original,
+        id: "other-thread",
+        sessionId: "other-thread",
+      };
+      await renderView(unrelated);
+      assert.equal(document.querySelector(".context-compaction-event"), null);
+      await renderView(partial);
+      await act(async () =>
+        requiredButton(".context-compaction-toggle").click(),
+      );
+
+      // A later authoritative read restores exact diagnostics, with no invented context while waiting.
+      const hydrated = {
+        ...partial,
+        canonicalItems: [...history.slice(0, -1), compact],
+      };
+      await renderView(hydrated);
+      assert.doesNotMatch(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /unavailable/u,
+      );
+      assert.match(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /Keep this request/u,
+      );
+      assert.match(
+        requiredElement(".compaction-projection").textContent ?? "",
+        /Kept answer/u,
+      );
+      assert.ok(requiredElement(".compaction-projection").querySelector("ol"));
+      assert.equal(
+        requiredElement<HTMLTextAreaElement>("textarea").value,
+        "Unsent draft",
+      );
+    });
+  });
+}
+
+test("compaction with a present boundary but missing retained items keeps its summary", async () => {
+  await withDom(async (root) => {
+    const history = compactionHistory();
+    const partial = {
+      ...thread([]),
+      canonicalItems: history.filter(
+        (item) =>
+          item.type === "turn_completed" || item.type === "context_compaction",
+      ),
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: partial,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".context-compaction-toggle").click());
+    assert.match(
+      requiredElement(".compaction-summary").textContent ?? "",
+      /Continue with the accepted plan/u,
+    );
+    assert.match(
+      requiredElement(".compaction-projection").textContent ?? "",
+      /Retained context Item does not exist/u,
+    );
+    assert.equal(
+      requiredElement(".compaction-projection").querySelector("ol"),
+      null,
+    );
   });
 });
 
@@ -696,6 +888,83 @@ test("running empty composer exposes Stop without locking the editor", () => {
   assert.match(html, /aria-label="Stop"/u);
 });
 
+test("one running orb switches between Stop and send without losing attachment-only drafts", async () => {
+  await withDom(async (root) => {
+    const calls: string[] = [];
+    let composer = emptyComposerState();
+    let running = true;
+    const show = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: thread(running ? [turn()] : []),
+          onDraftChange: () => undefined,
+          onInterrupt: async (id) => {
+            calls.push(`stop:${id}`);
+          },
+          onRespondToApproval: noop,
+          onSubmit: async (intent, id) => {
+            calls.push(`${intent}:${id ?? "idle"}`);
+          },
+        }),
+      );
+    await act(async () => show());
+    const orb = requiredButton(".action-orb");
+    for (const text of ["", " \n\t "]) {
+      composer = editComposer(composer, text);
+      await act(async () => show());
+      assert.equal(requiredButton(".action-orb"), orb);
+      assert.equal(
+        orb.getAttribute("aria-label"),
+        calls.length === 0 ? "Stop" : "Stopping…",
+      );
+      assert.equal(orb.disabled, calls.length > 0);
+      assert.ok(orb.classList.contains("stop"));
+      await act(async () => orb.click());
+    }
+    composer = editComposer(composer, "new direction");
+    await act(async () => show());
+    assert.equal(orb.getAttribute("aria-label"), "Steer now");
+    await act(async () => orb.click());
+    composer = addComposerImages(editComposer(composer, ""), [
+      {
+        id: "attachment-only",
+        name: "fixture.png",
+        attachment: {
+          type: "attachment",
+          sha256: "a".repeat(64),
+          mediaType: "image/png",
+          byteLength: 4,
+          width: 1,
+          height: 1,
+        },
+      },
+    ]);
+    await act(async () => show());
+    assert.equal(requiredButton(".action-orb"), orb);
+    assert.equal(orb.getAttribute("aria-label"), "Steer now");
+    await act(async () => orb.click());
+    assert.equal(composer.draft.images.length, 1);
+    running = false;
+    await act(async () => show());
+    assert.equal(requiredButton(".action-orb"), orb);
+    assert.equal(orb.getAttribute("aria-label"), "Send");
+    await act(async () => orb.click());
+    assert.deepEqual(calls, [
+      "stop:turn-1",
+      "steer:turn-1",
+      "steer:turn-1",
+      "start:idle",
+    ]);
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+  });
+});
+
 test("running draft keeps one send action and hides alternate choices until hover", () => {
   const composer = editComposer(emptyComposerState(), "change direction");
   const html = render(true, [], composer);
@@ -741,7 +1010,7 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
     await show();
     assert.match(
       document.querySelector('[aria-label="Message queue"]')?.textContent ?? "",
-      /1 queued.*identical/u,
+      /Pending send · 1.*identical/u,
     );
     const queue = document.querySelector<HTMLElement>(
       '[aria-label="Message queue"]',
@@ -749,7 +1018,7 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
     assert.equal(queue?.getAttribute("aria-live"), null);
     assert.equal(
       queue?.querySelector('[role="status"]')?.textContent,
-      "1 queued",
+      "Pending send · 1",
     );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
@@ -828,8 +1097,8 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
       [{ queuedItemId: queued[0]!.id, clientId: "first" }],
     ]);
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /2 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 2/u,
     );
     await act(async () =>
       resolve({
@@ -843,8 +1112,8 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
       }),
     );
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /2 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 2/u,
     );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
@@ -859,10 +1128,10 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
     });
     await show();
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /1 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 1/u,
     );
-    assert.equal(document.querySelectorAll(".queued-messages li").length, 1);
+    assert.equal(document.querySelectorAll(".queue-shelf li").length, 1);
   });
 });
 
@@ -912,13 +1181,7 @@ test("bulk queue confirmation captures IDs before a later append", async () => {
       );
     await show();
     await act(async () =>
-      requiredButton(
-        '.queued-messages button[title="Cancel this pending message only"]',
-      )
-        .closest(".queued-messages")
-        ?.querySelectorAll("button")
-        ?.item(2)
-        ?.click(),
+      requiredButton('.queue-shelf [data-queue-control="cancel-all"]').click(),
     );
     assert.match(
       document.querySelector('[role="dialog"]')?.textContent ?? "",
@@ -930,8 +1193,8 @@ test("bulk queue confirmation captures IDs before a later append", async () => {
     });
     await show();
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /3 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 3/u,
     );
     await act(async () =>
       requiredButton('[role="dialog"] button:last-child').click(),
@@ -1000,7 +1263,7 @@ test("a message that started before cancellation reports a conflict even after q
       },
     });
     await show();
-    assert.equal(document.querySelector(".queued-messages"), null);
+    assert.equal(document.querySelector(".queue-shelf"), null);
     assert.match(
       document.querySelector(".queued-cancel-notice")?.textContent ?? "",
       /cannot be canceled/u,
@@ -1033,14 +1296,17 @@ test("pending approvals render in the bottom zone next to the composer", () => {
     },
   } as ApprovalCardState;
   const html = render(true, [approval]);
-  assert.match(html, /class="bottom-zone"/u);
-  assert.match(html, /class="approval-bar"/u);
-  assert.match(html, /Allow the shell-equivalent run_code capability\?/u);
-  assert.match(html, /remembered for the stable run_code capability/u);
-  assert.match(html, /not granted per command or code segment/u);
+  assert.match(html, /class="bottom-zone[^"]*"/u);
+  assert.match(html, /class="approval-request-card"/u);
+  assert.match(html, /Allow tool access\?/u);
+  assert.match(
+    html,
+    /Remember permission for the stable, shell-equivalent run_code capability/u,
+  );
+  assert.match(html, /not per command or code segment/u);
   assert.match(html, /printf &lt;full&gt;/u);
   assert.match(html, /very\/long\/path\/that\/must\/remain\/visible/u);
-  assert.match(html, /Allow capability/u);
+  assert.match(html, /Allow access/u);
 });
 
 test("approval response returns keyboard focus to the composer", async () => {
@@ -1083,10 +1349,12 @@ test("approval response returns keyboard focus to the composer", async () => {
       ),
     );
     await act(async () => {
-      requiredButton(".approval-actions .allow").click();
+      requiredButton(".approval-request-allow").focus();
+      requiredButton(".approval-request-allow").click();
       await Promise.resolve();
     });
     assert.equal(decision, "accept");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
     assert.equal(document.activeElement?.id, "thread-composer");
   });
 });
@@ -2307,7 +2575,7 @@ test("failed turn opens received trace and preserves the error without a final a
   );
   assert.equal(document.querySelector(".turn-final"), null);
   assert.equal(
-    document.querySelector(".turn-terminal")?.textContent,
+    document.querySelector(".turn-outcome > p")?.textContent,
     "invalid tool call id",
   );
 });
@@ -2397,7 +2665,7 @@ test("shell headings and pending calls do not claim that a started call is runni
       requiredElement(".trace-item-toggle").textContent ?? "",
       /Shell/,
     );
-    assert.equal(requiredElement(".tool-status").textContent, "Started");
+    assert.equal(requiredElement(".tool-status").textContent, "Requested");
     assert.equal(document.querySelector(".trace-item .mini-spinner"), null);
   });
 });
@@ -2476,7 +2744,7 @@ test("folded task group and expanded wait row use the same receipt phase", async
       ...base,
       toolName: "wait",
       contentType: "application/vnd.zen.tool-task+json",
-      structuredContent: { status: "running" },
+      structuredContent: { task_id: "test-task", status: "running" },
     };
     const reasoning = reasoningItem("reason-wait", [], ["Waiting for task"]);
     await renderInteractive(
@@ -2497,7 +2765,10 @@ test("folded task group and expanded wait row use the same receipt phase", async
       root,
       turnWithItems("inProgress", [
         reasoning,
-        { ...wait, structuredContent: { status: "timed_out" } },
+        {
+          ...wait,
+          structuredContent: { task_id: "test-task", status: "timed_out" },
+        },
       ]),
     );
     assert.match(group.textContent ?? "", /Wait · timed out/u);
@@ -2791,7 +3062,7 @@ test("running and completed durations share second, minute and hour formatting",
       await renderInteractive(root, turnWithItems("inProgress", []));
       assert.equal(
         requiredElement(".turn-running-label").textContent,
-        `Working for ${label}`,
+        `Working${label}`,
       );
       await renderInteractive(root, turnWithItems("completed", [], duration));
       assert.equal(
@@ -2808,22 +3079,22 @@ test("running duration ticks from turn start and stops on completion", async (t)
     await renderInteractive(root, turnWithItems("inProgress", []));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 12s",
+      "Working12s",
     );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 14s",
+      "Working14s",
     );
     await act(async () => t.mock.timers.tick(46_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 1m 0s",
+      "Working1m 0s",
     );
     await act(async () => t.mock.timers.tick(3_540_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 1h 0m 0s",
+      "Working1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
     assert.equal(document.querySelector(".turn-running-label"), null);
@@ -2887,23 +3158,25 @@ test("send hover options preserve actual shortcuts and changing defaults never s
         .querySelector("kbd"),
       null,
     );
-    const select = requiredElement<HTMLSelectElement>(
-      '[aria-label="Default send mode"]',
+    await act(async () =>
+      requiredButton('[aria-label="Default send mode"]').click(),
     );
-    await act(async () => {
-      select.value = "queue";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
+    await act(async () =>
+      requiredElement('[role="option"][data-value="queue"]').click(),
+    );
     assert.equal(mode, "queue");
     assert.deepEqual(sends, []);
     assert.equal(
-      requiredElement<HTMLSelectElement>('[aria-label="Default send mode"]')
-        .value,
+      requiredButton('[aria-label="Default send mode"]').getAttribute(
+        "data-value",
+      ),
       "queue",
     );
     const nextButton = [
       ...panel.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((button) => button.textContent === "Next turn")!;
+    ].find(
+      (button) => button.querySelector("strong")?.textContent === "Next turn",
+    )!;
     await act(async () => nextButton.click());
     assert.deepEqual(sends, ["batch-next"]);
     assert.equal(document.querySelector('[role="dialog"]'), null);
@@ -2934,17 +3207,19 @@ test("send preferences keep the current choice on a failed save and expose the e
         }),
       ),
     );
+    await act(async () => openSendOptions());
     await act(async () =>
-      requiredElement<HTMLDivElement>(".composer-send-control").focus(),
+      requiredButton('[aria-label="Default send mode"]').click(),
     );
-    const select = requiredElement<HTMLSelectElement>(
-      '[aria-label="Default send mode"]',
+    await act(async () =>
+      requiredElement('[role="option"][data-value="hard"]').click(),
     );
-    await act(async () => {
-      select.value = "hard";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    });
-    assert.equal(select.value, "soft");
+    assert.equal(
+      requiredButton('[aria-label="Default send mode"]').getAttribute(
+        "data-value",
+      ),
+      "soft",
+    );
     assert.equal(
       requiredElement('[role="alert"]').textContent,
       "Settings changed elsewhere",
@@ -3005,10 +3280,326 @@ test("send panel Stop follows interrupt availability independently of send avail
         ...document.querySelectorAll<HTMLButtonElement>(
           ".composer-send-options button",
         ),
-      ].find((button) => button.textContent === "Stop")!;
+      ].find(
+        (button) => button.querySelector("strong")?.textContent === "Stop",
+      )!;
       assert.equal(stop.disabled, stopDisabled);
       await act(async () => stop.click());
       assert.equal(stops, stopDisabled ? 0 : 1);
     }
   });
 });
+
+test("send hover keeps one visible orb and primary click still submits once", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: true,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: "steer",
+          primaryLabel: "Steer now",
+          compact: false,
+          onPrimary: () => calls.push("primary"),
+          onSend: (intent) => calls.push(intent),
+          onStop: () => calls.push("stop"),
+        }),
+      ),
+    );
+    const primary = requiredButton(".action-orb");
+    assert.equal(primary.getAttribute("aria-haspopup"), null);
+    assert.ok(
+      !document.querySelector(".composer-send-disclosure"),
+      "no adjacent disclosure is rendered",
+    );
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+    await act(async () =>
+      requiredElement(".composer-send-control").dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    assert.deepEqual(calls, []);
+    assert.match(
+      requiredElement(".composer-send-heading").textContent!,
+      /Steer now/,
+    );
+    assert.match(
+      requiredElement(".composer-send-description").textContent!,
+      /current turn/,
+    );
+    await act(async () => primary.click());
+    assert.deepEqual(calls, ["primary"]);
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+test("send orb supports keyboard focus and Escape without reopening", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    await act(async () =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: true,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: "steer",
+          primaryLabel: "Steer now",
+          compact: false,
+          onPrimary: () => assert.fail("must not submit"),
+          onSend: () => assert.fail("must not submit"),
+          onStop: () => assert.fail("must not stop"),
+        }),
+      ),
+    );
+    const primary = requiredButton(".action-orb");
+    await act(async () => {
+      primary.focus();
+      primary.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    assert.equal(
+      document.activeElement?.matches(
+        ".composer-send-popover button:not(:disabled)",
+      ),
+      true,
+    );
+    await act(async () =>
+      document.activeElement!.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    await waitForSendFocus("Steer now");
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+test("touch sends once without hover and disabled orb keeps keyboard options access", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    let calls = 0;
+    const renderControl = (disabled: boolean) =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running: false,
+          hasDraft: true,
+          disabled,
+          sendDisabled: disabled,
+          primaryMode: "send",
+          primaryLabel: "Send",
+          compact: false,
+          onPrimary: () => calls++,
+          onSend: () => calls++,
+          onStop: () => calls++,
+        }),
+      );
+    await act(async () => renderControl(false));
+    const touch = (type: string) => {
+      const event = new window.MouseEvent(type, { bubbles: true });
+      Object.defineProperty(event, "pointerType", { value: "touch" });
+      return event;
+    };
+    await act(async () => {
+      requiredElement(".composer-send-control").dispatchEvent(
+        touch("pointerover"),
+      );
+      requiredButton(".action-orb").dispatchEvent(touch("pointerdown"));
+      requiredButton(".action-orb").focus();
+    });
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await act(async () => requiredButton(".action-orb").click());
+    assert.equal(calls, 1);
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    assert.equal(requiredButton(".composer-send-summary").disabled, true);
+    assert.equal(requiredElement(".composer-send-control").tabIndex, 0);
+    assert.equal(
+      requiredElement(".composer-send-control").querySelectorAll("button")
+        .length,
+      1,
+    );
+    assert.equal(calls, 1);
+  });
+});
+
+test("an open send panel closes when the running turn ends without sending the draft", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const renderControl = (running: boolean) =>
+      root.render(
+        createElement(ComposerSendControl, {
+          mode: "soft",
+          running,
+          hasDraft: true,
+          disabled: false,
+          sendDisabled: false,
+          primaryMode: running ? "steer" : "send",
+          primaryLabel: running ? "Steer now" : "Send",
+          compact: false,
+          onPrimary: () => assert.fail("must not send"),
+          onSend: () => assert.fail("must not send"),
+          onStop: () => assert.fail("must not stop"),
+        }),
+      );
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    assert.ok(document.querySelector(".composer-send-popover"));
+    await act(async () => renderControl(false));
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await waitForSendFocus("Send");
+    assert.equal(
+      requiredButton(".action-orb").getAttribute("aria-label"),
+      "Send",
+    );
+  });
+});
+
+test("panel action returns keyboard focus while hover Escape preserves the editor focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const calls: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement("textarea", { "aria-label": "Outside editor" }),
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running: true,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: "steer",
+            primaryLabel: "Steer now",
+            compact: false,
+            onPrimary: () => calls.push("primary"),
+            onSend: (intent) => calls.push(intent),
+            onStop: () => calls.push("stop"),
+          }),
+        ),
+      ),
+    );
+    await act(async () => openSendOptions());
+    await act(async () =>
+      requiredButton(".composer-send-options button").click(),
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+    await waitForSendFocus("Steer now");
+    const editor = requiredElement<HTMLTextAreaElement>(
+      '[aria-label="Outside editor"]',
+    );
+    await act(async () => editor.focus());
+    await act(async () =>
+      requiredElement(".composer-send-control").dispatchEvent(
+        new window.MouseEvent("pointerover", { bubbles: true }),
+      ),
+    );
+    assert.ok(document.querySelector(".composer-send-popover"));
+    await act(async () =>
+      editor.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "Outside editor",
+    );
+    assert.deepEqual(calls, ["batch-next"]);
+  });
+});
+
+test("turn transition restores nested preference focus without stealing outside focus", async () => {
+  await withDom(async (root) => {
+    const { ComposerSendControl } =
+      await import("../src/renderer/src/ComposerSendControl.js");
+    const renderControl = (running: boolean) =>
+      root.render(
+        createElement(
+          React.Fragment,
+          {},
+          createElement("input", { "aria-label": "Outside control" }),
+          createElement(ComposerSendControl, {
+            mode: "soft",
+            running,
+            hasDraft: true,
+            disabled: false,
+            sendDisabled: false,
+            primaryMode: running ? "steer" : "send",
+            primaryLabel: running ? "Steer now" : "Send",
+            compact: false,
+            onPrimary: () => assert.fail("must not send"),
+            onSend: () => assert.fail("must not send"),
+            onStop: () => assert.fail("must not stop"),
+            onModeChange: async () => {},
+          }),
+        ),
+      );
+    await act(async () => renderControl(true));
+    await act(async () => openSendOptions());
+    await act(async () =>
+      requiredButton('[aria-label="Default send mode"]').click(),
+    );
+    assert.equal(document.activeElement?.getAttribute("role"), "option");
+    await act(async () => renderControl(false));
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+    await waitForSendFocus("Send");
+    await act(async () =>
+      requiredElement<HTMLInputElement>(
+        '[aria-label="Outside control"]',
+      ).focus(),
+    );
+    await act(async () => renderControl(true));
+    assert.equal(
+      document.activeElement?.getAttribute("aria-label"),
+      "Outside control",
+    );
+    assert.equal(document.querySelector(".composer-send-popover"), null);
+  });
+});
+
+// Radix restores focus after its closing FocusScope has unmounted.
+async function waitForSendFocus(label: string): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (
+    document.activeElement?.getAttribute("aria-label") !== label &&
+    Date.now() < deadline
+  ) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+  }
+  assert.equal(document.activeElement?.getAttribute("aria-label"), label);
+}
+
+function openSendOptions(): void {
+  const orb = requiredButton(".action-orb");
+  const target = orb.disabled
+    ? requiredElement<HTMLElement>(".composer-send-control")
+    : orb;
+  target.focus();
+  target.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+  );
+}

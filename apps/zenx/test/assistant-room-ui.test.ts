@@ -210,7 +210,7 @@ test("assistant view reads without starting work, pauses future replies explicit
 });
 
 for (const entry of ["primary route", "plugin button"] as const) {
-  test(`PAW creation keeps the existing command and custom identity: ${entry}`, async () => {
+  test(`PAW explicit existing binding keeps the command and custom identity: ${entry}`, async () => {
     const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
     Object.assign(globalThis, {
       window: dom.window,
@@ -219,6 +219,23 @@ for (const entry of ["primary route", "plugin button"] as const) {
     });
     Object.assign(window, {
       zenx: {
+        plugins: {
+          get: async () => ({
+            plugins: [
+              "zenx-rooms",
+              "zenx-triggers",
+              "zenx-self-control",
+              "zenx-subagents",
+            ].map((id) => ({
+              id,
+              displayName: id,
+              lifecycle: "enabled",
+              enabled: true,
+              available: true,
+            })),
+          }),
+          onChange: () => () => {},
+        },
         threads: {
           list: async () => [
             {
@@ -249,6 +266,7 @@ for (const entry of ["primary route", "plugin button"] as const) {
         execute: async (id: string, input: unknown) => {
           calls.push({ id, input });
           if (id === "list") return { rooms: [] };
+          if (id === "workspaces") return [];
           if (id === "create-assistant") return { id: "created" };
           throw Error(id);
         },
@@ -284,14 +302,37 @@ for (const entry of ["primary route", "plugin button"] as const) {
       );
       assert.equal(input("Name").value, "PAW");
       assert.match(document.body.textContent ?? "", /New PAW conversation/);
-      assert.match(document.body.textContent ?? "", /for the PAW preset/);
-      assert.ok(calls.every((call) => call.id === "list"));
+      assert.match(
+        document.body.textContent ?? "",
+        /creates its own working conversation/,
+      );
+      assert.match(document.body.textContent ?? "", /Chat and memory: Ready/);
+      assert.ok(
+        calls.every((call) => ["list", "workspaces"].includes(call.id)),
+      );
       await fill("Name", "Daily Companion");
-      await fill("Member name", "Chief");
+      assert.equal(
+        [...document.querySelectorAll("label")].some(
+          (node) => node.textContent === "Member name",
+        ),
+        false,
+      );
       await act(async () =>
         document
           .querySelector<HTMLButtonElement>(
-            '[aria-label="Member conversation"]',
+            '[aria-label="Working conversation"]',
+          )!
+          .click(),
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLElement>('[role="option"][data-value="existing"]')!
+          .click(),
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Existing conversation"]',
           )!
           .click(),
       );
@@ -308,18 +349,21 @@ for (const entry of ["primary route", "plugin button"] as const) {
       assert.ok(create);
       assert.equal(create.disabled, false);
       await act(async () => create.click());
-      assert.deepEqual(
-        calls.filter((call) => call.id === "create-assistant"),
-        [
-          {
-            id: "create-assistant",
-            input: {
-              name: "Daily Companion",
-              members: [{ name: "Chief", threadId: "existing-thread" }],
-            },
-          },
-        ],
-      );
+      const creations = calls.filter((call) => call.id === "create-assistant");
+      assert.equal(creations.length, 1);
+      const submitted = creations[0]!.input as {
+        name: string;
+        memberName: string;
+        operationId: string;
+        target: unknown;
+      };
+      assert.equal(submitted.name, "Daily Companion");
+      assert.equal(submitted.memberName, "Daily Companion");
+      assert.equal(typeof submitted.operationId, "string");
+      assert.deepEqual(submitted.target, {
+        kind: "existing",
+        threadId: "existing-thread",
+      });
     } finally {
       await act(async () => root.unmount());
       dom.window.close();

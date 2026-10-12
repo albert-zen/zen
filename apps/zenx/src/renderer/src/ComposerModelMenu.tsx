@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import {
   agentProviderLabel,
   useAgentProviderSelection,
@@ -51,6 +53,7 @@ export function ComposerModelMenu({
   showReasoning?: boolean;
   onRetryModels?(): void;
 }) {
+  useTranslation("shell");
   const engineSelection = useAgentProviderSelection();
   const selectedEngine = engineSelection?.instances.find(
     (instance) => instance.id === engineSelection.value,
@@ -94,10 +97,10 @@ export function ComposerModelMenu({
   const currentModelLabel =
     selected?.displayName ??
     (loading
-      ? "Loading models…"
+      ? i18n.t("shell:providerLoadingModels")
       : nativeModels
-        ? selectedModel || "Choose model"
-        : "Unavailable model");
+        ? selectedModel || i18n.t("shell:chooseModel")
+        : i18n.t("shell:unavailableModel"));
   const selectedReasoningLabel =
     !showReasoning ||
     selected === undefined ||
@@ -114,10 +117,10 @@ export function ComposerModelMenu({
     : currentSelectionLabel;
   const reasoningLabel =
     selected === undefined
-      ? "Unknown"
+      ? i18n.t("shell:unknown")
       : efforts.length === 0
-        ? "Text only"
-        : (selectedReasoningLabel ?? "Choose");
+        ? i18n.t("shell:textOnly")
+        : (selectedReasoningLabel ?? i18n.t("shell:choose"));
   const close = (restoreFocus = true) => {
     restoreFocusRef.current = restoreFocus;
     setPanel(null);
@@ -164,8 +167,12 @@ export function ComposerModelMenu({
             aria-haspopup="menu"
             aria-label={
               engineLabel
-                ? `Agent Provider and model: ${currentScopeLabel}`
-                : `Model and reasoning: ${currentSelectionLabel}`
+                ? i18n.t("shell:providerSelectionLabel", {
+                    selection: currentScopeLabel,
+                  })
+                : i18n.t("shell:modelAndReasoningSelection", {
+                    selection: currentSelectionLabel,
+                  })
             }
             title={currentScopeLabel}
             disabled={disabled || switching}
@@ -192,7 +199,7 @@ export function ComposerModelMenu({
               </span>
             ) : null}
             <span className="composer-selection-label">
-              {switching ? "Changing…" : currentSelectionLabel}
+              {switching ? i18n.t("shell:changing") : currentSelectionLabel}
             </span>
             <Icon name="chevron-down" size={12} />
           </button>
@@ -209,13 +216,13 @@ export function ComposerModelMenu({
           aria-label={
             visiblePanel === "root"
               ? engineLabel
-                ? "Agent Provider and model"
-                : "Model and reasoning"
+                ? i18n.t("shell:providerAndModel")
+                : i18n.t("shell:modelAndReasoning")
               : visiblePanel === "engine"
-                ? "Choose Agent Provider"
+                ? i18n.t("shell:providerChoose")
                 : visiblePanel === "model"
-                  ? "Choose model"
-                  : "Choose reasoning effort"
+                  ? i18n.t("shell:chooseModel")
+                  : i18n.t("shell:chooseReasoningEffort")
           }
           onKeyDown={(event) => {
             if (event.key === "Tab") triggerRef.current?.focus();
@@ -226,8 +233,8 @@ export function ComposerModelMenu({
             <>
               {engineSelection === null ? null : (
                 <MenuEntry
-                  label="Agent Provider"
-                  value={engineLabel ?? "Unavailable instance"}
+                  label={i18n.t("shell:providerLabel")}
+                  value={engineLabel ?? i18n.t("shell:providerMissingInstance")}
                   disabled={
                     !engineSelection.onChange || engineSelection.disabled
                   }
@@ -236,14 +243,14 @@ export function ComposerModelMenu({
               )}
               <MenuEntry
                 disabled={loading || modelSelectionDisabled}
-                label="Model"
+                label={i18n.t("shell:model")}
                 value={currentModelLabel}
                 onClick={() => setPanel("model")}
               />
               {showReasoning ? (
                 <MenuEntry
                   disabled={efforts.length === 0}
-                  label="Reasoning"
+                  label={i18n.t("shell:reasoning")}
                   value={reasoningLabel}
                   onClick={() => setPanel("reasoning")}
                 />
@@ -255,29 +262,31 @@ export function ComposerModelMenu({
               )}
               {onRetryModels === undefined ? null : (
                 <button type="button" role="menuitem" onClick={onRetryModels}>
-                  Retry models
+                  {i18n.t("shell:providerRetryModels")}
                 </button>
               )}
               {loading ? (
                 <p className="composer-menu-note" role="status">
-                  Loading this Agent Provider’s models…
+                  {i18n.t("shell:providerCatalogLoading")}
                 </p>
               ) : available ? (
                 <p className="composer-menu-note">
                   {showReasoning && efforts.length === 0
-                    ? "This model sends text without a Provider-specific reasoning control. Configure or detect capabilities to enable one."
-                    : "Changes apply to the next turn."}
+                    ? i18n.t(
+                        "shell:thisModelSendsTextWithoutAProviderSpecificReasoningControlConfigureOrDetectCapabilitiesToEnableOne",
+                      )
+                    : i18n.t("shell:changesApplyToTheNextTurn")}
                 </p>
               ) : (
                 <p className="composer-menu-warning" role="alert">
-                  This model cannot run. Choose another model before sending.
+                  {i18n.t("shell:cannotRunModel")}
                 </p>
               )}
             </>
           ) : visiblePanel === "engine" ? (
             <>
               <MenuBack
-                label="Agent Provider"
+                label={i18n.t("shell:providerLabel")}
                 onClick={() => setPanel("root")}
               />
               <div className="composer-menu-scroll">
@@ -307,7 +316,7 @@ export function ComposerModelMenu({
           ) : visiblePanel === "model" ? (
             <>
               <MenuBack
-                label="Model"
+                label={i18n.t("shell:model")}
                 onClick={() => {
                   setQuery("");
                   setPanel("root");
@@ -315,8 +324,8 @@ export function ComposerModelMenu({
               />
               <input
                 className="composer-model-search"
-                aria-label="Search models"
-                placeholder="Search models…"
+                aria-label={i18n.t("shell:searchModels")}
+                placeholder={i18n.t("shell:searchModelsPlaceholder")}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={(event) => {
@@ -331,7 +340,7 @@ export function ComposerModelMenu({
               />
               {groups.length === 0 ? (
                 <p className="composer-menu-note" role="status">
-                  No matching models.
+                  {i18n.t("shell:noMatchingModels")}
                 </p>
               ) : null}
               <div className="composer-menu-scroll">
@@ -357,7 +366,8 @@ export function ComposerModelMenu({
                           <small>
                             {showReasoning
                               ? capabilityLabel(model)
-                              : model.description || "Native model"}
+                              : model.description ||
+                                i18n.t("shell:providerNativeModel")}
                           </small>
                         </span>
                         {model.id === selectedModel ? (
@@ -371,7 +381,10 @@ export function ComposerModelMenu({
             </>
           ) : (
             <>
-              <MenuBack label="Reasoning" onClick={() => setPanel("root")} />
+              <MenuBack
+                label={i18n.t("shell:reasoning")}
+                onClick={() => setPanel("root")}
+              />
               {efforts.map((effort) => (
                 <button
                   className="composer-effort-option"
@@ -448,15 +461,24 @@ function MenuBack({ label, onClick }: { label: string; onClick(): void }) {
 
 function capabilityLabel(model: ModelSummary): string {
   const modalities = model.inputModalities.includes("image")
-    ? "Text + images"
-    : "Text";
-  return `${modalities} · ${model.supportedReasoningEfforts.length} reasoning ${
-    model.supportedReasoningEfforts.length === 1 ? "level" : "levels"
-  }`;
+    ? i18n.t("shell:textAndImages")
+    : i18n.t("shell:text");
+  return `${modalities} · ${i18n.t("shell:reasoningLevels", { count: model.supportedReasoningEfforts.length })}`;
 }
 
 function formatReasoningEffort(effort: string): string {
-  if (effort === "xhigh") return "Extra High";
+  if (effort === "xhigh") return i18n.t("shell:extraHigh");
+  const known = {
+    none: "effortNone",
+    minimal: "effortMinimal",
+    low: "effortLow",
+    medium: "effortMedium",
+    high: "effortHigh",
+    max: "effortMax",
+    ultra: "effortUltra",
+  } as const;
+  if (effort in known)
+    return i18n.t(`shell:${known[effort as keyof typeof known]}`);
   return effort
     .split(/[-_\s]+/u)
     .filter(Boolean)

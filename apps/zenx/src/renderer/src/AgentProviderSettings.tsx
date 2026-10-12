@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { useEffect, useRef, useState } from "react";
 import type { AgentProviderInstance } from "../../main/agent-providers/types.js";
 import { agentProvidersApi } from "./agent-providers-ui.js";
@@ -13,6 +15,7 @@ export function AgentProviderSettings({
   onOpenZen(tab: "account" | "models"): void;
   onChanged?(): void;
 }) {
+  useTranslation("shell");
   const [saved, setSaved] = useState<AgentProviderInstance[]>([]);
   const [drafts, setDrafts] = useState<AgentProviderInstance[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -32,7 +35,7 @@ export function AgentProviderSettings({
       ...latest,
       [instance.id]: {
         loading: true,
-        message: "Loading models…",
+        message: i18n.t("shell:providerLoadingModels"),
         error: false,
       },
     }));
@@ -46,8 +49,10 @@ export function AgentProviderSettings({
           loading: false,
           message:
             available.length === 0
-              ? "Connected, but no models were returned"
-              : `Connected · ${available.length} model${available.length === 1 ? "" : "s"} available`,
+              ? i18n.t("shell:providerConnectedEmpty")
+              : i18n.t("shell:providerConnectedModels", {
+                  count: available.length,
+                }),
           error: available.length === 0,
         },
       }));
@@ -57,7 +62,9 @@ export function AgentProviderSettings({
         ...latest,
         [instance.id]: {
           loading: false,
-          message: `${agentProviderError(reason)}. Check the executable and sign in through the native CLI if required.`,
+          message: i18n.t("shell:providerCheckFailure", {
+            error: agentProviderError(reason),
+          }),
           error: true,
         },
       }));
@@ -68,7 +75,7 @@ export function AgentProviderSettings({
     let current = true;
     const api = agentProvidersApi();
     if (!api) {
-      setError("Agent Provider settings are unavailable");
+      setError(i18n.t("shell:providerSettingsUnavailable"));
       return;
     }
     void api.list().then(
@@ -106,7 +113,7 @@ export function AgentProviderSettings({
   const save = async (instance: AgentProviderInstance) => {
     if (busy !== null) return;
     if (!instance.name.trim()) {
-      setError("Enter an instance name");
+      setError(i18n.t("shell:providerEnterName"));
       return;
     }
     setBusy(instance.id);
@@ -127,7 +134,7 @@ export function AgentProviderSettings({
       setDrafts((value) =>
         value.map((entry) => (entry === instance ? result : entry)),
       );
-      setStatus(`${result.name} saved`);
+      setStatus(i18n.t("shell:providerSaved", { name: result.name }));
       onChanged?.();
     } catch (reason) {
       setError(agentProviderError(reason));
@@ -138,7 +145,7 @@ export function AgentProviderSettings({
   return (
     <div className="agent-provider-settings">
       <header>
-        <h2>Agent Providers</h2>
+        <h2>{i18n.t("shell:agentProviders")}</h2>
       </header>
       <section className="settings-card agent-provider-card">
         <h3>Zen</h3>
@@ -148,14 +155,14 @@ export function AgentProviderSettings({
             type="button"
             onClick={() => onOpenZen("models")}
           >
-            Models &amp; providers
+            {i18n.t("shell:providerModels")}
           </button>
           <button
             className="quiet-button"
             type="button"
             onClick={() => onOpenZen("account")}
           >
-            Account
+            {i18n.t("shell:providerAccount")}
           </button>
         </div>
       </section>
@@ -168,7 +175,9 @@ export function AgentProviderSettings({
           <section
             className="settings-card agent-provider-card"
             key={instance.id}
-            aria-label={`${instance.kind} instance`}
+            aria-label={i18n.t("shell:providerInstanceLabel", {
+              kind: instance.kind,
+            })}
           >
             <h3>
               {instance.kind === "codex"
@@ -180,9 +189,11 @@ export function AgentProviderSettings({
             {supported ? (
               <>
                 <label className="field">
-                  Name
+                  {i18n.t("shell:providerName")}
                   <input
-                    aria-label={`${instance.kind} instance name`}
+                    aria-label={i18n.t("shell:providerInstanceName", {
+                      kind: instance.kind,
+                    })}
                     value={instance.name}
                     onChange={(event) =>
                       edit(instance.id, { name: event.target.value })
@@ -190,9 +201,11 @@ export function AgentProviderSettings({
                   />
                 </label>
                 <label className="field">
-                  Executable
+                  {i18n.t("shell:providerExecutable")}
                   <input
-                    aria-label={`${instance.kind} executable`}
+                    aria-label={i18n.t("shell:providerExecutableLabel", {
+                      kind: instance.kind,
+                    })}
                     placeholder={
                       instance.kind === "codex" ? "codex" : "opencode"
                     }
@@ -203,10 +216,12 @@ export function AgentProviderSettings({
                   />
                 </label>
                 <label className="field">
-                  Default model
+                  {i18n.t("shell:providerDefaultModel")}
                   <input
-                    aria-label={`${instance.kind} default model`}
-                    placeholder="Provider default"
+                    aria-label={i18n.t("shell:providerDefaultModelLabel", {
+                      kind: instance.kind,
+                    })}
+                    placeholder={i18n.t("shell:providerDefault")}
                     value={instance.defaultModel ?? ""}
                     onChange={(event) =>
                       edit(instance.id, { defaultModel: event.target.value })
@@ -224,8 +239,8 @@ export function AgentProviderSettings({
                       onClick={() => void check(instance)}
                     >
                       {checks[instance.id]?.loading
-                        ? "Loading models…"
-                        : "Load models"}
+                        ? i18n.t("shell:providerLoadingModels")
+                        : i18n.t("shell:providerLoadModels")}
                     </button>
                     {checks[instance.id] === undefined ? null : (
                       <p role={checks[instance.id]!.error ? "alert" : "status"}>
@@ -241,19 +256,21 @@ export function AgentProviderSettings({
                     disabled={busy !== null || !dirty}
                     onClick={() => void save(instance)}
                   >
-                    {busy === instance.id ? "Saving…" : "Save"}
+                    {busy === instance.id
+                      ? i18n.t("shell:providerSaving")
+                      : i18n.t("shell:providerSave")}
                   </button>
                 </div>
               </>
             ) : (
-              <p>Not supported in this build</p>
+              <p>{i18n.t("shell:providerUnsupportedBuild")}</p>
             )}
           </section>
         );
       })}
       <div className="agent-provider-add">
         <Select
-          aria-label="Add Agent Provider type"
+          aria-label={i18n.t("shell:providerAddType")}
           value={kind}
           onValueChange={(value) => setKind(value as typeof kind)}
         >
@@ -275,7 +292,7 @@ export function AgentProviderSettings({
             ])
           }
         >
-          Add instance
+          {i18n.t("shell:providerAddInstance")}
         </button>
       </div>
       {error === null ? null : (
@@ -290,7 +307,7 @@ export function AgentProviderSettings({
                 setLoadRevision((value) => value + 1);
               }}
             >
-              Retry
+              {i18n.t("shell:providerRetry")}
             </button>
           )}
         </p>

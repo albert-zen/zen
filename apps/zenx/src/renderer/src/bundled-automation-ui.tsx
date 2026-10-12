@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import { useContext, useLayoutEffect } from "react";
 import { RoomDraftContext } from "./room-drafts.js";
 import React, {
@@ -20,6 +22,8 @@ import {
   handleComposerSuggestionKey,
 } from "./ComposerSuggestions.js";
 import { useRoomComposerSelector } from "./use-room-composer-selector.js";
+import { PluginRequirementsPreview } from "./PluginRequirementsPreview.js";
+import { PAW_PLUGIN_REQUIREMENTS } from "../../assistant-preset-requirements.js";
 
 import type {
   TriggerKind,
@@ -183,8 +187,7 @@ export function roomReplySetupEditor(
   const room = rooms.find((entry) => entry.id === intent.roomId);
   if (!room || room.assistant)
     return {
-      error:
-        "This Room is no longer available for automatic-reply setup. Return to Rooms and choose a current member.",
+      error: i18n.t("panels:thisRoomIsNoLongerAvailableFor"),
     };
   const member = room.members.find(
     (entry) =>
@@ -192,17 +195,16 @@ export function roomReplySetupEditor(
   );
   if (!member)
     return {
-      error:
-        "This Room member has changed or is no longer available. Return to the Room and choose a current member.",
+      error: i18n.t("panels:thisRoomMemberHasChangedOrIs"),
     };
   const target = threads.find((entry) => entry.threadId === member.threadId);
   if (!target)
     return {
-      error: `The conversation for @${member.name} is unavailable. Choose an available member conversation in Room settings first.`,
+      error: i18n.t("panels:conversationForUnavailable", { name: member.name }),
     };
   if (target.archived)
     return {
-      error: `The conversation for @${member.name} is archived. Unarchive it before setting up automatic replies.`,
+      error: i18n.t("panels:conversationForArchived", { name: member.name }),
     };
   const matching = triggers.filter(
     (entry) =>
@@ -216,15 +218,21 @@ export function roomReplySetupEditor(
   if (existing)
     return {
       notice: existing.active
-        ? `Automatic replies for @${member.name} already have a trigger: ${existing.label}. Check its definition below or return to the Room.`
-        : `The reply trigger for @${member.name}, ${existing.label}, is paused. Use Resume on its definition below to enable future replies.`,
+        ? i18n.t("panels:existingReplyTrigger", {
+            name: member.name,
+            trigger: existing.label,
+          })
+        : i18n.t("panels:pausedReplyTrigger", {
+            name: member.name,
+            trigger: existing.label,
+          }),
     };
   return {
     editor: {
       ...blankEditor(member.threadId),
       kind: "roomMention",
       condition: `${room.id}|${member.name}`,
-      label: `Reply as @${member.name}`,
+      label: i18n.t("panels:replyAsMember", { name: member.name }),
     },
     roomName: room.name,
   };
@@ -260,33 +268,32 @@ export function triggerEditorInput(editor: TriggerEditor) {
     ...(editor.id === undefined ? {} : { id: editor.id }),
   };
   if (!common.threadId || !common.label || !common.prompt)
-    throw new Error("Choose a target Thread and enter a name and instructions");
+    throw new Error(i18n.t("panels:chooseATargetThreadAndEnterA"));
   if (editor.kind === "timer") {
     const runAt = new Date(editor.runAt).getTime();
     if (!Number.isFinite(runAt) || runAt <= Date.now())
-      throw new Error("Choose a future local date and time");
+      throw new Error(i18n.t("panels:chooseAFutureLocalDateAndTime"));
     const intervalMinutes =
       editor.interval.trim() === "" ? undefined : Number(editor.interval);
     if (
       intervalMinutes !== undefined &&
       (!Number.isFinite(intervalMinutes) || intervalMinutes <= 0)
     )
-      throw new Error("Repeat interval must be positive minutes");
+      throw new Error(i18n.t("panels:repeatIntervalMustBePositiveMinutes"));
     return {
       ...common,
       runAt,
       ...(intervalMinutes === undefined ? {} : { intervalMinutes }),
     };
   }
-  if (!editor.condition.trim()) throw new Error("Choose a trigger condition");
+  if (!editor.condition.trim())
+    throw new Error(i18n.t("panels:chooseATriggerCondition"));
   if (editor.kind === "thread") {
     const sourceDevice = editor.sourceDevice?.trim();
     const remote = sourceDevice && sourceDevice !== "local";
     const sourceWorkspace = editor.sourceWorkspace?.trim();
     if (sourceWorkspace && !remote)
-      throw new Error(
-        "Choose a remote source device before a source workspace",
-      );
+      throw new Error(i18n.t("panels:chooseARemoteSourceDeviceBeforeA"));
     return {
       ...common,
       watchedThreadId: editor.condition,
@@ -302,7 +309,7 @@ export function triggerEditorInput(editor: TriggerEditor) {
   if (editor.kind === "roomMention") {
     const separator = editor.condition.indexOf("|");
     if (separator < 1 || separator === editor.condition.length - 1)
-      throw new Error("Choose a Room member");
+      throw new Error(i18n.t("panels:chooseARoomMember"));
     const roomId = editor.condition.slice(0, separator);
     const mention = editor.condition.slice(separator + 1);
     return { ...common, roomId, mention };
@@ -311,7 +318,7 @@ export function triggerEditorInput(editor: TriggerEditor) {
 }
 
 function timeLabel(timestamp: number): string {
-  return new Date(timestamp).toLocaleString(undefined, {
+  return new Date(timestamp).toLocaleString(i18n.resolvedLanguage, {
     timeZoneName: "short",
   });
 }
@@ -321,11 +328,29 @@ function conditionLabel(
   threads: readonly ThreadCandidate[],
 ): string {
   if (trigger.timer)
-    return `${trigger.timer.intervalMinutes === null ? "Once" : `Every ${trigger.timer.intervalMinutes} min`} · ${timeLabel(trigger.timer.nextRunAt)}`;
+    return trigger.timer.intervalMinutes === null
+      ? i18n.t("panels:onceAt", { time: timeLabel(trigger.timer.nextRunAt) })
+      : i18n.t("panels:everyMinutesAt", {
+          count: trigger.timer.intervalMinutes,
+          time: timeLabel(trigger.timer.nextRunAt),
+        });
   if (trigger.watch)
-    return `After ${trigger.watch.sourceDevice ? sourceIdentity(trigger.watch.sourceDevice, trigger.watch.sourceWorkspace, trigger.watch.threadId) : threadLabel(threads, trigger.watch.threadId)} ends · ${trigger.watch.once ? "one attempt" : "each turn"}`;
+    return i18n.t("panels:afterThreadEnds", {
+      name: trigger.watch.sourceDevice
+        ? sourceIdentity(
+            trigger.watch.sourceDevice,
+            trigger.watch.sourceWorkspace,
+            trigger.watch.threadId,
+          )
+        : threadLabel(threads, trigger.watch.threadId),
+      mode: trigger.watch.once
+        ? i18n.t("panels:oneAttempt")
+        : i18n.t("panels:eachTurn"),
+    });
   if (trigger.room) return `#${trigger.room.roomId} · @${trigger.room.mention}`;
-  return `Signal: ${trigger.signal?.name ?? "unknown"}`;
+  return i18n.t("panels:signalNameLabel", {
+    name: trigger.signal?.name ?? i18n.t("panels:unknown"),
+  });
 }
 
 function sourceIdentity(
@@ -333,7 +358,11 @@ function sourceIdentity(
   workspace: string | undefined,
   threadId: string,
 ): string {
-  return `${device}${workspace ? ` · ${workspace}` : ""} · Thread ${threadId}`;
+  return i18n.t("panels:sourceThreadIdentity", {
+    device,
+    workspace: workspace ? ` · ${workspace}` : "",
+    id: threadId,
+  });
 }
 
 export function safeProgramFailure(entry: TriggerHistoryEntry): string | null {
@@ -345,7 +374,15 @@ export function safeProgramFailure(entry: TriggerHistoryEntry): string | null {
     return null;
   const outcome = entry.programOutcome;
   // Host-classified fields only; never raw error, stdout, command or env.
-  return `Program ${outcome.stage}: ${outcome.status}${outcome.exitCode === null ? "" : ` (exit ${outcome.exitCode})`}. Diagnostic history ${entry.id}.`;
+  return i18n.t("panels:programFailure", {
+    stage: outcome.stage,
+    status: outcome.status,
+    exit:
+      outcome.exitCode === null
+        ? ""
+        : i18n.t("panels:programExit", { code: outcome.exitCode }),
+    id: entry.id,
+  });
 }
 
 function useTriggerData(sdk: PluginUiSdkV1) {
@@ -392,6 +429,7 @@ function TriggerManager({
   scopedThreadId?: string;
   setupIntent?: RoomReplySetupIntent;
 }) {
+  useTranslation("panels");
   const { data, threads, workspaces, error, setError, refresh, loaded } =
     useTriggerData(sdk);
   const [editor, setEditor] = useState<TriggerEditor>(() =>
@@ -430,7 +468,10 @@ function TriggerManager({
       setEditor(result.editor);
       setEditing(true);
       setSetupNotice(
-        `Set up future @${setupIntent.member} replies in #${result.roomName}. Review the instructions and save to enable this trigger. Existing conversation permissions are unchanged; earlier messages are not replayed.`,
+        i18n.t("panels:newReplySetup", {
+          name: setupIntent.member,
+          room: result.roomName,
+        }),
       );
     }
   }, [setupIntent, loaded, data, threads]);
@@ -584,12 +625,17 @@ function TriggerManager({
       createdId = result.threadId;
       if (!current(token)) {
         noteRetired(
-          `An earlier request created idle Thread ${result.threadId} after its form was left. Inspect it in Threads; no Trigger was saved or cancelled.`,
+          i18n.t("panels:earlierIdleThreadCreated", { id: result.threadId }),
         );
         return;
       }
       setTargetNotice(
-        `Dedicated Thread ${result.threadId} created with ${result.effective.sandbox} / ${result.effective.approvalPolicy}, model ${result.effective.modelId}. Save this trigger to bind it; if saving fails, this idle Thread remains available.`,
+        i18n.t("panels:dedicatedThreadCreated", {
+          id: result.threadId,
+          sandbox: result.effective.sandbox,
+          approval: result.effective.approvalPolicy,
+          model: result.effective.modelId,
+        }),
       );
       pendingTarget.current = {
         generation: token.generation,
@@ -599,7 +645,7 @@ function TriggerManager({
       if (!current(token)) {
         pendingTarget.current = null;
         noteRetired(
-          `An earlier request created idle Thread ${result.threadId} after its form was left. Inspect it in Threads; no Trigger was saved or cancelled.`,
+          i18n.t("panels:earlierIdleThreadCreated", { id: result.threadId }),
         );
         return;
       }
@@ -609,13 +655,19 @@ function TriggerManager({
       if (current(token)) {
         setTargetPreview(null);
         setError(
-          `${createdId === null ? "" : `Idle Thread ${createdId} was created; `}${describeError(reason)}. Inspect Threads before retrying; do not assume the request was cancelled.`,
+          i18n.t("panels:creationOutcomeUnknown", {
+            prefix:
+              createdId === null
+                ? ""
+                : i18n.t("panels:idleThreadCreatedPrefix", { id: createdId }),
+            error: describeError(reason),
+          }),
         );
       } else
         noteRetired(
           createdId === null
-            ? "An earlier Thread creation did not return a confirmed outcome. Inspect Threads before retrying; leaving its form did not cancel the Host request."
-            : `An earlier request created idle Thread ${createdId} after its form was left. Inspect it in Threads; no Trigger was saved or cancelled.`,
+            ? i18n.t("panels:anEarlierThreadCreationDidNotReturn")
+            : i18n.t("panels:earlierIdleThreadCreated", { id: createdId }),
         );
     } finally {
       finish(token);
@@ -656,7 +708,12 @@ function TriggerManager({
       )) as { id?: string };
       if (!current(token)) {
         noteRetired(
-          `An earlier form ${editor.id ? "updated" : "created"} Trigger ${result.id ?? editor.id ?? "(ID unavailable)"} after it was left. Inspect the list; it was not cancelled.`,
+          i18n.t("panels:earlierTriggerSaved", {
+            action: editor.id
+              ? i18n.t("panels:updated")
+              : i18n.t("panels:created"),
+            id: result.id ?? editor.id ?? i18n.t("panels:idUnavailable"),
+          }),
         );
         if (mounted.current) void refresh().catch(() => {});
         return;
@@ -681,9 +738,7 @@ function TriggerManager({
           `${describeError(reason)}. If the outcome is uncertain, inspect the list before retrying.`,
         );
       else
-        noteRetired(
-          "An earlier Trigger save returned an uncertain outcome after its form was left. Inspect definitions before retrying; no Host cancellation was implied.",
-        );
+        noteRetired(i18n.t("panels:anEarlierTriggerSaveReturnedAnUncertain"));
     } finally {
       finish(token);
     }
@@ -698,21 +753,20 @@ function TriggerManager({
     >
       <header className="trigger-manager-header">
         <div>
-          <h2>{scopedThreadId ? "Thread triggers" : "Automations"}</h2>
+          <h2>
+            {scopedThreadId
+              ? i18n.t("panels:threadTriggers")
+              : i18n.t("panels:automations")}
+          </h2>
           <p>
             {scopedThreadId
-              ? "Host schedules independently of this panel."
-              : "Host schedules while running, even when this page is closed."}
+              ? i18n.t("panels:hostSchedulesIndependentlyOfThisPanel")
+              : i18n.t("panels:hostSchedulesWhileRunningEvenWhenThis")}
           </p>
           {!scopedThreadId ? (
             <details>
-              <summary>Scheduling and recovery</summary>
-              <p>
-                Sleep or Host exit pauses execution; missed timers fire at most
-                once when Host resumes. Unknown deliveries are not retried
-                automatically. Pausing or deleting a definition does not cancel
-                an already accepted delivery.
-              </p>
+              <summary>{i18n.t("panels:schedulingAndRecovery")}</summary>
+              <p>{i18n.t("panels:schedulingRecoveryDetails")}</p>
             </details>
           ) : null}
         </div>
@@ -724,13 +778,13 @@ function TriggerManager({
               sdk.navigation.navigate("/plugins/zenx-triggers/triggers")
             }
           >
-            All automations
+            {i18n.t("panels:allAutomations")}
           </button>
         ) : null}
       </header>
       {setupIntent ? (
         <button type="button" className="quiet-button" onClick={backToRoom}>
-          Back to Room
+          {i18n.t("panels:backToRoom")}
         </button>
       ) : null}
       {setupNotice ? <p role="status">{setupNotice}</p> : null}
@@ -755,7 +809,7 @@ function TriggerManager({
             setEditing(true);
           }}
         >
-          New trigger
+          {i18n.t("panels:newTrigger")}
         </button>
       ) : null}
       {editing ? (
@@ -766,42 +820,45 @@ function TriggerManager({
         >
           <h3>
             {roomSetupActive
-              ? "Set up replies"
+              ? i18n.t("panels:setUpReplies")
               : editor.id
-                ? "Edit trigger"
-                : "New trigger"}
+                ? i18n.t("panels:editTrigger")
+                : i18n.t("panels:newTrigger")}
           </h3>
           {roomSetupActive ? (
             <div
               className="trigger-room-context"
               role="group"
-              aria-label="Room reply context"
+              aria-label={i18n.t("panels:roomReplyContext")}
             >
               <strong>
-                Replies to @{setupIntent.member} in #
-                {setupRoom?.name ?? setupIntent.roomId}
+                {i18n.t("panels:repliesToInRoom", {
+                  member: setupIntent.member,
+                  room: setupRoom?.name ?? setupIntent.roomId,
+                })}
               </strong>
               <p title={setupIntent.threadId}>
-                Runs in{" "}
+                {i18n.t("panels:runsIn")}{" "}
                 {setupThread
-                  ? setupThread.name?.trim() || "Untitled conversation"
+                  ? setupThread.name?.trim() ||
+                    i18n.t("panels:untitledConversation")
                   : setupIntent.threadId}
               </p>
               <small>
-                Uses this conversation’s current model and permissions.
+                {i18n.t("panels:usesThisConversationSCurrentModelAnd")}
               </small>
             </div>
           ) : null}
           <div className="form-grid">
             <Field
-              label="Name"
+              label={i18n.t("panels:name")}
               value={editor.label}
               onChange={(value) => change({ label: value })}
             />
             {!roomSetupActive ? (
               <>
                 <label className="field">
-                  <span>Type</span>
+                  <span>{i18n.t("panels:type")}</span>
                   <Select
                     value={editor.kind}
                     onValueChange={(value) =>
@@ -813,20 +870,25 @@ function TriggerManager({
                       })
                     }
                   >
-                    <option value="timer">Timer</option>
-                    <option value="thread">Thread turn ended</option>
-                    <option value="roomMention">Room mention</option>
-                    <option value="signal">Signal</option>
+                    <option value="timer">{i18n.t("panels:timer")}</option>
+                    <option value="thread">
+                      {i18n.t("panels:threadTurnEnded")}
+                    </option>
+                    <option value="roomMention">
+                      {i18n.t("panels:roomMention")}
+                    </option>
+                    <option value="signal">{i18n.t("panels:signal")}</option>
                   </Select>
                 </label>
                 {scopedThreadId ? (
                   <p className="field">
-                    Target: {threadLabel(threads, scopedThreadId)}
+                    {i18n.t("panels:target")}{" "}
+                    {threadLabel(threads, scopedThreadId)}
                   </p>
                 ) : (
                   <div className="trigger-target-picker">
                     <ThreadPicker
-                      label="Target Thread"
+                      label={i18n.t("panels:targetThread")}
                       threads={threads}
                       value={editor.threadId}
                       onChange={(value) => {
@@ -840,7 +902,7 @@ function TriggerManager({
                       <div className="trigger-dedicated">
                         <label className="field">
                           <span>
-                            Or create a dedicated Thread in a workspace
+                            {i18n.t("panels:orCreateADedicatedThreadInA")}
                           </span>
                           <Select
                             value={workspace}
@@ -852,7 +914,7 @@ function TriggerManager({
                             }}
                           >
                             <option value="">
-                              Select a configured workspace
+                              {i18n.t("panels:selectAConfiguredWorkspace")}
                             </option>
                             {workspaces.map((cwd) => (
                               <option key={cwd} value={cwd}>
@@ -867,47 +929,65 @@ function TriggerManager({
                           disabled={busy || !workspace}
                           onClick={() => void previewDedicatedTarget()}
                         >
-                          Review Thread permissions
+                          {i18n.t("panels:reviewThreadPermissions")}
                         </button>
                         {targetPreview?.workspace === workspace ? (
                           <div
                             className="trigger-target-confirm"
                             role="group"
-                            aria-label="Confirm dedicated Thread settings"
+                            aria-label={i18n.t(
+                              "panels:confirmDedicatedThreadSettings",
+                            )}
                           >
-                            <p>Host defaults for this unattended Thread:</p>
                             <p>
-                              Configured workspace: {targetPreview.workspace}
+                              {i18n.t(
+                                "panels:hostDefaultsForThisUnattendedThread",
+                              )}
+                            </p>
+                            <p>
+                              {i18n.t("panels:configuredWorkspace")}{" "}
+                              {targetPreview.workspace}
                             </p>
                             {targetPreview.resolvedWorkspace !==
                             targetPreview.workspace ? (
                               <p>
-                                Actual directory for this Thread:{" "}
+                                {i18n.t("panels:actualDirectoryForThisThread")}{" "}
                                 {targetPreview.resolvedWorkspace}
                               </p>
                             ) : null}
                             <p>
-                              Model: {targetPreview.modelId} (profile{" "}
-                              {targetPreview.providerProfileId}); effort{" "}
-                              {targetPreview.reasoningEffort ?? "default"}
+                              {i18n.t("panels:modelProfileEffort", {
+                                model: targetPreview.modelId,
+                                profile: targetPreview.providerProfileId,
+                                effort:
+                                  targetPreview.reasoningEffort ??
+                                  i18n.t("panels:defaultEffort"),
+                              })}
                             </p>
                             <p>
-                              File access:{" "}
-                              {targetPreview.sandbox === "danger-full-access"
-                                ? "Full Access — may change files outside this workspace without sandbox approval"
-                                : targetPreview.sandbox}
-                              . Approval:{" "}
-                              {targetPreview.approvalPolicy === "never"
-                                ? "Never — actions may proceed without asking you"
-                                : "On request"}
-                              .
+                              {i18n.t("panels:fileAccessApproval", {
+                                access:
+                                  targetPreview.sandbox === "danger-full-access"
+                                    ? i18n.t(
+                                        "panels:fullAccessMayChangeFilesOutsideThis",
+                                      )
+                                    : targetPreview.sandbox,
+                                approval:
+                                  targetPreview.approvalPolicy === "never"
+                                    ? i18n.t(
+                                        "panels:neverActionsMayProceedWithoutAskingYou",
+                                      )
+                                    : i18n.t("panels:onRequest"),
+                              })}
                             </p>
                             <button
                               type="button"
                               disabled={busy}
                               onClick={() => void createTarget()}
                             >
-                              Confirm settings and create dedicated Thread
+                              {i18n.t(
+                                "panels:confirmSettingsAndCreateDedicatedThread",
+                              )}
                             </button>
                             <button
                               type="button"
@@ -916,7 +996,7 @@ function TriggerManager({
                                 setTargetPreview(null);
                               }}
                             >
-                              Cancel
+                              {i18n.t("panels:cancel")}
                             </button>
                           </div>
                         ) : null}
@@ -930,7 +1010,7 @@ function TriggerManager({
                 {editor.kind === "timer" ? (
                   <>
                     <label className="field">
-                      <span>Next run (local timezone)</span>
+                      <span>{i18n.t("panels:nextRunLocalTimezone")}</span>
                       <input
                         type="datetime-local"
                         value={editor.runAt}
@@ -940,7 +1020,7 @@ function TriggerManager({
                       />
                     </label>
                     <Field
-                      label="Repeat every N minutes (blank = once)"
+                      label={i18n.t("panels:repeatEveryNMinutesBlankOnce")}
                       value={editor.interval}
                       onChange={(value) => change({ interval: value })}
                     />
@@ -949,18 +1029,18 @@ function TriggerManager({
                   <>
                     {editor.id && editor.sourceDevice ? (
                       <p className="field wide">
-                        Remote source:{" "}
+                        {i18n.t("panels:remoteSource")}{" "}
                         {sourceIdentity(
                           editor.sourceDevice,
                           editor.sourceWorkspace,
                           editor.condition,
                         )}
-                        . This edit keeps the exact source identity.
+                        {i18n.t("panels:thisEditKeepsTheExactSourceIdentity")}
                       </p>
                     ) : (
                       <>
                         <Field
-                          label="Source device ID (blank = this Host)"
+                          label={i18n.t("panels:sourceDeviceIdBlankThisHost")}
                           value={editor.sourceDevice ?? ""}
                           onChange={(sourceDevice) =>
                             change({
@@ -973,7 +1053,7 @@ function TriggerManager({
                         {editor.sourceDevice?.trim() &&
                         editor.sourceDevice.trim() !== "local" ? (
                           <Field
-                            label="Source workspace (optional)"
+                            label={i18n.t("panels:sourceWorkspaceOptional")}
                             value={editor.sourceWorkspace ?? ""}
                             onChange={(sourceWorkspace) =>
                               change({ sourceWorkspace })
@@ -983,13 +1063,13 @@ function TriggerManager({
                         {editor.sourceDevice?.trim() &&
                         editor.sourceDevice.trim() !== "local" ? (
                           <Field
-                            label="Remote Thread ID or exact title"
+                            label={i18n.t("panels:remoteThreadIdOrExactTitle")}
                             value={editor.condition}
                             onChange={(condition) => change({ condition })}
                           />
                         ) : (
                           <ThreadPicker
-                            label="Watch Thread"
+                            label={i18n.t("panels:watchThread")}
                             threads={threads}
                             value={editor.condition}
                             onChange={(value) => change({ condition: value })}
@@ -998,9 +1078,7 @@ function TriggerManager({
                         {editor.sourceDevice?.trim() &&
                         editor.sourceDevice.trim() !== "local" ? (
                           <p className="field wide">
-                            Use a configured Fleet device ID. The Host resolves
-                            the remote source; notification delivery stays in
-                            the selected local target Thread.
+                            {i18n.t("panels:useAConfiguredFleetDeviceIdThe")}
                           </p>
                         ) : null}
                       </>
@@ -1013,7 +1091,7 @@ function TriggerManager({
                           change({ once: event.target.checked })
                         }
                       />
-                      Only one attempt
+                      {i18n.t("panels:onlyOneAttempt")}
                     </label>
                     {!editor.id ? (
                       <label className="trigger-checkbox">
@@ -1024,18 +1102,20 @@ function TriggerManager({
                             change({ includeLatest: event.target.checked })
                           }
                         />
-                        Include latest completed turn
+                        {i18n.t("panels:includeLatestCompletedTurn")}
                       </label>
                     ) : null}
                   </>
                 ) : editor.kind === "roomMention" ? (
                   <label className="field">
-                    <span>Room member</span>
+                    <span>{i18n.t("panels:roomMember")}</span>
                     <Select
                       value={editor.condition}
                       onValueChange={(value) => change({ condition: value })}
                     >
-                      <option value="">Choose membership</option>
+                      <option value="">
+                        {i18n.t("panels:chooseMembership")}
+                      </option>
                       {(data.rooms ?? []).flatMap((room) =>
                         room.members.map((member) => (
                           <option
@@ -1050,7 +1130,7 @@ function TriggerManager({
                   </label>
                 ) : (
                   <Field
-                    label="Signal name"
+                    label={i18n.t("panels:signalName")}
                     value={editor.condition}
                     onChange={(value) => change({ condition: value })}
                   />
@@ -1058,11 +1138,11 @@ function TriggerManager({
               </>
             ) : null}
             <label className="field wide">
-              <span>Instructions for target Thread</span>
+              <span>{i18n.t("panels:instructionsForTargetThread")}</span>
               <textarea
                 placeholder={
                   roomSetupActive
-                    ? "Describe how this agent should respond when mentioned…"
+                    ? i18n.t("panels:describeHowThisAgentShouldRespondWhen")
                     : undefined
                 }
                 value={editor.prompt}
@@ -1072,7 +1152,7 @@ function TriggerManager({
           </div>
           <div className="trigger-actions">
             <button type="submit" className="primary-button" disabled={busy}>
-              Save
+              {i18n.t("panels:save")}
             </button>
             <button
               type="button"
@@ -1084,15 +1164,18 @@ function TriggerManager({
                 if (setupIntent) backToRoom();
               }}
             >
-              Cancel
+              {i18n.t("panels:cancel")}
             </button>
           </div>
         </form>
       ) : null}
-      <section aria-label="Trigger definitions" className="trigger-grid">
+      <section
+        aria-label={i18n.t("panels:triggerDefinitions")}
+        className="trigger-grid"
+      >
         {visible.length === 0 ? (
           <p className="trigger-empty">
-            No triggers yet. Create one above to notify a Thread.
+            {i18n.t("panels:noTriggersYetCreateOneAboveTo")}
           </p>
         ) : null}
         {visible.map((trigger) => {
@@ -1101,32 +1184,39 @@ function TriggerManager({
             <article className="page-card trigger-card" key={trigger.id}>
               <div className="trigger-card-heading">
                 <h3>{trigger.label}</h3>
-                <span>{trigger.active ? "Enabled" : "Paused"}</span>
+                <span>
+                  {trigger.active
+                    ? i18n.t("panels:enabled")
+                    : i18n.t("panels:paused")}
+                </span>
               </div>
               <p>{conditionLabel(trigger, threads)}</p>
               {trigger.sourceError ? (
                 <p role="status">
-                  Source connection error: {trigger.sourceError}
+                  {i18n.t("panels:sourceConnectionError")} {trigger.sourceError}
                 </p>
               ) : null}
               {trigger.timer ? (
                 <p>
-                  Next run:{" "}
+                  {i18n.t("panels:nextRun")}{" "}
                   {trigger.active
                     ? timeLabel(trigger.timer.nextRunAt)
-                    : "Paused"}
+                    : i18n.t("panels:paused")}
                 </p>
               ) : null}
-              <p>Target: {threadLabel(threads, trigger.threadId)}</p>
+              <p>
+                {i18n.t("panels:target")}{" "}
+                {threadLabel(threads, trigger.threadId)}
+              </p>
               <details className="trigger-instruction-details">
-                <summary>Instructions</summary>
+                <summary>{i18n.t("panels:instructions")}</summary>
                 <p className="trigger-instructions">{trigger.prompt}</p>
               </details>
               <p>
-                Last:{" "}
+                {i18n.t("panels:last")}{" "}
                 {last
                   ? `${timeLabel(last.startedAt)} · ${deliveryLabel(last)}${safeProgramFailure(last) ? ` · ${safeProgramFailure(last)}` : last.error ? ` · ${last.error}` : ""}`
-                  : "No runs yet"}
+                  : i18n.t("panels:noRunsYet")}
               </p>
               <div className="trigger-actions">
                 <button
@@ -1134,7 +1224,9 @@ function TriggerManager({
                   disabled={busy || trigger.program !== undefined}
                   title={
                     trigger.program
-                      ? "Program steps require the advanced API; editing here would discard private settings"
+                      ? i18n.t(
+                          "panels:programStepsRequireTheAdvancedApiEditing",
+                        )
                       : undefined
                   }
                   className="quiet-button"
@@ -1145,10 +1237,12 @@ function TriggerManager({
                     createForm.current?.scrollIntoView({ block: "nearest" });
                   }}
                 >
-                  Edit
+                  {i18n.t("panels:edit")}
                 </button>
                 {trigger.program ? (
-                  <small>Program-managed; edit using the advanced API.</small>
+                  <small>
+                    {i18n.t("panels:programManagedEditUsingTheAdvancedApi")}
+                  </small>
                 ) : null}
                 <button
                   type="button"
@@ -1163,11 +1257,15 @@ function TriggerManager({
                     })
                   }
                 >
-                  {trigger.active ? "Pause" : "Enable"}
+                  {trigger.active
+                    ? i18n.t("panels:pause")
+                    : i18n.t("panels:enable")}
                 </button>
                 {confirmDelete === trigger.id ? (
                   <>
-                    <span>Delete definition? History remains.</span>
+                    <span>
+                      {i18n.t("panels:deleteDefinitionHistoryRemains")}
+                    </span>
                     <button
                       type="button"
                       disabled={busy}
@@ -1179,13 +1277,13 @@ function TriggerManager({
                         )
                       }
                     >
-                      Confirm delete
+                      {i18n.t("panels:confirmDelete")}
                     </button>
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(null)}
                     >
-                      Cancel
+                      {i18n.t("panels:cancel")}
                     </button>
                   </>
                 ) : (
@@ -1194,7 +1292,7 @@ function TriggerManager({
                     className="quiet-button"
                     onClick={() => setConfirmDelete(trigger.id)}
                   >
-                    Delete…
+                    {i18n.t("panels:delete")}
                   </button>
                 )}
               </div>
@@ -1202,10 +1300,13 @@ function TriggerManager({
           );
         })}
       </section>
-      <section aria-label="Trigger history" className="trigger-history-list">
-        <h3>Recent runs</h3>
+      <section
+        aria-label={i18n.t("panels:triggerHistory")}
+        className="trigger-history-list"
+      >
+        <h3>{i18n.t("panels:recentRuns")}</h3>
         {history.length === 0 ? (
-          <p>No runs yet.</p>
+          <p>{i18n.t("panels:noRunsYet2")}</p>
         ) : (
           history.map((entry) => (
             <article
@@ -1214,13 +1315,13 @@ function TriggerManager({
             >
               <strong>
                 {data.triggers.find((item) => item.id === entry.triggerId)
-                  ?.label ?? "Deleted trigger"}
+                  ?.label ?? i18n.t("panels:deletedTrigger")}
               </strong>{" "}
               · {timeLabel(entry.startedAt)} · {deliveryLabel(entry)}
               <p>{entry.reason}</p>
               {entry.sourceDevice && entry.sourceThreadId ? (
                 <p>
-                  Remote source:{" "}
+                  {i18n.t("panels:remoteSource")}{" "}
                   {sourceIdentity(
                     entry.sourceDevice,
                     entry.sourceWorkspace,
@@ -1255,7 +1356,7 @@ function TriggerManager({
                           )
                       }
                     >
-                      Source result
+                      {i18n.t("panels:sourceResult")}
                     </button>
                     {entry.sourceDevice === undefined ? (
                       <button
@@ -1267,7 +1368,7 @@ function TriggerManager({
                           )
                         }
                       >
-                        Source Thread
+                        {i18n.t("panels:sourceThread")}
                       </button>
                     ) : null}
                   </>
@@ -1281,7 +1382,7 @@ function TriggerManager({
                     )
                   }
                 >
-                  Target Thread
+                  {i18n.t("panels:targetThread")}
                 </button>
               </div>
               {previews[entry.id] ? <pre>{previews[entry.id]}</pre> : null}
@@ -1294,6 +1395,7 @@ function TriggerManager({
 }
 
 export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
+  useTranslation("panels");
   const route = typeof sdk.context.route === "string" ? sdk.context.route : "";
   const query = routeQuery(route);
   const setupIntent =
@@ -1310,20 +1412,20 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
 function threadLabel(threads: readonly ThreadCandidate[], id: string): string {
   const thread = threads.find((candidate) => candidate.threadId === id);
   return thread === undefined
-    ? `${id} (unavailable)`
-    : `${thread.name ?? "Untitled"} · ${thread.shortId} · ${thread.status}${thread.archived ? " · archived" : ""}`;
+    ? i18n.t("panels:unavailableThreadId", { id })
+    : `${thread.name ?? i18n.t("panels:untitled")} · ${thread.shortId} · ${thread.status}${thread.archived ? i18n.t("panels:archived") : ""}`;
 }
 
 function deliveryLabel(entry: TriggerHistoryEntry): string {
   switch (entry.delivery) {
     case "queued":
-      return "Queued";
+      return i18n.t("panels:queued");
     case "pending":
-      return "Sending";
+      return i18n.t("panels:sending");
     case "failed":
-      return "Failed";
+      return i18n.t("panels:failed");
     case "unknown":
-      return "Delivery unknown — not retried";
+      return i18n.t("panels:deliveryUnknownNotRetried");
     default:
       return entry.status;
   }
@@ -1340,6 +1442,7 @@ function ThreadPicker({
   value: string;
   onChange(value: string): void;
 }) {
+  useTranslation("panels");
   const [query, setQuery] = useState("");
   const visible = threads.filter(
     (thread) =>
@@ -1351,18 +1454,20 @@ function ThreadPicker({
   return (
     <div className="field">
       <label className="field">
-        <span>Search {label}</span>
+        <span>
+          {i18n.t("panels:search")} {label}
+        </span>
         <input
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Title, short ID or workspace"
+          placeholder={i18n.t("panels:titleShortIdOrWorkspace")}
         />
       </label>
       <label className="field">
         <span>{label}</span>
         <Select value={value} onValueChange={onChange}>
-          <option value="">Choose a Thread</option>
+          <option value="">{i18n.t("panels:chooseAThread")}</option>
           {visible.map((thread) => (
             <option key={thread.threadId} value={thread.threadId}>
               {threadLabel(threads, thread.threadId)}
@@ -1371,13 +1476,14 @@ function ThreadPicker({
         </Select>
       </label>
       {visible.length === 0 ? (
-        <small>No matching Threads. Try another title or workspace.</small>
+        <small>{i18n.t("panels:noMatchingThreadsTryAnotherTitleOr")}</small>
       ) : null}
     </div>
   );
 }
 
 export function TriggersPanel({ sdk }: PluginUiSurfaceProps) {
+  useTranslation("panels");
   const threadId = sdk.context["threadId"];
   if (typeof threadId !== "string") return null;
   return <TriggerManager key={threadId} sdk={sdk} scopedThreadId={threadId} />;
@@ -1391,7 +1497,7 @@ function memberConversationContext(
     "currentMetadata" in thread ? thread.currentMetadata.cwd : undefined;
   const parts = cwd?.split(/[\\/]/u).filter(Boolean) ?? [];
   const workspace = !cwd
-    ? "Unavailable workspace"
+    ? i18n.t("panels:unavailableWorkspace")
     : parts.length > 2
       ? `…/${parts.slice(-2).join("/")}`
       : cwd;
@@ -1409,6 +1515,11 @@ function memberConversationContext(
 }
 
 export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
+  useTranslation("panels");
+  const setupSdk = useRef(sdk);
+  useLayoutEffect(() => {
+    setupSdk.current = sdk;
+  }, [sdk]);
   const initialRoomId = routeQuery(sdk.context?.route).get("roomId");
   const primaryNavigation = sdk.context?.primaryNavigation === true;
   const createIntent = routeQuery(sdk.context?.route).get("create");
@@ -1420,6 +1531,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     };
   }, [sdk.context?.route]);
   const [assistantMode, setAssistantMode] = useState(false);
+  const [assistantPluginsReady, setAssistantPluginsReady] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
   const [selected, setSelected] = useState<string | null>(initialRoomId);
   const [panel, setPanel] = useState<"create" | "manage" | "rename" | null>(
@@ -1428,6 +1540,29 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [name, setName] = useState("");
   const [memberName, setMemberName] = useState("");
   const [threadId, setThreadId] = useState("");
+  const [assistantTarget, setAssistantTarget] = useState<"new" | "existing">(
+    "new",
+  );
+  const [assistantWorkspaces, setAssistantWorkspaces] = useState<string[]>([]);
+  const [assistantWorkspacesLoaded, setAssistantWorkspacesLoaded] =
+    useState(false);
+  const [assistantSetupSession, setAssistantSetupSession] = useState(0);
+  const [assistantProjectNames, setAssistantProjectNames] = useState<
+    Record<string, string>
+  >({});
+  const [assistantWorkspace, setAssistantWorkspace] = useState("");
+  const [assistantTargetPreview, setAssistantTargetPreview] =
+    useState<AutomationTargetPreview | null>(null);
+  const [assistantSetupError, setAssistantSetupError] = useState<string | null>(
+    null,
+  );
+  const assistantCreation = useRef<{
+    operationId: string;
+    input: unknown;
+  } | null>(null);
+  const [assistantCreationFailed, setAssistantCreationFailed] = useState(false);
+  const assistantNameTooLong =
+    new TextEncoder().encode(name.trim()).length > 128;
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
   const [localReplies, setLocalReplies] = useState<
     Record<string, ZenXRoom["messages"][number]["replyTo"]>
@@ -1494,9 +1629,90 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setName(createIntent === "companion" ? "PAW" : "");
       setMemberName(createIntent === "companion" ? "Assistant" : "");
       setThreadId("");
+      setAssistantTarget("new");
+      setAssistantSetupSession((session) => session + 1);
+      setAssistantWorkspace("");
+      setAssistantTargetPreview(null);
+      setAssistantSetupError(null);
+      assistantCreation.current = null;
+      setAssistantCreationFailed(false);
       setPanel("create");
     }
   }, [initialRoomId, primaryNavigation, createIntent]);
+  // SDK wrappers change on ordinary parent polling, without a new setup intent.
+  useEffect(() => {
+    if (panel !== "create" || !assistantMode) return;
+    let active = true;
+    setAssistantWorkspaces([]);
+    setAssistantWorkspacesLoaded(false);
+    void Promise.all([
+      setupSdk.current.commands.execute("workspaces"),
+      window.zenx.projects?.get?.().catch(() => null) ?? Promise.resolve(null),
+    ])
+      .then(([result, projects]) => {
+        if (!active) return;
+        if (
+          !Array.isArray(result) ||
+          result.some((value) => typeof value !== "string")
+        )
+          throw new Error("Invalid configured Projects");
+        setAssistantWorkspaces(result);
+        setAssistantWorkspacesLoaded(true);
+        setAssistantProjectNames(
+          Object.fromEntries(
+            projects?.projects
+              .filter((project) => project.configured && project.name)
+              .map((project) => [project.workspace, project.name!]) ?? [],
+          ),
+        );
+        setAssistantWorkspace((current) =>
+          result.includes(current)
+            ? current
+            : projects?.lastUsedWorkspace &&
+                result.includes(projects.lastUsedWorkspace)
+              ? projects.lastUsedWorkspace
+              : (result[0] ?? ""),
+        );
+      })
+      .catch(
+        (reason: unknown) =>
+          active && setAssistantSetupError(describeError(reason)),
+      );
+    return () => {
+      active = false;
+    };
+  }, [panel, assistantMode, assistantSetupSession]);
+  useEffect(() => {
+    setAssistantTargetPreview(null);
+    if (
+      panel !== "create" ||
+      !assistantMode ||
+      assistantTarget !== "new" ||
+      !assistantWorkspace
+    )
+      return;
+    let active = true;
+    setAssistantSetupError(null);
+    void setupSdk.current.commands
+      .execute("preview-target", { workspace: assistantWorkspace })
+      .then((result) => {
+        if (active)
+          setAssistantTargetPreview(result as AutomationTargetPreview);
+      })
+      .catch(
+        (reason: unknown) =>
+          active && setAssistantSetupError(describeError(reason)),
+      );
+    return () => {
+      active = false;
+    };
+  }, [
+    panel,
+    assistantMode,
+    assistantTarget,
+    assistantWorkspace,
+    assistantSetupSession,
+  ]);
   const feed = useRef<HTMLDivElement>(null);
   const lastMessage = useRef<string | null>(null);
   const lastRoom = useRef<string | null>(null);
@@ -1590,7 +1806,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           return;
         messages = [...page.messages, ...messages];
         if (page.nextCursor !== null && page.nextCursor <= cursor)
-          throw new Error("Room history cursor did not advance");
+          throw new Error(i18n.t("panels:roomHistoryCursorDidNotAdvance"));
         cursor = page.nextCursor;
       } while (cursor !== null && messages.length < desired);
       historyCache.current[target.id] = {
@@ -1734,6 +1950,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     else if (panel !== null) dialogClose.current?.focus();
   }, [panel]);
   const closeDialog = () => {
+    dialogEpoch.current += 1;
     setPanel(null);
     if (primaryNavigation && createIntent)
       sdk.navigation.navigate(
@@ -1784,16 +2001,28 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const run = async (command: string, input: unknown) => {
     if (actionBusy.current) return false;
     const epoch = viewEpoch.current;
+    const creation = command === "create" || command === "create-assistant";
+    const dialogToken = dialogEpoch.current;
+    const current = () =>
+      epoch === viewEpoch.current &&
+      (!creation || dialogToken === dialogEpoch.current);
     actionBusy.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await sdk.commands.execute(command, input);
-      if (epoch !== viewEpoch.current) return false;
-      await refresh();
-      if (epoch !== viewEpoch.current) return false;
+      if (!current()) return false;
+      try {
+        await refresh();
+      } catch (reason) {
+        if (current())
+          setError(
+            `Saved, but refresh failed: ${describeError(reason)}. Reopen the conversation to refresh.`,
+          );
+      }
+      if (!current()) return false;
       if (
-        (command === "create" || command === "create-assistant") &&
+        creation &&
         result &&
         typeof result === "object" &&
         "id" in result &&
@@ -1807,9 +2036,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       }
       return true;
     } catch (reason) {
-      if (epoch !== viewEpoch.current) return false;
+      if (!current()) return false;
+      if (command === "create-assistant") setAssistantCreationFailed(true);
       setError(
-        `Result unknown; refresh before repeating. ${describeError(reason)}`,
+        command === "create-assistant"
+          ? `${describeError(reason)}. Close and reopen to edit setup; inspect any reported Thread before creating another.`
+          : `Result unknown; refresh before repeating. ${describeError(reason)}`,
       );
       void refresh().catch(() => {});
       return false;
@@ -1866,7 +2098,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     } catch (reason) {
       setRoomErrors((current) => ({
         ...current,
-        [roomId]: `Older messages unavailable: ${describeError(reason)}`,
+        [roomId]: i18n.t("panels:olderMessagesUnavailable", {
+          error: describeError(reason),
+        }),
       }));
     } finally {
       setLoadingOlder(false);
@@ -1888,7 +2122,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         emoji,
       })) as { message: ZenXRoom["messages"][number] };
       if (result.message?.id !== messageId || result.message.roomId !== roomId)
-        throw new Error("Reaction receipt identity mismatch");
+        throw new Error(i18n.t("panels:reactionReceiptIdentityMismatch"));
       const cached = historyCache.current[roomId];
       if (cached)
         cached.messages = cached.messages.map((message) =>
@@ -1961,7 +2195,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         text,
       })) as { messageId: string };
       if (!committed.messageId)
-        throw new Error("No immutable Room message ID returned");
+        throw new Error(i18n.t("panels:noImmutableRoomMessageIdReturned"));
       const status = (await sdk.commands.execute("operation", {
         roomId,
         operationId: entry.id,
@@ -2025,7 +2259,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       if (state.state === "prepared" && resume) {
         if (!state.text)
           throw new Error(
-            "Pending message text is unavailable; do not send again",
+            i18n.t("panels:pendingMessageTextIsUnavailableDoNot"),
           );
         await sdk.commands.execute("post-message", {
           roomId,
@@ -2045,8 +2279,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       } else
         setFeedback((current) => ({
           ...current,
-          [roomId]:
-            "Message has not been sent. Choose Send pending message to send it.",
+          [roomId]: i18n.t("panels:messageHasNotBeenSentChooseSend"),
         }));
       await refresh();
     } catch (reason) {
@@ -2083,7 +2316,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         operationId: entry.id,
       })) as RoomDeliveryResult;
       if (result.state !== "cancelled")
-        throw new Error("Cancellation not confirmed; check delivery");
+        throw new Error(i18n.t("panels:cancellationNotConfirmedCheckDelivery"));
       finishCancelled(roomId, entry);
       setFeedback((current) => ({ ...current, [roomId]: "" }));
       await refresh();
@@ -2122,9 +2355,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       className={`rooms-chat${primaryNavigation ? " rooms-chat-primary" : ""}`}
     >
       {!primaryNavigation ? (
-        <nav className="rooms-chat-list" aria-label="Rooms">
+        <nav className="rooms-chat-list" aria-label={i18n.t("panels:rooms")}>
           <div className="rooms-chat-list-head">
-            <strong>Rooms</strong>
+            <strong>{i18n.t("panels:rooms")}</strong>
             <button
               type="button"
               onClick={(event) => {
@@ -2136,7 +2369,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 setPanel("create");
               }}
             >
-              <Icon name="plus" size={15} /> New
+              <Icon name="plus" size={15} /> {i18n.t("panels:new")}
             </button>
             <button
               type="button"
@@ -2146,6 +2379,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 setName("PAW");
                 setMemberName("Assistant");
                 setThreadId("");
+                setAssistantTarget("new");
+                setAssistantSetupSession((session) => session + 1);
+                setAssistantWorkspace("");
+                setAssistantTargetPreview(null);
+                setAssistantSetupError(null);
+                assistantCreation.current = null;
+                setAssistantCreationFailed(false);
                 setPanel("create");
               }}
             >
@@ -2165,7 +2405,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               }}
             >
               <strong>{entry.assistant ? entry.name : `#${entry.name}`}</strong>
-              <small>{entry.messages.at(-1)?.text ?? "No messages yet"}</small>
+              <small>
+                {entry.messages.at(-1)?.text ?? i18n.t("panels:noMessagesYet")}
+              </small>
             </button>
           ))}
         </nav>
@@ -2173,12 +2415,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       <main className="rooms-chat-main">
         {loading ? (
           <p className="rooms-chat-empty" role="status">
-            Loading rooms…
+            {i18n.t("panels:loadingRooms")}
           </p>
         ) : room === undefined ? (
           <div className="rooms-chat-empty">
-            <h3>A place to work together</h3>
-            <p>Create a room to bring your agents into one conversation.</p>
+            <h3>{i18n.t("panels:aPlaceToWorkTogether")}</h3>
+            <p>{i18n.t("panels:createARoomToBringYourAgents")}</p>
           </div>
         ) : (
           <>
@@ -2189,14 +2431,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
                 {room.assistant && !room.assistantRepliesEnabled ? (
                   <p className="room-assistant-state" role="status">
-                    Replies paused
+                    {i18n.t("panels:repliesPaused")}
                   </p>
                 ) : null}
               </div>
               <button
                 type="button"
-                aria-label="Rename conversation"
-                title="Rename conversation"
+                aria-label={i18n.t("panels:renameConversation")}
+                title={i18n.t("panels:renameConversation")}
                 onClick={(event) => {
                   dialogInvoker.current = event.currentTarget;
                   setName(room.name);
@@ -2210,8 +2452,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   id="thread-browser-toggle"
                   data-room-id={room.id}
                   type="button"
-                  aria-label="Open conversation workspace"
-                  title="Open conversation workspace"
+                  aria-label={i18n.t("panels:openConversationWorkspace")}
+                  title={i18n.t("panels:openConversationWorkspace")}
                   onClick={() =>
                     sdk.navigation.navigate(
                       `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
@@ -2223,8 +2465,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               ) : null}
               <button
                 type="button"
-                aria-label="Conversation settings"
-                title="Conversation settings"
+                aria-label={i18n.t("panels:conversationSettings")}
+                title={i18n.t("panels:conversationSettings")}
                 onClick={(event) => {
                   dialogInvoker.current = event.currentTarget;
                   setName(room.name);
@@ -2245,7 +2487,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             ) ? (
               <div
                 className="rooms-chat-status"
-                aria-label="Room delivery and setup"
+                aria-label={i18n.t("panels:roomDeliveryAndSetup")}
                 tabIndex={0}
               >
                 {error || roomErrors[room.id] ? (
@@ -2258,7 +2500,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 !room.assistant &&
                 room.responders?.some((entry) => !entry.configured) ? (
                   <p className="room-setup-note">
-                    Automatic replies are not set up for:{" "}
+                    {i18n.t("panels:automaticRepliesAreNotSetUpFor")}{" "}
                     {room.responders
                       .filter((entry) => !entry.configured)
                       .map((entry) => `@${entry.name}`)
@@ -2285,7 +2527,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                             )
                           }
                         >
-                          Set up @{member.name} replies…
+                          {i18n.t("panels:setupMemberReplies", {
+                            member: member.name,
+                          })}
                         </button>
                       ))}
                   </p>
@@ -2296,17 +2540,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {pending ? (
                   <div role="status" className="room-send-pending">
                     {pending.cancelled
-                      ? "Send cancelled; no message was sent."
+                      ? i18n.t("panels:sendCancelledNoMessageWasSent")
                       : pending.messageId
-                        ? "Message saved; check its delivery status."
-                        : "Delivery unconfirmed. Check its status before sending again."}{" "}
+                        ? i18n.t("panels:messageSavedCheckItsDeliveryStatus")
+                        : i18n.t(
+                            "panels:deliveryUnconfirmedCheckItsStatusBeforeSending",
+                          )}{" "}
                     <button
                       type="button"
                       onClick={() =>
                         void inspectPending(room.id, pending, false)
                       }
                     >
-                      Check delivery
+                      {i18n.t("panels:checkDelivery")}
                     </button>
                     {!pending.messageId && !pending.cancelled ? (
                       <>
@@ -2314,7 +2560,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           type="button"
                           onClick={() => void cancelPrepared(room.id, pending)}
                         >
-                          Cancel unsent message
+                          {i18n.t("panels:cancelUnsentMessage")}
                         </button>
                         <button
                           type="button"
@@ -2322,7 +2568,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                             void inspectPending(room.id, pending, true)
                           }
                         >
-                          Send pending message
+                          {i18n.t("panels:sendPendingMessage")}
                         </button>
                       </>
                     ) : null}
@@ -2336,7 +2582,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       key={operation.id}
                       role="status"
                     >
-                      Pending message: {operationStateLabel(operation)} ·{" "}
+                      {i18n.t("panels:pendingMessage")}{" "}
+                      {operationStateLabel(operation)} ·{" "}
                       {Array.from(operation.text).slice(0, 70).join("")}{" "}
                       <button
                         type="button"
@@ -2353,7 +2600,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           )
                         }
                       >
-                        Check delivery
+                        {i18n.t("panels:checkDelivery")}
                       </button>
                       {!operation.messageId && !operation.cancelled ? (
                         <>
@@ -2368,7 +2615,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               })
                             }
                           >
-                            Cancel unsent message
+                            {i18n.t("panels:cancelUnsentMessage")}
                           </button>
                           <button
                             type="button"
@@ -2385,7 +2632,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               )
                             }
                           >
-                            Send pending message
+                            {i18n.t("panels:sendPendingMessage")}
                           </button>
                         </>
                       ) : null}
@@ -2394,7 +2641,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {olderRoomOperations.length > 0 ? (
                   <details className="room-status-history">
                     <summary>
-                      Earlier sends ({olderRoomOperations.length})
+                      {i18n.t("panels:earlierSends")}
+                      {olderRoomOperations.length})
                     </summary>
                     {olderRoomOperations.map((operation) => (
                       <p className="room-send-pending" key={operation.id}>
@@ -2425,20 +2673,22 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   disabled={loadingOlder}
                   onClick={() => void loadEarlier(room.id, room.nextCursor!)}
                 >
-                  {loadingOlder ? "Loading…" : "Load earlier messages"}
+                  {loadingOlder
+                    ? i18n.t("panels:loading")
+                    : i18n.t("panels:loadEarlierMessages")}
                 </button>
               ) : null}
               {room.messages.length === 0 ? (
                 <div className="rooms-chat-empty">
                   <h3>
                     {room.assistant
-                      ? "What can I help with?"
-                      : "Start the conversation"}
+                      ? i18n.t("panels:whatCanIHelpWith")
+                      : i18n.t("panels:startTheConversation")}
                   </h3>
                   <p>
                     {room.assistant
-                      ? "Talk to your PAW here. No @mention needed. Send updates while work is in progress."
-                      : "Type @ to choose an agent and ask for a reply."}
+                      ? i18n.t("panels:talkToYourPawHereNoMention")
+                      : i18n.t("panels:typeToChooseAnAgentAndAsk")}
                   </p>
                 </div>
               ) : null}
@@ -2452,7 +2702,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     {message.author === roomRoleLabel(message.kind) ? null : (
                       <span
                         className={`room-role room-role-${message.kind}`}
-                        aria-label={`Message role: ${roomRoleLabel(message.kind)}`}
+                        aria-label={i18n.t("panels:messageRole", {
+                          role: roomRoleLabel(message.kind),
+                        })}
                       >
                         {roomRoleLabel(message.kind)}
                       </span>
@@ -2460,18 +2712,25 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     <strong>{message.author}</strong>
                     <time
                       dateTime={new Date(message.createdAt).toISOString()}
-                      title={new Date(message.createdAt).toLocaleString()}
+                      title={new Date(message.createdAt).toLocaleString(
+                        i18n.resolvedLanguage,
+                      )}
                     >
-                      {new Date(message.createdAt).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                      {new Date(message.createdAt).toLocaleTimeString(
+                        i18n.resolvedLanguage,
+                        {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        },
+                      )}
                     </time>
                   </header>
                   {message.replyTo ? (
                     <div
                       className="room-message-quote"
-                      aria-label={`Reply to ${message.replyTo.author}`}
+                      aria-label={i18n.t("panels:replyToAuthor", {
+                        name: message.replyTo.author,
+                      })}
                     >
                       <strong>{message.replyTo.author}</strong>
                       <p>{message.replyTo.text}</p>
@@ -2496,19 +2755,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                         composer.current?.focus();
                       }}
                     >
-                      Reply
+                      {i18n.t("panels:reply")}
                     </button>
                     <details>
-                      <summary>React</summary>
+                      <summary>{i18n.t("panels:react")}</summary>
                       <div
                         className="room-reaction-options"
-                        aria-label="Choose reaction"
+                        aria-label={i18n.t("panels:chooseReaction")}
                       >
                         {["👍", "❤️", "🎉", "👀", "✅", "🤔"].map((emoji) => (
                           <button
                             key={emoji}
                             type="button"
-                            aria-label={`React ${emoji}`}
+                            aria-label={i18n.t("panels:reactEmoji", { emoji })}
                             aria-pressed={
                               message.reactions?.some(
                                 (reaction) =>
@@ -2539,7 +2798,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       <span
                         key={reaction.actorId}
                         title={`${reaction.label}: ${reaction.emoji}`}
-                        aria-label={`${reaction.label} reacted ${reaction.emoji}`}
+                        aria-label={i18n.t("panels:reactedEmoji", {
+                          name: reaction.label,
+                          emoji: reaction.emoji,
+                        })}
                       >
                         {reaction.emoji}
                       </span>
@@ -2550,40 +2812,55 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     deliveries[message.id]?.state === "saved") ? (
                     <small
                       className="room-delivery"
-                      title="Delivered: saved in this Room. Read: admitted to the Agent Thread context, including ordered steering; not a claim about model comprehension."
+                      title={i18n.t(
+                        "panels:deliveredSavedInThisRoomReadAdmitted",
+                      )}
                     >
-                      Delivered to Room ·{" "}
+                      {i18n.t("panels:deliveredToRoom")}{" "}
                       {deliveries[message.id]?.readers
-                        ?.map(
-                          (reader) =>
-                            `@${reader.name}: ${reader.state === "read" ? "Read" : reader.state === "unavailable" ? "Read status unavailable" : "Read not confirmed"}`,
+                        ?.map((reader) =>
+                          i18n.t("panels:roomReplyStatus", {
+                            name: reader.name,
+                            status:
+                              reader.state === "read"
+                                ? i18n.t("panels:read")
+                                : reader.state === "unavailable"
+                                  ? i18n.t("panels:readStatusUnavailable")
+                                  : i18n.t("panels:readNotConfirmed"),
+                          }),
                         )
                         .join(" · ")}
                       {deliveries[message.id]?.readers?.length
                         ? ""
-                        : "Read not confirmed"}
+                        : i18n.t("panels:readNotConfirmed")}
                     </small>
                   ) : message.kind === "human" &&
                     deliveries[message.id]?.state === "unknown" ? (
                     <small className="room-delivery">
-                      Delivered to Room · agent read/response status unavailable
+                      {i18n.t("panels:deliveredToRoomAgentReadResponseStatus")}
                     </small>
                   ) : null}
                   {message.kind === "human" || message.originThreadId ? (
                     <details className="room-message-details">
-                      <summary>Message details</summary>
-                      <span>Message ID: {message.id}</span>
+                      <summary>{i18n.t("panels:messageDetails")}</summary>
+                      <span>
+                        {i18n.t("panels:messageId")} {message.id}
+                      </span>
                       {message.originThreadId ? (
                         <span>
-                          Source conversation: {message.originThreadId}
+                          {i18n.t("panels:sourceConversation")}{" "}
+                          {message.originThreadId}
                         </span>
                       ) : null}
                       {message.originTurnId ? (
-                        <span>Turn: {message.originTurnId}</span>
+                        <span>
+                          {i18n.t("panels:turn")} {message.originTurnId}
+                        </span>
                       ) : null}
                       {deliveries[message.id]?.operationId ? (
                         <span>
-                          Operation ID: {deliveries[message.id]!.operationId}
+                          {i18n.t("panels:operationId")}{" "}
+                          {deliveries[message.id]!.operationId}
                         </span>
                       ) : null}
                     </details>
@@ -2602,18 +2879,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   id={roomSelectorId}
                   selector={roomSelector}
                   textarea={composer}
-                  label="Room members"
-                  hint="Choose a room member to address."
+                  label={i18n.t("panels:roomMembers")}
+                  hint={i18n.t("panels:chooseARoomMemberToAddress")}
                 />
                 {replies[room.id] ? (
                   <div className="room-reply-draft">
                     <span>
-                      Replying to {replies[room.id]!.author}:{" "}
+                      {i18n.t("panels:replyingTo")} {replies[room.id]!.author}:{" "}
                       {replies[room.id]!.text.slice(0, 160)}
                     </span>
                     <button
                       type="button"
-                      aria-label="Cancel reply"
+                      aria-label={i18n.t("panels:cancelReply")}
                       disabled={Boolean(pending) || sendingRooms[room.id]}
                       onClick={() => {
                         revisions.current[room.id] =
@@ -2624,17 +2901,17 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                         }));
                       }}
                     >
-                      Cancel reply
+                      {i18n.t("panels:cancelReply")}
                     </button>
                   </div>
                 ) : null}
                 <label htmlFor="room-chat-input" className="sr-only">
-                  Message
+                  {i18n.t("panels:message")}
                 </label>
                 <ComposerEditor
                   textareaRef={composer}
                   id="room-chat-input"
-                  aria-label="Message"
+                  aria-label={i18n.t("panels:message")}
                   aria-controls={roomSelector.open ? roomSelectorId : undefined}
                   aria-activedescendant={
                     roomSelector.open && roomSelector.rows.length
@@ -2676,8 +2953,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       <button
                         className="composer-tool icon-only room-mention-tool"
                         type="button"
-                        aria-label="Mention a room member"
-                        title="Mention a room member"
+                        aria-label={i18n.t("panels:mentionARoomMember")}
+                        title={i18n.t("panels:mentionARoomMember")}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => roomSelector.openMembers()}
                       >
@@ -2687,14 +2964,20 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     {!room.assistant || !room.assistantRepliesEnabled ? (
                       <small className="room-composer-note">
                         {room.assistant
-                          ? "Replies paused. Messages are saved only; resuming does not replay them."
-                          : "@mention an agent to request a reply"}
+                          ? i18n.t(
+                              "panels:repliesPausedMessagesAreSavedOnlyResuming",
+                            )
+                          : i18n.t("panels:mentionAgentForReply")}
                       </small>
                     ) : null}
                   </div>
                   <div className="composer-actions">
                     <ComposerAction
-                      label={sendingRooms[room.id] ? "Sending…" : "Send"}
+                      label={
+                        sendingRooms[room.id]
+                          ? i18n.t("panels:sending2")
+                          : i18n.t("panels:send")
+                      }
                       disabled={
                         busy ||
                         sendingRooms[room.id] ||
@@ -2748,11 +3031,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             aria-label={
               panel === "create"
                 ? assistantMode
-                  ? "Create PAW"
-                  : "Create Room"
+                  ? i18n.t("panels:createPaw")
+                  : i18n.t("panels:createRoom")
                 : panel === "rename"
-                  ? "Rename conversation"
-                  : "Conversation settings"
+                  ? i18n.t("panels:renameConversation")
+                  : i18n.t("panels:conversationSettings")
             }
             className="rooms-chat-dialog"
           >
@@ -2760,30 +3043,62 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               <h2>
                 {panel === "create"
                   ? assistantMode
-                    ? "New PAW conversation"
-                    : "New Room"
+                    ? i18n.t("panels:newPawConversation")
+                    : i18n.t("panels:newRoom")
                   : panel === "rename"
-                    ? "Rename conversation"
-                    : `${room?.name} settings`}
+                    ? i18n.t("panels:renameConversation")
+                    : i18n.t("panels:roomSettingsTitle", {
+                        name: room?.name ?? "",
+                      })}
               </h2>
               <button ref={dialogClose} type="button" onClick={closeDialog}>
-                {panel === "rename" ? "Cancel" : "Close"}
+                {panel === "rename"
+                  ? i18n.t("panels:cancel")
+                  : i18n.t("panels:close")}
               </button>
             </header>
             {panel === "create" && assistantMode ? (
-              <p className="room-assistant-disclosure">
-                Choose an existing Thread for the PAW preset. Messages join its
-                ongoing work. It uses Rooms to communicate, Triggers to continue
-                after waits, and Fleet-enabled self-control to work with
-                configured devices. Enable Rooms, Triggers and self-control
-                first. Existing model and permissions are preserved.
-              </p>
+              <>
+                <p className="room-assistant-disclosure">
+                  {i18n.t("panels:pawWorkingConversationDisclosure")}
+                </p>
+                <PluginRequirementsPreview
+                  requirements={PAW_PLUGIN_REQUIREMENTS}
+                  purposeLabels={{
+                    "zenx-rooms": i18n.t("panels:pawChatAndMemory"),
+                    "zenx-triggers": i18n.t("panels:pawReplyToMessages"),
+                    "zenx-self-control": i18n.t(
+                      "panels:pawWorkWithConversations",
+                    ),
+                    "zenx-subagents": i18n.t("panels:pawDelegateWork"),
+                  }}
+                  onReady={setAssistantPluginsReady}
+                  openSettings={() => {
+                    closeDialog();
+                    sdk.navigation.navigate("settings");
+                  }}
+                />
+              </>
             ) : null}
             <Field
-              label={room?.assistant || assistantMode ? "Name" : "Room name"}
+              label={
+                room?.assistant || assistantMode
+                  ? i18n.t("panels:name")
+                  : i18n.t("panels:roomName")
+              }
               value={name}
               onChange={setName}
+              disabled={
+                panel === "create" &&
+                assistantMode &&
+                (busy ||
+                  (assistantCreation.current !== null &&
+                    assistantCreationFailed))
+              }
             />
+            {panel === "create" && assistantMode && assistantNameTooLong ? (
+              <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
+            ) : null}
             {panel !== "create" ? (
               <button
                 type="button"
@@ -2795,41 +3110,166 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   });
                 }}
               >
-                {panel === "rename" ? "Save name" : "Rename"}
+                {panel === "rename"
+                  ? i18n.t("panels:saveName")
+                  : i18n.t("panels:rename")}
               </button>
             ) : null}
             {panel === "create" || (panel === "manage" && !room?.assistant) ? (
               <>
-                <Field
-                  label="Member name"
-                  value={memberName}
-                  onChange={setMemberName}
-                />
-                <label className="field">
-                  <span>Member conversation</span>
-                  <Combobox
-                    label="Member conversation"
-                    value={threadId}
-                    onValueChange={setThreadId}
-                  >
-                    {threads.map((thread) => (
-                      <option
-                        key={thread.threadId}
-                        value={thread.threadId}
-                        title={`${threadTitle(thread)} · ${thread.threadId} · ${"currentMetadata" in thread ? thread.currentMetadata.cwd : "Unavailable workspace"}`}
+                {!assistantMode ? (
+                  <Field
+                    label={i18n.t("panels:memberName")}
+                    value={memberName}
+                    onChange={setMemberName}
+                  />
+                ) : null}
+                {assistantMode ? (
+                  <>
+                    <label className="field">
+                      <span>{i18n.t("panels:pawWorkingConversation")}</span>
+                      <Select
+                        aria-label={i18n.t("panels:pawWorkingConversation")}
+                        value={assistantTarget}
+                        onValueChange={(value) => {
+                          setAssistantTarget(value as "new" | "existing");
+                          if (value === "existing") {
+                            assistantCreation.current = null;
+                          }
+                        }}
+                        disabled={busy}
                       >
-                        <span className="room-member-choice">
-                          <span className="room-member-choice-title">
-                            {threadTitle(thread)}
-                          </span>{" "}
-                          <small>
-                            {memberConversationContext(thread, threads)}
-                          </small>
-                        </span>
-                      </option>
-                    ))}
-                  </Combobox>
-                </label>
+                        <option value="new">
+                          {i18n.t("panels:pawNewWorkingConversation")}
+                        </option>
+                        <option value="existing">
+                          {i18n.t("panels:pawExistingWorkingConversation")}
+                        </option>
+                      </Select>
+                    </label>
+                    {assistantTarget === "new" ? (
+                      <>
+                        <label className="field">
+                          <span>{i18n.t("panels:pawProject")}</span>
+                          <Select
+                            aria-label={i18n.t("panels:pawProject")}
+                            value={assistantWorkspace}
+                            onValueChange={setAssistantWorkspace}
+                            disabled={
+                              busy ||
+                              assistantCreationFailed ||
+                              !assistantWorkspacesLoaded
+                            }
+                          >
+                            <option value="">
+                              {i18n.t("panels:selectAConfiguredWorkspace")}
+                            </option>
+                            {assistantWorkspaces.map((workspace) => (
+                              <option
+                                key={workspace}
+                                value={workspace}
+                                title={workspace}
+                              >
+                                {assistantProjectNames[workspace] ?? workspace}
+                              </option>
+                            ))}
+                          </Select>
+                        </label>
+                        {assistantTargetPreview?.workspace ===
+                        assistantWorkspace ? (
+                          <p
+                            className="room-assistant-disclosure"
+                            role="status"
+                          >
+                            {i18n.t("panels:modelProfileEffort", {
+                              model: assistantTargetPreview.modelId,
+                              profile: assistantTargetPreview.providerProfileId,
+                              effort:
+                                assistantTargetPreview.reasoningEffort ??
+                                i18n.t("panels:defaultEffort"),
+                            })}
+                            <br />
+                            {i18n.t("panels:pawNewThreadPermissions", {
+                              access:
+                                assistantTargetPreview.sandbox ===
+                                "danger-full-access"
+                                  ? i18n.t("shell:fullAccess")
+                                  : assistantTargetPreview.sandbox ===
+                                      "read-only"
+                                    ? i18n.t("shell:readOnly")
+                                    : i18n.t("shell:workspaceWrite"),
+                              approval:
+                                assistantTargetPreview.approvalPolicy ===
+                                "never"
+                                  ? i18n.t(
+                                      "panels:neverActionsMayProceedWithoutAskingYou",
+                                    )
+                                  : i18n.t("panels:onRequest"),
+                            })}
+                          </p>
+                        ) : assistantWorkspace &&
+                          assistantSetupError === null ? (
+                          <p role="status">
+                            {i18n.t("panels:pawReviewingSettings")}
+                          </p>
+                        ) : null}
+                        {assistantWorkspacesLoaded &&
+                        assistantWorkspaces.length === 0 &&
+                        assistantSetupError === null ? (
+                          <p className="room-assistant-disclosure">
+                            {i18n.t("panels:pawAddProjectFirst")}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {assistantSetupError !== null &&
+                    assistantTarget === "new" ? (
+                      <p role="alert">{assistantSetupError}</p>
+                    ) : null}
+                  </>
+                ) : null}
+                {!assistantMode || assistantTarget === "existing" ? (
+                  <label className="field">
+                    <span>
+                      {assistantMode
+                        ? i18n.t("panels:pawExistingConversation")
+                        : i18n.t("panels:memberConversation")}
+                    </span>
+                    <Combobox
+                      label={
+                        assistantMode
+                          ? i18n.t("panels:pawExistingConversation")
+                          : i18n.t("panels:memberConversation")
+                      }
+                      value={threadId}
+                      onValueChange={setThreadId}
+                      disabled={
+                        panel === "create" &&
+                        assistantMode &&
+                        (busy ||
+                          (assistantCreation.current !== null &&
+                            assistantCreationFailed))
+                      }
+                    >
+                      {threads.map((thread) => (
+                        <option
+                          key={thread.threadId}
+                          value={thread.threadId}
+                          title={`${threadTitle(thread)} · ${thread.threadId} · ${"currentMetadata" in thread ? thread.currentMetadata.cwd : i18n.t("panels:unavailableWorkspace")}`}
+                        >
+                          <span className="room-member-choice">
+                            <span className="room-member-choice-title">
+                              {threadTitle(thread)}
+                            </span>{" "}
+                            <small>
+                              {memberConversationContext(thread, threads)}
+                            </small>
+                          </span>
+                        </option>
+                      ))}
+                    </Combobox>
+                  </label>
+                ) : null}
               </>
             ) : null}
             {panel === "create" ? (
@@ -2837,18 +3277,70 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 type="button"
                 className="primary-button"
                 disabled={
-                  busy || !name.trim() || !memberName.trim() || !threadId
+                  busy ||
+                  !name.trim() ||
+                  (assistantMode && assistantNameTooLong) ||
+                  (!assistantMode && !memberName.trim()) ||
+                  (assistantMode
+                    ? assistantTarget === "new"
+                      ? !assistantTargetPreview ||
+                        assistantTargetPreview.workspace !== assistantWorkspace
+                      : !threadId
+                    : !threadId) ||
+                  (assistantMode &&
+                    assistantTarget === "new" &&
+                    assistantCreationFailed) ||
+                  (assistantMode && !assistantPluginsReady)
                 }
-                onClick={() =>
-                  void run(assistantMode ? "create-assistant" : "create", {
+                onClick={() => {
+                  const creationDialogToken = dialogEpoch.current;
+                  const creationViewToken = viewEpoch.current;
+                  let input: unknown = {
                     name,
-                    members: [{ name: memberName, threadId }],
-                  }).then((ok) => {
-                    if (ok) setPanel(null);
-                  })
-                }
+                    members: [
+                      { name: assistantMode ? name : memberName, threadId },
+                    ],
+                  };
+                  if (assistantMode) {
+                    assistantCreation.current ??= {
+                      operationId: crypto.randomUUID(),
+                      input: {
+                        name,
+                        memberName: name,
+                        target:
+                          assistantTarget === "new"
+                            ? {
+                                kind: "new",
+                                workspace: assistantWorkspace,
+                                expected: assistantTargetPreview,
+                              }
+                            : { kind: "existing", threadId },
+                      },
+                    };
+                    input = {
+                      ...(assistantCreation.current.input as Record<
+                        string,
+                        unknown
+                      >),
+                      operationId: assistantCreation.current.operationId,
+                    };
+                  }
+                  void run(
+                    assistantMode ? "create-assistant" : "create",
+                    input,
+                  ).then((ok) => {
+                    if (
+                      ok &&
+                      creationDialogToken === dialogEpoch.current &&
+                      creationViewToken === viewEpoch.current
+                    )
+                      setPanel(null);
+                  });
+                }}
               >
-                {assistantMode ? "Create PAW" : "Create Room"}
+                {assistantMode
+                  ? i18n.t("panels:createPaw")
+                  : i18n.t("panels:createRoom")}
               </button>
             ) : panel === "manage" ? (
               <>
@@ -2863,7 +3355,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       })
                     }
                   >
-                    {room.assistantRepliesEnabled ? "Pause PAW" : "Resume PAW"}
+                    {room.assistantRepliesEnabled
+                      ? i18n.t("panels:pausePaw")
+                      : i18n.t("panels:resumePaw")}
                   </button>
                 ) : null}
                 <button
@@ -2887,14 +3381,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     })
                   }
                 >
-                  Add member
+                  {i18n.t("panels:addMember")}
                 </button>
-                <h3>Members</h3>
+                <h3>{i18n.t("panels:members")}</h3>
                 {room?.members.map((member) => (
                   <div className="rooms-chat-member" key={member.threadId}>
                     <strong>@{member.name}</strong>
                     <details>
-                      <summary>Details</summary>
+                      <summary>{i18n.t("panels:details")}</summary>
                       <code>{member.threadId}</code>
                     </details>
                     <button
@@ -2903,7 +3397,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       onClick={() => {
                         if (
                           window.confirm(
-                            `Remove @${member.name} from #${room.name}?`,
+                            i18n.t("panels:removeMemberConfirm", {
+                              name: member.name,
+                              room: room.name,
+                            }),
                           )
                         )
                           void run("remove-member", {
@@ -2912,7 +3409,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                           });
                       }}
                     >
-                      Remove
+                      {i18n.t("panels:remove")}
                     </button>
                   </div>
                 ))}
@@ -2932,7 +3429,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       });
                   }}
                 >
-                  Delete Room…
+                  {i18n.t("panels:deleteRoom")}
                 </button>
               </>
             ) : null}
@@ -2948,23 +3445,30 @@ function Field({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange(value: string): void;
+  disabled?: boolean;
 }) {
+  useTranslation("panels");
   return (
     <label className="field">
       <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} />
+      <input
+        disabled={disabled}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }
 
 function roomRoleLabel(kind: ZenXRoom["messages"][number]["kind"]): string {
-  if (kind === "human") return "You";
-  if (kind === "agent") return "Agent";
-  return "System";
+  if (kind === "human") return i18n.t("panels:you");
+  if (kind === "agent") return i18n.t("panels:agent");
+  return i18n.t("panels:system");
 }
 
 function describeError(error: unknown): string {

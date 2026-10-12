@@ -202,6 +202,7 @@ async function fixture(
                 "resume",
                 "resumePage",
                 "send",
+                "send-unarchived",
                 "models",
               ],
             };
@@ -394,6 +395,61 @@ test("TLS pair is one-time and secrets remain vault-only; restart reconnects and
     assert.equal(f.pairCalls, 2);
     await f.client.forget(f.peer);
     await assert.rejects(f.client.test(f.peer), /unpaired/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("old HTTPS Hosts reject exact-ID sends before mutation while fuzzy sends retain their existing behavior", async () => {
+  const f = await fixture((rpc) => {
+    if (rpc.method === "zen/remote/hello")
+      return {
+        version: 1,
+        hostId: rpc.params.hostId,
+        processEpoch: "epoch-one",
+        capabilities: [
+          "workspaces",
+          "threads",
+          "create",
+          "resume",
+          "resumePage",
+          "send",
+          "models",
+        ],
+      };
+  });
+  try {
+    await f.enrolled();
+    for (const messageType of ["guidance", "follow_up", "replacement"]) {
+      await assert.rejects(
+        f.client.invoke(
+          f.peer,
+          request("zenx_threads_send", {
+            threadId: "thread-full",
+            text: "must not execute",
+            messageType,
+          }),
+          signal(),
+        ),
+        /does not support archive-fenced.*Update the target Host/u,
+      );
+    }
+    assert.equal(
+      f.requests.filter((rpc) => rpc.method === "zen/remote/send").length,
+      0,
+    );
+    await f.client.invoke(
+      f.peer,
+      request("zenx_threads_send", {
+        target: "Remote task",
+        text: "legacy fuzzy send",
+      }),
+      signal(),
+    );
+    assert.equal(
+      f.requests.filter((rpc) => rpc.method === "zen/remote/send").length,
+      1,
+    );
   } finally {
     await f.close();
   }

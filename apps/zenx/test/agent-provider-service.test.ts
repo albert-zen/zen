@@ -131,6 +131,29 @@ test("catalog is instance-scoped, and an empty native catalog stays empty", asyn
   assert.equal(zenCalls, 1);
   await assert.rejects(service.models("unknown"), /Unknown/);
 });
+test("catalog forwards the selected Project and rejects invalid workspace inputs", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "agent-provider-"));
+  const { adapter } = fixture();
+  const workspaces: Array<string | undefined> = [];
+  adapter.models = async (cwd) => {
+    workspaces.push(cwd);
+    return [];
+  };
+  const service = new AgentProviderService(
+    dir,
+    () => adapter,
+    async () => [],
+  );
+  await service.save({ id: "opencode", kind: "opencode", name: "OpenCode" });
+  const project = path.join(dir, "project");
+  await service.models("opencode", project);
+  await service.models("opencode");
+  for (const invalid of ["relative", "", "\0", "x".repeat(4097)]) {
+    await assert.rejects(service.models("opencode", invalid), /workspace/);
+  }
+  assert.deepEqual(workspaces, [project, undefined]);
+  await service.dispose();
+});
 test("invalid config input and stopped Host calls fail explicitly", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "agent-provider-"));
   const { adapter } = fixture();

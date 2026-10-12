@@ -114,6 +114,45 @@ export class ToolTaskManager {
     return [...this.#tasks.values()].filter((task) => !task.terminal).length;
   }
 
+  /** Observation-only receipt; never consumes incremental output or a task. */
+  status(threadId: string, taskId: string): ToolExecutionResult {
+    const task = this.#tasks.get(taskId);
+    if (task === undefined || task.threadId !== threadId)
+      throw new Error("Tool task not found for this thread");
+    return task.snapshot("");
+  }
+
+  /** Resolve and validate timing with the same precedence used by execution. */
+  resolveTiming(
+    runtime: ToolRuntime,
+    invocation: Pick<ToolInvocation, "arguments" | "task">,
+  ): { yieldTimeMs: number; timeoutMs: number } {
+    const policy = runtime.taskPolicy;
+    const timing = invocation.task;
+    return {
+      yieldTimeMs: integer(
+        timing?.yieldTimeMs ??
+          (policy?.timingArguments?.yieldTimeMs === undefined
+            ? undefined
+            : invocation.arguments[policy.timingArguments.yieldTimeMs]) ??
+          policy?.yieldTimeMs ??
+          this.#options.yieldTimeMs,
+        "yield_time_ms",
+        MAX_TOOL_YIELD_TIME_MS,
+      ),
+      timeoutMs: integer(
+        timing?.timeoutMs ??
+          (policy?.timingArguments?.timeoutMs === undefined
+            ? undefined
+            : invocation.arguments[policy.timingArguments.timeoutMs]) ??
+          policy?.timeoutMs ??
+          this.#options.timeoutMs,
+        "timeout_ms",
+        86400000,
+      ),
+    };
+  }
+
   async run(
     runtime: ToolRuntime,
     invocation: ToolInvocation,
@@ -152,26 +191,9 @@ export class ToolTaskManager {
           "Tool resource is busy with a running or unconfirmed task; use wait before starting a conflicting operation",
         );
     }
-    const timing = invocation.task;
-    const yieldMs = integer(
-      timing?.yieldTimeMs ??
-        (policy?.timingArguments?.yieldTimeMs === undefined
-          ? undefined
-          : invocation.arguments[policy.timingArguments.yieldTimeMs]) ??
-        policy?.yieldTimeMs ??
-        this.#options.yieldTimeMs,
-      "yield_time_ms",
-      MAX_TOOL_YIELD_TIME_MS,
-    );
-    const timeoutMs = integer(
-      timing?.timeoutMs ??
-        (policy?.timingArguments?.timeoutMs === undefined
-          ? undefined
-          : invocation.arguments[policy.timingArguments.timeoutMs]) ??
-        policy?.timeoutMs ??
-        this.#options.timeoutMs,
-      "timeout_ms",
-      86400000,
+    const { yieldTimeMs: yieldMs, timeoutMs } = this.resolveTiming(
+      runtime,
+      invocation,
     );
     // Observe the task's own signal so parent abort, terminate and deadline
     // cancellation all bound the guest wait without changing normal awaits.

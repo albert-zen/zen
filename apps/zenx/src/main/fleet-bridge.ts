@@ -18,7 +18,7 @@ export async function invokeFleetBridge(
   const request = input as FleetRequest;
   if (
     !request ||
-    request.version !== 1 ||
+    (request.version !== 1 && request.version !== 2) ||
     !fleetTools.has(request.name) ||
     typeof request.callId !== "string" ||
     !request.callId ||
@@ -30,6 +30,13 @@ export async function invokeFleetBridge(
     (request.threadId !== undefined && typeof request.threadId !== "string") ||
     (request.canonicalToolCallId !== undefined &&
       typeof request.canonicalToolCallId !== "string")
+  )
+    throw new Error("Invalid Fleet request");
+  if (
+    request.version === 2 &&
+    (request.name !== "zenx_threads_send" ||
+      typeof request.arguments.threadId !== "string" ||
+      request.arguments.target !== undefined)
   )
     throw new Error("Invalid Fleet request");
   const descriptor = await readZenXConnectionDescriptor(descriptorFile);

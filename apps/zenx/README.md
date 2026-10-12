@@ -1,5 +1,7 @@
 # ZenX
 
+The desktop interface supports English, 简体中文, and following the system language. Switch immediately in **Settings → General → Language**. See [localization](docs/localization.md) for translation and contribution guidelines.
+
 ZenX is Zen's in-development Electron product. Its main process hosts the same
 App Server used by the CLI and keeps desktop-only configuration and
 orchestration outside Zen Core.

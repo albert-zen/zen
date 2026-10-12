@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "./i18n.js";
 import {
   AgentProviderModelScope,
   type AgentProviderSelection,
@@ -14,6 +16,7 @@ import {
   ROOM_ROUTE,
   useRoomConversations,
   roomConversationRoute,
+  roomConversationAdmissionRevision,
 } from "./room-conversations.js";
 import {
   CompanionWorkspace,
@@ -29,6 +32,7 @@ import {
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
+import { FleetComposerSurface } from "./FleetComposerSurface.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
 import {
   default as React,
@@ -48,7 +52,6 @@ import type {
   QueuedCancellationResult,
   QueuedCancellationTarget,
 } from "../../../../../src/app-server.js";
-import type { CanonicalItem } from "../../../../../src/item.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
@@ -150,6 +153,11 @@ import {
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
 import { ThreadConversationViewport } from "./thread-conversation-viewport.js";
+import { requestQueuedEdit, importQueuedImages } from "./queue-edit-request.js";
+import {
+  createQueueEditStore,
+  type QueueEditStore,
+} from "./queue-edit-state.js";
 import {
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
@@ -159,7 +167,11 @@ import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
 type ProductPage = string;
-const MODEL_CATALOG_LOADING = "Models are still loading. Try again.";
+const modelCatalogLoading = () => i18n.t("shell:modelsAreStillLoadingTryAgain");
+const isModelCatalogLoading = (value: string | null) =>
+  value !== null &&
+  (value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "en" }) ||
+    value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "zh-CN" }));
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
 
 interface NewThreadDraft {
@@ -185,23 +197,6 @@ interface ThreadProjectionCacheEntry {
   activeTurnNotifications: BufferedProtocolNotification[];
   processEpoch: string | null;
   watermark: number;
-}
-
-function hasCompactionPrefix(
-  items: readonly CanonicalItem[] | undefined,
-  id: string,
-): boolean {
-  const compaction = items?.find(
-    (item) => item.id === id && item.type === "context_compaction",
-  );
-  return (
-    compaction?.type === "context_compaction" &&
-    items !== undefined &&
-    items.some((item) => item.id === compaction.coveredThroughItemId) &&
-    compaction.retainedItemIds.every((retainedId) =>
-      items.some((item) => item.id === retainedId),
-    )
-  );
 }
 
 function replayThreadProjection(
@@ -381,35 +376,6 @@ function updateThreadProjectionCache(
   if (current === undefined) return undefined;
   if (
     notification.method === "zen/thread/event" &&
-    current.processEpoch === null &&
-    notification.params.watermark > current.watermark &&
-    notification.params.event.type === "item_completed" &&
-    notification.params.event.item.type === "context_compaction" &&
-    notification.params.event.item.threadId === threadId
-  ) {
-    const compactionItem = notification.params.event.item;
-    if (
-      current.thread.canonicalItems?.some(
-        (item) => item.id === compactionItem.id,
-      )
-    )
-      return current;
-    // A CAS start projection has no native epoch yet. Keep only this exact saved
-    // fact inspectable while reading its owner, without inventing a native prefix
-    // or promoting the notification's epoch/watermark to a recovery authority.
-    const next = {
-      ...current,
-      thread: applyNativeThreadEvent(current.thread, notification.params.event),
-      activeTurnNotifications: activeTurnNotificationTail([
-        ...current.activeTurnNotifications,
-        notification,
-      ]),
-    };
-    cache.set(threadId, next);
-    return next;
-  }
-  if (
-    notification.method === "zen/thread/event" &&
     (notification.params.processEpoch !== current.processEpoch ||
       notification.params.watermark <= current.watermark)
   )
@@ -441,6 +407,8 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  const [queueEditStore] = useState(createQueueEditStore);
+  const { i18n: activeI18n } = useTranslation("shell");
   const agentProviders = useAgentProviders();
   const [selectedAgentSessionId, setSelectedAgentSessionId] = useState<
     string | null
@@ -456,12 +424,7 @@ export function App() {
     threadId: string;
     notifications: BufferedProtocolNotification[];
   } | null>(null);
-  const compactionHydrationRef = useRef(
-    new Map<
-      string,
-      { epoch: number; itemIds: Set<string>; promise: Promise<void> }
-    >(),
-  );
+
   const threadProjectionCacheRef = useRef(
     new Map<string, ThreadProjectionCacheEntry>(),
   );
@@ -687,6 +650,11 @@ export function App() {
   const [switchingPermission, setSwitchingPermission] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [modelUpdateError, setModelUpdateError] = useState<string | null>(null);
+  useEffect(() => {
+    setModelUpdateError((current) =>
+      isModelCatalogLoading(current) ? modelCatalogLoading() : current,
+    );
+  }, [activeI18n.resolvedLanguage]);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
     try {
       return readSidebarMode(window.localStorage);
@@ -931,56 +899,35 @@ export function App() {
           threadUsageLoadEpoch.current === epoch
         )
           setRequestError(
-            `Thread usage could not be loaded: ${describeError(error)}`,
+            i18n.t("shell:threadUsageLoadFailed", {
+              error: describeError(error),
+            }),
           );
       });
   };
 
-  const resumeThread = async (
-    threadId: string,
-    preserveNavigation = false,
-    refreshOnly = false,
-  ): Promise<readonly CanonicalItem[] | undefined> => {
-    if (refreshOnly && selectedThreadIdRef.current !== threadId) return;
-    if (!refreshOnly) {
-      setSelectedAgentSessionId(null);
-      discardRecoverableDraft();
-    }
+  const resumeThread = async (threadId: string, preserveNavigation = false) => {
+    setSelectedAgentSessionId(null);
+    discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
-    pendingResumeProjectionRef.current = {
-      epoch,
-      threadId,
-      // These exact facts were observed before the first native read. A stale
-      // successful snapshot must replay them under the recovered native fence.
-      notifications:
-        cached?.processEpoch === null
-          ? cached.activeTurnNotifications.filter(
-              (notification) =>
-                notification.method === "zen/thread/event" &&
-                notification.params.event.type === "item_completed" &&
-                notification.params.event.item.type === "context_compaction",
-            )
-          : [],
-    };
-    if (!refreshOnly) confirmNewThreadDraft(null);
+    pendingResumeProjectionRef.current = { epoch, threadId, notifications: [] };
+    confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
       setPage("agent");
       setSidebarOpen(false);
     }
-    if (!refreshOnly) {
-      setSelectedThreadId(threadId);
-      setThreadDetail(cached?.thread ?? null);
-      setThreadAttachments({});
-      setThreadUsage(undefined);
-      setSelectedSettings(cached?.settings ?? null);
-      setModelUpdateError(null);
-      setThreadLoading(cached === undefined);
-      setThreadError(null);
-      void loadComposerCatalog();
-    }
+    setSelectedThreadId(threadId);
+    setThreadDetail(cached?.thread ?? null);
+    setThreadAttachments({});
+    setThreadUsage(undefined);
+    setSelectedSettings(cached?.settings ?? null);
+    setModelUpdateError(null);
+    setThreadLoading(cached === undefined);
+    setThreadError(null);
+    void loadComposerCatalog();
     try {
       const result = await window.zenx.protocol.request("zen/thread/resume", {
         threadId,
@@ -994,18 +941,6 @@ export function App() {
               ?.activeTurnNotifications ?? []);
       if (pending?.epoch === epoch && pending.threadId === threadId)
         pendingResumeProjectionRef.current = null;
-      if (
-        refreshOnly &&
-        cached?.processEpoch === result.processEpoch &&
-        result.watermark < cached.watermark
-      ) {
-        const latest = threadProjectionCacheRef.current.get(threadId);
-        if (latest !== undefined) {
-          setThreadDetail(latest.thread);
-          setSelectedSettings(latest.settings);
-        }
-        return result.thread.items;
-      }
       const projected = replayThreadProjection(
         projectNativeRecovery(result),
         settingsFromSnapshot(threadId, nativeSettingsSnapshot(result.thread)),
@@ -1026,17 +961,6 @@ export function App() {
         );
       }
       setSelectedSettings(projected.settings);
-      for (const item of projected.thread.canonicalItems ?? []) {
-        if (
-          item.type === "context_compaction" &&
-          !hasCompactionPrefix(result.thread.items, item.id)
-        ) {
-          // Initial recovery may first disclose this Item through its own event
-          // tail or buffered notifications. Share the existing hydration fence;
-          // the same incomplete target cannot schedule a self-retry.
-          void hydrateCompactionProjection(threadId, item.id, true);
-        }
-      }
       void window.zenx.imageAttachments
         .forThread(threadId)
         .then((attachments) => {
@@ -1046,7 +970,9 @@ export function App() {
         .catch((error: unknown) => {
           if (selectionEpoch.current === epoch)
             setRequestError(
-              `Thread images could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadImagesLoadFailed", {
+                error: describeError(error),
+              }),
             );
         });
       void window.zenx.modelUsage
@@ -1064,107 +990,24 @@ export function App() {
             threadUsageLoadEpoch.current === usageEpoch
           )
             setRequestError(
-              `Thread usage could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadUsageLoadFailed", {
+                error: describeError(error),
+              }),
             );
         });
-      if (!refreshOnly)
-        void window.zenx.settings
-          .markWorkspaceUsed(result.thread.cwd)
-          .then(() => loadProjects())
-          .catch(() => undefined);
-      return result.thread.items;
+      void window.zenx.settings
+        .markWorkspaceUsed(result.thread.cwd)
+        .then(() => loadProjects())
+        .catch(() => undefined);
     } catch (error) {
       if (selectionEpoch.current === epoch) {
         if (pendingResumeProjectionRef.current?.epoch === epoch)
           pendingResumeProjectionRef.current = null;
-        if (refreshOnly) {
-          // The buffer already updated this cache. A details read failure cannot
-          // strand a valid terminal event or settings change outside the view.
-          const latest = threadProjectionCacheRef.current.get(threadId);
-          if (latest !== undefined) {
-            setThreadDetail(latest.thread);
-            setSelectedSettings(latest.settings);
-          }
-          setRequestError(
-            `Compacted context details could not be refreshed: ${describeError(error)}. Reopen this conversation to try again.`,
-          );
-        } else setThreadError(describeError(error));
+        setThreadError(describeError(error));
       }
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
-  };
-
-  const hydrateCompactionProjection = async (
-    threadId: string,
-    compactionItemId?: string,
-    forceRead = false,
-  ) => {
-    if (selectedThreadIdRef.current !== threadId) return;
-    const pending = compactionHydrationRef.current.get(threadId);
-    if (pending?.epoch === selectionEpoch.current) {
-      if (compactionItemId !== undefined) pending.itemIds.add(compactionItemId);
-      return await pending.promise;
-    }
-    const items =
-      threadProjectionCacheRef.current.get(threadId)?.thread.canonicalItems;
-    if (
-      !forceRead &&
-      compactionItemId !== undefined &&
-      hasCompactionPrefix(items, compactionItemId)
-    )
-      return;
-    const ownerEpoch = selectionEpoch.current;
-    const entry = {
-      epoch: ownerEpoch,
-      itemIds: new Set(
-        compactionItemId === undefined ? [] : [compactionItemId],
-      ),
-      promise: Promise.resolve(),
-    };
-    // Start after installing the request fence so synchronous event bursts also
-    // share this read. The target IDs are transient enrichment requests only.
-    const run = async () => {
-      let expectedEpoch = ownerEpoch;
-      for (;;) {
-        if (
-          selectedThreadIdRef.current !== threadId ||
-          selectionEpoch.current !== expectedEpoch
-        )
-          return;
-        const requested = new Set(entry.itemIds);
-        entry.epoch = expectedEpoch + 1;
-        const read = resumeThread(threadId, true, true);
-        expectedEpoch = entry.epoch;
-        const nativePrefix = await read;
-        if (
-          nativePrefix === undefined ||
-          selectedThreadIdRef.current !== threadId ||
-          selectionEpoch.current !== expectedEpoch
-        )
-          return;
-        const unsatisfied = [...entry.itemIds].filter(
-          (id) => !hasCompactionPrefix(nativePrefix, id),
-        );
-        if (!unsatisfied.some((id) => !requested.has(id))) {
-          if (unsatisfied.length > 0)
-            setRequestError(
-              "Compacted context details are still incomplete. Reopen this conversation to refresh them.",
-            );
-          return;
-        }
-        // Only a distinct newer recorded compaction can request a trailing read.
-        // An unchanged prefix, duplicate event, or failed read never retries itself.
-      }
-    };
-    entry.promise = Promise.resolve()
-      .then(run)
-      .finally(() => {
-        if (compactionHydrationRef.current.get(threadId) === entry)
-          compactionHydrationRef.current.delete(threadId);
-      });
-    compactionHydrationRef.current.set(threadId, entry);
-    await entry.promise;
   };
 
   const loadComposerCatalog = async () => {
@@ -1183,7 +1026,7 @@ export function App() {
       setModels(result.value.data);
       setModelCatalogError(null);
       setModelUpdateError((current) =>
-        current === MODEL_CATALOG_LOADING ? null : current,
+        isModelCatalogLoading(current) ? null : current,
       );
     } catch (error) {
       setModelCatalogError(describeError(error));
@@ -1208,7 +1051,7 @@ export function App() {
         setModels(result.value.data);
         setModelCatalogError(null);
         setModelUpdateError((current) =>
-          current === MODEL_CATALOG_LOADING ? null : current,
+          isModelCatalogLoading(current) ? null : current,
         );
       } catch (error) {
         setModelCatalogError(describeError(error));
@@ -1235,7 +1078,9 @@ export function App() {
           pendingApprovalSnapshotRef.current = null;
         setApprovals(replacePendingApprovals([], pending.events));
         setRequestError(
-          `Pending approvals could not be loaded: ${describeError(error)}`,
+          i18n.t("shell:pendingApprovalsLoadFailed", {
+            error: describeError(error),
+          }),
         );
       }
     };
@@ -1293,10 +1138,7 @@ export function App() {
           params,
         } as BufferedProtocolNotification;
         const eventThreadId = notificationThreadId(notification);
-        const previousProjection =
-          eventThreadId === null
-            ? undefined
-            : threadProjectionCacheRef.current.get(eventThreadId);
+
         const cached = updateThreadProjectionCache(
           threadProjectionCacheRef.current,
           notification,
@@ -1341,29 +1183,34 @@ export function App() {
           const nativeEvent = projected.event;
           if (
             nativeEvent.type === "item_completed" &&
-            nativeEvent.item.type === "context_compaction" &&
-            nativeEvent.item.threadId === projected.threadId &&
-            cached !== undefined &&
-            ((cached.processEpoch === null &&
-              !previousProjection?.thread.canonicalItems?.some(
-                (item) => item.id === nativeEvent.item.id,
-              )) ||
-              (cached.processEpoch === projected.processEpoch &&
-                cached.watermark === projected.watermark &&
-                projected.watermark > (previousProjection?.watermark ?? 0)))
+            nativeEvent.item.type === "user_message_queue_edited"
           ) {
-            // Lifecycle event notifications are not the exact saved canonical prefix.
-            // Read it from the native owner; never synthesize missing Item IDs.
-            void hydrateCompactionProjection(
-              projected.threadId,
-              nativeEvent.item.id,
-              true,
+            const edited = nativeEvent.item;
+            queueAttemptsRef.current.delete(
+              `${projected.threadId}:${edited.queuedItemId}`,
             );
+            if (selectedThreadIdRef.current === projected.threadId)
+              setQueueFailure((current) =>
+                current?.queuedItemId === edited.queuedItemId &&
+                (current.revision ?? 0) < edited.revision
+                  ? null
+                  : current,
+              );
           }
           if (nativeEvent.type === "queue_admission_started") {
             const key = `${projected.threadId}:${nativeEvent.queuedItemId}`;
-            queueAttemptsRef.current.set(key, nativeEvent.attemptId);
-            if (selectedThreadIdRef.current === projected.threadId)
+            const sameRevision = cached?.thread.queuedMessages?.some(
+              (item) =>
+                item.id === nativeEvent.queuedItemId &&
+                item.clientId === nativeEvent.clientId &&
+                (item.revision ?? 0) === (nativeEvent.revision ?? 0),
+            );
+            if (sameRevision)
+              queueAttemptsRef.current.set(key, nativeEvent.attemptId);
+            if (
+              sameRevision &&
+              selectedThreadIdRef.current === projected.threadId
+            )
               setQueueFailure((current) =>
                 current?.queuedItemId === nativeEvent.queuedItemId
                   ? null
@@ -1378,7 +1225,8 @@ export function App() {
               cached?.thread.queuedMessages?.some(
                 (item) =>
                   item.id === nativeEvent.queuedItemId &&
-                  item.clientId === nativeEvent.clientId,
+                  item.clientId === nativeEvent.clientId &&
+                  (item.revision ?? 0) === (nativeEvent.revision ?? 0),
               )
             )
               setQueueFailure(nativeEvent);
@@ -1427,7 +1275,9 @@ export function App() {
               })
               .catch((error: unknown) =>
                 setRequestError(
-                  `Thread images could not be loaded: ${describeError(error)}`,
+                  i18n.t("shell:threadImagesLoadFailed", {
+                    error: describeError(error),
+                  }),
                 ),
               );
           }
@@ -1453,7 +1303,9 @@ export function App() {
               })
               .catch((error: unknown) =>
                 setRequestError(
-                  `Thread images could not be loaded: ${describeError(error)}`,
+                  i18n.t("shell:threadImagesLoadFailed", {
+                    error: describeError(error),
+                  }),
                 ),
               );
           }
@@ -1511,7 +1363,9 @@ export function App() {
       .get()
       .then(setPluginSnapshot)
       .catch((error: unknown) =>
-        setRequestError(`ZenX plugin catalog failed: ${describeError(error)}`),
+        setRequestError(
+          i18n.t("shell:pluginCatalogFailed", { error: describeError(error) }),
+        ),
       );
     return dispose;
   }, []);
@@ -1531,7 +1385,9 @@ export function App() {
       .get()
       .then(setTitleSnapshot)
       .catch((error: unknown) =>
-        setRequestError(`ZenX title metadata failed: ${describeError(error)}`),
+        setRequestError(
+          i18n.t("shell:titleMetadataFailed", { error: describeError(error) }),
+        ),
       );
     return dispose;
   }, []);
@@ -1586,7 +1442,10 @@ export function App() {
     pluginSnapshot?.pages.some(
       (p) => p.pluginId === "zenx-rooms" && p.route === ROOM_ROUTE,
     ) ?? false;
-  const roomConversations = useRoomConversations(roomsAdmitted, pluginSnapshot);
+  const roomConversations = useRoomConversations(
+    roomsAdmitted,
+    roomConversationAdmissionRevision(pluginSnapshot),
+  );
   const roomQuery = new URLSearchParams(page.split("?")[1] ?? "");
   const selectedRoomId =
     roomsAdmitted && pluginRoutePath(page) === ROOM_ROUTE
@@ -1801,17 +1660,19 @@ export function App() {
         })
         .catch((error: unknown) =>
           setRequestError(
-            `Thread title could not be staged: ${describeError(error)}`,
+            i18n.t("shell:threadTitleStagingFailed", {
+              error: describeError(error),
+            }),
           ),
         );
     if (skillDraft.skills.length > 0) {
       if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error("This Thread is being archived.");
+        throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       if (
         (submission.intent === "steer" || submission.intent === "replace") &&
         submission.expectedTurnId === null
       )
-        throw new Error("The active turn changed before sending");
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSending"));
       const input: (
         | import("../../../../../src/item.js").UserInputPart
         | import("../../../../../src/skill-input.js").SkillReference
@@ -1840,7 +1701,7 @@ export function App() {
     if (submission.intent === "start") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
-          "This Thread is being archived. Try again if archiving fails.",
+          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
       await window.zenx.protocol.request("turn/start", {
         threadId,
@@ -1849,7 +1710,7 @@ export function App() {
       });
     } else if (submission.intent === "batch-next") {
       if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error("This Thread is being archived.");
+        throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         mode: "batch-next",
@@ -1859,14 +1720,14 @@ export function App() {
             : part.type === "text"
               ? part
               : (() => {
-                  throw new Error("Unsupported batch input part");
+                  throw new Error(i18n.t("shell:unsupportedBatchInputPart"));
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
       });
     } else if (submission.intent === "queue") {
       if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error("This Thread is being archived.");
+        throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       await window.zenx.protocol.request("turn/queue", {
         threadId,
         input,
@@ -1874,10 +1735,10 @@ export function App() {
       });
     } else if (submission.intent === "steer") {
       if (submission.expectedTurnId === null)
-        throw new Error("The active turn changed before steering");
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSteering"));
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
-          "This Thread is being archived. Try again if archiving fails.",
+          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
       await window.zenx.protocol.request("turn/steer", {
         threadId,
@@ -1887,10 +1748,10 @@ export function App() {
       });
     } else {
       if (submission.expectedTurnId === null)
-        throw new Error("The active turn changed before replacement");
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeReplacement"));
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
-          "This Thread is being archived. Try again if archiving fails.",
+          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
       await window.zenx.protocol.request("turn/replace", {
         threadId,
@@ -1922,7 +1783,7 @@ export function App() {
       return;
     }
     if (current.workspace === null) {
-      setModelUpdateError("Choose a Project before sending.");
+      setModelUpdateError(i18n.t("shell:chooseAProjectBeforeSending"));
       return;
     }
     const project = projectsRef.current.projects.find(
@@ -1931,7 +1792,7 @@ export function App() {
     );
     if (project === undefined) {
       setModelUpdateError(
-        "This Project is no longer available. Choose another Project.",
+        i18n.t("shell:thisProjectIsNoLongerAvailableChooseAnotherProject"),
       );
       return;
     }
@@ -1949,16 +1810,16 @@ export function App() {
       }
     }
     if (draftSettings === null) {
-      setModelUpdateError(modelCatalogError ?? MODEL_CATALOG_LOADING);
+      setModelUpdateError(modelCatalogError ?? modelCatalogLoading());
       return;
     }
     if (!canSendWithModel(models, draftSettings.model)) {
-      setModelUpdateError("Choose an available model before sending.");
+      setModelUpdateError(i18n.t("shell:chooseAnAvailableModelBeforeSending"));
       return;
     }
     if (!hasValidReasoningSelection(models, draftSettings)) {
       setModelUpdateError(
-        "Choose an available reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -2051,7 +1912,9 @@ export function App() {
           })
           .catch((error: unknown) =>
             setRequestError(
-              `Thread images could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadImagesLoadFailed", {
+                error: describeError(error),
+              }),
             ),
           );
       }
@@ -2086,7 +1949,9 @@ export function App() {
                 message,
               ),
             },
-            message: `New Thread could not be created: ${message}`,
+            message: i18n.t("shell:newThreadCreationFailed", {
+              error: message,
+            }),
           });
         }
       } else {
@@ -2128,13 +1993,13 @@ export function App() {
         read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
         update: (change) => updateComposer(threadId, change),
         compact: async (id, includeOriginalReference) => {
-          const result = await window.zenx.protocol.request("thread/compact", {
+          await window.zenx.protocol.request("thread/compact", {
             threadId: id,
             ...(includeOriginalReference
               ? {}
               : { includeOriginalReference: false }),
           });
-          await hydrateCompactionProjection(id, result.compactionItemId);
+          if (selectedThreadIdRef.current === id) await resumeThread(id, true);
         },
       });
       return;
@@ -2151,7 +2016,7 @@ export function App() {
       }
     }
     if (intent !== "steer" && models.length === 0) {
-      setModelUpdateError(modelCatalogError ?? MODEL_CATALOG_LOADING);
+      setModelUpdateError(modelCatalogError ?? modelCatalogLoading());
       return;
     }
     if (
@@ -2164,7 +2029,7 @@ export function App() {
           models,
           providerProfiles,
           selectedSettings,
-        ) ?? "Choose an available model before sending.",
+        ) ?? i18n.t("shell:chooseAnAvailableModelBeforeSending"),
       );
       return;
     }
@@ -2174,7 +2039,7 @@ export function App() {
       !hasValidReasoningSelection(models, selectedSettings)
     ) {
       setModelUpdateError(
-        "Choose an available reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -2206,7 +2071,9 @@ export function App() {
           })
           .catch((error: unknown) =>
             setRequestError(
-              `Thread images could not be loaded: ${describeError(error)}`,
+              i18n.t("shell:threadImagesLoadFailed", {
+                error: describeError(error),
+              }),
             ),
           );
       }
@@ -2235,10 +2102,8 @@ export function App() {
       read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
       update: (change) => updateComposer(threadId, change),
       compact: async (id) => {
-        const result = await window.zenx.protocol.request("thread/compact", {
-          threadId: id,
-        });
-        await hydrateCompactionProjection(id, result.compactionItemId);
+        await window.zenx.protocol.request("thread/compact", { threadId: id });
+        if (selectedThreadIdRef.current === id) await resumeThread(id, true);
       },
     });
   };
@@ -2329,7 +2194,7 @@ export function App() {
       newThreadDraftRef.current?.settings ?? null,
     );
     if (settings === null) {
-      setModelUpdateError("Choose an available model before sending.");
+      setModelUpdateError(i18n.t("shell:chooseAnAvailableModelBeforeSending"));
       return;
     }
     setModelUpdateError(null);
@@ -2352,7 +2217,7 @@ export function App() {
       )
     ) {
       setModelUpdateError(
-        "Choose an available reasoning effort before sending.",
+        i18n.t("shell:chooseAnAvailableReasoningEffortBeforeSending"),
       );
       return;
     }
@@ -2495,7 +2360,9 @@ export function App() {
     clearSelectedOnArchive = false,
   ) => {
     if (!summary.archived && threadHasActiveTurn(summary, threadDetail)) {
-      throw new Error("Wait for the active Turn to finish before archiving.");
+      throw new Error(
+        i18n.t("shell:waitForTheActiveTurnToFinishBeforeArchiving"),
+      );
     }
     const fenceSelectedArchive =
       !summary.archived &&
@@ -2528,7 +2395,9 @@ export function App() {
         );
       } catch (error) {
         setRequestError(
-          `Thread archived, but its local Pin could not be cleared: ${describeError(error)}`,
+          i18n.t("shell:threadArchivedPinClearFailed", {
+            error: describeError(error),
+          }),
         );
       }
     }
@@ -2657,14 +2526,13 @@ export function App() {
       } catch {
         // A failed read cannot prove the outcome either.
       }
-      throw new Error(
-        "Cancellation is unconfirmed; pending messages were not assumed canceled. Check this Thread before choosing to try again.",
-      );
+      throw new Error(i18n.t("shell:cancellationUnconfirmedDetail"));
     }
   };
 
   const renderSideConversation = (id: string) => (
     <ThreadConversationViewport
+      queueEditStore={queueEditStore}
       key={id}
       threadId={id}
       composer={composerStates[id] ?? emptyComposerState()}
@@ -2757,8 +2625,10 @@ export function App() {
         ) : page === "settings" ? (
           <PageTitleBar
             onOpenSidebar={openSidebar}
-            subtitle="Agent Providers, appearance, plugins, and local host"
-            title="Settings"
+            subtitle={i18n.t(
+              "shell:accountAppearanceModelsPluginsAndLocalHost",
+            )}
+            title={i18n.t("shell:settings")}
           />
         ) : genericPluginTarget !== undefined ? (
           <PageTitleBar
@@ -2767,8 +2637,10 @@ export function App() {
               selectedRoom
                 ? selectedRoom.assistant
                   ? "PAW"
-                  : "Shared conversation"
-                : `Provided by ${genericPluginTarget.pluginId}`
+                  : i18n.t("shell:sharedConversation")
+                : i18n.t("shell:providedByPlugin", {
+                    plugin: genericPluginTarget.pluginId,
+                  })
             }
             title={selectedRoom?.name ?? genericPluginTarget.title}
           />
@@ -2799,13 +2671,13 @@ export function App() {
           type="button"
           aria-label={
             browserPanels[selectedSummary.threadId]
-              ? "Close side panel"
-              : "Open side panel"
+              ? i18n.t("shell:closeSidePanel")
+              : i18n.t("shell:openSidePanel")
           }
           title={
             browserPanels[selectedSummary.threadId]
-              ? "Close side panel"
-              : "Open side panel"
+              ? i18n.t("shell:closeSidePanel")
+              : i18n.t("shell:openSidePanel")
           }
           aria-controls="thread-workspace-panel"
           aria-expanded={browserPanels[selectedSummary.threadId] === true}
@@ -2971,7 +2843,7 @@ export function App() {
                 discardRecoverableDraft();
               }}
             >
-              Restore draft
+              {i18n.t("shell:restoreDraft")}
             </button>
           ) : null}
           <button
@@ -2985,7 +2857,7 @@ export function App() {
               setRequestError(null);
             }}
           >
-            Dismiss
+            {i18n.t("shell:dismiss")}
           </button>
         </div>
       ) : null}
@@ -3082,7 +2954,9 @@ export function App() {
                       (project) =>
                         project.workspace === newThreadDraft.workspace,
                     )
-                      ? "This Project is no longer available. Choose another Project."
+                      ? i18n.t(
+                          "shell:thisProjectIsNoLongerAvailableChooseAnotherProject",
+                        )
                       : null
                   }
                   permissionMode={
@@ -3131,7 +3005,7 @@ export function App() {
                           draft: failed,
                           message:
                             failed.composer.submission.error ??
-                            "Could not create agent session",
+                            i18n.t("shell:providerCreateFailed"),
                         });
                       externalPendingDraftsRef.current.delete(
                         newThreadDraft.id,
@@ -3161,7 +3035,7 @@ export function App() {
                         role="heading"
                         aria-level={2}
                       >
-                        What should we build in{" "}
+                        {i18n.t("shell:whatShouldWeBuildIn")}{" "}
                         <NewThreadProjectSelector
                           disabled={
                             newThreadDraft.composer.submission?.status ===
@@ -3184,6 +3058,27 @@ export function App() {
                 />
               ) : (
                 <AgentSurface
+                  agentProviderSelection={
+                    newThreadDraft === null
+                      ? null
+                      : {
+                          instances: agentProviders.instances,
+                          value: newThreadDraft.providerInstanceId ?? "zen",
+                          onChange: changeAgentProvider,
+                          disabled:
+                            newThreadDraft.composer.submission?.status ===
+                            "pending",
+                        }
+                  }
+                  onRecoverQueuedEdit={(threadId) => {
+                    // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
+                    if (
+                      selectedThreadIdRef.current === threadId &&
+                      newThreadDraftRef.current === null
+                    )
+                      void resumeThread(threadId, true);
+                  }}
+                  queueEditStore={queueEditStore}
                   threadHeader={
                     selectedThreadId !== null &&
                     newThreadDraft === null &&
@@ -3229,18 +3124,6 @@ export function App() {
                   composerStates={composerStates}
                   configuredProjects={configuredProjects}
                   newThreadDraft={newThreadDraft}
-                  agentProviderSelection={
-                    newThreadDraft === null
-                      ? null
-                      : {
-                          instances: agentProviders.instances,
-                          value: newThreadDraft.providerInstanceId ?? "zen",
-                          onChange: changeAgentProvider,
-                          disabled:
-                            newThreadDraft.composer.submission?.status ===
-                            "pending",
-                        }
-                  }
                   threadAttachments={threadAttachments}
                   threadUsage={threadUsage}
                   models={models}
@@ -3344,7 +3227,7 @@ export function App() {
                   onReadAttachment={readAttachment}
                   onInterrupt={async (turnId) => {
                     if (threadDetail === null)
-                      throw new Error("No thread is selected");
+                      throw new Error(i18n.t("shell:noThreadSelected"));
                     await window.zenx.protocol.request("turn/interrupt", {
                       threadId: threadDetail.id,
                       turnId,
@@ -3437,7 +3320,9 @@ export function App() {
                             entry.threadId ===
                             conversationPanels[threadDetail.id],
                         );
-                        return summary ? threadTitle(summary) : "Conversation";
+                        return summary
+                          ? threadTitle(summary)
+                          : i18n.t("shell:conversation");
                       })(),
                       render: renderSideConversation,
                     }
@@ -3456,7 +3341,7 @@ export function App() {
               threadId={threadDetail.id}
               title={
                 selectedSummary === null
-                  ? "Current thread"
+                  ? i18n.t("shell:currentThread")
                   : threadTitle(selectedSummary)
               }
               open={browserPanels[threadDetail.id]}
@@ -3557,16 +3442,27 @@ function WindowTitleBar({
   onToggleSidebar(): void;
 }) {
   return (
-    <header className="window-titlebar" aria-label="ZenX window controls">
+    <header
+      className="window-titlebar"
+      aria-label={i18n.t("shell:zenxWindowControls")}
+    >
       <div className="window-titlebar-product">
         <ZenXBrand />
         <div className="window-titlebar-inbox">
           <button
             className="icon-button inbox-button"
             type="button"
-            aria-label={mode === "inbox" ? "Return to projects" : "Open inbox"}
+            aria-label={
+              mode === "inbox"
+                ? i18n.t("shell:returnToProjects")
+                : i18n.t("shell:openInbox")
+            }
             aria-pressed={mode === "inbox"}
-            title={mode === "inbox" ? "Return to projects" : "Open inbox"}
+            title={
+              mode === "inbox"
+                ? i18n.t("shell:returnToProjects")
+                : i18n.t("shell:openInbox")
+            }
             onClick={onToggleInbox}
           >
             <Icon name="inbox" />
@@ -3582,8 +3478,16 @@ function WindowTitleBar({
           type="button"
           aria-controls="primary-sidebar"
           aria-expanded={!sidebarCollapsed}
-          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={
+            sidebarCollapsed
+              ? i18n.t("shell:expandSidebar")
+              : i18n.t("shell:collapseSidebar")
+          }
+          title={
+            sidebarCollapsed
+              ? i18n.t("shell:expandSidebar")
+              : i18n.t("shell:collapseSidebar")
+          }
           onClick={onToggleSidebar}
         >
           <Icon name="panel-left" />
@@ -3626,7 +3530,7 @@ function ConversationTitleBar({
         <button
           className="icon-button mobile-menu"
           type="button"
-          aria-label="Open sidebar"
+          aria-label={i18n.t("shell:openSidebar")}
           onClick={onOpenSidebar}
         >
           <Icon name="tree" />
@@ -3648,12 +3552,15 @@ function ConversationTitleBar({
           </div>
           <span>
             {selectedSummary.status === "systemError"
-              ? "Unavailable journal"
+              ? i18n.t("shell:unavailableJournal")
               : selectedSummary.currentMetadata.cwd}
             {threadDetail?.forkedFromId === null ||
             threadDetail?.forkedFromId === undefined ? null : sourceSummary ===
               undefined ? (
-              <> · Copied from unavailable source</>
+              <>
+                {" · "}
+                {i18n.t("shell:copiedFromUnavailableSource")}
+              </>
             ) : (
               <>
                 {" · "}
@@ -3662,7 +3569,9 @@ function ConversationTitleBar({
                   type="button"
                   onClick={() => onOpenSource(sourceSummary.threadId)}
                 >
-                  Copied from {threadTitle(sourceSummary)}
+                  {i18n.t("shell:copiedFrom", {
+                    name: threadTitle(sourceSummary),
+                  })}
                 </button>
               </>
             )}
@@ -3690,7 +3599,7 @@ function PageTitleBar({
         <button
           className="icon-button mobile-menu"
           type="button"
-          aria-label="Open sidebar"
+          aria-label={i18n.t("shell:openSidebar")}
           onClick={onOpenSidebar}
         >
           <Icon name="tree" />
@@ -3710,6 +3619,8 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  onRecoverQueuedEdit,
+  queueEditStore,
   agentProviderSelection,
   threadHeader,
   onOpenMessageLink,
@@ -3767,6 +3678,8 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  onRecoverQueuedEdit(threadId: string): void;
+  queueEditStore: QueueEditStore;
   agentProviderSelection?: AgentProviderSelection | null;
   onOpenMessageLink(
     threadId: string,
@@ -3855,7 +3768,7 @@ function AgentSurface({
     newThreadDraft?.workspace !== null &&
     newThreadDraft !== null &&
     draftProject === undefined
-      ? "This Project is no longer available. Choose another Project."
+      ? i18n.t("shell:thisProjectIsNoLongerAvailableChooseAnotherProject")
       : null;
   return (
     <section
@@ -3869,7 +3782,7 @@ function AgentSurface({
       {serverStatus.type === "error" ? (
         <EmptyState
           error
-          title="Zen App Server stopped"
+          title={i18n.t("shell:zenAppServerStopped")}
           detail={serverStatus.message}
         />
       ) : serverStatus.type !== "ready" ? (
@@ -3880,96 +3793,114 @@ function AgentSurface({
           }
           title={
             serverStatus.type === "starting"
-              ? "Starting Zen App Server"
+              ? i18n.t("shell:startingZenAppServer")
               : serverStatus.type === "reconnecting"
-                ? "Reconnecting to Zen App Server"
-                : "Zen App Server disconnected"
+                ? i18n.t("shell:reconnectingToZenAppServer")
+                : i18n.t("shell:zenAppServerDisconnected")
           }
-          detail="Your draft is preserved while ZenX reconnects to the local runtime."
+          detail={i18n.t(
+            "shell:yourDraftIsPreservedWhileZenxReconnectsToTheLocalRuntime",
+          )}
         />
       ) : threadLoading ? (
         <EmptyState
           loading
-          title="Loading conversation"
-          detail="Reconstructing this Thread from App Server history…"
+          title={i18n.t("shell:loadingConversation")}
+          detail={i18n.t("shell:reconstructingThread")}
         />
       ) : threadError !== null ? (
         <EmptyState
           error
-          title="Could not open conversation"
+          title={i18n.t("shell:couldNotOpenConversation")}
           detail={threadError}
         />
       ) : newThreadDraft !== null ? (
         <AgentProviderModelScope selection={agentProviderSelection ?? null}>
-          <ThreadView
-            approvals={[]}
-            composer={newThreadDraft.composer}
-            composerSendMode={composerSendMode}
-            onComposerSendModeChange={onComposerSendModeChange}
-            composerContext={
-              <NewThreadProjectContext
-                projects={configuredProjects}
-                selectedWorkspace={newThreadDraft.workspace}
+          <FleetComposerSurface
+            key={newThreadDraft.id}
+            text={newThreadDraft.composer.draft.text}
+            onTextChange={onNewThreadDraftChange}
+            attachmentCount={newThreadDraft.composer.draft.images.length}
+            onNotice={onNoticeError}
+            disabled={newThreadDraft.composer.submission?.status === "pending"}
+          >
+            {(machineControl) => (
+              <ThreadView
+                approvals={[]}
+                composerContextPosition="after"
+                composer={newThreadDraft.composer}
+                composerSendMode={composerSendMode}
+                onComposerSendModeChange={onComposerSendModeChange}
+                composerContext={
+                  <div className="new-thread-composer-context">
+                    {machineControl}
+                    <NewThreadProjectContext
+                      projects={configuredProjects}
+                      selectedWorkspace={newThreadDraft.workspace}
+                    />
+                  </div>
+                }
+                emptyContent={
+                  <div className="thread-empty new-thread-draft-empty">
+                    <div
+                      className="new-thread-draft-heading"
+                      role="heading"
+                      aria-level={2}
+                    >
+                      {i18n.t("shell:whatShouldWeBuildIn")}{" "}
+                      <NewThreadProjectSelector
+                        disabled={
+                          newThreadDraft.composer.submission?.status ===
+                          "pending"
+                        }
+                        onAddProject={onAddNewThreadProject}
+                        onChange={onNewThreadProjectChange}
+                        projects={configuredProjects}
+                        selectedWorkspace={newThreadDraft.workspace}
+                      />
+                      ?
+                    </div>
+                  </div>
+                }
+                imageCapabilityError={imageCapabilityMessage(
+                  providerProfiles,
+                  draftSettings,
+                  models,
+                )}
+                imageCapabilityNotice={imageCapabilityNotice(
+                  providerProfiles,
+                  draftSettings,
+                  models,
+                )}
+                modelDisabled={
+                  newThreadDraft.composer.submission?.status === "pending"
+                }
+                modelError={
+                  draftProjectError ?? modelUpdateError ?? modelCatalogError
+                }
+                models={models}
+                providerProfiles={providerProfiles}
+                permissionMode={
+                  newThreadDraft.permissionMode ?? "danger-full-access"
+                }
+                onPermissionChange={onNewThreadPermissionChange}
+                selectedModel={draftSettings?.model ?? ""}
+                selectedReasoningEffort={draftSettings?.reasoningEffort}
+                thread={null}
+                workflowCommands={workflowCommands}
+                onDraftChange={onNewThreadDraftChange}
+                onImportImages={onImportNewThreadImages}
+                onPickImages={onPickNewThreadImages}
+                onReadAttachment={onReadAttachment}
+                onRemoveImage={onRemoveNewThreadImage}
+                onInterrupt={async () => undefined}
+                onModelChange={onNewThreadModelChange}
+                onReasoningChange={onNewThreadReasoningChange}
+                onRespondToApproval={onRespondToApproval}
+                onSubmit={onSubmitNewThread}
               />
-            }
-            emptyContent={
-              <div className="thread-empty new-thread-draft-empty">
-                <div
-                  className="new-thread-draft-heading"
-                  role="heading"
-                  aria-level={2}
-                >
-                  What should we build in{" "}
-                  <NewThreadProjectSelector
-                    disabled={
-                      newThreadDraft.composer.submission?.status === "pending"
-                    }
-                    onAddProject={onAddNewThreadProject}
-                    onChange={onNewThreadProjectChange}
-                    projects={configuredProjects}
-                    selectedWorkspace={newThreadDraft.workspace}
-                  />
-                  ?
-                </div>
-              </div>
-            }
-            imageCapabilityError={imageCapabilityMessage(
-              providerProfiles,
-              draftSettings,
-              models,
             )}
-            imageCapabilityNotice={imageCapabilityNotice(
-              providerProfiles,
-              draftSettings,
-              models,
-            )}
-            modelDisabled={
-              newThreadDraft.composer.submission?.status === "pending"
-            }
-            modelError={
-              draftProjectError ?? modelUpdateError ?? modelCatalogError
-            }
-            models={models}
-            providerProfiles={providerProfiles}
-            permissionMode={
-              newThreadDraft.permissionMode ?? "danger-full-access"
-            }
-            onPermissionChange={onNewThreadPermissionChange}
-            selectedModel={draftSettings?.model ?? ""}
-            selectedReasoningEffort={draftSettings?.reasoningEffort}
-            thread={null}
-            workflowCommands={workflowCommands}
-            onDraftChange={onNewThreadDraftChange}
-            onImportImages={onImportNewThreadImages}
-            onPickImages={onPickNewThreadImages}
-            onReadAttachment={onReadAttachment}
-            onRemoveImage={onRemoveNewThreadImage}
-            onInterrupt={async () => undefined}
-            onModelChange={onNewThreadModelChange}
-            onReasoningChange={onNewThreadReasoningChange}
-            onRespondToApproval={onRespondToApproval}
-            onSubmit={onSubmitNewThread}
-          />
+          </FleetComposerSurface>
         </AgentProviderModelScope>
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
@@ -3982,15 +3913,19 @@ function AgentSurface({
             onCancelQueued={(targets) =>
               onCancelQueued(threadDetail.id, targets)
             }
+            queueEditStore={queueEditStore}
+            onEditQueued={(params) =>
+              requestQueuedEdit(params, () =>
+                onRecoverQueuedEdit(params.threadId),
+              )
+            }
+            onImportQueueImages={importQueuedImages}
+            onPickQueueImages={() => window.zenx.imageAttachments.pick()}
             composerContext={
               composerSendModeMigration?.acknowledged === false &&
               composerSendMode === "soft" ? (
                 <div className="composer-migration-notice" role="status">
-                  <p>
-                    Your older Queue preference could not distinguish the old
-                    default from a manual choice. Running-turn sends now steer
-                    the current Turn; messages already queued keep their choice.
-                  </p>
+                  <p>{i18n.t("shell:olderQueuePreference")}</p>
                   <button
                     type="button"
                     onClick={() =>
@@ -3999,7 +3934,7 @@ function AgentSurface({
                       )
                     }
                   >
-                    Restore per-message Queue
+                    {i18n.t("shell:restorePerMessageQueue")}
                   </button>
                   <button
                     type="button"
@@ -4009,7 +3944,7 @@ function AgentSurface({
                       )
                     }
                   >
-                    Keep Steer
+                    {i18n.t("shell:keepSteer")}
                   </button>
                 </div>
               ) : null
@@ -4019,7 +3954,8 @@ function AgentSurface({
               threadDetail.queuedMessages?.some(
                 (item) =>
                   item.id === queueFailure.queuedItemId &&
-                  item.clientId === queueFailure.clientId,
+                  item.clientId === queueFailure.clientId &&
+                  (item.revision ?? 0) === (queueFailure.revision ?? 0),
               )
                 ? queueFailure
                 : null
@@ -4061,8 +3997,8 @@ function AgentSurface({
                 ? null
                 : selectedSettings.permissionMode === "danger-full-access" &&
                     selectedSettings.approvalPolicy === "on-request"
-                  ? "Approval required"
-                  : "File permissions"
+                  ? i18n.t("shell:approvalRequired")
+                  : i18n.t("shell:filePermissions")
             }
             permissionMode={
               selectedSettings?.permissionMode ?? "danger-full-access"
@@ -4131,9 +4067,11 @@ function NewThreadProjectSelector({
   );
   const selectedLabel =
     selectedWorkspace === null
-      ? "Choose a Project"
+      ? i18n.t("shell:chooseAProject")
       : selectedProject === undefined
-        ? `${projectLabel(selectedWorkspace)} unavailable`
+        ? i18n.t("shell:projectUnavailable", {
+            project: projectLabel(selectedWorkspace),
+          })
         : projectDisplayLabel(selectedProject.workspace, projects);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filteredProjects = projects.filter((project) => {
@@ -4272,8 +4210,10 @@ function NewThreadProjectSelector({
         aria-haspopup="dialog"
         aria-label={
           selectedWorkspace === null
-            ? "Choose a Project"
-            : `Change Project. Current Project: ${selectedWorkspace}`
+            ? i18n.t("shell:chooseAProject")
+            : i18n.t("shell:changeCurrentProject", {
+                project: selectedWorkspace,
+              })
         }
         disabled={disabled}
         onClick={() => (open ? closeMenu(false) : setOpen(true))}
@@ -4286,7 +4226,7 @@ function NewThreadProjectSelector({
           data-placement={popoverLayout.placement}
           id={popoverId}
           role="dialog"
-          aria-label="Switch Project"
+          aria-label={i18n.t("shell:switchProject")}
           style={{
             maxHeight: `${popoverLayout.maxHeight}px`,
             transform: `translateX(calc(-50% + ${popoverLayout.offsetX}px))`,
@@ -4303,13 +4243,13 @@ function NewThreadProjectSelector({
         >
           <label className="new-thread-project-search">
             <Icon name="search" size={13} />
-            <span className="sr-only">Search projects</span>
+            <span className="sr-only">{i18n.t("shell:searchProjects")}</span>
             <input
               ref={searchRef}
               type="search"
               value={query}
-              placeholder="Search projects"
-              aria-label="Search projects"
+              placeholder={i18n.t("shell:searchProjects")}
+              aria-label={i18n.t("shell:searchProjects")}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
@@ -4323,7 +4263,7 @@ function NewThreadProjectSelector({
             ref={menuRef}
             className="new-thread-project-menu"
             role="menu"
-            aria-label="Choose a Project"
+            aria-label={i18n.t("shell:chooseAProject")}
             onKeyDown={(event) => {
               if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
                 return;
@@ -4360,7 +4300,7 @@ function NewThreadProjectSelector({
                   type="button"
                   role="menuitemradio"
                   aria-checked={selected}
-                  aria-label={`${selected ? "Selected Project" : "Select Project"}: ${project.workspace}`}
+                  aria-label={`${selected ? i18n.t("shell:selectedProject") : i18n.t("shell:selectProject")}: ${project.workspace}`}
                   title={project.workspace}
                   onClick={() => {
                     onChange(project.workspace);
@@ -4376,7 +4316,9 @@ function NewThreadProjectSelector({
               );
             })}
             {filteredProjects.length === 0 ? (
-              <p className="new-thread-project-empty">No projects found</p>
+              <p className="new-thread-project-empty">
+                {i18n.t("shell:noProjectsFound")}
+              </p>
             ) : null}
           </div>
           <div className="new-thread-project-actions">
@@ -4390,7 +4332,7 @@ function NewThreadProjectSelector({
               }}
             >
               <Icon name="folder-plus" size={13} />
-              <span>Add project</span>
+              <span>{i18n.t("shell:addProject")}</span>
             </button>
           </div>
         </div>
@@ -4411,17 +4353,19 @@ function NewThreadProjectContext({
   );
   const selectedLabel =
     selectedWorkspace === null
-      ? "Choose a Project"
+      ? i18n.t("shell:chooseAProject")
       : selectedProject === undefined
-        ? `${projectLabel(selectedWorkspace)} unavailable`
+        ? i18n.t("shell:projectUnavailable", {
+            project: projectLabel(selectedWorkspace),
+          })
         : projectDisplayLabel(selectedProject.workspace, projects);
   return (
     <div
       className="new-thread-project-context"
       aria-label={
         selectedWorkspace === null
-          ? "No Project selected"
-          : `Selected Project: ${selectedWorkspace}`
+          ? i18n.t("shell:noProjectSelected")
+          : i18n.t("shell:selectedProjectPath", { project: selectedWorkspace })
       }
       title={selectedWorkspace ?? undefined}
     >
@@ -4437,7 +4381,7 @@ function EmptyState({
   action,
   loading = false,
   error = false,
-  actionLabel = "New thread",
+  actionLabel = i18n.t("shell:newThread"),
   actionIcon = "compose",
 }: {
   title: string;
@@ -4508,15 +4452,15 @@ function ThreadTitleEditor({
       >
         <input
           autoFocus
-          aria-label="Thread title"
+          aria-label={i18n.t("shell:threadTitle")}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
         />
         <button type="submit" disabled={busy || !draft.trim()}>
-          Save
+          {i18n.t("shell:save")}
         </button>
         <button type="button" onClick={() => setEditing(false)}>
-          Cancel
+          {i18n.t("shell:cancel")}
         </button>
         {error ? <small role="alert">{error}</small> : null}
       </form>
@@ -4528,18 +4472,18 @@ function ThreadTitleEditor({
       {editable ? (
         <button
           type="button"
-          aria-label="Rename Thread"
+          aria-label={i18n.t("shell:renameThreadTitle")}
           onClick={() => setEditing(true)}
         >
-          Rename
+          {i18n.t("shell:rename")}
         </button>
       ) : null}
       {editable && projection?.status === "generating" ? (
-        <small>Generating title…</small>
+        <small>{i18n.t("shell:generatingTitle")}</small>
       ) : null}
       {editable && projection?.status === "failed" ? (
         <button type="button" onClick={() => void onRetry()}>
-          Retry title
+          {i18n.t("shell:retryTitle")}
         </button>
       ) : null}
     </div>
@@ -4565,8 +4509,12 @@ function unavailableSelectionMessage(
     (candidate) => candidate.providerProfileId === settings.modelProvider,
   );
   return provider === undefined
-    ? `Provider profile “${settings.modelProvider}” was deleted. Choose a model before sending.`
-    : `The configured model from “${provider.displayName}” is hidden or unavailable. Choose another model before sending.`;
+    ? i18n.t("shell:providerProfileDeleted", {
+        provider: settings.modelProvider,
+      })
+    : i18n.t("shell:configuredModelUnavailable", {
+        provider: provider.displayName,
+      });
 }
 
 function defaultDraftSettings(
@@ -4652,7 +4600,7 @@ export function optimisticThreadSummary(
     archived: false,
     createdAt: new Date(result.thread.createdAt * 1_000).toISOString(),
     updatedAt: new Date(result.thread.updatedAt * 1_000).toISOString(),
-    name: result.thread.name ?? "New thread",
+    name: result.thread.name ?? i18n.t("shell:newThread"),
     preview: referenceTitle(draft.text, draft.references),
     status: "idle",
   };

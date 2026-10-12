@@ -42,6 +42,7 @@ export interface ZenXCapabilityTool extends ModelTool {
   interactionMode: ZenXCapabilityInteractionMode;
   capabilities: string[];
   maxOutputBytes?: number;
+  remoteExecution?: "text-json";
 }
 
 export interface ZenXPluginSidebarContribution {
@@ -316,9 +317,19 @@ export type ZenXPluginTarballSelectionResult =
 
 export interface ZenXCapabilityHostSnapshot {
   definitions: ModelTool[];
+  /** Exposed exact-name runtimes whose authors declared text/JSON eligibility. */
+  remoteToolNames?: string[];
   /** Current v2 discovery catalog projected into the hosted App Server. */
   plugins?: ZenXAvailablePlugin[];
+  /** Nonsecret lifecycle projection, including disabled/uninstalled plugins. */
+  pluginReadiness?: ZenXPluginReadinessSummary[];
+  pluginCatalogAvailable?: boolean;
 }
+
+export type ZenXPluginReadinessSummary = Pick<
+  ZenXPluginSummary,
+  "id" | "displayName" | "lifecycle" | "enabled" | "available"
+>;
 
 /** Host-only snapshot identity; never projected into model-visible tool specs. */
 export interface ZenXCapabilityGenerationSnapshot extends ZenXCapabilityHostSnapshot {
@@ -343,6 +354,8 @@ export interface ZenXCapabilityHost {
     invocation: ToolInvocation,
     generationToken?: string,
   ): Promise<ToolExecutionResult>;
+  /** Host adapter for target-owned executions, with no local plugin task. */
+  executeTarget?(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }
 
 export interface ZenXPluginCatalogStore {

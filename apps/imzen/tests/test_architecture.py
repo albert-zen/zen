@@ -34,5 +34,6 @@ def test_imzen_keeps_only_product_composition_modules():
         "main.py",
         "paw.py",
         "paw_pipe.py",
+        "readiness.py",
         "zenx.py",
     }

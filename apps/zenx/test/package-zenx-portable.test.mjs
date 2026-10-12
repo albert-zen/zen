@@ -415,6 +415,22 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
   );
   assert.ok(roleActivation >= 0);
   assert.ok(windowResolution > roleActivation);
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /matchingWindows\.contains\(where: \{ CFEqual\(\$0, window\) \}\)/u,
+  );
+  assert.match(
+    sources.MAC_ACCESSIBILITY_SOURCE,
+    /matchingWindows\.count != 1[\s\S]*?target window title is ambiguous/u,
+  );
+  for (const field of [
+    "targetContext",
+    "launchTime",
+    "windowFrame",
+    "windowId",
+  ]) {
+    assert.match(sources.MAC_ACCESSIBILITY_SOURCE, new RegExp(field));
+  }
   for (const field of [
     "visitedCount",
     "visitLimitReached",
@@ -615,7 +631,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     const sourceDirectory = path.join(directory, "source", "plugins");
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(
-      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.5.tgz"),
+      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.6.tgz"),
       "rooms tarball",
     );
     const buildPath = path.join(
@@ -632,7 +648,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     });
     assert.equal(
       await readFile(
-        path.join(destination, "zenx-rooms-plugin-1.0.5.tgz"),
+        path.join(destination, "zenx-rooms-plugin-1.0.6.tgz"),
         "utf8",
       ),
       "rooms tarball",

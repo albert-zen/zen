@@ -155,6 +155,15 @@ export function validatePluginManifest(value: unknown): ZenXPluginManifestV2 {
       tool.capabilities,
       `Plugin tool ${name} capabilities`,
     );
+    if (
+      tool.remoteExecution !== undefined &&
+      (tool.remoteExecution !== "text-json" ||
+        tool.interactionMode !== "background_safe")
+    ) {
+      throw new Error(
+        `Plugin tool ${name} remoteExecution must be text-json on a background_safe tool`,
+      );
+    }
     if (capabilities.length === 0)
       throw new Error(`Plugin tool ${name} declares no capabilities`);
     for (const permissionId of requireStringArray(

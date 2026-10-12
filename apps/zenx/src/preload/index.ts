@@ -3,6 +3,10 @@ import type {
   AgentProviderEvent,
 } from "../main/agent-providers/types.js";
 import type { SubscriptionUsage } from "../main/subscription-usage.js";
+import type {
+  ImZenXSetupView,
+  ImZenXChannelSave,
+} from "../main/imzenx-setup-service.js";
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppServerHostStatus } from "../main/app-server-manager.js";
@@ -19,6 +23,7 @@ import type {
   ServerNotificationParams,
 } from "../protocol-client/index.js";
 import { ipcChannels } from "./ipc.js";
+import type { ProtocolIpcResult } from "./queue-edit-ipc.js";
 import type {
   PublicHostSettings,
   ZenXProviderDeleteReplacements,
@@ -123,8 +128,22 @@ const agentProviders: AgentProvidersApi = {
   },
 };
 contextBridge.exposeInMainWorld("zenx", {
+  imzenx: {
+    inspect: async (): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupInspect),
+    saveChannel: async (input: ImZenXChannelSave): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupSaveChannel, input),
+    prepareRuntime: async (): Promise<ImZenXSetupView> =>
+      ipcRenderer.invoke(ipcChannels.imzenxSetupPrepareRuntime),
+  },
   agentProviders,
   platform: process.platform,
+  locale: {
+    getSystemLanguages: (): Promise<string[]> =>
+      ipcRenderer.invoke(ipcChannels.localeSystemLanguages),
+    setLanguage: (language: string): Promise<void> =>
+      ipcRenderer.invoke(ipcChannels.localeSetLanguage, language),
+  },
   skills: {
     list: () => ipcRenderer.invoke(ipcChannels.skillsList),
     importDirectory: (directory: string) =>
@@ -227,7 +246,8 @@ contextBridge.exposeInMainWorld("zenx", {
     request: async <M extends ClientRequestMethod>(
       method: M,
       params: ClientRequestParams[M],
-    ): Promise<ClientRequestResults[M]> =>
+    ): Promise<ProtocolIpcResult<M>> =>
+      // Edit rejection envelopes must stay plain data through contextBridge.
       await ipcRenderer.invoke(ipcChannels.request, method, params),
     respondToApproval: async (
       requestId: string,
@@ -327,7 +347,20 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   fleet: {
+    catalog: (id: string) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "catalog", id),
+    listThreads: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "listThreads", input),
+    createThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "createThread", input),
+    readThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "readThread", input),
+    threadStatus: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "threadStatus", input),
+    sendThread: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "sendThread", input),
     status: () => ipcRenderer.invoke(ipcChannels.fleetControl, "status"),
+    readiness: () => ipcRenderer.invoke(ipcChannels.fleetControl, "readiness"),
     save: (config: unknown, revision?: number) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "save", config, revision),
     pair: (input: unknown) =>
@@ -339,6 +372,8 @@ contextBridge.exposeInMainWorld("zenx", {
     invoke: (input: unknown) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "invoke", input),
     hostPair: () => ipcRenderer.invoke(ipcChannels.fleetControl, "hostPair"),
+    hostInvitation: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "hostInvitation", input),
     revoke: (id: string) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "revoke", id),
   },
