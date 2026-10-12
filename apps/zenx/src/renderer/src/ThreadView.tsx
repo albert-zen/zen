@@ -20,6 +20,7 @@ import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
   useEffect,
+  useContext,
   useCallback,
   useId,
   useLayoutEffect,
@@ -255,6 +256,7 @@ function ThreadViewContent({
   onOpenMessageLink,
 }: ThreadViewProps) {
   useTranslation("shell");
+  const readingState = useContext(ThreadReadingContext)!;
   const queueFailure =
     suppliedQueueFailure &&
     thread?.queuedMessages?.some(
@@ -416,7 +418,7 @@ function ThreadViewContent({
   useEffect(() => {
     if (!queuePreviewCurrent) setPreview(null);
   }, [queuePreviewCurrent]);
-  const [atLive, setAtLive] = useState(true);
+  const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
   const skillDraft = parseSkillDraft(composer.draft.text);
@@ -437,7 +439,7 @@ function ThreadViewContent({
     };
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const shouldFollowRef = useRef(true);
+  const shouldFollowRef = useRef(readingState.scroll?.following ?? true);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -483,39 +485,81 @@ function ThreadViewContent({
   });
   const selectorId = useId();
 
-  useEffect(() => {
+  const saveReadingPosition = useCallback(() => {
     const scroll = scrollRef.current;
-    if (
-      scroll !== null &&
-      shouldFollowRef.current &&
-      !transcriptHasSelection(scroll)
-    ) {
-      scroll.scrollTop = scroll.scrollHeight;
-      setAtLive(true);
+    if (scroll)
+      readingState.scroll = {
+        top: scroll.scrollTop,
+        following: shouldFollowRef.current,
+      };
+  }, [readingState]);
+  const pauseFollowing = useCallback(() => {
+    shouldFollowRef.current = false;
+    setAtLive(false);
+    saveReadingPosition();
+  }, [saveReadingPosition]);
+  const followBottom = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll || !shouldFollowRef.current) return;
+    if (transcriptHasSelection(scroll)) {
+      pauseFollowing();
+      return;
     }
-  }, [approvals, composer.compaction, thread?.canonicalItems, thread?.turns]);
+    scroll.scrollTop = scroll.scrollHeight;
+    saveReadingPosition();
+  }, [pauseFollowing, saveReadingPosition]);
+
+  // Restore only this thread's last reading position. A new thread opens at live.
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const saved = readingState.scroll;
+    shouldFollowRef.current = saved?.following ?? true;
+    scroll.scrollTop = saved?.top ?? scroll.scrollHeight;
+    setAtLive(shouldFollowRef.current);
+    saveReadingPosition();
+  }, [readingState, saveReadingPosition]);
+
+  // New transcript data may advance a live reader. Approvals, focus and Composer
+  // layout are not new messages and must not independently pull an idle reader.
+  const latestTurn = turns.at(-1);
+  const transcriptArrival = JSON.stringify([
+    thread?.id,
+    turns.length,
+    latestTurn?.id,
+    latestTurn?.status,
+    latestTurn?.items.length,
+    latestTurn?.items.at(-1)?.id,
+    thread?.canonicalItems?.length,
+    thread?.canonicalItems?.at(-1)?.id,
+  ]);
+  useEffect(() => {
+    followBottom();
+  }, [followBottom, transcriptArrival]);
 
   useEffect(() => {
     const selection = () => {
-      if (transcriptHasSelection(scrollRef.current)) {
-        shouldFollowRef.current = false;
-        setAtLive(false);
-      }
+      if (transcriptHasSelection(scrollRef.current)) pauseFollowing();
     };
     document.addEventListener("selectionchange", selection);
     return () => document.removeEventListener("selectionchange", selection);
-  }, []);
+  }, [pauseFollowing]);
+  const streamingRef = useRef(false);
+  streamingRef.current = runningTurn !== null;
   useLayoutEffect(() => {
-    const content = scrollRef.current?.firstElementChild;
-    if (!content || typeof ResizeObserver === "undefined") return;
+    const scroll = scrollRef.current;
+    const content = scroll?.firstElementChild;
+    if (!scroll || !content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      const scroll = scrollRef.current;
-      if (scroll && shouldFollowRef.current && !transcriptHasSelection(scroll))
-        scroll.scrollTop = scroll.scrollHeight;
+      if (streamingRef.current) followBottom();
+      else if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1)
+        pauseFollowing();
+      // Idle layout changes can expose a Back to live action, never activate it.
     });
     observer.observe(content);
+    observer.observe(scroll);
     return () => observer.disconnect();
-  }, []);
+  }, [followBottom, pauseFollowing]);
 
   // Keep a newly failed request visible when approvals, queued messages and a
   // long draft overflow the bottom zone. User scrolling afterwards is left
@@ -528,8 +572,8 @@ function ThreadViewContent({
 
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
-  // space and Back to live can float just above it; growth keeps a live
-  // view pinned to the bottom.
+  // space and Back to live can float just above it. This is geometry only;
+  // publishing a height never changes the reader's follow intent.
   useLayoutEffect(() => {
     const view = viewRef.current;
     const zone = bottomZoneRef.current;
@@ -539,13 +583,6 @@ function ThreadViewContent({
       if (view.style.getPropertyValue("--bottom-zone-height") === height)
         return;
       view.style.setProperty("--bottom-zone-height", height);
-      const scroll = scrollRef.current;
-      if (
-        shouldFollowRef.current &&
-        scroll !== null &&
-        !transcriptHasSelection(scroll)
-      )
-        scroll.scrollTop = scroll.scrollHeight;
     };
     publish();
     if (typeof ResizeObserver === "undefined") return;
@@ -910,16 +947,38 @@ function ThreadViewContent({
             isNestedTranscriptScroll(event.target, event.currentTarget)
           )
             return;
-          shouldFollowRef.current = false;
-          setAtLive(false);
+          pauseFollowing();
+        }}
+        onPointerDownCapture={(event) => {
+          if (!isNestedTranscriptScroll(event.target, event.currentTarget))
+            pauseFollowing();
+        }}
+        onFocusCapture={pauseFollowing}
+        onKeyDownCapture={(event) => {
+          if (
+            [
+              "ArrowUp",
+              "ArrowDown",
+              "PageUp",
+              "PageDown",
+              "Home",
+              "End",
+              " ",
+            ].includes(event.key) &&
+            !isNestedTranscriptScroll(event.target, event.currentTarget)
+          )
+            pauseFollowing();
         }}
         onScroll={(event) => {
           const target = event.currentTarget;
-          const live =
-            !transcriptHasSelection(target) &&
-            target.scrollHeight - target.scrollTop - target.clientHeight < 80;
-          shouldFollowRef.current = live;
-          setAtLive(live);
+          // A scroll event (including one generated by layout/anchoring) may
+          // pause following, but proximity to bottom never resumes it.
+          if (
+            transcriptHasSelection(target) ||
+            target.scrollHeight - target.scrollTop - target.clientHeight > 1
+          )
+            pauseFollowing();
+          saveReadingPosition();
         }}
       >
         <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
@@ -1000,6 +1059,7 @@ function ThreadViewContent({
             document.getSelection()?.removeAllRanges();
             scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
             setAtLive(true);
+            saveReadingPosition();
           }}
         >
           <Icon name="arrow-down" size={14} />

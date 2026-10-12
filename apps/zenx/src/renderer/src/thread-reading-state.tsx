@@ -11,6 +11,7 @@ export function createThreadReadingState() {
   let disclosures: ReadonlyMap<string, boolean> = new Map();
   const listeners = new Set<() => void>();
   return {
+    scroll: null as { top: number; following: boolean } | null,
     snapshot: () => disclosures,
     subscribe: (listener: () => void) => {
       listeners.add(listener);

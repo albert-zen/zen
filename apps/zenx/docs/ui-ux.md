@@ -233,6 +233,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 不在 Composer 重复显示 Turn 已经表达的运行时长或状态。
 - Approval bar 位于聊天流与 Composer 之间，不塞入 Trace Group 或 Composer toolbar。
 - 用户处于实时底部时，新 Item 自动跟随；用户向上阅读后，不改变滚动位置，并显示 **Back to live**。
+- 手动上翻、键盘阅读、展开/聚焦 transcript 或选择文字后暂停跟随，即使仍在底部附近也不自动重启。空闲会话的 ResizeObserver、Composer 高度、窗口宽度与焦点变化不吸附到底部；切换线程或页面后按精确 Thread 恢复上次阅读位置。
 - Back to live 返回实时底部后才恢复自动跟随。流式 patch 不得丢失 disclosure、焦点或草稿。
 - Composer（含审批条与上下文行）是浮在满高 transcript 滚动区底部的 overlay：transcript 滚动条贯穿右侧从上到下，列表底部保留与 bottom zone 等高的虚拟留白，Back to live 悬浮在 bottom zone 正上方并随其高度上移。所有可滚动表面使用统一的细滚动条。这是布局与视觉校准，不改变 live following 的交互合同。
 - Tool completion 与 Final Message / Turn completion 的到达顺序可能不同；UI 等到可展示终态后再切换完成态投影。
