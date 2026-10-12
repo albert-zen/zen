@@ -76,6 +76,7 @@ test("PAW exposes explicit notes, exact local references and truthful unconfigur
     assistant: { threadId: "assistant", triggerId: "reply" },
     memberCount: 1,
     messagePreview: null,
+    lastMessageAt: null,
   };
   const props = {
     room,

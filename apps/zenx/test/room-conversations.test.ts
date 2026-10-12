@@ -23,6 +23,7 @@ const companion = {
   members: [{ name: "Companion", threadId: "assistant-thread" }],
   memberCount: 1,
   messagePreview: "Ready to help",
+  lastMessageAt: 1_700_000_000_000,
 };
 const room = {
   id: "team",
@@ -33,6 +34,7 @@ const room = {
   ],
   memberCount: 2,
   messagePreview: null,
+  lastMessageAt: null,
 };
 
 test("Sidebar opens grouped PAW conversations and Rooms without duplicating plugin navigation or creating Threads", async () => {

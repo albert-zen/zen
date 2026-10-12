@@ -31,6 +31,7 @@ for (const interruption of ["none", "route", "focus"] as const) {
       members: [],
       memberCount: 0,
       messagePreview: null,
+      lastMessageAt: null,
     };
     const drafts = new WorkspaceFileDrafts();
     function Harness() {

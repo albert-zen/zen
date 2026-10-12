@@ -51,6 +51,7 @@ import {
 const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
 type ThreadDensity = "compact" | "detailed";
 const SidebarSettingsContext = createContext<PublicHostSettings | null>(null);
+const EMPTY_UNREAD_IDS: ReadonlySet<string> = new Set<string>();
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -87,6 +88,9 @@ interface SidebarProps {
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
   roomConversations?: RoomConversationState;
+  /** Window-local unread badges derived from read watermarks in App. */
+  unreadThreadIds?: ReadonlySet<string>;
+  unreadRoomIds?: ReadonlySet<string>;
   selectedRoomId?: string | null;
   selectedPage: string;
   selectedThreadId: string | null;
@@ -125,6 +129,8 @@ export function Sidebar({
   pendingApprovalThreadIds,
   pluginContributions,
   roomConversations,
+  unreadThreadIds = EMPTY_UNREAD_IDS,
+  unreadRoomIds = EMPTY_UNREAD_IDS,
   selectedRoomId,
   selectedPage,
   selectedThreadId,
@@ -424,6 +430,7 @@ export function Sidebar({
               {...roomConversations}
               selectedRoomId={selectedRoomId}
               selectedPage={selectedPage}
+              unreadRoomIds={unreadRoomIds}
               onOpen={onOpenContribution}
             />
           )}
@@ -555,6 +562,7 @@ export function Sidebar({
               liveThread={liveThread}
               pinnedThreadIds={pinnedThreadIds}
               watchingThreadIds={watchingThreadIds}
+              unreadThreadIds={unreadThreadIds}
             />
           ) : (
             <>
@@ -570,6 +578,7 @@ export function Sidebar({
                   selectedThreadId={selectedThreadId}
                   threads={pinnedThreads}
                   watchingThreadIds={watchingThreadIds}
+                  unreadThreadIds={unreadThreadIds}
                 />
               )}
               {!projectsOpen ? null : (
@@ -599,6 +608,7 @@ export function Sidebar({
                   liveThread={liveThread}
                   pinnedThreadIds={pinnedThreadIds}
                   watchingThreadIds={watchingThreadIds}
+                  unreadThreadIds={unreadThreadIds}
                 />
               )}
             </>
@@ -719,6 +729,7 @@ function InboxView({
   liveThread,
   watchingThreadIds,
   pinnedThreadIds,
+  unreadThreadIds = EMPTY_UNREAD_IDS,
 }: {
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
@@ -731,6 +742,7 @@ function InboxView({
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
   pinnedThreadIds: ReadonlySet<string>;
+  unreadThreadIds?: ReadonlySet<string>;
 }) {
   return deriveInboxSections(
     threads,
@@ -755,6 +767,7 @@ function InboxView({
             selected={thread.threadId === selectedThreadId}
             thread={thread}
             watching={watchingThreadIds.has(thread.threadId)}
+            unread={unreadThreadIds.has(thread.threadId)}
           />
         ))}
       </section>
@@ -773,6 +786,7 @@ function PinnedThreadsView({
   selectedThreadId,
   threads,
   watchingThreadIds,
+  unreadThreadIds = EMPTY_UNREAD_IDS,
 }: {
   liveThread: Thread | null;
   onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
@@ -784,6 +798,7 @@ function PinnedThreadsView({
   selectedThreadId: string | null;
   threads: readonly NativeThreadSummary[];
   watchingThreadIds: ReadonlySet<string>;
+  unreadThreadIds?: ReadonlySet<string>;
 }) {
   return (
     <section
@@ -807,6 +822,7 @@ function PinnedThreadsView({
           selected={thread.threadId === selectedThreadId}
           thread={thread}
           watching={watchingThreadIds.has(thread.threadId)}
+          unread={unreadThreadIds.has(thread.threadId)}
         />
       ))}
     </section>
@@ -837,6 +853,7 @@ function ProjectsView({
   liveThread,
   watchingThreadIds,
   pinnedThreadIds,
+  unreadThreadIds = EMPTY_UNREAD_IDS,
 }: {
   projects: ZenXProjectProjectionSnapshot;
   sidebarOrder: ZenXSidebarOrder;
@@ -861,6 +878,7 @@ function ProjectsView({
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
   pinnedThreadIds: ReadonlySet<string>;
+  unreadThreadIds?: ReadonlySet<string>;
 }) {
   const [dropTarget, setDropTarget] = useState<{
     kind: "project" | "thread";
@@ -946,6 +964,7 @@ function ProjectsView({
       selectedThreadId={selectedThreadId}
       pinnedThreadIds={pinnedThreadIds}
       watchingThreadIds={watchingThreadIds}
+      unreadThreadIds={unreadThreadIds}
       projectReorder={
         onReorderProject === undefined || group.key === "__unavailable__"
           ? undefined
@@ -1194,6 +1213,7 @@ function ProjectRows({
   liveThread,
   watchingThreadIds,
   pinnedThreadIds,
+  unreadThreadIds = EMPTY_UNREAD_IDS,
   projectReorder,
   threadReorder,
 }: {
@@ -1215,6 +1235,7 @@ function ProjectRows({
   liveThread: Thread | null;
   watchingThreadIds: ReadonlySet<string>;
   pinnedThreadIds: ReadonlySet<string>;
+  unreadThreadIds?: ReadonlySet<string>;
   projectReorder?: ProjectReorderHandlers;
   threadReorder?: ThreadReorderHandlers;
 }) {
@@ -1528,6 +1549,7 @@ function ProjectRows({
                 thread={thread}
                 projectWorkspace={group.workspace}
                 watching={watchingThreadIds.has(thread.threadId)}
+                unread={unreadThreadIds.has(thread.threadId)}
                 reorder={
                   threadReorder === undefined
                     ? undefined
@@ -1592,6 +1614,7 @@ function ThreadRow({
   pinned,
   watching,
   inbox = false,
+  unread = false,
   reorder,
 }: {
   thread: NativeThreadSummary;
@@ -1607,6 +1630,8 @@ function ThreadRow({
   pinned: boolean;
   watching: boolean;
   inbox?: boolean;
+  /** New completed activity the user has not viewed since (read watermark). */
+  unread?: boolean;
   reorder?: ThreadRowReorderHandlers;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -1712,6 +1737,11 @@ function ThreadRow({
           <span
             className="thread-title-status live-dot ready"
             aria-label={i18n.t("shell:running")}
+          />
+        ) : unread ? (
+          <span
+            className="unread-dot"
+            aria-label={i18n.t("shell:unreadMessages")}
           />
         ) : watching ? (
           <Icon name="moon" size={12} aria-label={i18n.t("shell:watching")} />

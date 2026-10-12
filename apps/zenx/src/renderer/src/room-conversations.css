@@ -38,6 +38,14 @@
   gap: 2px;
   min-width: 0;
 }
+.room-conversation-unread {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--text-accent);
+}
 .room-conversation-label strong,
 .room-conversation-label small {
   overflow: hidden;

@@ -1189,6 +1189,16 @@ button:disabled {
 .needs-dot {
   background: var(--warn);
 }
+/* Unread = finished activity the user has not viewed; deliberately distinct
+ * from the warning (needs you) and status (running) dots, and visible in both
+ * Sidebar densities unlike the model-metadata status slots. */
+.unread-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-accent);
+}
 .live-dot {
   background: var(--text-disabled);
 }

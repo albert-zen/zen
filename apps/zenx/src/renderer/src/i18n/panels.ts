@@ -267,6 +267,7 @@ export const en = {
   cancellationNotConfirmedCheckDelivery:
     "Cancellation not confirmed; check delivery",
   rooms: "Rooms",
+  unreadMessages: "Unread messages",
   noMessagesYet: "No messages yet",
   aPlaceToWorkTogether: "A place to work together",
   createARoomToBringYourAgents:
@@ -966,6 +967,7 @@ export const zhCN = {
   messageHasNotBeenSentChooseSend: "消息尚未发送。选择“发送待发消息”即可发送。",
   cancellationNotConfirmedCheckDelivery: "取消未确认；请检查投递状态",
   rooms: "房间",
+  unreadMessages: "有未读消息",
   noMessagesYet: "尚无消息",
   aPlaceToWorkTogether: "一起工作的地方",
   createARoomToBringYourAgents: "创建房间，让 Agent 在同一个会话中协作。",

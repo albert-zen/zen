@@ -123,6 +123,15 @@ import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { Sidebar } from "./Sidebar.js";
 import {
+  deriveUnreadKeys,
+  parseReadWatermarks,
+  serializeReadWatermarks,
+  withReadBaselines,
+  withReadMark,
+  type ReadWatermarks,
+  type WatermarkEntry,
+} from "./conversation-read-state.js";
+import {
   derivePinnedThreads,
   EMPTY_SIDEBAR_ORDER,
   readSidebarMode,
@@ -157,6 +166,13 @@ const isModelCatalogLoading = (value: string | null) =>
   (value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "en" }) ||
     value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "zh-CN" }));
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
+const READ_WATERMARKS_STORAGE_KEY = "zenx.conversation-read-watermarks";
+
+function isoToEpochMs(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 interface NewThreadDraft {
   permissionMode?: FilePermissionMode;
@@ -575,6 +591,17 @@ export function App() {
     [],
   );
   const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
+  // Window-local read watermarks; unknown conversations are baselined as
+  // read so restarts never create a backlog of false unread dots.
+  const [readWatermarks, setReadWatermarks] = useState<ReadWatermarks>(() => {
+    try {
+      return parseReadWatermarks(
+        window.localStorage.getItem(READ_WATERMARKS_STORAGE_KEY),
+      );
+    } catch {
+      return {};
+    }
+  });
   const [sidebarOrder, setSidebarOrder] =
     useState<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
@@ -1380,6 +1407,68 @@ export function App() {
   );
   const roomPanel = roomQuery.get("panel");
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
+  // Unread = activity watermark advanced after the last view, excluding the
+  // conversation currently on screen. Read marks follow the surface they
+  // belong to (t: Thread, r: Room) and stay inside this window.
+  const threadWatermarkEntries: WatermarkEntry[] = activeSummaries.map(
+    (summary) => ({
+      key: `t:${summary.threadId}`,
+      updatedAtMs: isoToEpochMs(summary.updatedAt),
+    }),
+  );
+  const roomWatermarkEntries: WatermarkEntry[] = roomConversations.rooms.map(
+    (room) => ({ key: `r:${room.id}`, updatedAtMs: room.lastMessageAt }),
+  );
+  const viewedWatermarkKeys = new Set([
+    ...(selectedThreadId === null ? [] : [`t:${selectedThreadId}`]),
+    ...(selectedRoomId === null ? [] : [`r:${selectedRoomId}`]),
+  ]);
+  const unreadThreadIds = new Set<string>(
+    [
+      ...deriveUnreadKeys(
+        threadWatermarkEntries,
+        readWatermarks,
+        viewedWatermarkKeys,
+      ),
+    ].flatMap((key) => (key.startsWith("t:") ? [key.slice(2)] : [])),
+  );
+  const unreadRoomIds = new Set<string>(
+    [
+      ...deriveUnreadKeys(
+        roomWatermarkEntries,
+        readWatermarks,
+        viewedWatermarkKeys,
+      ),
+    ].flatMap((key) => (key.startsWith("r:") ? [key.slice(2)] : [])),
+  );
+  useEffect(() => {
+    setReadWatermarks((current) => {
+      let next = withReadBaselines(current, threadWatermarkEntries);
+      next = withReadBaselines(next, roomWatermarkEntries);
+      for (const entry of threadWatermarkEntries)
+        if (viewedWatermarkKeys.has(entry.key))
+          next = withReadMark(next, entry.key, entry.updatedAtMs);
+      for (const entry of roomWatermarkEntries)
+        if (viewedWatermarkKeys.has(entry.key))
+          next = withReadMark(next, entry.key, entry.updatedAtMs);
+      return next;
+    });
+  }, [
+    threadSummaries,
+    roomConversations.rooms,
+    selectedThreadId,
+    selectedRoomId,
+  ]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        READ_WATERMARKS_STORAGE_KEY,
+        serializeReadWatermarks(readWatermarks),
+      );
+    } catch {
+      // Local convenience storage; absence loses nothing durable.
+    }
+  }, [readWatermarks]);
 
   const configuredProjects = projects.projects.filter(
     (project) => project.configured,
@@ -2532,6 +2621,8 @@ export function App() {
       ) : null}
       <Sidebar
         roomConversations={roomsAdmitted ? roomConversations : undefined}
+        unreadThreadIds={unreadThreadIds}
+        unreadRoomIds={roomsAdmitted ? unreadRoomIds : undefined}
         selectedRoomId={selectedRoomId}
         collapsed={sidebarCollapsed}
         liveThread={threadDetail}

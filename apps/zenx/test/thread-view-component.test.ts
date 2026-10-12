@@ -3598,3 +3598,85 @@ function openSendOptions(): void {
     new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
   );
 }
+
+test("Turn and session output rates reach the message hover and context-ring telemetry", async () => {
+  const completed = turnWithItems("completed", [user("ask"), agent("answer")]);
+  assert.equal(completed.startedAt, 10);
+  assert.equal(completed.completedAt, 11);
+  const usageProjection: ModelUsageProjection = {
+    thread: { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+    turns: {
+      "turn-1": { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+    },
+    context: {
+      inputTokens: 120_000,
+      inputTokenSource: "provider",
+      contextWindow: 400_000,
+      ratio: 0.3,
+    },
+  };
+  const {
+    turnOutputRatePerSecond,
+    threadOutputRatePerSecond,
+    outputRateLabel,
+  } = await import("../src/renderer/src/ThreadView.js");
+
+  assert.equal(
+    turnOutputRatePerSecond(usageProjection.turns["turn-1"], completed),
+    900,
+  );
+  assert.equal(turnOutputRatePerSecond(undefined, completed), null);
+  assert.equal(
+    turnOutputRatePerSecond(
+      usageProjection.turns["turn-1"],
+      turnWithItems("inProgress", []),
+    ),
+    null,
+    "running Turns never invent a rate",
+  );
+  assert.equal(
+    threadOutputRatePerSecond(thread([completed]), usageProjection),
+    900,
+  );
+  assert.equal(
+    threadOutputRatePerSecond(thread([completed]), {
+      ...usageProjection,
+      turns: {},
+    }),
+    null,
+    "turns without usage telemetry are excluded, not guessed",
+  );
+  assert.equal(
+    outputRateLabel(null),
+    "output speed unknown",
+    "Unknown mirrors the cache telemetry semantics",
+  );
+  assert.equal(outputRateLabel(45.2), "output 45 tok/s");
+  assert.equal(outputRateLabel(3.26), "output 3.3 tok/s");
+
+  const html = renderTurns([completed], [], undefined, {}, usageProjection);
+  assert.match(
+    html,
+    /class="message-cache" title="Turn cache telemetry[^"]*output 900 tok\/s/u,
+    "the final message hover carries its own Turn rate",
+  );
+  assert.match(
+    html,
+    /aria-label="[^"]*output 900 tok\/s[^"]*"/u,
+    "the context ring hover carries the session rate",
+  );
+
+  // A Thread whose Turn lacks usage keeps the ring honest.
+  const bare = renderTurns(
+    [completed],
+    [],
+    undefined,
+    {},
+    {
+      ...usageProjection,
+      turns: {},
+    },
+  );
+  assert.match(bare, /output speed unknown/u);
+  assert.doesNotMatch(bare, /message-cache/u);
+});

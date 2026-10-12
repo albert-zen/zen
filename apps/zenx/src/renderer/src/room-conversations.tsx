@@ -16,6 +16,8 @@ export interface RoomConversation {
   members: readonly { name: string; threadId: string }[];
   memberCount: number;
   messagePreview: string | null;
+  /** Epoch ms of the newest message; null when the Room has no messages. */
+  lastMessageAt: number | null;
 }
 
 export interface RoomConversationState {
@@ -197,6 +199,10 @@ function navigationRoom(value: unknown): RoomConversation {
   const messages = Array.isArray(room.messages) ? room.messages : [];
   const latest = record(messages.at(-1));
   const preview = typeof latest?.text === "string" ? latest.text : null;
+  const lastMessageAt =
+    typeof latest?.createdAt === "number" && Number.isFinite(latest.createdAt)
+      ? latest.createdAt
+      : null;
   return {
     id: room.id,
     name: room.name,
@@ -207,6 +213,7 @@ function navigationRoom(value: unknown): RoomConversation {
       preview === null
         ? null
         : Array.from(preview.slice(0, 240)).slice(0, 120).join(""),
+    lastMessageAt,
   };
 }
 
@@ -231,10 +238,12 @@ export function RoomConversationNavigation({
   selectedRoomId,
   selectedPage,
   onOpen,
+  unreadRoomIds,
 }: RoomConversationState & {
   selectedRoomId?: string | null;
   selectedPage: string;
   onOpen(route: string): void;
+  unreadRoomIds?: ReadonlySet<string>;
 }) {
   useTranslation("panels");
   const groups = [
@@ -267,6 +276,7 @@ export function RoomConversationNavigation({
           error={error}
           selectedRoomId={selectedRoomId}
           selectedPage={selectedPage}
+          unreadRoomIds={unreadRoomIds}
           onOpen={onOpen}
         />
       ))}
@@ -295,6 +305,7 @@ function ConversationGroup({
   error,
   selectedRoomId,
   selectedPage,
+  unreadRoomIds,
   onOpen,
 }: {
   group: {
@@ -308,6 +319,7 @@ function ConversationGroup({
   error: string | null;
   selectedRoomId?: string | null;
   selectedPage: string;
+  unreadRoomIds?: ReadonlySet<string>;
   onOpen(route: string): void;
 }) {
   const identity = group.kind === "companion" ? "paw" : "rooms";
@@ -375,6 +387,14 @@ function ConversationGroup({
                           }))}
                   </small>
                 </span>
+                {unreadRoomIds?.has(room.id) === true ? (
+                  <span
+                    className="room-conversation-unread"
+                    role="status"
+                    aria-label={i18n.t("panels:unreadMessages")}
+                    title={i18n.t("panels:unreadMessages")}
+                  />
+                ) : null}
               </button>
             ))}
             {group.rooms.length === 0 && !loading && error === null ? (
