@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import childProcess, { ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,10 +23,10 @@ test("GUI launch waits for framed login-shell PATH before mutating only PATH", a
     childProcess,
     "spawn",
     (shell: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
-      assert.equal(shell, "/bin/zsh");
-      assert.equal(args[0], "-ilc");
+      assert.equal(shell, "/bin/sh");
+      assert.deepEqual(args.slice(3, 5), ["/bin/zsh", "-ilc"]);
       assert.equal(options.env.PATH, minimalPath);
-      command = args[1]!;
+      command = args.at(-1)!;
       return child;
     },
   );
@@ -44,7 +44,7 @@ test("GUI launch waits for framed login-shell PATH before mutating only PATH", a
   assert.equal(environment.PATH, minimalPath);
   const marker = command.match(/ZENX_PATH_[a-f0-9]+/u)![0];
   stdout.write(
-    `startup noise\nAPI_KEY=do-not-import\n\0${marker}\0/Users/test/.local/bin:${minimalPath}\0${marker}\0logout noise`,
+    `startup noise\nAPI_KEY=do-not-import\n\0${marker}\0/Users/test/.local/bin:${minimalPath}\0${marker}\0logout noise\0${marker}_EXIT\0${0}\0`,
   );
   child.emit("close", 0, null);
   assert.equal(await pending, "restored");
@@ -66,7 +66,7 @@ function mockShell(t: TestContext) {
     childProcess,
     "spawn",
     (_shell: string, args: string[]) => {
-      command = args[1]!;
+      command = args.at(-1)!;
       return child;
     },
   );
@@ -75,12 +75,12 @@ function mockShell(t: TestContext) {
     stdout,
     kill,
     spawn,
-    frame(path: string | Buffer) {
+    frame(path: string | Buffer, status = 0) {
       const marker = command.match(/ZENX_PATH_[a-f0-9]+/u)![0];
       return Buffer.concat([
         Buffer.from(`\0${marker}\0`),
         Buffer.from(path),
-        Buffer.from(`\0${marker}\0`),
+        Buffer.from(`\0${marker}\0\0${marker}_EXIT\0${status}\0`),
       ]);
     },
     complete(path: string) {
@@ -137,12 +137,7 @@ test("explicit terminal detection preserves PATH even without terminal variables
   assert.equal(shell.spawn.mock.callCount(), 0);
 });
 
-for (const path of [
-  "",
-  "/usr/bin:",
-  "relative:/usr/bin",
-  "/usr/bin\0SECRET=bad",
-])
+for (const path of ["/usr/bin\0SECRET=bad"])
   test(`malformed PATH ${JSON.stringify(path)} cannot replace the inherited PATH`, async (t) => {
     const shell = mockShell(t);
     const environment = { PATH: minimalPath, SHELL: "/bin/zsh" };
@@ -186,7 +181,12 @@ for (const output of [
               : frame,
     );
     shell.child.emit("close", 0, null);
-    assert.equal(await pending, "invalid-output");
+    assert.equal(
+      await pending,
+      output === "empty" || output === "unframed" || output === "truncated"
+        ? "failed"
+        : "invalid-output",
+    );
     assert.deepEqual(environment, { PATH: minimalPath, SHELL: "/bin/zsh" });
   });
 
@@ -230,7 +230,7 @@ test("Quit cancels promptly and prevents a late PATH publication", async (t) => 
     fromTerminal: false,
     signal: controller.signal,
   });
-  shell.stdout.write(shell.frame("/custom/bin:/usr/bin"));
+  shell.stdout.write(shell.frame("/custom/bin:/usr/bin").subarray(0, -1));
   controller.abort();
   assert.equal(await pending, "cancelled");
   shell.child.emit("close", 0, null);
@@ -267,7 +267,7 @@ for (const failure of ["throw", "error", "exit"] as const)
     });
     if (failure === "error") shell.child.emit("error", new Error("ENOENT"));
     if (failure === "exit") {
-      shell.stdout.write(shell.frame("/uncommitted"));
+      shell.stdout.write(shell.frame("/uncommitted", 1));
       shell.child.emit("close", 1, null);
     }
     assert.equal(await pending, "failed");
@@ -449,3 +449,179 @@ test(
     }
   },
 );
+
+for (const path of ["", "/usr/bin:", "relative:.:/usr/bin"])
+  test(`valid PATH ${JSON.stringify(path)} retains shell lookup semantics`, async (t) => {
+    const shell = mockShell(t);
+    const environment = { PATH: minimalPath, SHELL: "/bin/zsh" };
+    const pending = restoreLoginShellPath({
+      platform: "darwin",
+      environment,
+      fromTerminal: false,
+    });
+    shell.complete(path);
+    assert.equal(await pending, "restored");
+    assert.equal(environment.PATH, path);
+  });
+
+for (const suffix of [":", ":.:relative-bin"])
+  test(
+    `real login PATH with ${suffix} still finds the first user tool`,
+    { skip: process.platform === "win32" || !existsSync("/bin/zsh") },
+    async () => {
+      const home = await mkdtemp(join(tmpdir(), "zenx-path-semantics-"));
+      try {
+        await mkdir(join(home, "bin"));
+        await writeFile(
+          join(home, ".zprofile"),
+          `export PATH="$HOME/bin:$PATH${suffix}"\n`,
+        );
+        await writeFile(
+          join(home, "bin", "zenx-path-fixture"),
+          "#!/bin/sh\nprintf found",
+          { mode: 0o700 },
+        );
+        const environment = {
+          PATH: minimalPath,
+          HOME: home,
+          ZDOTDIR: home,
+          SHELL: "/bin/zsh",
+        };
+        assert.equal(
+          await restoreLoginShellPath({
+            platform: "darwin",
+            environment,
+            fromTerminal: false,
+          }),
+          "restored",
+        );
+        assert(environment.PATH.endsWith(suffix));
+        const result = await new ShellToolRuntime({ environment }).execute({
+          callId: "relative-path-tool",
+          name: "shell",
+          arguments: { command: "zenx-path-fixture" },
+          cwd: home,
+          signal: new AbortController().signal,
+        });
+        assert.equal(result.exitCode, 0);
+        assert.equal(result.output, "found");
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+function processHasStopped(pid: number): boolean {
+  try {
+    return childProcess
+      .execFileSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+      .trim()
+      .startsWith("Z");
+  } catch {
+    return true;
+  }
+}
+
+async function eventually(
+  check: () => Promise<boolean> | boolean,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!(await check())) {
+    assert(Date.now() < deadline, "fixture condition did not settle");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+for (const disposition of ["restored", "timed-out", "cancelled"] as const)
+  test(
+    `real profile helper holding stdout is stopped on ${disposition}`,
+    { skip: process.platform === "win32" || !existsSync("/bin/zsh") },
+    async () => {
+      const home = await mkdtemp(join(tmpdir(), "zenx-shell-cleanup-"));
+      const controller = new AbortController();
+      let helperPid: number | undefined;
+      try {
+        // Cleanup flag lets the fixture stop naturally even if the assertion fails;
+        // tests never signal a saved PID after the probe has relinquished ownership.
+        await writeFile(
+          join(home, "helper"),
+          '#!/bin/sh\nwhile ! [ -f "$HOME/cleanup" ]; do /bin/sleep 0.05; done\n',
+          { mode: 0o700 },
+        );
+        await writeFile(
+          join(home, ".zshrc"),
+          `(trap '' HUP; exec "$HOME/helper") &\n/usr/bin/printf '%s' $! > "$HOME/helper.pid"\n${disposition === "restored" ? "" : 'while ! [ -f "$HOME/cleanup" ]; do /bin/sleep 0.05; done\n'}`,
+        );
+        const environment = {
+          PATH: minimalPath,
+          HOME: home,
+          ZDOTDIR: home,
+          SHELL: "/bin/zsh",
+        };
+        const pending = restoreLoginShellPath({
+          platform: "darwin",
+          environment,
+          fromTerminal: false,
+          signal: controller.signal,
+          timeoutMs: disposition === "timed-out" ? 750 : 5_000,
+        });
+        await eventually(async () => {
+          try {
+            helperPid = Number(
+              await readFile(join(home, "helper.pid"), "utf8"),
+            );
+            return helperPid > 0;
+          } catch {
+            return false;
+          }
+        });
+        if (disposition === "cancelled") controller.abort();
+        assert.equal(await pending, disposition);
+        await eventually(() => processHasStopped(helperPid!));
+      } finally {
+        controller.abort();
+        await writeFile(join(home, "cleanup"), "done");
+        if (helperPid !== undefined)
+          await eventually(() => processHasStopped(helperPid!));
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+test("split exit-status framing cannot publish PATH before successful shell completion", async (t) => {
+  const shell = mockShell(t);
+  const environment = { PATH: minimalPath, SHELL: "/bin/zsh" };
+  const pending = restoreLoginShellPath({
+    platform: "darwin",
+    environment,
+    fromTerminal: false,
+  });
+  const frame = shell.frame("relative-bin:/usr/bin:");
+  shell.stdout.write(frame.subarray(0, -1));
+  assert.equal(environment.PATH, minimalPath);
+  shell.stdout.write(frame.subarray(-1));
+  assert.equal(await pending, "restored");
+  assert.equal(environment.PATH, "relative-bin:/usr/bin:");
+  assert.equal(shell.kill.mock.callCount(), 1);
+});
+
+test("an unexpectedly exited supervisor is never signalled through a reusable numeric group ID", async (t) => {
+  const shell = mockShell(t);
+  Object.defineProperty(shell.child, "pid", { value: 987654 });
+  shell.child.exitCode = 1;
+  const killGroup = t.mock.method(process, "kill", () => true);
+  assert.equal(
+    await restoreLoginShellPath({
+      platform: "darwin",
+      environment: { SHELL: "/bin/zsh" },
+      fromTerminal: false,
+      timeoutMs: 10,
+    }),
+    "timed-out",
+  );
+  assert.equal(killGroup.mock.callCount(), 0);
+  assert.equal(shell.kill.mock.callCount(), 0);
+});

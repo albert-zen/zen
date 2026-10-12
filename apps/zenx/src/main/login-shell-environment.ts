@@ -56,18 +56,30 @@ export async function restoreLoginShellPath(options: {
 
   const marker = `ZENX_PATH_${randomBytes(16).toString("hex")}`;
   const delimiter = Buffer.from(`\0${marker}\0`);
+  const exitDelimiter = Buffer.from(`\0${marker}_EXIT\0`);
   // An absolute external printf avoids aliases/functions and works in the
   // supported login shells. Only PATH is printed, not a dump of exported keys.
   const command = `/usr/bin/printf '\\0${marker}\\0%s\\0${marker}\\0' "$PATH"`;
+  // Keep a supervisor alive until we close its stdin or kill its group. A login
+  // profile may leave background helpers holding stdout after its shell exits;
+  // the supervisor pins the PGID so cleanup never signals a recycled identity.
+  const supervisor = `"$@"
+status=$?
+/usr/bin/printf '\\0${marker}_EXIT\\0%d\\0' "$status"
+exec /bin/cat >/dev/null`;
   return await new Promise<LoginShellPathResult>((resolve) => {
     let child: ReturnType<typeof childProcess.spawn>;
     try {
-      child = childProcess.spawn(shell, ["-ilc", command], {
-        cwd: environment.HOME || "/",
-        env: { ...environment, TERM: environment.TERM || "dumb" },
-        detached: true,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
+      child = childProcess.spawn(
+        "/bin/sh",
+        ["-c", supervisor, "zenx-login-shell", shell, "-ilc", command],
+        {
+          cwd: environment.HOME || "/",
+          env: { ...environment, TERM: environment.TERM || "dumb" },
+          detached: true,
+          stdio: ["pipe", "pipe", "ignore"],
+        },
+      );
     } catch {
       resolve("failed");
       return;
@@ -81,8 +93,8 @@ export async function restoreLoginShellPath(options: {
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       if (stop && child.exitCode === null && child.signalCode === null) {
-        // The detached shell owns this process group. Kill its startup helpers
-        // too, while its live PID still identifies this particular child.
+        // The live supervisor pins this detached group even after the login
+        // shell exits. Never signal its numeric PGID after the supervisor exits.
         try {
           if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
           else child.kill("SIGKILL");
@@ -94,6 +106,7 @@ export async function restoreLoginShellPath(options: {
           }
         }
       }
+      child.stdin?.destroy();
       child.stdout?.destroy();
       child.unref();
       resolve(result);
@@ -104,21 +117,25 @@ export async function restoreLoginShellPath(options: {
       Math.min(TIMEOUT_MS, Math.max(1, options.timeoutMs ?? TIMEOUT_MS)),
     );
     child.on("error", () => finish("failed", true));
+    child.stdout?.on("error", () => finish("failed", true));
     child.stdout?.on("data", (chunk: Buffer) => {
+      if (settled) return;
       bytes += chunk.length;
       if (bytes > MAX_OUTPUT_BYTES) {
         finish("invalid-output", true);
         return;
       }
       chunks.push(chunk);
-    });
-    child.once("close", (code, exitSignal) => {
-      if (settled) return;
-      if (code !== 0 || exitSignal !== null) {
-        finish("failed");
+      const output = Buffer.concat(chunks);
+      const exitStart = output.indexOf(exitDelimiter);
+      if (exitStart < 0) return;
+      const statusStart = exitStart + exitDelimiter.length;
+      const statusEnd = output.indexOf(0, statusStart);
+      if (statusEnd < 0) return;
+      if (output.subarray(statusStart, statusEnd).toString("ascii") !== "0") {
+        finish("failed", true);
         return;
       }
-      const output = Buffer.concat(chunks);
       const start = output.indexOf(delimiter);
       const end = output.indexOf(delimiter, start + delimiter.length);
       if (
@@ -126,7 +143,7 @@ export async function restoreLoginShellPath(options: {
         end < 0 ||
         output.indexOf(delimiter, end + delimiter.length) !== -1
       ) {
-        finish("invalid-output");
+        finish("invalid-output", true);
         return;
       }
       let path: string;
@@ -135,14 +152,11 @@ export async function restoreLoginShellPath(options: {
           output.subarray(start + delimiter.length, end),
         );
       } catch {
-        finish("invalid-output");
+        finish("invalid-output", true);
         return;
       }
-      if (
-        path.includes("\0") ||
-        !path.split(":").every((entry) => posix.isAbsolute(entry))
-      ) {
-        finish("invalid-output");
+      if (path.includes("\0")) {
+        finish("invalid-output", true);
         return;
       }
       if (signal?.aborted) {
@@ -150,8 +164,9 @@ export async function restoreLoginShellPath(options: {
         return;
       }
       environment.PATH = path;
-      finish("restored");
+      finish("restored", true);
     });
+    child.once("close", () => finish("failed"));
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
   });
