@@ -24,7 +24,7 @@ function Fixture() {
   const [id, setId] = useState("thread-a");
   const [hidden, setHidden] = useState(false);
   const [wide, setWide] = useState(true);
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const thread = {
     ...runtimeThread(
       [
@@ -90,14 +90,15 @@ function Fixture() {
             </div>
           ) : (
             <ThreadView
-              key={id}
               thread={thread}
               approvals={[]}
               composer={{
                 ...emptyComposerState(),
-                draft: { text: draft, images: [] },
+                draft: { text: drafts[id] ?? "", images: [] },
               }}
-              onDraftChange={setDraft}
+              onDraftChange={(text) =>
+                setDrafts((current) => ({ ...current, [id]: text }))
+              }
               onInterrupt={async () => {}}
               onRespondToApproval={async () => {}}
               onSubmit={async () => {}}

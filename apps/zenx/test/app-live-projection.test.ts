@@ -1227,3 +1227,163 @@ async function waitFor<T>(read: () => T | null | undefined | false) {
   }
   throw new Error("Timed out waiting for renderer projection");
 }
+
+test("actual App cached navigation restores tall-Composer position", async () => {
+  const a = {
+    ...thread(),
+    turns: runtimeThread([runtimeCommand("done")], "completed").turns,
+  };
+  const b = { ...a, id: "thread-2" };
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === a.id ? a : b,
+        );
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  const previous = globalThis.ResizeObserver;
+  const callbacks = new Set<() => void>();
+  globalThis.ResizeObserver = class {
+    constructor(private callback: () => void) {}
+    observe() {
+      callbacks.add(this.callback);
+    }
+    disconnect() {
+      callbacks.delete(this.callback);
+    }
+  } as unknown as typeof ResizeObserver;
+  const resize = () => {
+    for (const callback of callbacks) callback();
+  };
+  try {
+    const tops = new WeakMap<HTMLElement, number>();
+    const proto = window.HTMLElement.prototype;
+    const originalRect = proto.getBoundingClientRect;
+    proto.getBoundingClientRect = function () {
+      return this.classList.contains("bottom-zone")
+        ? {
+            ...originalRect.call(this),
+            height: this.querySelector("textarea")?.value.includes("\n")
+              ? 226
+              : 126,
+          }
+        : originalRect.call(this);
+    };
+    Object.defineProperties(proto, {
+      clientHeight: {
+        configurable: true,
+        get() {
+          return 400;
+        },
+      },
+      scrollHeight: {
+        configurable: true,
+        get() {
+          const inset =
+            Number.parseFloat(
+              this.closest(".thread-view")?.style.getPropertyValue(
+                "--bottom-zone-height",
+              ) ?? "0",
+            ) || 0;
+          return 1287 + Math.max(0, inset + 24 - 38);
+        },
+      },
+      scrollTop: {
+        configurable: true,
+        get() {
+          return Math.min(tops.get(this) ?? 0, this.scrollHeight - 400);
+        },
+        set(value: number) {
+          tops.set(this, Math.max(0, Math.min(this.scrollHeight - 400, value)));
+        },
+      },
+    });
+
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ];
+    assert.equal(rows.length, 2);
+    const choose = async (index: number) => {
+      await act(async () => rows[index]!.click());
+      await waitFor(() => document.querySelector(".messages"));
+      await act(async () => resize());
+    };
+    const scroll = () => document.querySelector<HTMLElement>(".messages")!;
+    // Warm both exact native projection caches before testing same-view switching.
+    await choose(0);
+    await choose(1);
+    const reused = scroll();
+    await choose(0);
+    assert.equal(
+      scroll(),
+      reused,
+      "actual cached App navigation reuses ThreadView",
+    );
+    const textarea =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    const key = Object.getOwnPropertyNames(textarea).find((key) =>
+      key.startsWith("__reactProps$"),
+    )!;
+    await act(async () => {
+      (
+        textarea as unknown as Record<
+          string,
+          { onChange(event: { target: { value: string } }): void }
+        >
+      )[key]!.onChange({
+        target: {
+          value: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine",
+        },
+      });
+    });
+    await act(async () => {
+      resize();
+      scroll().dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -75, bubbles: true }),
+      );
+      scroll().scrollTop = 1024;
+      scroll().dispatchEvent(new window.Event("scroll"));
+    });
+    assert.equal(scroll().scrollTop, 1024);
+    await choose(1);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "",
+    );
+    await choose(0);
+    assert.equal(
+      scroll(),
+      reused,
+      "test exercised cached navigation, not a loader remount",
+    );
+    assert.equal(scroll().scrollHeight - scroll().clientHeight, 1099);
+    assert.equal(
+      scroll().scrollTop,
+      1024,
+      "actual App cached A must restore after its own Composer inset",
+    );
+    // New manual input replaces the restored target, including subsequent
+    // observer delivery and further cached A/B/A navigation.
+    await act(async () => {
+      scroll().dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -75, bubbles: true }),
+      );
+      scroll().scrollTop = 947;
+      scroll().dispatchEvent(new window.Event("scroll"));
+      resize();
+    });
+    assert.equal(scroll().scrollTop, 947);
+    await choose(1);
+    await choose(0);
+    assert.equal(scroll(), reused);
+    assert.equal(scroll().scrollTop, 947);
+    assert.ok(document.querySelector(".back-live"));
+  } finally {
+    globalThis.ResizeObserver = previous;
+    await harness.unmount();
+  }
+});

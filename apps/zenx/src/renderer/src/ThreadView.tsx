@@ -512,7 +512,8 @@ function ThreadViewContent({
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
   // space and Back to live can float just above it. This is geometry only;
-  // publishing a height never changes the reader's follow intent.
+  // publishing a height never changes the reader's follow intent. Re-publish
+  // on identity changes too: cached App navigation reuses this same DOM.
   useLayoutEffect(() => {
     const view = viewRef.current;
     const zone = bottomZoneRef.current;
@@ -530,9 +531,9 @@ function ThreadViewContent({
     return () => {
       observer.disconnect();
     };
-  }, []);
+  }, [readingState]);
 
-  // Restore only after the initial Composer inset above has been published.
+  // Restore only after this thread's Composer inset above has been published.
   // Otherwise scrollTop clamps to the temporary CSS fallback range and saving
   // that clamp loses near-bottom positions, especially with a tall draft.
   // This finishes synchronously: no delayed restore can override later input.

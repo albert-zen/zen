@@ -6,7 +6,8 @@ import {
 } from "./agent-runtime-dom.js";
 
 // Existing runtime tests also exercise updates within one mounted ThreadView.
-// These navigation regressions deliberately mirror App's keyed thread remounts.
+// Exercise loading/Settings remounts here; app-live-projection also covers
+// cached navigation, which keeps the same ThreadView mounted.
 const withRuntimeDom: typeof withUnkeyedRuntimeDom = (run) =>
   withUnkeyedRuntimeDom(run, { keyByThread: true });
 import {
