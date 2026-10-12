@@ -7,6 +7,7 @@ import {
 import { loadWorkspaceInstructions } from "./workspace-instructions.js";
 import type { WorkspaceInstructionFile } from "./item.js";
 import { pendingQueuedMessages } from "./input-queue.js";
+import { completedAnswer } from "./readable-thread-position.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -3110,6 +3111,7 @@ export class ZenAppServer {
         : { name: productMetadata.name }),
       createdAt: fork?.createdAt ?? metadata.createdAt,
       updatedAt: items.at(-1)?.createdAt ?? metadata.createdAt,
+      completedAnswer: completedAnswer(items),
       turnSortAt:
         items.findLast(
           (item, index) => index > forkIndex && item.type === "turn_started",

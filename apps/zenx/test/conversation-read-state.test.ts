@@ -10,8 +10,9 @@ import {
   type WatermarkEntry,
 } from "../src/renderer/src/conversation-read-state.js";
 
-const entries = (pairs: Array<[string, number | null]>): WatermarkEntry[] =>
-  pairs.map(([key, updatedAtMs]) => ({ key, updatedAtMs }));
+const entries = (
+  pairs: Array<[string, number | string | null]>,
+): WatermarkEntry[] => pairs.map(([key, position]) => ({ key, position }));
 
 test("watermarks round-trip through storage and reject malformed input", () => {
   const marks = { "t:a": 1_700, "r:b": 1_800 };
@@ -39,7 +40,7 @@ test("first-seen conversations are baselined as read without inventing unreads",
       ["t:b", null],
     ]),
   );
-  assert.deepEqual(next, { "t:a": 100 });
+  assert.deepEqual(next, { "t:a": 100, "t:b": 0 });
   assert.equal(
     withReadBaselines(next, entries([["t:a", 100]])),
     next,
@@ -85,4 +86,32 @@ test("the conversation on screen is never reported unread", () => {
     "viewed t:a stays read even when advanced; t:c has no baseline yet",
   );
   assert.deepEqual([...deriveUnreadKeys(listed, marks, ["t:a", "t:b"])], []);
+});
+
+test("an empty known Room keeps a baseline across reload and its first message is unread", () => {
+  const marks = parseReadWatermarks(
+    serializeReadWatermarks(
+      withReadBaselines({}, entries([["r:empty", null]])),
+    ),
+  );
+  assert.equal(marks["r:empty"], 0);
+  assert.deepEqual(
+    [...deriveUnreadKeys(entries([["r:empty", 100]]), marks, [])],
+    ["r:empty"],
+  );
+});
+
+test("Room identities survive reload and distinguish equal timestamps and saturated histories", () => {
+  let marks = withReadBaselines({}, entries([["r:room", "first-id"]]));
+  marks = parseReadWatermarks(serializeReadWatermarks(marks));
+  assert.deepEqual(
+    [...deriveUnreadKeys(entries([["r:room", "second-id"]]), marks, [])],
+    ["r:room"],
+  );
+  marks = withReadMark(marks, "r:room", "second-id");
+  assert.deepEqual(
+    [...deriveUnreadKeys(entries([["r:room", "a-later-id"]]), marks, [])],
+    ["r:room"],
+    "random ID lexical order never defines chronology",
+  );
 });

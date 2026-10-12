@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { CompletedAnswer } from "./readable-thread-position.js";
 import type { ApprovalPolicy, SandboxMode } from "./item.js";
 
 export interface CurrentMetadata {
@@ -24,6 +25,8 @@ export interface ThreadSummary {
   archived: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Derived final-answer identity/position; absent is unknown, null is empty. */
+  completedAnswer?: CompletedAnswer | null;
   /** Latest locally started Turn, or this Thread's creation (including forks). */
   turnSortAt?: string;
   preview: string;
@@ -157,6 +160,13 @@ export function isNativeThreadSummary(
     (value.status === "idle" || value.status === "active") &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
+    (value.completedAnswer === undefined ||
+      value.completedAnswer === null ||
+      (isRecord(value.completedAnswer) &&
+        typeof value.completedAnswer.itemId === "string" &&
+        value.completedAnswer.itemId.length > 0 &&
+        Number.isSafeInteger(value.completedAnswer.position) &&
+        (value.completedAnswer.position as number) > 0)) &&
     (value.turnSortAt === undefined || typeof value.turnSortAt === "string") &&
     (value.forkedFromThreadId === undefined ||
       typeof value.forkedFromThreadId === "string") &&

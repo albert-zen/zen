@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { useContext, useLayoutEffect } from "react";
+import { RoomReadContext } from "./room-read-context.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import React, {
   useEffect,
@@ -1533,6 +1534,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [assistantMode, setAssistantMode] = useState(false);
   const [assistantPluginsReady, setAssistantPluginsReady] = useState(false);
   const [data, setData] = useState<RoomListResult>({ rooms: [] });
+  // Other list rows may contain preview-only messages. A read acknowledgement
+  // must match the exact Room/tail whose history request completed.
+  const [loadedRoomRead, setLoadedRoomRead] = useState<{
+    id: string;
+    tail: string | null;
+  } | null>(null);
   const [selected, setSelected] = useState<string | null>(initialRoomId);
   const [panel, setPanel] = useState<"create" | "manage" | "rename" | null>(
     null,
@@ -1819,6 +1826,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     }
     if (sequence !== refreshSequence.current) return;
     setData({ ...next });
+    setLoadedRoomRead(
+      target === undefined
+        ? null
+        : { id: target.id, tail: target.messages.at(-1)?.id ?? null },
+    );
     setSelected((current) =>
       primaryNavigation ||
       (current !== null && next.rooms.some((entry) => entry.id === current))
@@ -1988,6 +2000,25 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           : "saved"
         : "delivery unconfirmed";
   const tail = room?.messages.at(-1)?.id ?? null;
+  const acknowledgeRoom = useContext(RoomReadContext);
+  useEffect(() => {
+    if (
+      !loading &&
+      room !== undefined &&
+      loadedRoomRead?.id === room.id &&
+      loadedRoomRead.tail === tail &&
+      (!primaryNavigation || room.id === initialRoomId)
+    )
+      acknowledgeRoom?.(room.id, tail);
+  }, [
+    acknowledgeRoom,
+    loading,
+    room?.id,
+    loadedRoomRead,
+    tail,
+    primaryNavigation,
+    initialRoomId,
+  ]);
   useEffect(() => {
     if (
       selected !== lastRoom.current ||

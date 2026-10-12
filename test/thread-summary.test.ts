@@ -83,6 +83,7 @@ test("rebuilds native summaries and follows canonical and product metadata chang
       archived: true,
       createdAt: started.items[0]?.createdAt,
       updatedAt: archived[0]?.updatedAt,
+      completedAnswer: null,
       turnSortAt: started.items[0]?.createdAt,
       preview: "",
       status: "idle",
@@ -493,6 +494,49 @@ test("parallel cold reads never write a terminal or consume queued input", async
       ).length,
       0,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("completed-answer summary is canonical, ignores settings and survives restart", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-answer-"),
+  );
+  try {
+    const server = createServer(directory);
+    const thread = await server.startThread();
+    const positions: Array<Promise<unknown>> = [];
+    server.subscribe((event) => {
+      if (event.type === "turn_completed")
+        positions.push(server.listThreadSummaries());
+    });
+    const empty = (await server.listThreadSummaries())[0]!;
+    assert(empty.status !== "systemError");
+    assert.equal(empty.completedAnswer, null);
+    const turn = await server.startTurn(thread.id, "hello");
+    await turn.done;
+    const snapshot = await server.readThread(thread.id);
+    const finalIndex = snapshot.items.findLastIndex(
+      (item) => item.type === "agent_message",
+    );
+    const expected = {
+      itemId: snapshot.items[finalIndex]!.id,
+      position: finalIndex + 1,
+    };
+    const finished = (await server.listThreadSummaries())[0]!;
+    assert(finished.status !== "systemError");
+    assert.deepEqual(finished.completedAnswer, expected);
+    assert.equal(positions.length, 1);
+    const atTerminal = (await positions[0]) as (typeof finished)[];
+    assert.deepEqual(atTerminal[0]!.completedAnswer, expected);
+    await server.updateThreadSettings(thread.id, { model: "other" });
+    const configured = (await server.listThreadSummaries())[0]!;
+    assert(configured.status !== "systemError");
+    assert.deepEqual(configured.completedAnswer, expected);
+    const restarted = (await createServer(directory).listThreadSummaries())[0]!;
+    assert(restarted.status !== "systemError");
+    assert.deepEqual(restarted.completedAnswer, expected);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -1392,13 +1392,14 @@ export function threadCacheUsageLabel(
       });
 }
 
-function outputWindowSeconds(
-  startedAt: number | null,
-  completedAt: number | null,
-): number | null {
-  if (startedAt === null || completedAt === null) return null;
-  const seconds = completedAt - startedAt;
-  return seconds > 0 ? seconds : null;
+function outputWindowSeconds(turn: Turn): number | null {
+  const ms = turn.durationMs;
+  return turn.status === "completed" &&
+    ms !== null &&
+    Number.isFinite(ms) &&
+    ms > 0
+    ? ms / 1_000
+    : null;
 }
 
 /** Output tokens per second for one Turn. Unknown without usage telemetry or
@@ -1407,14 +1408,14 @@ export function turnOutputRatePerSecond(
   usage: ModelUsageAggregate | undefined,
   turn: Turn,
 ): number | null {
-  const seconds = outputWindowSeconds(turn.startedAt, turn.completedAt);
+  const seconds = outputWindowSeconds(turn);
   if (usage === undefined || seconds === null) return null;
   return usage.outputTokens > 0 ? usage.outputTokens / seconds : null;
 }
 
-/** Session generation rate: output tokens over the summed active windows of
- * completed Turns that reported usage. Waiting and idle time are excluded,
- * so the number describes actual Provider speed. */
+/** Session rate over completed Turns with matched usage and known duration.
+ * Idle gaps between Turns are excluded; tool/wait time within a Turn remains
+ * part of its observed execution duration. */
 export function threadOutputRatePerSecond(
   thread: Thread | null,
   usage: ModelUsageProjection | undefined,
@@ -1423,7 +1424,7 @@ export function threadOutputRatePerSecond(
   let tokens = 0;
   let seconds = 0;
   for (const turn of thread.turns) {
-    const window = outputWindowSeconds(turn.startedAt, turn.completedAt);
+    const window = outputWindowSeconds(turn);
     const turnUsage = usage.turns[turn.id];
     if (window === null || turnUsage === undefined) continue;
     tokens += turnUsage.outputTokens;

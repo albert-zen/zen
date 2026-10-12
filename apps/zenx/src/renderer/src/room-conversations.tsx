@@ -18,6 +18,8 @@ export interface RoomConversation {
   messagePreview: string | null;
   /** Epoch ms of the newest message; null when the Room has no messages. */
   lastMessageAt: number | null;
+  /** Exact latest identity; null is known empty, absent is unavailable. */
+  lastMessageId?: string | null;
 }
 
 export interface RoomConversationState {
@@ -214,6 +216,8 @@ function navigationRoom(value: unknown): RoomConversation {
         ? null
         : Array.from(preview.slice(0, 240)).slice(0, 120).join(""),
     lastMessageAt,
+    lastMessageId:
+      latest === null ? null : text(latest.id, 512) ? latest.id : undefined,
   };
 }
 

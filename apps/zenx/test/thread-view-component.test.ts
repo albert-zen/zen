@@ -3600,7 +3600,11 @@ function openSendOptions(): void {
 }
 
 test("Turn and session output rates reach the message hover and context-ring telemetry", async () => {
-  const completed = turnWithItems("completed", [user("ask"), agent("answer")]);
+  const completed = turnWithItems(
+    "completed",
+    [user("ask"), agent("answer")],
+    1000,
+  );
   assert.equal(completed.startedAt, 10);
   assert.equal(completed.completedAt, 11);
   const usageProjection: ModelUsageProjection = {
@@ -3651,8 +3655,8 @@ test("Turn and session output rates reach the message hover and context-ring tel
     "output speed unknown",
     "Unknown mirrors the cache telemetry semantics",
   );
-  assert.equal(outputRateLabel(45.2), "output 45 tok/s");
-  assert.equal(outputRateLabel(3.26), "output 3.3 tok/s");
+  assert.equal(outputRateLabel(45.2), "output 45 tok/s (Turn duration)");
+  assert.equal(outputRateLabel(3.26), "output 3.3 tok/s (Turn duration)");
 
   const html = renderTurns([completed], [], undefined, {}, usageProjection);
   assert.match(

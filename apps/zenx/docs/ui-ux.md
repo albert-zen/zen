@@ -31,7 +31,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - Thread 会话内容与执行结果来自 append-only canonical ItemList。流式 delta 只用于实时显示，不能被 UI 当作第二份 durable history。
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
 - Thread 的名称与归档由 ZAS 产品元数据负责；当前选择、disclosure、草稿、打开的菜单和面板属于 renderer-local UI 状态。
-- 未读提示同样是连接端本地状态：Thread/Room 行上的未读点表示上次查看后活动水位（Thread `updatedAt`、Room 最新消息时间）又前进，打开对应会话即清除；首次出现或重启后没有基线的会话一律视为已读，不进入 canonical Items、不跨设备同步，也不引入 ZAS 会话事实。正在查看的会话永远已读。
+- 未读提示是接入端本地状态：Thread 比较成功完成 Turn 的最终可读 Agent Message 身份及 canonical 位置，Room 比较最新消息 ID（不按随机 ID 排序）。仅当前可见、已加载的完整消息推进本地读水位；保留的 Thread 选择、导航预览、失败或尚未完成的恢复不能清除未读。配置、排队输入、工具进度和失败/中断/未完成输出不产生最终答案未读。首次出现的已知会话建立基线，空会话保留空基线；尚不可用的数据保持未知。重载保留已存水位，不进入 canonical Items、不跨设备同步，也不引入 ZAS 未读权威。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
 - Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。是否使用独立 Pinned section、放置位置与该 section 自身的排序规则仍为 **TBD**。
 - Project 与 Thread 的 Sidebar 顺序是 Settings-owned host-profile local preference，不是 canonical Item/journal fact，也不跨设备同步。Project 使用 canonical Project key 排序；Thread 顺序按 owning Project 分区保存，排序操作不能改变 cwd、Project identity 或把 Thread 移到另一 Project。

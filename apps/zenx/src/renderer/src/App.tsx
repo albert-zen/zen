@@ -1,6 +1,8 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
+import { completedAnswer } from "../../../../../src/readable-thread-position.js";
+import { RoomReadContext } from "./room-read-context.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import {
   ROOM_ROUTE,
@@ -159,6 +161,26 @@ import { cancellationResultsFromItems } from "./queue-cancel-state.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
 import { ZenXBrand } from "./ZenXBrand.js";
 
+function displayedAnswerPosition(
+  thread: Thread,
+  summary: NativeThreadSummary | null | undefined,
+): number {
+  // Recovery contains the complete canonical prefix. Live notifications may omit
+  // control Items, so only the Host's matching final Item identity can advance it.
+  const recovered = completedAnswer(thread.canonicalItems ?? [])?.position ?? 0;
+  if (summary?.status === "systemError" || summary?.completedAnswer == null)
+    return recovered;
+  const answer = summary.completedAnswer;
+  const displayed = thread.turns.some(
+    (turn) =>
+      turn.status === "completed" &&
+      turn.items.some(
+        (item) => item.type === "agentMessage" && item.id === answer.itemId,
+      ),
+  );
+  return displayed ? Math.max(recovered, answer.position) : recovered;
+}
+
 type ProductPage = string;
 const modelCatalogLoading = () => i18n.t("shell:modelsAreStillLoadingTryAgain");
 const isModelCatalogLoading = (value: string | null) =>
@@ -166,13 +188,7 @@ const isModelCatalogLoading = (value: string | null) =>
   (value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "en" }) ||
     value === i18n.t("shell:modelsAreStillLoadingTryAgain", { lng: "zh-CN" }));
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "zenx.sidebar-collapsed";
-const READ_WATERMARKS_STORAGE_KEY = "zenx.conversation-read-watermarks";
-
-function isoToEpochMs(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
+const READ_WATERMARKS_STORAGE_KEY = "zenx.conversation-read-watermarks.v2";
 
 interface NewThreadDraft {
   permissionMode?: FilePermissionMode;
@@ -1407,58 +1423,79 @@ export function App() {
   );
   const roomPanel = roomQuery.get("panel");
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
-  // Unread = activity watermark advanced after the last view, excluding the
-  // conversation currently on screen. Read marks follow the surface they
-  // belong to (t: Thread, r: Room) and stay inside this window.
-  const threadWatermarkEntries: WatermarkEntry[] = activeSummaries.map(
-    (summary) => ({
-      key: `t:${summary.threadId}`,
-      updatedAtMs: isoToEpochMs(summary.updatedAt),
-    }),
+  // Missing native projection is unknown, not an empty baseline. Never read
+  // hidden transcripts just to populate the Sidebar.
+  const threadWatermarkEntries: WatermarkEntry[] = activeSummaries.flatMap(
+    (summary) =>
+      summary.status === "systemError" || summary.completedAnswer === undefined
+        ? []
+        : [
+            {
+              key: `t:${summary.threadId}`,
+              position: summary.completedAnswer?.position ?? 0,
+            },
+          ],
   );
-  const roomWatermarkEntries: WatermarkEntry[] = roomConversations.rooms.map(
-    (room) => ({ key: `r:${room.id}`, updatedAtMs: room.lastMessageAt }),
-  );
-  const viewedWatermarkKeys = new Set([
-    ...(selectedThreadId === null ? [] : [`t:${selectedThreadId}`]),
-    ...(selectedRoomId === null ? [] : [`r:${selectedRoomId}`]),
-  ]);
+  const roomWatermarkEntries: WatermarkEntry[] =
+    roomConversations.rooms.flatMap((room) =>
+      room.lastMessageId === undefined
+        ? []
+        : [{ key: `r:${room.id}`, position: room.lastMessageId ?? "" }],
+    );
+  const displayedThreadPosition =
+    page === "agent" &&
+    newThreadDraft === null &&
+    !threadLoading &&
+    threadError === null &&
+    threadDetail?.id === selectedThreadId &&
+    threadDetail?.canonicalItems !== undefined
+      ? displayedAnswerPosition(threadDetail, selectedSummary)
+      : null;
   const unreadThreadIds = new Set<string>(
-    [
-      ...deriveUnreadKeys(
-        threadWatermarkEntries,
-        readWatermarks,
-        viewedWatermarkKeys,
-      ),
-    ].flatMap((key) => (key.startsWith("t:") ? [key.slice(2)] : [])),
+    [...deriveUnreadKeys(threadWatermarkEntries, readWatermarks, [])].map(
+      (key) => key.slice(2),
+    ),
   );
   const unreadRoomIds = new Set<string>(
-    [
-      ...deriveUnreadKeys(
-        roomWatermarkEntries,
-        readWatermarks,
-        viewedWatermarkKeys,
-      ),
-    ].flatMap((key) => (key.startsWith("r:") ? [key.slice(2)] : [])),
+    [...deriveUnreadKeys(roomWatermarkEntries, readWatermarks, [])].map((key) =>
+      key.slice(2),
+    ),
   );
   useEffect(() => {
     setReadWatermarks((current) => {
       let next = withReadBaselines(current, threadWatermarkEntries);
       next = withReadBaselines(next, roomWatermarkEntries);
-      for (const entry of threadWatermarkEntries)
-        if (viewedWatermarkKeys.has(entry.key))
-          next = withReadMark(next, entry.key, entry.updatedAtMs);
-      for (const entry of roomWatermarkEntries)
-        if (viewedWatermarkKeys.has(entry.key))
-          next = withReadMark(next, entry.key, entry.updatedAtMs);
+      if (selectedThreadId !== null && displayedThreadPosition !== null)
+        next = withReadMark(
+          next,
+          `t:${selectedThreadId}`,
+          displayedThreadPosition,
+        );
       return next;
     });
   }, [
     threadSummaries,
     roomConversations.rooms,
     selectedThreadId,
-    selectedRoomId,
+    displayedThreadPosition,
   ]);
+  const acknowledgeRoom = useCallback(
+    (roomId: string, messageId: string | null) => {
+      const listed = roomConversations.rooms.find((room) => room.id === roomId);
+      // IDs are identities, not sortable clocks. An older loaded tail cannot
+      // acknowledge a newer list entry, including a saturated retained history.
+      if (
+        roomId !== selectedRoomId ||
+        listed?.lastMessageId === undefined ||
+        listed.lastMessageId !== messageId
+      )
+        return;
+      setReadWatermarks((current) =>
+        withReadMark(current, `r:${roomId}`, messageId ?? ""),
+      );
+    },
+    [selectedRoomId, roomConversations.rooms],
+  );
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -2798,16 +2835,18 @@ export function App() {
           {page === "settings" ? null : genericPluginTarget !== undefined &&
             pluginSnapshot !== null ? (
             <ImZenXDraftContext.Provider value={imzenxDrafts}>
-              <PluginProductPage
-                context={
-                  genericPluginTarget.pluginId === "zenx-rooms"
-                    ? { primaryNavigation: true }
-                    : undefined
-                }
-                snapshot={pluginSnapshot}
-                route={page}
-                navigate={openPage}
-              />
+              <RoomReadContext.Provider value={acknowledgeRoom}>
+                <PluginProductPage
+                  context={
+                    genericPluginTarget.pluginId === "zenx-rooms"
+                      ? { primaryNavigation: true }
+                      : undefined
+                  }
+                  snapshot={pluginSnapshot}
+                  route={page}
+                  navigate={openPage}
+                />
+              </RoomReadContext.Provider>
             </ImZenXDraftContext.Provider>
           ) : (
             <AgentSurface
