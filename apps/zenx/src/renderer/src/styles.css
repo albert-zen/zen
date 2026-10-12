@@ -486,6 +486,8 @@ button:disabled {
   transform: translateX(-12px);
 }
 .sidebar-header {
+  /* Sidebar actions can overlap the native titlebar drag rectangle. */
+  -webkit-app-region: no-drag;
   flex: 0 0 auto;
   padding: 4px 8px 0;
 }
