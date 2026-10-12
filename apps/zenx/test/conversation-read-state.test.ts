@@ -6,6 +6,7 @@ import {
   serializeReadWatermarks,
   withReadBaselines,
   withReadMark,
+  type ReadWatermarks,
   type WatermarkEntry,
 } from "../src/renderer/src/conversation-read-state.js";
 
@@ -52,7 +53,7 @@ test("first-seen conversations are baselined as read without inventing unreads",
 });
 
 test("viewing a conversation marks up to the newest activity read", () => {
-  let marks = { "t:a": 500 };
+  let marks: ReadWatermarks = { "t:a": 500 };
   marks = withReadMark(marks, "t:a", 700);
   assert.equal(marks["t:a"], 700);
   assert.equal(
