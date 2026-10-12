@@ -1,5 +1,9 @@
 # ARCHITECTURE
 
+- **Imported tool replay** — Canonical calls preserve inert source namespace/input-format provenance; model adapters create deterministic, past-only wire aliases and matched call/result IDs without registering tool definitions or granting execution authority.
+
+- **Selected-file conversation import** — Version-pinned external parsers live under their protocol adapter and produce bounded provider-neutral historical Items; AppServer atomically creates an idle continuable Thread with canonical source/checkpoint provenance, explicit local cwd/model/permissions, inert tool observations and no inherited execution or source authority. Imported tool outcomes may have a null exitCode only with the historical-result content type; native presentation calls them unknown. The import prefix length lets the first new local Turn load current workspace instructions. Compacted exports use their latest explicit continuation checkpoint and visibly disclose omitted earlier records.
+
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
 - **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.

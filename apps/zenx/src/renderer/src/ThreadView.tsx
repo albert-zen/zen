@@ -1,3 +1,4 @@
+import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import type { SkillEntry } from "../../../../cli/src/skills.js";
@@ -917,6 +918,7 @@ export function ThreadView({
             }}
           >
             <div className="messages-inner">
+              <ImportedThreadNotice items={thread?.canonicalItems ?? []} />
               {transcriptRows.length === 0
                 ? (emptyContent ?? (
                     <div className="thread-empty">
@@ -2830,7 +2832,13 @@ function StatusMark({
       ? commandStatus(item)
       : commandPhaseLabel(phase);
   if (status === i18n.t("shell:completed")) return null;
-  return <small className={`tool-status ${item.status}`}>{status}</small>;
+  return (
+    <small
+      className={`tool-status ${phase === "imported" ? "imported" : item.status}`}
+    >
+      {status}
+    </small>
+  );
 }
 
 function TraceDetail({

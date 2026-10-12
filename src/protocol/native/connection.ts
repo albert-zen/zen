@@ -1,3 +1,4 @@
+import { parseSessionImport, previewSessionImport } from "../session-import.js";
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
 import { AppServerError, type ZenAppServer } from "../../app-server.js";
 import type { ApprovalHandler } from "../../tool.js";
@@ -74,6 +75,103 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (
+      message.method === "zen/thread/import/preview" ||
+      message.method === "zen/thread/import"
+    ) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.format !== "string" ||
+          typeof params.contents !== "string"
+        )
+          throw new AppServerError(
+            "invalid_import",
+            "Import format and selected file contents are required",
+          );
+        const history = parseSessionImport({
+          format: params.format,
+          contents: params.contents,
+        });
+        let result: unknown;
+        if (message.method === "zen/thread/import/preview")
+          result = previewSessionImport(history);
+        else {
+          const config = params.configuration;
+          if (
+            params.expectedSha256 !== history.source.sha256 ||
+            !isRecord(config) ||
+            typeof config.cwd !== "string" ||
+            Object.keys(config).some(
+              (key) => !["cwd", "sandbox", "selection"].includes(key),
+            ) ||
+            (config.sandbox !== undefined &&
+              !["read-only", "workspace-write", "danger-full-access"].includes(
+                String(config.sandbox),
+              ))
+          )
+            throw new AppServerError(
+              "invalid_import",
+              "Review the exact file and choose a valid local working directory and permissions",
+            );
+          if (
+            config.selection !== undefined &&
+            (!isRecord(config.selection) ||
+              typeof config.selection.providerProfileId !== "string" ||
+              typeof config.selection.modelId !== "string" ||
+              (config.selection.reasoningEffort !== undefined &&
+                config.selection.reasoningEffort !== null &&
+                typeof config.selection.reasoningEffort !== "string"))
+          )
+            throw new AppServerError(
+              "invalid_import",
+              "Invalid local provider selection",
+            );
+          if (!this.#appServer)
+            throw new AppServerError("unavailable", "Import is unavailable");
+          result = await this.#appServer.importThread(history, {
+            cwd: config.cwd,
+            ...(config.sandbox === undefined
+              ? {}
+              : {
+                  sandbox: config.sandbox as
+                    "read-only" | "workspace-write" | "danger-full-access",
+                }),
+            ...(config.selection === undefined
+              ? {}
+              : {
+                  selection:
+                    config.selection as unknown as import("../../provider-registry.js").ProviderSelectionInput,
+                }),
+          });
+        }
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: -32602,
+              message: error instanceof Error ? error.message : String(error),
+              data: {
+                zenCode:
+                  error instanceof AppServerError
+                    ? error.code
+                    : "invalid_import",
+              },
+            },
+          });
+      }
+      return;
+    }
     if (message.method === NATIVE_THREAD_CREATE_CHILD_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
         this.#send({
