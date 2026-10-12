@@ -92,12 +92,21 @@ exec /bin/cat >/dev/null`;
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
-      if (stop && child.exitCode === null && child.signalCode === null) {
+      // Node releases without the unspawned-handle fix may turn child.kill()
+      // into kill(0), signalling our own process group after a failed spawn.
+      const pid = child.pid;
+      if (
+        stop &&
+        pid !== undefined &&
+        Number.isSafeInteger(pid) &&
+        pid > 0 &&
+        child.exitCode === null &&
+        child.signalCode === null
+      ) {
         // The live supervisor pins this detached group even after the login
         // shell exits. Never signal its numeric PGID after the supervisor exits.
         try {
-          if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-          else child.kill("SIGKILL");
+          process.kill(-pid, "SIGKILL");
         } catch {
           try {
             child.kill("SIGKILL");

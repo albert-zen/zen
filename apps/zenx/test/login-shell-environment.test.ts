@@ -18,6 +18,9 @@ test("GUI launch waits for framed login-shell PATH before mutating only PATH", a
   const child = new ChildProcess();
   const stdout = new PassThrough();
   Object.defineProperty(child, "stdout", { value: stdout });
+  const kill = t.mock.method(child, "kill", () => {
+    throw new Error("An unspawned mock must never receive a native signal");
+  });
   let command = "";
   t.mock.method(
     childProcess,
@@ -48,6 +51,7 @@ test("GUI launch waits for framed login-shell PATH before mutating only PATH", a
   );
   child.emit("close", 0, null);
   assert.equal(await pending, "restored");
+  assert.equal(kill.mock.callCount(), 0);
   assert.deepEqual(environment, {
     PATH: `/Users/test/.local/bin:${minimalPath}`,
     SHELL: "/bin/zsh",
@@ -58,6 +62,12 @@ test("GUI launch waits for framed login-shell PATH before mutating only PATH", a
 
 function mockShell(t: TestContext) {
   const child = new ChildProcess();
+  Object.defineProperty(child, "pid", { value: 987654, configurable: true });
+  // No mocked process may send a native signal, even in cleanup paths. The
+  // failed group signal also exercises the positive-PID child.kill fallback.
+  const groupKill = t.mock.method(process, "kill", () => {
+    throw new Error("Mock process group does not exist");
+  });
   const stdout = new PassThrough();
   Object.defineProperty(child, "stdout", { value: stdout });
   const kill = t.mock.method(child, "kill", () => true);
@@ -74,6 +84,7 @@ function mockShell(t: TestContext) {
     child,
     stdout,
     kill,
+    groupKill,
     spawn,
     frame(path: string | Buffer, status = 0) {
       const marker = command.match(/ZENX_PATH_[a-f0-9]+/u)![0];
@@ -309,9 +320,7 @@ test("an empty inherited environment can receive a framed PATH", async (t) => {
 test("timeout targets the owned detached process group and still settles if killing fails", async (t) => {
   const shell = mockShell(t);
   Object.defineProperty(shell.child, "pid", { value: 987654 });
-  const killGroup = t.mock.method(process, "kill", () => {
-    throw new Error("already gone");
-  });
+  const killGroup = shell.groupKill;
   shell.kill.mock.mockImplementation(() => {
     throw new Error("already gone");
   });
@@ -351,6 +360,7 @@ test(
     shell.complete(recoveredPath);
     assert.equal(await pending, "restored");
     shell.spawn.mock.restore();
+    shell.groupKill.mock.restore();
     assert.deepEqual(sanitizeToolEnvironment(environment, ["LC_TEST"]), {
       PATH: recoveredPath,
       SHELL: "/bin/zsh",
@@ -612,7 +622,8 @@ test("an unexpectedly exited supervisor is never signalled through a reusable nu
   const shell = mockShell(t);
   Object.defineProperty(shell.child, "pid", { value: 987654 });
   Object.defineProperty(shell.child, "exitCode", { value: 1 });
-  const killGroup = t.mock.method(process, "kill", () => true);
+  const killGroup = shell.groupKill;
+  killGroup.mock.mockImplementation(() => true);
   assert.equal(
     await restoreLoginShellPath({
       platform: "darwin",
@@ -625,3 +636,56 @@ test("an unexpectedly exited supervisor is never signalled through a reusable nu
   assert.equal(killGroup.mock.callCount(), 0);
   assert.equal(shell.kill.mock.callCount(), 0);
 });
+
+for (const pid of [undefined, 0, -1, Number.NaN])
+  test(`spawn failure with PID ${String(pid)} never signals the caller`, async (t) => {
+    const shell = mockShell(t);
+    Object.defineProperty(shell.child, "pid", { value: pid });
+    const signal = shell.groupKill;
+    signal.mock.mockImplementation(() => true);
+    const environment = { PATH: minimalPath, SHELL: "/bin/zsh" };
+    const pending = restoreLoginShellPath({
+      platform: "darwin",
+      environment,
+      fromTerminal: false,
+    });
+    shell.child.emit("error", new Error("spawn ENOENT"));
+    assert.equal(await pending, "failed");
+    assert.equal(signal.mock.callCount(), 0);
+    assert.equal(shell.kill.mock.callCount(), 0);
+    assert.equal(environment.PATH, minimalPath);
+  });
+
+test(
+  "a real supervisor spawn failure falls back without native signal dispatch",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "zenx-failed-spawn-"));
+    const signal = t.mock.method(process, "kill", () => {
+      throw new Error("No spawned process to signal");
+    });
+    const childKill = t.mock.method(ChildProcess.prototype, "kill", () => {
+      throw new Error("No spawned process handle to signal");
+    });
+    try {
+      const environment = {
+        PATH: minimalPath,
+        HOME: join(directory, "missing"),
+        SHELL: "/bin/sh",
+      };
+      assert.equal(
+        await restoreLoginShellPath({
+          platform: "darwin",
+          environment,
+          fromTerminal: false,
+        }),
+        "failed",
+      );
+      assert.equal(signal.mock.callCount(), 0);
+      assert.equal(childKill.mock.callCount(), 0);
+      assert.equal(environment.PATH, minimalPath);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
