@@ -39,6 +39,10 @@ export type ZenXProviderProfile = ZenXProviderConnection & {
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
   logoResource?: string;
+  /** The user has actively configured this Provider's model catalog (added
+   * or removed model IDs). Host then stops injecting built-in presets or the
+   * auto-configured subscription catalog; deletions survive restarts. */
+  modelsUserConfigured?: true;
 };
 
 export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault"> & {
@@ -729,6 +733,9 @@ function validateProviderProfile(value: unknown): ZenXProviderProfile {
     ...(value.logoResource === undefined
       ? {}
       : { logoResource: providerLogoResource(value.logoResource) }),
+    ...(value.modelsUserConfigured === true
+      ? { modelsUserConfigured: true as const }
+      : {}),
   };
 }
 
@@ -906,6 +913,9 @@ export function applyBuiltInModelCatalogPresets(
       };
     }
     if (provider.type !== "openai-subscription") return provider;
+    // A user-configured subscription catalog is authoritative: deleted
+    // presets must not come back on the next load, update, or repackaging.
+    if (provider.modelsUserConfigured === true) return provider;
     const existingById = new Map(
       provider.models.map((model) => [model.id, model]),
     );

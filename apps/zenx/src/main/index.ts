@@ -938,6 +938,21 @@ async function bootstrapZenX(): Promise<void> {
     await settingsService!.reconcileConfiguration();
   };
   await attachConfigurationControl();
+  // An unconfigured OpenAI subscription catalog adopts the account's current
+  // models once, then belongs to the user. This runs after the configuration
+  // control is attached so the persisted catalog publishes to the live Host
+  // instead of waiting for the next restart. It never blocks startup on the
+  // network; failures keep the built-in presets and retry on next launch or
+  // login.
+  void settingsService!
+    .autoConfigureSubscriptionModels()
+    .then(async (configured) => {
+      if (!configured) return;
+      const value = await settingsService!.publicSettings();
+      for (const window of BrowserWindow.getAllWindows())
+        window.webContents.send(ipcChannels.settingsChanged, value);
+    })
+    .catch(() => undefined);
   ipcMain.handle(ipcChannels.settingsSafeRestart, async () => {
     const manager = appServerManager;
     if (!manager || manager.status.type !== "ready")
@@ -2021,6 +2036,9 @@ function installSettingsIpc(
         }
       },
     );
+    // First login is the earliest moment the account's real model catalog is
+    // discoverable; adopt it once when the user has not configured models.
+    await settings.autoConfigureSubscriptionModels().catch(() => false);
     return await settings.publicSettings();
   });
   ipcMain.handle(

@@ -39,6 +39,7 @@ import {
   type ConfigurationSaveResult,
   type ZenXHostProfile,
   type ZenXModelCatalogEntry,
+  type ZenXModelReference,
   type ZenXProviderDeleteReplacements,
   type ZenXProviderEditOptions,
   type ZenXProviderProfile,
@@ -109,6 +110,37 @@ type SubscriptionAuth = Pick<
       "acquireAccessLease" | "renewAccessLease"
     >
   >;
+
+/**
+ * Adding or removing model IDs is the user taking ownership of a
+ * subscription catalog. Once owned, the Host stops injecting built-in
+ * presets or auto-configured entries, so deletions survive updates and
+ * repackaging. Pure metadata saves (name, capabilities, hidden) keep the
+ * catalog Host-manageable.
+ */
+function stampSubscriptionModelOwnership(
+  previous: readonly ZenXProviderProfile[],
+  providers: readonly ZenXProviderProfile[],
+): ZenXProviderProfile[] {
+  return providers.map((provider) => {
+    if (
+      provider.type !== "openai-subscription" ||
+      provider.modelsUserConfigured === true
+    )
+      return provider;
+    const before = previous.find(
+      (candidate) => candidate.providerProfileId === provider.providerProfileId,
+    );
+    if (before === undefined)
+      return { ...provider, modelsUserConfigured: true };
+    if (
+      provider.models.map((model) => model.id).join("\u0000") ===
+      before.models.map((model) => model.id).join("\u0000")
+    )
+      return provider;
+    return { ...provider, modelsUserConfigured: true };
+  });
+}
 
 interface CanonicalWorkspaceSnapshot {
   readonly profile: ZenXHostProfile;
@@ -789,6 +821,157 @@ export class ZenXSettingsService {
     }
   }
 
+  private static readonly SUBSCRIPTION_AUTO_CONFIGURE_LIMIT = 5;
+
+  /**
+   * One-time help for users who never edited the subscription catalog: the
+   * ChatGPT Codex models endpoint is authoritative about which models the
+   * account currently has, including reasoning efforts and context windows,
+   * so seed the recent entries into the profile instead of letting stale
+   * build-time presets decide. Applying marks the catalog user-owned; the
+   * Host never rewrites or re-injects preset models afterwards. Any failure
+   * (unauthenticated, offline, account changed) keeps built-in presets and
+   * retries on the next startup or login.
+   */
+  async autoConfigureSubscriptionModels(): Promise<boolean> {
+    const release = this.#beginAuxiliaryOperation();
+    try {
+      return await this.#autoConfigureSubscriptionModels();
+    } finally {
+      await release();
+    }
+  }
+
+  async #autoConfigureSubscriptionModels(): Promise<boolean> {
+    await this.#profileOperations;
+    const profile = this.#requireProfile();
+    const provider = profile.providerProfiles.find(
+      (candidate) =>
+        candidate.type === "openai-subscription" &&
+        candidate.modelsUserConfigured !== true,
+    );
+    if (provider === undefined) return false;
+    const subscription = this.#subscriptionForProfile(
+      provider.providerProfileId,
+    );
+    if (subscription.acquireAccessLease === undefined) return false;
+    const status = await subscription.status();
+    if (!status.authenticated) return false;
+    const signal = AbortSignal.timeout(30_000);
+    const fetch = this.#providerFetchFactory(undefined);
+    let listed: readonly DiscoveredModelCatalogEntry[];
+    let accountId: string;
+    try {
+      const lease = await subscription.acquireAccessLease(signal);
+      accountId = extractChatGptAccountId(lease.accessToken);
+      const cached = await this.#subscriptionModelCache.load(accountId);
+      const result = await discoverOpenAiSubscriptionModels({
+        accessToken: lease.accessToken,
+        ...(cached?.etag === undefined ? {} : { etag: cached.etag }),
+        fetch,
+        signal,
+      });
+      listed =
+        result.notModified && cached !== undefined
+          ? cached.models
+          : result.models;
+      if (!result.notModified)
+        await this.#subscriptionModelCache
+          .store({
+            accountId: result.accountId,
+            fetchedAt: Date.now(),
+            ...(result.etag === undefined ? {} : { etag: result.etag }),
+            models: result.models,
+          })
+          .catch(() => undefined);
+    } catch {
+      return false;
+    } finally {
+      await fetch.close?.();
+    }
+    const recent = listed
+      .filter((entry) => !entry.hidden && entry.contextWindow !== null)
+      .slice(0, ZenXSettingsService.SUBSCRIPTION_AUTO_CONFIGURE_LIMIT);
+    if (recent.length === 0) return false;
+    return await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const index = current.providerProfiles.findIndex(
+        (candidate) =>
+          candidate.providerProfileId === provider.providerProfileId,
+      );
+      if (index < 0) return false;
+      const target = current.providerProfiles[index]!;
+      if (
+        target.type !== "openai-subscription" ||
+        target.modelsUserConfigured === true
+      )
+        return false;
+      // The account may have switched during the network round trip.
+      const latest = await this.#subscriptionForProfile(
+        target.providerProfileId,
+      ).status();
+      if (!latest.authenticated) return false;
+      const providerProfiles = [...current.providerProfiles];
+      // Manual capability edits remain authoritative over the fresh list,
+      // and a previously hidden model id keeps the user's visibility choice.
+      const hiddenIds = new Set(
+        target.models.filter((model) => model.hidden).map((model) => model.id),
+      );
+      const manualById = new Map(
+        target.models
+          .filter((model) => model.source === "manual")
+          .map((model) => [model.id, model] as const),
+      );
+      const models: ZenXModelCatalogEntry[] = recent.map(
+        (entry) =>
+          manualById.get(entry.id) ??
+          (hiddenIds.has(entry.id) ? { ...entry, hidden: true } : entry),
+      );
+      const ids = new Set(models.map((model) => model.id));
+      for (const [modelId, model] of manualById) {
+        if (ids.has(modelId)) continue;
+        models.push(model);
+        ids.add(modelId);
+      }
+      providerProfiles[index] = {
+        ...target,
+        models,
+        modelsUserConfigured: true,
+      };
+      const keepOrReplace = (
+        reference: ZenXModelReference,
+        fallbackModelId: string,
+      ): ZenXModelReference =>
+        reference.providerProfileId !== target.providerProfileId ||
+        ids.has(reference.modelId)
+          ? reference
+          : {
+              providerProfileId: target.providerProfileId,
+              modelId: fallbackModelId,
+            };
+      const defaultModel = keepOrReplace(current.defaultModel, recent[0]!.id);
+      const titleModel = keepOrReplace(
+        current.titleModel,
+        defaultModel.modelId,
+      );
+      let next: ZenXHostProfile;
+      try {
+        next = validateHostProfile({
+          ...current,
+          providerProfiles,
+          defaultModel,
+          titleModel,
+        });
+        validateConfiguredModelContexts(next, [next.providerProfiles[index]!]);
+      } catch {
+        return false;
+      }
+      await this.#persistProfile(next);
+      this.#profile = next;
+      return true;
+    });
+  }
+
   async probeProviderModelImage(
     providerProfileId: string,
     modelId: string,
@@ -1002,7 +1185,10 @@ export class ZenXSettingsService {
             computerForegroundControlEnabled:
               settings.computerForegroundControlEnabled === true,
             browserMode: settings.browserMode ?? current.browserMode,
-            providerProfiles: settings.providerProfiles,
+            providerProfiles: stampSubscriptionModelOwnership(
+              current.providerProfiles,
+              settings.providerProfiles,
+            ),
             defaultModel: settings.defaultModel,
             titleModel: settings.titleModel,
             approvalPolicy: settings.approvalPolicy,
@@ -1193,8 +1379,13 @@ export class ZenXSettingsService {
           options.logoUpload instanceof Uint8Array
             ? await this.#providerLogos.import(options.logoUpload)
             : undefined;
+        // Adding or removing model IDs is the user taking ownership of the
+        // subscription catalog. Pure metadata saves keep Host-owned presets
+        // refreshable, and hidden/manual choices already survive seeding.
         const withLogo = {
-          ...provider,
+          ...stampSubscriptionModelOwnership(current.providerProfiles, [
+            provider,
+          ])[0]!,
           ...(options.logoUpload === null
             ? { logoResource: undefined }
             : imported === undefined
