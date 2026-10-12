@@ -1979,7 +1979,7 @@ function TraceItemHeader({
           item.type === "reasoning"
             ? "reasoning"
             : item.type === "nativeItem"
-              ? "tools"
+              ? "layers"
               : toolPresentation(item.toolName ?? item.command).icon
         }
         size={14}

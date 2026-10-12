@@ -1170,10 +1170,7 @@ function projectItem(
   const tool = commandItem(
     id,
     type,
-    text(item.command) ??
-      (type === "mcpToolCall"
-        ? `${text(item.server) ?? "mcp"}.${text(item.tool) ?? "tool"}`
-        : (text(item.tool) ?? type)),
+    text(item.command) ?? "",
     text(item.cwd) ?? cwd,
     item.status,
   );
