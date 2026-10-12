@@ -292,7 +292,7 @@ for (const entry of ["primary route", "plugin button"] as const) {
       );
       assert.match(
         document.body.textContent ?? "",
-        /Create a conversation, then choose its name together/,
+        /Create your PAW and it will welcome you/,
       );
       assert.ok(
         calls.every((call) => ["list", "workspaces"].includes(call.id)),
