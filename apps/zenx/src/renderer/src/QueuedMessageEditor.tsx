@@ -39,7 +39,7 @@ export function QueuedMessageEditor(props: QueuedMessageEditorProps) {
 }
 
 function EditorSession(props: QueuedMessageEditorProps) {
-  const { t } = useTranslation(["shell", "panels"]);
+  const { t } = useTranslation("shell");
   const dialogId = useId();
   const editorId = useId();
   const descriptionId = useId();
