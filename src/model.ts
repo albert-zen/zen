@@ -73,6 +73,8 @@ export interface ModelRequest {
    * but providers must not treat it as a second persisted conversation.
    */
   sessionId?: string;
+  /** A sample replay must not restart HTTP admission retries. */
+  isSamplingRetry?: true;
 }
 
 export interface ModelTool {
@@ -132,7 +134,12 @@ export interface ModelAdapter {
  * own retry layer and must not be multiplied by sample replay.
  */
 export function isRetryableModelSampleError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
+  if (
+    !(error instanceof Error) ||
+    error.name === "AbortError" ||
+    error.name === "TimeoutError"
+  )
+    return false;
   const candidate = error as { retryable?: unknown; status?: unknown };
   return candidate.retryable === true && candidate.status === undefined;
 }

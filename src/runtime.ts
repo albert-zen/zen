@@ -209,6 +209,11 @@ export class AgentRuntime {
   readonly #maxConcurrentToolBodies: number;
   readonly #sampleRetryMaxAttempts: number;
   readonly #sampleRetryBaseDelayMs: number;
+  readonly #sampleRetryRandom: () => number;
+  readonly #sampleRetrySleep: (
+    milliseconds: number,
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly #codeStateTails = new Map<string, Promise<void>>();
   readonly #resolveCodeMedia:
     | ((
@@ -227,7 +232,12 @@ export class AgentRuntime {
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
     /** Bounded replay of retryable model sample failures; tests may shrink it. */
-    sampleRetry?: { maxAttempts?: number; baseDelayMs?: number };
+    sampleRetry?: {
+      maxAttempts?: number;
+      baseDelayMs?: number;
+      random?: () => number;
+      sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+    };
     resolveCodeMedia?: (
       media: readonly { type: "image" | "audio"; value: JsonValue }[],
       items: readonly CanonicalItem[],
@@ -281,6 +291,12 @@ export class AgentRuntime {
       );
     }
     this.#sampleRetryBaseDelayMs = sampleRetryBaseDelayMs;
+    this.#sampleRetryRandom = options.sampleRetry?.random ?? Math.random;
+    this.#sampleRetrySleep =
+      options.sampleRetry?.sleep ??
+      (async (ms, signal) => {
+        await delay(ms, undefined, { signal });
+      });
   }
 
   hasActiveToolTasks(threadId: string): boolean {
@@ -498,36 +514,35 @@ export class AgentRuntime {
   ): Promise<ModelSampleResult> {
     const maxAttempts = this.#sampleRetryMaxAttempts;
     for (let attempt = 1; ; attempt += 1) {
-      try {
-        return await this.#runModelOnce(turnId, options);
-      } catch (error) {
-        if (
-          attempt >= maxAttempts ||
-          options.signal.aborted ||
-          !isRetryableModelSampleError(error)
-        ) {
-          throw error;
-        }
-        const delayMs = Math.round(
-          this.#sampleRetryBaseDelayMs *
-            2 ** (attempt - 1) *
-            (1 + Math.random()),
-        );
-        console.warn("Model sample retry", {
-          attempt: attempt + 1,
-          maxAttempts,
-          delayMs,
-          reason: describeError(error),
-        });
-        await delay(delayMs, undefined, { signal: options.signal });
+      options.signal.throwIfAborted();
+      const result = await this.#runModelOnce(turnId, options, attempt > 1);
+      if (!("error" in result)) return result;
+      options.signal.throwIfAborted();
+      if (
+        attempt >= maxAttempts ||
+        !isRetryableModelSampleError(result.error)
+      ) {
+        throw result.error;
       }
+      const delayMs = Math.round(
+        Math.min(this.#sampleRetryBaseDelayMs * 2 ** (attempt - 1), 30_000) *
+          (1 + this.#sampleRetryRandom()),
+      );
+      console.warn("Model sample retry", {
+        attempt: attempt + 1,
+        maxAttempts,
+        delayMs,
+        reason: describeError(result.error),
+      });
+      await this.#sampleRetrySleep(delayMs, options.signal);
     }
   }
 
   async #runModelOnce(
     turnId: string,
     options: RunTurnOptions,
-  ): Promise<ModelSampleResult> {
+    isSamplingRetry: boolean,
+  ): Promise<ModelSampleResult | { error: unknown }> {
     const itemId = this.#id();
     let started = false;
     let text = "";
@@ -536,6 +551,8 @@ export class AgentRuntime {
       name: string;
       arguments: Record<string, unknown>;
     }> = [];
+    const completedReasoning: ReasoningItem[] = [];
+    let failure: { error: unknown } | undefined;
     const reasoningItems = new Map<string, string>();
     const reasoningDeltas = new Map<
       string,
@@ -612,6 +629,7 @@ export class AgentRuntime {
         ),
         signal: options.signal,
         sessionId: options.thread.id,
+        ...(isSamplingRetry ? { isSamplingRetry: true } : {}),
       })) {
         if (event.type === "text_delta") {
           if (!started) {
@@ -678,8 +696,8 @@ export class AgentRuntime {
               ? {}
               : { providerItemId: event.providerItemId }),
           };
-          await options.commit(reasoning);
-          options.emit({ type: "item_completed", item: reasoning });
+          // Later tool validation can still invalidate this entire sample.
+          completedReasoning.push(reasoning);
           if (event.reasoningId !== undefined) {
             reasoningItems.delete(event.reasoningId);
             reasoningDeltas.delete(event.reasoningId);
@@ -716,12 +734,23 @@ export class AgentRuntime {
           });
         }
       }
+      options.signal.throwIfAborted();
       if (reasoningItems.size > 0) {
         throw new Error("Model stream ended with incomplete reasoning");
       }
     } catch (error) {
-      // Never retry a journal append whose outcome is unknown.
       if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
+      failure = { error };
+    }
+    // All canonical writes are outside the sample-error boundary: preparation
+    // and persistence failures cannot become a replayable model failure.
+    for (const reasoning of completedReasoning) {
+      const snapshot: ReasoningItem =
+        failure === undefined ? reasoning : { ...reasoning, incomplete: true };
+      await options.commit(snapshot);
+      options.emit({ type: "item_completed", item: snapshot });
+    }
+    if (failure !== undefined) {
       for (const [reasoningId, partialId] of reasoningItems) {
         const partial = reasoningDeltas.get(reasoningId)!;
         if (!partial.content && !partial.summary) continue;
@@ -754,22 +783,22 @@ export class AgentRuntime {
         await options.commit(snapshot);
         options.emit({ type: "item_completed", item: snapshot });
       }
-      throw error;
-    } finally {
-      if (latestUsage !== undefined) {
-        const usage: ModelUsageItem = {
-          id: this.#id(),
-          threadId: options.thread.id,
-          turnId,
-          createdAt: this.#now(),
-          type: "model_usage",
-          modelResponseId: itemId,
-          ...latestUsage,
-        };
-        await options.commit(usage);
-        options.emit({ type: "item_completed", item: usage });
-      }
     }
+    if (latestUsage !== undefined) {
+      const usage: ModelUsageItem = {
+        id: this.#id(),
+        threadId: options.thread.id,
+        turnId,
+        createdAt: this.#now(),
+        type: "model_usage",
+        modelResponseId: itemId,
+        ...latestUsage,
+      };
+      await options.commit(usage);
+      options.emit({ type: "item_completed", item: usage });
+    }
+
+    if (failure !== undefined) return failure;
 
     if (!started && toolCalls.length === 0) {
       options.emit({

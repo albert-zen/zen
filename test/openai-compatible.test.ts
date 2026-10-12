@@ -1322,7 +1322,11 @@ test("marks mid-stream transport failures as retryable sample failures", async (
                 }),
               ),
             );
-            controller.error(new TypeError("terminated"));
+            controller.error(
+              new TypeError("terminated", {
+                cause: { code: "UND_ERR_SOCKET" },
+              }),
+            );
           },
         }).pipeThrough(new TextEncoderStream()),
         {
