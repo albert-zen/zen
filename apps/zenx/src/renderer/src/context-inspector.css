@@ -1,0 +1,63 @@
+.context-inspector {
+  padding: 20px;
+  overflow: auto;
+  height: 100%;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.context-inspector h2 {
+  margin: 4px 0 10px;
+  font-size: 21px;
+}
+.context-inspector h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.context-inspector p {
+  margin: 8px 0;
+}
+.context-inspector section {
+  margin-top: 22px;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+.context-inspector-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.context-inspector dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+}
+.context-inspector dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.context-inspector summary {
+  cursor: pointer;
+  padding: 9px 0;
+  overflow-wrap: anywhere;
+}
+.context-inspector summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.context-inspector pre {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.context-inspector code,
+.context-inspector footer {
+  overflow-wrap: anywhere;
+}
+.context-inspector footer {
+  margin-top: 24px;
+  font-size: 12px;
+}

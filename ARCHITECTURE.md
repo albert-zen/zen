@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+ContextInspection 是从 canonical ItemList 经 compileModelMessages 派生的有界只读调试投影，不保存会话状态；它展示本地消息估算、规则快照与压缩来源，不代表 provider 私有上下文或当前完整工具目录。ZenX 实验通过 host-local usage 投影携带，默认关闭。
+
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
 - **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.

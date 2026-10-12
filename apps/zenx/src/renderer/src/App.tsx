@@ -661,6 +661,7 @@ export function App() {
   const [threadUsage, setThreadUsage] = useState<
     ModelUsageProjection | undefined
   >();
+  const [threadUsageStale, setThreadUsageStale] = useState(false);
   // Stable identity so streaming re-renders of App do not restart every
   // mounted attachment read; thumbnails cache payloads per attachment.
   const readAttachment = useCallback(
@@ -841,7 +842,8 @@ export function App() {
     }
   };
 
-  const refreshThreadUsage = (threadId: string) => {
+  const refreshThreadUsage = (threadId: string, invalidate = false) => {
+    if (invalidate) setThreadUsageStale(true);
     const epoch = ++threadUsageLoadEpoch.current;
     void window.zenx.modelUsage
       .forThread(threadId)
@@ -849,20 +851,30 @@ export function App() {
         if (
           selectedThreadIdRef.current === threadId &&
           threadUsageLoadEpoch.current === epoch
-        )
+        ) {
           setThreadUsage(usage);
+          setThreadUsageStale(false);
+        }
       })
       .catch((error: unknown) => {
         if (
           selectedThreadIdRef.current === threadId &&
           threadUsageLoadEpoch.current === epoch
-        )
+        ) {
+          setThreadUsageStale(true);
           setRequestError(
             i18n.t("shell:threadUsageLoadFailed", {
               error: describeError(error),
             }),
           );
+        }
       });
+  };
+
+  const activateContext = (threadId: string) => {
+    refreshThreadUsage(threadId, true);
+    setPanelTabs((current) => ({ ...current, [threadId]: "context" }));
+    setBrowserPanels((current) => ({ ...current, [threadId]: true }));
   };
 
   const resumeThread = async (threadId: string, preserveNavigation = false) => {
@@ -939,8 +951,10 @@ export function App() {
           if (
             selectionEpoch.current === epoch &&
             threadUsageLoadEpoch.current === usageEpoch
-          )
+          ) {
             setThreadUsage(usage);
+            setThreadUsageStale(false);
+          }
         })
         .catch((error: unknown) => {
           if (
@@ -1210,10 +1224,14 @@ export function App() {
           }
           if (
             projected.event.type === "item_completed" ||
-            projected.event.type === "turn_completed"
+            projected.event.type === "turn_completed" ||
+            projected.event.type === "thread_settings_updated"
           ) {
             if (selectedThreadIdRef.current === projected.threadId)
-              refreshThreadUsage(projected.threadId);
+              refreshThreadUsage(
+                projected.threadId,
+                projected.event.type === "thread_settings_updated",
+              );
           }
           if (
             projected.event.type === "item_completed" &&
@@ -1268,6 +1286,8 @@ export function App() {
           }
         }
         if (method === "thread/settings/updated") {
+          if (eventThreadId && selectedThreadIdRef.current === eventThreadId)
+            refreshThreadUsage(eventThreadId, true);
           setModelUpdateError(null);
         }
       },
@@ -2806,7 +2826,10 @@ export function App() {
               configuredProjects={configuredProjects}
               newThreadDraft={newThreadDraft}
               threadAttachments={threadAttachments}
-              threadUsage={threadUsage}
+              threadUsage={threadUsageStale ? undefined : threadUsage}
+              onInspectContext={() => {
+                if (threadDetail) activateContext(threadDetail.id);
+              }}
               models={models}
               providerProfiles={providerProfiles}
               workflowCommands={workflowCommands}
@@ -2981,6 +3004,9 @@ export function App() {
           threadDetail !== null &&
           selectedThreadId === threadDetail.id ? (
             <AuxiliaryPanel
+              contextUsage={threadUsage}
+              contextUsageStale={threadUsageStale}
+              onRefreshContext={() => activateContext(threadDetail.id)}
               threadContext={{
                 threads: [...threadSummaries, ...archivedThreadSummaries],
               }}
@@ -3037,12 +3063,14 @@ export function App() {
                 }))
               }
               selectedTab={panelTabs[threadDetail.id]}
-              onSelectTab={(tab) =>
-                setPanelTabs((current) => ({
-                  ...current,
-                  [threadDetail.id]: tab,
-                }))
-              }
+              onSelectTab={(tab) => {
+                if (tab === "context") activateContext(threadDetail.id);
+                else
+                  setPanelTabs((current) => ({
+                    ...current,
+                    [threadDetail.id]: tab,
+                  }));
+              }}
             />
           ) : null}
         </main>
@@ -3308,6 +3336,7 @@ function AgentSurface({
   newThreadDraft,
   threadAttachments,
   threadUsage,
+  onInspectContext,
   models,
   providerProfiles,
   workflowCommands,
@@ -3374,6 +3403,7 @@ function AgentSurface({
   newThreadDraft: NewThreadDraft | null;
   threadAttachments: ZenXThreadAttachmentProjection;
   threadUsage: ModelUsageProjection | undefined;
+  onInspectContext(): void;
   models: ModelSummary[];
   providerProfiles: ZenXProviderProfile[];
   workflowCommands: WorkflowCommand[];
@@ -3692,6 +3722,7 @@ function AgentSurface({
             pluginUiRegistry={pluginUiRegistry}
             threadAttachments={threadAttachments}
             threadUsage={threadUsage}
+            onInspectContext={onInspectContext}
             wakeups={[]}
             watching={false}
             workflowCommands={workflowCommands}

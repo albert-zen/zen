@@ -1,3 +1,5 @@
+import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
+import { ContextInspector } from "./context-inspector.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
@@ -53,6 +55,9 @@ export interface AuxiliaryCustomTab {
 }
 
 type AuxiliaryPanelProps = {
+  contextUsage?: ModelUsageProjection;
+  contextUsageStale?: boolean;
+  onRefreshContext?(): void;
   customTabs?: readonly AuxiliaryCustomTab[];
   contextControl?: React.ReactNode;
   threadContext?: Readonly<Record<string, unknown>>;
@@ -84,6 +89,9 @@ type AuxiliaryPanelProps = {
 );
 
 export function AuxiliaryPanel({
+  contextUsage,
+  contextUsageStale,
+  onRefreshContext,
   navigate,
   threadId: legacyThreadId,
   conversationContext,
@@ -125,6 +133,10 @@ export function AuxiliaryPanel({
   const theme = useAppearance();
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (open && selectedTab === "context")
+      document.getElementById("aux-tab-context")?.focus();
+  }, [open, selectedTab]);
   const tabRail = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!panel.current || !onWidthChange) return;
@@ -190,6 +202,15 @@ export function AuxiliaryPanel({
     ([key]) => threadId !== undefined && JSON.parse(key)[0] === threadId,
   );
   const candidates: ContentTab[] = [
+    ...(contextUsage?.inspection
+      ? [
+          {
+            id: "context",
+            title: i18n.t("contextInspection:tab"),
+            icon: "layers" as const,
+          },
+        ]
+      : []),
     ...customTabs.map((tab) => ({ ...tab, id: `custom:${tab.id}` })),
     ...(conversation && threadId !== undefined
       ? [
@@ -774,6 +795,12 @@ export function AuxiliaryPanel({
                       )}
                 </p>
               </header>
+              {contextUsage?.inspection ? (
+                <button type="button" onClick={() => void add("context")}>
+                  <Icon name="layers" />
+                  <span>{i18n.t("contextInspection:chooser")}</span>
+                </button>
+              ) : null}
               {customTabs.map((tab) => (
                 <button
                   type="button"
@@ -860,6 +887,13 @@ export function AuxiliaryPanel({
             aria-labelledby={`aux-tab-${tab.id}`}
             hidden={!visible}
           >
+            {tab.id === "context" && contextUsage?.inspection ? (
+              <ContextInspector
+                usage={contextUsage}
+                stale={contextUsageStale}
+                onRefresh={onRefreshContext}
+              />
+            ) : null}
             {conversation &&
             threadId !== undefined &&
             tab.id === `thread:${conversation.threadId}` &&

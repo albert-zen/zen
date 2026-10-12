@@ -1,3 +1,4 @@
+import { projectContextInspection } from "../../../../src/context-inspection.js";
 import { randomUUID } from "node:crypto";
 import { FleetToolGateway } from "../../../../src/protocol/native/remote-tools.js";
 import { FleetShellGateway } from "./fleet-shell.js";
@@ -403,20 +404,30 @@ async function handleCommand(command: HostCommand): Promise<void> {
       const usageSelection = snapshot.turns.find(
         (turn) => turn.id === latestUsage?.turnId,
       )?.selection;
+      const inspection =
+        process.env.ZENX_CONTEXT_INSPECTOR === "1"
+          ? projectContextInspection(snapshot.items, selection)
+          : undefined;
       send({
         type: "thread-usage/result",
         requestId: command.requestId,
-        usage: projectModelUsage(snapshot.items, {
-          contextWindow,
-          estimatedInputTokens: estimateModelMessageInputTokens(
-            compileModelMessages(snapshot.items, selection),
-          ),
-          providerContextUsageCompatible:
-            usageSelection !== undefined &&
-            usageSelection.providerProfileId === selection.providerProfileId &&
-            usageSelection.modelId === selection.modelId &&
-            usageSelection.reasoningEffort === selection.reasoningEffort,
-        }),
+        usage: {
+          ...(inspection ? { inspection } : {}),
+          ...projectModelUsage(snapshot.items, {
+            contextWindow,
+            estimatedInputTokens:
+              inspection?.estimatedMessageTokens ??
+              estimateModelMessageInputTokens(
+                compileModelMessages(snapshot.items, selection),
+              ),
+            providerContextUsageCompatible:
+              usageSelection !== undefined &&
+              usageSelection.providerProfileId ===
+                selection.providerProfileId &&
+              usageSelection.modelId === selection.modelId &&
+              usageSelection.reasoningEffort === selection.reasoningEffort,
+          }),
+        },
       });
     } catch (error) {
       send({
