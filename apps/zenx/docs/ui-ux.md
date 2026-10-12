@@ -182,6 +182,8 @@ Trace sequence projection 按 Item 顺序生成：
 
 只有一个 Item 的 trace sequence 直接显示该 Thinking / Tool Call row；连续达到两个或更多 Items 时才显示 Trace Group。sequence identity 取首个 Item 的稳定 identity，因此流式追加只更新现有 sequence，不重挂载 disclosure 或丢失键盘焦点。singleton 升级为 group 时继承用户当前的展开或收起状态；用户在 Turn 运行期间显式展开或收起后，后续 streaming patch 不得覆盖该选择。
 
+用户显式选择的 Turn、Trace Group 与 Tool row 展开/收起状态按精确 Thread / Turn / Item 身份保留；切换会话、进入 Settings 或 loading 重挂载后返回仍沿用该选择。它们仅存在于本次 renderer 内存，不写入历史或 Host 配置，也不常驻隐藏会话 DOM。
+
 Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
 Tool 状态统一投影为 `queued / running / success / failed / cancelled / approval_required`。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。

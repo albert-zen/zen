@@ -1,3 +1,4 @@
+import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
@@ -394,6 +395,14 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  return (
+    <ThreadReadingStateProvider>
+      <AppContent />
+    </ThreadReadingStateProvider>
+  );
+}
+
+function AppContent() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);

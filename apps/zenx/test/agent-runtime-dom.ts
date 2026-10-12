@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import { ThreadReadingStateProvider } from "../src/renderer/src/thread-reading-state.js";
 import { ThreadView } from "../src/renderer/src/ThreadView.js";
 import {
   editComposer,
@@ -18,6 +19,7 @@ export const draft = editComposer(
 export async function withRuntimeDom(
   run: (h: {
     render(thread: Thread, props?: Partial<ViewProps>): Promise<void>;
+    hide(): Promise<void>;
     click(selector: string): Promise<HTMLButtonElement>;
   }) => Promise<void>,
 ) {
@@ -56,16 +58,26 @@ export async function withRuntimeDom(
       render: async (thread, props = {}) => {
         await act(async () =>
           root.render(
-            React.createElement(ThreadView, {
-              thread,
-              approvals: [],
-              composer: draft,
-              onDraftChange() {},
-              onInterrupt: async () => {},
-              onRespondToApproval: async () => {},
-              onSubmit: async () => {},
-              ...props,
+            React.createElement(ThreadReadingStateProvider, {
+              children: React.createElement(ThreadView, {
+                key: thread.id,
+                thread,
+                approvals: [],
+                composer: draft,
+                onDraftChange() {},
+                onInterrupt: async () => {},
+                onRespondToApproval: async () => {},
+                onSubmit: async () => {},
+                ...props,
+              }),
             }),
+          ),
+        );
+      },
+      hide: async () => {
+        await act(async () =>
+          root.render(
+            React.createElement(ThreadReadingStateProvider, { children: null }),
           ),
         );
       },

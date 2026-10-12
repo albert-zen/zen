@@ -1,3 +1,10 @@
+import {
+  ThreadReadingContext,
+  useThreadReadingState,
+  useReadingDisclosure,
+  useReadingDisclosures,
+  disclosureKey,
+} from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import type { SkillEntry } from "../../../../cli/src/skills.js";
@@ -183,7 +190,16 @@ interface ThreadViewProps {
   ): Promise<void>;
 }
 
-export function ThreadView({
+export function ThreadView(props: ThreadViewProps) {
+  const readingState = useThreadReadingState(props.thread?.id);
+  return (
+    <ThreadReadingContext.Provider value={readingState}>
+      <ThreadViewContent {...props} />
+    </ThreadReadingContext.Provider>
+  );
+}
+
+function ThreadViewContent({
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
@@ -928,7 +944,7 @@ export function ThreadView({
                     row.type === "turn" ? (
                       <TurnBlock
                         index={row.index}
-                        key={row.turn.id}
+                        key={JSON.stringify([thread?.id, row.turn.id])}
                         turn={row.turn}
                         stopping={
                           interrupting && row.turn.id === runningTurn?.id
@@ -1172,7 +1188,9 @@ export function ThreadView({
                   type="button"
                   className="quiet-button"
                   key={skill.id}
-                  aria-label={i18n.t("shell:removeSkill", { name: skill.name })}
+                  aria-label={i18n.t("shell:removeSkill", {
+                    name: skill.name,
+                  })}
                   onClick={() =>
                     onDraftChange(
                       withSkillDraft(
@@ -1574,7 +1592,9 @@ export function ThreadView({
                   )
                     preview.trigger.focus({ preventScroll: true });
                   else
-                    composerTextareaRef.current?.focus({ preventScroll: true });
+                    composerTextareaRef.current?.focus({
+                      preventScroll: true,
+                    });
                 }
               : undefined
           }
@@ -1969,7 +1989,10 @@ function TurnBlock({
   );
   const sectionRef = useRef<HTMLElement>(null);
   const historyId = useId();
-  const [expandedOverride, setExpanded] = useState<boolean | null>(null);
+  const [expandedOverride, setExpanded] = useReadingDisclosure(
+    disclosureKey("turn", turn.id),
+  );
+  const [protectedOpen, setProtectedOpen] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const previousStatus = useRef(turn.status);
   // selectionchange is queued by browsers. Observe the still-mounted history
@@ -1987,12 +2010,15 @@ function TurnBlock({
           !!sectionRef.current?.contains(active)))
     ) {
       setInspecting(true);
-      setExpanded(true);
+      setProtectedOpen(true);
     }
   }
   const expanded =
-    expandedOverride ??
-    (turn.status === "failed" || turn.status === "interrupted" || inspecting);
+    protectedOpen ||
+    (expandedOverride ??
+      (turn.status === "failed" ||
+        turn.status === "interrupted" ||
+        inspecting));
   const complete = turn.status !== "inProgress";
   useEffect(() => {
     const preserve = () => {
@@ -2058,7 +2084,10 @@ function TurnBlock({
           type="button"
           aria-expanded={expanded}
           aria-controls={historyId}
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => {
+            setProtectedOpen(false);
+            setExpanded(!expanded);
+          }}
         >
           <span>
             {confirmedStopped
@@ -2525,11 +2554,14 @@ function TraceSequence({
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expandedChoice, setExpanded] = useReadingDisclosure(
+    disclosureKey("trace", turn.id, node.id),
+  );
+  const expanded = expandedChoice ?? false;
+  const { choices, set: setChoice } = useReadingDisclosures();
   const sectionRef = useRef<HTMLElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
-  const [openItems, setOpenItems] = useState<Set<string>>(new Set());
-  const [visited, setVisited] = useState(false);
+  const [visited, setVisited] = useState(expanded);
   const [visitedItems, setVisitedItems] = useState<Set<string>>(new Set());
   const grouped = node.kind === "traceGroup";
   const activity = summarizeTraceActivity(
@@ -2550,7 +2582,7 @@ function TraceSequence({
     setVisited(true);
     if (!expanded && singleton !== null && singletonExpandable) {
       setVisitedItems((seen) => new Set(seen).add(singleton.id));
-      setOpenItems(new Set([singleton.id]));
+      setChoice(disclosureKey("item", turn.id, singleton.id), true);
     }
     setExpanded((current) => !current);
   };
@@ -2623,7 +2655,7 @@ function TraceSequence({
       )}
       {!grouped && singletonExpandable ? (
         <TraceReveal open={expanded} id={detailsId}>
-          {visited ? (
+          {visited || expanded ? (
             <TraceDetail
               item={singleton}
               pluginSnapshot={pluginSnapshot}
@@ -2634,7 +2666,7 @@ function TraceSequence({
       ) : null}
       {grouped ? (
         <TraceReveal open={expanded} id={detailsId}>
-          {visited ? (
+          {visited || expanded ? (
             <div
               className="trace-items"
               role="region"
@@ -2677,7 +2709,9 @@ function TraceSequence({
                     );
                   }
                   const { item, nested, parentToolName } = row;
-                  const open = openItems.has(item.id);
+                  const open =
+                    choices.get(disclosureKey("item", turn.id, item.id)) ??
+                    false;
                   const expandable = traceItemExpandable(item);
                   return (
                     <div
@@ -2701,12 +2735,10 @@ function TraceSequence({
                             setVisitedItems((current) =>
                               new Set(current).add(item.id),
                             );
-                            setOpenItems((current) => {
-                              const next = new Set(current);
-                              if (next.has(item.id)) next.delete(item.id);
-                              else next.add(item.id);
-                              return next;
-                            });
+                            setChoice(
+                              disclosureKey("item", turn.id, item.id),
+                              (current) => !current,
+                            );
                           }}
                         >
                           <TraceItemHeader
@@ -2732,7 +2764,7 @@ function TraceSequence({
                       )}
                       {expandable ? (
                         <TraceReveal open={open}>
-                          {visitedItems.has(item.id) ? (
+                          {visitedItems.has(item.id) || open ? (
                             <TraceDetail
                               item={item}
                               pluginSnapshot={pluginSnapshot}

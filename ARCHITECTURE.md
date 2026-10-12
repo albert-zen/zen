@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **ZenX reading state** — One App-owned, memory-only renderer cache retains explicit disclosure choices by exact Thread/Turn/Item identity across navigation, without retaining hidden transcripts or changing execution, canonical history or Host storage.
+
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
 - **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.

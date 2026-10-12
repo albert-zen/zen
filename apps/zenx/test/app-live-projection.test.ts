@@ -21,6 +21,10 @@ import type {
   ServerNotificationParams,
   Thread,
 } from "../src/protocol-client/index.js";
+import {
+  runtimeCommand,
+  runtimeThread,
+} from "./fixtures/agent-runtime-data.js";
 import { App } from "../src/renderer/src/App.js";
 import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
@@ -28,6 +32,74 @@ import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
+
+test("actual App navigation restores exact thread disclosures after loading remounts", async () => {
+  const a = {
+    ...thread(),
+    turns: runtimeThread(
+      [runtimeCommand("one"), runtimeCommand("two")],
+      "completed",
+    ).turns,
+  };
+  const b = { ...a, id: "thread-2" };
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === a.id ? a : b,
+        );
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  const click = async (selector: string) => {
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(selector),
+    );
+    await act(async () => button.click());
+  };
+  try {
+    await click(".thread-row");
+    await click(".turn-toggle");
+    await click(".trace-toggle");
+    await click(".trace-item-toggle");
+    const selected = document.querySelector(".trace-detail");
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ];
+    assert.equal(rows.length, 2);
+    await act(async () => rows[1]!.click());
+    await waitFor(() => document.querySelector(".turn-toggle"));
+    assert.equal(
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+      "false",
+    );
+    assert.equal(
+      selected?.isConnected,
+      false,
+      "old transcript DOM is not cached",
+    );
+    await act(async () => rows[0]!.click());
+    await waitFor(() => document.querySelector(".trace-item-toggle"));
+    assert.equal(
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(
+      document.querySelector(".trace-toggle")?.getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(
+      document
+        .querySelector(".trace-item-toggle")
+        ?.getAttribute("aria-expanded"),
+      "true",
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
 
 test("canonical image tool completion refreshes the visible attachment projection", async () => {
   let notify: NotificationListener | undefined;
