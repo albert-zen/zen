@@ -1307,6 +1307,7 @@ export class ShellToolRuntime implements ToolRuntime {
       reportLifecycle();
     });
     child.once("exit", (code, signal) => {
+      if (lifecycle === undefined) return;
       lifecycle = {
         foreground: "exited",
         stdio: "open",

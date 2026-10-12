@@ -415,3 +415,43 @@ test(
     }
   },
 );
+
+test(
+  "shell lifecycle needs both output streams to reach EOF",
+  { skip: process.platform === "win32" },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-shell-one-eof-"),
+    );
+    const marker = path.join(directory, "ready");
+    const gate = path.join(directory, "release");
+    const shell = createShell();
+    try {
+      const command = `exec 1>&-; printf ready > ${JSON.stringify(marker)}; while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.01; done; printf error-output >&2; exit 11`;
+      const started = await shell.execute(invocation("shell", { command }));
+      await waitForFile(marker);
+      const running = await shell.waitRuntime.execute(
+        invocation("wait", {
+          task_id: sessionId(started.output),
+          yield_time_ms: 20,
+        }),
+      );
+      assert.equal(facts(running).foreground, "running");
+      assert.equal(facts(running).stdio, "open");
+      await writeFile(gate, "release");
+      const completed = await shell.waitRuntime.execute(
+        invocation("wait", {
+          task_id: sessionId(started.output),
+          yield_time_ms: 5_000,
+        }),
+      );
+      assert.equal(facts(completed).stdio, "eof");
+      assert.equal(facts(completed).foreground_exit_code, 11);
+      assert.equal(facts(completed).status, "failed");
+      assert.match(completed.output, /error-output/);
+    } finally {
+      await shell.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
