@@ -40,6 +40,18 @@ function Wait-Event($Directory, $Process, $Type) {
   }
   throw "Timed out waiting for $Type"
 }
+function Write-FixtureDiagnostics($Directory, $Process) {
+  foreach ($name in @("events-$($Process.Id).jsonl", "stdout.log", "stderr.log")) {
+    try {
+      $file = Join-Path $Directory $name
+      if (!(Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+      $text = [IO.File]::ReadAllText($file)
+      if ($text.Length -gt 32768) { $text = "[last 32768 characters]`n" + $text.Substring($text.Length - 32768) }
+      Write-Host "--- Startup failure diagnostics: $name"
+      Write-Host $text
+    } catch { Write-Warning "Could not print $name`: $($_.Exception.Message)" }
+  }
+}
 function Assert-SoleVisibleWindow($ProcessId, [IntPtr] $Handle) {
   $visible = @([StartupWindows]::Visible($ProcessId))
   if ($visible.Count -ne 1 -or $visible[0] -ne $Handle.ToInt64() -or [StartupWindows]::IsIconic($Handle)) {
@@ -179,6 +191,7 @@ public static class StartupWindows {
     } catch {
       $scenarioFailure = $_
       $sample.error = $_.Exception.Message
+      Write-FixtureDiagnostics $directory $primary
     } finally {
       $sample.cleanupErrors = @(Stop-OwnedFixtures @($secondary, $primary) $directory)
       try { Write-Json (Join-Path $EvidenceDirectory "report.json") $report }

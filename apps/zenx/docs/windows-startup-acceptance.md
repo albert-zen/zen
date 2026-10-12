@@ -5,6 +5,27 @@ startup flag, production hook, or security exception. It observes the existing
 portable application on a real Windows desktop, holding its existing awaited
 bootstrap fence while the first window renders and a second process launches.
 
+## Windows checkout correctness
+
+The first hosted run observed real startup/success (428.5ms to `WS_VISIBLE`, same
+HWND, second-launch foreground ownership, Host ready), but its failure case timed
+out. These are partial results from head `6148c586`, not complete acceptance.
+
+A subsequent deterministic regression reproduced a strict-CSP mismatch when the
+appearance bootstrap input has Windows CRLF line endings. HTML parsing normalizes
+CRLF and CR to LF before the browser hashes inline script text; hashing the
+unnormalized input can block the script that changes status into the actual error
+page. `startupScreenHtml` now normalizes the emitted script before hashing it.
+The strict script policy is unchanged. LF/CRLF/CR inputs produce identical HTML
+and the hash matches the parsed script. See the [HTML preprocessing rule](https://html.spec.whatwg.org/multipage/parsing.html#preprocessing-the-input-stream)
+and [CSP hash matching](https://www.w3.org/TR/CSP3/#match-element-to-source-list).
+
+This is a confirmed source-level defect and a hypothesis for that particular
+hosted failure until a fresh Windows run completes. The harness now prints bounded
+failure diagnostics (events/stdout/stderr), observes the startup page before image
+capture, and records renderer console/load errors. It does not relax the failure
+assertion or timeout.
+
 ## Run
 
 On Windows, from `apps/zenx`, build the normal package using the existing approved

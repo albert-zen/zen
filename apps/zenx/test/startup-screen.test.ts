@@ -109,3 +109,28 @@ test("startup follows saved language before mounting the renderer and keeps raw 
   assert.equal(dom.window.document.querySelector("main b"), null);
   dom.window.close();
 });
+
+test("startup CSP hash matches browser-parsed script for Windows and CR line endings", () => {
+  const baseline = startupScreenHtml();
+  for (const ending of ["\r\n", "\r"]) {
+    const windowsBootstrap = appearanceBootstrap.replace(/\r\n?|\n/gu, ending);
+    const html = renderStartup(windowsBootstrap);
+    const dom = new JSDOM(html);
+    const script = dom.window.document.querySelector("script")!.textContent!;
+    const hash = createHash("sha256").update(script).digest("base64");
+    const policy = dom.window.document
+      .querySelector('meta[http-equiv="Content-Security-Policy"]')!
+      .getAttribute("content")!;
+    assert.ok(
+      policy.includes(`'sha256-${hash}'`),
+      "CSP must authorize the script after HTML newline normalization",
+    );
+    assert.doesNotMatch(policy, /script-src[^;]*'unsafe-inline'/u);
+    assert.equal(
+      html,
+      baseline,
+      "checkout line endings must not change the startup artifact",
+    );
+    dom.window.close();
+  }
+});

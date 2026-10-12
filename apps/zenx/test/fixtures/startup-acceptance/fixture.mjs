@@ -52,6 +52,18 @@ export function observe() {
   app.on("browser-window-created", (_event, window) => {
     windowsCreated++;
     event("created", identity(window));
+    window.webContents.on("console-message", (_event, details) => {
+      event("renderer-console", {
+        message: details.message,
+        level: details.level,
+      });
+    });
+    window.webContents.on(
+      "did-fail-load",
+      (_event, code, description, url, isMainFrame) => {
+        event("page-load-failed", { code, description, url, isMainFrame });
+      },
+    );
     window.webContents.on("did-finish-load", () => {
       void (async () => {
         const url = window.webContents.getURL();
@@ -60,6 +72,7 @@ export function observe() {
         const page = await window.webContents.executeJavaScript(
           `({ role: document.querySelector('main')?.getAttribute('role'), text: document.querySelector('main')?.textContent })`,
         );
+        event("startup-page-observed", { ...identity(window), url, ...page });
         const type =
           page.role === "alert" ? "failure-loaded" : "startup-loaded";
         const screenshot = await window.webContents.capturePage();
