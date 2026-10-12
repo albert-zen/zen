@@ -749,6 +749,66 @@ export function App() {
     return retained;
   };
 
+  const changeNewThreadProject = (
+    workspace: string,
+    carryDraftToNewProject = false,
+  ) => {
+    setModelUpdateError(null);
+    const current = newThreadDraftRef.current;
+    if (current === null || current.workspace === workspace) return;
+    if (
+      (!newThreadDraftHasUnsentInput(current) &&
+        current.composer.submission === null) ||
+      (carryDraftToNewProject &&
+        !retainedNewThreadDraftsRef.current.has(
+          newThreadDraftRetentionKey(workspace),
+        ))
+    ) {
+      // Only a genuinely new folder can carry the current input. Existing
+      // Projects restore their own draft through the same selection path.
+      const retained = takeRetainedNewThreadDraft(workspace);
+      if (retained !== null) {
+        confirmNewThreadDraft(retained);
+        return;
+      }
+      updateNewThreadDraft((draft) => ({
+        ...draft,
+        workspace,
+        composer: {
+          ...draft.composer,
+          submission:
+            draft.composer.submission?.status === "failed"
+              ? null
+              : draft.composer.submission,
+        },
+      }));
+      return;
+    }
+    if (current.composer.submission?.status === "pending") {
+      // An in-flight first Send keeps its draft identity so the
+      // promotion path can finish even while the Project moves.
+      updateNewThreadDraft((draft) => ({ ...draft, workspace }));
+      return;
+    }
+    // Each Project keeps its own unsent welcome input like an
+    // independent Thread: stash the current text under the old
+    // Project and swap in the target Project's retained draft.
+    if (newThreadDraftHasUnsentInput(current))
+      retainedNewThreadDraftsRef.current.set(
+        newThreadDraftRetentionKey(current.workspace),
+        current,
+      );
+    confirmNewThreadDraft(
+      takeRetainedNewThreadDraft(workspace) ?? {
+        id: crypto.randomUUID(),
+        workspace,
+        composer: emptyComposerState(),
+        settings: current.settings,
+        permissionMode: current.permissionMode,
+      },
+    );
+  };
+
   const openProjectPicker = (intent: "add-project" | "new-thread") => {
     projectPickerOperationEpoch.current += 1;
     projectPickerPendingRef.current = false;
@@ -848,6 +908,9 @@ export function App() {
     if (intent === null || projectPickerPendingRef.current) return;
     projectPickerPendingRef.current = true;
     const epoch = projectPickerOperationEpoch.current;
+    const existingProject = projectsRef.current.projects.some(
+      (project) => project.workspace === workspace,
+    );
     try {
       await window.zenx.settings.addWorkspace(workspace);
       if (projectPickerOperationEpoch.current !== epoch) return;
@@ -857,20 +920,7 @@ export function App() {
       if (intent === "new-thread") {
         const draft = newThreadDraftRef.current;
         if (draft === null) openNewThreadDraft(workspace);
-        else {
-          setModelUpdateError(null);
-          confirmNewThreadDraft({
-            ...draft,
-            workspace,
-            composer: {
-              ...draft.composer,
-              submission:
-                draft.composer.submission?.status === "failed"
-                  ? null
-                  : draft.composer.submission,
-            },
-          });
-        }
+        else changeNewThreadProject(workspace, !existingProject);
       }
     } catch (error) {
       if (projectPickerOperationEpoch.current === epoch)
@@ -2890,58 +2940,7 @@ export function App() {
               }
               onNewThreadModelChange={changeNewThreadModel}
               onNewThreadReasoningChange={changeNewThreadReasoning}
-              onNewThreadProjectChange={(workspace) => {
-                setModelUpdateError(null);
-                const current = newThreadDraftRef.current;
-                if (current === null || current.workspace === workspace) return;
-                if (
-                  !newThreadDraftHasUnsentInput(current) &&
-                  current.composer.submission === null
-                ) {
-                  // A plain untouched page adopts the target Project's
-                  // retained draft when it has one.
-                  const retained = takeRetainedNewThreadDraft(workspace);
-                  if (retained !== null) {
-                    confirmNewThreadDraft(retained);
-                    return;
-                  }
-                  updateNewThreadDraft((draft) => ({
-                    ...draft,
-                    workspace,
-                    composer: {
-                      ...draft.composer,
-                      submission:
-                        draft.composer.submission?.status === "failed"
-                          ? null
-                          : draft.composer.submission,
-                    },
-                  }));
-                  return;
-                }
-                if (current.composer.submission?.status === "pending") {
-                  // An in-flight first Send keeps its draft identity so the
-                  // promotion path can finish even while the Project moves.
-                  updateNewThreadDraft((draft) => ({ ...draft, workspace }));
-                  return;
-                }
-                // Each Project keeps its own unsent welcome input like an
-                // independent Thread: stash the current text under the old
-                // Project and swap in the target Project's retained draft.
-                if (newThreadDraftHasUnsentInput(current))
-                  retainedNewThreadDraftsRef.current.set(
-                    newThreadDraftRetentionKey(current.workspace),
-                    current,
-                  );
-                confirmNewThreadDraft(
-                  takeRetainedNewThreadDraft(workspace) ?? {
-                    id: crypto.randomUUID(),
-                    workspace,
-                    composer: emptyComposerState(),
-                    settings: current.settings,
-                    permissionMode: current.permissionMode,
-                  },
-                );
-              }}
+              onNewThreadProjectChange={changeNewThreadProject}
               onAddNewThreadProject={() => openProjectPicker("new-thread")}
               onImportImages={async (threadId, files) => {
                 const imports = await Promise.all(

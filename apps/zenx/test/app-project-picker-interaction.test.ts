@@ -1226,56 +1226,71 @@ test("draft Project chooser stays within the viewport and only scrolls its resul
   }
 });
 
-test("adding a Project from the central switcher preserves the local draft", async () => {
-  let currentProjects = oneProject();
-  let addWorkspaceCalls = 0;
-  let starts = 0;
-  const harness = await mountApp(currentProjects, {
-    addWorkspace: async (workspace) => {
-      addWorkspaceCalls += 1;
-      currentProjects = {
-        projects: [
-          ...currentProjects.projects,
-          {
-            key: workspace,
-            workspace,
-            configured: true,
-            isDefault: false,
-            threadIds: [],
-          },
-        ],
-        unavailableThreadIds: [],
-        lastUsedWorkspace: workspace,
-      };
-    },
-    projectsGet: async () => currentProjects,
-    startProjectThread: async (workspace) => {
-      starts += 1;
-      return started(liveThread(), workspace);
-    },
+for (const entry of ["heading", "chip"] as const) {
+  test(`adding a new Project from ${entry} preserves the local draft`, async () => {
+    let currentProjects = oneProject();
+    let addWorkspaceCalls = 0;
+    let starts = 0;
+    const harness = await mountApp(currentProjects, {
+      addWorkspace: async (workspace) => {
+        addWorkspaceCalls += 1;
+        currentProjects = {
+          projects: [
+            ...currentProjects.projects,
+            {
+              key: workspace,
+              workspace,
+              configured: true,
+              isDefault: false,
+              threadIds: [],
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: workspace,
+        };
+      },
+      projectsGet: async () => currentProjects,
+      startProjectThread: async (workspace) => {
+        starts += 1;
+        return started(liveThread(), workspace);
+      },
+    });
+    try {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".new-thread-action")
+          ?.click(),
+      );
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      );
+      await setTextareaValue(composer, "Keep this draft");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            entry === "chip"
+              ? ".new-thread-project-trigger-chip"
+              : ".new-thread-project-trigger:not(.new-thread-project-trigger-chip)",
+          )!
+          .click(),
+      );
+      const addProject = await waitFor(() => exactButton("Add project"));
+      await act(async () => addProject.click());
+      const addFolder = await waitFor(() => exactButton("Add folder"));
+      await waitFor(() => addFolder.disabled === false);
+      await act(async () => addFolder.click());
+      await waitFor(() => projectSwitcher()?.textContent?.trim() === "/");
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+        "Keep this draft",
+      );
+      assert.equal(addWorkspaceCalls, 1);
+      assert.equal(starts, 0);
+    } finally {
+      await unmountApp(harness);
+    }
   });
-  try {
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
-    );
-    const composer = await waitFor(() =>
-      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
-    );
-    await setTextareaValue(composer, "Keep this draft");
-    await act(async () => projectSwitcher()?.click());
-    const addProject = await waitFor(() => exactButton("Add project"));
-    await act(async () => addProject.click());
-    const addFolder = await waitFor(() => exactButton("Add folder"));
-    await waitFor(() => addFolder.disabled === false);
-    await act(async () => addFolder.click());
-    await waitFor(() => projectSwitcher()?.textContent?.trim() === "/");
-    assert.equal(composer.value, "Keep this draft");
-    assert.equal(addWorkspaceCalls, 1);
-    assert.equal(starts, 0);
-  } finally {
-    await unmountApp(harness);
-  }
-});
+}
 
 test("first Turn starts before ancillary Project refresh completes", async () => {
   const marked = deferred<ReturnType<typeof publicSettings>>();
@@ -5067,4 +5082,53 @@ for (const text of ["Original Project draft", ""]) {
       await unmountApp(harness);
     }
   });
+}
+
+for (const entry of ["heading", "chip"] as const) {
+  for (const retainedText of ["Zen draft must survive", ""]) {
+    test(`Add project from ${entry} restores an existing Project with ${retainedText ? "a retained draft" : "no draft"}`, async () => {
+      const projects = twoProjectSnapshot();
+      const harness = await mountApp(projects);
+      try {
+        const text = () =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+        await waitFor(text);
+        if (retainedText) await setTextareaValue(text(), retainedText);
+        await chooseDraftProject("documents");
+        await setTextareaValue(text(), "Documents draft must survive");
+        // The directory picker can choose a folder that is already configured.
+        window.zenx.settings.getDirectoryBrowser = async () => ({
+          locations: [{ label: "Zen", path: "/work/zen" }],
+          initialPath: "/work/zen",
+        });
+        window.zenx.settings.listDirectory = async () => ({
+          path: "/work/zen",
+          parent: "/work",
+          breadcrumbs: [{ label: "zen", path: "/work/zen" }],
+          directories: [],
+        });
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(
+              entry === "chip"
+                ? ".new-thread-project-trigger-chip"
+                : ".new-thread-project-trigger:not(.new-thread-project-trigger-chip)",
+            )!
+            .click(),
+        );
+        await act(async () => exactButton("Add project")!.click());
+        const addFolder = await waitFor(() => exactButton("Add folder"));
+        await waitFor(() => !addFolder.disabled);
+        await act(async () => addFolder.click());
+        await waitFor(() => projectSwitcher()?.textContent?.trim() === "zen");
+        assert.equal(text().value, retainedText);
+        await chooseDraftProject("documents");
+        assert.equal(text().value, "Documents draft must survive");
+        await chooseDraftProject("zen");
+        assert.equal(text().value, retainedText);
+      } finally {
+        await unmountApp(harness);
+      }
+    });
+  }
 }
