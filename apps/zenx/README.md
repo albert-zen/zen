@@ -226,6 +226,35 @@ certificate's 40-character SHA-1 fingerprint:
 { "identity": "0123456789ABCDEF0123456789ABCDEF01234567", "mode": "local" }
 ```
 
+Each portable app and provider-smoke artifact includes `build-info.json` at the
+packaged app root (`Contents/Resources/app/build-info.json` on macOS,
+`resources/app/build-info.json` on Windows/Linux). The final packaging JSON also
+includes the same `buildInfo`. It records schema version 1, the unchanged package
+version, app/smoke target, platform/architecture, full Git commit, sorted exact
+locally available tags, source state and the assembled provider manifest SHA-256.
+It is written in the current run's private app snapshot before signing, never
+into shared build output or the source tree.
+
+Source is observed before the build and after source-backed resource copies.
+Tracked, staged and non-ignored untracked changes mark it `dirty`; missing Git,
+source exports and failed Git reads report `unknown` with null commit and no tags.
+Different observations report `changed-during-build` with null commit and no tags.
+An empty tag list means no exact tag is available locally, including shallow
+checkouts; it does not assert that no remote tag exists. Build from an unchanged,
+clean checkout for commit identification. These endpoint observations are not an
+atomic source snapshot: ignored dependencies/generated inputs and edits reverted
+between observations are not attested. Dirty metadata does not hash local edits.
+
+The [Git exact-match convention](https://git-scm.com/docs/git-describe) informs
+exact tags instead of a misleading nearest-release label. We adopt
+[reproducible-build timestamp guidance](https://reproducible-builds.org/docs/timestamps/)
+by omitting wall-clock time and machine paths; identical metadata inputs yield
+identical JSON. We do not claim byte-reproducible binaries or signed provenance.
+[Electron's signing guidance](https://www.electronjs.org/docs/latest/tutorial/code-signing)
+keeps signing and notarization separate: build info changes neither bundle/helper
+IDs nor signing options. Developer ID/notarization and installed macOS upgrade
+acceptance remain separate release prerequisites (#124).
+
 Local signing is intended for repeated builds on one development Mac. The same
 identity signs the app, nested Electron code, `zenx-accessibility`, and
 `zenx-foreground-input`, giving macOS a stable code-signing identity for

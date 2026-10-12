@@ -1,3 +1,4 @@
+import { readSourceProvenance, writeBuildInfo } from "./build-info.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -41,6 +42,7 @@ async function packageZenX(arguments_) {
     await mkdir(runsRoot, { recursive: true, mode: 0o700 });
     const staging = await mkdtemp(path.join(runsRoot, "package-"));
     try {
+      const sourceBefore = await readSourceProvenance(root);
       const buildSnapshot = await createBuildSnapshot(staging);
       const resources = path.join(staging, "resources");
       const appDir = path.join(staging, "app");
@@ -77,6 +79,7 @@ async function packageZenX(arguments_) {
       const macOsSigningConfiguration = await resolveMacOsSigningConfiguration({
         platform: process.platform,
       });
+      let buildInfo;
       const { packager } = await import("@electron/packager");
       const packaged = await packager({
         dir: appDir,
@@ -144,6 +147,18 @@ async function packageZenX(arguments_) {
                 ),
               });
             }
+            // Finish the private app snapshot after all source-backed copies and
+            // helper compilation, before Electron packager signs its resources.
+            buildInfo = await writeBuildInfo({
+              appDirectory: buildPath,
+              version: zenxPackage.version,
+              target,
+              platform: process.platform,
+              arch: process.arch,
+              manifestSha256: assembly.manifestSha256,
+              sourceBefore,
+              sourceAfter: await readSourceProvenance(root),
+            });
           },
         ],
         asar: false,
@@ -187,6 +202,7 @@ async function packageZenX(arguments_) {
             executable,
             target,
             version: zenxPackage.version,
+            buildInfo,
             manifestDigest: assembly.manifestSha256,
             releaseSizeBytes: assembly.releaseSizeBytes,
           },
