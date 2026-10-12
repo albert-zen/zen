@@ -623,7 +623,7 @@ test("an unexpectedly exited supervisor is never signalled through a reusable nu
   Object.defineProperty(shell.child, "pid", { value: 987654 });
   Object.defineProperty(shell.child, "exitCode", { value: 1 });
   const killGroup = shell.groupKill;
-  killGroup.mock.mockImplementation(() => true);
+  killGroup.mock.mockImplementation((): true => true);
   assert.equal(
     await restoreLoginShellPath({
       platform: "darwin",
@@ -642,7 +642,7 @@ for (const pid of [undefined, 0, -1, Number.NaN])
     const shell = mockShell(t);
     Object.defineProperty(shell.child, "pid", { value: pid });
     const signal = shell.groupKill;
-    signal.mock.mockImplementation(() => true);
+    signal.mock.mockImplementation((): true => true);
     const environment = { PATH: minimalPath, SHELL: "/bin/zsh" };
     const pending = restoreLoginShellPath({
       platform: "darwin",
