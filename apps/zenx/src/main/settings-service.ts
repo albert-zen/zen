@@ -659,6 +659,7 @@ export class ZenXSettingsService {
   async #discoverSubscriptionModels(
     target: SubscriptionDiscoverySnapshot,
     requestSignal: AbortSignal | undefined,
+    catalogMode: "configured" | "discovered" = "configured",
   ): Promise<ZenXProviderCatalogSnapshot> {
     const signal = requestSignal ?? new AbortController().signal;
     const subscription = this.#subscriptionForProfile(
@@ -675,6 +676,7 @@ export class ZenXSettingsService {
     const merge = (
       discovered: readonly DiscoveredModelCatalogEntry[],
     ): ZenXModelCatalogEntry[] => {
+      if (catalogMode === "discovered") return [...discovered];
       const discoveredById = new Map(
         discovered.map((entry) => [entry.id, entry]),
       );
@@ -851,43 +853,33 @@ export class ZenXSettingsService {
         candidate.modelsUserConfigured !== true,
     );
     if (provider === undefined) return false;
-    const subscription = this.#subscriptionForProfile(
-      provider.providerProfileId,
-    );
-    if (subscription.acquireAccessLease === undefined) return false;
-    const status = await subscription.status();
-    if (!status.authenticated) return false;
-    const signal = AbortSignal.timeout(30_000);
-    const fetch = this.#providerFetchFactory(undefined);
-    let listed: readonly DiscoveredModelCatalogEntry[];
+    let discovery: SubscriptionDiscoverySnapshot;
     let accountId: string;
+    let listed: readonly ZenXModelCatalogEntry[];
     try {
-      const lease = await subscription.acquireAccessLease(signal);
-      accountId = extractChatGptAccountId(lease.accessToken);
-      const cached = await this.#subscriptionModelCache.load(accountId);
-      const result = await discoverOpenAiSubscriptionModels({
-        accessToken: lease.accessToken,
-        ...(cached?.etag === undefined ? {} : { etag: cached.etag }),
-        fetch,
-        signal,
-      });
-      listed =
-        result.notModified && cached !== undefined
-          ? cached.models
-          : result.models;
-      if (!result.notModified)
-        await this.#subscriptionModelCache
-          .store({
-            accountId: result.accountId,
-            fetchedAt: Date.now(),
-            ...(result.etag === undefined ? {} : { etag: result.etag }),
-            models: result.models,
-          })
-          .catch(() => undefined);
+      const captured = await this.#captureSubscriptionDiscovery(
+        provider.providerProfileId,
+      );
+      if (captured === undefined) return false;
+      discovery = captured;
+      const subscription = this.#subscriptionForProfile(
+        provider.providerProfileId,
+      );
+      const status = await subscription.status();
+      if (!status.authenticated || status.accountId === undefined) return false;
+      accountId = status.accountId;
+      const catalog = await this.#discoverSubscriptionModels(
+        discovery,
+        AbortSignal.timeout(30_000),
+        "discovered",
+      );
+      // A fallback is useful for manual discovery, but must not make the
+      // initial catalog user-owned after a failed network request.
+      if (catalog.source === "fallback" || catalog.warning !== undefined)
+        return false;
+      listed = catalog.models;
     } catch {
       return false;
-    } finally {
-      await fetch.close?.();
     }
     const recent = listed
       .filter((entry) => !entry.hidden && entry.contextWindow !== null)
@@ -903,14 +895,15 @@ export class ZenXSettingsService {
       const target = current.providerProfiles[index]!;
       if (
         target.type !== "openai-subscription" ||
-        target.modelsUserConfigured === true
+        target.modelsUserConfigured === true ||
+        JSON.stringify(target) !== discovery.providerFingerprint
       )
         return false;
       // The account may have switched during the network round trip.
       const latest = await this.#subscriptionForProfile(
         target.providerProfileId,
       ).status();
-      if (!latest.authenticated) return false;
+      if (!latest.authenticated || latest.accountId !== accountId) return false;
       const providerProfiles = [...current.providerProfiles];
       // Manual capability edits remain authoritative over the fresh list,
       // and a previously hidden model id keeps the user's visibility choice.
@@ -952,7 +945,9 @@ export class ZenXSettingsService {
       const defaultModel = keepOrReplace(current.defaultModel, recent[0]!.id);
       const titleModel = keepOrReplace(
         current.titleModel,
-        defaultModel.modelId,
+        defaultModel.providerProfileId === target.providerProfileId
+          ? defaultModel.modelId
+          : recent[0]!.id,
       );
       let next: ZenXHostProfile;
       try {

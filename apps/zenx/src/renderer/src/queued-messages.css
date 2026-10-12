@@ -1,0 +1,422 @@
+.queue-shelf {
+  width: 100%;
+  max-width: var(--conversation-width);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 6px auto -1px;
+  /* Keep the layout footprint, but read as a quiet shelf above the input. */
+  border: 1px solid transparent;
+  border-top-color: var(--color-border-subtle);
+  border-radius: 0;
+  background: var(--color-surface-main);
+  box-shadow: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+}
+
+.queue-shelf + .composer {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+.queue-shelf-header,
+.queue-shelf-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.queue-shelf-header {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0 8px;
+}
+
+.queue-shelf button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.queue-shelf button:disabled {
+  cursor: default;
+  color: var(--color-text-disabled);
+}
+
+.queue-shelf button:focus-visible,
+.queue-preview:focus-visible,
+.queue-row-error:focus-visible,
+.queue-shelf-details:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-control);
+}
+
+.queue-shelf-toggle,
+.queue-header-action,
+.queue-view-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+}
+
+.queue-shelf-toggle {
+  justify-content: flex-start;
+  white-space: nowrap;
+  font-weight: 500 !important;
+}
+
+.queue-header-action {
+  white-space: nowrap;
+}
+
+.queue-resume {
+  color: var(--color-text-primary) !important;
+}
+
+.queue-resume:disabled {
+  color: var(--color-text-muted) !important;
+}
+
+.queue-shelf.is-open .queue-shelf-chevron,
+.queue-preview.is-expanded .queue-preview-chevron,
+.queue-view-all[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.queue-shelf-details {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(252px, calc(30dvh + 36px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding: 4px;
+}
+
+.queue-shelf-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 4px;
+}
+
+.queue-row {
+  margin: 0;
+  padding: 0;
+}
+
+.queue-row + .queue-row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.queue-row-main {
+  display: flex;
+  align-items: flex-start;
+  min-height: 44px;
+  gap: 4px;
+}
+
+.queue-row-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-row-content.has-images > .queue-preview {
+  padding-bottom: 4px;
+}
+
+.queue-preview {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  padding: 10px 8px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 1.55;
+}
+
+.queue-preview.is-expandable {
+  padding-right: 24px;
+  cursor: pointer;
+}
+
+.queue-preview-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.queue-preview.is-expanded .queue-preview-text {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.queue-preview-chevron {
+  position: absolute;
+  top: 15px;
+  right: 5px;
+  color: var(--color-text-muted);
+}
+
+.queue-images {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.queue-image-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 0 8px 8px;
+}
+
+.queue-image-strip.is-only-content {
+  padding-top: 0;
+  padding-bottom: 6px;
+}
+
+.queue-image-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.queue-image-gallery .image-thumbnail,
+.queue-image-gallery .queue-images-more {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-inset);
+}
+
+.queue-image-gallery .image-placeholder {
+  min-height: 0;
+  height: 100%;
+  padding: 2px;
+  font-size: var(--font-size-caption);
+  line-height: 1.05;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.queue-image-gallery .queue-images-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-images-more[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.queue-image-unavailable {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+
+.queue-images.is-only-content {
+  margin-top: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+}
+
+.queue-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+
+.queue-row-edit,
+.queue-row-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  color: var(--color-text-muted) !important;
+}
+
+.queue-row-edit:disabled {
+  color: var(--color-text-disabled) !important;
+}
+
+.queue-row-edit.is-pending,
+.queue-row-cancel.is-pending {
+  white-space: nowrap;
+  color: var(--color-text-secondary) !important;
+}
+
+/* Approval coexists with a single 44px reading lane. Put a complete thumbnail
+   alongside the text/count instead of leaving a clipped strip below it. */
+.queue-shelf.is-compact .queue-row-content.has-images {
+  display: flex;
+  align-items: flex-start;
+}
+
+.queue-shelf.is-compact .queue-row-content.has-images > .queue-preview {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 6px 0 8px;
+}
+
+.queue-shelf.is-compact
+  .queue-row-content.has-images
+  > .queue-preview.is-expandable
+  .queue-preview-text {
+  padding-right: 14px;
+}
+
+.queue-shelf.is-compact .queue-preview-chevron {
+  top: 4px;
+}
+
+.queue-shelf.is-compact .queue-images {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.queue-shelf.is-compact .queue-images > svg {
+  flex: 0 0 auto;
+}
+
+.queue-shelf.is-compact
+  .queue-row-content.has-images
+  > .queue-preview:not(.is-expanded)
+  .queue-preview-text {
+  -webkit-line-clamp: 1;
+}
+
+.queue-shelf.is-compact .queue-image-strip {
+  flex: 0 0 auto;
+  max-width: 94px;
+  padding: 0;
+}
+
+.queue-shelf.is-compact .queue-image-gallery {
+  max-width: 94px;
+}
+
+.queue-view-all {
+  display: flex;
+  width: calc(100% - 16px);
+  min-height: 36px;
+  margin: 0 8px;
+}
+
+.queue-row-error,
+.queue-resume-error {
+  margin: 0;
+  padding: 4px 8px 10px;
+  color: var(--color-status-danger);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.queue-resume-error {
+  padding-inline: 16px;
+  max-height: 76px;
+  overflow-y: auto;
+}
+
+.queue-hidden-failure {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  padding: 4px 16px 10px;
+  color: var(--color-status-danger) !important;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.queue-hidden-failure svg {
+  flex: 0 0 auto;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .queue-row-edit:not(:focus-visible):not(.is-pending),
+  .queue-row-cancel:not(:focus-visible):not(.is-pending) {
+    opacity: 0.55;
+  }
+
+  .queue-row:hover .queue-row-edit,
+  .queue-row:focus-within .queue-row-edit,
+  .queue-row:hover .queue-row-cancel,
+  .queue-row:focus-within .queue-row-cancel {
+    opacity: 1;
+  }
+
+  .queue-shelf button:not(:disabled):hover,
+  .queue-preview.is-expandable:hover {
+    background: var(--color-surface-hover);
+    border-radius: var(--radius-control);
+  }
+}
+
+@media (pointer: coarse) {
+  .queue-view-all {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .queue-shelf-header {
+    padding-inline: 4px;
+    gap: 0;
+  }
+
+  .queue-header-action,
+  .queue-shelf-toggle {
+    padding-inline: 6px;
+  }
+
+  .queue-shelf-details {
+    max-height: min(212px, calc(28dvh + 36px));
+  }
+}
+
+@media (forced-colors: active) {
+  .queue-row-edit,
+  .queue-row-cancel {
+    opacity: 1 !important;
+  }
+}

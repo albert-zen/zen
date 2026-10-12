@@ -891,13 +891,14 @@ function PinnedThreadsView({
                     )
                       return;
                     event.preventDefault();
+                    const placement = dropPlacement(event);
                     void reorderAndRestoreFocus(
                       sidebarOrderControlId("thread", sourceThreadId),
                       () =>
                         onReorderPinnedThread(
                           sourceThreadId,
                           thread.threadId,
-                          dropPlacement(event),
+                          placement,
                         ),
                       onSidebarOrderAttempt,
                       onSidebarOrderError,
@@ -1120,14 +1121,10 @@ function ProjectsView({
                 )
                   return;
                 event.preventDefault();
+                const placement = projectDropPlacement(event);
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("project", sourceKey),
-                  () =>
-                    onReorderProject(
-                      sourceKey,
-                      group.key,
-                      projectDropPlacement(event),
-                    ),
+                  () => onReorderProject(sourceKey, group.key, placement),
                   onSidebarOrderAttempt,
                   onSidebarOrderError,
                 );
@@ -1218,6 +1215,7 @@ function ProjectsView({
                 )
                   return;
                 event.preventDefault();
+                const placement = dropPlacement(event);
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("thread", source.threadId),
                   () =>
@@ -1226,7 +1224,7 @@ function ProjectsView({
                       source.threadId,
                       group.key,
                       targetThreadId,
-                      dropPlacement(event),
+                      placement,
                     ),
                   onSidebarOrderAttempt,
                   onSidebarOrderError,

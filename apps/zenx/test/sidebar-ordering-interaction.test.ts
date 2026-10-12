@@ -869,3 +869,71 @@ function summary(
     status,
   };
 }
+
+for (const kind of ["pinned", "project", "thread"] as const) {
+  test(`failed ${kind} drag reorder retries its captured placement after dispatch`, async () => {
+    const argumentsSeen: unknown[][] = [];
+    await withDom(async (root) => {
+      const reorder = async (...args: unknown[]) => {
+        argumentsSeen.push(args);
+        if (argumentsSeen.length === 1)
+          throw new Error("Temporary disk failure");
+      };
+      await act(async () =>
+        root.render(
+          createElement(StaticSidebar, {
+            pinnedThreads: kind === "pinned" ? threads.slice(0, 2) : [],
+            onReorderPinnedThread: reorder,
+            onReorderProject: reorder,
+            onReorderThread: reorder,
+          }),
+        ),
+      );
+      const [sourceSelector, targetSelector] =
+        kind === "pinned"
+          ? [
+              '.pinned-thread-group [data-thread-id="active"].thread-row-shell',
+              '.pinned-thread-group [data-thread-id="pinned"].thread-row-shell',
+            ]
+          : kind === "project"
+            ? [
+                '[data-project-key="/work/a"] .project-toggle',
+                '[data-project-key="/work/b"] .project-header',
+              ]
+            : [
+                '[data-thread-id="active"].thread-row-shell',
+                '[data-thread-id="idle"].thread-row-shell',
+              ];
+      const source = requiredElement<HTMLElement>(sourceSelector);
+      const target = requiredElement<HTMLElement>(targetSelector);
+      target.getBoundingClientRect = () =>
+        ({ top: 100, height: 40 }) as DOMRect;
+      const transfer = dragData();
+      await act(async () =>
+        source.dispatchEvent(dragEvent("dragstart", transfer)),
+      );
+      await act(async () =>
+        target.dispatchEvent(dragEvent("dragover", transfer, 135)),
+      );
+      await act(async () =>
+        target.dispatchEvent(dragEvent("drop", transfer, 135)),
+      );
+      assert.equal(argumentsSeen.length, 1);
+      assert.equal(argumentsSeen[0]?.at(-1), "after");
+      assert.match(document.body.textContent ?? "", /Temporary disk failure/);
+      // Geometry may change before Retry; the original user's placement still wins.
+      target.getBoundingClientRect = () =>
+        ({ top: 200, height: 40 }) as DOMRect;
+      await act(async () => {
+        requiredButton(".sidebar-error button").click();
+        await Promise.resolve();
+      });
+      assert.equal(argumentsSeen.length, 2);
+      assert.deepEqual(argumentsSeen[1], argumentsSeen[0]);
+      assert.doesNotMatch(
+        document.body.textContent ?? "",
+        /Could not save Sidebar order/,
+      );
+    });
+  });
+}

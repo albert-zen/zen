@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "../src/protocol-client/index.js";
 import {
+  commandPhase,
   commandSummary,
   commandTitle,
   toolPresentation,
@@ -69,10 +70,18 @@ test("generic successful tools retain their factual title without a redundant co
 
 test("thread failures and active phases remain visible without past-tense success labels", () => {
   const send = command("zenx_threads_send");
+  const requested = { ...send, status: "inProgress" as const };
+  assert.equal(commandPhase(requested), "requested");
   assert.equal(
-    commandSummary({ ...send, status: "inProgress" }),
-    "Send message · started",
+    commandPhase({
+      ...requested,
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: { status: "running" },
+    }),
+    "requested",
+    "a status without a native task identity is not execution evidence",
   );
+  assert.equal(commandSummary(requested), "Send message · requested");
   assert.equal(
     commandSummary({ ...send, status: "failed" }),
     "Send message · failed",
@@ -82,6 +91,7 @@ test("thread failures and active phases remain visible without past-tense succes
     "Send message · declined",
   );
   for (const [status, label] of [
+    ["admitting", "preparing"],
     ["running", "running"],
     ["queued", "queued"],
     ["cancel_requested", "cancelling"],
@@ -94,7 +104,7 @@ test("thread failures and active phases remain visible without past-tense succes
       commandSummary({
         ...send,
         contentType: "application/vnd.zen.tool-task+json",
-        structuredContent: { status },
+        structuredContent: { task_id: "thread-action-task", status },
       }),
       `Send message · ${label}`,
     );

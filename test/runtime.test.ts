@@ -3784,6 +3784,7 @@ test("automatic and explicit batch admission reject the actual undeliverable Ite
   assert.equal(failures().length, 1);
   assert.deepEqual(failures()[0], {
     type: "queue_failed",
+    revision: 0,
     threadId: thread.id,
     queuedItemId: queued[1]!.id,
     clientId: "batch-image",

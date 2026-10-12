@@ -1364,3 +1364,158 @@ test("subscription cache rejects ETags from another catalog compatibility versio
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+for (const changedDuring of ["fetch", "close"] as const) {
+  test(`auto seed refuses an old account catalog after switching during ${changedDuring}`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-auto-account-"),
+    );
+    try {
+      const profileStore = new ZenXHostProfileStore(
+        path.join(directory, "profile.json"),
+      );
+      await profileStore.write(subscriptionProfile());
+      let account = "account-a";
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const response = () =>
+        Response.json({
+          models: [
+            {
+              slug: "account-a-exclusive",
+              visibility: "list",
+              priority: 0,
+              context_window: 300_000,
+              supported_reasoning_levels: [],
+            },
+          ],
+        });
+      const service = new ZenXSettingsService({
+        userDataDirectory: directory,
+        zenDataDirectory: path.join(directory, "zen"),
+        profileStore,
+        vault: new ZenXCredentialVault(
+          path.join(directory, "vault"),
+          encryption,
+        ),
+        subscription: {
+          ...inactiveSubscription,
+          status: async () => ({
+            authenticated: true,
+            expired: false,
+            accountId: account,
+          }),
+          acquireAccessLease: async () => ({
+            accessToken: subscriptionToken("account-a"),
+          }),
+        },
+        providerFetchFactory: () =>
+          Object.assign(
+            async () => {
+              if (changedDuring === "fetch") {
+                entered.resolve();
+                await release.promise;
+              }
+              return response();
+            },
+            {
+              close: async () => {
+                if (changedDuring === "close") {
+                  entered.resolve();
+                  await release.promise;
+                }
+              },
+            },
+          ),
+      });
+      await service.initialize({});
+      const result = service.autoConfigureSubscriptionModels();
+      await entered.promise;
+      account = "account-b";
+      release.resolve();
+      assert.equal(
+        await result,
+        false,
+        "must not permanently seed account-a models for account-b",
+      );
+      const profile = (await service.publicSettings()).profile;
+      assert.notEqual(profile.providerProfiles[0]?.modelsUserConfigured, true);
+      assert.equal(
+        profile.providerProfiles[0]?.models.some(
+          (model) => model.id === "account-a-exclusive",
+        ),
+        false,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("auto seed repairs title model when default belongs to another Provider", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-auto-title-"));
+  try {
+    const profileStore = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    const profile = subscriptionProfile();
+    profile.providerProfiles.push({
+      providerProfileId: "fake",
+      displayName: "Fake",
+      type: "fake",
+      models: structuredLegacyModelCatalog("fake", ["fake"]),
+    });
+    profile.defaultModel = { providerProfileId: "fake", modelId: "fake" };
+    await profileStore.write(profile);
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore,
+      vault: new ZenXCredentialVault(path.join(directory, "vault"), encryption),
+      subscription: {
+        ...inactiveSubscription,
+        status: async () => ({
+          authenticated: true,
+          expired: false,
+          accountId: "account-a",
+        }),
+        acquireAccessLease: async () => ({
+          accessToken: subscriptionToken("account-a"),
+        }),
+      },
+      providerFetchFactory: () =>
+        Object.assign(
+          async () =>
+            Response.json({
+              models: [
+                {
+                  slug: "new-model",
+                  visibility: "list",
+                  priority: 0,
+                  context_window: 300000,
+                  supported_reasoning_levels: [],
+                },
+              ],
+            }),
+          { close: async () => undefined },
+        ),
+    });
+    await service.initialize({});
+    assert.equal(
+      await service.autoConfigureSubscriptionModels(),
+      true,
+      "valid separate default Provider must not prevent subscription seeding",
+    );
+    const after = (await service.publicSettings()).profile;
+    assert.deepEqual(after.defaultModel, {
+      providerProfileId: "fake",
+      modelId: "fake",
+    });
+    assert.deepEqual(after.titleModel, {
+      providerProfileId: "openai-codex",
+      modelId: "new-model",
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

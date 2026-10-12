@@ -915,7 +915,11 @@ test("one running orb switches between Stop and send without losing attachment-o
       composer = editComposer(composer, text);
       await act(async () => show());
       assert.equal(requiredButton(".action-orb"), orb);
-      assert.equal(orb.getAttribute("aria-label"), "Stop");
+      assert.equal(
+        orb.getAttribute("aria-label"),
+        calls.length === 0 ? "Stop" : "Stopping…",
+      );
+      assert.equal(orb.disabled, calls.length > 0);
       assert.ok(orb.classList.contains("stop"));
       await act(async () => orb.click());
     }
@@ -948,7 +952,6 @@ test("one running orb switches between Stop and send without losing attachment-o
     assert.equal(orb.getAttribute("aria-label"), "Send");
     await act(async () => orb.click());
     assert.deepEqual(calls, [
-      "stop:turn-1",
       "stop:turn-1",
       "steer:turn-1",
       "steer:turn-1",
@@ -1007,7 +1010,7 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
     await show();
     assert.match(
       document.querySelector('[aria-label="Message queue"]')?.textContent ?? "",
-      /1 queued.*identical/u,
+      /Pending send · 1.*identical/u,
     );
     const queue = document.querySelector<HTMLElement>(
       '[aria-label="Message queue"]',
@@ -1015,7 +1018,7 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
     assert.equal(queue?.getAttribute("aria-live"), null);
     assert.equal(
       queue?.querySelector('[role="status"]')?.textContent,
-      "1 queued",
+      "Pending send · 1",
     );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
@@ -1094,8 +1097,8 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
       [{ queuedItemId: queued[0]!.id, clientId: "first" }],
     ]);
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /2 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 2/u,
     );
     await act(async () =>
       resolve({
@@ -1109,8 +1112,8 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
       }),
     );
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /2 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 2/u,
     );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
@@ -1125,10 +1128,10 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
     });
     await show();
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /1 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 1/u,
     );
-    assert.equal(document.querySelectorAll(".queued-messages li").length, 1);
+    assert.equal(document.querySelectorAll(".queue-shelf li").length, 1);
   });
 });
 
@@ -1178,13 +1181,7 @@ test("bulk queue confirmation captures IDs before a later append", async () => {
       );
     await show();
     await act(async () =>
-      requiredButton(
-        '.queued-messages button[title="Cancel this pending message only"]',
-      )
-        .closest(".queued-messages")
-        ?.querySelectorAll("button")
-        ?.item(2)
-        ?.click(),
+      requiredButton('.queue-shelf [data-queue-control="cancel-all"]').click(),
     );
     assert.match(
       document.querySelector('[role="dialog"]')?.textContent ?? "",
@@ -1196,8 +1193,8 @@ test("bulk queue confirmation captures IDs before a later append", async () => {
     });
     await show();
     assert.match(
-      document.querySelector(".queued-messages")?.textContent ?? "",
-      /3 queued/u,
+      document.querySelector(".queue-shelf")?.textContent ?? "",
+      /Pending send · 3/u,
     );
     await act(async () =>
       requiredButton('[role="dialog"] button:last-child').click(),
@@ -1266,7 +1263,7 @@ test("a message that started before cancellation reports a conflict even after q
       },
     });
     await show();
-    assert.equal(document.querySelector(".queued-messages"), null);
+    assert.equal(document.querySelector(".queue-shelf"), null);
     assert.match(
       document.querySelector(".queued-cancel-notice")?.textContent ?? "",
       /cannot be canceled/u,
@@ -1299,14 +1296,17 @@ test("pending approvals render in the bottom zone next to the composer", () => {
     },
   } as ApprovalCardState;
   const html = render(true, [approval]);
-  assert.match(html, /class="bottom-zone"/u);
-  assert.match(html, /class="approval-bar"/u);
-  assert.match(html, /Allow the shell-equivalent run_code capability\?/u);
-  assert.match(html, /remembered for the stable run_code capability/u);
-  assert.match(html, /not granted per command or code segment/u);
+  assert.match(html, /class="bottom-zone[^"]*"/u);
+  assert.match(html, /class="approval-request-card"/u);
+  assert.match(html, /Allow tool access\?/u);
+  assert.match(
+    html,
+    /Remember permission for the stable, shell-equivalent run_code capability/u,
+  );
+  assert.match(html, /not per command or code segment/u);
   assert.match(html, /printf &lt;full&gt;/u);
   assert.match(html, /very\/long\/path\/that\/must\/remain\/visible/u);
-  assert.match(html, /Allow capability/u);
+  assert.match(html, /Allow access/u);
 });
 
 test("approval response returns keyboard focus to the composer", async () => {
@@ -1349,10 +1349,12 @@ test("approval response returns keyboard focus to the composer", async () => {
       ),
     );
     await act(async () => {
-      requiredButton(".approval-actions .allow").click();
+      requiredButton(".approval-request-allow").focus();
+      requiredButton(".approval-request-allow").click();
       await Promise.resolve();
     });
     assert.equal(decision, "accept");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
     assert.equal(document.activeElement?.id, "thread-composer");
   });
 });
@@ -2573,7 +2575,7 @@ test("failed turn opens received trace and preserves the error without a final a
   );
   assert.equal(document.querySelector(".turn-final"), null);
   assert.equal(
-    document.querySelector(".turn-terminal")?.textContent,
+    document.querySelector(".turn-outcome > p")?.textContent,
     "invalid tool call id",
   );
 });
@@ -2663,7 +2665,7 @@ test("shell headings and pending calls do not claim that a started call is runni
       requiredElement(".trace-item-toggle").textContent ?? "",
       /Shell/,
     );
-    assert.equal(requiredElement(".tool-status").textContent, "Started");
+    assert.equal(requiredElement(".tool-status").textContent, "Requested");
     assert.equal(document.querySelector(".trace-item .mini-spinner"), null);
   });
 });
@@ -2742,7 +2744,7 @@ test("folded task group and expanded wait row use the same receipt phase", async
       ...base,
       toolName: "wait",
       contentType: "application/vnd.zen.tool-task+json",
-      structuredContent: { status: "running" },
+      structuredContent: { task_id: "test-task", status: "running" },
     };
     const reasoning = reasoningItem("reason-wait", [], ["Waiting for task"]);
     await renderInteractive(
@@ -2763,7 +2765,10 @@ test("folded task group and expanded wait row use the same receipt phase", async
       root,
       turnWithItems("inProgress", [
         reasoning,
-        { ...wait, structuredContent: { status: "timed_out" } },
+        {
+          ...wait,
+          structuredContent: { task_id: "test-task", status: "timed_out" },
+        },
       ]),
     );
     assert.match(group.textContent ?? "", /Wait · timed out/u);
@@ -3057,7 +3062,7 @@ test("running and completed durations share second, minute and hour formatting",
       await renderInteractive(root, turnWithItems("inProgress", []));
       assert.equal(
         requiredElement(".turn-running-label").textContent,
-        `Working for ${label}`,
+        `Working${label}`,
       );
       await renderInteractive(root, turnWithItems("completed", [], duration));
       assert.equal(
@@ -3074,22 +3079,22 @@ test("running duration ticks from turn start and stops on completion", async (t)
     await renderInteractive(root, turnWithItems("inProgress", []));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 12s",
+      "Working12s",
     );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 14s",
+      "Working14s",
     );
     await act(async () => t.mock.timers.tick(46_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 1m 0s",
+      "Working1m 0s",
     );
     await act(async () => t.mock.timers.tick(3_540_000));
     assert.equal(
       requiredElement(".turn-running-label").textContent,
-      "Working for 1h 0m 0s",
+      "Working1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
     assert.equal(document.querySelector(".turn-running-label"), null);
