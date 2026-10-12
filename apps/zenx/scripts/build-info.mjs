@@ -34,7 +34,7 @@ export async function readSourceProvenance(rootDirectory) {
       "--untracked-files=normal",
       "--ignore-submodules=none",
     );
-    const tags = (await git("tag", "--points-at", commit))
+    const tags = (await git("tag", "--no-column", "--points-at", commit))
       .split("\n")
       .filter(Boolean)
       .sort();

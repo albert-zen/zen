@@ -10,6 +10,8 @@ import {
   writeBuildInfo,
 } from "../scripts/build-info.mjs";
 
+import { createApplicationIconSnapshot } from "../scripts/package-zenx-portable.mjs";
+
 const run = promisify(execFile);
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-build-info-"));
@@ -37,6 +39,7 @@ test("source provenance records full detached commit and sorted exact tags", asy
   const { root, git } = await fixture(t);
   await git("tag", "z-release");
   await git("tag", "a-release");
+  await git("config", "column.tag", "always");
   await git("checkout", "--detach");
   const source = await readSourceProvenance(root);
   assert.match(source.commit, /^[a-f0-9]{40}$/);
@@ -155,4 +158,97 @@ test("source changes during packaging do not claim a clean exact build", async (
     writeBuildInfo({ ...options, sourceAfter: source, manifestSha256: "bad" }),
     /digest/,
   );
+});
+
+test("Packager consumes the private icon after provenance cutoff, not later checkout edits", async (t) => {
+  // Exercise the installed Packager's real ordering and icon copy without an
+  // Electron download, native signing, notarization or executable mutation.
+  const entry = import.meta.resolve("@electron/packager");
+  const { App: MacApp } = await import(new URL("./mac.js", entry));
+  const { App: BaseApp } = await import(new URL("./platform.js", entry));
+  const { root, git } = await fixture(t);
+  const originalIcon = path.join(root, "zenx.icns");
+  await writeFile(originalIcon, "committed icon");
+  await git("add", ".");
+  await git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "icon",
+  );
+  const sourceBefore = await readSourceProvenance(root);
+  const staging = path.join(root, "output");
+  const icon = await createApplicationIconSnapshot(staging, originalIcon);
+  assert.equal(
+    await createApplicationIconSnapshot(staging, undefined),
+    undefined,
+  );
+  const appDirectory = path.join(staging, "app");
+  const resources = path.join(staging, "Resources");
+  const buildPath = path.join(resources, "app");
+  await mkdir(appDirectory, { recursive: true });
+  await writeFile(
+    path.join(appDirectory, "package.json"),
+    JSON.stringify({ name: "fixture", version: "0.1.0", main: "index.js" }),
+  );
+  let info;
+  const receiver = {
+    opts: {
+      dir: appDirectory,
+      name: "fixture",
+      out: path.join(staging, "packaged"),
+      prune: false,
+      icon,
+      platform: "darwin",
+      arch: "arm64",
+      electronVersion: "43.2.0",
+      afterCopy: [
+        async () => {
+          info = await writeBuildInfo({
+            appDirectory: buildPath,
+            version: "0.1.0",
+            target: "app",
+            platform: "darwin",
+            arch: "arm64",
+            manifestSha256: "a".repeat(64),
+            sourceBefore,
+            sourceAfter: await readSourceProvenance(root),
+          });
+        },
+      ],
+    },
+    originalResourcesAppDir: buildPath,
+    originalResourcesDir: resources,
+    hookArgsWithOriginalResourcesAppDir: { buildPath },
+    appPlist: { CFBundleIconFile: "electron.icns" },
+    initialize() {
+      return BaseApp.prototype.copyTemplate.call(this);
+    },
+    // Actual create() calls this between afterCopy and copyIcon.
+    updatePlistFiles() {
+      return writeFile(originalIcon, "uncommitted replacement icon");
+    },
+    normalizeIconExtension: BaseApp.prototype.normalizeIconExtension,
+    copyIcon: MacApp.prototype.copyIcon,
+    async renameElectron() {},
+    async renameAppAndHelpers() {},
+    async copyExtraResources() {},
+    async applyIntegrityDigest() {},
+    async signAppIfSpecified() {},
+    async notarizeAppIfSpecified() {},
+    async move() {},
+  };
+  await MacApp.prototype.create.call(receiver);
+  assert.equal(info.source.state, "clean");
+  assert.equal((await readSourceProvenance(root)).state, "dirty");
+  assert.equal(
+    await readFile(path.join(resources, "electron.icns"), "utf8"),
+    "committed icon",
+  );
+  assert.equal(await readFile(icon, "utf8"), "committed icon");
 });

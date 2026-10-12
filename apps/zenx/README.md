@@ -232,7 +232,9 @@ packaged app root (`Contents/Resources/app/build-info.json` on macOS,
 includes the same `buildInfo`. It records schema version 1, the unchanged package
 version, app/smoke target, platform/architecture, full Git commit, sorted exact
 locally available tags, source state and the assembled provider manifest SHA-256.
-It is written in the current run's private app snapshot before signing, never
+The selected platform icon is copied into the same private run before the final
+source observation, so Packager's later icon read cannot consume checkout edits.
+Build info is written in the current run's private app snapshot before signing, never
 into shared build output or the source tree.
 
 Source is observed before the build and after source-backed resource copies.
