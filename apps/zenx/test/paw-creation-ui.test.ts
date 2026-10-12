@@ -53,10 +53,13 @@ test("PAW defaults to its own new working Thread, and duplicate clicks share one
     assert.equal(typeof creates[0]!.input.operationId, "string");
     await act(async () => release({ id: "created-paw" }));
     assert.equal(document.querySelector(".paw-start-content"), null);
-    const introduction = calls.filter((call) => call.id === "post-message");
+    const introduction = calls.filter(
+      (call) => call.id === "start-introduction",
+    );
     assert.equal(introduction.length, 1);
     assert.equal(introduction[0]!.input.roomId, "created-paw");
-    assert.match(introduction[0]!.input.text, /^\[Automatic start\]/);
+    assert.equal(introduction[0]!.input.text, undefined);
+    assert.equal(calls.filter((call) => call.id === "post-message").length, 0);
   });
 });
 
@@ -378,12 +381,12 @@ async function withForm(
             };
           }
           if (id === "create-assistant") return await creation;
-          if (id === "prepare-message") return {};
-          if (id === "post-message") {
+          if (id === "prepare-introduction") return {};
+          if (id === "start-introduction") {
             if (introductionDelayed) await introductionWait;
             if (introductionFails)
               throw new Error("Introduction transport outcome unknown");
-            return { messageId: "introduction" };
+            return { wakeupId: "introduction" };
           }
           if (id === "ack-operation") return { acknowledged: true };
           throw Error(id);
@@ -436,7 +439,7 @@ test("first-use PAW creation is inline, has no name form, and can be postponed w
     );
     assert.match(
       document.querySelector(".paw-start-content")!.textContent!,
-      /Automatic start/,
+      /will introduce itself/,
     );
     await act(async () =>
       [...document.querySelectorAll<HTMLButtonElement>("button")]
@@ -446,9 +449,11 @@ test("first-use PAW creation is inline, has no name form, and can be postponed w
     assert.equal(document.querySelector(".paw-start-content") !== null, false);
     assert.equal(
       calls.some((call) =>
-        ["create-assistant", "prepare-message", "post-message"].includes(
-          call.id,
-        ),
+        [
+          "create-assistant",
+          "prepare-introduction",
+          "start-introduction",
+        ].includes(call.id),
       ),
       false,
     );
@@ -495,7 +500,7 @@ test("uncertain introduction opens the created Room without recreating it or inv
         1,
       );
       assert.equal(
-        calls.filter((call) => call.id === "post-message").length,
+        calls.filter((call) => call.id === "start-introduction").length,
         1,
       );
       assert.equal(
@@ -506,7 +511,7 @@ test("uncertain introduction opens the created Room without recreating it or inv
         root.render(React.createElement(RoomsPage, { sdk: sdk(routes[0]) })),
       );
       assert.equal(
-        calls.filter((call) => call.id === "post-message").length,
+        calls.filter((call) => call.id === "start-introduction").length,
         1,
         "reopening does not resend initialization",
       );
@@ -537,7 +542,7 @@ test("confirmed creation opens chat before introduction admission, and a newer r
       );
       assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms?roomId=new-chat"]);
       assert.equal(
-        calls.filter((call) => call.id === "post-message").length,
+        calls.filter((call) => call.id === "start-introduction").length,
         1,
       );
       assert.equal(
@@ -554,7 +559,7 @@ test("confirmed creation opens chat before introduction admission, and a newer r
       await act(async () => releaseIntroduction());
       assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms?roomId=new-chat"]);
       assert.equal(
-        calls.filter((call) => call.id === "post-message").length,
+        calls.filter((call) => call.id === "start-introduction").length,
         1,
       );
       assert.equal(
@@ -578,7 +583,10 @@ test("admission opens new PAW before unrelated list refresh settles", async () =
           [...routes],
           ["/plugins/zenx-rooms/rooms?roomId=accepted-paw"],
         );
-        assert.equal(calls.filter((c) => c.id === "prepare-message").length, 1);
+        assert.equal(
+          calls.filter((c) => c.id === "prepare-introduction").length,
+          1,
+        );
       } finally {
         await act(async () => releaseRefresh());
       }
@@ -601,7 +609,7 @@ test("accepted explicit greeting survives navigation during create admission", a
     );
     assert.deepEqual(routes, []);
     assert.equal(
-      calls.filter((c) => c.id === "prepare-message").length,
+      calls.filter((c) => c.id === "prepare-introduction").length,
       1,
       "create-and-greet owns its accepted request even when navigation changes",
     );

@@ -30,6 +30,30 @@ class ModelStub implements ZenXTriggerAppServerPort {
     Parameters<ZenXTriggerAppServerPort["onNotification"]>[0] | undefined;
   requests: ClientRequestParams["turn/start"][] = [];
   failure = false;
+  wakeups: Array<{
+    threadId: string;
+    clientId: string;
+    source: "bootstrap";
+    text: string;
+  }> = [];
+  async sendAssistantWakeup(params: {
+    threadId: string;
+    clientId: string;
+    source: "bootstrap";
+    text: string;
+  }) {
+    this.wakeups.push(params);
+    const result = await this.request("turn/start", {
+      threadId: params.threadId,
+      input: [{ type: "text", text: params.text }],
+    });
+    // The compatibility projection honestly contains no userMessage for a Host wakeup.
+    this.listener?.("turn/completed", {
+      threadId: params.threadId,
+      turn: result.turn,
+    });
+    return { turnId: result.turn.id };
+  }
   async request(
     _method: "turn/start",
     params: ClientRequestParams["turn/start"],
@@ -409,10 +433,11 @@ test("conversation introduction receipt survives restart and the bound naming to
       members: [{ name: "PAW", threadId: "chief-thread" }],
     });
     const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
-    const text =
-      "[Automatic introduction request from Create PAW] Ask what I would like to call you.";
-    await f.service.prepareRoomMessage(room.id, operationId, text);
-    await f.service.postPreparedRoomMessage(room.id, operationId, text);
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "en");
+    await f.service.startAssistantIntroduction(room.id, operationId);
+    assert.equal(f.service.snapshot().rooms[0]!.messages.length, 0);
+    assert.match(f.model.wakeups[0]!.text, /Host bootstrap event/);
+    assert.doesNotMatch(f.model.wakeups[0]!.text, /Current user message/);
     await f.service.acknowledgeRoomOperation(room.id, operationId);
     const requests = f.model.requests.length;
     assert.equal(requests, 1);
@@ -453,13 +478,14 @@ test("conversation introduction receipt survives restart and the bound naming to
     await f.service.stop();
     await f.service.start();
     assert.equal(f.model.requests.length, beforeRestart);
-    await f.service.prepareRoomMessage(room.id, operationId, text);
-    await f.service.postPreparedRoomMessage(room.id, operationId, text);
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "zh");
+    await f.service.startAssistantIntroduction(room.id, operationId);
     assert.equal(f.model.requests.length, beforeRestart);
     assert.equal(
       f.service
         .snapshot()
-        .rooms[0]!.messages.filter((message) => message.text === text).length,
+        .rooms[0]!.messages.filter((message) => message.kind === "human")
+        .length,
       1,
     );
     assert.equal(f.service.snapshot().rooms[0]!.name, "Nova");
@@ -487,11 +513,7 @@ test("explicit Start introduction works after cancelling an unsent introduction"
   try {
     const room = await f.service.createAssistantRoom(input);
     const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
-    await f.service.prepareRoomMessage(
-      room.id,
-      operationId,
-      "[Automatic start] Please say hello and ask what I’d like to call you. I can skip naming and start working.",
-    );
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "en");
     await f.service.cancelPreparedRoomOperation(room.id, operationId);
     const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
       createZenXTrustedPlugin,
@@ -522,7 +544,7 @@ test("explicit Start introduction works after cancelling an unsent introduction"
             if (id === "ack-operation") settleIntroduction();
             return result;
           } catch (error) {
-            if (id === "prepare-message" || id === "post-message")
+            if (id === "prepare-introduction" || id === "start-introduction")
               settleIntroduction();
             throw error;
           }
@@ -548,11 +570,11 @@ test("explicit Start introduction works after cancelling an unsent introduction"
       f.service.roomOperation(room.id, operationId).state,
       "cancelled",
     );
-    assert.equal(f.service.snapshot().rooms[0]!.messages.length, 1);
+    assert.equal(f.service.snapshot().rooms[0]!.messages.length, 0);
     assert.equal(
       f.service
         .snapshot()
-        .rooms[0]!.operations?.filter((entry) => entry.messageId !== null)
+        .rooms[0]!.operations?.filter((entry) => entry.wakeupId !== undefined)
         .length,
       1,
     );
@@ -582,9 +604,7 @@ test("restarted introduction retains its new operation when delivery and refresh
   try {
     const room = await f.service.createAssistantRoom(input);
     const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
-    const text =
-      "[Automatic start] Please say hello and ask what I’d like to call you. I can skip naming and start working.";
-    await f.service.prepareRoomMessage(room.id, operationId, text);
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "en");
     await f.service.cancelPreparedRoomOperation(room.id, operationId);
     const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
       createZenXTrustedPlugin,
@@ -601,7 +621,7 @@ test("restarted introduction retains its new operation when delivery and refresh
         execute: async (id: string, input: any = {}) => {
           if (id === "list" && hideResult)
             throw Error("list transport unavailable");
-          if (id === "prepare-message") prepared.push(input.operationId);
+          if (id === "prepare-introduction") prepared.push(input.operationId);
           const result = await runtime.invoke(
             `zenx_rooms_${id.replaceAll("-", "_")}`,
             {
@@ -612,7 +632,7 @@ test("restarted introduction retains its new operation when delivery and refresh
               arguments: { input },
             },
           );
-          if (id === "post-message") {
+          if (id === "start-introduction") {
             hideResult = true;
             throw Error("post result lost after admission");
           }
@@ -708,9 +728,7 @@ test("restarted introduction lookup across remount retains one admission", async
   try {
     const room = await f.service.createAssistantRoom(input);
     const originalId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
-    const text =
-      "[Automatic start] Please say hello and ask what I’d like to call you. I can skip naming and start working.";
-    await f.service.prepareRoomMessage(room.id, originalId, text);
+    await f.service.prepareAssistantIntroduction(room.id, originalId, "en");
     await f.service.cancelPreparedRoomOperation(room.id, originalId);
     const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
       createZenXTrustedPlugin,
@@ -723,7 +741,7 @@ test("restarted introduction lookup across remount retains one admission", async
       navigation: { navigate: () => {} },
       commands: {
         execute: async (id: string, input: any = {}) => {
-          if (id === "prepare-message") prepared.push(input.operationId);
+          if (id === "prepare-introduction") prepared.push(input.operationId);
           const result = await runtime.invoke(
             `zenx_rooms_${id.replaceAll("-", "_")}`,
             {
@@ -784,6 +802,189 @@ test("restarted introduction lookup across remount retains one admission", async
     releaseLookup();
     await act(async () => root.unmount());
     dom.window.close();
+    await f.close();
+  }
+});
+
+test("PAW bootstrap is an honest Host event with no Room sender, and early completion is retained", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    const operation = await f.service.prepareAssistantIntroduction(
+      room.id,
+      id,
+      "zh",
+    );
+    assert.equal(operation.kind, "assistantIntroduction");
+    assert.equal(operation.messageId, null);
+    assert.equal(f.model.requests.length, 0);
+    await assert.rejects(
+      f.service.postPreparedRoomMessage(room.id, id, operation.text),
+      /different message/,
+    );
+    await Promise.all([
+      f.service.startAssistantIntroduction(room.id, id),
+      f.service.startAssistantIntroduction(room.id, id),
+    ]);
+    assert.equal(f.model.wakeups.length, 1);
+    assert.equal(f.model.wakeups[0]!.source, "bootstrap");
+    assert.match(f.model.wakeups[0]!.text, /Write the welcome in Chinese/);
+    const snapshot = f.service.snapshot();
+    assert.deepEqual(snapshot.rooms[0]!.messages, []);
+    assert.equal(snapshot.history.length, 1);
+    assert.equal(snapshot.history[0]!.sourceRoomMessageId, null);
+    assert.equal(
+      snapshot.history[0]!.status,
+      "completed",
+      "completion before admission response must not remain running",
+    );
+    const receipt = f.service.roomOperation(room.id, id);
+    assert.equal(receipt.state, "saved");
+    assert.equal(receipt.messageId, null);
+    assert.equal(receipt.wakeupId, snapshot.history[0]!.id);
+    await assert.rejects(
+      f.service.cancelPreparedRoomOperation(room.id, id),
+      /Cannot cancel an admitted/,
+    );
+    await assert.rejects(
+      f.service.prepareRoomMessage(room.id, id, operation.text),
+      /different message/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("interrupted preparation remains explicit and cancellable across restart without a fabricated welcome", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    await f.service.prepareAssistantIntroduction(room.id, id, "en");
+    await f.service.stop();
+    await f.service.start();
+    assert.equal(f.service.roomOperation(room.id, id).state, "prepared");
+    assert.equal(f.model.wakeups.length, 0);
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, []);
+    await f.service.cancelPreparedRoomOperation(room.id, id);
+    await f.service.stop();
+    await f.service.start();
+    await assert.rejects(
+      f.service.startAssistantIntroduction(room.id, id),
+      /cancelled/,
+    );
+    assert.equal(f.service.roomOperation(room.id, id).state, "cancelled");
+    assert.equal(f.model.wakeups.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed bootstrap delivery stays explicit and never redispatches after restart", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    f.model.failure = true;
+    await f.service.prepareAssistantIntroduction(room.id, id, "en");
+    await f.service.startAssistantIntroduction(room.id, id);
+    assert.equal(f.service.snapshot().history[0]!.status, "failed");
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, []);
+    await f.service.acknowledgeRoomOperation(room.id, id);
+    await f.service.stop();
+    await f.service.start();
+    f.model.failure = false;
+    await f.service.startAssistantIntroduction(room.id, id);
+    assert.equal(f.model.wakeups.length, 1);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    const result = (await runtime.invoke("zenx_rooms_list", {
+      callId: randomUUID(),
+      trustedPluginUi: true,
+      cwd: "/project",
+      arguments: { input: {} },
+      signal: new AbortController().signal,
+    })) as { rooms: Array<{ introduction: { state: string; error: string } }> };
+    assert.equal(result.rooms[0]!.introduction.state, "failed");
+    assert.match(result.rooms[0]!.introduction.error, /thread_busy/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("bootstrap commands require trusted UI and cannot be reinterpreted as ordinary Room messaging", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    for (const tool of [
+      "zenx_rooms_prepare_introduction",
+      "zenx_rooms_start_introduction",
+    ]) {
+      await assert.rejects(
+        runtime.invoke(tool, {
+          callId: randomUUID(),
+          threadId: "chief-thread",
+          cwd: "/project",
+          arguments: { roomId: room.id, operationId: id, language: "en" },
+          signal: new AbortController().signal,
+        }),
+        /Trusted Room UI required/,
+      );
+    }
+    const ordinary = await f.service.createRoom(input);
+    await assert.rejects(
+      f.service.prepareAssistantIntroduction(
+        ordinary.id,
+        `${ordinary.operationEpoch}:${randomUUID()}`,
+        "en",
+      ),
+      /PAW assistant Room/,
+    );
+    assert.equal(f.model.wakeups.length, 0);
+    assert.deepEqual(
+      f.service.snapshot().rooms.map((entry) => entry.messages),
+      [[], []],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("bootstrap reconciles the exact admitted terminal Turn when its completion event is already gone", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    let terminal: ClientRequestResults["turn/start"]["turn"];
+    f.model.sendAssistantWakeup = async (params) => {
+      f.model.wakeups.push(params);
+      terminal = (
+        await f.model.request("turn/start", {
+          threadId: params.threadId,
+          input: [{ type: "text", text: params.text }],
+        })
+      ).turn;
+      return { turnId: terminal.id };
+    };
+    let reads = 0;
+    Object.assign(f.model, {
+      readThread: async (threadId: string) => {
+        reads++;
+        return { thread: { id: threadId, turns: [terminal] } };
+      },
+    });
+    await f.service.prepareAssistantIntroduction(room.id, id, "en");
+    await f.service.startAssistantIntroduction(room.id, id);
+    assert.equal(reads, 1);
+    assert.equal(f.service.snapshot().history[0]!.status, "completed");
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, []);
+  } finally {
     await f.close();
   }
 });

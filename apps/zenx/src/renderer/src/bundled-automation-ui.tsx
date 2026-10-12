@@ -74,11 +74,25 @@ interface RoomListResult {
   rooms: Array<
     Omit<ZenXRoom, "operations"> & {
       assistantRepliesEnabled?: boolean;
+      introduction?: {
+        operationId: string;
+        state:
+          | "prepared"
+          | "cancelled"
+          | "starting"
+          | "running"
+          | "completed"
+          | "failed"
+          | "unknown";
+        error: string | null;
+      };
       pendingCount?: number;
       operationEpoch?: string;
       messageCount?: number;
       nextCursor?: number | null;
       operations?: Array<{
+        kind?: "assistantIntroduction";
+        wakeupId?: string;
         id: string;
         text: string;
         messageId: string | null;
@@ -91,6 +105,8 @@ interface RoomListResult {
   >;
 }
 interface RoomDeliveryResult {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   receipt?: "delivered" | "unknown";
   readers?: Array<{
     threadId: string;
@@ -117,6 +133,8 @@ interface RoomDeliveryResult {
   }>;
 }
 interface RoomPendingSend {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   id: string;
   text: string;
   revision: number | null;
@@ -1739,7 +1757,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     entry: RoomPendingSend,
     result: RoomDeliveryResult,
   ) => {
-    if (result.state !== "saved" || !result.messageId) return;
+    if (result.state !== "saved" || (!result.messageId && !result.wakeupId))
+      return;
     setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     refreshSequence.current += 1;
     const revision =
@@ -1843,8 +1862,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       // Only an exactly observed saved message and no outstanding Host
       // operation permit clearing a stale local success banner.
       if (
-        local?.messageId &&
-        room.messages.some((message) => message.id === local.messageId) &&
+        local &&
+        ((local.messageId &&
+          room.messages.some((message) => message.id === local.messageId)) ||
+          (local.wakeupId &&
+            room.introduction?.operationId === local.id &&
+            !["prepared", "cancelled"].includes(room.introduction.state))) &&
         !room.operations?.some((operation) => operation.id === local.id) &&
         room.pendingCount === 0
       )
@@ -1854,6 +1877,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       for (const operation of room.operations ?? []) {
         if (!merged[room.id] || merged[room.id]?.id === operation.id) {
           merged[room.id] = {
+            kind: operation.kind,
+            wakeupId: operation.wakeupId,
             id: operation.id,
             text: operation.text,
             revision:
@@ -1889,6 +1914,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       const merged = { ...pendingRef.current };
       if (!merged[active.id] && collected[0])
         merged[active.id] = {
+          kind: collected[0].kind,
+          wakeupId: collected[0].wakeupId,
           id: collected[0].id,
           text: collected[0].text,
           revision: intentRevisions.current[collected[0].id]?.revision ?? null,
@@ -2028,7 +2055,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const operationStateLabel = (operation: (typeof roomOperations)[number]) =>
     operation.cancelled
       ? "cancelled"
-      : operation.messageId
+      : operation.messageId || operation.wakeupId
         ? operation.acknowledged
           ? "saved · reviewed"
           : "saved"
@@ -2058,7 +2085,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     let operationId =
       introductionOperations.current[attemptKey] ??
       `${created.operationEpoch ?? "legacy"}:00000000-0000-4000-8000-000000000001`;
-    const text = i18n.t("panels:pawIntroductionRequest");
     try {
       if (explicitRestart) {
         while (true) {
@@ -2087,15 +2113,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       // Retain the chosen receipt before any uncertain transport result. A retry
       // must inspect this attempt, not the previously cancelled introduction.
       introductionOperations.current[attemptKey] = operationId;
-      await sdk.commands.execute("prepare-message", {
+      await sdk.commands.execute("prepare-introduction", {
         roomId: created.id,
         operationId,
-        text,
+        language: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
       });
-      await sdk.commands.execute("post-message", {
+      await sdk.commands.execute("start-introduction", {
         roomId: created.id,
         operationId,
-        text,
       });
       await sdk.commands.execute("ack-operation", {
         roomId: created.id,
@@ -2371,7 +2396,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           roomId,
           operationId: entry.id,
         })) as RoomDeliveryResult;
-        if (status.state === "saved" && status.messageId)
+        if (status.state === "saved" && (status.messageId || status.wakeupId))
           await finishSaved(roomId, entry, status);
       } catch {
         /* Unknown remains unresolved across Room switches. */
@@ -2400,17 +2425,24 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           throw new Error(
             i18n.t("panels:pendingMessageTextIsUnavailableDoNot"),
           );
-        await sdk.commands.execute("post-message", {
-          roomId,
-          operationId: entry.id,
-          text: state.text,
-        });
+        await sdk.commands.execute(
+          state.kind === "assistantIntroduction"
+            ? "start-introduction"
+            : "post-message",
+          {
+            roomId,
+            operationId: entry.id,
+            ...(state.kind === "assistantIntroduction"
+              ? {}
+              : { text: state.text }),
+          },
+        );
         state = (await sdk.commands.execute("operation", {
           roomId,
           operationId: entry.id,
         })) as RoomDeliveryResult;
       }
-      if (state.state === "saved" && state.messageId)
+      if (state.state === "saved" && (state.messageId || state.wakeupId))
         await finishSaved(roomId, entry, state);
       else if (state.state === "cancelled") {
         finishCancelled(roomId, entry);
@@ -2436,11 +2468,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         roomId,
         operationId: entry.id,
       })) as RoomDeliveryResult;
-      if (exact.state === "saved" && exact.messageId) {
+      if (exact.state === "saved" && (exact.messageId || exact.wakeupId)) {
         await finishSaved(roomId, entry, exact);
         setRoomErrors((current) => ({
           ...current,
-          [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+          [roomId]: exact.wakeupId
+            ? i18n.t("panels:pawWelcomeAlreadyStarted")
+            : `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
         }));
         await refresh();
         return;
@@ -2471,11 +2505,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           await refresh();
           return;
         }
-        if (exact.state === "saved" && exact.messageId) {
+        if (exact.state === "saved" && (exact.messageId || exact.wakeupId)) {
           await finishSaved(roomId, entry, exact);
           setRoomErrors((current) => ({
             ...current,
-            [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+            [roomId]: exact.wakeupId
+              ? i18n.t("panels:pawWelcomeAlreadyStarted")
+              : `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
           }));
           await refresh();
           return;
@@ -2617,8 +2653,21 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </header>
             {room.assistant &&
             room.messages.length === 0 &&
+            room.introduction &&
+            !["prepared", "cancelled"].includes(room.introduction.state) ? (
+              <p className="paw-chat-introduction" role="status">
+                {room.introduction.state === "starting" ||
+                room.introduction.state === "running"
+                  ? i18n.t("panels:pawWelcomeStarting")
+                  : i18n.t("panels:pawWelcomeNoMessage")}
+                {room.introduction.error ? ` ${room.introduction.error}` : ""}
+              </p>
+            ) : null}
+            {room.assistant &&
+            room.messages.length === 0 &&
             (room.pendingCount ?? 0) === 0 &&
-            (room.operations?.length ?? 0) === 0 ? (
+            (room.operations?.length ?? 0) === 0 &&
+            (!room.introduction || room.introduction.state === "cancelled") ? (
               <div className="paw-chat-introduction">
                 <p>{i18n.t("panels:pawEmptyChat")}</p>
                 <button
@@ -2711,11 +2760,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   <div role="status" className="room-send-pending">
                     {pending.cancelled
                       ? i18n.t("panels:sendCancelledNoMessageWasSent")
-                      : pending.messageId
-                        ? i18n.t("panels:messageSavedCheckItsDeliveryStatus")
-                        : i18n.t(
-                            "panels:deliveryUnconfirmedCheckItsStatusBeforeSending",
-                          )}{" "}
+                      : pending.wakeupId
+                        ? i18n.t("panels:pawWelcomeAlreadyStarted")
+                        : pending.messageId
+                          ? i18n.t("panels:messageSavedCheckItsDeliveryStatus")
+                          : i18n.t(
+                              "panels:deliveryUnconfirmedCheckItsStatusBeforeSending",
+                            )}{" "}
                     <button
                       type="button"
                       onClick={() =>
@@ -2724,13 +2775,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     >
                       {i18n.t("panels:checkDelivery")}
                     </button>
-                    {!pending.messageId && !pending.cancelled ? (
+                    {!pending.messageId &&
+                    !pending.wakeupId &&
+                    !pending.cancelled ? (
                       <>
                         <button
                           type="button"
                           onClick={() => void cancelPrepared(room.id, pending)}
                         >
-                          {i18n.t("panels:cancelUnsentMessage")}
+                          {i18n.t(
+                            pending.kind === "assistantIntroduction"
+                              ? "panels:pawCancelWelcome"
+                              : "panels:cancelUnsentMessage",
+                          )}
                         </button>
                         <button
                           type="button"
@@ -2738,7 +2795,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                             void inspectPending(room.id, pending, true)
                           }
                         >
-                          {i18n.t("panels:sendPendingMessage")}
+                          {i18n.t(
+                            pending.kind === "assistantIntroduction"
+                              ? "panels:pawStartIntroduction"
+                              : "panels:sendPendingMessage",
+                          )}
                         </button>
                       </>
                     ) : null}
@@ -2752,15 +2813,23 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       key={operation.id}
                       role="status"
                     >
-                      {i18n.t("panels:pendingMessage")}{" "}
+                      {i18n.t(
+                        operation.kind === "assistantIntroduction"
+                          ? "panels:pawIntroductionPreview"
+                          : "panels:pendingMessage",
+                      )}{" "}
                       {operationStateLabel(operation)} ·{" "}
-                      {Array.from(operation.text).slice(0, 70).join("")}{" "}
+                      {operation.kind === "assistantIntroduction"
+                        ? ""
+                        : Array.from(operation.text).slice(0, 70).join("")}{" "}
                       <button
                         type="button"
                         onClick={() =>
                           void inspectPending(
                             room.id,
                             {
+                              kind: operation.kind,
+                              wakeupId: operation.wakeupId,
                               id: operation.id,
                               text: operation.text,
                               revision: null,
@@ -2772,7 +2841,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       >
                         {i18n.t("panels:checkDelivery")}
                       </button>
-                      {!operation.messageId && !operation.cancelled ? (
+                      {!operation.messageId &&
+                      !operation.wakeupId &&
+                      !operation.cancelled ? (
                         <>
                           <button
                             type="button"
@@ -2785,7 +2856,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               })
                             }
                           >
-                            {i18n.t("panels:cancelUnsentMessage")}
+                            {i18n.t(
+                              operation.kind === "assistantIntroduction"
+                                ? "panels:pawCancelWelcome"
+                                : "panels:cancelUnsentMessage",
+                            )}
                           </button>
                           <button
                             type="button"
@@ -2802,7 +2877,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               )
                             }
                           >
-                            {i18n.t("panels:sendPendingMessage")}
+                            {i18n.t(
+                              operation.kind === "assistantIntroduction"
+                                ? "panels:pawStartIntroduction"
+                                : "panels:sendPendingMessage",
+                            )}
                           </button>
                         </>
                       ) : null}

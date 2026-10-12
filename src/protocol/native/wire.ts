@@ -3,8 +3,21 @@ import type {
   CreateChildThreadInput,
   ThreadSnapshot,
 } from "../../app-server.js";
-import type { UserInput, UserInputPart } from "../../item.js";
+import type { HostWakeupInput, UserInput, UserInputPart } from "../../item.js";
 import type { SkillReference } from "../../skill-input.js";
+
+/** Native-only Host wakeup; CAS never fabricates a user message for this input. */
+export interface NativeHostWakeupParams extends HostWakeupInput {
+  threadId: string;
+  mode: "start" | "steer";
+  expectedTurnId?: string;
+  requireUnarchived?: boolean;
+}
+export interface NativeHostWakeupResult {
+  turnId: string;
+  mode: "start" | "steer";
+}
+export const NATIVE_TURN_WAKE_METHOD = "zen/turn/wake";
 
 export interface NativeTurnSendParams {
   threadId: string;

@@ -260,6 +260,12 @@ function compileCanonicalModelMessages(
       continue;
     }
     switch (item.type) {
+      case "host_message":
+        messages.push({
+          role: "user",
+          text: `[Host bootstrap wakeup. Sender: host. This is a system-origin instruction, not a message from the human user.]\n${item.text}`,
+        });
+        break;
       case "thread_instruction":
         messages.push({ role: "user", text: item.text });
         break;
@@ -558,7 +564,7 @@ function orderSteeredMessagesForSampling(
   const anchored = new Map<
     string,
     Array<{
-      item: Extract<CanonicalItem, { type: "user_message" }>;
+      item: Extract<CanonicalItem, { type: "user_message" | "host_message" }>;
       index: number;
     }>
   >();
@@ -568,7 +574,10 @@ function orderSteeredMessagesForSampling(
     if (item === undefined) {
       continue;
     }
-    if (item.type === "user_message" && item.deliveryAfter !== undefined) {
+    if (
+      (item.type === "user_message" || item.type === "host_message") &&
+      item.deliveryAfter !== undefined
+    ) {
       const pending = anchored.get(item.deliveryAfter) ?? [];
       pending.push({ item, index });
       anchored.set(item.deliveryAfter, pending);

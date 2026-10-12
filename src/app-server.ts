@@ -49,6 +49,8 @@ import type {
   QueuedUserMessageItem,
   QueuedUserMessageCancelledItem,
   QueuedUserMessageEditedItem,
+  HostMessageItem,
+  HostWakeupInput,
 } from "./item.js";
 import {
   contentFromUserMessage,
@@ -198,6 +200,17 @@ export interface CreateChildThreadInput {
 export interface SteerTurnOptions {
   clientId?: string;
   requireUnarchived?: boolean;
+}
+
+export interface WakeTurnOptions {
+  mode: "start" | "steer";
+  expectedTurnId?: string;
+  requireUnarchived?: boolean;
+  requestApproval?: ApprovalHandler;
+}
+
+export interface WakeTurnHandle extends TurnHandle {
+  mode: "start" | "steer";
 }
 
 export interface ReplaceTurnOptions {
@@ -359,6 +372,14 @@ export class ZenAppServer {
   readonly #replacementOperations = new Map<
     string,
     { clientId: string; result: Promise<ReplaceTurnResult> }
+  >();
+  // Coalesce only concurrent admission calls. Durable deduplication comes from Items.
+  readonly #wakeupOperations = new Map<
+    string,
+    {
+      input: HostWakeupInput;
+      result: Promise<WakeTurnHandle>;
+    }
   >();
   #threadSummaries: Map<string, NativeThreadSummary> | undefined;
   #threadSummaryLoad: Promise<void> | undefined;
@@ -1617,6 +1638,132 @@ export class ZenAppServer {
     return await this.#launchTurn(threadId, input, options);
   }
 
+  async wakeTurn(
+    threadId: string,
+    input: HostWakeupInput,
+    options: WakeTurnOptions,
+  ): Promise<WakeTurnHandle> {
+    if (
+      input.source !== "bootstrap" ||
+      typeof input.clientId !== "string" ||
+      !input.clientId.trim() ||
+      typeof input.text !== "string" ||
+      !input.text.trim() ||
+      (options.mode !== "start" && options.mode !== "steer") ||
+      (options.mode === "steer" && !options.expectedTurnId?.trim())
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Host bootstrap input, client ID and start/steer mode are required",
+      );
+    const key = JSON.stringify([threadId, input.clientId]);
+    const existing = this.#wakeupOperations.get(key);
+    if (existing !== undefined) {
+      if (
+        existing.input.source !== input.source ||
+        existing.input.text !== input.text
+      )
+        throw new AppServerError(
+          "idempotency_conflict",
+          "Wakeup client ID was already used for different input",
+        );
+      return await existing.result;
+    }
+    // Snapshot caller-owned input before yielding.
+    const snapshot: HostWakeupInput = {
+      clientId: input.clientId,
+      source: input.source,
+      text: input.text,
+    };
+    const result = this.#deliverWakeup(threadId, snapshot, options);
+    this.#wakeupOperations.set(key, { input: snapshot, result });
+    try {
+      return await result;
+    } finally {
+      if (this.#wakeupOperations.get(key)?.result === result)
+        this.#wakeupOperations.delete(key);
+    }
+  }
+
+  async #deliverWakeup(
+    threadId: string,
+    input: HostWakeupInput,
+    options: WakeTurnOptions,
+  ): Promise<WakeTurnHandle> {
+    if (options.mode === "start") {
+      const turn = await this.#launchTurn(threadId, input.text, options, {
+        hostInput: input,
+      });
+      const thread = await this.#requireThread(threadId);
+      const receipt = thread.items.find(
+        (item): item is HostMessageItem =>
+          item.type === "host_message" && item.clientId === input.clientId,
+      );
+      return { ...turn, mode: receipt!.mode };
+    }
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
+      const duplicate = this.#existingWakeup(thread, input);
+      if (duplicate !== undefined) return duplicate;
+      const active = this.#activeTurns.get(threadId);
+      if (
+        active === undefined ||
+        active.turnId !== options.expectedTurnId ||
+        active.controller.signal.aborted ||
+        this.#isTerminal(thread, active.turnId)
+      )
+        throw new AppServerError(
+          "turn_not_running",
+          `Turn ${options.expectedTurnId} is not running on thread ${threadId}`,
+        );
+      await this.#validateInput(
+        [{ type: "text", text: input.text }],
+        active.inputModalities,
+      );
+      const message: HostMessageItem = {
+        id: this.#id(),
+        threadId,
+        turnId: active.turnId,
+        createdAt: this.#now(),
+        type: "host_message",
+        sender: "host",
+        mode: "steer",
+        ...input,
+        ...(active.deliveryAnchorId === undefined
+          ? {}
+          : { deliveryAfter: active.deliveryAnchorId }),
+      };
+      await this.#commit(thread, message);
+      this.#emit({ type: "item_completed", item: message });
+      return { id: active.turnId, done: active.done, mode: "steer" };
+    });
+  }
+
+  #existingWakeup(
+    thread: Thread,
+    input: HostWakeupInput,
+  ): WakeTurnHandle | undefined {
+    const duplicate = thread.items.find(
+      (item): item is HostMessageItem =>
+        item.type === "host_message" && item.clientId === input.clientId,
+    );
+    if (duplicate === undefined) return undefined;
+    if (duplicate.source !== input.source || duplicate.text !== input.text)
+      throw new AppServerError(
+        "idempotency_conflict",
+        "Wakeup client ID was already used for different input",
+      );
+    const active = this.#activeTurns.get(thread.id);
+    return {
+      id: duplicate.turnId,
+      mode: duplicate.mode,
+      done:
+        active?.turnId === duplicate.turnId ? active.done : Promise.resolve(),
+    };
+  }
+
   async compactThread(
     threadId: string,
     options: CompactThreadOptions = {},
@@ -1738,6 +1885,7 @@ export class ZenAppServer {
       };
     },
     internal: {
+      hostInput?: HostWakeupInput;
       preparedInput?: boolean;
       turnId?: string;
       replacementClientId?: string;
@@ -1752,6 +1900,11 @@ export class ZenAppServer {
       const thread = await this.#requireThread(threadId);
       if (options.requireUnarchived === true)
         await this.#requireUnarchived(threadId);
+      if (internal.hostInput !== undefined) {
+        const duplicate = this.#existingWakeup(thread, internal.hostInput);
+        if (duplicate !== undefined)
+          return { handle: duplicate, ready: Promise.resolve() };
+      }
       if (
         internal.queuedAdmission !== undefined &&
         !this.#queueBatchCurrent(thread, internal.queuedAdmission.items)
@@ -1834,7 +1987,7 @@ export class ZenAppServer {
           );
       }
       const input =
-        internal.preparedInput === true
+        internal.preparedInput === true || internal.hostInput !== undefined
           ? normalizeAppServerInput(requestedInput as UserInput, "Turn")
           : await this.#prepareSkillInput(
               thread,
@@ -1935,6 +2088,9 @@ export class ZenAppServer {
           thread,
           turnId,
           input,
+          ...(internal.hostInput === undefined
+            ? {}
+            : { hostInput: internal.hostInput }),
           ...(internal.initialMessages === undefined
             ? {}
             : { initialMessages: internal.initialMessages }),
@@ -1962,6 +2118,9 @@ export class ZenAppServer {
                 thread,
                 turnId,
                 input,
+                ...(internal.hostInput === undefined
+                  ? {}
+                  : { hostInput: internal.hostInput }),
                 ...(internal.initialMessages === undefined
                   ? {}
                   : { initialMessages: internal.initialMessages }),
@@ -2672,7 +2831,7 @@ export class ZenAppServer {
       await this.#commit(thread, message);
       const pendingSteer = thread.items.some(
         (item) =>
-          item.type === "user_message" &&
+          (item.type === "user_message" || item.type === "host_message") &&
           item.turnId === turnId &&
           item.deliveryAfter === modelResponseId,
       );
@@ -2782,6 +2941,7 @@ export class ZenAppServer {
     thread: Thread;
     turnId: string;
     input: UserInput;
+    hostInput?: HostWakeupInput;
     initialMessages?: readonly { input: UserInput; clientId: string }[];
     resolved: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
@@ -2802,16 +2962,31 @@ export class ZenAppServer {
         type: "turn_started",
         selection: options.resolved.selection,
       },
-      ...(options.initialMessages ?? [{ input: options.input }]).map(
-        (message, index) => ({
-          id: `${options.turnId}:context-preview-input:${index}`,
-          threadId: options.thread.id,
-          turnId: options.turnId,
-          createdAt: this.#now(),
-          type: "user_message" as const,
-          content: message.input,
-        }),
-      ),
+      ...(options.hostInput === undefined
+        ? []
+        : [
+            {
+              id: `${options.turnId}:context-preview-host-input`,
+              threadId: options.thread.id,
+              turnId: options.turnId,
+              createdAt: this.#now(),
+              type: "host_message" as const,
+              sender: "host" as const,
+              mode: "start" as const,
+              ...options.hostInput,
+            },
+          ]),
+      ...(options.hostInput !== undefined
+        ? []
+        : (options.initialMessages ?? [{ input: options.input }])
+      ).map((message, index) => ({
+        id: `${options.turnId}:context-preview-input:${index}`,
+        threadId: options.thread.id,
+        turnId: options.turnId,
+        createdAt: this.#now(),
+        type: "user_message" as const,
+        content: message.input,
+      })),
     ];
     if (
       estimateModelMessageInputTokens(
@@ -3685,7 +3860,10 @@ function remapForkItems(
     ) {
       localIds.add(item.modelResponseId);
     }
-    if (item.type === "user_message" && item.deliveryAfter !== undefined) {
+    if (
+      (item.type === "user_message" || item.type === "host_message") &&
+      item.deliveryAfter !== undefined
+    ) {
       localIds.add(item.deliveryAfter);
     }
     if (item.type === "context_compaction" && item.provenance === "agentic") {
@@ -3704,7 +3882,10 @@ function remapForkItems(
     ) {
       copied.queuedItemId = remap(copied.queuedItemId);
     }
-    if (copied.type === "user_message" && copied.deliveryAfter !== undefined) {
+    if (
+      (copied.type === "user_message" || copied.type === "host_message") &&
+      copied.deliveryAfter !== undefined
+    ) {
       copied.deliveryAfter = remap(copied.deliveryAfter);
     }
     if (

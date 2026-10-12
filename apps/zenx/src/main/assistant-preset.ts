@@ -94,3 +94,67 @@ export async function deliverAssistantInput(
   }
   throw new Error("Assistant input was not admitted");
 }
+
+export type AssistantWakeupInput = Pick<
+  ClientRequestParams["zen/turn/wake"],
+  "threadId" | "clientId" | "source" | "text"
+>;
+export interface AssistantWakeupPort {
+  request<M extends "thread/read" | "zen/turn/wake">(
+    method: M,
+    params: ClientRequestParams[M],
+  ): Promise<ClientRequestResults[M]>;
+}
+
+/** Bootstrap admission is honest Host input; never use the user-message fallback. */
+export async function deliverAssistantWakeup(
+  port: AssistantWakeupPort,
+  params: AssistantWakeupInput,
+  signal?: AbortSignal,
+  admission: { requireUnarchived?: true } = {},
+): Promise<{
+  turnId: string;
+  mode: "start" | "steer";
+  expectedTurnId?: string;
+}> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    signal?.throwIfAborted();
+    const { thread } = await port.request("thread/read", {
+      threadId: params.threadId,
+      includeTurns: true,
+    });
+    signal?.throwIfAborted();
+    const active = thread.turns.find((turn) => turn.status === "inProgress");
+    try {
+      const result = await port.request("zen/turn/wake", {
+        ...params,
+        mode: active ? "steer" : "start",
+        ...(active ? { expectedTurnId: active.id } : {}),
+        ...admission,
+      });
+      if (
+        typeof result.turnId !== "string" ||
+        !result.turnId ||
+        (result.mode !== "start" && result.mode !== "steer")
+      )
+        throw new Error(
+          "Host wakeup outcome is unconfirmed; read the Thread before retrying",
+        );
+      return {
+        ...result,
+        ...(result.mode === "steer" ? { expectedTurnId: result.turnId } : {}),
+      };
+    } catch (error) {
+      const code =
+        error instanceof ZenXProtocolError &&
+        (error.code === -32000 || error.code === -32602) &&
+        error.data &&
+        typeof error.data === "object"
+          ? (error.data as { zenCode?: unknown }).zenCode
+          : undefined;
+      if (code !== "thread_busy" && code !== "turn_not_running") throw error;
+      if (attempt === 7) throw error;
+    }
+  }
+  throw new Error("Host wakeup was not admitted");
+}
