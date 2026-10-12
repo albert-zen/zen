@@ -267,6 +267,7 @@ test("hosts a real App Server and removes its private token on shutdown", async 
       createdAt: summary.createdAt,
       updatedAt: summary.updatedAt,
       turnSortAt: summary.createdAt,
+      completedAnswer: null,
       preview: "",
       status: "idle",
     });
