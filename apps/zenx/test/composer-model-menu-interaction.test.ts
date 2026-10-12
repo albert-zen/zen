@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 
 import type { ZenXProviderProfile } from "../src/main/host-profile.js";
 import type { ModelSummary } from "../src/protocol-client/index.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 
 const { act, createElement } = React;
 Object.assign(globalThis, { React });

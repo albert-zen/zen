@@ -30,6 +30,7 @@ type SelfControlRequestMethod = Extract<
   ClientRequestMethod,
   | "zen/thread/read"
   | "zen/thread/create-child"
+  | "zen/thread/create-child-configured"
   | "zen/turn/send-unarchived"
   | "model/list"
   | "thread/settings/update"

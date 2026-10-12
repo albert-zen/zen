@@ -72,7 +72,7 @@ import type {
 import {
   decodeModelKey,
   encodeModelKey,
-} from "../../../../../src/protocol/codex/model-key.js";
+} from "../../../../../src/protocol/model-key.js";
 import {
   addApprovalRequest,
   markApprovalResponding,

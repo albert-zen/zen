@@ -461,3 +461,260 @@ test("fork create exposes only a public summary on success and partial follow-up
     );
   }
 });
+
+test("creation forwards settings once before sending and never falls back on an older Host", async () => {
+  const f = fixture();
+  const request = f.port.request.bind(f.port);
+  f.port.request = (async (method, params) => {
+    if (method === "zen/thread/create-child-configured") {
+      f.requests.push({ method, params });
+      return { thread: f.child };
+    }
+    return await request(method, params);
+  }) as AppServerRequestPort["request"];
+  await f.service.invoke(
+    "zenx_subagents_create",
+    invocation("zenx_subagents_create", {
+      mode: "fresh",
+      model: "selected",
+      effort: "high",
+      task: "first task",
+    }),
+  );
+  assert.deepEqual(f.requests[0], {
+    method: "zen/thread/create-child-configured",
+    params: {
+      parentThreadId: "trusted-parent",
+      mode: "fresh",
+      model: "selected",
+      effort: "high",
+    },
+  });
+  assert.equal(
+    f.requests.some((entry) => entry.method === "thread/settings/update"),
+    false,
+  );
+  const calls: string[] = [];
+  f.port.request = async (method) => {
+    calls.push(method);
+    throw new Error("Method not found");
+  };
+  await assert.rejects(
+    f.service.invoke(
+      "zenx_subagents_create",
+      invocation("zenx_subagents_create", {
+        mode: "fresh",
+        effort: "high",
+        task: "do not send",
+      }),
+    ),
+    /Method not found/,
+  );
+  assert.deepEqual(calls, ["zen/thread/create-child-configured"]);
+});
+
+test("model and effort validation and shipped schema reject malformed settings before creation", async () => {
+  const schema = subagentsManifest.tools.find(
+    (tool) => tool.name === "zenx_subagents_create",
+  )!.inputSchema;
+  assert.deepEqual(schema.properties.model?.type, "string");
+  assert.deepEqual(schema.properties.effort?.type, "string");
+  assert.equal(schema.additionalProperties, false);
+  for (const invalid of [
+    { model: null },
+    { model: " " },
+    { model: 42 },
+    { effort: "" },
+    { effort: [] },
+    { effort: null },
+  ]) {
+    const f = fixture();
+    await assert.rejects(
+      f.service.invoke(
+        "zenx_subagents_create",
+        invocation("zenx_subagents_create", {
+          mode: "fresh",
+          task: "not started",
+          ...invalid,
+        }),
+      ),
+      /must be a non-empty string/,
+    );
+    assert.deepEqual(f.requests, []);
+  }
+});
+
+test("explicit first tasks use the requested profile through real native creation and standard send", async () => {
+  const { ZenAppServer } = await import("../../../src/app-server.js");
+  const { InMemoryThreadJournal } = await import("../../../src/journal.js");
+  const { StaticModelCatalog } = await import("../../../src/model-catalog.js");
+  const { ProviderRegistry } =
+    await import("../../../src/provider-registry.js");
+  const { AgentRuntime } = await import("../../../src/runtime.js");
+  const { ToolEnvironment } = await import("../../../src/tool.js");
+  const { InMemoryThreadMetadataStore } =
+    await import("../../../src/thread-metadata.js");
+  const { CodexConnection } =
+    await import("../../../src/protocol/codex/connection.js");
+  const { NativeConnection } =
+    await import("../../../src/protocol/native/connection.js");
+  const { NativeRecoveryProjection } =
+    await import("../../../src/protocol/native/recovery.js");
+  const { encodeModelKey } = await import("../../../src/protocol/model-key.js");
+  const requests: Array<{ profile: string; effort: string | null }> = [];
+  const server = new ZenAppServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({ runtimes: [] }),
+    }),
+    providerRegistry: new ProviderRegistry(
+      ["parent", "requested"].map((profile) => ({
+        providerProfileId: profile,
+        adapter: {
+          provider: profile,
+          async *stream(request: import("../../../src/model.js").ModelRequest) {
+            requests.push({ profile, effort: request.reasoningEffort });
+            yield { type: "text_delta" as const, delta: profile };
+          },
+        },
+        modelCatalog: new StaticModelCatalog([
+          {
+            id: "shared",
+            isDefault: true,
+            supportedReasoningEfforts: ["low", "high"],
+            defaultReasoningEffort: "low",
+            contextWindow: 32768,
+          },
+        ]),
+      })),
+    ),
+    threadMetadata: new InMemoryThreadMetadataStore(),
+    defaults: {
+      cwd: process.cwd(),
+      providerProfileId: "parent",
+      modelId: "shared",
+      reasoningEffort: "low",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  });
+  const projection = new NativeRecoveryProjection(server);
+  const messages: import("../../../src/protocol/codex/wire.js").JsonRpcMessage[] =
+    [];
+  const send = (
+    message: import("../../../src/protocol/codex/wire.js").JsonRpcMessage,
+  ) => {
+    messages.push(message);
+  };
+  const native = new NativeConnection({ appServer: server, projection, send });
+  const cas = new CodexConnection({
+    appServer: server,
+    send,
+    zenHome: process.cwd(),
+  });
+  await native.receive({
+    id: "native-init",
+    method: "zen/initialize",
+    params: {},
+  });
+  await cas.receive({
+    id: "cas-init",
+    method: "initialize",
+    params: { clientInfo: { name: "test", version: "1" } },
+  });
+  await cas.receive({ method: "initialized" });
+  let nextId = 0;
+  const methods: string[] = [];
+  const port = {
+    projectProjection: new ZenXProjectProjection(),
+    async request(method: string, params: unknown) {
+      methods.push(method);
+      const id = ++nextId;
+      await (method.startsWith("zen/") ? native : cas).receive({
+        id,
+        method,
+        params,
+      });
+      const response = messages.find(
+        (message) => "id" in message && message.id === id,
+      )!;
+      if ("error" in response) throw new Error(response.error.message);
+      if (!("result" in response)) throw new Error("Missing reply");
+      return response.result;
+    },
+  } as AppServerRequestPort;
+  const service = new ZenXSubagentsCapabilityPackage({
+    appServer: port,
+    threads: new ZenXSelfControlCapabilityPackage({ appServer: port }),
+    listSummaries: () => server.listThreadSummaries(),
+  });
+  try {
+    const parent = await server.startThread();
+    await (
+      await server.startTurn(parent.id, "parent history")
+    ).done;
+    for (const mode of ["fresh", "fork"] as const) {
+      const done = new Promise<void>((resolve) => {
+        const stop = server.subscribe((event) => {
+          if (event.type === "turn_completed" && event.threadId !== parent.id) {
+            stop();
+            resolve();
+          }
+        });
+      });
+      const result = (await service.invoke("zenx_subagents_create", {
+        ...invocation("zenx_subagents_create", {
+          mode,
+          model: encodeModelKey({
+            providerProfileId: "requested",
+            modelId: "shared",
+          }),
+          effort: "high",
+          task: "first task",
+        }),
+        threadId: parent.id,
+      })) as {
+        threadId: string;
+        delivery: { mode: string };
+        thread: { providerProfileId: string };
+      };
+      assert.equal(result.thread.providerProfileId, "requested");
+      assert.equal(result.delivery.mode, "start");
+      await done;
+      assert.deepEqual(requests.at(-1), {
+        profile: "requested",
+        effort: "high",
+      });
+      const snapshot = await server.readThread(result.threadId);
+      const beforeRetry = snapshot.items.length;
+      const task = snapshot.items.findLast(
+        (item) => item.type === "user_message",
+      );
+      assert(task?.type === "user_message" && task.clientId);
+      await (
+        await server.startTurn(result.threadId, "first task", {
+          clientId: task.clientId,
+        })
+      ).done;
+      assert.equal(
+        (await server.readThread(result.threadId)).items.length,
+        beforeRetry,
+      );
+    }
+    assert.equal(
+      methods.filter(
+        (method) => method === "zen/thread/create-child-configured",
+      ).length,
+      2,
+    );
+    assert.equal(methods.includes("thread/settings/update"), false);
+    assert.equal(
+      (await server.readThread(parent.id)).providerProfileId,
+      "parent",
+    );
+  } finally {
+    cas.close();
+    native.close();
+    projection.close();
+  }
+});

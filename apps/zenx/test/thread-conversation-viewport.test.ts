@@ -6,7 +6,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Thread } from "../src/protocol-client/index.js";
 import type { NativeThreadRecoverySnapshot } from "../../../src/protocol/native/recovery.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 import { ThreadConversationViewport } from "../src/renderer/src/thread-conversation-viewport.js";
 import {
   emptyComposerState,

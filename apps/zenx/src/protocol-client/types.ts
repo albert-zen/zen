@@ -6,10 +6,8 @@ import type {
 } from "../../../../src/protocol/codex/mapper.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { CanonicalItem } from "../../../../src/item.js";
-import type {
-  CreateChildThreadInput,
-  ThreadSnapshot,
-} from "../../../../src/app-server.js";
+import type { ThreadSnapshot } from "../../../../src/app-server.js";
+import type { NativeCreateChildThreadParams } from "../../../../src/protocol/native/wire.js";
 import type {
   NativeProjectedThreadEvent,
   NativeThreadRecoverySnapshot,
@@ -153,7 +151,8 @@ export interface ClientRequestParams {
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
   "zen/thread/read": { threadId: string };
-  "zen/thread/create-child": CreateChildThreadInput;
+  "zen/thread/create-child": NativeCreateChildThreadParams;
+  "zen/thread/create-child-configured": NativeCreateChildThreadParams;
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
     limit?: number;
@@ -240,6 +239,7 @@ export interface ClientRequestResults {
   "zen/thread/resume": NativeThreadRecoverySnapshot;
   "zen/thread/read": { thread: ThreadSnapshot };
   "zen/thread/create-child": { thread: ThreadSnapshot };
+  "zen/thread/create-child-configured": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];

@@ -38,7 +38,7 @@ export const subagentsManifest = {
     {
       name: "zenx_subagents_create",
       description:
-        "Create a native child Thread. side-chat snapshots the full parent context and waits for the user without starting a Turn. fresh/fork may optionally submit an explicit task; delivery reports acceptance, not completion.",
+        "Create a native child Thread. side-chat snapshots the full parent context and waits for the user without starting a Turn. fresh/fork may optionally submit an explicit task; delivery reports acceptance, not completion. Optional model/effort take effect atomically at creation; omit both to inherit. Discover model keys with zenx_models_list.",
       inputSchema: {
         type: "object",
         properties: {
@@ -48,6 +48,16 @@ export const subagentsManifest = {
           mode: {
             type: "string",
             enum: ["fresh", "fork", "side-chat"],
+          },
+          model: {
+            type: "string",
+            description:
+              "Opaque model key from zenx_models_list, or an unambiguous model ID. Omit to inherit.",
+          },
+          effort: {
+            type: "string",
+            description:
+              "Supported reasoning effort. Omit to keep inherited effort when supported, otherwise use the selected model default.",
           },
           title: {
             type: "string",

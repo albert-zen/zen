@@ -25,7 +25,16 @@ export const NATIVE_TURN_SEND_UNARCHIVED_METHOD = "zen/turn/send-unarchived";
 export const NATIVE_INITIALIZE_METHOD = "zen/initialize";
 export const NATIVE_THREAD_READ_METHOD = "zen/thread/read";
 export const NATIVE_THREAD_CREATE_CHILD_METHOD = "zen/thread/create-child";
-export type NativeCreateChildThreadParams = CreateChildThreadInput;
+/** Older Hosts must reject configured creation rather than ignore its selection. */
+export const NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD =
+  "zen/thread/create-child-configured";
+export interface NativeCreateChildThreadParams extends Pick<
+  CreateChildThreadInput,
+  "parentThreadId" | "mode"
+> {
+  model?: string;
+  effort?: string;
+}
 export interface NativeCreateChildThreadResult {
   thread: ThreadSnapshot;
 }
