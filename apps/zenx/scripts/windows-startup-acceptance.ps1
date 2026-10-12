@@ -191,9 +191,10 @@ public static class StartupWindows {
     } catch {
       $scenarioFailure = $_
       $sample.error = $_.Exception.Message
-      Write-FixtureDiagnostics $directory $primary
     } finally {
       $sample.cleanupErrors = @(Stop-OwnedFixtures @($secondary, $primary) $directory)
+      # Windows keeps redirected output files locked until the child exits.
+      if ($null -ne $scenarioFailure) { Write-FixtureDiagnostics $directory $primary }
       try { Write-Json (Join-Path $EvidenceDirectory "report.json") $report }
       catch { $sample.cleanupErrors += "Report write: $($_.Exception.Message)" }
       if ($sample.cleanupErrors.Count) { $sample.passed = $false }

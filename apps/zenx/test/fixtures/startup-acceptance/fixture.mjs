@@ -1,5 +1,6 @@
 // Copied only by prepare-windows-startup-acceptance.mjs, never built or shipped.
 import { app, BrowserWindow } from "electron";
+import { once } from "node:events";
 import {
   appendFileSync,
   existsSync,
@@ -43,6 +44,14 @@ function identity(window) {
     windowsCreated,
   };
 }
+async function captureVisible(window) {
+  // did-finish-load can precede the production ready-to-show -> show handler.
+  // Observe that real event; never make the fixture itself show the window.
+  if (!window.isVisible())
+    await once(window, "show", { signal: AbortSignal.timeout(10_000) });
+  if (!window.isVisible()) throw new Error("Window is not visible for capture");
+  return window.webContents.capturePage();
+}
 export function observe() {
   event("observer", {
     electron: process.versions.electron,
@@ -75,7 +84,7 @@ export function observe() {
         event("startup-page-observed", { ...identity(window), url, ...page });
         const type =
           page.role === "alert" ? "failure-loaded" : "startup-loaded";
-        const screenshot = await window.webContents.capturePage();
+        const screenshot = await captureVisible(window);
         writeFileSync(
           path.join(config.evidenceDirectory, `${type}.png`),
           screenshot.toPNG(),
@@ -126,7 +135,7 @@ export function completed(hostStatus) {
           "document.querySelector('#root')?.childElementCount > 0",
         );
         if (mounted) {
-          const screenshot = await window.webContents.capturePage();
+          const screenshot = await captureVisible(window);
           writeFileSync(
             path.join(config.evidenceDirectory, "renderer-loaded.png"),
             screenshot.toPNG(),

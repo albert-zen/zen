@@ -120,7 +120,7 @@ test("private staging preserves the original package and refuses reused destinat
   }
 });
 
-test("fixture records Electron 43 console-message details from the first argument", async () => {
+async function loadObserverFixture() {
   const { readFile } = await import("node:fs/promises");
   const { EventEmitter } = await import("node:events");
   const { createRequire } = await import("node:module");
@@ -141,14 +141,15 @@ test("fixture records Electron 43 console-message details from the first argumen
     },
   }).outputText;
   const app = new EventEmitter();
-  const webContents = new EventEmitter();
   const records = [];
+  const writes = [];
   const exports = {};
   const realRequire = createRequire(import.meta.url);
   vm.runInNewContext(compiled, {
     exports,
     process,
     URL,
+    AbortSignal,
     setInterval: () => ({ unref() {} }),
     require: (name) =>
       name === "electron"
@@ -161,10 +162,17 @@ test("fixture records Electron 43 console-message details from the first argumen
                   mode: "failure",
                 }),
               appendFileSync: (_path, line) => records.push(JSON.parse(line)),
+              writeFileSync: (path, bytes) => writes.push({ path, bytes }),
             }
           : realRequire(name),
   });
   exports.observe();
+  return { app, records, writes, EventEmitter };
+}
+
+test("fixture records Electron 43 console-message details from the first argument", async () => {
+  const { app, records, EventEmitter } = await loadObserverFixture();
+  const webContents = new EventEmitter();
   app.emit(
     "browser-window-created",
     {},
@@ -187,5 +195,60 @@ test("fixture records Electron 43 console-message details from the first argumen
       message: "synthetic CSP rejection",
       level: "error",
     },
+  );
+});
+
+test("startup capture waits for the real show event after did-finish-load", async () => {
+  const { app, records, writes, EventEmitter } = await loadObserverFixture();
+  const window = new EventEmitter();
+  const webContents = new EventEmitter();
+  let visible = false;
+  let captures = 0;
+  Object.assign(window, {
+    id: 1,
+    webContents,
+    getNativeWindowHandle: () => Buffer.alloc(8),
+    isVisible: () => visible,
+  });
+  Object.assign(webContents, {
+    getURL: () => "file:///startup.html",
+    executeJavaScript: async () => ({
+      role: "status",
+      text: "Starting fixture",
+    }),
+    capturePage: async () => {
+      captures++;
+      if (!visible) throw new Error("UnknownVizError before show");
+      return { toPNG: () => Buffer.from("synthetic-png") };
+    },
+  });
+  app.emit("browser-window-created", {}, window);
+  webContents.emit("did-finish-load");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    captures,
+    0,
+    "DOM load does not guarantee a visible compositor surface",
+  );
+  assert.equal(
+    records.some((record) => record.type === "startup-page-observed"),
+    true,
+  );
+  assert.equal(
+    records.some((record) => record.type === "startup-loaded"),
+    false,
+  );
+  visible = true;
+  window.emit("show");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captures, 1);
+  assert.equal(writes.length, 1);
+  assert.equal(
+    records.find((record) => record.type === "startup-loaded")?.visible,
+    true,
+  );
+  assert.equal(
+    records.some((record) => record.type === "fixture-error"),
+    false,
   );
 });
