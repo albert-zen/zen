@@ -85,3 +85,13 @@ confirmation, and return with no repeated submission. See the PR for the
 exact tested commit, executed checks and environment limits. The fixture is
 not certification of real websites, native Windows/macOS, credentials or
 server-side transactions.
+
+## Native navigation completion
+
+The existing Host navigation generation also fences completion. A navigation
+must observe its own main-frame commit and finish, or its same-document event,
+in addition to Electron's loadURL promise. Electron 43 can resolve that promise
+on a previous document's late finish event; such a reply alone is not success.
+Redirected final URLs remain valid. A newer request, closed target or load that
+stops before completion rejects and removes its temporary listeners. This is
+per-request native completion tracking, not a queue or replay mechanism.

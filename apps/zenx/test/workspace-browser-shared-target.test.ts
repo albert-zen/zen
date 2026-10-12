@@ -121,6 +121,113 @@ test("an aborted current Agent navigation fails instead of reporting success", a
   }
 });
 
+test("navigation ignores a prior document finish even when native loadURL resolves early", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const opened = await f.browser.open("a", "https://example.test/prior");
+    const web = f.views[0]!.webContents;
+    const before = web.listenerCount("did-finish-load");
+    web.loadURL = async (url) => {
+      web.emit("did-start-navigation", {}, url, false, true);
+      // Confirmed Electron 43 ordering: the prior document's late finish
+      // resolves loadURL while getURL still names the prior page.
+      web.emit("did-finish-load");
+    };
+    let settled = false;
+    const next = f.browser.navigate(
+      "a",
+      opened.tabId,
+      "https://example.test/next",
+    );
+    void next.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      settled,
+      false,
+      "prior-page completion must not fulfill navigate",
+    );
+    assert.equal(web.getURL(), "https://example.test/prior");
+    web.finishLoad("https://example.test/redirected");
+    assert.equal(
+      (await next).url,
+      "https://example.test/redirected",
+      "final redirect URL remains valid",
+    );
+    assert.equal(web.listenerCount("did-finish-load"), before);
+  } finally {
+    await f.close();
+  }
+});
+
+test("early native completion still rejects superseded, closed and stopped navigation", async () => {
+  for (const ending of ["superseded", "closed", "stopped"] as const) {
+    const f = await sharedFixture();
+    try {
+      f.browser.bindThreadSession("a", "thread-a");
+      const opened = await f.browser.open("a", "https://example.test/prior");
+      const web = f.views[0]!.webContents;
+      const before = web.listenerCount("did-finish-load");
+      web.loadURL = async (url) => {
+        web.emit("did-start-navigation", {}, url, false, true);
+        web.emit("did-finish-load");
+      };
+      const first = f.browser.navigate(
+        "a",
+        opened.tabId,
+        "https://example.test/slow",
+      );
+      const rejected = assert.rejects(
+        first,
+        /superseded|no longer available|stopped/u,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      if (ending === "superseded") {
+        const second = f.browser.navigate(
+          "a",
+          opened.tabId,
+          "https://example.test/fast",
+        );
+        web.finishLoad("https://example.test/fast");
+        assert.equal((await second).url, "https://example.test/fast");
+      } else if (ending === "closed") web.close();
+      else web.emit("did-stop-loading");
+      await rejected;
+      assert.equal(web.listenerCount("did-finish-load"), before);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("same-document navigation completes without requiring a document load event", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const opened = await f.browser.open("a", "https://example.test/page");
+    const web = f.views[0]!.webContents;
+    web.loadURL = async (url) => {
+      web.emit("did-start-navigation", {}, url, true, true);
+      web.finishLoad(url, true);
+    };
+    assert.equal(
+      (
+        await f.browser.navigate(
+          "a",
+          opened.tabId,
+          "https://example.test/page#section",
+        )
+      ).url,
+      "https://example.test/page",
+    );
+    assert.equal(web.getURL(), "https://example.test/page#section");
+  } finally {
+    await f.close();
+  }
+});
+
 test("mounting during an Agent action fences its outcome while an unchanged mount preserves observation", async () => {
   const fixture = await sharedFixture();
   try {
@@ -1017,8 +1124,15 @@ class FakeWebContents extends EventEmitter {
     const next = this.nextLoad;
     this.nextLoad = undefined;
     if (next !== undefined) await next.promise;
+    this.finishLoad(url);
+  }
+  finishLoad(url: string, inPage = false) {
     this.#url = url;
-    this.emit("did-navigate");
+    if (inPage) this.emit("did-navigate-in-page", {}, url, true);
+    else {
+      this.emit("did-navigate", {}, url, 200, "OK");
+      this.emit("did-finish-load");
+    }
     this.emit("did-stop-loading");
   }
   getURL() {

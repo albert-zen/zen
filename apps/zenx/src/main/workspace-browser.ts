@@ -224,8 +224,79 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   async #load(tab: Tab, url: string): Promise<void> {
     const generation = this.#beginNavigation(tab);
     tab.error = undefined;
+    const web = tab.view.webContents;
+    // Electron 43 loadURL can resolve on an older document's late finish event.
+    // Keep the existing generation fence, but also require this request's
+    // main-frame commit and completion (redirects may change the final URL).
+    let started = false;
+    let sameDocument = false;
+    let committed = false;
+    let completed = false;
+    let resolveCompletion!: () => void;
+    let rejectCompletion!: (error: unknown) => void;
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    // A synchronous loadURL throw must not leave a rejected side promise unhandled.
+    void completion.catch(() => undefined);
+    const current = () => {
+      try {
+        this.#assertNavigationCurrent(tab, generation);
+        return true;
+      } catch (error) {
+        rejectCompletion(error);
+        return false;
+      }
+    };
+    const start = (
+      _event: Electron.Event,
+      _url: string,
+      inPage: boolean,
+      main: boolean,
+    ) => {
+      if (!main || !current()) return;
+      if (started && !inPage) {
+        rejectCompletion(
+          new Error(
+            "Browser navigation was interrupted by another page request",
+          ),
+        );
+        return;
+      }
+      if (!started) sameDocument = inPage;
+      started = true;
+    };
+    const commit = () => {
+      if (started && current()) committed = true;
+    };
+    const finish = () => {
+      if (!committed || !current()) return;
+      completed = true;
+      resolveCompletion();
+    };
+    const inPage = (_event: Electron.Event, _url: string, main: boolean) => {
+      if (main && started && sameDocument && current()) {
+        committed = true;
+        finish();
+      }
+    };
+    const stop = () => {
+      if (started && !completed && !web.isLoading() && current())
+        rejectCompletion(
+          new Error("Browser navigation stopped before its document completed"),
+        );
+    };
+    const destroyed = () =>
+      rejectCompletion(new Error("Browser navigation target was closed"));
+    web.on("did-start-navigation", start);
+    web.on("did-navigate", commit);
+    web.on("did-navigate-in-page", inPage);
+    web.on("did-finish-load", finish);
+    web.on("did-stop-loading", stop);
+    web.on("destroyed", destroyed);
     try {
-      await tab.view.webContents.loadURL(url);
+      await Promise.all([web.loadURL(url), completion]);
     } catch (error) {
       this.#assertNavigationCurrent(tab, generation);
       if ((error as NodeJS.ErrnoException).code === "ERR_ABORTED") {
@@ -237,6 +308,13 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       tab.error = error instanceof Error ? error.message : String(error);
       this.#publish(tab.threadId);
       throw error;
+    } finally {
+      web.removeListener("did-start-navigation", start);
+      web.removeListener("did-navigate", commit);
+      web.removeListener("did-navigate-in-page", inPage);
+      web.removeListener("did-finish-load", finish);
+      web.removeListener("did-stop-loading", stop);
+      web.removeListener("destroyed", destroyed);
     }
     this.#assertNavigationCurrent(tab, generation);
   }
