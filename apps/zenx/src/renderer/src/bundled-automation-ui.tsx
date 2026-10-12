@@ -2136,6 +2136,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         "id" in result &&
         typeof result.id === "string"
       ) {
+        // Ordinary Rooms retain their existing refresh/retirement boundary.
+        // Only explicit PAW creation promises immediate chat admission.
+        if (command === "create") {
+          if (!current()) return false;
+          await refresh();
+        }
         const ownsView = current();
         if (ownsView) {
           setSelected(result.id);
@@ -2152,7 +2158,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           void introduce(result as { id: string; operationEpoch?: string })
             .then(() => refresh())
             .catch(() => {});
-        } else if (ownsView) {
+        } else if (ownsView && command !== "create") {
           void refresh().catch(() => {});
         }
         return ownsView;
