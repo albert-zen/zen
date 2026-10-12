@@ -279,7 +279,22 @@ export class OpenAiCompatibleModel implements ModelAdapter {
           console.error("Model stream diagnostic could not be persisted");
         }
       }
-      throw error;
+      if (
+        error instanceof OpenAiCompatibleModelError ||
+        request.signal.aborted ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        throw error;
+      }
+      // A mid-stream transport failure is safe to replay: no Tool side effect
+      // can exist before the stream completes.
+      throw new OpenAiCompatibleModelError(
+        "transport",
+        `OpenAI-compatible model stream read failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { retryable: true },
+      );
     }
   }
 }
@@ -1315,5 +1330,9 @@ function modelError(
   kind: Exclude<OpenAiCompatibleModelErrorKind, "http">,
   message: string,
 ): OpenAiCompatibleModelError {
-  return new OpenAiCompatibleModelError(kind, message);
+  // Protocol failures mean the provider delivered a malformed or truncated
+  // completion; replaying the sample is safe before any tool side effect.
+  return new OpenAiCompatibleModelError(kind, message, {
+    retryable: kind === "protocol",
+  });
 }

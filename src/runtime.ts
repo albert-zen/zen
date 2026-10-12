@@ -1,5 +1,6 @@
 import type { WorkspaceInstructionFile } from "./item.js";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { codeExecutionOptions } from "./code-options.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
 import {
@@ -40,6 +41,7 @@ import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
 import {
   compileModelMessages,
   compileWorkspaceInstructionMessages,
+  isRetryableModelSampleError,
   type ModelAdapter,
   type ModelMessage,
   type ModelTool,
@@ -171,7 +173,24 @@ export type ToolDefinitionProjection = (
   items: readonly CanonicalItem[],
 ) => readonly ModelTool[];
 
+interface ModelSampleResult {
+  itemId: string;
+  text: string;
+  presentation: ToolPresentationSnapshot;
+  contextBoundaryItemId: string;
+  inputTokens: number | undefined;
+  toolCalls: Array<{
+    callId: string;
+    name: string;
+    arguments: Record<string, unknown>;
+  }>;
+}
+
 export const DEFAULT_MAX_CONCURRENT_TOOL_BODIES = 8;
+
+/** Bounded in-turn replay of side-effect-free model samples. */
+export const DEFAULT_SAMPLE_RETRY_MAX_ATTEMPTS = 3;
+const DEFAULT_SAMPLE_RETRY_BASE_DELAY_MS = 1000;
 
 function assertPositiveExecutionLimit(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -188,6 +207,8 @@ export class AgentRuntime {
   readonly #toolPresentation: ToolPresentation | undefined;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
   readonly #maxConcurrentToolBodies: number;
+  readonly #sampleRetryMaxAttempts: number;
+  readonly #sampleRetryBaseDelayMs: number;
   readonly #codeStateTails = new Map<string, Promise<void>>();
   readonly #resolveCodeMedia:
     | ((
@@ -205,6 +226,8 @@ export class AgentRuntime {
     toolPresentation?: ToolPresentation;
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
+    /** Bounded replay of retryable model sample failures; tests may shrink it. */
+    sampleRetry?: { maxAttempts?: number; baseDelayMs?: number };
     resolveCodeMedia?: (
       media: readonly { type: "image" | "audio"; value: JsonValue }[],
       items: readonly CanonicalItem[],
@@ -236,6 +259,28 @@ export class AgentRuntime {
       );
     }
     this.#maxConcurrentToolBodies = maxConcurrentToolBodies;
+    const sampleRetryMaxAttempts =
+      options.sampleRetry?.maxAttempts ?? DEFAULT_SAMPLE_RETRY_MAX_ATTEMPTS;
+    if (
+      !Number.isSafeInteger(sampleRetryMaxAttempts) ||
+      sampleRetryMaxAttempts < 1
+    ) {
+      throw new Error(
+        "Sample retry max attempts must be a positive safe integer",
+      );
+    }
+    this.#sampleRetryMaxAttempts = sampleRetryMaxAttempts;
+    const sampleRetryBaseDelayMs =
+      options.sampleRetry?.baseDelayMs ?? DEFAULT_SAMPLE_RETRY_BASE_DELAY_MS;
+    if (
+      !Number.isSafeInteger(sampleRetryBaseDelayMs) ||
+      sampleRetryBaseDelayMs < 0
+    ) {
+      throw new Error(
+        "Sample retry base delay must be a non-negative safe integer",
+      );
+    }
+    this.#sampleRetryBaseDelayMs = sampleRetryBaseDelayMs;
   }
 
   hasActiveToolTasks(threadId: string): boolean {
@@ -440,21 +485,49 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * Replays retryable sample failures in place. A failed sample is
+   * side-effect-free — Tools run only after a complete sample returns — and
+   * each attempt commits its own partial/usage Items, so the journal stays
+   * append-only and derivable. Exhausted or non-retryable failures surface
+   * unchanged.
+   */
   async #runModel(
     turnId: string,
     options: RunTurnOptions,
-  ): Promise<{
-    itemId: string;
-    text: string;
-    presentation: ToolPresentationSnapshot;
-    contextBoundaryItemId: string;
-    inputTokens: number | undefined;
-    toolCalls: Array<{
-      callId: string;
-      name: string;
-      arguments: Record<string, unknown>;
-    }>;
-  }> {
+  ): Promise<ModelSampleResult> {
+    const maxAttempts = this.#sampleRetryMaxAttempts;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.#runModelOnce(turnId, options);
+      } catch (error) {
+        if (
+          attempt >= maxAttempts ||
+          options.signal.aborted ||
+          !isRetryableModelSampleError(error)
+        ) {
+          throw error;
+        }
+        const delayMs = Math.round(
+          this.#sampleRetryBaseDelayMs *
+            2 ** (attempt - 1) *
+            (1 + Math.random()),
+        );
+        console.warn("Model sample retry", {
+          attempt: attempt + 1,
+          maxAttempts,
+          delayMs,
+          reason: describeError(error),
+        });
+        await delay(delayMs, undefined, { signal: options.signal });
+      }
+    }
+  }
+
+  async #runModelOnce(
+    turnId: string,
+    options: RunTurnOptions,
+  ): Promise<ModelSampleResult> {
     const itemId = this.#id();
     let started = false;
     let text = "";
@@ -674,6 +747,9 @@ export class AgentRuntime {
           createdAt: this.#now(),
           type: "agent_message",
           text,
+          // Superseded by a retry or by the surfaced failure; never replayed
+          // to the model.
+          incomplete: true,
         };
         await options.commit(snapshot);
         options.emit({ type: "item_completed", item: snapshot });

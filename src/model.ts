@@ -125,6 +125,18 @@ export interface ModelAdapter {
   stream(request: ModelRequest): AsyncIterable<ModelEvent>;
 }
 
+/**
+ * True when a model sample failed in a way the Runtime may replay before any
+ * tool side effect exists: the adapter marked the failure `retryable`, and no
+ * HTTP status is attached — HTTP admission failures already exhausted their
+ * own retry layer and must not be multiplied by sample replay.
+ */
+export function isRetryableModelSampleError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const candidate = error as { retryable?: unknown; status?: unknown };
+  return candidate.retryable === true && candidate.status === undefined;
+}
+
 export function compileModelMessages(
   items: readonly CanonicalItem[],
   targetSelection?: CanonicalProviderSelection,
@@ -274,6 +286,9 @@ function compileCanonicalModelMessages(
         }
         break;
       case "agent_message":
+        // Partial text from a superseded or failed sample is retained in the
+        // journal for the user but never replayed to the model.
+        if (item.incomplete === true) break;
         if (items[index + 1]?.type === "tool_call") {
           const toolCalls: ToolCallModelMessage["toolCalls"] = [];
           let cursor = index + 1;
