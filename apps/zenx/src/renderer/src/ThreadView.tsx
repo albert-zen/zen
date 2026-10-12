@@ -509,7 +509,34 @@ function ThreadViewContent({
     saveReadingPosition();
   }, [pauseFollowing, saveReadingPosition]);
 
-  // Restore only this thread's last reading position. A new thread opens at live.
+  // The Composer overlays the bottom of the full-height transcript scroll
+  // area. Publish its live height so the list reserves matching virtual
+  // space and Back to live can float just above it. This is geometry only;
+  // publishing a height never changes the reader's follow intent.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    const zone = bottomZoneRef.current;
+    if (view === null || zone === null) return;
+    const publish = () => {
+      const height = `${Math.round(zone.getBoundingClientRect().height)}px`;
+      if (view.style.getPropertyValue("--bottom-zone-height") === height)
+        return;
+      view.style.setProperty("--bottom-zone-height", height);
+    };
+    publish();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(publish);
+    observer.observe(zone);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // Restore only after the initial Composer inset above has been published.
+  // Otherwise scrollTop clamps to the temporary CSS fallback range and saving
+  // that clamp loses near-bottom positions, especially with a tall draft.
+  // This finishes synchronously: no delayed restore can override later input.
+  // A new thread opens at live.
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     if (!scroll) return;
@@ -569,29 +596,6 @@ function ThreadViewContent({
     const zone = bottomZoneRef.current;
     if (zone !== null) zone.scrollTop = zone.scrollHeight;
   }, [composer.compaction, thread?.id]);
-
-  // The Composer overlays the bottom of the full-height transcript scroll
-  // area. Publish its live height so the list reserves matching virtual
-  // space and Back to live can float just above it. This is geometry only;
-  // publishing a height never changes the reader's follow intent.
-  useLayoutEffect(() => {
-    const view = viewRef.current;
-    const zone = bottomZoneRef.current;
-    if (view === null || zone === null) return;
-    const publish = () => {
-      const height = `${Math.round(zone.getBoundingClientRect().height)}px`;
-      if (view.style.getPropertyValue("--bottom-zone-height") === height)
-        return;
-      view.style.setProperty("--bottom-zone-height", height);
-    };
-    publish();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(publish);
-    observer.observe(zone);
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
 
   const submit = (intent: ComposerIntent) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)

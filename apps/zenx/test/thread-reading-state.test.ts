@@ -306,3 +306,92 @@ test("idle resize pauses following even through equivalent snapshot rerenders", 
     });
   });
 });
+
+for (const zoneHeight of [126, 226]) {
+  test(`restores a paused near-bottom reader after the ${zoneHeight}px Composer inset is published`, async () => {
+    await withRuntimeDom(async (h) => {
+      await withScrollLayout(async (resize) => {
+        let measuredHeight = zoneHeight;
+        const tops = new WeakMap<HTMLElement, number>();
+        const prototype = window.HTMLElement.prototype;
+        const originalRect = prototype.getBoundingClientRect;
+        prototype.getBoundingClientRect = function () {
+          return this.classList.contains("bottom-zone")
+            ? { ...originalRect.call(this), height: measuredHeight }
+            : originalRect.call(this);
+        };
+        Object.defineProperties(prototype, {
+          clientHeight: { configurable: true, get: () => 400 },
+          scrollHeight: {
+            configurable: true,
+            get() {
+              const inset =
+                Number.parseFloat(
+                  this.closest(".thread-view")?.style.getPropertyValue(
+                    "--bottom-zone-height",
+                  ) ?? "0",
+                ) || 0;
+              // Match the real CSS fallback: mount starts with 38px padding,
+              // then Composer geometry reserves its height plus 24px.
+              return 1287 + Math.max(0, inset + 24 - 38);
+            },
+          },
+          scrollTop: {
+            configurable: true,
+            get() {
+              return tops.get(this) ?? 0;
+            },
+            set(value: number) {
+              tops.set(
+                this,
+                Math.max(0, Math.min(this.scrollHeight - 400, value)),
+              );
+            },
+          },
+        });
+        const a = runtimeThread([runtimeCommand("done")], "completed");
+        const b = { ...a, id: "thread-b" };
+        const scroll = () => document.querySelector<HTMLElement>(".messages")!;
+        const readAt = async (top: number) =>
+          act(async () => {
+            scroll().dispatchEvent(
+              new window.WheelEvent("wheel", { deltaY: -75, bubbles: true }),
+            );
+            scroll().scrollTop = top;
+            scroll().dispatchEvent(new window.Event("scroll"));
+          });
+        await h.render(a);
+        const savedTop = 924 + zoneHeight - 126;
+        await readAt(savedTop);
+        await h.render(b);
+        await h.render(a);
+        assert.equal(
+          scroll().scrollTop,
+          savedTop,
+          "thread round trip must not retain the temporary clamp",
+        );
+        await h.hide();
+        await h.render(a);
+        assert.equal(
+          scroll().scrollTop,
+          savedTop,
+          "Settings remount must preserve a tall-draft reading position",
+        );
+        // There is no delayed restore left to fight later user input or resize.
+        await readAt(850);
+        await act(async () => {
+          measuredHeight += 80;
+          resize();
+        });
+        assert.equal(scroll().scrollTop, 850);
+        await h.hide();
+        await h.render(a);
+        assert.equal(
+          scroll().scrollTop,
+          850,
+          "new manual intent replaces the restored target",
+        );
+      });
+    });
+  });
+}
