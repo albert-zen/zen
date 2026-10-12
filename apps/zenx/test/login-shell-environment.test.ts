@@ -611,7 +611,7 @@ test("split exit-status framing cannot publish PATH before successful shell comp
 test("an unexpectedly exited supervisor is never signalled through a reusable numeric group ID", async (t) => {
   const shell = mockShell(t);
   Object.defineProperty(shell.child, "pid", { value: 987654 });
-  shell.child.exitCode = 1;
+  Object.defineProperty(shell.child, "exitCode", { value: 1 });
   const killGroup = t.mock.method(process, "kill", () => true);
   assert.equal(
     await restoreLoginShellPath({
