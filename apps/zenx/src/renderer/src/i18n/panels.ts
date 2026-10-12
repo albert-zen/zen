@@ -310,8 +310,27 @@ export const en = {
   setUpPaw: "Set up your PAW",
   meetYourPaw: "A personal agent, just for you",
   pawWelcomeDescription:
-    "Give it a name, choose where it works, and start a conversation.",
+    "Start a conversation, then choose a name and way of working together.",
   pawLater: "Later",
+  pawAdvancedSetup: "Advanced setup & introduction request",
+  pawOpenInstructions: "Open workspace AGENTS.md",
+  pawInstructionsBoundary:
+    "This edits the existing AGENTS.md inside this working directory, using the shared file editor and its save/conflict checks. Core reads repository-root AGENTS.md when a new Thread first receives input; if this directory is below that root, use a root-directory conversation to manage it. Missing files are not created automatically.",
+  pawIntroductionPreview: "Introduction request",
+  pawStartTitle: "Meet your PAW",
+  pawStartHelp:
+    "Create a conversation, then choose its name together. Creating sends the introduction request below to your configured model.",
+  pawCreateAndGreet: "Create and say hello",
+  pawIntroductionRequest:
+    "[Automatic start] Please say hello and ask what I’d like to call you. I can skip naming and start working.",
+  pawIntroductionFailed:
+    "Your PAW was created, but its introduction could not be confirmed. Check this conversation's delivery before retrying.",
+  pawEmptyChat:
+    "Your PAW is ready. Ask for an introduction, or just send a message to start working. You can change its name and work instructions later from settings.",
+  pawStartIntroduction: "Start introduction",
+  pawWorkInstructions: "Working directory & instructions",
+  pawWorkInstructionsHelp:
+    "Open the working conversation to inspect its directory and existing AGENTS.md. File edits keep the same workspace permissions; renaming your PAW does not move the directory.",
   pawNameStep: "What should we call your PAW?",
   pawNameHelp:
     "This is how your personal agent appears in conversations. You can change it anytime from its sidebar menu.",
@@ -1025,8 +1044,27 @@ export const zhCN = {
   openPawWorkspace: "打开工作空间",
   setUpPaw: "设置你的 PAW",
   meetYourPaw: "你的个人 Agent",
-  pawWelcomeDescription: "起个名字，选择工作位置，就可以开始对话。",
+  pawWelcomeDescription: "先开始对话，再一起决定名字和工作方式。",
   pawLater: "稍后再说",
+  pawAdvancedSetup: "高级设置与初始化请求",
+  pawOpenInstructions: "打开工作目录 AGENTS.md",
+  pawInstructionsBoundary:
+    "这里通过共享文件编辑器修改当前工作目录内已有的 AGENTS.md，沿用保存与冲突检查。Core 在新会话首次收到输入时读取仓库根目录 AGENTS.md；如果当前目录位于仓库内层，请在根目录会话中管理。不会自动创建缺失文件。",
+  pawIntroductionPreview: "查看初始化请求",
+  pawStartTitle: "认识你的 PAW",
+  pawStartHelp:
+    "先开始对话，再一起决定名字。创建时会把下方初始化请求发送给已配置的模型。",
+  pawCreateAndGreet: "创建并打个招呼",
+  pawIntroductionRequest:
+    "[自动开始] 先打个招呼，问问我想怎么称呼你吧。也可以跳过，直接开始工作。",
+  pawIntroductionFailed:
+    "PAW 已创建，但尚无法确认欢迎请求的结果。请先检查本对话的投递状态，再重试。",
+  pawEmptyChat:
+    "PAW 已就绪。可以让它介绍自己，也可以直接发消息开始工作。以后仍可从设置修改名字和工作说明。",
+  pawStartIntroduction: "开始介绍",
+  pawWorkInstructions: "工作目录与说明",
+  pawWorkInstructionsHelp:
+    "打开工作会话，查看目录与已有的 AGENTS.md。文件编辑仍遵循原有工作目录权限；给 PAW 改名不会移动目录。",
   pawNameStep: "给你的 PAW 起个名字",
   pawNameHelp: "这个名字会显示在对话中。以后可以从侧栏菜单随时修改。",
   pawNext: "继续",

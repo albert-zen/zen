@@ -146,32 +146,60 @@
   line-height: 1.6;
   color: var(--text-3);
 }
-.paw-setup-name {
-  margin: 0;
-  font-size: 16px;
+/* Creation stays in the conversation surface, never a modal or focus trap. */
+.rooms-chat-main[hidden] {
+  display: none;
 }
-
-.rooms-chat-overlay.paw-setup-overlay {
-  align-items: center;
+.paw-start-page {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
   justify-content: center;
-  padding: 24px;
+  padding: 48px 24px;
 }
-.rooms-chat-dialog.paw-setup-dialog {
+.paw-start-content {
   width: min(100%, 480px);
-  height: auto;
-  max-height: calc(100dvh - 48px);
-  border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 16px 60px var(--shadow-color);
+  display: flex;
+  flex-direction: column;
+  align-self: flex-start;
+  gap: 18px;
+}
+.paw-start-content > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.paw-start-content h2 {
+  font-size: 24px;
+  font-weight: 550;
+  margin: 0;
+}
+.paw-start-content .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.paw-start-request {
+  margin: 0;
+  padding: 12px 16px;
+  border-left: 2px solid var(--border-soft);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.paw-chat-introduction {
+  padding: 12px 20px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.paw-work-settings p {
+  color: var(--text-3);
+  line-height: 1.6;
 }
 @media (max-width: 600px) {
-  .rooms-chat-overlay.paw-setup-overlay {
-    padding: 12px;
-  }
-  .rooms-chat-dialog.paw-setup-dialog {
-    max-height: calc(100dvh - 24px);
-    padding: 18px;
+  .paw-start-page {
+    padding: 28px 16px;
   }
 }
 
@@ -184,4 +212,31 @@
 }
 .paw-setup-dialog > .quiet-button {
   justify-self: start;
+}
+
+.paw-work-directory {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.paw-advanced {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.paw-advanced > summary {
+  cursor: pointer;
+}
+.paw-advanced[open] > :not(summary) {
+  margin-top: 16px;
+}
+.paw-start-content .room-assistant-disclosure {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+}
+.paw-start-content > .quiet-button {
+  align-self: flex-start;
 }

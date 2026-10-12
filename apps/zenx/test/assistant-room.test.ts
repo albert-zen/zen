@@ -1,3 +1,4 @@
+import { createZenXRoomsProfileLoader } from "../src/main/rooms-profile-loader.js";
 import { ALWAYS_ON_ASSISTANT_PROMPT } from "../src/main/assistant-preset.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -390,6 +391,73 @@ test("renaming a PAW atomically updates its speaking identity and mention withou
     assert.equal(f.model.requests.length, 0);
     await assert.rejects(f.service.renameRoom(room.id, "x".repeat(129)));
     assert.equal((await f.store.read()).rooms[0]?.name, "Nova");
+  } finally {
+    await f.close();
+  }
+});
+
+test("conversation introduction receipt survives restart and the bound naming tool updates future speakers", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom({
+      name: "PAW",
+      members: [{ name: "PAW", threadId: "chief-thread" }],
+    });
+    const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    const text =
+      "[Automatic introduction request from Create PAW] Ask what I would like to call you.";
+    await f.service.prepareRoomMessage(room.id, operationId, text);
+    await f.service.postPreparedRoomMessage(room.id, operationId, text);
+    await f.service.acknowledgeRoomOperation(room.id, operationId);
+    const requests = f.model.requests.length;
+    assert.equal(requests, 1);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    const invoke = (tool: string, args: Record<string, unknown>) =>
+      runtime.invoke(tool, {
+        callId: randomUUID(),
+        threadId: "chief-thread",
+        cwd: "/project",
+        arguments: args,
+        signal: new AbortController().signal,
+      });
+    // Scripted model actions traverse the production tool/Host/store seam.
+    await invoke("zenx_rooms_post_message", {
+      roomId: room.id,
+      text: "Welcome. What would you like to call me?",
+    });
+    await f.service.postRoomMessage(room.id, "You", "Call yourself Nova");
+    await invoke("zenx_rooms_rename", { roomId: room.id, name: "Nova" });
+    await invoke("zenx_rooms_post_message", {
+      roomId: room.id,
+      text: "My name is now Nova.",
+    });
+    const renamed = f.service
+      .snapshot()
+      .rooms.find((entry) => entry.id === room.id)!;
+    assert.equal(renamed.name, "Nova");
+    assert.equal(renamed.members[0]!.name, "Nova");
+    assert.equal(renamed.messages.at(-1)!.author, "Nova");
+    assert.equal(
+      renamed.messages.find((message) => message.text.startsWith("Welcome"))!
+        .author,
+      "PAW",
+    );
+    const beforeRestart = f.model.requests.length;
+    await f.service.stop();
+    await f.service.start();
+    assert.equal(f.model.requests.length, beforeRestart);
+    await f.service.prepareRoomMessage(room.id, operationId, text);
+    await f.service.postPreparedRoomMessage(room.id, operationId, text);
+    assert.equal(f.model.requests.length, beforeRestart);
+    assert.equal(
+      f.service
+        .snapshot()
+        .rooms[0]!.messages.filter((message) => message.text === text).length,
+      1,
+    );
+    assert.equal(f.service.snapshot().rooms[0]!.name, "Nova");
   } finally {
     await f.close();
   }

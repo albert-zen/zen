@@ -177,6 +177,14 @@ for (const source of ["rename", "settings"]) {
         threads: {
           list: async () => [
             {
+              threadId: "working",
+              name: "Working",
+              preview: "",
+              status: "idle",
+              archived: false,
+              currentMetadata: { cwd: "/actual-paw-directory" },
+            },
+            {
               threadId: "member-thread",
               name: "Reviewer",
               preview: "",
@@ -230,6 +238,18 @@ for (const source of ["rename", "settings"]) {
           React.createElement(RoomsPage, { sdk: sdk("paw", source) }),
         ),
       );
+      if (source === "settings") {
+        assert.equal(
+          document.querySelector(".paw-work-directory")?.textContent,
+          "/actual-paw-directory",
+        );
+        assert.equal(
+          [...document.querySelectorAll("button")].some(
+            (button) => button.textContent === "Open workspace AGENTS.md",
+          ),
+          true,
+        );
+      }
       await act(async () =>
         document.querySelector('[role="dialog"]')!.dispatchEvent(
           new window.KeyboardEvent("keydown", {

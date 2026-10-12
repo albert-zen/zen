@@ -272,6 +272,25 @@ export function CompanionWorkspace({
     </>
   );
   const tabsContent = [
+    ...(room.assistant
+      ? [
+          {
+            id: "instructions",
+            title: i18n.t("panels:pawWorkInstructions"),
+            icon: "file" as const,
+            render: () =>
+              resource ? (
+                <div className="companion-content">
+                  <p className="companion-note">
+                    {i18n.t("panels:pawInstructionsBoundary")}
+                  </p>
+                </div>
+              ) : (
+                <p role="status">{i18n.t("panels:unavailableWorkspace")}</p>
+              ),
+          },
+        ]
+      : []),
     {
       id: "overview",
       title: i18n.t("panels:overview"),
@@ -507,6 +526,11 @@ export function CompanionWorkspace({
           : undefined
       }
       fileDrafts={fileDrafts}
+      messageLinkRequest={
+        section === "instructions" && resource
+          ? { id: 1, kind: "file", value: "AGENTS.md" }
+          : null
+      }
       onWidthChange={onWidthChange}
       conversationContext={{
         kind: "room",

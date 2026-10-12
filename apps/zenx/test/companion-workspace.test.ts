@@ -133,6 +133,40 @@ test("PAW exposes explicit notes, exact local references and truthful unconfigur
       false,
     );
     assert.ok(calls.every((c) => c === "workspace" || c === "list"));
+    const fileReads: Array<[string, string]> = [];
+    Object.assign(window.zenx, {
+      workspaceFiles: {
+        read: async (threadId: string, relative: string) => {
+          fileReads.push([threadId, relative]);
+          throw new Error("AGENTS.md is not present in this working directory");
+        },
+      },
+    });
+    await act(async () =>
+      root.render(
+        React.createElement(CompanionWorkspace, {
+          ...props,
+          section: "instructions",
+          threads: [
+            {
+              threadId: "assistant",
+              name: "Assistant",
+              preview: "",
+              status: "idle",
+              archived: false,
+              currentMetadata: { cwd: "/actual-workspace" },
+            } as any,
+          ],
+        }),
+      ),
+    );
+    assert.deepEqual(fileReads, [["assistant", "AGENTS.md"]]);
+    assert.match(document.body.textContent!, /AGENTS.md is not present/);
+    assert.equal(
+      props.fileDrafts.snapshot().size,
+      0,
+      "opening missing instructions does not invent a file or alternate identity store",
+    );
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

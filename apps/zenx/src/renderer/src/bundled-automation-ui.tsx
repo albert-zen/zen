@@ -1529,7 +1529,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [assistantProjectPicker, setAssistantProjectPicker] = useState(false);
   const [assistantProjectSaving, setAssistantProjectSaving] = useState(false);
   const assistantProjectOperation = useRef({ epoch: 0, pending: false });
-  const [assistantStep, setAssistantStep] = useState<"name" | "setup">("name");
   const viewEpoch = useRef(0);
   useLayoutEffect(() => {
     viewEpoch.current += 1;
@@ -1634,7 +1633,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     setAssistantProjectPicker(false);
     assistantProjectOperation.current.epoch += 1;
     if (createIntent === "room" || createIntent === "companion") {
-      setAssistantStep("name");
       setAssistantMode(createIntent === "companion");
       setName(createIntent === "companion" ? "PAW" : "");
       setMemberName(createIntent === "companion" ? "Assistant" : "");
@@ -1956,13 +1954,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     return () => clearInterval(timer);
   }, [sdk]);
   useEffect(() => {
-    if (
-      panel === "rename" ||
-      (panel === "create" && assistantMode && assistantStep === "name")
-    )
-      dialog.current?.querySelector("input")?.focus();
+    if (panel === "rename") dialog.current?.querySelector("input")?.focus();
     else if (panel !== null) dialogClose.current?.focus();
-  }, [panel, assistantMode, assistantStep, assistantProjectPicker]);
+  }, [panel, assistantMode, assistantProjectPicker]);
   const closeDialog = () => {
     dialogEpoch.current += 1;
     setPanel(null);
@@ -1975,6 +1969,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     requestAnimationFrame(() => dialogInvoker.current?.focus());
   };
   const room = data.rooms.find((entry) => entry.id === selected);
+  const assistantThread = threads.find(
+    (thread) => thread.threadId === room?.assistant?.threadId,
+  );
+  const assistantCwd =
+    assistantThread && "currentMetadata" in assistantThread
+      ? assistantThread.currentMetadata.cwd
+      : undefined;
+  const inlineSetup = panel === "create" && assistantMode;
   const assistantDialog =
     panel === "create" ? assistantMode : Boolean(room?.assistant);
   useEffect(() => {
@@ -2038,6 +2040,42 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     lastRoom.current = selected;
     lastMessage.current = tail;
   }, [selected, tail]);
+  const introduce = async (created: {
+    id: string;
+    operationEpoch?: string;
+  }) => {
+    if (sending.current[created.id]) return;
+    sending.current[created.id] = true;
+    setSendingRooms((current) => ({ ...current, [created.id]: true }));
+    const operationId = `${created.operationEpoch ?? "legacy"}:00000000-0000-4000-8000-000000000001`;
+    const text = i18n.t("panels:pawIntroductionRequest");
+    try {
+      await sdk.commands.execute("prepare-message", {
+        roomId: created.id,
+        operationId,
+        text,
+      });
+      await sdk.commands.execute("post-message", {
+        roomId: created.id,
+        operationId,
+        text,
+      });
+      await sdk.commands.execute("ack-operation", {
+        roomId: created.id,
+        operationId,
+      });
+    } catch (reason) {
+      // Room creation already succeeded. Keep its receipt and open that Room;
+      // its existing operation recovery UI resolves uncertain delivery.
+      setRoomErrors((current) => ({
+        ...current,
+        [created.id]: `${i18n.t("panels:pawIntroductionFailed")} ${describeError(reason)}`,
+      }));
+    } finally {
+      sending.current[created.id] = false;
+      setSendingRooms((current) => ({ ...current, [created.id]: false }));
+    }
+  };
   const run = async (command: string, input: unknown) => {
     if (actionBusy.current) return false;
     const epoch = viewEpoch.current;
@@ -2073,6 +2111,14 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           sdk.navigation.navigate(
             `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: result.id })}`,
           );
+        if (command === "create-assistant") {
+          // Publish the confirmed Room immediately. This explicit action owns
+          // the kickoff even if navigation changes while admission is pending;
+          // its completion must never navigate back over a newer user intent.
+          void introduce(result as { id: string; operationEpoch?: string })
+            .then(() => refresh())
+            .catch(() => {});
+        }
       }
       return true;
     } catch (reason) {
@@ -2416,7 +2462,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               onClick={(event) => {
                 dialogInvoker.current = event.currentTarget;
                 setAssistantMode(true);
-                setAssistantStep("name");
                 setName("PAW");
                 setMemberName("Assistant");
                 setThreadId("");
@@ -2453,7 +2498,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ))}
         </nav>
       ) : null}
-      <main className="rooms-chat-main">
+      <main className="rooms-chat-main" hidden={inlineSetup}>
         {loading ? (
           <p className="rooms-chat-empty" role="status">
             {i18n.t("panels:loadingRooms")}
@@ -2517,6 +2562,36 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 <Icon name="settings" size={16} />
               </button>
             </header>
+            {room.assistant &&
+            room.messages.length === 0 &&
+            (room.operations?.length ?? 0) === 0 ? (
+              <div className="paw-chat-introduction">
+                <p>{i18n.t("panels:pawEmptyChat")}</p>
+                <button
+                  type="button"
+                  disabled={busy || sendingRooms[room.id]}
+                  onClick={() => {
+                    if (actionBusy.current) return;
+                    actionBusy.current = true;
+                    setBusy(true);
+                    void introduce(room)
+                      .then(() => refresh())
+                      .catch((reason: unknown) =>
+                        setRoomErrors((current) => ({
+                          ...current,
+                          [room.id]: describeError(reason),
+                        })),
+                      )
+                      .finally(() => {
+                        actionBusy.current = false;
+                        setBusy(false);
+                      });
+                  }}
+                >
+                  {i18n.t("panels:pawStartIntroduction")}
+                </button>
+              </div>
+            ) : null}
             {error ||
             roomErrors[room.id] ||
             feedback[room.id] ||
@@ -3077,9 +3152,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       ) : null}
       {panel !== null && !assistantProjectPicker ? (
         <div
-          className={`rooms-chat-overlay${panel === "create" && assistantDialog ? " paw-setup-overlay" : ""}`}
+          className={inlineSetup ? "paw-start-page" : "rooms-chat-overlay"}
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeDialog();
+            if (!inlineSetup && event.target === event.currentTarget)
+              closeDialog();
           }}
         >
           <section
@@ -3090,7 +3166,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 closeDialog();
                 return;
               }
-              if (event.key !== "Tab") return;
+              if (inlineSetup || event.key !== "Tab") return;
               const targets = [
                 ...(dialog.current?.querySelectorAll<HTMLElement>(
                   "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [role=combobox], summary, a[href]",
@@ -3107,8 +3183,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 first?.focus();
               }
             }}
-            role="dialog"
-            aria-modal="true"
+            role={inlineSetup ? "region" : "dialog"}
+            aria-modal={inlineSetup ? undefined : true}
             aria-label={
               panel === "create"
                 ? assistantDialog
@@ -3118,17 +3194,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   ? i18n.t("panels:renameConversation")
                   : i18n.t("panels:conversationSettings")
             }
-            className={`rooms-chat-dialog${panel === "create" && assistantDialog ? " paw-setup-dialog" : ""}`}
+            className={inlineSetup ? "paw-start-content" : "rooms-chat-dialog"}
           >
             <header>
               <h2>
                 {panel === "create"
                   ? assistantDialog
-                    ? i18n.t(
-                        assistantStep === "name"
-                          ? "panels:pawNameStep"
-                          : "panels:pawSetupStep",
-                      )
+                    ? i18n.t("panels:pawStartTitle")
                     : i18n.t("panels:newRoom")
                   : panel === "rename"
                     ? i18n.t("panels:renameConversation")
@@ -3146,58 +3218,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             </header>
             {panel === "create" && assistantDialog ? (
               <p className="paw-setup-description">
-                {i18n.t(
-                  assistantStep === "name"
-                    ? "panels:pawNameHelp"
-                    : "panels:pawSetupHelp",
-                )}
+                {i18n.t("panels:pawStartHelp")}
               </p>
             ) : null}
-            {panel === "create" &&
-            assistantDialog &&
-            assistantStep === "setup" ? (
-              <details
-                className="paw-setup-capabilities"
-                open={!assistantPluginsReady}
-              >
-                <summary>{i18n.t("panels:pawCapabilities")}</summary>
-                <p className="room-assistant-disclosure">
-                  {i18n.t("panels:pawWorkingConversationDisclosure")}
-                </p>
-                <PluginRequirementsPreview
-                  key={assistantSetupSession}
-                  requirements={PAW_PLUGIN_REQUIREMENTS}
-                  purposeLabels={{
-                    "zenx-rooms": i18n.t("panels:pawChatAndMemory"),
-                    "zenx-triggers": i18n.t("panels:pawReplyToMessages"),
-                    "zenx-self-control": i18n.t(
-                      "panels:pawWorkWithConversations",
-                    ),
-                    "zenx-subagents": i18n.t("panels:pawDelegateWork"),
-                  }}
-                  onReady={setAssistantPluginsReady}
-                  openSettings={() => {
-                    closeDialog();
-                    sdk.navigation.navigate("settings");
-                  }}
-                />
-                {!assistantPluginsReady ? (
-                  <button
-                    type="button"
-                    className="quiet-button"
-                    disabled={busy}
-                    onClick={() =>
-                      setAssistantSetupSession((session) => session + 1)
-                    }
-                  >
-                    {i18n.t("panels:pawRetrySetup")}
-                  </button>
-                ) : null}
-              </details>
-            ) : null}
-            {panel !== "create" ||
-            !assistantDialog ||
-            assistantStep === "name" ? (
+            {panel !== "create" || !assistantDialog ? (
               <Field
                 label={
                   room?.assistant || assistantDialog
@@ -3214,37 +3238,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       assistantCreationFailed))
                 }
               />
-            ) : (
-              <p className="paw-setup-name">
-                <strong>{name}</strong>
-              </p>
-            )}
+            ) : null}
             {assistantDialog && assistantNameTooLong ? (
               <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
-            ) : null}
-            {panel === "create" &&
-            assistantDialog &&
-            assistantStep === "name" ? (
-              <button
-                type="button"
-                className="primary-button"
-                disabled={!name.trim() || assistantNameTooLong}
-                onClick={() => setAssistantStep("setup")}
-              >
-                {i18n.t("panels:pawNext")}
-              </button>
-            ) : null}
-            {panel === "create" &&
-            assistantDialog &&
-            assistantStep === "setup" ? (
-              <button
-                type="button"
-                className="quiet-button"
-                disabled={busy || assistantCreation.current !== null}
-                onClick={() => setAssistantStep("name")}
-              >
-                {i18n.t("panels:pawBack")}
-              </button>
             ) : null}
             {panel !== "create" ? (
               <button
@@ -3267,9 +3263,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   : i18n.t("panels:rename")}
               </button>
             ) : null}
-            {(panel === "create" &&
-              (!assistantDialog || assistantStep === "setup")) ||
-            (panel === "manage" && !room?.assistant) ? (
+            {panel === "create" || (panel === "manage" && !room?.assistant) ? (
               <>
                 {!assistantDialog ? (
                   <Field
@@ -3280,27 +3274,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
                 {assistantDialog ? (
                   <>
-                    <label className="field">
-                      <span>{i18n.t("panels:pawWorkingConversation")}</span>
-                      <Select
-                        aria-label={i18n.t("panels:pawWorkingConversation")}
-                        value={assistantTarget}
-                        onValueChange={(value) => {
-                          setAssistantTarget(value as "new" | "existing");
-                          if (value === "existing") {
-                            assistantCreation.current = null;
-                          }
-                        }}
-                        disabled={busy}
-                      >
-                        <option value="new">
-                          {i18n.t("panels:pawNewWorkingConversation")}
-                        </option>
-                        <option value="existing">
-                          {i18n.t("panels:pawExistingWorkingConversation")}
-                        </option>
-                      </Select>
-                    </label>
                     {assistantTarget === "new" ? (
                       <>
                         <label className="field">
@@ -3402,6 +3375,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                         >
                           {i18n.t("panels:pawRetrySetup")}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => sdk.navigation.navigate("settings")}
+                        >
+                          {i18n.t("shell:settings")}
+                        </button>
                       </div>
                     ) : null}
                   </>
@@ -3450,8 +3429,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
               </>
             ) : null}
-            {panel === "create" &&
-            (!assistantDialog || assistantStep === "setup") ? (
+            {panel === "create" ? (
               <button
                 type="button"
                 className="primary-button"
@@ -3518,11 +3496,53 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 }}
               >
                 {assistantDialog
-                  ? i18n.t("panels:createPaw")
+                  ? i18n.t("panels:pawCreateAndGreet")
                   : i18n.t("panels:createRoom")}
               </button>
             ) : panel === "manage" ? (
               <>
+                {room?.assistant ? (
+                  <div className="paw-work-settings">
+                    <h3>{i18n.t("panels:pawWorkInstructions")}</h3>
+                    <code className="paw-work-directory">
+                      {assistantCwd ?? i18n.t("panels:unavailableWorkspace")}
+                    </code>
+                    <p>{i18n.t("panels:pawWorkInstructionsHelp")}</p>
+                    <button
+                      type="button"
+                      disabled={!assistantCwd}
+                      onClick={() => {
+                        setPanel(null);
+                        sdk.navigation.navigate(
+                          `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "instructions" })}`,
+                        );
+                      }}
+                    >
+                      {i18n.t("panels:pawOpenInstructions")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        sdk.navigation.navigate(
+                          `/threads/${encodeURIComponent(room.assistant!.threadId)}`,
+                        )
+                      }
+                    >
+                      {i18n.t("panels:openConversationWorkspace")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPanel(null);
+                        sdk.navigation.navigate(
+                          `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
+                        );
+                      }}
+                    >
+                      {i18n.t("panels:openPawWorkspace")}
+                    </button>
+                  </div>
+                ) : null}
                 {room?.assistant ? (
                   <button
                     type="button"
@@ -3615,6 +3635,81 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   {i18n.t("panels:deleteRoom")}
                 </button>
               </>
+            ) : null}
+            {inlineSetup ? (
+              <details
+                className="paw-advanced"
+                open={!assistantPluginsReady || assistantTarget === "existing"}
+              >
+                <summary>{i18n.t("panels:pawAdvancedSetup")}</summary>
+                <label className="field">
+                  <span>{i18n.t("panels:pawWorkingConversation")}</span>
+                  <Select
+                    aria-label={i18n.t("panels:pawWorkingConversation")}
+                    value={assistantTarget}
+                    onValueChange={(value) => {
+                      setAssistantTarget(value as "new" | "existing");
+                      if (value === "existing") {
+                        assistantCreation.current = null;
+                      }
+                    }}
+                    disabled={busy}
+                  >
+                    <option value="new">
+                      {i18n.t("panels:pawNewWorkingConversation")}
+                    </option>
+                    <option value="existing">
+                      {i18n.t("panels:pawExistingWorkingConversation")}
+                    </option>
+                  </Select>
+                </label>
+                {panel === "create" && assistantDialog ? (
+                  <details className="paw-start-request">
+                    <summary>{i18n.t("panels:pawIntroductionPreview")}</summary>
+                    <p>{i18n.t("panels:pawIntroductionRequest")}</p>
+                  </details>
+                ) : null}
+                {panel === "create" && assistantDialog ? (
+                  <details
+                    className="paw-setup-capabilities"
+                    open={!assistantPluginsReady}
+                  >
+                    <summary>{i18n.t("panels:pawCapabilities")}</summary>
+                    <p className="room-assistant-disclosure">
+                      {i18n.t("panels:pawWorkingConversationDisclosure")}
+                    </p>
+                    <PluginRequirementsPreview
+                      key={assistantSetupSession}
+                      requirements={PAW_PLUGIN_REQUIREMENTS}
+                      purposeLabels={{
+                        "zenx-rooms": i18n.t("panels:pawChatAndMemory"),
+                        "zenx-triggers": i18n.t("panels:pawReplyToMessages"),
+                        "zenx-self-control": i18n.t(
+                          "panels:pawWorkWithConversations",
+                        ),
+                        "zenx-subagents": i18n.t("panels:pawDelegateWork"),
+                      }}
+                      onReady={setAssistantPluginsReady}
+                      openSettings={() => {
+                        closeDialog();
+                        sdk.navigation.navigate("settings");
+                      }}
+                    />
+                    {!assistantPluginsReady ? (
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        disabled={busy}
+                        onClick={() =>
+                          setAssistantSetupSession((session) => session + 1)
+                        }
+                      >
+                        {i18n.t("panels:pawRetrySetup")}
+                      </button>
+                    ) : null}
+                  </details>
+                ) : null}
+              </details>
             ) : null}
             {error ? <p role="alert">{error}</p> : null}
           </section>

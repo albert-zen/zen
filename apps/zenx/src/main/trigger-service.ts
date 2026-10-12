@@ -2927,6 +2927,7 @@ function assistantWakeupInput(
       "",
       ...preset,
       `Reply Room ID: ${sourceRoom.id}`,
+      `Current PAW display name: ${JSON.stringify(sourceRoom.name)}`,
       ...(sourceMessageText !== undefined
         ? []
         : [
