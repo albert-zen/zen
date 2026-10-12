@@ -268,12 +268,13 @@ export function ThreadConversationViewport({
 
   // AuxiliaryPanel mounts this viewport only for its open, visible conversation
   // tab. Old recovery generations are fenced above; match both loaded identities
-  // before allowing the owning App to advance its local read position.
+  // before allowing the owning App to advance its local read position. Media
+  // and model-operation errors are nonblocking notices within the visible
+  // ThreadView, so they do not hide otherwise loaded conversation content.
   useEffect(() => {
     if (
       serverStatus.type === "ready" &&
       !loading &&
-      error === null &&
       thread?.id === threadId &&
       settings?.threadId === threadId &&
       thread.canonicalItems !== undefined
@@ -282,7 +283,6 @@ export function ThreadConversationViewport({
   }, [
     serverStatus.type,
     loading,
-    error,
     thread,
     threadId,
     settings,

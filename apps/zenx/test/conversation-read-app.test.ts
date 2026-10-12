@@ -1406,3 +1406,121 @@ for (const outcome of ["failure", "hidden"] as const) {
     }
   });
 }
+
+for (const mediaFails of [false, true]) {
+  test(`R3 visible side live answer with nonblocking media error=${mediaFails}`, async () => {
+    const plugin = testPlugin("zenx-rooms", false, "thread-1");
+    let current = summary();
+    const listeners = new Set<NotificationListener>();
+    const harness = await mountApp({
+      pluginSnapshot: plugin.pluginSnapshot,
+      seedMarks: '{"t:thread-1":0}',
+      threads: async (archived) => (archived ? [] : [current]),
+      request: async () => resumed(thread()),
+      attachments: async () => {
+        if (mediaFails) throw Error("Attachment metadata unavailable");
+        return {};
+      },
+      onNotification: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      executeCommand: async (_plugin, command) => {
+        if (command === "list")
+          return {
+            rooms: [
+              {
+                id: "room-1",
+                name: "Work room",
+                createdAt: 0,
+                members: [{ name: "Bot", threadId: "thread-1" }],
+                assistant: { threadId: "thread-1", triggerId: "reply" },
+                messages: [],
+              },
+            ],
+          };
+        if (command === "workspace")
+          return { revision: 1, updatedAt: 0, matters: [], memory: [] };
+        throw Error(String(command));
+      },
+    });
+    try {
+      const roomButton = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Open PAW Work room"]',
+        ),
+      );
+      await act(async () => roomButton.click());
+      const panelButton = [...document.querySelectorAll("button")].find(
+        (button) => button.textContent === "Open setup intent",
+      )!;
+      await act(async () => panelButton.click());
+      await waitFor(() =>
+        document.querySelector(
+          ".auxiliary-conversation .thread-conversation-viewport",
+        ),
+      );
+      if (mediaFails)
+        assert.match(
+          document.querySelector(".auxiliary-conversation")!.textContent!,
+          /Attachment metadata unavailable/,
+        );
+      current = {
+        ...current,
+        completedAnswer: { itemId: "r3-live", position: 10 },
+      };
+      await act(async () => {
+        const emit = (
+          seq: number,
+          event: Parameters<typeof nativeEvent>[1],
+        ) => {
+          for (const notify of listeners)
+            notify("zen/thread/event", nativeEvent(seq, event));
+        };
+        emit(1, {
+          type: "turn_started",
+          threadId: "thread-1",
+          turnId: "r3-turn",
+        });
+        emit(2, {
+          type: "item_completed",
+          item: {
+            id: "r3-live",
+            type: "agent_message",
+            threadId: "thread-1",
+            turnId: "r3-turn",
+            createdAt: new Date(3000).toISOString(),
+            text: "A fully visible R3 answer",
+          },
+        });
+        emit(3, {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "r3-turn",
+          status: "completed",
+        });
+      });
+      const view = document.querySelector(
+        ".auxiliary-conversation .thread-conversation-viewport",
+      )!;
+      assert.match(view.textContent!, /A fully visible R3 answer/);
+      assert.equal(Boolean(view.closest("[hidden]")), false);
+      const observed = {
+        unread: Boolean(document.querySelector(".unread-dot")),
+        mark: JSON.parse(
+          window.localStorage.getItem("zenx.conversation-read-watermarks.v2")!,
+        )["t:thread-1"],
+      };
+      assert.deepEqual(
+        observed,
+        { unread: false, mark: 10 },
+        "a visible final answer must be acknowledged even if unrelated metadata is unavailable",
+      );
+    } finally {
+      await harness.unmount();
+      plugin.dispose();
+    }
+  });
+}
