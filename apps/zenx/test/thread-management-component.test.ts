@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
+import { i18n } from "../src/renderer/src/i18n.js";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 const { createElement } = React;
@@ -36,7 +37,7 @@ test("sidebar announces active Thread loading", () => {
   assert.match(html, /Loading active Threads…/u);
 });
 
-test("active Thread menu offers copy at the latest complete boundary", () => {
+test("active Thread menu offers Fork at the latest complete boundary", () => {
   const html = renderToStaticMarkup(
     createElement(ThreadItemMenu, {
       archived: false,
@@ -58,8 +59,8 @@ test("active Thread menu offers copy at the latest complete boundary", () => {
   );
   assert.match(html, /role="menu"/u);
   assert.match(html, />Rename</u);
-  assert.match(html, />Copy thread</u);
-  assert.match(html, /data-thread-action="copy"/u);
+  assert.match(html, />Fork</u);
+  assert.match(html, /data-thread-action="fork"/u);
   assert.match(html, />Pin<\/button>/u);
   assert.match(
     html,
@@ -158,3 +159,42 @@ function summary(archived: boolean): NativeThreadSummary {
     status: "idle",
   };
 }
+
+test("Fork wording and icon are localized without a clipboard-copy action", async () => {
+  try {
+    for (const [language, label, busyLabel] of [
+      ["en", "Fork", "Forking…"],
+      ["zh-CN", "分叉", "正在分叉…"],
+    ]) {
+      await i18n.changeLanguage(language);
+      for (const busyAction of [null, "fork"] as const) {
+        const html = renderToStaticMarkup(
+          createElement(ThreadItemMenu, {
+            archived: false,
+            busyAction,
+            error: null,
+            hasActiveTurn: false,
+            open: true,
+            pinned: true,
+            child: true,
+            renaming: false,
+            renameDraft: "",
+            onArchive: noop,
+            onBeginRename: noop,
+            onCancelRename: noop,
+            onDraftChange: noop,
+            onPin: noop,
+            onRename: noop,
+            onUnarchive: noop,
+          }),
+        );
+        assert.ok(html.includes(busyAction ? busyLabel! : label!));
+        assert.match(html, /data-thread-action="fork"/);
+        assert.match(html, /M4 4.5v7M12 4.5v1a3 3 0 0 1-3 3H4/);
+        assert.doesNotMatch(html, /data-thread-action="copy"/);
+      }
+    }
+  } finally {
+    await i18n.changeLanguage("en");
+  }
+});

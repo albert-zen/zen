@@ -4,6 +4,7 @@ import test from "node:test";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import {
   deriveInboxSections,
+  deriveSidebarThreads,
   derivePinnedThreads,
   deriveProjectGroups,
   moveSidebarProject,
@@ -411,3 +412,37 @@ function project(key: string, threadIds: string[]) {
     threadIds,
   };
 }
+
+test("Sidebar children require an explicit pin while ordinary Threads and forks remain visible", () => {
+  const parent = summary("parent", "idle", 10);
+  const child = { ...summary("child", "active", 30), parentThreadId: "parent" };
+  const nested = { ...summary("nested", "idle", 40), parentThreadId: "child" };
+  const fork = { ...summary("fork", "idle", 50), forkedFromThreadId: "child" };
+  const pluginThread = summary("plugin-created", "idle", 20);
+  const threads = [parent, child, nested, fork, pluginThread];
+  const ids = (pins: string[]) =>
+    deriveSidebarThreads(threads, pins).map((thread) => thread.threadId);
+  assert.deepEqual(ids([]), ["parent", "fork", "plugin-created"]);
+  assert.deepEqual(ids(["nested", "parent", "missing"]), [
+    "parent",
+    "nested",
+    "fork",
+    "plugin-created",
+  ]);
+  assert.deepEqual(ids(["child", "nested"]), [
+    "parent",
+    "child",
+    "nested",
+    "fork",
+    "plugin-created",
+  ]);
+  assert.deepEqual(ids(["nested"]), [
+    "parent",
+    "nested",
+    "fork",
+    "plugin-created",
+  ]);
+  assert.equal(child.parentThreadId, "parent");
+  assert.equal(nested.parentThreadId, "child");
+  assert.equal(threads.length, 5);
+});

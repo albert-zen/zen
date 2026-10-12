@@ -29,6 +29,7 @@ import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
 import {
   deriveInboxSections,
+  deriveSidebarThreads,
   deriveProjectGroups,
   EMPTY_SIDEBAR_ORDER,
   threadModelIdentity,
@@ -135,7 +136,7 @@ export function Sidebar({
   projects,
   sidebarOrder = EMPTY_SIDEBAR_ORDER,
   pinnedThreads,
-  threads,
+  threads: allThreads,
 }: SidebarProps) {
   useTranslation("shell");
   const [sidebarOrderError, setSidebarOrderError] = useState<string | null>(
@@ -200,6 +201,7 @@ export function Sidebar({
     () => new Set(pinnedThreads.map((thread) => thread.threadId)),
     [pinnedThreads],
   );
+  const threads = deriveSidebarThreads(allThreads, [...pinnedThreadIds]);
   const [pendingPinFocus, setPendingPinFocus] = useState<
     "pinned" | "list" | null
   >(null);
@@ -1618,7 +1620,7 @@ function ThreadRow({
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
   const [busyAction, setBusyAction] = useState<
-    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null
+    "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
   const [menuError, setMenuError] = useState<string | null>(null);
   const closeMenu = (restoreFocus = true) => {
@@ -1748,7 +1750,7 @@ function ThreadRow({
     </>
   );
   const runAction = async (
-    action: "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive",
+    action: "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive",
     operation: () => Promise<void>,
   ) => {
     setBusyAction(action);
@@ -1870,6 +1872,7 @@ function ThreadRow({
       </button>
       <ThreadItemMenu
         archived={thread.archived}
+        child={thread.parentThreadId !== undefined}
         busyAction={busyAction}
         error={menuError}
         hasActiveTurn={hasActiveTurn}
@@ -1885,8 +1888,8 @@ function ThreadRow({
           void runAction("archive", () => onChangeThreadLifecycle(thread))
         }
         onBeginRename={() => setRenaming(true)}
-        onCopy={() =>
-          void runAction("copy", () => onForkThread(thread.threadId))
+        onFork={() =>
+          void runAction("fork", () => onForkThread(thread.threadId))
         }
         onCancelRename={() => setRenaming(false)}
         onRequestClose={() => closeMenu()}
@@ -1911,6 +1914,7 @@ function ThreadRow({
 
 export function ThreadItemMenu({
   archived,
+  child = false,
   busyAction,
   error,
   hasActiveTurn,
@@ -1924,7 +1928,7 @@ export function ThreadItemMenu({
   renameDraft,
   onArchive,
   onBeginRename,
-  onCopy = () => undefined,
+  onFork = () => undefined,
   onCancelRename,
   onRequestClose,
   onDraftChange,
@@ -1933,8 +1937,9 @@ export function ThreadItemMenu({
   onUnarchive,
 }: {
   archived: boolean;
+  child?: boolean;
   busyAction:
-    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null;
+    "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null;
   error: string | null;
   hasActiveTurn: boolean;
   labelledBy?: string;
@@ -1947,7 +1952,7 @@ export function ThreadItemMenu({
   renameDraft: string;
   onArchive(): void;
   onBeginRename(): void;
-  onCopy?(): void;
+  onFork?(): void;
   onCancelRename(): void;
   onRequestClose?(): void;
   onDraftChange(value: string): void;
@@ -2054,17 +2059,17 @@ export function ThreadItemMenu({
             type="button"
             role="menuitem"
             tabIndex={-1}
-            data-thread-action="copy"
+            data-thread-action="fork"
             disabled={busy}
             title={i18n.t(
-              "shell:copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
+              "shell:forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
             )}
-            onClick={onCopy}
+            onClick={onFork}
           >
-            <Icon name="copy" />
-            {busyAction === "copy"
-              ? i18n.t("shell:copying")
-              : i18n.t("shell:copyThread")}
+            <Icon name="fork" />
+            {busyAction === "fork"
+              ? i18n.t("shell:forking")
+              : i18n.t("shell:forkThread")}
           </button>
           <button
             type="button"
@@ -2072,6 +2077,9 @@ export function ThreadItemMenu({
             tabIndex={-1}
             data-thread-action={pinned ? "unpin" : "pin"}
             disabled={busy}
+            title={
+              child ? i18n.t("shell:childSidebarVisibilityHint") : undefined
+            }
             onClick={onPin}
           >
             <Icon name={pinned ? "pin-off" : "pin"} />
@@ -2079,9 +2087,13 @@ export function ThreadItemMenu({
               ? i18n.t("shell:pinning")
               : busyAction === "unpin"
                 ? i18n.t("shell:unpinning")
-                : pinned
-                  ? i18n.t("shell:unpin")
-                  : i18n.t("shell:pin")}
+                : child
+                  ? pinned
+                    ? i18n.t("shell:removeFromSidebar")
+                    : i18n.t("shell:pinToSidebar")
+                  : pinned
+                    ? i18n.t("shell:unpin")
+                    : i18n.t("shell:pin")}
           </button>
           <button
             type="button"

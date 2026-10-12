@@ -35,6 +35,7 @@
   max-width: 240px;
   color: var(--color-status-danger);
   margin: 8px 0;
+  overflow-wrap: anywhere;
 }
 .thread-breadcrumb-ancestors {
   display: flex;
@@ -192,4 +193,85 @@
   outline: 2px solid var(--text-accent);
   outline-offset: 4px;
   border-radius: 3px;
+}
+
+/* Promotion is a distinct, always-visible action, including on touch screens. */
+.subagent-tree-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.subagent-tree-entry > .subagent-tree-row {
+  flex: 1 1 120px;
+  width: auto;
+  min-height: 36px;
+}
+.subagent-sidebar-action {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+.subagent-sidebar-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+}
+.subagent-sidebar-pin > svg {
+  flex-shrink: 0;
+}
+.subagent-sidebar-pin:hover {
+  background: var(--color-surface-hover);
+}
+.subagent-sidebar-pin:disabled {
+  opacity: 0.5;
+}
+.subagent-sidebar-pin:focus-visible,
+.subagent-create-button:focus-visible,
+.subagent-tree-row:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+.workspace-subagents-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+}
+.workspace-subagents-actions > button,
+.workspace-subagents-actions .subagent-create-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-surface-wash);
+  color: var(--color-text-secondary);
+  font: inherit;
+  text-align: left;
+}
+.workspace-subagents-actions > button:hover,
+.workspace-subagents-actions .subagent-create-button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.workspace-subagents-actions .subagent-create-error {
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .subagent-sidebar-pin,
+  .subagent-tree-row,
+  .subagent-create-button {
+    min-height: 44px;
+  }
 }

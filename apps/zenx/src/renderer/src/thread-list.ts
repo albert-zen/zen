@@ -42,6 +42,17 @@ export const EMPTY_SIDEBAR_ORDER: ZenXSidebarOrder = {
   threadIdsByProject: {},
 };
 
+/** Child ancestry stays canonical; the existing user Pin is an explicit promotion. */
+export function deriveSidebarThreads(
+  threads: readonly NativeThreadSummary[],
+  pinnedThreadIds: readonly string[],
+): NativeThreadSummary[] {
+  const pins = new Set(pinnedThreadIds);
+  return threads.filter(
+    (thread) => !thread.parentThreadId || pins.has(thread.threadId),
+  );
+}
+
 export function derivePinnedThreads(
   threads: readonly NativeThreadSummary[],
   pinnedThreadIds: readonly string[],

@@ -1,6 +1,13 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import {
@@ -11,6 +18,12 @@ import {
 import { Icon } from "./icons.js";
 import { threadTitle } from "./thread-list.js";
 import { useAppearance } from "./PluginProductPage.js";
+
+/** Host-owned UI preferences are intentionally outside the serializable plugin SDK. */
+export const ChildThreadSidebarContext = createContext<{
+  pinnedThreadIds: readonly string[];
+  changePinned(thread: NativeThreadSummary): Promise<void>;
+} | null>(null);
 
 type RelatedThread = NativeThreadSummary & { parentThreadId?: string };
 
@@ -121,20 +134,26 @@ function useRelatedThreads(sdk: PluginUiSurfaceProps["sdk"]) {
   };
 }
 
-function CreateSideChat({
-  sdk,
+export function CreateSideChat({
   parent,
+  active = true,
+  execute,
+  navigate,
   onCreated,
 }: {
-  sdk: PluginUiSurfaceProps["sdk"];
   parent: string;
-  onCreated(): void;
+  active?: boolean;
+  execute(input: {
+    parentThreadId: string;
+    mode: "side-chat";
+  }): Promise<unknown>;
+  navigate(route: string): void;
+  onCreated?(): void;
 }) {
   useTranslation("panels");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef(false);
-  const active = sdk.context.active !== false;
   const epoch = useRef(0);
   useLayoutEffect(() => {
     epoch.current += 1;
@@ -157,17 +176,15 @@ function CreateSideChat({
     setBusy(true);
     setError(null);
     try {
-      const result = (await sdk.commands.execute("create", {
+      const result = (await execute({
         parentThreadId: source,
         mode: "side-chat",
       })) as { thread?: { id?: string }; threadId?: string };
       const id = result.thread?.id ?? result.threadId;
       if (!id) throw new Error(i18n.t("panels:newConversationUnidentified"));
       if (mounted.current && epoch.current === requestEpoch) {
-        onCreated();
-        sdk.navigation.navigate(
-          `/threads/${encodeURIComponent(id)}?view=panel`,
-        );
+        onCreated?.();
+        navigate(`/threads/${encodeURIComponent(id)}?view=panel`);
       }
     } catch (cause) {
       if (mounted.current && epoch.current === requestEpoch)
@@ -268,27 +285,35 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
       <ul className="subagent-tree">
         {children.map((child) => (
           <li key={child.threadId}>
-            <button
-              type="button"
-              className="subagent-tree-row"
-              onClick={() =>
-                sdk.navigation.navigate(
-                  `/threads/${encodeURIComponent(child.threadId)}?view=panel`,
-                )
-              }
-            >
-              <Icon name="users" />
-              <span className="subagent-tree-title">{threadTitle(child)}</span>
-              <span className="subagent-tree-status">
-                {child.archived
-                  ? i18n.t("panels:archivedStatus")
-                  : child.status === "active"
-                    ? i18n.t("shell:working")
-                    : child.status === "systemError"
-                      ? i18n.t("panels:unavailable")
-                      : i18n.t("panels:idleStatus")}
-              </span>
-            </button>
+            <div className="subagent-tree-entry">
+              <button
+                type="button"
+                className="subagent-tree-row"
+                onClick={() =>
+                  sdk.navigation.navigate(
+                    `/threads/${encodeURIComponent(child.threadId)}?view=panel`,
+                  )
+                }
+              >
+                <Icon name="users" />
+                <span className="subagent-tree-title">
+                  {threadTitle(child)}
+                </span>
+                <span className="subagent-tree-status">
+                  {child.archived
+                    ? i18n.t("panels:archivedStatus")
+                    : child.status === "active"
+                      ? i18n.t("shell:working")
+                      : child.status === "systemError"
+                        ? i18n.t("panels:unavailable")
+                        : i18n.t("panels:idleStatus")}
+                </span>
+              </button>
+              <ChildThreadPin
+                thread={child}
+                active={sdk.context.active !== false}
+              />
+            </div>
             {visited.size < 32
               ? render(child.threadId, new Set([...visited, child.threadId]))
               : null}
@@ -307,8 +332,10 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
         <strong>{i18n.t("panels:subagents")}</strong>
         <CreateSideChat
           key={parent}
-          sdk={sdk}
           parent={parent}
+          active={sdk.context.active !== false}
+          execute={(input) => sdk.commands.execute("create", input)}
+          navigate={sdk.navigation.navigate}
           onCreated={refresh}
         />
       </header>
@@ -334,6 +361,77 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
         </label>
       ) : null}
     </section>
+  );
+}
+
+function ChildThreadPin({
+  thread,
+  active,
+}: {
+  thread: NativeThreadSummary;
+  active: boolean;
+}) {
+  const sidebar = useContext(ChildThreadSidebarContext);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inflight = useRef(false);
+  const mounted = useRef(true);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const epoch = useRef(0);
+  useLayoutEffect(() => {
+    epoch.current += 1;
+    setError(null);
+    return () => {
+      epoch.current += 1;
+    };
+  }, [thread.threadId, active]);
+  if (!sidebar || thread.archived) return null;
+  const pinned = sidebar.pinnedThreadIds.includes(thread.threadId);
+  const label = i18n.t(
+    pinned ? "shell:removeFromSidebar" : "shell:pinToSidebar",
+  );
+  const change = async () => {
+    if (inflight.current || !active) return;
+    const requestEpoch = epoch.current;
+    inflight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await sidebar.changePinned(thread);
+    } catch (cause) {
+      if (epoch.current === requestEpoch) setError(message(cause));
+    } finally {
+      inflight.current = false;
+      // The row stays mounted when its panel hides; an old completion only
+      // releases its busy affordance, never changes selection or visibility.
+      if (mounted.current) setBusy(false);
+    }
+  };
+  return (
+    <div className="subagent-sidebar-action">
+      <button
+        type="button"
+        className="subagent-sidebar-pin"
+        aria-label={`${label}: ${threadTitle(thread)}`}
+        aria-pressed={pinned}
+        title={i18n.t("shell:childSidebarVisibilityHint")}
+        disabled={busy || !active}
+        onClick={() => void change()}
+      >
+        <Icon name={pinned ? "pin-off" : "pin"} />
+        <span>{label}</span>
+      </button>
+      {error ? (
+        <p className="subagent-create-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

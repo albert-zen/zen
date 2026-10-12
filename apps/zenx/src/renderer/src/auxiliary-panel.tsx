@@ -22,6 +22,7 @@ import {
 import { WorkspaceFilesPanel } from "./workspace-files-panel.js";
 import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
+import { CreateSideChat } from "./subagents-ui.js";
 import { messageFilePath } from "./message-file-path.js";
 
 interface ContentTab {
@@ -830,18 +831,42 @@ export function AuxiliaryPanel({
                       </span>
                     </button>
                   ) : null}
-                  {panels.map((panel) => (
-                    <button
-                      type="button"
-                      key={panel.key}
-                      onClick={() => void add(`plugin:${panel.key}`)}
-                    >
-                      <Icon name="layers" />
-                      <span>
-                        <strong>{panel.title}</strong>
-                      </span>
-                    </button>
-                  ))}
+                  {panels.map((panel) => {
+                    const entry = (
+                      <button
+                        type="button"
+                        onClick={() => void add(`plugin:${panel.key}`)}
+                      >
+                        <Icon name="layers" />
+                        <span>
+                          <strong>{panel.title}</strong>
+                        </span>
+                      </button>
+                    );
+                    return panel.pluginId === "zenx-subagents" ? (
+                      <div
+                        className="workspace-subagents-actions"
+                        key={panel.key}
+                      >
+                        {entry}
+                        <CreateSideChat
+                          key={threadId}
+                          parent={threadId}
+                          active={open === true}
+                          execute={(input) =>
+                            window.zenx.plugins.executeCommand(
+                              panel.pluginId,
+                              "create",
+                              input,
+                            )
+                          }
+                          navigate={(route) => navigate?.(route)}
+                        />
+                      </div>
+                    ) : (
+                      <React.Fragment key={panel.key}>{entry}</React.Fragment>
+                    );
+                  })}
                 </>
               ) : null}
             </div>

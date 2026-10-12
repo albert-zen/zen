@@ -14,6 +14,7 @@ import {
   createPluginUiRegistry,
 } from "../src/renderer/src/plugin-ui-host.js";
 import {
+  ChildThreadSidebarContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
   registerSubagentsUi,
@@ -65,6 +66,7 @@ async function fixture(
   execute: (call: CommandCall) => Promise<unknown> = async () => ({
     threads: [],
   }),
+  sidebar?: React.ContextType<typeof ChildThreadSidebarContext>,
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
@@ -116,35 +118,39 @@ async function fixture(
   ) => {
     await act(async () => {
       root.render(
-        surface === "header"
-          ? React.createElement(PluginThreadHeaders, {
-              snapshot,
-              threadId: parent,
-              threads,
-              navigate,
-              registry,
-            })
-          : surface === "breadcrumb"
-            ? React.createElement(ThreadBreadcrumbAncestors, {
+        React.createElement(
+          ChildThreadSidebarContext.Provider,
+          { value: sidebar ?? null },
+          surface === "header"
+            ? React.createElement(PluginThreadHeaders, {
+                snapshot,
                 threadId: parent,
                 threads,
                 navigate,
-              })
-            : React.createElement(GenericPluginUiHost, {
                 registry,
-                snapshot,
-                pluginId: "zenx-subagents",
-                surfaceId: "subagents-panel",
-                context: {
+              })
+            : surface === "breadcrumb"
+              ? React.createElement(ThreadBreadcrumbAncestors, {
                   threadId: parent,
                   threads,
-                  ...(active === undefined ? {} : { active }),
-                },
-                theme: "light",
-                navigate,
-                executeCommand,
-                readHandle,
-              }),
+                  navigate,
+                })
+              : React.createElement(GenericPluginUiHost, {
+                  registry,
+                  snapshot,
+                  pluginId: "zenx-subagents",
+                  surfaceId: "subagents-panel",
+                  context: {
+                    threadId: parent,
+                    threads,
+                    ...(active === undefined ? {} : { active }),
+                  },
+                  theme: "light",
+                  navigate,
+                  executeCommand,
+                  readHandle,
+                }),
+        ),
       );
     });
   };
@@ -458,5 +464,89 @@ test("a pending Side chat creation cannot navigate after its panel hides, even i
     } finally {
       await f.close();
     }
+  }
+});
+
+test("hidden children expose a separate accessible Pin action and demote without navigating", async () => {
+  const saved: string[][] = [];
+  const sidebar = {
+    pinnedThreadIds: ["existing-b", "existing-a"],
+    changePinned: async (thread: NativeThreadSummary) => {
+      sidebar.pinnedThreadIds = sidebar.pinnedThreadIds.includes(
+        thread.threadId,
+      )
+        ? sidebar.pinnedThreadIds.filter((id) => id !== thread.threadId)
+        : [thread.threadId, ...sidebar.pinnedThreadIds];
+      saved.push([...sidebar.pinnedThreadIds]);
+    },
+  };
+  const f = await fixture(undefined, sidebar);
+  const child = summary("child", "parent", { name: "Research" });
+  try {
+    await f.render("parent", "panel", [child]);
+    const promote = f.button("Pin to sidebar: Research");
+    assert.equal(promote.closest(".subagent-tree-row"), null);
+    assert.equal(promote.getAttribute("aria-pressed"), "false");
+    promote.focus();
+    assert.equal(f.dom.window.document.activeElement, promote);
+    await f.click(promote);
+    await f.render("parent", "panel", [child]);
+    const demote = f.button("Remove from sidebar: Research");
+    assert.equal(demote.getAttribute("aria-pressed"), "true");
+    await f.click(demote);
+    await f.render("parent", "panel", [child]);
+    assert.ok(f.button("Pin to sidebar: Research"));
+    assert.deepEqual(saved, [
+      ["child", "existing-b", "existing-a"],
+      ["existing-b", "existing-a"],
+    ]);
+    assert.deepEqual(f.routes, []);
+    assert.equal(child.parentThreadId, "parent");
+    await f.click(
+      f.dom.window.document.querySelector<HTMLButtonElement>(
+        ".subagent-tree-row",
+      )!,
+    );
+    assert.deepEqual(f.routes, ["/threads/child?view=panel"]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("pin failure preserves the current preference and can be retried without duplicate requests", async () => {
+  let reject!: (cause: Error) => void;
+  let attempts = 0;
+  const sidebar = {
+    pinnedThreadIds: ["other"],
+    changePinned: async () => {
+      attempts++;
+      if (attempts === 1)
+        await new Promise<void>((_resolve, fail) => {
+          reject = fail;
+        });
+    },
+  };
+  const f = await fixture(undefined, sidebar);
+  try {
+    await f.render("parent", "panel", [summary("child", "parent")]);
+    const pin = f.button("Pin to sidebar: child");
+    await act(async () => {
+      pin.click();
+      pin.click();
+    });
+    assert.equal(attempts, 1);
+    assert.equal(pin.disabled, true);
+    await act(async () => reject(new Error("Could not save pins")));
+    assert.match(
+      f.dom.window.document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Could not save pins/,
+    );
+    assert.deepEqual(sidebar.pinnedThreadIds, ["other"]);
+    assert.equal(pin.disabled, false);
+    await f.click(pin);
+    assert.equal(attempts, 2);
+    assert.deepEqual(f.routes, []);
+  } finally {
+    await f.close();
   }
 });

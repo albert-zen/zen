@@ -1,4 +1,8 @@
 export const en = {
+  pinToSidebar: "Pin to sidebar",
+  removeFromSidebar: "Remove from sidebar",
+  childSidebarVisibilityHint:
+    "Pin to show in the sidebar. Removing keeps this conversation in its parent’s Subagents tab.",
   approvalQuestionOnce: "Allow this action?",
   approvalQuestionCapability: "Allow tool access?",
   approvalAllowAccess: "Allow access",
@@ -172,13 +176,13 @@ export const en = {
   conversationUnavailable: "Conversation unavailable",
   conversationsProjectsAndThreads: "Conversations, projects and threads",
   copied: "Copied",
-  copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
-    "Copies through the latest complete Turn and uses the same working directory.",
+  forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
+    "Forks through the latest complete Turn and uses the same working directory.",
   copy: "Copy",
   copyAssistantMessage: "Copy assistant message",
-  copyThread: "Copy thread",
+  forkThread: "Fork",
   copyUserMessage: "Copy user message",
-  copying: "Copying…",
+  forking: "Forking…",
   couldNotCopySelectTheSummaryTextToCopyIt:
     "Could not copy. Select the summary text to copy it.",
   couldNotOpenConversation: "Could not open conversation",
@@ -618,6 +622,10 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  pinToSidebar: "置顶到侧栏",
+  removeFromSidebar: "从侧栏移回",
+  childSidebarVisibilityHint:
+    "置顶后显示在侧栏；移回后仍保留在所属会话的 Subagents 标签页中。",
   approvalQuestionOnce: "允许这次操作？",
   approvalQuestionCapability: "允许工具访问？",
   approvalAllowAccess: "允许访问",
@@ -781,13 +789,13 @@ export const zhCN = {
   conversationUnavailable: "会话不可用",
   conversationsProjectsAndThreads: "会话与项目",
   copied: "已复制",
-  copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
-    "复制到最近完成的轮次，并使用相同的工作目录。",
+  forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
+    "从最近完成的轮次分叉，并使用相同的工作目录。",
   copy: "复制",
   copyAssistantMessage: "复制助手消息",
-  copyThread: "复制会话",
+  forkThread: "分叉",
   copyUserMessage: "复制用户消息",
-  copying: "正在复制…",
+  forking: "正在分叉…",
   couldNotCopySelectTheSummaryTextToCopyIt:
     "复制失败。请选择摘要文字进行复制。",
   couldNotOpenConversation: "无法打开会话",

@@ -282,6 +282,7 @@
   解析结果投影为同一套组件消费的根级语义色彩 token；它不进入 Core、Thread、Project、host
   restart 或 canonical ItemList。不启用原生窗口材质；标题栏、品牌区、侧栏与窄屏抽屉共享实色侧栏背景，
   旧透明偏好被忽略，其余配色选择保持有效。
+- **ZenXChildSidebarVisibility** — Renderer derives child identity only from canonical `parentThreadId`; children stay in their parent’s Subagents directory by default. The existing Host-profile Sidebar Pin is the sole persisted promotion preference, and unpinning a child demotes it without changing ancestry, Project ownership, order preferences, or execution. Trusted Subagents UI uses the shell’s same serialized Pin action; the workspace chooser shares its guarded side-chat creation control.
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。

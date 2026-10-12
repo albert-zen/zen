@@ -4778,3 +4778,134 @@ test("composer default save cannot roll back a newer settings notification", asy
     await unmountApp(harness);
   }
 });
+
+test("child visibility uses saved pins across remounts and demotion preserves the selected child and parent navigation", async () => {
+  const { ZenXPluginCatalog } =
+    await import("../src/main/capabilities/plugin-catalog.js");
+  const { subagentsManifest } =
+    await import("../../../packages/zenx-subagents-plugin/src/manifest.js");
+  const catalog = new ZenXPluginCatalog({
+    load: async () => ({ disabled: [], uninstalled: [], packages: {} }),
+    save: async () => {},
+  });
+  await catalog.initialize();
+  await catalog.install(
+    { manifest: subagentsManifest, invoke: async () => null },
+    "bundled",
+  );
+  const parent = summary(false, "thread-1", "Parent");
+  const child = {
+    ...summary(false, "child", "Child"),
+    parentThreadId: "thread-1",
+  };
+  const existingChild = {
+    ...summary(false, "existing-child", "Existing child"),
+    parentThreadId: "thread-1",
+  };
+  const other = summary(false, "other", "Other");
+  const threads = [parent, child, existingChild, other];
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = threads.map((thread) => thread.threadId);
+  let pins = ["existing-child", "other"];
+  const writes: string[][] = [];
+  const resumes: string[] = [];
+  const mount = () =>
+    mountApp(projects, {
+      initialPinnedThreadIds: pins,
+      threads: async (archived) => (archived ? [] : threads),
+      onPinnedThreadIds: (ids) => {
+        pins = [...ids];
+        writes.push([...ids]);
+      },
+      plugins: {
+        get: async () => catalog.pluginSnapshot(),
+        executeCommand: async (_plugin, command) =>
+          command === "list" ? { threads } : null,
+        readHandle: async () => null,
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const id = (params as { threadId: string }).threadId;
+          resumes.push(id);
+          return started({ ...liveThread(), id }, "/work/zen");
+        }
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+  let harness = await mount();
+  const row = (id: string) =>
+    document.querySelector<HTMLButtonElement>(
+      `.sidebar [data-thread-id="${id}"] > .thread-row`,
+    );
+  try {
+    assert.equal(row("child"), null);
+    assert.ok(row("existing-child"), "pre-existing child pins remain visible");
+    assert.ok(row("other"));
+    assert.deepEqual(writes, [], "startup does not overwrite user pins");
+    await act(async () => row("thread-1")!.click());
+    const toggle = await waitFor(() =>
+      document.getElementById("thread-browser-toggle"),
+    );
+    await act(async () => toggle.click());
+    const directory = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".workspace-subagents-actions > button",
+      ),
+    );
+    await act(async () => directory.click());
+    const promote = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Pin to sidebar: Child"]',
+      ),
+    );
+    assert.equal(document.querySelectorAll(".subagent-tree-row").length, 2);
+    const resumesBeforePin = [...resumes];
+    await act(async () => promote.click());
+    await waitFor(() => row("child"));
+    assert.deepEqual(pins, ["child", "existing-child", "other"]);
+    assert.deepEqual(
+      resumes,
+      resumesBeforePin,
+      "pinning never navigates or resumes another Thread",
+    );
+    assert.ok(row("thread-1")?.classList.contains("selected"));
+
+    await unmountApp(harness);
+    harness = await mount();
+    assert.ok(
+      row("child"),
+      "confirmed preferences survive restarting the renderer",
+    );
+    assert.deepEqual(writes, [["child", "existing-child", "other"]]);
+    await act(async () => row("child")!.click());
+    await waitFor(() => row("child")?.classList.contains("selected"));
+    const resumedChild = [...resumes];
+    await act(async () => threadMenuButton("Child").click());
+    await act(async () => exactButton("Remove from sidebar")!.click());
+    await waitFor(() => row("child") === null);
+    assert.deepEqual(pins, ["existing-child", "other"]);
+    assert.deepEqual(resumes, resumedChild);
+    assert.match(
+      document.querySelector(".thread-title-line")?.textContent ?? "",
+      /Child/,
+    );
+    const parentCrumb = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".thread-breadcrumb-ancestors button",
+      ),
+    );
+    assert.equal(parentCrumb.textContent, "Parent");
+    await act(async () => parentCrumb.click());
+    await waitFor(() => row("thread-1")?.classList.contains("selected"));
+    assert.equal(child.parentThreadId, "thread-1");
+    assert.deepEqual(projects.projects[0]!.threadIds, [
+      "thread-1",
+      "child",
+      "existing-child",
+      "other",
+    ]);
+  } finally {
+    await unmountApp(harness);
+    await catalog.close();
+  }
+});

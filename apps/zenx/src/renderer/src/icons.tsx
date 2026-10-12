@@ -25,6 +25,7 @@ export type IconName =
   | "chevron-right"
   | "compose"
   | "copy"
+  | "fork"
   | "folder"
   | "file"
   | "inbox"
@@ -149,6 +150,14 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M7.3 3H3.4C2.6 3 2 3.6 2 4.4v8.2c0 .8.6 1.4 1.4 1.4h8.2c.8 0 1.4-.6 1.4-1.4V8.7" />
       <path d="M12.6 1.9a1.6 1.6 0 0 1 2.3 2.3L9 10.1l-3 .7.7-3 5.9-5.9Z" />
+    </>
+  ),
+  fork: (
+    <>
+      <circle cx="4" cy="3" r="1.5" />
+      <circle cx="12" cy="3" r="1.5" />
+      <circle cx="4" cy="13" r="1.5" />
+      <path d="M4 4.5v7M12 4.5v1a3 3 0 0 1-3 3H4" />
     </>
   ),
   copy: (

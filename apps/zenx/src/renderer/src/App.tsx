@@ -148,6 +148,7 @@ import {
   type QueueEditStore,
 } from "./queue-edit-state.js";
 import {
+  ChildThreadSidebarContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
 } from "./subagents-ui.js";
@@ -2467,7 +2468,7 @@ export function App() {
     />
   );
 
-  return (
+  const shell = (
     <div
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
       style={
@@ -3100,6 +3101,13 @@ export function App() {
         />
       ) : null}
     </div>
+  );
+  return (
+    <ChildThreadSidebarContext.Provider
+      value={{ pinnedThreadIds, changePinned: changeThreadPinned }}
+    >
+      {shell}
+    </ChildThreadSidebarContext.Provider>
   );
 }
 
