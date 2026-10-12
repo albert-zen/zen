@@ -1782,7 +1782,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (pendingRef.current[roomId]?.id === entry.id)
       setRoomPending(roomId, null);
     delete intentRevisions.current[entry.id];
-    // Confirmed receipts live on the message, not in the persistent chat rail.
+    // Successful sends settle silently; only failures and uncertainty need a rail.
     setFeedback((current) => ({ ...current, [roomId]: "" }));
     await sdk.commands
       .execute("ack-operation", { roomId, operationId: entry.id })
@@ -2857,36 +2857,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                         reactToMessage(room.id, message.id, emoji)
                       }
                     />
-                    {message.kind === "human" &&
-                    (deliveries[message.id]?.receipt === "delivered" ||
-                      deliveries[message.id]?.state === "saved" ||
-                      deliveries[message.id]?.state === "unknown") ? (
-                      <small
-                        className="room-delivery"
-                        title={
-                          deliveries[message.id]?.readers
-                            ?.map((reader) =>
-                              i18n.t("panels:roomReplyStatus", {
-                                name: reader.name,
-                                status:
-                                  reader.state === "read"
-                                    ? i18n.t("panels:read")
-                                    : reader.state === "unavailable"
-                                      ? i18n.t("panels:readStatusUnavailable")
-                                      : i18n.t("panels:readNotConfirmed"),
-                              }),
-                            )
-                            .join(" · ") || i18n.t("panels:readNotConfirmed")
-                        }
-                      >
-                        {i18n.t("panels:roomDelivered")}
-                        {deliveries[message.id]?.readers?.some(
-                          (reader) => reader.state === "read",
-                        )
-                          ? ` · ${i18n.t("panels:roomReadCount", { count: deliveries[message.id]!.readers!.filter((reader) => reader.state === "read").length })}`
-                          : ""}
-                      </small>
-                    ) : null}
                   </article>
                 );
               })}

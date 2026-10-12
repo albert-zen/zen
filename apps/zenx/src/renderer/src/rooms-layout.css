@@ -417,9 +417,6 @@
     padding-inline-end: 0;
   }
 }
-.rooms-chat-feed .room-message[data-kind="human"] .room-delivery {
-  text-align: right;
-}
 .rooms-chat-dialog .rooms-chat-danger {
   align-self: flex-start;
   border: 0;
