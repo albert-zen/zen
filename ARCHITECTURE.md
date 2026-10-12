@@ -1159,3 +1159,5 @@ Room quotes are immutable bounded snapshots of a same-Room message captured with
 ### IMZenX PAW Room routes
 
 IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
+
+ZenX 的离线 package size report 只读投影现有 Provider assembly 目录与 provider-lock 中的归档 pin，区分文件逻辑大小、文件系统分配块、symlink 和已验证缓存归档，不决定安装、可用性、兼容性或默认分发内容。
