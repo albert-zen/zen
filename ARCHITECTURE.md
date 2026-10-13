@@ -400,6 +400,7 @@
   fence 校验的 viewport compositor JPEG。无 document/世代绑定的 screencast 事件仅 ack 并触发新采集，绝不发布其像素；
   采集保持单次串行，事件触发间隔至少 100ms，静默时每 500ms 采集；收到真实帧后才标记 Live。
   此投影不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
+- **ZenXBrowserExternalOpening** — 人工 Browser 快捷入口由可信窗口当前观察订阅绑定精确 Thread、target 与 backend generation；Host 临时读取该页面的实际 HTTP(S) URL 后交给系统浏览器，异步前后复核选择与资源身份。完整 query/hash 只在 Host 的读取/打开调用中流转，不加入工具摘要、renderer 回执或持久日志，现有工具 URL 脱敏保持不变。Electron/Workspace 的人工观察 loading 从精确 WebContents 的实时加载事件更新，订阅退役移除事件监听；历史工具 summary 不充当持续的加载状态权威。
 - **ZenXBrowserThreadObservation** — Browser 插件沿可信工具上下文接收 threadId，在 Host 内将每线程的逻辑 session 隔离为独立 provider session，并把目标集合、最近观察截图和定向实时订阅投影到线程右栏；这些瞬时资源随 provider 退役失效，不从模型参数或当前选中线程推断归属，不增加会话历史权威。
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
   单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle

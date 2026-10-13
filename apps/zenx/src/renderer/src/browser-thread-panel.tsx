@@ -7,6 +7,7 @@ import type {
   BrowserThreadEvent,
 } from "../../main/capabilities/browser-thread-observation.js";
 import { Icon } from "./icons.js";
+import { BrowserExternalOpen } from "./browser-external-open.js";
 
 const selections = new Map<string, string>();
 export function BrowserThreadPanel({
@@ -46,6 +47,10 @@ export function BrowserThreadPanel({
           ),
         })
       : browserStatusMessage(status.message);
+  const [externalBusy, setExternalBusy] = useState(false);
+  const [externalError, setExternalError] = useState("");
+  const externalGeneration = useRef(0);
+  const externalPending = useRef(false);
   const [hasFrame, setHasFrame] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(
@@ -65,15 +70,29 @@ export function BrowserThreadPanel({
     let active = true;
     let sequence = 0;
     let live = false;
+    let currentTarget: string | undefined;
+    const resetExternal = () => {
+      externalGeneration.current++;
+      externalPending.current = false;
+      setExternalBusy(false);
+      setExternalError("");
+    };
+    resetExternal();
     const clear = () => {
       imageRef.current?.removeAttribute("src");
       setHasFrame(false);
       sequence = 0;
     };
     clear();
+    // A new subscription must publish its own target before external opening.
+    setTargets([]);
+    setSelectedId(undefined);
+    setStatus({ status: "idle", message: "" });
     const receive = (event: BrowserThreadEvent) => {
       if (!active) return;
       if (event.type === "targets") {
+        if (currentTarget !== event.selectedId) resetExternal();
+        currentTarget = event.selectedId;
         setTargets(event.targets);
         setSelectedId(event.selectedId);
         if (
@@ -121,6 +140,7 @@ export function BrowserThreadPanel({
     );
     return () => {
       active = false;
+      externalGeneration.current++;
       stop();
       imageRef.current?.removeAttribute("src");
     };
@@ -147,6 +167,29 @@ export function BrowserThreadPanel({
   }, [open, expanded]);
   if (!open) return null;
   const selected = targets.find((target) => target.id === selectedId);
+  const openExternal = async () => {
+    if (
+      !selected ||
+      selected.canOpenExternally !== true ||
+      externalPending.current
+    )
+      return;
+    externalPending.current = true;
+    setExternalBusy(true);
+    setExternalError("");
+    const generation = externalGeneration.current;
+    try {
+      await window.zenx.browserObservation.openExternal(threadId, selected.id);
+    } catch {
+      if (generation === externalGeneration.current)
+        setExternalError(i18n.t("panels:openCurrentPageFailed"));
+    } finally {
+      if (generation === externalGeneration.current) {
+        externalPending.current = false;
+        setExternalBusy(false);
+      }
+    }
+  };
   const choose = (value: string) => {
     if (value) selections.set(threadId, value);
     else selections.delete(threadId);
@@ -274,8 +317,27 @@ export function BrowserThreadPanel({
             {i18n.t("panels:followAgent")}
           </button>
         ) : null}
-        {selected ? <span title={selected.url}>{selected.url}</span> : null}
+        <div className="browser-panel-location">
+          <span title={selected?.url}>{selected?.url}</span>
+          <BrowserExternalOpen
+            url={selected?.url}
+            onOpen={() => void openExternal()}
+            disabled={
+              selected?.canOpenExternally !== true ||
+              externalBusy ||
+              selected?.loading ||
+              status.status === "connecting" ||
+              status.status === "failed" ||
+              status.status === "unavailable"
+            }
+          />
+        </div>
       </div>
+      {externalError ? (
+        <p role="alert" className="browser-ui-error">
+          {externalError}
+        </p>
+      ) : null}
       <div className="browser-live-page">
         <header
           className="browser-live-toolbar"

@@ -403,6 +403,32 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     return entry.stop;
   }
 
+  async readCurrentUrl(sessionId: string, tabId: string): Promise<string> {
+    const { session, tab } = this.#sessionTab(sessionId, tabId);
+    const assertCurrent = () => {
+      if (this.#backendCloseQueued || session.closeQueued)
+        throw new Error("User browser session is closing");
+      this.#assertTabCurrent(session, tabId, tab);
+      this.#transferClientClosureProblem(session, [tabId]);
+      this.#throwIfSessionTainted(session, "URL read");
+    };
+    assertCurrent();
+    return await this.#startSessionOperation(session, async () => {
+      assertCurrent();
+      const documentVersion = tab.documentVersion;
+      const targets = await this.#client.listTargets();
+      assertCurrent();
+      if (tab.documentVersion !== documentVersion)
+        throw new Error("User browser document changed during URL read");
+      const target = targets.find(
+        (candidate) =>
+          candidate.targetId === tabId && candidate.type === "page",
+      );
+      if (target === undefined) throw new Error("User browser tab was closed");
+      return target.url;
+    });
+  }
+
   async listTabs(
     sessionId: string,
     signal?: AbortSignal,

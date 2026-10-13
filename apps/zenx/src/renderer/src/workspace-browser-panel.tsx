@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { Icon } from "./icons.js";
+import { BrowserExternalOpen } from "./browser-external-open.js";
 import React, { useEffect, useId, useRef, useState } from "react";
 import type {
   WorkspaceBrowserCommand,
@@ -274,6 +275,10 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
               <Icon name="arrow-right" />
             </button>
           </div>
+          <BrowserExternalOpen
+            url={active.url}
+            disabled={!open || busy || active.loading}
+          />
         </form>
         {active.error ? (
           <p role="alert" className="browser-ui-error">

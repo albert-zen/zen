@@ -343,6 +343,32 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     return Array.isArray(result) ? result.map(project) : project(result);
   }
 
+  async readTargetUrl(threadId: string, targetId: string): Promise<string> {
+    const backendId = targetId.split(":")[0]!;
+    const capability = this.#packages.get(backendId);
+    const current = () =>
+      !this.#closed &&
+      this.#packages.get(backendId) === capability &&
+      (this.#source === undefined ||
+        !backendId.startsWith("connected/") ||
+        this.#source
+          .connections()
+          .some(
+            (connection) =>
+              connection.state === "connected" &&
+              backendId ===
+                `connected/${connection.connectionId}/${connection.generation}`,
+          ));
+    if (!capability || !current())
+      throw new Error("Browser connection is unavailable");
+    const url = await capability.readTargetUrl(
+      threadId,
+      unqualify(backendId, targetId, "targetId"),
+    );
+    if (!current()) throw new Error("Browser connection is no longer current");
+    return url;
+  }
+
   observeThread(
     request: BrowserThreadRequest,
     listener: BrowserThreadListener,

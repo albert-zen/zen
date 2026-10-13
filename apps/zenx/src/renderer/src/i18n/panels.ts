@@ -528,6 +528,9 @@ export const en = {
   forward: "Forward",
   reloadPage: "Reload page",
   browserAddress: "Browser address",
+  openCurrentPageExternally: "Open current page in external browser",
+  openCurrentPageFailed:
+    "Could not open the current page. Check that it is still connected, then try again.",
   enterAUrl: "Enter a URL",
   go: "Go",
   interactiveWebPage: "Interactive web page",
@@ -1285,6 +1288,8 @@ export const zhCN = {
   forward: "前进",
   reloadPage: "重新加载页面",
   browserAddress: "浏览器地址",
+  openCurrentPageExternally: "在外部浏览器打开当前页面",
+  openCurrentPageFailed: "无法打开当前页面。请确认页面仍已连接，再重试。",
   enterAUrl: "输入网址",
   go: "前往",
   interactiveWebPage: "交互式网页",
