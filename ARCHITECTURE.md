@@ -212,6 +212,17 @@
 - **ComposerSubmission** — 接入端一次待确认的用户提交；只在 UI 内保留草稿、
   发送意图和稳定 `clientUserMessageId`，是否已进入会话仍完全由 App Server 的
   canonical Item 投影决定。
+- **Sidebar removal continuity** — The sidebar owns a transient DOM viewport/focus snapshot for an explicit archive action, keeps a surviving visible row anchored without animation, and moves focus to the nearest remaining row without scrolling or changing the selected conversation.
+- **Recoverable Thread deletion** — Archived, idle Threads may append a canonical
+  `thread_deleted` control Item under the existing mutation lock. The current
+  tombstone fences ordinary reads, lists and all execution; a native Deleted
+  summary lists only recovery metadata, and exact-tombstone restoration appends
+  `thread_restored` after preserving Archived status. Delete is fenced by the
+  observed last Item, and restore by the deletion Item, so late retries cannot
+  re-delete a restored Thread. These controls never enter model context, never
+  cascade to children, and never remove journals, workspace files or attachment
+  blobs. Unreplayable journals cannot be deleted because idle state is unknown.
+  Lifecycle notifications and summary caches remain disposable projections.
 - **ThreadMetadataStore** — ZAS 按 threadId 持久化名称与归档状态等产品元数据的
   append-only 外部索引；归档只影响标准 `thread/list.archived` 产品筛选与生命周期通知，
   它由 App Server 投影但不进入 Agent 上下文或

@@ -153,6 +153,9 @@ export interface ClientRequestParams {
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
   "zen/thread/read": { threadId: string };
+  "zen/thread/delete": { threadId: string; expectedLastItemId: string };
+  "zen/thread/deleted/list": Record<string, never>;
+  "zen/thread/restore": { threadId: string; deletionItemId: string };
   "zen/thread/create-child": CreateChildThreadInput;
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
@@ -239,6 +242,11 @@ export interface ClientRequestResults {
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
   "zen/thread/read": { thread: ThreadSnapshot };
+  "zen/thread/delete": { threadId: string; deletionItemId: string };
+  "zen/thread/deleted/list": {
+    data: import("../../../../src/protocol/native/wire.js").DeletedThreadSummary[];
+  };
+  "zen/thread/restore": { thread: ThreadSnapshot };
   "zen/thread/create-child": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {

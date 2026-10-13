@@ -864,7 +864,8 @@ export class CodexConnection {
     if (
       event.type === "model_catalog_updated" ||
       event.type === "queue_failed" ||
-      event.type === "queue_admission_started"
+      event.type === "queue_admission_started" ||
+      event.type === "thread_deleted_updated"
     )
       return;
     if (event.type === "thread_started") {
@@ -1311,6 +1312,7 @@ export class CodexConnection {
 
   #sendErrorNotification(error: unknown, event: AppServerEvent): void {
     if (
+      event.type === "thread_deleted_updated" ||
       event.type === "thread_started" ||
       event.type === "thread_name_updated" ||
       event.type === "thread_settings_updated" ||
@@ -1376,6 +1378,8 @@ function eventRepresentedInSnapshot(
   snapshot: ThreadSnapshot,
 ): boolean {
   switch (event.type) {
+    case "thread_deleted_updated":
+      return true; // A readable snapshot supersedes earlier delete/restore events.
     case "queue_failed":
     case "queue_admission_started":
       return true;
