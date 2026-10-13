@@ -1301,13 +1301,14 @@ test("IM continuation defaults independently and shows saved versus active queue
     configuration: saved,
     activeConfiguration: active,
   }));
+  const currentDraft = () => harness.drafts.current.imzenx;
   try {
     const selector = () =>
       document.querySelector<HTMLButtonElement>(
         'button[aria-label="Ordinary IM input"]',
       );
     assert.equal(selector()?.dataset.value, "steer");
-    assert.equal(harness.drafts.current.imzenx?.dirty, false);
+    assert.equal(currentDraft()?.dirty, false);
     assert.match(
       document.body.textContent ?? "",
       /Independent from Composer, Room and Trigger settings/,
@@ -1323,7 +1324,7 @@ test("IM continuation defaults independently and shows saved versus active queue
     saved = { ...prior, inputContinuation: "queue" };
     await harness.render();
     assert.equal(selector()?.dataset.value, "queue");
-    assert.equal(harness.drafts.current.imzenx?.dirty, false);
+    assert.equal(currentDraft()?.dirty, false);
     assert.match(
       document.body.textContent ?? "",
       /current connection still uses the previous runtime configuration/,
