@@ -62,8 +62,18 @@ try {
       target.windowTitle === expectedTarget.windowTitle,
   );
   if (discovered.truncated || fixtureWindows.length !== 1) {
+    const sameProcess = await backend.listWindows(
+      String(expectedTarget.pid),
+      controller.signal,
+    );
     throw new Error(
-      "ZenX discovery did not uniquely identify the fixture window",
+      "ZenX discovery did not uniquely identify the fixture window: " +
+        JSON.stringify({
+          expected: expectedTarget,
+          candidates: sameProcess.windows
+            .filter(({ target }) => target.pid === expectedTarget.pid)
+            .map(({ target }) => target),
+        }),
     );
   }
   const target = fixtureWindows[0]!.target;

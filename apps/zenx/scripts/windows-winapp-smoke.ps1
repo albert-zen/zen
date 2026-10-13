@@ -91,7 +91,10 @@ $guardEditor = New-Object System.Windows.Forms.TextBox
 $guardEditor.Text = "User input stays here"
 $guardEditor.Dock = "Fill"
 $guard.Controls.Add($guardEditor)
-$form.Show(); $guard.Show(); $guard.Activate(); $guardEditor.Focus()
+# The hidden helper startup state can suppress the first ShowWindow call.
+# Fully show the target before the guard takes focus and sampling starts.
+$form.Show(); $form.Hide(); $form.Show()
+$guard.Show(); $guard.Activate(); $guardEditor.Focus()
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 25
 $script:monitorStarted = $false
