@@ -360,9 +360,10 @@ export interface ServerRequestParams {
     itemId: string;
     startedAtMs: number;
     environmentId: null;
-    reason: null;
+    reason: string | null;
     command: string;
     approvalScope?: "once";
+    approvalTarget?: Readonly<{ key: string; label: string }>;
     toolName?: string;
     toolArguments?: Readonly<Record<string, unknown>>;
     cwd: string;

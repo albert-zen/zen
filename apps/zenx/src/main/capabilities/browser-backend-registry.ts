@@ -12,7 +12,12 @@ import type {
   BrowserThreadTarget,
 } from "./browser-thread-observation.js";
 
-type BackendId = "workspace" | "connected";
+import {
+  browserConnectionScopeKey,
+  type BrowserConnectionSource,
+} from "./browser-connections.js";
+
+type BackendId = string;
 const workspacePrefix = "browser_workspace_";
 const maxTrackedThreads = 512;
 const connectedPrefix = "browser_connected_";
@@ -84,9 +89,57 @@ export function concurrentBrowserManifest(): ZenXPluginManifestV2 {
   };
 }
 
+/** One catalog, not a copy of each tool per connected profile. */
+export function multiBrowserManifest(): ZenXPluginManifestV2 {
+  const manifest = concurrentBrowserManifest();
+  manifest.version = "1.0.7";
+  manifest.provider.id = "multi-browser";
+  manifest.description =
+    "Workspace, Chrome and Edge browser instances with separate targets and approvals.";
+  manifest.mainDocument = manifest.mainDocument.replace(
+    "Only one external browser connection is supported at a time; disconnect it explicitly before connecting another.",
+    "Start with browser_connections to discover non-sensitive connection IDs and labels. Every browser_connected_* call requires an explicit connectionId. Choose that instance before listing tabs; separate instances need separate approvals, including instances of the same browser. References are bound to the exact connection generation, so reconnect requires fresh list/inspect and never retries an old action. No unavailable target falls back to another browser.",
+  );
+  for (const tool of manifest.tools) {
+    if (!tool.name.startsWith(connectedPrefix)) continue;
+    const schema = tool.inputSchema as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+    schema.properties.connectionId = {
+      type: "string",
+      description:
+        "Exact opaque connectionId from browser_connections. Required even when only one browser is connected.",
+    };
+    schema.required = [...(schema.required ?? []), "connectionId"];
+  }
+  const template = structuredClone(
+    manifest.tools.find((tool) => tool.name === "browser_workspace_list_tabs")!,
+  );
+  manifest.tools.unshift({
+    ...template,
+    name: "browser_connections",
+    description:
+      "Discover connected browser instances by opaque ID, browser label and connection state only. Does not list tabs or expose page titles, URLs or account/profile information.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    permissions: [],
+  });
+  return manifest;
+}
+
 /** Process-local resource routing only; no new Thread history or permission authority. */
 export class BrowserBackendRegistry implements ZenXCapabilityPackage {
-  readonly manifest = concurrentBrowserManifest();
+  readonly manifest: ZenXPluginManifestV2;
+  readonly #source?: BrowserConnectionSource;
+  readonly #pendingConnections = new Map<
+    string,
+    Promise<BrowserZenXCapabilityPackage>
+  >();
+  readonly #stopConnections?: () => void;
   readonly #packages = new Map<BackendId, BrowserZenXCapabilityPackage>();
   readonly #connectedUnavailable: string;
   readonly #lastAction = new Map<
@@ -96,6 +149,7 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
   readonly #observers = new Set<{
     threadId: string;
     refresh: () => void;
+    syncPackages: () => void;
     stop: () => void;
     retire: () => void;
   }>();
@@ -105,7 +159,16 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     workspace: ZenXBrowserBackend,
     connected?: ZenXBrowserBackend,
     connectedUnavailable = "Enable the external browser connection in Settings, restart ZenX, and connect the extension.",
+    source?: BrowserConnectionSource,
   ) {
+    this.#source = source;
+    this.manifest =
+      source === undefined
+        ? concurrentBrowserManifest()
+        : multiBrowserManifest();
+    this.#stopConnections = source?.onConnectionsChanged(() =>
+      this.#syncConnections(),
+    );
     this.#packages.set(
       "workspace",
       new BrowserZenXCapabilityPackage(workspace, undefined, {
@@ -120,26 +183,129 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     this.#connectedUnavailable = connectedUnavailable;
   }
 
+  #syncConnections(): void {
+    const current = new Set(
+      this.#source
+        ?.connections()
+        .filter((value) => value.state === "connected")
+        .map((value) => `connected/${value.connectionId}/${value.generation}`),
+    );
+    for (const [key, capability] of this.#packages) {
+      if (!key.startsWith("connected/") || current.has(key)) continue;
+      this.#packages.delete(key);
+      void capability.close().catch(() => undefined);
+    }
+    for (const observer of [...this.#observers]) observer.syncPackages();
+  }
+
+  async #instance(
+    invocation: ToolInvocation,
+  ): Promise<{ key: string; capability: BrowserZenXCapabilityPackage }> {
+    const id = invocation.arguments.connectionId;
+    if (typeof id !== "string")
+      throw new Error("An explicit browser connectionId is required");
+    const connection = this.#source
+      ?.connections()
+      .find(
+        (value) => value.connectionId === id && value.state === "connected",
+      );
+    if (connection === undefined)
+      throw new Error(
+        "Browser connection is unavailable; discover connections again",
+      );
+    const scope = invocation.approvalScope;
+    if (scope?.key !== browserConnectionScopeKey(id))
+      throw new Error(
+        "Browser instance approval scope is missing or mismatched",
+      );
+    if (scope.generation !== connection.generation)
+      throw new Error(
+        "Browser connection generation changed; discover and inspect again",
+      );
+    const key = `connected/${id}/${connection.generation}`;
+    const existing = this.#packages.get(key);
+    if (existing !== undefined) return { key, capability: existing };
+    let pending = this.#pendingConnections.get(key);
+    if (pending === undefined) {
+      pending = this.#source!.connectInstance(
+        id,
+        connection.generation,
+        invocation.signal,
+      )
+        .then(async (result) => {
+          if (
+            this.#closed ||
+            !this.#source!.connections().some(
+              (value) =>
+                value.connectionId === id &&
+                value.generation === connection.generation &&
+                value.state === "connected",
+            )
+          ) {
+            await result.backend.close();
+            throw new Error(
+              "Browser connection generation changed while connecting",
+            );
+          }
+          const capability = new BrowserZenXCapabilityPackage(
+            result.backend,
+            userBrowserManifest(),
+          );
+          this.#packages.set(key, capability);
+          for (const observer of [...this.#observers]) observer.syncPackages();
+          return capability;
+        })
+        .finally(() => this.#pendingConnections.delete(key));
+      this.#pendingConnections.set(key, pending);
+    }
+    const capability = await pending;
+    invocation.signal.throwIfAborted();
+    if (
+      !this.#source!.connections().some(
+        (value) =>
+          value.connectionId === id &&
+          value.generation === scope.generation &&
+          value.state === "connected",
+      )
+    )
+      throw new Error("Browser connection generation changed before dispatch");
+    return { key, capability };
+  }
+
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
     if (this.#closed) throw new Error("Browser registry is closed");
+    if (toolName === "browser_connections" && this.#source !== undefined)
+      return this.#source
+        .connections()
+        .map(({ connectionId, browser, label, state }) => ({
+          connectionId,
+          browser,
+          label,
+          state,
+        }));
     const tool = this.manifest.tools.find((entry) => entry.name === toolName);
     if (tool === undefined)
       throw new Error(`Unsupported browser tool: ${toolName}`);
-    const backendId: BackendId = toolName.startsWith(connectedPrefix)
-      ? "connected"
-      : "workspace";
-    const selected = this.#packages.get(backendId);
+    const instance =
+      toolName.startsWith(connectedPrefix) && this.#source !== undefined
+        ? await this.#instance(invocation)
+        : undefined;
+    const backendId: BackendId =
+      instance?.key ??
+      (toolName.startsWith(connectedPrefix) ? "connected" : "workspace");
+    const selected = instance?.capability ?? this.#packages.get(backendId);
     if (selected === undefined)
       throw new Error(
         `Connected browser unavailable: ${this.#connectedUnavailable}`,
       );
     const args = { ...invocation.arguments };
+    if (instance !== undefined) delete args.connectionId;
     for (const key of referenceKeys) {
       if (args[key] !== undefined)
         args[key] = unqualify(backendId, args[key], key);
     }
     const canonicalName = toolName.replace(
-      backendId === "connected" ? connectedPrefix : workspacePrefix,
+      backendId.startsWith("connected") ? connectedPrefix : workspacePrefix,
       "browser_",
     );
     const result = await selected.invoke(canonicalName, {
@@ -169,7 +335,10 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     }
     const project = (value: unknown) => ({
       ...(qualifyResult(backendId, value) as object),
-      backendId,
+      backendId: backendId === "workspace" ? "workspace" : "connected",
+      ...(instance === undefined
+        ? {}
+        : { connectionId: invocation.arguments.connectionId }),
     });
     return Array.isArray(result) ? result.map(project) : project(result);
   }
@@ -185,15 +354,15 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     let stopFrames: (() => void) | undefined;
     let frameGeneration = 0;
     let refreshGeneration = 0;
-    const stops: Array<() => void> = [];
+    const stops = new Map<BackendId, () => void>();
     const stop = () => {
       if (!active) return;
       active = false;
       ++frameGeneration;
       this.#observers.delete(observer);
-      const cleanup = [stopFrames, ...stops];
+      const cleanup = [stopFrames, ...stops.values()];
       stopFrames = undefined;
-      stops.length = 0;
+      stops.clear();
       for (const dispose of cleanup) {
         try {
           dispose?.();
@@ -215,9 +384,7 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
       const refreshRevision = ++refreshGeneration;
       const all = [...targets.values()].flat();
       const lastBackend = this.#lastAction.get(request.threadId)?.backendId;
-      const priorBackend = all.find(
-        (target) => target.id === selectedId,
-      )?.backendId;
+      const priorBackend = selectedId?.split(":")[0];
       const following = lastBackend ?? priorBackend;
       const next =
         request.targetId === undefined
@@ -256,7 +423,7 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
         });
         return;
       }
-      const backendId = next.backendId as BackendId;
+      const backendId = next.id.split(":")[0]!;
       const dispose = this.#packages.get(backendId)!.observeThread(
         {
           ...request,
@@ -277,6 +444,7 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     const observer = {
       threadId: request.threadId,
       refresh,
+      syncPackages: () => syncPackages(),
       stop,
       retire: () => {
         send({ type: "targets", targets: [] });
@@ -292,42 +460,73 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
       observer.retire();
       return stop;
     }
-    this.#observers.add(observer);
-    for (const [backendId, capability] of this.#packages) {
-      if (!active) break;
-      const dispose = capability.observeThread(
-        { threadId: request.threadId, frames: false },
-        (event) => {
-          if (!active || event.type !== "targets") return;
-          targets.set(
-            backendId,
-            event.targets.map((target) => ({
-              ...target,
+    const syncPackages = () => {
+      if (!active) return;
+      for (const [key, dispose] of stops) {
+        if (this.#packages.has(key)) continue;
+        stops.delete(key);
+        dispose();
+        targets.delete(key);
+        childSelections.delete(key);
+      }
+      for (const [backendId, capability] of this.#packages) {
+        if (!active) break;
+        if (stops.has(backendId)) continue;
+        stops.set(backendId, () => {});
+        const dispose = capability.observeThread(
+          { threadId: request.threadId, frames: false },
+          (event) => {
+            if (!active || event.type !== "targets") return;
+            targets.set(
               backendId,
-              id: qualify(backendId, target.id),
-              tabId: qualify(backendId, target.tabId),
-            })),
-          );
-          if (event.selectedId === undefined) childSelections.delete(backendId);
-          else
-            childSelections.set(
-              backendId,
-              qualify(backendId, event.selectedId),
+              event.targets.map((target) => ({
+                ...target,
+                backendId:
+                  backendId === "workspace"
+                    ? ("workspace" as const)
+                    : ("connected" as const),
+                ...(backendId.startsWith("connected/")
+                  ? {
+                      connectionId: backendId.split("/")[1],
+                      connectionLabel: this.#source
+                        ?.connections()
+                        .find(
+                          (value) =>
+                            value.connectionId === backendId.split("/")[1],
+                        )?.label,
+                    }
+                  : {}),
+                id: qualify(backendId, target.id),
+                tabId: qualify(backendId, target.tabId),
+              })),
             );
-          refresh();
-        },
-      );
-      if (!active) dispose();
-      else stops.push(dispose);
-    }
+            if (event.selectedId === undefined)
+              childSelections.delete(backendId);
+            else
+              childSelections.set(
+                backendId,
+                qualify(backendId, event.selectedId),
+              );
+            refresh();
+          },
+        );
+        if (!active) dispose();
+        else stops.set(backendId, dispose);
+      }
+      refresh();
+    };
+    this.#observers.add(observer);
+    syncPackages();
     return stop;
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    this.#stopConnections?.();
     this.#lastAction.clear();
     for (const observer of [...this.#observers]) observer.retire();
+    await Promise.allSettled([...this.#pendingConnections.values()]);
     await Promise.all(
       [...this.#packages.values()].map((capability) => capability.close()),
     );
@@ -358,7 +557,7 @@ function qualifyResult(
   if (key === "nextAction" && typeof value === "string")
     return value.replaceAll(
       "browser_",
-      backendId === "connected" ? connectedPrefix : workspacePrefix,
+      backendId.startsWith("connected") ? connectedPrefix : workspacePrefix,
     );
   if (typeof value === "string" && key !== undefined && referenceKeys.has(key))
     return qualify(backendId, value);

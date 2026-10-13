@@ -2018,7 +2018,26 @@ test("General reports a browser connection with multiple available tabs", async 
     extensionDirectory:
       "/Applications/ZenX.app/Contents/Resources/chrome-extension",
     extensionId: "fixture",
-    connection: { state: "connected" as const, tabCount: 3 },
+    connection: {
+      state: "connected" as const,
+      tabCount: 3,
+      connections: [
+        {
+          connectionId: "11111111-1111-4111-8111-111111111111",
+          generation: "g1",
+          browser: "chrome" as const,
+          label: "Chrome · 11111111",
+          state: "connected" as const,
+        },
+        {
+          connectionId: "22222222-2222-4222-8222-222222222222",
+          generation: "g2",
+          browser: "edge" as const,
+          label: "Edge · 22222222",
+          state: "connected" as const,
+        },
+      ],
+    },
   };
   const harness = await mountSettings("general", {
     initialSettings: {
@@ -2040,6 +2059,12 @@ test("General reports a browser connection with multiple available tabs", async 
         : undefined,
     );
     assert.match(document.body.textContent ?? "", /3 tabs available/u);
+    assert.match(document.body.textContent ?? "", /Chrome · 11111111/);
+    assert.match(document.body.textContent ?? "", /Edge · 22222222/);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Only one external browser/,
+    );
     assert.match(document.body.textContent ?? "", /Existing and new web tabs/u);
     assert.doesNotMatch(
       document.body.textContent ?? "",

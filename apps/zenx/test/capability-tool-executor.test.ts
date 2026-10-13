@@ -856,3 +856,96 @@ test("concurrent browser namespaces keep page and session fences backend-local",
     { key: connected[0]!.key, access: "exclusive" },
   ]);
 });
+
+test("connected browser admission uses only trusted captured instance scopes", async () => {
+  const { InMemoryToolPolicyStore, ToolEnvironment } =
+    await import("../../../src/tool.js");
+  const connection = {
+    connectionId: "11111111-1111-4111-8111-111111111111",
+    generation: "generation-a",
+    label: "Chrome · 11111111",
+    browser: "chrome" as const,
+    state: "connected" as const,
+  };
+  const name = "browser_connected_list_tabs";
+  const events: HostEvent[] = [];
+  const bundle = new ZenXHostToolBundle({
+    capabilities: {
+      definitions: [
+        {
+          name,
+          description: "list",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      browserConnections: [connection],
+    },
+    send: (event) => events.push(event),
+  });
+  const environment = new ToolEnvironment({
+    runtimes: [],
+    bundles: [bundle],
+    policyStore: new InMemoryToolPolicyStore({ [name]: "approved" }),
+  });
+  const invocation = {
+    name,
+    callId: "scope",
+    cwd: "/tmp",
+    arguments: { connectionId: connection.connectionId },
+    signal: new AbortController().signal,
+  };
+  assert.throws(
+    () => environment.prepare({ ...invocation, arguments: {} }),
+    /connectionId/,
+  );
+  assert.throws(
+    () =>
+      environment.prepare({
+        ...invocation,
+        arguments: { connectionId: "unknown" },
+      }),
+    /unavailable|unknown/,
+  );
+  const prepared = environment.prepare(invocation);
+  connection.generation = "mutated";
+  assert.equal(prepared.approvalScope?.generation, "generation-a");
+  let prompts = 0;
+  await environment.admit(prepared, {
+    policy: "ask_unknown",
+    approvalRequest: {
+      threadId: "t",
+      turnId: "u",
+      itemId: "i",
+      callId: "c",
+      command: name,
+      cwd: "/tmp",
+      signal: invocation.signal,
+    },
+    requestApproval: async (request) => {
+      prompts++;
+      assert.match(request.command, /Chrome · 11111111/);
+      return "accept";
+    },
+  });
+  assert.equal(prompts, 1);
+  const pending = environment.execute(prepared);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const event = events.find((value) => value.type === "capability/invoke");
+  assert.equal(event?.type, "capability/invoke");
+  if (event?.type !== "capability/invoke")
+    throw new Error("Missing invocation");
+  assert.equal(event.invocation.approvalScope?.generation, "generation-a");
+  assert.equal(
+    Object.hasOwn(event.invocation.arguments, "approvalScope"),
+    false,
+  );
+  bundle.handleResult({
+    type: "capability/result",
+    invocationId: event.invocationId,
+    generationToken: event.generationToken,
+    output: "[]",
+    exitCode: 0,
+  });
+  await pending;
+  await environment.close();
+});
