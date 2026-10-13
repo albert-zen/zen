@@ -571,6 +571,40 @@ test("Fast Shell completion remains owned until its initial observer settles", a
   }
 });
 
+test("Fast Shell cancellation during initial observation stays unconfirmed after natural exit", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = ownedShellFixture(async (capture) => {
+    if (capture === 1) await gate;
+  }, 2_000);
+  const abort = new AbortController();
+  try {
+    const result = f.tools.execute(
+      f.tools.prepare({
+        ...shellInvocation("exit 0", true),
+        signal: abort.signal,
+      }),
+    );
+    await f.childClosed;
+    abort.abort();
+    release();
+    const receipt = await result;
+    assert.match(receipt.output, /cancellation_unconfirmed/u);
+    assert.match(
+      receipt.output,
+      /owned foreground exited during identity capture/u,
+    );
+    assert.equal(f.kills(), 0);
+    assert.equal(f.tools.taskManager.activeTaskCount, 1);
+    await assert.rejects(f.tools.close(), /Host tool cleanup is unconfirmed/u);
+  } finally {
+    release();
+    await f.cleanup();
+  }
+});
+
 test("Shell environment close reports a never-settling cleanup at its configured deadline", async () => {
   const f = ownedShellFixture(async (capture) => {
     if (capture === 2) await new Promise(() => undefined);

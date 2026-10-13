@@ -56,6 +56,12 @@ commands retain their previous turn cancellation semantics.
   existing Windows direct-child boundary. PTY stop signals the owned terminal; native
   terminal closure ends its foreground process in the acceptance fixture.
   Escaped/detached descendants are not promised to be contained.
+- A fast Windows command may exit while its initial identity snapshot is still
+  pending. If replacement or Stop races that observation, cancellation stays
+  unconfirmed even after foreground exit and EOF: those facts cannot establish
+  ownership of unseen descendants. Host cleanup reports that uncertainty rather
+  than declaring all processes stopped. Tests needing a live replacement target
+  use a fixture-owned ready/release gate, not a short sleep as a liveness promise.
 - Windows native observation helpers stay part of their actual Shell invocation,
   including fast commands. Host disposal joins that owned cleanup under one
   30-second deadline; it does not equate a task notification with helper exit.
