@@ -75,10 +75,44 @@ const fixture = createServer((request, response) => {
 void app.whenReady().then(async () => {
   let owner: BrowserWindow | undefined;
   let createdView: WebContentsView | undefined;
+  let captureCalls = 0;
+  let phase = "setup";
+  let layoutStarted = false;
   const browser = createElectronWorkspaceBrowser({
     artifactDirectory: path.join(directory, "artifacts"),
     onCreateView: (view) => {
       createdView = view;
+      const capture = view.webContents.capturePage.bind(view.webContents);
+      view.webContents.capturePage = async (
+        ...args: Parameters<typeof capture>
+      ) => {
+        const call = ++captureCalls;
+        try {
+          return await capture(...args);
+        } catch (error) {
+          try {
+            console.error("Owned shared-browser capture failed", {
+              phase,
+              call,
+              destroyed: view.webContents.isDestroyed(),
+              loading: view.webContents.isLoading(),
+              viewVisible: view.getVisible(),
+              viewBounds: view.getBounds(),
+              parents: BrowserWindow.getAllWindows()
+                .slice(0, 8)
+                .filter((window) => window.contentView.children.includes(view))
+                .map((window) => ({
+                  visible: window.isVisible(),
+                  minimized: window.isMinimized(),
+                  bounds: window.getBounds(),
+                })),
+            });
+          } catch {
+            // Failure-only fixture reads never replace the native error.
+          }
+          throw error;
+        }
+      };
     },
   });
   try {
@@ -105,6 +139,7 @@ void app.whenReady().then(async () => {
     assert.ok(createdView);
     let liveFrameCount = 0;
     let liveFrameError: string | undefined;
+    phase = "unmounted-live-observation";
     const stopLiveObservation = browser.observeTab(
       "shared-session",
       tabId,
@@ -134,6 +169,7 @@ void app.whenReady().then(async () => {
       1,
       "live capture must release its temporary renderer",
     );
+    phase = "shared-browser-operations";
     const unmountedInspection = await browser.inspect("shared-session", tabId);
     assert.match(unmountedInspection.visibleText, /Human value/u);
     assert.ok(
@@ -406,6 +442,7 @@ void app.whenReady().then(async () => {
       "Ending the Agent session must preserve the shared human page",
     );
     await assertHiddenMountedCapture(port);
+    layoutStarted = true;
     await assertStableControlLayout();
     console.log(
       JSON.stringify({
@@ -441,7 +478,21 @@ void app.whenReady().then(async () => {
       }),
     );
   } catch (error) {
-    console.error("ZenX shared Workspace Browser smoke failed", error);
+    const failures = [error];
+    if (!layoutStarted) {
+      layoutStarted = true;
+      try {
+        await assertStableControlLayout();
+      } catch (layoutError) {
+        failures.push(layoutError);
+      }
+    }
+    console.error(
+      "ZenX shared Workspace Browser smoke failed",
+      failures.length === 1
+        ? error
+        : new AggregateError(failures, "Capture and layout phases both failed"),
+    );
     process.exitCode = 1;
   } finally {
     await browser.shutdown();
