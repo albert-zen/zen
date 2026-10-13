@@ -1,4 +1,21 @@
 export const en = {
+  threadDetails: "Thread details",
+  threadProjectLabel: "Project",
+  threadMachineLabel: "Machine",
+  threadThisMachine: "This machine",
+  threadLastMessage: "Last message",
+  threadNextTrigger: "Next trigger",
+  threadAutomationsLabel: "Automations",
+  threadFactUnknown: "Unavailable",
+  threadTriggersPaused: "Paused",
+  threadTriggerOnEvent: "When an event matches",
+  threadOtherTriggersUnknown: "Other trigger times are unavailable",
+  threadAutomationCount: "{{count}} automations",
+  threadAutomationCount_one: "{{count}} automation",
+  threadAutomationCount_other: "{{count}} automations",
+  threadUnreadReply: "Unread agent reply",
+  renameThreadNamed: "Rename {{title}}",
+
   sidebarWidth: "Sidebar width",
   sidebarWidthPixels: "{{width}} pixels",
   sidebarResizeHelp:
@@ -628,6 +645,21 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  threadDetails: "线程详情",
+  threadProjectLabel: "项目",
+  threadMachineLabel: "机器",
+  threadThisMachine: "本机",
+  threadLastMessage: "最近消息",
+  threadNextTrigger: "下次触发",
+  threadAutomationsLabel: "自动化",
+  threadFactUnknown: "暂不可用",
+  threadTriggersPaused: "已暂停",
+  threadTriggerOnEvent: "符合条件时触发",
+  threadOtherTriggersUnknown: "其他触发时间暂不可用",
+  threadAutomationCount: "{{count}} 个自动化",
+  threadUnreadReply: "Agent 有未读回复",
+  renameThreadNamed: "重命名 {{title}}",
+
   sidebarWidth: "侧边栏宽度",
   sidebarWidthPixels: "{{width}} 像素",
   sidebarResizeHelp: "拖动调整宽度 · 方向键微调 · 回车收起",

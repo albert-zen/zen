@@ -56,6 +56,7 @@ import type {
   TriggerProgramOutcome,
   TriggerProgramSpec,
   TriggerSnapshot,
+  TriggerSidebarSnapshot,
   UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
@@ -401,6 +402,26 @@ export class ZenXTriggerService {
       if (error !== undefined) trigger.sourceError = error;
     }
     return snapshot;
+  }
+
+  sidebarFacts(): TriggerSidebarSnapshot {
+    // Project directly from the bounded registry before any snapshot clone.
+    // In particular, never visit Room bodies, history, prompt, or program data.
+    return {
+      triggers: this.#snapshot.triggers.map((trigger) => ({
+        id: trigger.id,
+        threadId: trigger.threadId,
+        kind: trigger.kind,
+        active: trigger.active,
+        ...(trigger.timer === undefined
+          ? {}
+          : { timer: { nextRunAt: trigger.timer.nextRunAt } }),
+        ...(this.#generation?.remoteWatches.get(trigger.id)?.error ===
+          undefined && trigger.sourceError === undefined
+          ? {}
+          : { sourceError: "Source observation unavailable" as const }),
+      })),
+    };
   }
 
   onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {

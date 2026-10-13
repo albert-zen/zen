@@ -134,6 +134,10 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 
 ### 4.1 Thread row 与管理菜单
 
+- Thread 标题用满除真实状态以外的可用宽度。绑定的 Trigger 用时钟表示，运行用明确 spinner；时钟位于 spinner 左侧，未读 Agent 回复用独立的小点。详细密度保留 Working 文字，reduced-motion 使用静态进度图形与可读状态。管理三点只在 hover / keyboard focus / 菜单打开时显示，渐变表面覆盖标题尾部，不永久空留操作栏；无 hover 的触屏保留可见的 44px 操作入口。 时钟、进度与三点使用相同 16px 图形画布和等距槽位；尾部遮罩覆盖会话行整高，左缘圆弧配柔和渐变、右缘沿行圆角，不露出上沿文字。
+- Hover / row keyboard focus 打开右侧非模态详情；不抢焦点，浮层可跨间隙进入并点击，Arrow Right 进入完整名称，Escape 关闭并还焦点。完整名称按钮直接进入原有 Thread rename；触屏三点内提供同样完整信息。详情显示已知 Project、机器、最近 canonical 消息时间以及绑定 Trigger 的最早有效未来时间；过期、读取失败或缺失投影明确不可用，不从 updatedAt 推断消息时间，不从 timer interval 私算下次运行。只有事件型 Trigger 显示符合条件时触发，全部暂停显示已暂停。
+- Thread 与 PAW/Room 名称保持各自对象身份。改名使用原有权威命令，Enter 保存、IME Enter 不提交、Escape 取消；保存中防重复、失败保留草稿并显示错误，晚到回执不能关闭新编辑器、改变新选择或抢走焦点。
+
 - Thread management menu 存在于每个 Thread row，触发器使用正常重量的 horizontal ellipsis。
 - ellipsis 默认视觉隐藏，只在 row hover、keyboard focus/focus-within 或菜单打开时显示。选中 row 本身不让它常驻。
 - 隐藏状态不得拦截 pointer input；显示状态保留完整 hit target、accessible name、tooltip 和 focus ring。

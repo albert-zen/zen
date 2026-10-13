@@ -31,6 +31,7 @@ import type {
   RoomSendOperation,
   RoomDeliveryView,
   TriggerSnapshot,
+  TriggerSidebarSnapshot,
   UpdateTriggerInput,
   AssistantWorkspace,
   UpdateAssistantWorkspaceInput,
@@ -556,6 +557,10 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   }
   snapshot(): TriggerSnapshot {
     return this.#service.snapshot();
+  }
+
+  sidebarFacts(): TriggerSidebarSnapshot {
+    return this.#service.sidebarFacts();
   }
 
   async create(input: CreateTriggerInput) {

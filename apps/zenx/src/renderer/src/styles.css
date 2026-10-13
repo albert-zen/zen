@@ -1022,7 +1022,7 @@ button:disabled {
   display: grid;
   align-content: center;
   gap: 7px;
-  padding: 10px 46px 10px 12px;
+  padding: 10px 12px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
@@ -5222,7 +5222,7 @@ button:disabled {
     opacity: 1;
   }
   .thread-row {
-    padding: 10px 46px 10px 10px;
+    padding: 10px;
   }
   .workspace-header {
     padding-left: 16px;
@@ -5447,9 +5447,6 @@ button:disabled {
   .thread-item-menu > button {
     min-width: 44px;
     min-height: 44px;
-  }
-  .thread-row {
-    padding-right: 52px;
   }
   .directory-picker-backdrop {
     padding: 0;
@@ -9955,5 +9952,228 @@ button:disabled {
 @media (prefers-reduced-motion: reduce) {
   .trace-row .mini-spinner {
     animation: none;
+  }
+}
+
+.room-name-form {
+  display: grid;
+  gap: 16px;
+}
+
+/* Information uses the existing row's space; only factual states reserve width.
+   Hover actions cover the tail with a surface fade rather than a vacant column. */
+.thread-row-shell {
+  --thread-row-surface: var(--color-surface-sidebar);
+  border-radius: 10px;
+}
+.thread-row-shell:hover {
+  --thread-row-surface: color-mix(
+    in srgb,
+    var(--color-surface-sidebar),
+    var(--color-text-primary) 6%
+  );
+}
+.thread-row-shell[data-selected="true"] {
+  --thread-row-surface: color-mix(
+    in srgb,
+    var(--color-surface-sidebar),
+    var(--color-accent) 12%
+  );
+}
+.thread-row-shell > .thread-row {
+  background: var(--thread-row-surface);
+  padding-inline-end: calc(10px + var(--thread-state-space, 0px));
+}
+.thread-row-shell[data-unread="true"] .thread-title {
+  font-weight: 650;
+}
+.thread-status-rail {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding-inline: 0 6px;
+  border-radius: inherit;
+  /* Huge pill radii scale ALL four corners down under CSS overlap rules.
+     Two 50% block radii fit this actual row height and preserve its 10px end. */
+  border-start-start-radius: 32px 50%;
+  border-end-start-radius: 32px 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+.thread-row-shell:is(:hover, :focus-within, [data-menu-open="true"])
+  .thread-status-rail {
+  padding-inline-start: 32px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--thread-row-surface) 12%, transparent) 8px,
+    color-mix(in srgb, var(--thread-row-surface) 65%, transparent) 22px,
+    var(--thread-row-surface) 32px
+  );
+}
+.thread-status-slot {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+}
+.thread-status-slot > svg,
+.thread-status-rail .thread-menu-trigger > svg {
+  width: 16px;
+  height: 16px;
+}
+.thread-running-spinner {
+  display: block;
+  animation: thread-spinner-turn 900ms linear infinite;
+}
+@keyframes thread-spinner-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.thread-unread-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.thread-status-rail .thread-menu-trigger {
+  position: relative;
+  inset: auto;
+  transform: none;
+  flex: 0 0 auto;
+  width: 0;
+  height: 28px;
+  min-width: 0;
+  min-height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  transition: opacity 140ms ease;
+}
+.thread-row-shell:is(:hover, :focus-within, [data-menu-open="true"])
+  .thread-status-rail
+  .thread-menu-trigger {
+  width: 28px;
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+.thread-information {
+  position: fixed;
+  z-index: 35;
+  width: min(328px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--color-surface-elevated);
+  box-shadow: 0 8px 28px var(--shadow-color-low);
+}
+.thread-information-title {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  padding: 4px 0 10px;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: start;
+  line-height: 1.45;
+  font-weight: 600;
+}
+.thread-information-title > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.thread-information-title > svg {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: var(--color-text-muted);
+}
+.thread-information-title:hover {
+  color: var(--color-accent);
+}
+.thread-information-facts {
+  display: grid;
+  gap: 11px;
+  margin: 4px 0 0;
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+}
+.thread-information-facts > div {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 10px;
+}
+.thread-information-facts dt {
+  color: var(--color-text-muted);
+}
+.thread-information-facts dd {
+  margin: 0;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.thread-information-facts dd small {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: inherit;
+}
+.thread-item-menu:has(.thread-menu-information) {
+  width: min(328px, calc(100vw - 16px));
+}
+.thread-menu-information {
+  padding: 8px 6px 14px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.thread-menu-information .thread-information-title {
+  min-height: 36px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-running-spinner {
+    animation: none;
+  }
+}
+@media (forced-colors: active) {
+  .thread-running-spinner {
+    color: CanvasText;
+  }
+  .thread-unread-dot {
+    background: Highlight;
+  }
+  .thread-status-rail,
+  .thread-row-shell:is(:hover, :focus-within, [data-menu-open="true"])
+    .thread-status-rail {
+    background: Canvas;
+  }
+}
+@media (hover: none), (pointer: coarse) {
+  .thread-row-shell > .thread-row {
+    min-height: 44px;
+    padding-inline-end: calc(54px + var(--thread-state-space, 0px));
+  }
+  .thread-status-rail .thread-menu-trigger,
+  .thread-row-shell:is(:hover, :focus-within, [data-menu-open="true"])
+    .thread-status-rail
+    .thread-menu-trigger {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    margin-inline-start: 0;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .thread-information-title {
+    min-height: 44px;
   }
 }

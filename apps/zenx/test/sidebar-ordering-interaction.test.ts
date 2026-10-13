@@ -46,7 +46,7 @@ const threads = [
   summary("other", "idle", 10, "/work/b"),
 ];
 
-test("detailed active row keeps its Working indicator beside the model", async () => {
+test("detailed active row keeps Working text and a distinct trailing spinner", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(StaticSidebar)));
     const row = requiredElement<HTMLElement>(
@@ -65,7 +65,9 @@ test("detailed active row keeps its Working indicator beside the model", async (
       "Working",
     );
     assert.ok(
-      row.querySelector(".thread-model > .thread-state-inline .live-dot"),
+      row.parentElement?.querySelector(
+        ".thread-status-rail .thread-running-spinner",
+      ),
     );
   });
 });

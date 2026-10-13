@@ -1,4 +1,5 @@
 export const en = {
+  unreadMessages: "{{count}} unread messages",
   shellTitle: "Terminal",
   shellChooser: "Manage shared Shell sessions and open your own terminal",
   shellLocalHost: "This thread · This device",
@@ -797,6 +798,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  unreadMessages: "{{count}} 条未读消息",
   shellTitle: "终端",
   shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
   shellLocalHost: "当前线程 · 本机",

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -41,6 +42,7 @@ export interface ZenXPluginCatalogOptions {
 export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   readonly #configurationStore: ZenXPluginCatalogStore;
   readonly #registered = new Map<string, RegisteredZenXCapability>();
+  readonly #admissionIds = new Map<string, string>();
   readonly #catalogPackages = new Map<string, RegisteredZenXCapability>();
   readonly #toolOwners = new Map<
     string,
@@ -664,6 +666,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   #activateRegistration(registration: RegisteredZenXCapability): void {
     const manifest = registration.package.manifest;
     this.#registered.set(manifest.id, registration);
+    this.#admissionIds.set(manifest.id, randomUUID());
     for (const tool of manifest.tools) {
       this.#toolOwners.set(tool.name, { capabilityId: manifest.id, tool });
     }
@@ -683,6 +686,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   ): Promise<void> {
     if (this.#registered.get(capabilityId) !== registered) return;
     this.#registered.delete(capabilityId);
+    this.#admissionIds.delete(capabilityId);
     for (const tool of registered.package.manifest.tools) {
       this.#toolOwners.delete(tool.name);
     }
@@ -696,6 +700,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   ): void {
     if (this.#registered.get(capabilityId) !== registered) return;
     this.#registered.delete(capabilityId);
+    this.#admissionIds.delete(capabilityId);
     for (const tool of registered.package.manifest.tools) {
       this.#toolOwners.delete(tool.name);
     }
@@ -798,6 +803,9 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
         lifecycle,
         enabled,
         available: entry.available,
+        ...(enabled && this.#admissionIds.has(manifest.id)
+          ? { admissionId: this.#admissionIds.get(manifest.id)! }
+          : {}),
         ...(unavailableReason === undefined ? {} : { unavailableReason }),
         contributionCount:
           (manifest.contributions?.sidebar?.length ?? 0) +
