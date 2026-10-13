@@ -106,7 +106,11 @@ jobs:
         timeout-minutes: 1
         env:
           ZENX_SHELL_TEST_DIAGNOSTICS: "1"
-        run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
+        run: |
+          node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-pty-windows-diagnostic.test.ts
+          $coldExit = $LASTEXITCODE
+          node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
+          if ($coldExit -ne 0 -or $LASTEXITCODE -ne 0) { exit 1 }
       - name: Exercise shell lifecycle observations on Windows
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - name: Exercise trigger process containment on Windows
