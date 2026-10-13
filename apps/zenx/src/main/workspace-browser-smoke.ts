@@ -466,6 +466,34 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
   const guard = new BrowserWindow({ show: true, width: 320, height: 160 });
   let phase = "setup";
   const cases: string[] = [];
+  const started = Date.now();
+  const trace: object[] = [];
+  let droppedTraceEntries = 0;
+  const record = (event: string) => {
+    try {
+      if (trace.length === 48) {
+        droppedTraceEntries++;
+        return;
+      }
+      trace.push({
+        event,
+        phase,
+        elapsedMs: Date.now() - started,
+        visible: owner.isVisible(),
+        minimized: owner.isMinimized(),
+        attached: view ? owner.contentView.children.includes(view) : false,
+      });
+    } catch {
+      // Failure-only fixture diagnostics must not alter capture or event handling.
+    }
+  };
+  const ownerListeners = ["show", "hide", "restore", "minimize"].map(
+    (event) => {
+      const listener = () => record(`owner:${event}`);
+      owner.on(event, listener);
+      return [event, listener] as const;
+    },
+  );
   try {
     await owner.loadURL("about:blank");
     await guard.loadURL(
@@ -571,11 +599,14 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
     const restored = once(owner, "restore", {
       signal: AbortSignal.timeout(5_000),
     });
+    record("setup:restore-request");
     owner.restore();
     await restored;
     await eventually(async () => assert.equal(owner.isMinimized(), false));
+    record("setup:hide-request");
     owner.hide();
     await eventually(async () => assert.equal(owner.isVisible(), false));
+    record("setup:hidden-state");
     guard.focus();
     const nativeCapture = view.webContents.capturePage.bind(view.webContents);
     try {
@@ -588,6 +619,7 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
         "deadline",
       ] as const) {
         phase = `pending-capture-${change}`;
+        record("pending:hide-request");
         owner.hide();
         mount(`before-${change}`);
         if (change === "return-control")
@@ -607,11 +639,14 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
         view.webContents.capturePage = async (
           ...args: Parameters<typeof nativeCapture>
         ) => {
+          record("native-capture:begin");
           const image = await nativeCapture(...args);
+          record("native-capture:image-ready");
           entered(); // A real native image exists, but its Host result is pending.
           await gate;
           return image;
         };
+        record("inspect:begin");
         const pending = browser.inspect("hidden-session", tab.tabId);
         const rejected = assert.rejects(
           pending,
@@ -621,6 +656,7 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
         );
         try {
           await Promise.race([captured, pending.then(() => undefined)]);
+          record("native-capture:gate-entered");
           if (change === "show") {
             owner.showInactive();
             await eventually(async () =>
@@ -693,10 +729,14 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
         ownerMinimized: owner.isMinimized(),
         ownerAttached: view ? owner.contentView.children.includes(view) : false,
         focusedWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+        trace,
+        droppedTraceEntries,
       }),
     );
     throw error;
   } finally {
+    for (const [event, listener] of ownerListeners)
+      owner.removeListener(event, listener);
     await browser.shutdown();
     owner.destroy();
     guard.destroy();
