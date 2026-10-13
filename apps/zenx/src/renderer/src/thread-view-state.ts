@@ -22,6 +22,7 @@ function projectedQueue(
     clientId: item.clientId,
     text: userInputText(item.input),
     imageCount: item.input.filter((part) => part.type === "image").length,
+    revision: item.revision,
   }));
 }
 
@@ -95,7 +96,11 @@ export function applyNativeThreadEvent(
       ? { ...thread, name: event.name, updatedAt: nowSeconds }
       : thread;
   }
-  if (event.type === "thread_archived_updated") return thread;
+  if (
+    event.type === "thread_archived_updated" ||
+    event.type === "thread_deleted_updated"
+  )
+    return thread;
   if (event.type === "thread_settings_updated") {
     return event.threadId === thread.id
       ? {
@@ -122,6 +127,7 @@ export function applyNativeThreadEvent(
     if (
       event.item.type === "user_message_queued" ||
       event.item.type === "user_message_queue_cancelled" ||
+      event.item.type === "user_message_queue_edited" ||
       event.item.type === "user_message"
     ) {
       thread = {

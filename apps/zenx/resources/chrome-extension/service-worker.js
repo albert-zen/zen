@@ -1,5 +1,5 @@
 const NATIVE_HOST = "com.zenx.chrome_bridge";
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const READY_TIMEOUT_MS = 5000;
 let connection;
 let actionChain = Promise.resolve();
@@ -11,6 +11,17 @@ chrome.action.onClicked.addListener(() => {
 async function handleAction() {
   if (connection !== undefined) {
     await disconnect(connection);
+    return;
+  }
+  let identity;
+  try {
+    identity = await browserIdentity();
+  } catch (error) {
+    await chrome.action.setBadgeBackgroundColor({ color: "#a33a3a" });
+    await chrome.action.setBadgeText({ text: "!" });
+    await chrome.action.setTitle({
+      title: `ZenX connection failed: ${describeError(error)}`,
+    });
     return;
   }
   const session = {
@@ -41,6 +52,15 @@ async function handleAction() {
         ) {
           clearTimeout(timer);
           resolve();
+        } else if (message?.type === "connection-rejected") {
+          clearTimeout(timer);
+          reject(
+            new Error(
+              typeof message.message === "string"
+                ? message.message
+                : "Another browser is connected",
+            ),
+          );
         } else if (message?.type === "cdp-command" && session.published) {
           void runCommand(session, message);
         }
@@ -62,6 +82,7 @@ async function handleAction() {
         protocolVersion: PROTOCOL_VERSION,
         scope: "browser",
         extensionVersion: chrome.runtime.getManifest().version,
+        ...identity,
       });
     });
     const tabs = await chrome.tabs.query({});
@@ -79,7 +100,9 @@ async function handleAction() {
     });
     await chrome.action.setBadgeBackgroundColor({ color: "#16784a" });
     await chrome.action.setBadgeText({ text: "ON" });
-    await chrome.action.setTitle({ title: "Disconnect Chrome from ZenX" });
+    await chrome.action.setTitle({
+      title: "Disconnect this browser from ZenX",
+    });
   } catch (error) {
     await disconnect(session);
     if (connection !== undefined) return;
@@ -324,4 +347,25 @@ function publicTab(tab) {
 }
 function describeError(error) {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300);
+}
+
+// Random per-install identity only. No account or profile information is read.
+async function browserIdentity() {
+  const key = "zenxBrowserInstanceId";
+  await chrome.storage.local.setAccessLevel({
+    accessLevel: "TRUSTED_CONTEXTS",
+  });
+  const stored = await chrome.storage.local.get(key);
+  let instanceId = stored[key];
+  if (
+    typeof instanceId !== "string" ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(instanceId)
+  ) {
+    instanceId = crypto.randomUUID();
+    await chrome.storage.local.set({ [key]: instanceId });
+  }
+  return {
+    instanceId,
+    browser: /\bEdg\//.test(navigator.userAgent) ? "edge" : "chrome",
+  };
 }

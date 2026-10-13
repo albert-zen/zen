@@ -62,44 +62,33 @@ test("Browser Host accepts web message URLs and rejects unsafe navigation", () =
   );
 });
 
-test("bare message URLs shed markdown residue and CJK prose punctuation", () => {
-  // Observed failure: a model wrote `**url**（prose…）`; the emphasis fails to
-  // pair before full-width punctuation and the autolinker keeps the residue in
-  // the href, navigating to a 404.
-  const observed = classifyMessageLink(
-    "http://127.0.0.1:56277/sales–architecture.html**（刚重启，已验证",
-  );
-  assert.deepEqual(observed, {
-    kind: "browser",
-    value: new URL("http://127.0.0.1:56277/sales–architecture.html").toString(),
+test("message classification preserves explicit and Host current-page URL targets", () => {
+  // The external-opening callers use the same classifier for exact Host URLs.
+  for (const href of [
+    "https://example.test/report%EF%BC%88v2%EF%BC%89.html",
+    "https://example.test/search?q=one%EF%BC%8Ctwo",
+    "https://example.test/app#chapter_1!",
+    "https://example.test/a_",
+    "https://example.test/a**",
+    "https://example.test/报告（v2）.html",
+  ]) {
+    const expected = new URL(href).toString();
+    const target = classifyMessageLink(href);
+    assert.deepEqual(target, { kind: "browser", value: expected }, href);
+    if (target.kind === "browser")
+      assert.equal(workspaceBrowserUrl(target.value), expected);
+  }
+  assert.deepEqual(classifyMessageLink("#第1节（修订）"), {
+    kind: "anchor",
+    href: "#第1节（修订）",
   });
-  const wrapped = classifyMessageLink("https://example.com/a）");
-  assert.deepEqual(wrapped, {
-    kind: "browser",
-    value: "https://example.com/a",
+  const mailto = "mailto:owner@example.test?subject=report%EF%BC%88v2%EF%BC%89";
+  assert.deepEqual(classifyMessageLink(mailto), {
+    kind: "external",
+    href: mailto,
   });
-  const emphasized = classifyMessageLink("https://example.com/a**");
-  assert.deepEqual(emphasized, {
-    kind: "browser",
-    value: "https://example.com/a",
+  assert.deepEqual(classifyMessageLink("报告（v2）.md"), {
+    kind: "file",
+    value: "报告（v2）.md",
   });
-  const sentence = classifyMessageLink("https://example.com/a。");
-  assert.deepEqual(sentence, {
-    kind: "browser",
-    value: "https://example.com/a",
-  });
-  const query = classifyMessageLink("https://example.com/?a=1，下一页");
-  assert.deepEqual(query, {
-    kind: "browser",
-    value: "https://example.com/?a=1",
-  });
-  // Legitimate targets survive: CJK characters in a path are not punctuation,
-  // and CJK punctuation inside a workspace file name stays a file link.
-  const cjkPath = classifyMessageLink("http://127.0.0.1:56277/报告.html");
-  assert.deepEqual(cjkPath, {
-    kind: "browser",
-    value: new URL("http://127.0.0.1:56277/报告.html").toString(),
-  });
-  const file = classifyMessageLink("报告（v2）.md");
-  assert.deepEqual(file, { kind: "file", value: "报告（v2）.md" });
 });

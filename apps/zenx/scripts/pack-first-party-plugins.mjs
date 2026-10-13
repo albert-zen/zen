@@ -44,18 +44,30 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-electron-1.0.4.tgz",
+    "zenx-browser-plugin-electron-1.0.5.tgz",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-playwright-1.0.4.tgz",
+    "zenx-browser-plugin-multi-1.0.7.tgz",
+    "variants/multi.zenx.plugin.json",
+  ),
+  plugin(
+    "@zenx/browser-plugin",
+    "zenx-browser-plugin",
+    "zenx-browser-plugin-concurrent-1.0.6.tgz",
+    "variants/concurrent.zenx.plugin.json",
+  ),
+  plugin(
+    "@zenx/browser-plugin",
+    "zenx-browser-plugin",
+    "zenx-browser-plugin-playwright-1.0.5.tgz",
     "variants/playwright.zenx.plugin.json",
   ),
   plugin(
     "@zenx/browser-plugin",
     "zenx-browser-plugin",
-    "zenx-browser-plugin-user-session-1.0.4.tgz",
+    "zenx-browser-plugin-user-session-1.0.5.tgz",
     "variants/user-session.zenx.plugin.json",
   ),
   plugin(
@@ -162,7 +174,7 @@ async function packFirstPartyPlugin(definition, options) {
     const result = JSON.parse(packed.stdout);
     const filename = result?.[0]?.filename;
     const expectedPacked = definition.tarball.replace(
-      /-(?:electron|playwright|user-session|macos|peekaboo|win32)(?=-\d)/u,
+      /-(?:electron|concurrent|multi|playwright|user-session|macos|peekaboo|win32)(?=-\d)/u,
       "",
     );
     if (typeof filename !== "string" || filename !== expectedPacked) {

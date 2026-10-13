@@ -1,3 +1,4 @@
+import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
@@ -21,6 +22,7 @@ import {
 } from "./compact-command.js";
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { SidebarResizer } from "./SidebarResizer.js";
 import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
 import { FleetComposerSurface } from "./FleetComposerSurface.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
@@ -142,6 +144,11 @@ import {
 } from "./thread-view-state.js";
 import { ThreadView } from "./ThreadView.js";
 import { ThreadConversationViewport } from "./thread-conversation-viewport.js";
+import { requestQueuedEdit, importQueuedImages } from "./queue-edit-request.js";
+import {
+  createQueueEditStore,
+  type QueueEditStore,
+} from "./queue-edit-state.js";
 import {
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
@@ -389,6 +396,7 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
   const pendingResumeProjectionRef = useRef<{
@@ -551,6 +559,7 @@ export function App() {
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const messageLinkSequence = useRef(0);
   const [messageLinkRequest, setMessageLinkRequest] = useState<{
     id: number;
     threadId: string;
@@ -580,6 +589,13 @@ export function App() {
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
     NativeThreadSummary[]
   >([]);
+  const [deletedThreadSummaries, setDeletedThreadSummaries] = useState<
+    DeletedThreadSummary[]
+  >([]);
+  const [deletedThreadError, setDeletedThreadError] = useState<string | null>(
+    null,
+  );
+  const [deletedThreadLoading, setDeletedThreadLoading] = useState(true);
   const [threadListLoaded, setThreadListLoaded] = useState({
     active: false,
     archived: false,
@@ -780,6 +796,34 @@ export function App() {
     }
     setThreadListLoaded({ active: true, archived: true });
   };
+
+  const deletedLoadEpoch = useRef(0);
+  const loadDeletedThreads = async (showLoading = false) => {
+    const epoch = ++deletedLoadEpoch.current;
+    if (showLoading) setDeletedThreadLoading(true);
+    try {
+      const result = await window.zenx.protocol.request(
+        "zen/thread/deleted/list",
+        {},
+      );
+      if (deletedLoadEpoch.current !== epoch) return;
+      setDeletedThreadSummaries(result.data);
+      setDeletedThreadError(null);
+    } catch (error) {
+      if (deletedLoadEpoch.current !== epoch) return;
+      setDeletedThreadError(describeError(error));
+    } finally {
+      if (deletedLoadEpoch.current === epoch) setDeletedThreadLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (
+      page === "settings" &&
+      settingsTab === "archived" &&
+      serverStatus.type === "ready"
+    )
+      void loadDeletedThreads(true);
+  }, [page, settingsTab, serverStatus.type]);
 
   const loadProjects = async () => {
     const epoch = ++projectLoadEpoch.current;
@@ -1084,6 +1128,26 @@ export function App() {
           void loadThreadSummaries();
           void loadProjects();
         }
+        if (method === "zen/thread/event") {
+          const lifecycle = (
+            params as ServerNotificationParams["zen/thread/event"]
+          ).event;
+          if (lifecycle.type === "thread_deleted_updated")
+            void loadDeletedThreads();
+          if (
+            lifecycle.type === "thread_deleted_updated" &&
+            lifecycle.deleted
+          ) {
+            threadProjectionCacheRef.current.delete(lifecycle.threadId);
+            setThreadSummaries((current) =>
+              current.filter((entry) => entry.threadId !== lifecycle.threadId),
+            );
+            setArchivedThreadSummaries((current) =>
+              current.filter((entry) => entry.threadId !== lifecycle.threadId),
+            );
+            clearSelectedThreadForArchive(lifecycle.threadId);
+          }
+        }
         const pendingResume = pendingResumeProjectionRef.current;
         const notification = {
           method,
@@ -1132,10 +1196,36 @@ export function App() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           const nativeEvent = projected.event;
+          if (
+            nativeEvent.type === "item_completed" &&
+            nativeEvent.item.type === "user_message_queue_edited"
+          ) {
+            const edited = nativeEvent.item;
+            queueAttemptsRef.current.delete(
+              `${projected.threadId}:${edited.queuedItemId}`,
+            );
+            if (selectedThreadIdRef.current === projected.threadId)
+              setQueueFailure((current) =>
+                current?.queuedItemId === edited.queuedItemId &&
+                (current.revision ?? 0) < edited.revision
+                  ? null
+                  : current,
+              );
+          }
           if (nativeEvent.type === "queue_admission_started") {
             const key = `${projected.threadId}:${nativeEvent.queuedItemId}`;
-            queueAttemptsRef.current.set(key, nativeEvent.attemptId);
-            if (selectedThreadIdRef.current === projected.threadId)
+            const sameRevision = cached?.thread.queuedMessages?.some(
+              (item) =>
+                item.id === nativeEvent.queuedItemId &&
+                item.clientId === nativeEvent.clientId &&
+                (item.revision ?? 0) === (nativeEvent.revision ?? 0),
+            );
+            if (sameRevision)
+              queueAttemptsRef.current.set(key, nativeEvent.attemptId);
+            if (
+              sameRevision &&
+              selectedThreadIdRef.current === projected.threadId
+            )
               setQueueFailure((current) =>
                 current?.queuedItemId === nativeEvent.queuedItemId
                   ? null
@@ -1150,7 +1240,8 @@ export function App() {
               cached?.thread.queuedMessages?.some(
                 (item) =>
                   item.id === nativeEvent.queuedItemId &&
-                  item.clientId === nativeEvent.clientId,
+                  item.clientId === nativeEvent.clientId &&
+                  (item.revision ?? 0) === (nativeEvent.revision ?? 0),
               )
             )
               setQueueFailure(nativeEvent);
@@ -2267,6 +2358,40 @@ export function App() {
     await loadProjects();
   };
 
+  const deleteArchivedThread = async (summary: NativeThreadSummary) => {
+    if (summary.lastItemId === undefined)
+      throw new Error(i18n.t("settings:settingsView.unavailableJournal"));
+    await window.zenx.protocol.request("zen/thread/delete", {
+      threadId: summary.threadId,
+      expectedLastItemId: summary.lastItemId,
+    });
+    threadProjectionCacheRef.current.delete(summary.threadId);
+    setArchivedThreadSummaries((current) =>
+      current.filter((entry) => entry.threadId !== summary.threadId),
+    );
+    clearSelectedThreadForArchive(summary.threadId);
+    await Promise.all([
+      loadThreadSummaries(),
+      loadDeletedThreads(),
+      loadProjects(),
+    ]);
+  };
+
+  const restoreDeletedThread = async (summary: DeletedThreadSummary) => {
+    await window.zenx.protocol.request("zen/thread/restore", {
+      threadId: summary.threadId,
+      deletionItemId: summary.deletionItemId,
+    });
+    setDeletedThreadSummaries((current) =>
+      current.filter((entry) => entry.threadId !== summary.threadId),
+    );
+    await Promise.all([
+      loadThreadSummaries(),
+      loadDeletedThreads(),
+      loadProjects(),
+    ]);
+  };
+
   const toggleSidebarCollapsed = () => {
     setSidebarCollapsed((current) => {
       const next = !current;
@@ -2394,6 +2519,7 @@ export function App() {
 
   const renderSideConversation = (id: string) => (
     <ThreadConversationViewport
+      queueEditStore={queueEditStore}
       key={id}
       threadId={id}
       composer={composerStates[id] ?? emptyComposerState()}
@@ -2405,11 +2531,11 @@ export function App() {
         void resumeThread(id)
           .then(() => {
             if (selectedThreadIdRef.current !== id) return;
-            setMessageLinkRequest((previous) => ({
+            setMessageLinkRequest({
               ...target,
-              id: (previous?.id ?? 0) + 1,
+              id: ++messageLinkSequence.current,
               threadId: id,
-            }));
+            });
             setBrowserPanels((current) => ({
               ...current,
               [id]: true,
@@ -2635,6 +2761,10 @@ export function App() {
         threadLoading={!threadListLoaded.active}
         threads={activeSummaries}
       />
+      <SidebarResizer
+        collapsed={sidebarCollapsed}
+        onCollapse={toggleSidebarCollapsed}
+      />
 
       {projectError !== null ||
       requestError !== null ||
@@ -2695,7 +2825,15 @@ export function App() {
             archivedError={threadListErrors.archived}
             archivedLoading={!threadListLoaded.archived}
             archivedThreads={archivedSummaries}
-            onRetryArchived={() => void loadThreadSummaries(true)}
+            deletedThreads={deletedThreadSummaries}
+            deletedError={deletedThreadError}
+            deletedLoading={deletedThreadLoading}
+            onDelete={deleteArchivedThread}
+            onRestoreDeleted={restoreDeletedThread}
+            onRetryArchived={() => {
+              void loadThreadSummaries(true);
+              void loadDeletedThreads(true);
+            }}
             onTabChange={setSettingsTab}
             onUnarchive={performThreadLifecycle}
             onOpenSidebar={openSidebar}
@@ -2720,6 +2858,15 @@ export function App() {
             </ImZenXDraftContext.Provider>
           ) : (
             <AgentSurface
+              onRecoverQueuedEdit={(threadId) => {
+                // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
+                if (
+                  selectedThreadIdRef.current === threadId &&
+                  newThreadDraftRef.current === null
+                )
+                  void resumeThread(threadId, true);
+              }}
+              queueEditStore={queueEditStore}
               threadHeader={
                 selectedThreadId !== null &&
                 newThreadDraft === null &&
@@ -2735,11 +2882,11 @@ export function App() {
                 ) : null
               }
               onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest((previous) => ({
+                setMessageLinkRequest({
                   ...target,
-                  id: (previous?.id ?? 0) + 1,
+                  id: ++messageLinkSequence.current,
                   threadId,
-                }));
+                });
                 setBrowserPanels((current) => ({
                   ...current,
                   [threadId]: true,
@@ -3251,6 +3398,8 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  onRecoverQueuedEdit,
+  queueEditStore,
   threadHeader,
   onOpenMessageLink,
   composerSendMode,
@@ -3308,6 +3457,8 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  onRecoverQueuedEdit(threadId: string): void;
+  queueEditStore: QueueEditStore;
   onOpenMessageLink(
     threadId: string,
     target: { kind: "file" | "browser"; value: string },
@@ -3549,6 +3700,14 @@ function AgentSurface({
             onCancelQueued={(targets) =>
               onCancelQueued(threadDetail.id, targets)
             }
+            queueEditStore={queueEditStore}
+            onEditQueued={(params) =>
+              requestQueuedEdit(params, () =>
+                onRecoverQueuedEdit(params.threadId),
+              )
+            }
+            onImportQueueImages={importQueuedImages}
+            onPickQueueImages={() => window.zenx.imageAttachments.pick()}
             composerContext={
               composerSendModeMigration?.acknowledged === false &&
               composerSendMode === "soft" ? (
@@ -3582,7 +3741,8 @@ function AgentSurface({
               threadDetail.queuedMessages?.some(
                 (item) =>
                   item.id === queueFailure.queuedItemId &&
-                  item.clientId === queueFailure.clientId,
+                  item.clientId === queueFailure.clientId &&
+                  (item.revision ?? 0) === (queueFailure.revision ?? 0),
               )
                 ? queueFailure
                 : null

@@ -988,3 +988,7 @@ Missing or inaccessible selections fail visibly and preserve the draft.
 For the standalone selector visual fixture, run from the repository root:
 `node node_modules/vite/bin/vite.js apps/zenx/test/fixtures/selector --host 127.0.0.1 --port 5189`.
 It uses the actual composer with fixture Host responses; it does not start ZAS.
+
+### Concurrent browsers
+
+The ordinary Browser settings now add an explicitly connected Chrome or Edge alongside the shared Workspace browser. Backend-qualified references and separate tool-name approvals prevent cross-routing. See [the concurrency contract](../../docs/browser-concurrency.md) for setup, migration, single-external-connection limits and validation boundaries.

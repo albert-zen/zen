@@ -21,6 +21,8 @@ import type { ZenXThreadAttachmentProjection } from "../../main/image-attachment
 import type { ModelSummary, Thread } from "../../protocol-client/index.js";
 import type { ApprovalCardState } from "./approval-state.js";
 import { ThreadView } from "./ThreadView.js";
+import { requestQueuedEdit, importQueuedImages } from "./queue-edit-request.js";
+import type { QueueEditStore } from "./queue-edit-state.js";
 import {
   applyNativeThreadEvent,
   projectNativeRecovery,
@@ -70,6 +72,7 @@ function nativeSettings(
 
 /** A transient viewport onto the existing native Thread, never a new session. */
 export function ThreadConversationViewport({
+  queueEditStore,
   threadId,
   composer,
   readComposer,
@@ -88,6 +91,7 @@ export function ThreadConversationViewport({
   workflowCommands,
   archived = false,
 }: {
+  queueEditStore?: QueueEditStore;
   threadId: string;
   composer: ComposerState;
   readComposer(): ComposerState;
@@ -123,6 +127,7 @@ export function ThreadConversationViewport({
   const [revision, setRevision] = useState(0);
   const [queueFailure, setQueueFailure] = useState<{
     queuedItemId: string;
+    revision?: number;
     code: string;
     message: string;
   } | null>(null);
@@ -176,8 +181,35 @@ export function ThreadConversationViewport({
       setThread(projection);
       if (event.event.type === "thread_settings_updated")
         setSettings(nativeSettings(threadId, event.event.settings));
-      if (event.event.type === "queue_failed") setQueueFailure(event.event);
-      if (event.event.type === "queue_admission_started") setQueueFailure(null);
+      if (
+        event.event.type === "queue_failed" ||
+        event.event.type === "queue_admission_started"
+      ) {
+        const queueEvent = event.event;
+        if (
+          projection.queuedMessages?.some(
+            (item) =>
+              item.id === queueEvent.queuedItemId &&
+              item.clientId === queueEvent.clientId &&
+              (item.revision ?? 0) === (queueEvent.revision ?? 0),
+          )
+        )
+          setQueueFailure(
+            queueEvent.type === "queue_failed" ? queueEvent : null,
+          );
+      }
+      if (
+        event.event.type === "item_completed" &&
+        event.event.item.type === "user_message_queue_edited"
+      ) {
+        const edited = event.event.item;
+        setQueueFailure((current) =>
+          current?.queuedItemId === edited.queuedItemId &&
+          (current.revision ?? 0) < edited.revision
+            ? null
+            : current,
+        );
+      }
       if (projection.canonicalItems !== undefined)
         callbacks.current.updateComposer((state) =>
           reconcileCanonicalAdmission(
@@ -198,6 +230,31 @@ export function ThreadConversationViewport({
       if (!current() || method !== "zen/thread/event") return;
       const event = params as NativeProjectedThreadEvent;
       if (event.threadId !== threadId) return;
+      if (
+        event.event.type === "thread_deleted_updated" &&
+        event.event.deleted
+      ) {
+        if (
+          processEpoch !== null &&
+          (event.processEpoch !== processEpoch || event.watermark <= watermark)
+        )
+          return;
+        // Revoke this viewport independently of the primary App selection. This
+        // also fences its pending resume and attachment/usage responses.
+        generation.current += 1;
+        buffered = null;
+        projection = null;
+        setThread(null);
+        setSettings(null);
+        setAttachments({});
+        setUsage(undefined);
+        setQueueFailure(null);
+        setLoading(false);
+        setError(
+          i18n.t("settings:settingsView.deletedConversationUnavailable"),
+        );
+        return;
+      }
       if (buffered !== null) buffered.push(event);
       else apply(event);
     });
@@ -368,6 +425,17 @@ export function ThreadConversationViewport({
           updateComposer((value) => editComposer(value, text))
         }
         onRespondToApproval={respondToApproval}
+        queueEditStore={queueEditStore}
+        onEditQueued={(params) => {
+          const epoch = generation.current;
+          return requestQueuedEdit(params, () => {
+            // Reload uses the existing read-only native resume barrier.
+            if (generation.current === epoch && params.threadId === threadId)
+              reload();
+          });
+        }}
+        onImportQueueImages={importQueuedImages}
+        onPickQueueImages={() => window.zenx.imageAttachments.pick()}
         onSubmit={submit}
         onOpenMessageLink={onOpenMessageLink}
         onModelChange={(model) =>

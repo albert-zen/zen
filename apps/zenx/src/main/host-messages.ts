@@ -1,3 +1,5 @@
+import type { ShellPanelRequest, ShellPanelResult } from "../shell-panel.js";
+import { validateShellPanelRequest } from "../shell-panel.js";
 import type { ZenHostOptions } from "../../../../apps/cli/src/host.js";
 import type {
   NativeThreadSummary,
@@ -58,6 +60,7 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
 
 export type HostCommand =
+  | { type: "shell-panel/request"; requestId: string; input: ShellPanelRequest }
   | {
       type: "fleet/control";
       requestId: string;
@@ -138,6 +141,12 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | {
+      type: "shell-panel/result";
+      requestId: string;
+      result?: ShellPanelResult;
+      error?: string;
+    }
   | {
       type: "fleet/result";
       requestId: string;
@@ -247,6 +256,7 @@ export type HostEvent =
       invocationId: string;
       generationToken: string;
       invocation: {
+        approvalScope?: import("../../../../src/tool.js").ToolApprovalScope;
         callId: string;
         canonicalToolCallId?: string;
         threadId?: string;
@@ -291,6 +301,14 @@ export function isHostCommand(value: unknown): value is HostCommand {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "shell-panel/request") {
+    try {
+      validateShellPanelRequest(fleet.input);
+      return typeof fleet.requestId === "string";
+    } catch {
+      return false;
+    }
+  }
   if (fleet.type === "fleet/control")
     return (
       typeof fleet.requestId === "string" && typeof fleet.action === "string"
@@ -393,6 +411,11 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "shell-panel/result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
   if (fleet.type === "fleet/result")
     return (
       typeof fleet.requestId === "string" &&

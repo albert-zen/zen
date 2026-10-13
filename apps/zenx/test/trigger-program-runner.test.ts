@@ -229,46 +229,140 @@ test(
   },
 );
 
-test("Windows containment discovers and kills a descendant born during termination", async () => {
-  const root: WindowsProcessIdentity = {
-    pid: 101,
-    parentPid: 1,
-    processGroupId: null,
-    sessionId: null,
-    startTime: "root-original",
-  };
-  const lateDescendant: WindowsProcessIdentity = {
-    pid: 303,
-    parentPid: root.pid,
-    processGroupId: null,
-    sessionId: null,
-    startTime: "late-descendant",
-  };
-  let table: WindowsProcessTableSnapshot = { entries: [root] };
-  const taskkills: Array<[number, boolean]> = [];
+function windowsIdentity(
+  pid: number,
+  parentPid: number,
+  startTime: string,
+): WindowsProcessIdentity {
+  return { pid, parentPid, startTime, processGroupId: null, sessionId: null };
+}
 
-  const result = await verifyAndTerminateWindowsProcessTree(
+for (const nested of [false, true]) {
+  for (const parentState of ["absent", "reused"] as const) {
+    test(`Windows containment rejects a newly observed child of a ${parentState} ${nested ? "nested parent" : "root"}`, async () => {
+      const root = windowsIdentity(101, 1, "100");
+      const parent = nested ? windowsIdentity(202, root.pid, "100") : root;
+      // An unobserved intermediate generation (200) may have created this
+      // child (250), even though it predates the current replacement (400).
+      const ambiguous = windowsIdentity(303, parent.pid, "250");
+      const entries = [
+        ...(nested ? [root] : []),
+        ...(parentState === "reused" ? [{ ...parent, startTime: "400" }] : []),
+        ambiguous,
+      ];
+      const dispatched: WindowsProcessIdentity[] = [];
+      const actual = await verifyAndTerminateWindowsProcessTree(
+        root.pid,
+        { root, descendants: nested ? [parent] : [] },
+        {
+          captureProcessTable: async () => ({ entries }),
+          terminateProcessIdentity: async (identity) => {
+            dispatched.push(identity);
+            return { ok: true, error: "" };
+          },
+        },
+        { quiescencePollMs: 0 },
+      );
+      assert.equal(actual.ok, false);
+      assert.match(
+        actual.error,
+        /parent.*identity.*containment was not proven/u,
+      );
+      assert.deepEqual(dispatched, []);
+    });
+  }
+}
+
+test("Windows containment does not silently ignore a new child of a replacement parent", async () => {
+  const root = windowsIdentity(101, 1, "100");
+  const replacement = { ...root, startTime: "400" };
+  const child = windowsIdentity(303, root.pid, "450");
+  const dispatched: number[] = [];
+  const actual = await verifyAndTerminateWindowsProcessTree(
     root.pid,
     { root, descendants: [] },
     {
-      captureProcessTable: async () => structuredClone(table),
-      terminateProcessIdentity: async (expected) => {
-        taskkills.push([expected.pid, true]);
-        table =
-          expected.pid === root.pid
-            ? { entries: [lateDescendant] }
-            : { entries: [] };
+      captureProcessTable: async () => ({ entries: [replacement, child] }),
+      terminateProcessIdentity: async (identity) => {
+        dispatched.push(identity.pid);
         return { ok: true, error: "" };
       },
     },
     { quiescencePollMs: 0 },
   );
+  assert.deepEqual(dispatched, []);
+  assert.equal(actual.ok, false);
+  assert.match(actual.error, /parent.*identity.*containment was not proven/u);
+});
 
-  assert.deepEqual(result, { ok: true, error: "" });
-  assert.deepEqual(taskkills, [
-    [root.pid, true],
-    [lateDescendant.pid, true],
-  ]);
+test("Windows containment rejects an old orphan despite a matching current parent", async () => {
+  const root = windowsIdentity(101, 1, "400");
+  const oldOrphan = windowsIdentity(303, root.pid, "250");
+  const dispatched: number[] = [];
+  const actual = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [] },
+    {
+      captureProcessTable: async () => ({ entries: [root, oldOrphan] }),
+      terminateProcessIdentity: async (identity) => {
+        dispatched.push(identity.pid);
+        return { ok: true, error: "" };
+      },
+    },
+    { quiescencePollMs: 0 },
+  );
+  assert.equal(actual.ok, false);
+  assert.match(actual.error, /predates.*parent.*containment was not proven/u);
+  assert.deepEqual(dispatched, []);
+});
+
+test("Windows containment preserves captured descendants after their parent exits", async () => {
+  const root = windowsIdentity(101, 1, "100");
+  const descendant = windowsIdentity(202, root.pid, "200");
+  let entries = [descendant];
+  const dispatched: number[] = [];
+  const actual = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [descendant] },
+    {
+      captureProcessTable: async () => ({ entries: [...entries] }),
+      terminateProcessIdentity: async (identity) => {
+        dispatched.push(identity.pid);
+        entries = [];
+        return { ok: true, error: "" };
+      },
+    },
+    { quiescencePollMs: 0 },
+  );
+  assert.deepEqual(actual, { ok: true, error: "" });
+  assert.deepEqual(dispatched, [descendant.pid]);
+});
+
+test("Windows containment admits a late descendant while the parent generation still matches", async () => {
+  const root = windowsIdentity(101, 1, "100");
+  const lateDescendant = windowsIdentity(303, root.pid, "200");
+  let entries = [root];
+  const dispatched: number[] = [];
+  const actual = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [] },
+    {
+      captureProcessTable: async () => ({ entries: [...entries] }),
+      terminateProcessIdentity: async (identity) => {
+        dispatched.push(identity.pid);
+        // The first dispatch has not exited the root yet, allowing another
+        // snapshot to witness both the same parent and its newly born child.
+        entries =
+          dispatched.length === 1
+            ? [root, lateDescendant]
+            : entries.filter((entry) => entry.pid !== identity.pid);
+        return { ok: true, error: "" };
+      },
+    },
+    { quiescencePollMs: 0 },
+  );
+  assert.deepEqual(actual, { ok: true, error: "" });
+  assert.deepEqual(dispatched, [root.pid, root.pid, lateDescendant.pid]);
 });
 
 test("Windows containment fails when the deadline finds a non-empty tree", async () => {

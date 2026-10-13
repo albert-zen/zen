@@ -42,6 +42,12 @@ export interface BrowserTabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** Shared Workspace Browser only; other backends omit control metadata. */
+  control?: "agent" | "human";
+  agentActionsInFlight?: number;
+  agentActionOutcomeUnknown?: boolean;
+  requiresFreshObservation?: boolean;
+  mutationsRequireObservation?: boolean;
 }
 
 export interface BrowserInspection extends BrowserTabSummary {
@@ -139,6 +145,7 @@ export interface ZenXBrowserBackend {
     tabId: string,
     url: string,
     signal?: AbortSignal,
+    observationId?: string,
   ): Promise<BrowserTabSummary>;
   inspect(
     sessionId: string,
@@ -173,6 +180,7 @@ export interface ZenXBrowserBackend {
     sessionId: string,
     tabId: string,
     signal?: AbortSignal,
+    observationId?: string,
   ): Promise<void> | void;
   closeSession(
     sessionId: string,
@@ -185,13 +193,13 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "browser",
   name: "Browser",
-  version: "1.0.4",
+  version: "1.0.5",
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/browser" },
   mainDocument:
-    "Use Browser for bounded tab inspection and interaction. Inspect coverage: a full response is a self-contained bounded view, not necessarily the whole page. Follow nextCursor with browser_inspect cursor to read the same immutable capture without renewing its observationId; native omissions remain explicit. Stable targetId values only act with the latest observationId and are revalidated. Prefer observe:true on actions. Pass baseObservationId only while retaining that first-page baseline (and applied targetChanges); omitted base or full:true resynchronizes, including after context compaction. Diffs use added/updated/removedFromView and optional complete order, with visibleText replaced only when present; removedFromView never proves DOM deletion. Cursor pages do not change the first-page diff baseline. Discard all prior continuation pages when adopting a new observation or first-page diff; use the new nextCursor to read its tails. If actionCompleted:true includes observationError, inspect again without repeating the completed action.",
+    "Use Browser for bounded tab inspection and interaction. Inspect coverage: a full response is a self-contained bounded view, not necessarily the whole page. Follow nextCursor with browser_inspect cursor to read the same immutable capture without renewing its observationId; native omissions remain explicit. Stable targetId values only act with the latest observationId and are revalidated. Prefer observe:true on actions. Pass baseObservationId only while retaining that first-page baseline (and applied targetChanges); omitted base or full:true resynchronizes, including after context compaction. Diffs use added/updated/removedFromView and optional complete order, with visibleText replaced only when present; removedFromView never proves DOM deletion. Cursor pages do not change the first-page diff baseline. Discard all prior continuation pages when adopting a new observation or first-page diff; use the new nextCursor to read its tails. If actionCompleted:true includes observationError, inspect again without repeating the completed action. Shared Workspace tabs expose control and mutationsRequireObservation. Human control blocks Agent mutations; only the user can return control. After takeover, every mutation, including browser_navigate/browser_close, must carry the latest observationId from a new browser_inspect after return. In-flight/unknown actions are not cancelled; never replay them automatically.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -292,6 +300,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       inputSchema: browserTargetSchema(
         {
           url: stringSchema(),
+          observationId: handoffObservationOption(),
           observe: observationOption(),
           baseObservationId: observationReadProperties.baseObservationId,
           full: observationReadProperties.full,
@@ -397,7 +406,9 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       name: "browser_close",
       description:
         "Close one explicit ZenX browser tab and invalidate its latest observation.",
-      inputSchema: browserTargetSchema(),
+      inputSchema: browserTargetSchema({
+        observationId: handoffObservationOption(),
+      }),
       permissions: ["browser.navigate"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "tab.close"],
@@ -413,6 +424,23 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
     },
   ],
 };
+
+function optionalTargetId(
+  arguments_: Readonly<Record<string, unknown>>,
+  name: string,
+): string | undefined {
+  return arguments_[name] === undefined
+    ? undefined
+    : requiredTargetId(arguments_, name);
+}
+
+function handoffObservationOption() {
+  return {
+    type: "string",
+    description:
+      "Required for a shared Workspace tab after human takeover: pass its latest browser_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field.",
+  };
+}
 
 function observationOption() {
   return {
@@ -435,6 +463,8 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXBrowserBackend;
   readonly #threadObservation: BrowserThreadObservation;
+  readonly #ownsBackend: boolean;
+  #closePromise: Promise<void> | undefined;
   readonly #presentation: ObservationPresentation<
     BrowserInspection["targets"][number]
   >;
@@ -442,7 +472,9 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   constructor(
     backend: ZenXBrowserBackend,
     manifest: ZenXPluginManifestV2 = browserCapabilityManifest,
+    options: { ownsBackend?: boolean } = {},
   ) {
+    this.#ownsBackend = options.ownsBackend ?? true;
     this.#backend = backend;
     this.#threadObservation = new BrowserThreadObservation(backend);
     this.#presentation = new ObservationPresentation({
@@ -652,6 +684,7 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           requiredTargetId(invocation.arguments, "tabId"),
           safeBrowserUrl(requiredString(invocation.arguments, "url")),
           invocation.signal,
+          optionalTargetId(invocation.arguments, "observationId"),
         );
       case "browser_inspect":
         return await this.#backend.inspect(
@@ -708,7 +741,12 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       }
       case "browser_close": {
         const tabId = requiredTargetId(invocation.arguments, "tabId");
-        await this.#backend.closeTab(sessionId, tabId, invocation.signal);
+        await this.#backend.closeTab(
+          sessionId,
+          tabId,
+          invocation.signal,
+          optionalTargetId(invocation.arguments, "observationId"),
+        );
         return { closed: true, sessionId, tabId };
       }
       case "browser_close_session":
@@ -725,9 +763,29 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
+    if (this.#closePromise !== undefined) return await this.#closePromise;
     this.#presentation.close();
-    this.#threadObservation.close();
-    await this.#backend.close();
+    const sessions = this.#threadObservation.close();
+    this.#closePromise = (async () => {
+      if (this.#ownsBackend) {
+        await this.#backend.close();
+        return;
+      }
+      // The app owns the shared Workspace port. Retiring a runtime generation
+      // releases only that generation's opaque sessions, never another's lease.
+      const results = await Promise.allSettled(
+        sessions.map(async (id) => await this.#backend.closeSession(id)),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length > 0)
+        throw new AggregateError(
+          failures,
+          "Browser session lease cleanup failed",
+        );
+    })();
+    await this.#closePromise;
   }
 }
 
@@ -2453,6 +2511,7 @@ async function evaluateInTab<T>(
 export async function evaluateBrowserDocument<T>(
   debuggerApi: Pick<BrowserWindow["webContents"]["debugger"], "sendCommand">,
   expression: string,
+  beforeDispatch?: () => void,
 ): Promise<T> {
   const tree = (await debuggerApi.sendCommand("Page.getFrameTree")) as {
     frameTree?: { frame?: { id?: string } };
@@ -2470,6 +2529,7 @@ export async function evaluateBrowserDocument<T>(
     world.executionContextId! <= 0
   )
     throw new Error("Browser CDP isolated execution context is unavailable");
+  beforeDispatch?.();
   const response = (await debuggerApi.sendCommand("Runtime.evaluate", {
     expression,
     contextId: world.executionContextId,

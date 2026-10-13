@@ -1,7 +1,7 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import React, { act, useState } from "react";
+import React, { act, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -349,3 +349,256 @@ test("side panel expanded state persists across thread remounts", async () => {
     dom.window.close();
   }
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+for (const kind of ["browser", "file"] as const) {
+  for (const fail of [false, true]) {
+    test(`acknowledged ${kind} links retain delayed ${fail ? "failure" : "success"}`, async () => {
+      const dom = linkPanelDom();
+      const gate = deferred<any>();
+      const old = {
+        id: "old",
+        threadId: "acknowledged",
+        title: "Old page",
+        url: "https://example.test/old",
+        canGoBack: false,
+        canGoForward: false,
+      };
+      let changed: (value: any) => void = () => {};
+      let selection = "browser:old";
+      (window as any).zenx = {
+        workspaceBrowser: {
+          command: async (_thread: string, command: string) =>
+            command === "new" ? gate.promise : [old],
+          onChanged: (listener: typeof changed) => {
+            changed = listener;
+            return () => {};
+          },
+          onFocusAddress: () => () => {},
+          mount: async () => ({}),
+        },
+        workspaceFiles: { read: async () => gate.promise },
+      };
+      function Harness() {
+        const [request, setRequest] = useState<any>(null);
+        const [tab, setTab] = useState("browser:old");
+        return React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(
+            "button",
+            {
+              id: "request-link",
+              onClick: () =>
+                setRequest({
+                  id: 1,
+                  kind,
+                  value:
+                    kind === "browser" ? "https://example.test/new" : "new.md",
+                }),
+            },
+            "Open link",
+          ),
+          React.createElement(AuxiliaryPanel, {
+            threadId: "acknowledged",
+            workspacePath: "/tmp/work",
+            title: "Test",
+            open: true,
+            onOpenChange: () => {},
+            selectedTab: tab,
+            onSelectTab: (id) => {
+              selection = id;
+              setTab(id);
+            },
+            snapshot: null,
+            messageLinkRequest: request,
+            onMessageLinkRequestHandled: (id) =>
+              setRequest((current: any) =>
+                current?.id === id ? null : current,
+              ),
+          }),
+        );
+      }
+      const root = createRoot(document.getElementById("root")!);
+      try {
+        await act(async () => root.render(React.createElement(Harness)));
+        await act(async () => document.getElementById("request-link")!.click());
+        await act(async () => {
+          if (fail) gate.reject(new Error("delayed-link-failure"));
+          else if (kind === "browser") {
+            const tabs = [
+              old,
+              {
+                ...old,
+                id: "new",
+                title: "New page",
+                url: "https://example.test/new",
+              },
+            ];
+            changed({ threadId: "acknowledged", tabs });
+            gate.resolve(tabs);
+          } else
+            gate.resolve({
+              path: "new.md",
+              text: "new file",
+              revision: "fixture",
+            });
+        });
+        if (fail)
+          assert.match(
+            document.body.textContent ?? "",
+            /delayed-link-failure/u,
+          );
+        else
+          assert.equal(
+            selection,
+            kind === "browser" ? "browser:new" : "file:new.md",
+          );
+      } finally {
+        await act(async () => root.unmount());
+        dom.window.close();
+      }
+    });
+  }
+}
+
+for (const interrupt of [
+  "newer link",
+  "tab selection",
+  "remount",
+  "resource switch",
+] as const) {
+  for (const fail of [false, true]) {
+    test(`late message link ${fail ? "failure" : "success"} respects ${interrupt}`, async () => {
+      const dom = linkPanelDom();
+      const gate = deferred<any[]>();
+      const page = (id: string) => ({
+        id,
+        threadId: "pending-a",
+        title: id,
+        url: `https://example.test/${id}`,
+        canGoBack: false,
+        canGoForward: false,
+      });
+      let pages = [page("old"), page("other")];
+      let changed: (value: any) => void = () => {};
+      let selection = "browser:old";
+      let creates = 0;
+      (window as any).zenx = {
+        workspaceBrowser: {
+          command: async (_thread: string, command: string) => {
+            if (command !== "new") return pages;
+            creates += 1;
+            if (creates === 1) return gate.promise;
+            pages = [...pages, page("newer")];
+            changed({ threadId: "pending-a", tabs: pages });
+            return pages;
+          },
+          onChanged: (listener: typeof changed) => {
+            changed = listener;
+            return () => {
+              changed = () => {};
+            };
+          },
+          onFocusAddress: () => () => {},
+          mount: async () => ({}),
+        },
+      };
+      function Harness({
+        show = true,
+        owner = "pending-a",
+      }: {
+        show?: boolean;
+        owner?: string;
+      }) {
+        const sequence = useRef(0);
+        const [request, setRequest] = useState<any>(null);
+        const [tab, setTab] = useState("browser:old");
+        return React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(
+            "button",
+            {
+              id: "pending-link",
+              onClick: () =>
+                setRequest({
+                  id: ++sequence.current,
+                  kind: "browser",
+                  value: "https://example.test/link",
+                }),
+            },
+            "Open link",
+          ),
+          show
+            ? React.createElement(AuxiliaryPanel, {
+                threadId: owner,
+                title: "Test",
+                open: true,
+                onOpenChange: () => {},
+                selectedTab: tab,
+                onSelectTab: (id) => {
+                  selection = id;
+                  setTab(id);
+                },
+                snapshot: null,
+                messageLinkRequest: request,
+                onMessageLinkRequestHandled: (id) =>
+                  setRequest((current: any) =>
+                    current?.id === id ? null : current,
+                  ),
+              })
+            : null,
+        );
+      }
+      const root = createRoot(document.getElementById("root")!);
+      try {
+        await act(async () => root.render(React.createElement(Harness)));
+        await act(async () => document.getElementById("pending-link")!.click());
+        if (interrupt === "newer link")
+          await act(async () =>
+            document.getElementById("pending-link")!.click(),
+          );
+        if (interrupt === "tab selection")
+          await act(async () =>
+            document.getElementById("aux-tab-browser:other")!.click(),
+          );
+        if (interrupt === "remount") {
+          await act(async () =>
+            root.render(React.createElement(Harness, { show: false })),
+          );
+          await act(async () => root.render(React.createElement(Harness)));
+        }
+        if (interrupt === "resource switch") {
+          await act(async () =>
+            root.render(React.createElement(Harness, { owner: "pending-b" })),
+          );
+          await act(async () => root.render(React.createElement(Harness)));
+        }
+        const expectedSelection = selection;
+        await act(async () => {
+          if (fail) gate.reject(new Error("stale-link-failure"));
+          else gate.resolve([...pages, page("stale")]);
+        });
+        assert.equal(selection, expectedSelection);
+        assert.doesNotMatch(
+          document.body.textContent ?? "",
+          /stale-link-failure/u,
+        );
+        assert.equal(creates, interrupt === "newer link" ? 2 : 1);
+      } finally {
+        await act(async () => root.unmount());
+        dom.window.close();
+      }
+    });
+  }
+}

@@ -312,6 +312,40 @@ test("disconnect waits for a pending attach before allowing the next browser con
   await waitFor(() => fixture.ports[1].disconnected);
 });
 
+test("browser instance identity survives reconnect and worker restart but differs per install", async () => {
+  const stored = {};
+  const first = await workerFixture({ stored, browser: "edge" });
+  first.clicked.emit(tab(1));
+  await waitFor(() =>
+    first.ports[0]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+  const hello = first.ports[0].messages.find(
+    (message) => message.type === "hello",
+  );
+  assert.match(hello.instanceId, /^[a-f0-9-]{36}$/);
+  assert.equal(hello.browser, "edge");
+  first.clicked.emit(tab(1));
+  await waitFor(() => first.ports[0].disconnected);
+  const next = await workerFixture({ stored, browser: "edge" });
+  const other = await workerFixture();
+  next.clicked.emit(tab(1));
+  other.clicked.emit(tab(1));
+  await waitFor(
+    () =>
+      next.ports[0]?.messages.some(
+        (message) => message.type === "browser-connected",
+      ) &&
+      other.ports[0]?.messages.some(
+        (message) => message.type === "browser-connected",
+      ),
+  );
+  assert.equal(next.ports[0].messages[0].instanceId, hello.instanceId);
+  assert.notEqual(other.ports[0].messages[0].instanceId, hello.instanceId);
+  assert.equal(Object.keys(stored).length, 1);
+});
+
 async function workerFixture(options = {}) {
   const clicked = event();
   const ports = [];
@@ -327,7 +361,16 @@ async function workerFixture(options = {}) {
       entry,
     ]),
   );
+  const stored = options.stored ?? {};
   const chrome = {
+    storage: {
+      local: {
+        setAccessLevel: async ({ accessLevel }) =>
+          assert.equal(accessLevel, "TRUSTED_CONTEXTS"),
+        get: async (key) => ({ [key]: stored[key] }),
+        set: async (value) => Object.assign(stored, value),
+      },
+    },
     action: {
       onClicked: clicked,
       setBadgeBackgroundColor: async () => {},
@@ -354,7 +397,7 @@ async function workerFixture(options = {}) {
     },
     runtime: {
       connectNative: () => {
-        const port = nativePort();
+        const port = nativePort(options);
         ports.push(port);
         return port;
       },
@@ -389,7 +432,16 @@ async function workerFixture(options = {}) {
     ),
     "utf8",
   );
-  vm.runInNewContext(source, { chrome, clearTimeout, setTimeout, URL });
+  vm.runInNewContext(source, {
+    chrome,
+    clearTimeout,
+    setTimeout,
+    URL,
+    crypto: globalThis.crypto,
+    navigator: {
+      userAgent: options.browser === "edge" ? "Edg/130.0" : "Chrome/130.0",
+    },
+  });
   return {
     clicked,
     ports,
@@ -415,7 +467,7 @@ function event() {
   };
 }
 
-function nativePort() {
+function nativePort(options = {}) {
   const onMessage = event();
   const onDisconnect = event();
   return {
@@ -427,11 +479,19 @@ function nativePort() {
       this.messages.push(message);
       if (message?.type === "hello") {
         queueMicrotask(() =>
-          onMessage.emit({
-            type: "ready",
-            protocolVersion: 2,
-            scope: "browser",
-          }),
+          onMessage.emit(
+            options.rejectConnection
+              ? {
+                  type: "connection-rejected",
+                  message:
+                    "Another browser is connected. Disconnect its ZenX extension before connecting this browser.",
+                }
+              : {
+                  type: "ready",
+                  protocolVersion: message.protocolVersion,
+                  scope: "browser",
+                },
+          ),
         );
       }
     },
@@ -453,3 +513,24 @@ async function waitFor(predicate) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("a rejected competing browser reports the conflict without discovering or attaching tabs", async () => {
+  const fixture = await workerFixture({ rejectConnection: true });
+  const titles = [];
+  fixture.chrome.action.setTitle = async (value) => {
+    titles.push(value.title);
+  };
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    titles.some((title) => /Another browser is connected/.test(title)),
+  );
+  assert.equal(fixture.ports[0].disconnected, true);
+  assert.equal(
+    fixture.ports[0].messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+    false,
+  );
+  assert.deepEqual(fixture.attachCalls, []);
+  assert.deepEqual(fixture.removed, []);
+});

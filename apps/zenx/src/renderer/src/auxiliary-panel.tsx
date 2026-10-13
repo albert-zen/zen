@@ -1,3 +1,4 @@
+import { ShellThreadPanel } from "./shell-thread-panel.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
@@ -148,8 +149,9 @@ export function AuxiliaryPanel({
       onWidthChange(0);
     };
   }, [open, onWidthChange]);
-  const expandedKey =
-    threadId ?? (roomContext !== undefined ? `room:${roomContext.roomId}` : "");
+  const expandedKey = roomContext
+    ? `room:${roomContext.roomId}`
+    : `thread:${threadId}`;
   const [expanded, setExpandedState] = useState(
     () => expandedByConversation.get(expandedKey) ?? false,
   );
@@ -215,6 +217,15 @@ export function AuxiliaryPanel({
     ([key]) => threadId !== undefined && JSON.parse(key)[0] === threadId,
   );
   const candidates: ContentTab[] = [
+    ...(threadId !== undefined
+      ? [
+          {
+            id: "terminal",
+            title: i18n.t("panels:shellTitle"),
+            icon: "terminal" as const,
+          },
+        ]
+      : []),
     ...customTabs.map((tab) => ({ ...tab, id: `custom:${tab.id}` })),
     ...(conversation && threadId !== undefined
       ? [
@@ -480,8 +491,11 @@ export function AuxiliaryPanel({
     // Consume the request: the panel is keyed by thread and remounts on
     // every switch, so a stale request would otherwise reopen the link.
     onMessageLinkRequestHandled?.(messageLinkRequest.id);
-    selectionEpoch.current += 1;
-    let active = true;
+    const operationEpoch = ++selectionEpoch.current;
+    const bindingEpoch = resourceEpoch.current;
+    const current = () =>
+      resourceCurrent(bindingEpoch, threadId) &&
+      selectionEpoch.current === operationEpoch;
     setError("");
     void (async () => {
       try {
@@ -496,20 +510,19 @@ export function AuxiliaryPanel({
             undefined,
             messageLinkRequest.value,
           );
-          if (active) {
+          if (current()) {
             setBrowserTabs(tabs);
             const newest = tabs.at(-1);
             if (newest) select(`browser:${newest.id}`);
           }
         }
       } catch (reason) {
-        if (active)
+        if (current())
           setError(reason instanceof Error ? reason.message : String(reason));
       }
     })();
-    return () => {
-      active = false;
-    };
+    // Clearing the inbox acknowledges consumption, not cancellation. Existing
+    // resource/selection epochs fence newer navigation and actual unmounts.
     // A request id represents a single click; render changes must not replay it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messageLinkRequest?.id, threadId]);
@@ -816,6 +829,13 @@ export function AuxiliaryPanel({
               ))}
               {threadId !== undefined ? (
                 <>
+                  <button type="button" onClick={() => void add("terminal")}>
+                    <Icon name="terminal" />
+                    <span>
+                      <strong>{i18n.t("panels:shellTitle")}</strong>
+                      <small>{i18n.t("panels:shellChooser")}</small>
+                    </span>
+                  </button>
                   <button type="button" onClick={() => void add("file")}>
                     <Icon name="file" />
                     <span>
@@ -928,6 +948,13 @@ export function AuxiliaryPanel({
                 threadId={threadId}
                 tab={tab.browser}
                 open={open === true}
+              />
+            ) : null}
+            {tab.id === "terminal" && threadId !== undefined ? (
+              <ShellThreadPanel
+                key={threadId}
+                threadId={threadId}
+                active={open === true && visible}
               />
             ) : null}
             {tab.id === "computer" && threadId !== undefined ? (

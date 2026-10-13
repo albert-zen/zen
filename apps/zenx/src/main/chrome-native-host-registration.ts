@@ -12,6 +12,7 @@ const run = promisify(execFile);
 
 export interface ChromeNativeHostRegistrationOptions {
   platform: NodeJS.Platform;
+  browser?: "chrome" | "edge";
   homeDirectory: string;
   runtimeDirectory: string;
   executablePath: string;
@@ -45,8 +46,9 @@ export function chromeNativeHostManifestPath(
       options.homeDirectory,
       "Library",
       "Application Support",
-      "Google",
-      "Chrome",
+      ...(options.browser === "edge"
+        ? ["Microsoft Edge"]
+        : ["Google", "Chrome"]),
       "NativeMessagingHosts",
       `${ZENX_CHROME_NATIVE_HOST_NAME}.json`,
     );
@@ -55,7 +57,7 @@ export function chromeNativeHostManifestPath(
     return path.join(
       options.homeDirectory,
       ".config",
-      "google-chrome",
+      options.browser === "edge" ? "microsoft-edge" : "google-chrome",
       "NativeMessagingHosts",
       `${ZENX_CHROME_NATIVE_HOST_NAME}.json`,
     );
@@ -63,7 +65,9 @@ export function chromeNativeHostManifestPath(
   if (options.platform === "win32") {
     return path.join(
       options.runtimeDirectory,
-      `${ZENX_CHROME_NATIVE_HOST_NAME}.json`,
+      options.browser === "edge"
+        ? `${ZENX_CHROME_NATIVE_HOST_NAME}.edge.json`
+        : `${ZENX_CHROME_NATIVE_HOST_NAME}.json`,
     );
   }
   throw new Error(
@@ -77,7 +81,7 @@ export async function registerChromeNativeHost(
   const manifestFile = chromeNativeHostManifestPath(options);
   const manifest = {
     name: ZENX_CHROME_NATIVE_HOST_NAME,
-    description: "ZenX bridge for one explicitly selected Chrome tab",
+    description: "ZenX bridge for an explicitly connected browser",
     path: chromeNativeHostExecutablePath(options),
     type: "stdio",
     allowed_origins: [ZENX_CHROME_EXTENSION_ORIGIN],
@@ -97,7 +101,7 @@ export async function registerChromeNativeHost(
   if (options.platform === "win32") {
     await run("reg.exe", [
       "ADD",
-      `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${ZENX_CHROME_NATIVE_HOST_NAME}`,
+      chromeNativeHostRegistryKey(options),
       "/ve",
       "/t",
       "REG_SZ",
@@ -115,7 +119,7 @@ export async function unregisterChromeNativeHost(
   if (options.platform === "win32") {
     await run("reg.exe", [
       "DELETE",
-      `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${ZENX_CHROME_NATIVE_HOST_NAME}`,
+      chromeNativeHostRegistryKey(options),
       "/f",
     ]).catch((error: unknown) => {
       const output = `${(error as { stdout?: unknown }).stdout ?? ""} ${(error as { stderr?: unknown }).stderr ?? ""}`;
@@ -155,11 +159,25 @@ export async function chromeNativeHostRegistered(
   try {
     const result = await run("reg.exe", [
       "QUERY",
-      `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${ZENX_CHROME_NATIVE_HOST_NAME}`,
+      chromeNativeHostRegistryKey(options),
       "/ve",
     ]);
     return result.stdout.includes(manifestFile);
   } catch {
     return false;
   }
+}
+
+export function chromeNativeHostRegistryKey(
+  options: Pick<ChromeNativeHostRegistrationOptions, "browser">,
+): string {
+  return `HKCU\\Software\\${options.browser === "edge" ? "Microsoft\\Edge" : "Google\\Chrome"}\\NativeMessagingHosts\\${ZENX_CHROME_NATIVE_HOST_NAME}`;
+}
+
+export function readBrowserRegistrationTarget(
+  value: unknown,
+): "chrome" | "edge" {
+  if (value === undefined || value === "chrome") return "chrome";
+  if (value === "edge") return "edge";
+  throw new Error("Unsupported browser connector target");
 }

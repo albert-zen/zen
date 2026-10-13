@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ZenX runtime viewport fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #b5b8c0;
+      }
+      iframe {
+        border: 0;
+        display: block;
+        margin: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe title="ZenX runtime component viewport"></iframe>
+    <script>
+      const p = new URLSearchParams(location.search);
+      const f = document.querySelector("iframe");
+      f.width = String(
+        Math.max(280, Math.min(1440, Number(p.get("width") || 390))),
+      );
+      f.height = String(
+        Math.max(400, Math.min(1200, Number(p.get("height") || 600))),
+      );
+      p.delete("width");
+      p.delete("height");
+      f.src = "./agent-runtime-visual.html?" + p.toString();
+    </script>
+  </body>
+</html>

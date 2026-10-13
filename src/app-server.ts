@@ -6,7 +6,10 @@ import {
 } from "./skill-input.js";
 import { loadWorkspaceInstructions } from "./workspace-instructions.js";
 import type { WorkspaceInstructionFile } from "./item.js";
-import { pendingQueuedMessages } from "./input-queue.js";
+import {
+  pendingQueuedMessages,
+  type PendingQueuedUserMessage,
+} from "./input-queue.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -45,11 +48,13 @@ import type {
   UserMessageItem,
   QueuedUserMessageItem,
   QueuedUserMessageCancelledItem,
+  QueuedUserMessageEditedItem,
 } from "./item.js";
 import {
   contentFromUserMessage,
   SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   normalizeUserInput,
+  validateUserInput,
   previewFromUserMessage,
   sameUserInput,
 } from "./item.js";
@@ -143,10 +148,34 @@ export interface UnavailableThreadSnapshot {
 
 export type ThreadListEntry = ThreadSnapshot | UnavailableThreadSnapshot;
 
+/** Recovery-only product projection, intentionally without transcript contents. */
+export interface DeletedThreadSummary {
+  threadId: string;
+  name?: string;
+  cwd: string;
+  deletedAt: string;
+  deletionItemId: string;
+}
+
+export interface DeleteThreadResult {
+  threadId: string;
+  deletionItemId: string;
+}
+
 export interface TurnHandle {
   id: string;
   done: Promise<void>;
 }
+
+/** Canonical queue identity captured inside the Thread mutation. */
+export type QueuedInputAdmission =
+  | { state: "queued"; clientId: string; queuedItemId: string }
+  | {
+      state: "admitted";
+      clientId: string;
+      queuedItemId: string;
+      turnId: string;
+    };
 
 export interface QueuedCancellationTarget {
   queuedItemId: string;
@@ -155,6 +184,18 @@ export interface QueuedCancellationTarget {
 
 export interface QueuedCancellationResult extends QueuedCancellationTarget {
   status: "cancelled" | "already_cancelled" | "already_started" | "not_found";
+}
+
+export interface QueuedEditTarget extends QueuedCancellationTarget {
+  expectedRevision: number;
+  /** Unique per Save; an exact retry reuses this ID and original request. */
+  editId: string;
+}
+
+export interface QueuedEditResult extends QueuedCancellationTarget {
+  revision: number;
+  editItemId: string;
+  status: "edited" | "already_edited";
 }
 
 export interface CompactThreadOptions {
@@ -227,6 +268,8 @@ export type AppServerEvent =
   | RuntimeEvent
   | {
       type: "queue_admission_started";
+      /** Missing only on events from older Hosts. */
+      revision?: number;
       threadId: string;
       queuedItemId: string;
       clientId: string;
@@ -234,6 +277,8 @@ export type AppServerEvent =
     }
   | {
       type: "queue_failed";
+      /** Missing only on events from older Hosts. */
+      revision?: number;
       threadId: string;
       queuedItemId: string;
       clientId: string;
@@ -245,6 +290,7 @@ export type AppServerEvent =
   | ThreadNameUpdatedEvent
   | ThreadArchivedUpdatedEvent
   | ThreadStartedEvent
+  | { type: "thread_deleted_updated"; threadId: string; deleted: boolean }
   | ModelCatalogUpdatedEvent;
 
 export type HostOperationKind =
@@ -748,10 +794,12 @@ export class ZenAppServer {
     for (const threadId of threadIds) {
       try {
         const thread = await this.#loadThread(threadId);
-        if (thread !== undefined) {
+        if (thread !== undefined && thread.deletion === undefined) {
           snapshots.push(await this.#snapshot(thread));
         }
       } catch (error) {
+        if (error instanceof AppServerError && error.code === "thread_deleted")
+          continue;
         console.warn(`Could not load Thread ${threadId}`, error);
         snapshots.push(await this.#unavailableSnapshot(threadId, error));
       }
@@ -932,6 +980,135 @@ export class ZenAppServer {
     });
   }
 
+  async deleteThread(
+    threadId: string,
+    expectedLastItemId: string,
+  ): Promise<DeleteThreadResult> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#loadThread(threadId);
+      if (thread === undefined)
+        throw new AppServerError(
+          "thread_not_found",
+          `Unknown thread: ${threadId}`,
+        );
+      const items = thread.items;
+      const deletion = thread.deletion;
+      if (deletion !== undefined && items.at(-2)?.id === expectedLastItemId) {
+        // An earlier append may have committed before reporting an I/O error.
+        // Confirming its exact retry must also repair disposable client views.
+        this.#emit({ type: "thread_deleted_updated", threadId, deleted: true });
+        return { threadId, deletionItemId: deletion.id };
+      }
+      if (deletion !== undefined || items.at(-1)?.id !== expectedLastItemId)
+        throw new AppServerError(
+          "stale_thread",
+          "Thread changed; refresh before deleting it",
+        );
+      const metadata = await this.#threadMetadata.read(threadId);
+      if (metadata.archived !== true)
+        throw new AppServerError(
+          "thread_not_archived",
+          "Archive this Thread before deleting it",
+        );
+      if (
+        this.#activeTurns.has(threadId) ||
+        this.#replacementOperations.has(threadId) ||
+        this.#pendingReplacement(thread) !== undefined ||
+        this.#runtime.hasActiveToolTasks(threadId)
+      )
+        throw new AppServerError(
+          "thread_busy",
+          "Wait for the running turn and tools to finish before deleting this Thread",
+        );
+      const item: CanonicalItem = {
+        type: "thread_deleted",
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+      };
+      await this.#commit(thread, item);
+      this.#emit({ type: "thread_deleted_updated", threadId, deleted: true });
+      return { threadId, deletionItemId: item.id };
+    });
+  }
+
+  async listDeletedThreads(): Promise<DeletedThreadSummary[]> {
+    const deleted: DeletedThreadSummary[] = [];
+    for (const threadId of await this.#journal.listThreadIds()) {
+      try {
+        const thread = await this.#loadThread(threadId);
+        if (thread === undefined || thread.deletion === undefined) continue;
+        const metadata = await this.#threadMetadata
+          .read(threadId)
+          .catch((error: unknown) => {
+            console.warn(
+              `Could not read product metadata for deleted Thread ${threadId}`,
+              error,
+            );
+            return {} as ThreadProductMetadata;
+          });
+        const deletion = thread.deletion;
+        if (deletion === undefined) continue;
+        deleted.push({
+          threadId,
+          deletionItemId: deletion.id,
+          deletedAt: deletion.createdAt,
+          cwd: thread.effectiveConfiguration().cwd,
+          ...(metadata.name === undefined ? {} : { name: metadata.name }),
+        });
+      } catch (error) {
+        console.warn(`Could not read deleted Thread ${threadId}`, error);
+      }
+    }
+    return deleted.sort(
+      (left, right) =>
+        right.deletedAt.localeCompare(left.deletedAt) ||
+        left.threadId.localeCompare(right.threadId),
+    );
+  }
+
+  async restoreThread(
+    threadId: string,
+    deletionItemId: string,
+  ): Promise<ThreadSnapshot> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#loadThread(threadId);
+      if (thread === undefined)
+        throw new AppServerError(
+          "thread_not_found",
+          `Unknown thread: ${threadId}`,
+        );
+      const last = thread.items.at(-1);
+      if (
+        last?.type === "thread_restored" &&
+        last.deletionItemId === deletionItemId
+      ) {
+        this.#emit({
+          type: "thread_deleted_updated",
+          threadId,
+          deleted: false,
+        });
+        return await this.#snapshot(thread);
+      }
+      if (thread.deletion?.id !== deletionItemId)
+        throw new AppServerError(
+          "stale_thread",
+          "Thread deletion changed; refresh before restoring it",
+        );
+      // Persist archival before making the journal readable/executable again.
+      await this.#threadMetadata.setArchived(threadId, true);
+      await this.#commit(thread, {
+        type: "thread_restored",
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        deletionItemId,
+      });
+      this.#emit({ type: "thread_deleted_updated", threadId, deleted: false });
+      return await this.#snapshot(thread);
+    });
+  }
+
   async #prepareSkillInput(
     thread: Thread,
     requested: RequestedUserInput,
@@ -966,79 +1143,252 @@ export class ZenAppServer {
       requestApproval?: ApprovalHandler;
       deliveryMode?: "batch-next";
       requireUnarchived?: boolean;
+      /** Defaults to waiting for first Turn admission, never Turn completion. */
+      waitForTurnAdmission?: boolean;
     } = {},
-  ): Promise<void> {
+  ): Promise<QueuedInputAdmission> {
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
-    await this.#withThreadMutation(threadId, async () => {
-      const thread = await this.#requireThread(threadId);
-      if (options.requireUnarchived === true)
-        await this.#requireUnarchived(threadId);
-      const input = await this.#prepareSkillInput(
-        thread,
-        requestedInput,
-        clientId,
-      );
-      const duplicate = thread.items.find(
-        (item) =>
-          (item.type === "user_message_queued" ||
-            item.type === "user_message") &&
-          item.clientId === clientId,
-      );
-      if (
-        duplicate?.type === "user_message_queued" ||
-        duplicate?.type === "user_message"
-      ) {
+    let added = false;
+    const admission = await this.#withThreadMutation<QueuedInputAdmission>(
+      threadId,
+      async () => {
+        const thread = await this.#requireThread(threadId);
+        if (options.requireUnarchived === true)
+          await this.#requireUnarchived(threadId);
+        const input = await this.#prepareSkillInput(
+          thread,
+          requestedInput,
+          clientId,
+        );
+        const queued = thread.items.find(
+          (item): item is QueuedUserMessageItem =>
+            item.type === "user_message_queued" && item.clientId === clientId,
+        );
+        if (queued !== undefined) {
+          if (
+            thread.items.some(
+              (item) =>
+                item.type === "user_message_queue_cancelled" &&
+                item.queuedItemId === queued.id &&
+                item.clientId === clientId,
+            )
+          )
+            throw new AppServerError(
+              "queue_id_cancelled",
+              "This queued client ID was canceled; use a new ID for a new message",
+            );
+          if (!sameUserInput(queued.input, input))
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Queue client id was already used for different input",
+            );
+          if (queued.deliveryMode !== options.deliveryMode)
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Queue client id was already used for a different delivery mode",
+            );
+          const consumed = thread.items.find(
+            (item): item is UserMessageItem =>
+              item.type === "user_message" && item.clientId === clientId,
+          );
+          return consumed === undefined
+            ? { state: "queued", clientId, queuedItemId: queued.id }
+            : {
+                state: "admitted",
+                clientId,
+                queuedItemId: queued.id,
+                turnId: consumed.turnId,
+              };
+        }
         if (
-          duplicate.type === "user_message_queued" &&
           thread.items.some(
             (item) =>
-              item.type === "user_message_queue_cancelled" &&
-              item.queuedItemId === duplicate.id &&
+              (item.type === "user_message" ||
+                item.type === "turn_replacement_requested") &&
               item.clientId === clientId,
           )
         )
           throw new AppServerError(
-            "queue_id_cancelled",
-            "This queued client ID was canceled; use a new ID for a new message",
-          );
-        const prior =
-          duplicate.type === "user_message_queued"
-            ? duplicate.input
-            : contentFromUserMessage(duplicate);
-        if (!sameUserInput(prior, input))
-          throw new AppServerError(
             "idempotency_conflict",
-            "Queue client id was already used for different input",
+            "Queue client id was already used without queued input lineage",
           );
+        const resolved = this.#requireSelection(
+          thread.effectiveConfiguration(),
+        );
+        await this.#validateInput(input, resolved.model.inputModalities);
+        const item: QueuedUserMessageItem = {
+          id: this.#id(),
+          type: "user_message_queued",
+          threadId,
+          createdAt: this.#now(),
+          clientId,
+          input,
+          ...(options.deliveryMode === undefined
+            ? {}
+            : { deliveryMode: options.deliveryMode }),
+        };
+        await this.#commit(thread, item);
+        this.#emit({ type: "item_completed", item });
+        added = true;
+        return { state: "queued", clientId, queuedItemId: item.id };
+      },
+    );
+    // A receipt retry is a read of canonical evidence, never an implicit Resume.
+    if (added) {
+      const starting = this.resumeQueue(threadId, options);
+      if (options.waitForTurnAdmission !== false) await starting;
+      else
+        void starting.catch((error: unknown) => {
+          // resumeQueue reports the identified live attempt through queue_failed.
+          // Keep other failures observable too, without logging input or secrets.
+          console.error(
+            "Queued input could not start",
+            safeQueueFailure(error).code,
+          );
+        });
+    }
+    return admission;
+  }
+
+  /** Edits append a revision without moving, admitting, or resuming the queue. */
+  async editQueuedMessage(
+    threadId: string,
+    target: QueuedEditTarget,
+    requestedInput: UserInput,
+  ): Promise<QueuedEditResult> {
+    target = { ...target }; // Freeze request identity before any asynchronous work.
+    if (
+      [target.queuedItemId, target.clientId, target.editId].some(
+        (value) =>
+          typeof value !== "string" ||
+          value.trim().length === 0 ||
+          value.length > 512,
+      ) ||
+      !Number.isSafeInteger(target.expectedRevision) ||
+      target.expectedRevision < 0 ||
+      target.expectedRevision >= Number.MAX_SAFE_INTEGER
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Queue identity, edit ID and a nonnegative expected revision are required",
+      );
+    let input: UserInput;
+    try {
+      validateUserInput(requestedInput, "input");
+      input = normalizeUserInput(requestedInput);
+    } catch {
+      throw new AppServerError(
+        "invalid_input",
+        "Provide valid text and image attachment input",
+      );
+    }
+    if (
+      input.some(
+        (part) =>
+          part.type === "audio" ||
+          (part.type === "text" && part.skillSource !== undefined),
+      )
+    )
+      throw new AppServerError(
+        "queue_edit_unsupported_input",
+        "Queued edits support ordinary text and images only",
+      );
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      const previous = thread.items.find(
+        (item): item is QueuedUserMessageEditedItem =>
+          item.type === "user_message_queue_edited" &&
+          item.editId === target.editId,
+      );
+      if (previous !== undefined) {
         if (
-          duplicate.type === "user_message_queued" &&
-          duplicate.deliveryMode !== options.deliveryMode
-        ) {
+          previous.queuedItemId !== target.queuedItemId ||
+          previous.clientId !== target.clientId ||
+          previous.revision !== target.expectedRevision + 1 ||
+          !sameUserInput(previous.input, input)
+        )
           throw new AppServerError(
             "idempotency_conflict",
-            "Queue client id was already used for a different delivery mode",
+            "Queue edit ID was already used for a different edit",
           );
-        }
-        return;
+        return {
+          queuedItemId: previous.queuedItemId,
+          clientId: previous.clientId,
+          revision: previous.revision,
+          editItemId: previous.id,
+          status: "already_edited",
+        };
       }
+      const original = thread.items.find(
+        (item): item is QueuedUserMessageItem =>
+          item.type === "user_message_queued" &&
+          item.id === target.queuedItemId &&
+          item.clientId === target.clientId,
+      );
+      if (original === undefined)
+        throw new AppServerError(
+          "queue_not_found",
+          "Queued message was not found",
+        );
+      if (
+        this.#reservedQueuedItems.get(threadId)?.has(original.id) ||
+        thread.items.some(
+          (item) =>
+            item.type === "user_message" && item.clientId === target.clientId,
+        )
+      )
+        throw new AppServerError(
+          "queue_already_started",
+          "This queued message has already started and cannot be edited",
+        );
+      const current = pendingQueuedMessages(thread.items).find(
+        (item) => item.id === original.id,
+      );
+      if (current === undefined)
+        throw new AppServerError(
+          "queue_cancelled",
+          "This queued message was cancelled and cannot be edited",
+        );
+      if (current.revision !== target.expectedRevision)
+        throw new AppServerError(
+          "queue_revision_conflict",
+          "This queued message changed. Review the current version before saving again",
+        );
+      if (
+        current.input.some(
+          (part) =>
+            part.type === "audio" ||
+            (part.type === "text" && part.skillSource !== undefined),
+        )
+      )
+        throw new AppServerError(
+          "queue_edit_unsupported_input",
+          "Queued messages containing audio or Host skill snapshots cannot be edited",
+        );
       const resolved = this.#requireSelection(thread.effectiveConfiguration());
       await this.#validateInput(input, resolved.model.inputModalities);
-      const queued: QueuedUserMessageItem = {
+      const edited: QueuedUserMessageEditedItem = {
         id: this.#id(),
-        type: "user_message_queued",
+        type: "user_message_queue_edited",
         threadId,
         createdAt: this.#now(),
-        clientId,
+        queuedItemId: current.id,
+        clientId: current.clientId,
+        editId: target.editId,
+        revision: current.revision + 1,
         input,
-        ...(options.deliveryMode === undefined
-          ? {}
-          : { deliveryMode: options.deliveryMode }),
       };
-      await this.#commit(thread, queued);
-      this.#emit({ type: "item_completed", item: queued });
+      await this.#commit(thread, edited);
+      this.#emit({ type: "item_completed", item: edited });
+      return {
+        queuedItemId: current.id,
+        clientId: current.clientId,
+        revision: edited.revision,
+        editItemId: edited.id,
+        status: "edited",
+      };
     });
-    await this.resumeQueue(threadId, options);
   }
 
   /** A canonical cancellation cannot undo a launched or delivered input. */
@@ -1166,7 +1516,7 @@ export class ZenAppServer {
       }
     };
     let attemptId: string;
-    let batch: QueuedUserMessageItem[];
+    let batch: PendingQueuedUserMessage[];
     while (true) {
       const pending = pendingQueuedMessages(thread.items)[0];
       if (pending === undefined) {
@@ -1215,9 +1565,13 @@ export class ZenAppServer {
   readonly #drainingQueues = new Set<string>();
   readonly #queueAdmissions = new Map<string, Promise<void>>();
 
-  #announceQueueAttempt(item: QueuedUserMessageItem, attemptId: string): void {
+  #announceQueueAttempt(
+    item: PendingQueuedUserMessage,
+    attemptId: string,
+  ): void {
     this.#emit({
       type: "queue_admission_started",
+      revision: item.revision,
       threadId: item.threadId,
       queuedItemId: item.id,
       clientId: item.clientId,
@@ -1230,9 +1584,13 @@ export class ZenAppServer {
       console.error("Queue admission failed without a known queued Item");
       return;
     }
+    const thread = this.#threads.get(threadId);
+    if (thread !== undefined && !this.#queueBatchCurrent(thread, [error.item]))
+      return;
     const { code, message } = safeQueueFailure(error.reason);
     this.#emit({
       type: "queue_failed",
+      revision: error.item.revision,
       threadId,
       queuedItemId: error.item.id,
       clientId: error.item.clientId,
@@ -1242,18 +1600,33 @@ export class ZenAppServer {
     });
   }
 
+  #queueBatchCurrent(
+    thread: Thread,
+    batch: readonly PendingQueuedUserMessage[],
+  ): boolean {
+    const pending = pendingQueuedMessages(thread.items);
+    return batch.every((item) =>
+      pending.some(
+        (current) =>
+          current.id === item.id &&
+          current.clientId === item.clientId &&
+          current.revision === item.revision,
+      ),
+    );
+  }
+
   async #preflightQueue(
     thread: Thread,
-    first: QueuedUserMessageItem,
+    first: PendingQueuedUserMessage,
     attemptId: string,
-  ): Promise<QueuedUserMessageItem[]> {
+  ): Promise<PendingQueuedUserMessage[]> {
     let selection: ResolvedProviderSelection;
     try {
       selection = this.#requireSelection(thread.effectiveConfiguration());
     } catch (error) {
       if (
         !pendingQueuedMessages(thread.items).some(
-          (item) => item.id === first.id,
+          (item) => item.id === first.id && item.revision === first.revision,
         )
       )
         throw new QueueBatchChanged();
@@ -1282,19 +1655,11 @@ export class ZenAppServer {
       try {
         await this.#validateInput(item.input, selection.model.inputModalities);
       } catch (error) {
-        if (
-          !pendingQueuedMessages(thread.items).some(
-            (entry) => entry.id === item.id,
-          )
-        )
+        if (!this.#queueBatchCurrent(thread, batch))
           throw new QueueBatchChanged();
         throw new QueueAdmissionRejection(item, attemptId, error);
       }
-      if (
-        !pendingQueuedMessages(thread.items).some(
-          (entry) => entry.id === item.id,
-        )
-      )
+      if (!this.#queueBatchCurrent(thread, batch))
         throw new QueueBatchChanged();
     }
     return batch;
@@ -1306,7 +1671,7 @@ export class ZenAppServer {
       requestApproval?: ApprovalHandler;
       requireUnarchived?: boolean;
     },
-    firstAttempt?: { batch: QueuedUserMessageItem[]; attemptId: string },
+    firstAttempt?: { batch: PendingQueuedUserMessage[]; attemptId: string },
     onFirstAdmission?: (
       outcome: { type: "admitted" } | { type: "rejected"; reason: unknown },
     ) => void,
@@ -1348,10 +1713,11 @@ export class ZenAppServer {
         const attemptId = nextAttempt?.attemptId ?? randomUUID();
         if (nextAttempt === undefined)
           this.#announceQueueAttempt(queued, attemptId);
-        let batch: QueuedUserMessageItem[];
+        let batch: PendingQueuedUserMessage[];
         if (
           nextAttempt !== undefined &&
-          nextAttempt.batch[0]?.id === queued.id
+          nextAttempt.batch[0]?.id === queued.id &&
+          this.#queueBatchCurrent(thread, nextAttempt.batch)
         ) {
           batch = nextAttempt.batch;
         } else {
@@ -1566,7 +1932,7 @@ export class ZenAppServer {
       replacementClientId?: string;
       initialMessages?: readonly { input: UserInput; clientId: string }[];
       queuedAdmission?: {
-        items: readonly QueuedUserMessageItem[];
+        items: readonly PendingQueuedUserMessage[];
         attemptId: string;
       };
     } = {},
@@ -1577,12 +1943,7 @@ export class ZenAppServer {
         await this.#requireUnarchived(threadId);
       if (
         internal.queuedAdmission !== undefined &&
-        !internal.queuedAdmission.items.every((item) =>
-          pendingQueuedMessages(thread.items).some(
-            (candidate) =>
-              candidate.id === item.id && candidate.clientId === item.clientId,
-          ),
-        )
+        !this.#queueBatchCurrent(thread, internal.queuedAdmission.items)
       )
         throw new QueueBatchChanged();
       if (
@@ -1637,7 +1998,9 @@ export class ZenAppServer {
             !matchesSkillInputSnapshot(
               requestedInput,
               intent.type === "user_message_queued"
-                ? intent.input
+                ? (pendingQueuedMessages(thread.items).find(
+                    (item) => item.id === intent.id,
+                  )?.input ?? intent.input)
                 : inputFromReplacement(intent),
             )
           ) {
@@ -2889,7 +3252,16 @@ export class ZenAppServer {
         `Unknown thread: ${threadId}`,
       );
     }
+    this.#requireNotDeleted(thread);
     return thread;
+  }
+
+  #requireNotDeleted(thread: Thread): void {
+    if (thread.deletion !== undefined)
+      throw new AppServerError(
+        "thread_deleted",
+        `Thread ${thread.id} is deleted; restore it before opening or changing it`,
+      );
   }
 
   /** Call under the same mutation lock used by setThreadArchived. */
@@ -2935,6 +3307,7 @@ export class ZenAppServer {
         error,
       );
     }
+    this.#requireNotDeleted(thread);
     const activeTurnId = this.#activeTurns.get(thread.id)?.turnId;
     const configuration = thread.effectiveConfiguration();
     const items = thread.items;
@@ -3015,7 +3388,7 @@ export class ZenAppServer {
     for (const threadId of threadIds) {
       try {
         const thread = await this.#loadThread(threadId);
-        if (thread !== undefined) {
+        if (thread !== undefined && thread.deletion === undefined) {
           rebuilt.set(threadId, await this.#summary(thread));
         }
       } catch (error) {
@@ -3040,7 +3413,9 @@ export class ZenAppServer {
   async #refreshThreadSummary(thread: Thread): Promise<void> {
     const summaries = await this.#captureThreadSummaries();
     const update = this.#threadSummaryWrites.then(async () => {
-      summaries.set(thread.id, await this.#summary(thread));
+      if (thread.deletion === undefined)
+        summaries.set(thread.id, await this.#summary(thread));
+      else summaries.delete(thread.id);
       await this.#saveThreadSummaries(summaries);
     });
     this.#threadSummaryWrites = update.catch(() => undefined);
@@ -3100,6 +3475,7 @@ export class ZenAppServer {
     const forkIndex = fork === undefined ? -1 : items.indexOf(fork);
     return {
       threadId: thread.id,
+      lastItemId: items.at(-1)!.id,
       currentMetadata: configuration,
       ...(metadata.parentThreadId === undefined
         ? {}
@@ -3426,6 +3802,8 @@ function forkablePrefix(
     const item = items[end]!;
     if (
       item.type !== "thread_configuration_changed" &&
+      item.type !== "thread_deleted" &&
+      item.type !== "thread_restored" &&
       !(item.type === "context_compaction" && item.turnId === undefined)
     ) {
       break;
@@ -3524,7 +3902,12 @@ function remapForkItems(
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
     if (copied.type === "thread_metadata") delete copied.parentThreadId;
-    if (copied.type === "user_message_queue_cancelled") {
+    if (copied.type === "thread_restored")
+      copied.deletionItemId = remap(copied.deletionItemId);
+    if (
+      copied.type === "user_message_queue_cancelled" ||
+      copied.type === "user_message_queue_edited"
+    ) {
       copied.queuedItemId = remap(copied.queuedItemId);
     }
     if (copied.type === "user_message" && copied.deliveryAfter !== undefined) {
@@ -3574,7 +3957,7 @@ class QueueBatchChanged extends Error {
 
 class QueueAdmissionRejection extends Error {
   constructor(
-    readonly item: QueuedUserMessageItem,
+    readonly item: PendingQueuedUserMessage,
     readonly attemptId: string,
     readonly reason: unknown,
   ) {
