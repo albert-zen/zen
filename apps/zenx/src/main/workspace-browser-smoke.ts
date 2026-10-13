@@ -882,14 +882,23 @@ async function assertStableControlLayout(): Promise<void> {
             const control=document.querySelector('.workspace-browser-control').getBoundingClientRect();
             const button=document.querySelector('.workspace-browser-control button').getBoundingClientRect();
             const status=document.querySelector('[role="status"]');
+            const geometry=(selector)=>{
+              try {
+                const element=document.querySelector(selector), style=getComputedStyle(element), rect=element.getBoundingClientRect();
+                return {selector,tag:element.tagName,inlineWidth:element.style.width,width:style.width,minWidth:style.minWidth,maxWidth:style.maxWidth,
+                  display:style.display,position:style.position,rect:[rect.x,rect.y,rect.width,rect.height]};
+              } catch { return {selector,unavailable:true}; }
+            };
             return {viewport:[viewport.x,viewport.y,viewport.width,viewport.height],
+              layout:{compatMode:document.compatMode,innerWidth,fixtureCount:document.querySelectorAll('#fixture').length,styleSheetCount:document.styleSheets.length,
+                geometry:['#fixture','.workspace-browser-panel','.workspace-browser-viewport'].map(geometry)},
               buttonVisible:button.x>=control.x&&button.right<=control.right&&button.y>=control.y&&button.bottom<=control.bottom,
               statusKeyboardScrollable:status.tabIndex===0&&status.clientHeight>0&&getComputedStyle(status).overflowY==='auto'};
           })()`);
           assert.equal(
             measured.viewport[2],
             width,
-            "Fixture must exercise the requested actual panel width",
+            `Fixture must exercise the requested actual panel width: ${JSON.stringify(measured.layout)}`,
           );
           expected ??= measured.viewport;
           assert.deepEqual(
