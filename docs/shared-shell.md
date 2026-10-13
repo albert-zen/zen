@@ -93,6 +93,18 @@ in a same-origin, scriptless, networkless sandboxed frame. The main renderer CSP
 is unchanged. Input writes are serialized, bounded and never automatically
 retried after an uncertain reply. No terminal output triggers Agent execution.
 
+## Windows native acceptance
+
+The real PowerShell fixture first checks basic input, file output and resize in
+an untouched session. It then imports the built-in Utility manifest by its exact
+`PSHOME` path before testing `Write-Output` and redirection. This is test-local
+dependency setup: the GitHub runner's reconstructed Azure/SQL module search paths
+made first Utility discovery exceed 20 seconds, while exact built-in import and
+the same cold/hot/resized commands completed promptly. The controls identified
+module-discovery dependence, not a defective individual module or PTY backend.
+Production shell flags, environment filtering and module paths are unchanged;
+arbitrary user module configurations are not covered by this timing assertion.
+
 ## References and decisions
 
 - [tmux getting started](https://github.com/tmux/tmux/wiki/Getting-Started):
@@ -111,3 +123,6 @@ retried after an uncertain reply. No terminal output triggers Agent execution.
 - [Microsoft node-pty](https://github.com/microsoft/node-pty): platform PTY support
   and native packaging requirements. The runtime uses its ordinary process
   privilege; it is not an additional OS security sandbox.
+- [PowerShell module paths](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath):
+  Windows PowerShell reconstructs its module paths when the variable is absent;
+  inheriting a PowerShell 7 module path is not a compatibility fix.
