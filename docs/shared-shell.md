@@ -45,9 +45,25 @@ commands retain their previous turn cancellation semantics.
   identity/count is guessed. PTYs do not fabricate those pipe-specific facts.
 - Stop is separate from closing a tab or side panel, and has an explicit
   confirmation in the view. Pipe commands retain the existing POSIX process-group
-  / Windows direct-child boundary. PTY stop signals the owned terminal; native
+  boundary. ZenX on Windows captures the owned foreground identity at launch and
+  uses the existing exact-handle, creation-time-checked termination primitive for
+  conservatively observed descendants. It never adopts new children of an absent
+  or reused parent. Each successful owned kill is followed by fresh observation;
+  uncertain ancestry or failed verification stays `cancellation_unconfirmed` with
+  diagnostics and retained task ownership, even if the direct child/pipes close.
+  This is bounded snapshot evidence, not a Windows Job Object or proof of every
+  escaped descendant. CLI/Fleet runtimes without this desktop adapter keep their
+  existing Windows direct-child boundary. PTY stop signals the owned terminal; native
   terminal closure ends its foreground process in the acceptance fixture.
   Escaped/detached descendants are not promised to be contained.
+- Windows native observation helpers stay part of their actual Shell invocation,
+  including fast commands. Host disposal joins that owned cleanup under one
+  30-second deadline; it does not equate a task notification with helper exit.
+  Native helper closure is not guaranteed by its kill-request timer. Deadline
+  expiry or unconfirmed cleanup is an explicit Host failure, with no claim that
+  all processes stopped. The Windows outer Host grace is 35 seconds, including a
+  five-second transport/resource margin; normal cleanup returns immediately when
+  observed complete, and other platforms retain their existing grace.
 - The live view retains at most 65,536 UTF-16 code units per session and discloses
   truncation. A read returns at most 32,768 code units. Reads use independent
   cursors; the Agent's normal `wait` output window is unchanged. Views preserve

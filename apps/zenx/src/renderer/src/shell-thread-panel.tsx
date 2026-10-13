@@ -369,6 +369,7 @@ function ShellTerminal({
     let timer: ReturnType<typeof setTimeout>;
     let term: Terminal | undefined;
     let resize: ResizeObserver | undefined;
+    let themeObserver: MutationObserver | undefined;
     let cursor = 0;
     let pending = "";
     let writing = false;
@@ -422,7 +423,7 @@ function ShellTerminal({
       const style = terminalDocument.createElement("style");
       style.textContent =
         terminalCss +
-        "html,body{height:100%;margin:0;overflow:hidden;background:#15171b}body{box-sizing:border-box;padding:10px}.xterm{height:100%}";
+        "html,body{height:100%;margin:0;overflow:hidden;background:var(--color-surface-control)}body{box-sizing:border-box;padding:10px}.xterm{height:100%}";
       terminalDocument.head.append(style);
       term = new Terminal({
         documentOverride: terminalDocument,
@@ -434,14 +435,30 @@ function ShellTerminal({
         screenReaderMode: true,
         fontSize: 12,
         fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
-        theme: {
-          background: "#15171b",
-          foreground: "#e3e7ed",
-          cursor: "#c2d7fa",
-          selectionBackground: "#415574",
-        },
       });
       terminal.current = term;
+      const applyTheme = () => {
+        if (!term || disposed) return;
+        const computed = window.getComputedStyle(document.documentElement);
+        const color = (name: string) => computed.getPropertyValue(name).trim();
+        const background = color("--color-surface-control");
+        terminalDocument.documentElement.style.setProperty(
+          "--color-surface-control",
+          background,
+        );
+        term.options.theme = {
+          background,
+          foreground: color("--color-text-primary"),
+          cursor: color("--color-accent"),
+          // xterm6 rejects translucent CSS4 token strings. Use the canonical
+          // opaque accent pair so selection stays legible in both app modes.
+          selectionBackground: color("--color-accent"),
+          selectionForeground: color("--color-text-on-accent"),
+        };
+      };
+      applyTheme();
+      themeObserver = new MutationObserver(applyTheme);
+      themeObserver.observe(document.documentElement, { attributes: true });
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(terminalDocument.body);
@@ -535,6 +552,7 @@ function ShellTerminal({
       input.current = false;
       clearTimeout(timer);
       resize?.disconnect();
+      themeObserver?.disconnect();
       term?.dispose();
       terminal.current = null;
     };

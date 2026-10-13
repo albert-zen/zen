@@ -18,7 +18,7 @@ export type {
 } from "./tool-task.js";
 import { createHash, randomUUID } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { sandboxCommand } from "./sandbox.js";
 import type { SandboxMode } from "./item.js";
 import { StringDecoder } from "node:string_decoder";
@@ -89,6 +89,8 @@ export interface ToolInvocation {
     onOutput(text: string): void;
     onShellOutput?(text: string): void;
     onShellControl?(control: ShellTerminalControl): void;
+    /** Trusted executor evidence; settlement alone did not prove cancellation. */
+    onCancellationUnconfirmed?(): void;
     /** Builtin shell observations only; absent before successful spawn. */
     onShellLifecycle?(facts: ShellLifecycleFacts): void;
     onModelContent?(content: UserInput): void;
@@ -1212,6 +1214,12 @@ export type ApprovalHandler = (
 ) => Promise<ApprovalDecision>;
 
 /** Concrete process execution only; the environment owns waiting and deadlines. */
+export interface ShellProcessTermination {
+  /** The invocation owns launch-observation helpers even after a fast command exits. */
+  readonly ready?: Promise<void>;
+  terminate(): Promise<{ ok: boolean; error: string }>;
+}
+
 export class ShellToolRuntime implements ToolRuntime {
   readonly enforcesSandbox = true;
   readonly remoteExecution = "text-json";
@@ -1254,6 +1262,8 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly #spool: ToolOutputSpool | undefined;
   readonly #outputFilter: ShellOutputFilter | undefined;
   readonly #pty: ShellPtyProvider | undefined;
+  readonly #trackProcess:
+    ((child: ChildProcess) => ShellProcessTermination) | undefined;
   constructor(
     options: {
       environment?: Readonly<NodeJS.ProcessEnv>;
@@ -1263,6 +1273,9 @@ export class ShellToolRuntime implements ToolRuntime {
       toolOutputSpool?: ToolOutputSpool;
       experimentalOutputFilter?: ShellOutputFilter;
       pty?: ShellPtyProvider;
+      /** Host adapter; ownership stays scoped to this exact invocation. */
+      trackProcess?: (child: ChildProcess) => ShellProcessTermination;
+      ownedCleanupWaitMs?: number;
     } = {},
   ) {
     this.#environment = Object.freeze(
@@ -1277,6 +1290,22 @@ export class ShellToolRuntime implements ToolRuntime {
     this.#spool = options.toolOutputSpool;
     this.#outputFilter = options.experimentalOutputFilter;
     this.#pty = options.pty;
+    this.#trackProcess = options.trackProcess;
+    if (options.trackProcess !== undefined) {
+      if (options.ownedCleanupWaitMs !== undefined) {
+        this.taskPolicy = {
+          ...this.taskPolicy,
+          shutdownWaitMs: options.ownedCleanupWaitMs,
+        };
+      }
+      this.specification = {
+        ...this.specification,
+        description: this.specification.description.replace(
+          "the direct child on Windows",
+          "the Host's captured, identity-verified process tree on Windows; ambiguous ownership or failed verification remains cancellation_unconfirmed",
+        ),
+      };
+    }
   }
   async #interactive(invocation: ToolInvocation): Promise<ToolExecutionResult> {
     if (!this.#pty || !invocation.taskContext || !invocation.threadId)
@@ -1374,6 +1403,20 @@ export class ShellToolRuntime implements ToolRuntime {
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    let processOwner: ShellProcessTermination | undefined;
+    try {
+      processOwner = this.#trackProcess?.(child);
+    } catch (error) {
+      // A failed ownership observer must not abandon the already-spawned task.
+      processOwner = {
+        async terminate() {
+          return {
+            ok: false,
+            error: `Process ownership unavailable: ${String(error)}`,
+          };
+        },
+      };
+    }
     let lifecycle: ShellLifecycleFacts | undefined;
     let stdoutEof = false;
     let stderrEof = false;
@@ -1444,6 +1487,31 @@ export class ShellToolRuntime implements ToolRuntime {
       const abort = () => {
         if (aborted || finished) return;
         aborted = true;
+        if (processOwner !== undefined) {
+          void processOwner.terminate().then(
+            (result) => {
+              if (!result.ok) {
+                invocation.taskContext?.onCancellationUnconfirmed?.();
+                write(
+                  `\n[Shell Stop unconfirmed: ${result.error.slice(0, 1024)}]\n`,
+                );
+              }
+              child.stdout.destroy();
+              child.stderr.destroy();
+              finish(130);
+            },
+            (error: unknown) => {
+              invocation.taskContext?.onCancellationUnconfirmed?.();
+              write(
+                `\n[Shell Stop unconfirmed: ${String(error).slice(0, 1024)}]\n`,
+              );
+              child.stdout.destroy();
+              child.stderr.destroy();
+              finish(130);
+            },
+          );
+          return;
+        }
         kill("SIGTERM");
         killTimer = setTimeout(() => {
           kill("SIGKILL");
@@ -1454,9 +1522,27 @@ export class ShellToolRuntime implements ToolRuntime {
       };
       child.once("error", (error) => {
         write(`\n[shell spawn failed: ${error.message}]`);
+        if (aborted && processOwner !== undefined) return;
         finish(1);
       });
       child.once("close", (code) => {
+        // Native child/pipe closure is separate from the adapter's bounded
+        // ownership verification. It cannot prematurely confirm a Stop.
+        if (aborted && processOwner !== undefined) return;
+        if (processOwner?.ready !== undefined) {
+          void processOwner.ready.then(
+            () => {
+              if (!aborted) finish(code ?? 128);
+            },
+            (error: unknown) => {
+              write(
+                `\n[Shell ownership observation failed: ${String(error).slice(0, 1024)}]\n`,
+              );
+              if (!aborted) finish(code ?? 128);
+            },
+          );
+          return;
+        }
         if (aborted) kill("SIGKILL");
         finish(aborted ? 130 : (code ?? 128));
       });

@@ -531,21 +531,32 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  await fleetHost?.close();
+  const failures: unknown[] = [];
+  const cleanup = async (operation: () => unknown | Promise<unknown>) => {
+    try {
+      await operation();
+    } catch (error) {
+      failures.push(error);
+    }
+  };
+  // Begin owned native cancellation immediately, before unrelated transport
+  // teardown can spend the outer Host shutdown budget.
+  const toolCleanup = cleanup(() => closeToolComposition?.());
+  closeToolComposition = undefined;
+  await cleanup(() => fleetHost?.close());
   fleetHost = undefined;
   for (const request of roomRequests.values()) {
     clearTimeout(request.timer);
     request.reject(new Error("Host stopped"));
   }
   roomRequests.clear();
-  await server?.close();
+  await cleanup(() => server?.close());
   server = undefined;
-  await closeToolComposition?.();
-  closeToolComposition = undefined;
+  await toolCleanup;
   if (appServer !== undefined) {
-    await appServer.closeHostResources();
+    await cleanup(() => appServer!.closeHostResources());
   } else {
-    await toolOutputSpool?.close();
+    await cleanup(() => toolOutputSpool?.close());
   }
   appServer = undefined;
   toolOutputSpool = undefined;
@@ -554,6 +565,12 @@ async function shutdown(): Promise<void> {
   replaceCapabilities = undefined;
   currentCapabilityGeneration = undefined;
   maintenance = undefined;
+  if (failures.length > 0) {
+    const message = `Host cleanup is unconfirmed: ${failures.map(String).join("; ")}`;
+    send({ type: "error", message });
+    console.error(message);
+    process.exitCode = 1;
+  }
   if (process.connected) process.disconnect();
   process.exit(process.exitCode ?? 0);
 }

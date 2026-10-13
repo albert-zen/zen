@@ -3,6 +3,9 @@ import test from "node:test";
 import os from "node:os";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { get } from "node:http";
+import { stripVTControlCharacters } from "node:util";
 import {
   ShellToolRuntime,
   ToolEnvironment,
@@ -15,6 +18,10 @@ import type {
   ShellSessionSummary,
 } from "../../../src/shell-session.js";
 import { desktopShellPty } from "../src/main/shell-pty.js";
+import {
+  trackWindowsShellProcess,
+  WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
+} from "../src/main/shell-process-termination.js";
 import { ShellPanelService } from "../src/main/shell-panel-service.js";
 import { validateShellPanelRequest } from "../src/shell-panel.js";
 
@@ -44,6 +51,12 @@ function fixture(
     ...(taskOptions ? { taskOptions } : {}),
     runtimes: [
       new ShellToolRuntime({
+        ...(process.platform === "win32"
+          ? {
+              trackProcess: trackWindowsShellProcess,
+              ownedCleanupWaitMs: WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
+            }
+          : {}),
         pty: {
           async spawn(options) {
             const trace = (stage: string) => {
@@ -138,6 +151,13 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
     assert.equal(created.origin, "user");
     assert.equal(created.cwd, directory);
     await until(f.service, created.taskId, (r) => r.session.inputAvailable);
+    if (process.platform === "win32") {
+      // Control registration precedes PowerShell's first prompt. Exercise input
+      // as a user would, after the shell has actually entered its read loop.
+      await until(f.service, created.taskId, (r) =>
+        /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
+      );
+    }
     await f.service.request({
       operation: "resize",
       threadId: "human",
@@ -479,11 +499,11 @@ test("human PTY outlives the Agent deadline and still exits on Host disposal", a
       callId: "lifetime",
       signal: new AbortController().signal,
     });
-    const agent = await f.tools.execute(
+    let agent = await f.tools.execute(
       f.tools.prepare(
         invocation("shell", {
-          // Keep the deadline fixture in the shell process itself. Ordinary
-          // Windows Shell cancellation intentionally does not own descendants.
+          // Isolate the deadline from descendant containment: the fixture
+          // runs entirely in the owned foreground shell process.
           command:
             process.platform === "win32"
               ? "for /L %i in (1,0,2) do @rem"
@@ -492,6 +512,19 @@ test("human PTY outlives the Agent deadline and still exits on Host disposal", a
         }),
       ),
     );
+    if (
+      (agent.structuredContent as { status: string }).status ===
+      "cancel_requested"
+    ) {
+      // The execution deadline is still 80ms. Native ownership verification is
+      // asynchronous, so observe its result rather than equating a yield with it.
+      agent = await f.tools.waitRuntime.execute(
+        invocation("wait", {
+          task_id: (agent.structuredContent as { task_id: string }).task_id,
+          yield_time_ms: 5000,
+        }),
+      );
+    }
     assert.equal(
       (agent.structuredContent as { status: string }).status,
       "timed_out",
@@ -527,6 +560,139 @@ test("human PTY outlives the Agent deadline and still exits on Host disposal", a
     ]);
     assert.deepEqual(f.tools.taskManager.listShellSessions("human"), []);
   } finally {
+    await f.tools.close();
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
+  }
+});
+
+test("panel Stop terminates an ordinary Agent Shell development server", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-agent-service-"));
+  const marker = path.join(directory, "service.json");
+  const script = path.join(directory, "service.cjs");
+  const token = randomUUID();
+  await writeFile(
+    script,
+    `
+const fs = require('node:fs');
+const server = require('node:http').createServer((req, res) => {
+  res.end(${JSON.stringify(token)});
+  if (req.url === '/stop/' + ${JSON.stringify(token)}) server.close(() => process.exit(0));
+});
+server.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({pid: process.pid, port: server.address().port}));
+});
+// An outer bound cleans up even if the test runner is interrupted.
+setTimeout(() => process.exit(1), 20000).unref();
+`,
+  );
+  const f = fixture(directory);
+  let owned: { pid: number; port: number } | undefined;
+  const request = (route = "/") =>
+    new Promise<string>((resolve, reject) => {
+      const req = get(
+        { hostname: "127.0.0.1", port: owned!.port, path: route, timeout: 500 },
+        (response) => {
+          let body = "";
+          response.on("data", (chunk) => {
+            body += String(chunk);
+          });
+          response.on("end", () => resolve(body));
+        },
+      );
+      req.once("error", reject);
+      req.once("timeout", () =>
+        req.destroy(new Error("Fixture request timeout")),
+      );
+    });
+  try {
+    const command =
+      process.platform === "win32"
+        ? `"${process.execPath}" "${script}"`
+        : `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`;
+    const receipt = await f.tools.execute(
+      f.tools.prepare({
+        name: "shell",
+        arguments: { command, yield_time_ms: 1 },
+        cwd: directory,
+        threadId: "human",
+        callId: "service-stop",
+        signal: new AbortController().signal,
+      }),
+    );
+    const taskId = (receipt.structuredContent as { task_id: string }).task_id;
+    const deadline = Date.now() + 5000;
+    while (!owned && Date.now() < deadline) {
+      try {
+        owned = JSON.parse(await readFile(marker, "utf8"));
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    assert(owned, "Agent service fixture started");
+    assert.equal(
+      await request(),
+      token,
+      "exact fixture owns the listening port",
+    );
+    await f.service.request({ operation: "stop", threadId: "human", taskId });
+    await until(
+      f.service,
+      taskId,
+      (view) => view.session.status === "cancelled",
+    );
+    let serving = true;
+    let alive = true;
+    const stoppedBy = Date.now() + 1000;
+    while ((serving || alive) && Date.now() < stoppedBy) {
+      try {
+        serving = (await request()) === token;
+      } catch {
+        serving = false;
+      }
+      try {
+        process.kill(owned.pid, 0);
+        if (process.platform === "linux") {
+          alive = !(await readFile(`/proc/${owned.pid}/stat`, "utf8")).includes(
+            ") Z ",
+          );
+        }
+      } catch (error) {
+        if (
+          ["ESRCH", "ENOENT"].includes(
+            (error as NodeJS.ErrnoException).code ?? "",
+          )
+        )
+          alive = false;
+        else throw error;
+      }
+      if (serving || alive)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(
+      serving,
+      false,
+      `Agent service survived Stop (owned PID ${owned.pid})`,
+    );
+    assert.equal(
+      alive,
+      false,
+      "the exact Agent service fixture process exited",
+    );
+  } finally {
+    // Never scan or kill a PID that may have been reused. Only the authenticated
+    // synthetic fixture endpoint may request its own graceful cleanup.
+    if (owned) {
+      try {
+        if ((await request()) === token) await request(`/stop/${token}`);
+      } catch {
+        /* The exact fixture has already stopped. */
+      }
+    }
     await f.tools.close();
     await rm(directory, {
       recursive: true,

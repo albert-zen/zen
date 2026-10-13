@@ -160,3 +160,71 @@ test("Agent session list and read remain available with no free execution capaci
     await tools.close();
   }
 });
+
+test("Shell Stop waits for ownership evidence and preserves an unconfirmed settlement", async () => {
+  let release!: () => void;
+  const evidence = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let closed!: () => void;
+  const childClosed = new Promise<void>((resolve) => {
+    closed = resolve;
+  });
+  const tools = new ToolEnvironment({
+    runtimes: [
+      new ShellToolRuntime({
+        trackProcess(child) {
+          child.once("close", closed);
+          return {
+            async terminate() {
+              child.kill();
+              await evidence;
+              return {
+                ok: false,
+                error: "synthetic ambiguous descendant identity",
+              };
+            },
+          };
+        },
+      }),
+    ],
+    taskOptions: { yieldTimeMs: 1, shutdownWaitMs: 1 },
+  });
+  try {
+    const running = await tools.execute(
+      tools.prepare(
+        call("shell", {
+          command:
+            process.platform === "win32"
+              ? "for /L %i in (1,0,2) do @rem"
+              : "while :; do :; done",
+        }),
+      ),
+    );
+    const taskId = (running.structuredContent as { task_id: string }).task_id;
+    await tools.taskManager.stopShellSession("shared", taskId);
+    await childClosed;
+    assert.equal(
+      tools.taskManager.readShellSession("shared", taskId).session.status,
+      "cancel_requested",
+      "direct child closure cannot prove descendant cancellation",
+    );
+    release();
+    const receipt = await tools.waitRuntime.execute(
+      call("wait", { task_id: taskId, yield_time_ms: 1000 }),
+    );
+    assert.equal(
+      (receipt.structuredContent as { status: string }).status,
+      "cancellation_unconfirmed",
+    );
+    const view = tools.taskManager.readShellSession("shared", taskId);
+    assert.equal(view.session.status, "cancellation_unconfirmed");
+    assert.equal(view.session.exitCode, null);
+    assert.equal(view.session.retained, false);
+    assert.match(view.output, /ambiguous descendant identity/);
+    assert.equal(tools.taskManager.activeTaskCount, 1);
+  } finally {
+    release();
+    await tools.close();
+  }
+});

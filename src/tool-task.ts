@@ -34,6 +34,8 @@ export interface ToolTaskPolicy {
   resourceQueue?: "fifo";
   /** Only adapters which confirm the underlying operation has stopped may opt in. */
   cancellation?: "confirmed-on-settle" | "unconfirmed";
+  /** Trusted native cleanup join policy; expiry is failure, never proof of cleanup. */
+  shutdownWaitMs?: number;
 }
 export interface ToolResourceClaim {
   /** Host-owned identity compared with JavaScript Map key equality. */
@@ -156,6 +158,7 @@ export class ToolTaskManager {
   readonly #options: Required<Omit<ToolTaskOptions, "toolOutputSpool">> &
     Pick<ToolTaskOptions, "toolOutputSpool">;
   #closed = false;
+  #closing: Promise<void> | undefined;
   readonly #invocations = new WeakSet<ToolInvocation>();
   ownsInvocation(invocation: ToolInvocation) {
     return this.#invocations.has(invocation);
@@ -410,19 +413,35 @@ export class ToolTaskManager {
     await task.shutdown();
     this.#tasks.delete(task.id);
   }
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closing !== undefined) return this.#closing;
     this.#closed = true;
+    this.#closing = this.#closeTasks();
+    return this.#closing;
+  }
+  async #closeTasks(): Promise<void> {
     const tasks = [...this.#tasks.values()];
+    const started = Date.now();
     for (const task of tasks) task.cancel(false);
-    await Promise.all(
-      tasks.map((task) => task.observe(this.#options.shutdownWaitMs)),
+    const results = await Promise.all(
+      tasks.map((task) => task.joinShutdown(started + task.shutdownWaitMs)),
+    );
+    const failures = tasks.flatMap((task, index) =>
+      task.requiresCleanupJoin && (!results[index] || !task.terminal)
+        ? [
+            new Error(
+              "Shell cleanup is unconfirmed; native ownership or cleanup did not settle successfully before the Host deadline",
+            ),
+          ]
+        : [],
     );
     for (const task of tasks) await task.shutdown();
     this.#tasks.clear();
     this.#shellHistory.clear();
     this.#queue.splice(0);
     this.#resources.clear();
+    if (failures.length > 0)
+      throw new AggregateError(failures, "Host tool cleanup is unconfirmed");
   }
 
   #capacityBusy(runtime: ToolRuntime): boolean {
@@ -585,6 +604,7 @@ class Task {
   #settled = false;
   #dispatched = false;
   #cancelReason: "timeout" | "cancel" | undefined;
+  #cancellationUnconfirmed = false;
   #deadline: NodeJS.Timeout | undefined;
   #expiry: NodeJS.Timeout | undefined;
   #released = false;
@@ -649,6 +669,7 @@ class Task {
   }
   get status(): Status {
     if (this.#cancelReason !== undefined) {
+      if (this.#cancellationUnconfirmed) return "cancellation_unconfirmed";
       if (this.#settled && !this.#dispatched)
         return this.#cancelReason === "timeout" ? "timed_out" : "cancelled";
       if (
@@ -682,6 +703,29 @@ class Task {
       this.status,
     );
   }
+  get requiresCleanupJoin() {
+    return this.#runtime.taskPolicy?.shutdownWaitMs !== undefined;
+  }
+  get shutdownWaitMs() {
+    return integer(
+      this.#runtime.taskPolicy?.shutdownWaitMs ?? this.#options.shutdownWaitMs,
+      "shutdownWaitMs",
+      60000,
+    );
+  }
+  async joinShutdown(deadline: number): Promise<boolean> {
+    if (this.#settled) return true;
+    return await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(
+        () => resolve(false),
+        Math.max(0, deadline - Date.now()),
+      );
+      void this.completion.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
   arm() {
     this.#invocation.signal.addEventListener("abort", this.#abort, {
       once: true,
@@ -707,6 +751,11 @@ class Task {
           ...this.#invocation,
           signal: this.#controller.signal,
           taskContext: {
+            onCancellationUnconfirmed: () => {
+              if (this.#closed) return;
+              this.#cancellationUnconfirmed = true;
+              this.#notify();
+            },
             onShellControl: (control) => {
               if (
                 this.isShell &&
@@ -923,6 +972,7 @@ class Task {
           : (result?.exitCode ?? this.#result?.exitCode ?? 1)
       : 0;
     const cancellation =
+      !this.#cancellationUnconfirmed &&
       this.#runtime.taskPolicy?.cancellation === "confirmed-on-settle"
         ? "confirmable"
         : "best_effort";
@@ -1018,7 +1068,7 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Tools, including run_code programs, automatically return task_id when they are queued or exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report queued/running state, confirmable or best_effort cancellation, and resource_scope without exposing resource keys. Running claims/bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart. Local shell receipts may include independent foreground/stdio observations; foreground_exit_code is available after the direct process exits, even while status is running. Only running + foreground=exited + stdio=open derives foreground_exited, a nonterminal label. EOF alone is not completion; forced pipe closure is not observed EOF. terminate/timeout targets the owned POSIX process group (direct child on Windows), including intentional background processes within that group; escaped descendants may survive.",
+        "Tools, including run_code programs, automatically return task_id when they are queued or exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report queued/running state, confirmable or best_effort cancellation, and resource_scope without exposing resource keys. Running claims/bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart. Local shell receipts may include independent foreground/stdio observations; foreground_exit_code is available after the direct process exits, even while status is running. Only running + foreground=exited + stdio=open derives foreground_exited, a nonterminal label. EOF alone is not completion; forced pipe closure is not observed EOF. terminate/timeout follows the originating Shell runtime's declared ownership scope (POSIX process group; Windows direct child unless the Host declares an identity-verified adapter). Escaped descendants may survive, and unconfirmed cleanup remains explicitly unconfirmed.",
       inputSchema: {
         type: "object",
         properties: {

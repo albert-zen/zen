@@ -4,7 +4,11 @@ import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
 import { observeOwnedChild } from "../src/main/owned-child-process.js";
-import { stopOwnedAppServerChild } from "../src/main/app-server-manager.js";
+import {
+  stopOwnedAppServerChild,
+  defaultHostShutdownGraceMs,
+} from "../src/main/app-server-manager.js";
+import { WINDOWS_SHELL_SHUTDOWN_WAIT_MS } from "../src/main/shell-process-termination.js";
 
 function childWithPid(pid: number | undefined): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
@@ -93,10 +97,13 @@ test("AppServer owned-child stop escalates exact shutdown through TERM and KILL 
   }) as ChildProcess["kill"];
   const observation = observeOwnedChild(child);
 
-  await stopOwnedAppServerChild(child, observation, {
-    shutdownGraceMs: 1,
-    terminationGraceMs: 1,
-  });
+  await assert.rejects(
+    stopOwnedAppServerChild(child, observation, {
+      shutdownGraceMs: 1,
+      terminationGraceMs: 1,
+    }),
+    /Host cleanup is unconfirmed/,
+  );
   assert.deepEqual(calls, ["shutdown", "SIGTERM", "SIGKILL", "close"]);
 });
 
@@ -123,4 +130,41 @@ test("AppServer owned-child stop treats an already closed exact child as settled
     terminationGraceMs: 1,
   });
   assert.deepEqual(calls, []);
+});
+
+test("Windows Host grace accommodates the one owned cleanup deadline without changing other platforms", () => {
+  assert.equal(
+    defaultHostShutdownGraceMs("win32"),
+    WINDOWS_SHELL_SHUTDOWN_WAIT_MS + 5000,
+  );
+  assert.equal(defaultHostShutdownGraceMs("linux"), 3000);
+  assert.equal(defaultHostShutdownGraceMs("darwin"), 3000);
+});
+
+test("unsuccessful Host cleanup exit is not reported as successful shutdown", async () => {
+  const child = childWithPid(6791);
+  const observation = observeOwnedChild(child);
+  child.emit("close", 1, null);
+  await assert.rejects(
+    stopOwnedAppServerChild(child, observation, {
+      shutdownGraceMs: 1,
+      terminationGraceMs: 1,
+    }),
+    /Host cleanup is unconfirmed/,
+  );
+});
+
+test("an already signalled Host cannot confirm graceful native cleanup", async () => {
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    const child = childWithPid(6792);
+    const observation = observeOwnedChild(child);
+    child.emit("close", null, signal);
+    await assert.rejects(
+      stopOwnedAppServerChild(child, observation, {
+        shutdownGraceMs: 1,
+        terminationGraceMs: 1,
+      }),
+      /Host cleanup is unconfirmed/,
+    );
+  }
 });

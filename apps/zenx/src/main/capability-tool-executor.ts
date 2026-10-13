@@ -1,4 +1,8 @@
 import { desktopShellPty } from "./shell-pty.js";
+import {
+  trackWindowsShellProcess,
+  WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
+} from "./shell-process-termination.js";
 import { randomUUID } from "node:crypto";
 import { FleetToolTargetRouter } from "./fleet-tool-router.js";
 import { RtkShellOutputFilter } from "../../../../src/shell-output-filter.js";
@@ -318,6 +322,12 @@ export function createZenXHostToolEnvironment(options: {
   });
   const shellRuntime = new ShellToolRuntime({
     pty: desktopShellPty,
+    ...(process.platform === "win32"
+      ? {
+          trackProcess: trackWindowsShellProcess,
+          ownedCleanupWaitMs: WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
+        }
+      : {}),
     blockedEnvironmentVariables: options.blockedEnvironmentVariables,
     toolOutputSpool: options.toolOutputSpool,
     experimentalOutputFilter:

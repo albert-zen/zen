@@ -98,12 +98,12 @@
   color: var(--color-text-muted);
 }
 .shell-status[data-status="running"] {
-  color: #54ad81;
-  background: #54ad8115;
+  color: var(--color-status-success);
+  background: var(--color-status-success-soft);
 }
 .shell-status[data-status="failed"],
 .shell-status[data-status="timed_out"] {
-  color: #d17860;
+  color: var(--color-status-danger);
 }
 .shell-session-heading {
   display: flex;
@@ -136,8 +136,8 @@
   flex: 1;
 }
 .shell-terminal {
-  background: #15171b;
-  border: 1px solid #2a303a;
+  background: var(--color-surface-control);
+  border: 1px solid var(--color-border);
   border-radius: 7px;
   padding: 0;
   width: 100%;
@@ -172,7 +172,7 @@
 }
 .shell-error {
   font-size: 12px;
-  color: #d17860;
+  color: var(--color-status-danger);
   overflow-wrap: anywhere;
   margin: 0;
 }
@@ -199,7 +199,7 @@
 }
 .shell-stop-confirm {
   padding: 12px;
-  border: 1px solid #b47a4b;
+  border: 1px solid var(--color-status-warning);
   border-radius: 7px;
 }
 .shell-stop-confirm p {
