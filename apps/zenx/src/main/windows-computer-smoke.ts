@@ -21,6 +21,10 @@ import {
 } from "./capabilities/windows-background-capture.js";
 
 const arguments_ = parseArguments(process.argv.slice(2));
+const probeDirectory = requiredString(
+  arguments_["probe-directory"],
+  "--probe-directory",
+);
 const expectedTarget = {
   pid: requiredPositiveInteger(arguments_.pid, "--pid"),
   windowTitle: requiredString(arguments_.title, "--title"),
@@ -40,6 +44,7 @@ const computer = new ComputerZenXCapabilityPackage(
 );
 
 try {
+  await stage("foreground-refusal");
   await assert.rejects(
     execute(
       computer,
@@ -50,9 +55,11 @@ try {
     /enable Foreground computer control/u,
     "The smoke must retain the default foreground-control refusal",
   );
+  await stage("diagnose");
   const diagnostic = await backend.diagnose(controller.signal);
   if (!diagnostic.ready) throw new Error(diagnostic.message);
 
+  await stage("discover");
   const discovered = await execute<ComputerWindowList>(
     computer,
     "computer_list_windows",
@@ -81,6 +88,7 @@ try {
   }
   const target = fixtureWindows[0]!.target;
 
+  await stage("inspect");
   const first = await execute<ComputerInspection>(
     computer,
     "computer_inspect",
@@ -95,6 +103,7 @@ try {
   }
 
   const probeText = `ZenX WinApp adapter smoke ${new Date().toISOString()}`;
+  await stage("set-value");
   const setResult = await execute<{
     target: ComputerInspection["target"];
     characterCount: number;
@@ -115,6 +124,7 @@ try {
     windowTitle: setResult.target.windowTitle,
   };
 
+  await stage("reinspect");
   const second = await execute<ComputerInspection>(
     computer,
     "computer_inspect",
@@ -127,6 +137,7 @@ try {
     );
   }
 
+  await stage("capture-valid");
   const screenshot = await execute<{
     artifactPath: string;
     bytes: number;
@@ -186,6 +197,7 @@ public static class ZenXMarkerCheck {
     );
     return verifiedPixels.stdout.trim().split(",").map(Number);
   };
+  await stage("verify-valid-pixels");
   const [bluePixels, magentaPixels] = await countFixturePixels(
     screenshot.artifactPath,
   );
@@ -194,15 +206,13 @@ public static class ZenXMarkerCheck {
       "Occluded screenshot is missing the target fixture's distinctive marker pixels",
     );
 
-  const probeDirectory = requiredString(
-    arguments_["probe-directory"],
-    "--probe-directory",
-  );
+  await stage("enable-partial");
   await writeFile(path.join(probeDirectory, "unrendered"), "unrendered");
   await waitForFixture(
     path.join(probeDirectory, "unrendered-ready"),
     controller.signal,
   );
+  await stage("capture-partial");
   const partialCapture = await execute<{ artifactPath: string }>(
     computer,
     "computer_screenshot",
@@ -226,6 +236,7 @@ public static class ZenXMarkerCheck {
     // dispatching WM_PRINT. That is a valid frame, not an unpainted counterexample.
     assert.equal(printProbe.printCalls, 0);
     assert.equal(printProbe.printClientCalls, 0);
+    await stage("verify-partial-pixels");
     const pixels = await countFixturePixels(partialCapture.result.artifactPath);
     assert.deepEqual(pixels, [2000, 625]);
     console.log(
@@ -241,12 +252,15 @@ public static class ZenXMarkerCheck {
   }
   // Always exercise the actual native production classifier; the compositor
   // behavior above must not skip its unpainted-buffer counterexamples.
+  await stage("native-classifier");
   await verifyNativeSentinelClassification(controller.signal);
+  await stage("minimize-fixture");
   await writeFile(path.join(probeDirectory, "minimize"), "minimize");
   await waitForFixture(
     path.join(probeDirectory, "minimized"),
     controller.signal,
   );
+  await stage("capture-minimized");
   try {
     await execute(
       computer,
@@ -263,7 +277,15 @@ public static class ZenXMarkerCheck {
   );
 } finally {
   clearTimeout(timeout);
-  await computer.close?.();
+  try {
+    await stage("cleanup");
+  } finally {
+    await computer.close?.();
+  }
+}
+
+async function stage(phase: string): Promise<void> {
+  await writeFile(path.join(probeDirectory, "phase"), phase);
 }
 
 async function verifyNativeSentinelClassification(

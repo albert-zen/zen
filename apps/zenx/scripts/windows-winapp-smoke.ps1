@@ -48,6 +48,7 @@ public class ZenXPartialPrintForm : System.Windows.Forms.Form {
 public static class ZenXCaptureSampler {
   [StructLayout(LayoutKind.Sequential)] struct Point { public int X, Y; }
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
   public static void Start(IntPtr guard, IntPtr target, string directory) {
@@ -55,16 +56,28 @@ public static class ZenXCaptureSampler {
     var thread = new Thread(() => {
       int samples=0, focusChanges=0, pointerChanges=0, restored=0;
       bool minimized=false;
+      var elapsed=System.Diagnostics.Stopwatch.StartNew();
+      var transitions=new System.Collections.Generic.List<string>();
+      var lastForeground=new IntPtr(-1);
+      string phase="fixture-ready";
       File.WriteAllText(Path.Combine(directory, "ready"), "ready");
       while (!File.Exists(Path.Combine(directory, "stop"))) {
         samples++;
-        if (GetForegroundWindow() != guard) focusChanges++;
+        var foreground=GetForegroundWindow();
+        if (foreground != guard) focusChanges++;
+        if (foreground != lastForeground) {
+          try { phase=System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(Path.Combine(directory,"phase")), "[^a-z-]", ""); } catch (IOException) { }
+          uint pid; GetWindowThreadProcessId(foreground, out pid);
+          string kind=foreground==guard ? "guard" : foreground==target ? "target" : foreground==IntPtr.Zero ? "none" : "other";
+          if (transitions.Count<32) transitions.Add("{\"elapsedMs\":" + elapsed.ElapsedMilliseconds + ",\"phase\":\"" + phase + "\",\"foreground\":\"" + kind + "\",\"pid\":" + pid + "}");
+          lastForeground=foreground;
+        }
         Point current;
         if (!GetCursorPos(out current) || current.X != initial.X || current.Y != initial.Y) pointerChanges++;
         if (IsIconic(target)) minimized=true; else if (minimized) restored++;
         Thread.Sleep(5);
       }
-      File.WriteAllText(Path.Combine(directory, "result.json"), "{\"samples\":" + samples + ",\"focusChanges\":" + focusChanges + ",\"pointerChanges\":" + pointerChanges + ",\"restored\":" + restored + ",\"observedMinimized\":" + (minimized ? "true" : "false") + "}");
+      File.WriteAllText(Path.Combine(directory, "result.json"), "{\"samples\":" + samples + ",\"focusChanges\":" + focusChanges + ",\"pointerChanges\":" + pointerChanges + ",\"restored\":" + restored + ",\"observedMinimized\":" + (minimized ? "true" : "false") + ",\"foregroundTransitions\":[" + string.Join(",",transitions) + "]}");
     });
     thread.IsBackground=true; thread.Start();
   }
