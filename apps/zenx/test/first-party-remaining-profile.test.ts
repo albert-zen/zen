@@ -1163,7 +1163,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 reason:
                   platform === "linux"
                     ? "No computer provider is available for this platform"
-                    : "Packaged WinApp provider manifest trust anchor is missing",
+                    : "Strict UIA requires the verified Windows application bundle and compiled manifest trust anchor",
               },
               { id: "zenx-rooms", available: true, reason: undefined },
               {

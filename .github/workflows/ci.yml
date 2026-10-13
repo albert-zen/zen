@@ -221,6 +221,48 @@ jobs:
           path: ${{ runner.temp }}/zenx-winapp-downstream
           if-no-files-found: warn
           retention-days: 14
+      - name: Collect the actual portable app trust inputs
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $resources = Join-Path $PWD "apps/zenx/.packaged/artifact/ZenX-win32-x64/resources"
+          $manifest = Join-Path $resources "providers/manifest.json"
+          if (!(Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            Write-Host "No actual portable app manifest was produced."
+            exit 0
+          }
+          $digest = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
+          $main = Join-Path $resources "app/out/main"
+          $anchors = @(Get-ChildItem -LiteralPath $main -Recurse -File -Filter "*.js" | Where-Object {
+            [System.IO.File]::ReadAllText($_.FullName).Contains($digest, [System.StringComparison]::Ordinal)
+          })
+          if ($anchors.Count -eq 0) {
+            throw "The actual portable app has no compiled anchor matching its manifest bytes."
+          }
+          $proof = Join-Path $env:RUNNER_TEMP "zenx-winapp-product-proof"
+          $providers = Join-Path $proof "resources/providers"
+          New-Item -ItemType Directory -Force -Path $providers | Out-Null
+          Copy-Item -LiteralPath $manifest -Destination (Join-Path $providers "manifest.json")
+          Copy-Item -LiteralPath (Join-Path $resources "providers/zenx-winapp-uia") -Destination $providers -Recurse
+          $anchorReceipts = @()
+          foreach ($anchor in $anchors) {
+            $relative = [System.IO.Path]::GetRelativePath($resources, $anchor.FullName)
+            $destination = Join-Path (Join-Path $proof "resources") $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $anchor.FullName -Destination $destination
+            $anchorReceipts += @{ path = $relative; sha256 = (Get-FileHash -LiteralPath $anchor.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+          }
+          @{ schemaVersion = 1; manifestSha256 = $digest; compiledAnchors = $anchorReceipts } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $proof "trust-evidence.json") -Encoding utf8
+      - name: Retain the actual portable app trust inputs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenx-winapp-product-proof-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-winapp-product-proof
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-windows-user-browser-smoke:
     name: ZenX Windows attached user-browser smoke

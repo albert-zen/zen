@@ -15,6 +15,25 @@ const added = patch
   .map((line) => line.slice(1))
   .join("\n");
 
+test("new native source matches the pinned upstream IDE0073 header template", () => {
+  // src/winapp-CLI/.editorconfig at c8ada4a403c43b96780b87abc454cba51f649c60.
+  const strictPatch = patch.split(
+    "+++ b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs\n",
+  )[1];
+  assert.ok(strictPatch);
+  const header = strictPatch
+    .split("\n")
+    .filter((line) => line.startsWith("+"))
+    .slice(0, 2)
+    .map((line) => line.slice(1))
+    .join("\n");
+  assert.equal(
+    header,
+    "// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.\n" +
+      "// Licensed under the MIT License.",
+  );
+});
+
 test("private strict entry point bypasses stock selector commands", () => {
   assert.match(added, /args\[0\] == "--zenx-uia-strict"/);
   assert.match(added, /ZenXStrictUiaCommand\.Run/);

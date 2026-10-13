@@ -75,11 +75,13 @@ index 5149796..8046f17 100644
          return EnumerateWindows((pid, title) =>
 diff --git a/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
 new file mode 100644
-index 0000000..b9d4b1b
+index 0000000..1fecdd6
 --- /dev/null
 +++ b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
-@@ -0,0 +1,501 @@
-+// Copyright (c) Zen contributors. Licensed under the MIT License.
+@@ -0,0 +1,503 @@
++// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
++// Licensed under the MIT License.
++
 +// Private downstream protocol. Stock WinApp commands do not call this path.
 +using System.Diagnostics;
 +using System.Globalization;
