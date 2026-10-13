@@ -53,6 +53,7 @@ function run(command, args, { cwd, capture = true } = {}) {
     env: {
       ...process.env,
       DOTNET_CLI_TELEMETRY_OPTOUT: "1",
+      DOTNET_NOLOGO: "1",
       WINAPP_CLI_TELEMETRY_OPTOUT: "1",
       WINAPP_CLI_UPDATE_CHECK: "0",
     },
@@ -145,6 +146,51 @@ async function hashFile(filename) {
   return hash.digest("hex");
 }
 
+export function getBuildProperties(lock) {
+  return [
+    "-p:Configuration=Release",
+    `-p:RuntimeIdentifier=${lock.targetRid}`,
+    "-p:SelfContained=true",
+    "-p:TargetLatestRuntimePatch=true",
+    `-p:Version=${lock.downstream.version}`,
+    "-p:ContinuousIntegrationBuild=true",
+    `-p:SourceRevisionId=${lock.upstream.commit}`,
+  ];
+}
+
+export function parseRuntimeResolution(output, lock) {
+  const { Properties: properties, Items: items } = JSON.parse(output);
+  assert.equal(properties.TargetFramework, "net10.0-windows10.0.19041.0");
+  assert.equal(properties.RuntimeIdentifier, lock.targetRid);
+  assert.equal(properties.SelfContained.toLowerCase(), "true");
+  assert.equal(properties.PublishAot.toLowerCase(), "true");
+  const frameworks = items.RuntimeFramework.filter(
+    (item) => item.Identity === "Microsoft.NETCore.App",
+  );
+  const packs = items.RuntimePack.filter(
+    (item) => item.FrameworkName === "Microsoft.NETCore.App",
+  );
+  assert.equal(
+    frameworks.length,
+    1,
+    "Expected one resolved .NET runtime framework",
+  );
+  assert.equal(
+    packs.length,
+    1,
+    "Expected one resolved target .NET runtime pack",
+  );
+  assert.equal(frameworks[0].Version, lock.runtimeVersion);
+  assert.equal(packs[0].NuGetPackageVersion, lock.runtimeVersion);
+  assert.equal(packs[0].RuntimeIdentifier, lock.targetRid);
+  return {
+    targetFramework: properties.TargetFramework,
+    targetRid: properties.RuntimeIdentifier,
+    runtimeVersion: frameworks[0].Version,
+    runtimePack: packs[0].Identity,
+  };
+}
+
 export async function buildDownstream({
   root = repositoryRoot,
   sourceDirectory,
@@ -189,46 +235,61 @@ export async function buildDownstream({
   );
   const project = path.join(sourceDirectory, lock.project);
   const dependencyLock = path.join(path.dirname(project), "packages.lock.json");
-  const properties = [
-    `-p:RuntimeFrameworkVersion=${lock.runtimeVersion}`,
-    `-p:Version=${lock.downstream.version}`,
-  ];
+  // A global RuntimeFrameworkVersion also overrides the unrelated Windows SDK
+  // framework. Resolve each framework with this pinned SDK, then verify the .NET
+  // framework AND RID-specific pack before restore and again after locked restore.
+  const properties = getBuildProperties(lock);
+  const readRuntimeResolution = () =>
+    run(
+      "dotnet",
+      [
+        "msbuild",
+        project,
+        "-nologo",
+        "-verbosity:quiet",
+        "-target:ProcessFrameworkReferences",
+        "-getProperty:TargetFramework,RuntimeIdentifier,SelfContained,PublishAot",
+        "-getItem:RuntimeFramework,RuntimePack",
+        ...properties,
+      ],
+      { cwd: sourceDirectory },
+    );
+  const initialRuntimeOutput = readRuntimeResolution();
+  await writeFile(
+    path.join(outputDirectory, "runtime-resolution-before-restore.json"),
+    initialRuntimeOutput,
+  );
+  const runtimeResolution = parseRuntimeResolution(initialRuntimeOutput, lock);
   // First checkpoint discovers the resolved dependency closure, then requires a
   // locked restore before compiling. Its lock is an output for subsequent review;
   // it is NOT represented as a previously reviewed transitive dependency pin.
-  run(
-    "dotnet",
-    [
-      "restore",
-      project,
-      "--runtime",
-      lock.targetRid,
-      "--use-lock-file",
-      ...properties,
-    ],
-    { cwd: sourceDirectory, capture: false },
-  );
+  run("dotnet", ["restore", project, "--use-lock-file", ...properties], {
+    cwd: sourceDirectory,
+    capture: false,
+  });
   const resolvedLock = await readFile(dependencyLock);
   await writeFile(
     path.join(outputDirectory, "packages.lock.json"),
     resolvedLock,
   );
-  run(
-    "dotnet",
-    [
-      "restore",
-      project,
-      "--runtime",
-      lock.targetRid,
-      "--locked-mode",
-      ...properties,
-    ],
-    { cwd: sourceDirectory, capture: false },
-  );
+  run("dotnet", ["restore", project, "--locked-mode", ...properties], {
+    cwd: sourceDirectory,
+    capture: false,
+  });
   assert.deepEqual(
     await readFile(dependencyLock),
     resolvedLock,
     "Locked restore changed dependencies",
+  );
+  const lockedRuntimeOutput = readRuntimeResolution();
+  await writeFile(
+    path.join(outputDirectory, "runtime-resolution-after-restore.json"),
+    lockedRuntimeOutput,
+  );
+  assert.deepEqual(
+    parseRuntimeResolution(lockedRuntimeOutput, lock),
+    runtimeResolution,
+    "Locked restore changed the resolved runtime",
   );
   const binaryDirectory = path.join(outputDirectory, "bin");
   run(
@@ -236,18 +297,10 @@ export async function buildDownstream({
     [
       "publish",
       project,
-      "--configuration",
-      "Release",
-      "--runtime",
-      lock.targetRid,
-      "--self-contained",
-      "true",
       "--no-restore",
       "--output",
       binaryDirectory,
       ...properties,
-      "-p:ContinuousIntegrationBuild=true",
-      `-p:SourceRevisionId=${lock.upstream.commit}`,
     ],
     { cwd: sourceDirectory, capture: false },
   );
@@ -277,6 +330,7 @@ export async function buildDownstream({
     nodeVersion: lock.nodeVersion,
     dotnetSdk: lock.dotnetSdk,
     runtimeVersion: lock.runtimeVersion,
+    runtimeResolution,
     targetRid: lock.targetRid,
     runnerImage: process.env.ImageOS ?? null,
     runnerImageVersion: process.env.ImageVersion ?? null,

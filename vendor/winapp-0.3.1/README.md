@@ -38,6 +38,14 @@ This first checkpoint **captures** NuGet's resolved dependency closure, then use
 locked restore and no-restore publish. The resolved lock and its hash are retained
 for review; they are not falsely described as a previously reviewed transitive
 pin. Freeze that generated closure before the next production-integration stage.
+Runtime selection uses the exact same Release/RID/self-contained properties for
+MSBuild evaluation, restore and publish. With the pinned SDK's latest-patch
+selection, `ProcessFrameworkReferences` must report the exact target framework,
+RID and expected .NET framework/runtime-pack version before and after locked
+restore. Both readbacks are retained. A global `RuntimeFrameworkVersion` override
+is deliberately avoided because it also affects the unrelated Windows SDK
+framework ([dotnet/sdk#37044](https://github.com/dotnet/sdk/issues/37044)).
+
 The hosted Windows image/toolchain is recorded. Bit-identical reproducibility has
 not been established; `bitReproducibilityVerified` is explicitly false.
 

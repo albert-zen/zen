@@ -172,6 +172,80 @@ test("Windows-style fresh clone preserves the exact hashed patch bytes", async (
   assert.equal(checkedOut.toString("utf8"), patch);
 });
 
+test("SDK runtime resolution is bound to the same framework, RID and version before build", async () => {
+  const { getBuildProperties, parseRuntimeResolution } =
+    await import("../../../scripts/build-zenx-winapp-downstream.mjs");
+  assert.equal(typeof getBuildProperties, "function");
+  assert.equal(typeof parseRuntimeResolution, "function");
+  const properties = getBuildProperties(lock);
+  assert.ok(properties.includes("-p:TargetLatestRuntimePatch=true"));
+  assert.ok(properties.includes(`-p:RuntimeIdentifier=${lock.targetRid}`));
+  assert.ok(properties.includes("-p:Configuration=Release"));
+  assert.ok(properties.includes("-p:SelfContained=true"));
+  assert.ok(
+    properties.every((value) => !value.includes("RuntimeFrameworkVersion=")),
+  );
+  const resolution = {
+    Properties: {
+      TargetFramework: "net10.0-windows10.0.19041.0",
+      RuntimeIdentifier: "win-x64",
+      SelfContained: "true",
+      PublishAot: "true",
+    },
+    Items: {
+      RuntimeFramework: [
+        { Identity: "Microsoft.NETCore.App", Version: "10.0.12" },
+      ],
+      RuntimePack: [
+        {
+          Identity: "Microsoft.NETCore.App.Runtime.win-x64",
+          FrameworkName: "Microsoft.NETCore.App",
+          RuntimeIdentifier: "win-x64",
+          NuGetPackageVersion: "10.0.12",
+        },
+      ],
+    },
+  };
+  assert.equal(
+    parseRuntimeResolution(JSON.stringify(resolution), lock).runtimeVersion,
+    "10.0.12",
+  );
+  const changes = [
+    (r) => {
+      r.Properties.TargetFramework = "net10.0";
+    },
+    (r) => {
+      r.Properties.RuntimeIdentifier = "win-arm64";
+    },
+    (r) => {
+      r.Properties.SelfContained = "false";
+    },
+    (r) => {
+      r.Properties.PublishAot = "false";
+    },
+    (r) => {
+      r.Items.RuntimeFramework[0].Version = "10.0.11";
+    },
+    (r) => {
+      r.Items.RuntimePack[0].NuGetPackageVersion = "10.0.13";
+    },
+    (r) => {
+      r.Items.RuntimePack[0].RuntimeIdentifier = "win-arm64";
+    },
+    (r) => {
+      r.Items.RuntimePack = [];
+    },
+    (r) => {
+      r.Items.RuntimePack.push({ ...r.Items.RuntimePack[0] });
+    },
+  ];
+  for (const change of changes) {
+    const invalid = structuredClone(resolution);
+    change(invalid);
+    assert.throws(() => parseRuntimeResolution(JSON.stringify(invalid), lock));
+  }
+});
+
 test("patch uses generated UIA2 and confirms FALSE on the real service before retaining its client", () => {
   assert.match(patch, /\+IUIAutomation2/u);
   assert.ok(
