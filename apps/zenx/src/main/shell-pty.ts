@@ -1,3 +1,7 @@
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import { verifyShellPtyPatch } from "../../scripts/shell-pty-patch.mjs";
 import type {
   ShellPtyProcess,
   ShellPtyProvider,
@@ -12,7 +16,8 @@ export function wrapDesktopPty(
   const closeWindows = () => {
     if (windowsClosed) return;
     // node-pty rejects POSIX signal arguments on Windows. Its public kill also
-    // disposes the ConPTY reader worker after a natural shell exit.
+    // disposes the ConPTY reader worker after a natural shell exit. The pinned
+    // dependency patch removes its unsafe asynchronous bare-PID sweep.
     terminal.kill();
     windowsClosed = true;
   };
@@ -48,8 +53,21 @@ export function wrapDesktopPty(
 /** node-pty owns the platform PTY / Windows ConPTY; the tool task owns its life. */
 export const desktopShellPty: ShellPtyProvider = {
   async spawn({ cwd, env, cols, rows }) {
-    const pty = await import("node-pty");
     const windows = process.platform === "win32";
+    if (windows) {
+      // Only the pinned system-ConPTY path is audited. Reject before launching
+      // rather than falling back to WinPTY or an unpatched PID-based cleanup.
+      const [major, , build] = os.release().split(".").map(Number);
+      if (major !== 10 || !Number.isInteger(build) || build! < 18309)
+        throw new Error(
+          "Interactive Windows Shell requires supported system ConPTY",
+        );
+      const require = createRequire(import.meta.url);
+      await verifyShellPtyPatch(
+        path.dirname(require.resolve("node-pty/package.json")),
+      );
+    }
+    const pty = await import("node-pty");
     const file = windows ? "powershell.exe" : env.SHELL || "/bin/sh";
     return wrapDesktopPty(
       pty.spawn(file, windows ? ["-NoLogo"] : ["-i"], {
@@ -58,6 +76,7 @@ export const desktopShellPty: ShellPtyProvider = {
         cols,
         rows,
         name: "xterm-256color",
+        ...(windows ? { useConpty: true, useConptyDll: false } : {}),
       }),
     );
   },
