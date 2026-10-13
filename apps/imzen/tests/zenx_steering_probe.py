@@ -137,7 +137,13 @@ async def main():
                                     source=LocalPath(filename),
                                     media_type=media_type,
                                     filename=filename.name,
-                                    size_bytes=(await asyncio.to_thread(filename.stat)).st_size,
+                                    # Retain the old image caller shape; production
+                                    # I1 derives size before SDK byte acquisition.
+                                    size_bytes=(
+                                        None
+                                        if key == "image"
+                                        else (await asyncio.to_thread(filename.stat)).st_size
+                                    ),
                                 )
                             )
                     await channel.emit_message(

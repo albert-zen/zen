@@ -190,7 +190,7 @@ def create_gateway(
         extensions=GatewayExtensions(
             startup_preparations=startup_preparations,
             outbound_presentation=outbound_presentation,
-            inbound_content_transformer=ImZenContentTransformer(),
+            inbound_content_transformer=ImZenContentTransformer(shared_filesystem_root),
             inbound_failure_presenter=ImZenFailurePresenter(),
             request_presenter=ImZenRequestPresenter(),
         ),

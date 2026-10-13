@@ -33,7 +33,12 @@ from imagent.interaction.controllers import (
 )
 from imagent.interaction.controllers.common import SlashCommand, parse_slash_command
 from imagent.interaction.controllers.common_presentation import MarkdownSlashPresenter
-from imagent.interaction.media import AttachmentContent, LocalPath
+from imagent.interaction.media import (
+    AttachmentContent,
+    LocalPath,
+    configure_shared_filesystem_root,
+    resolve_local_attachment,
+)
 from imagent.interaction.messages import (
     Content,
     ConversationRef,
@@ -44,6 +49,10 @@ from imagent.interaction.messages import (
 )
 
 from .config import PermissionMode
+
+# Matches the pinned Zen adapter's public image contract. Public adapter tests
+# cover both boundaries so a future dependency change cannot silently drift.
+_MAX_INPUT_IMAGES = 16
 
 _COMMAND_NAMES = {
     name: name
@@ -92,8 +101,16 @@ def thread_start_options(mode: PermissionMode) -> dict[str, object]:
     }
 
 
-def adapt_inbound_content(message: InboundMessage) -> tuple[Content, ...]:
+def adapt_inbound_content(
+    message: InboundMessage, *, shared_filesystem_root: Path | None = None
+) -> tuple[Content, ...]:
     """Preserve rooted image bytes and encode staged generic files for Zen."""
+    image_count = 0
+    for part in message.content:
+        if isinstance(part, AttachmentContent) and part.media_type.casefold().startswith("image/"):
+            image_count += 1
+            if image_count > _MAX_INPUT_IMAGES:
+                raise ValueError("IMZen input exceeds its image count bound")
     text = "\n".join(part.text for part in message.content if isinstance(part, TextContent)).strip()
     images: list[AttachmentContent] = []
     file_lines: list[str] = []
@@ -101,6 +118,18 @@ def adapt_inbound_content(message: InboundMessage) -> tuple[Content, ...]:
         if not isinstance(part, AttachmentContent):
             continue
         if part.media_type.casefold().startswith("image/"):
+            if isinstance(part.source, LocalPath) and part.size_bytes is None:
+                path = resolve_local_attachment(
+                    part.source,
+                    shared_filesystem_root=shared_filesystem_root,
+                    consumer="IMZen legacy image metadata",
+                )
+                size = path.stat().st_size
+                if not 0 < size <= 20 * 1024 * 1024:
+                    raise ValueError("IMZen legacy image is empty or exceeds its byte bound")
+                # Retain the original path. The SDK must acquire and validate
+                # actual bytes through its rooted no-follow descriptor chain.
+                part = replace(part, size_bytes=size)
             images.append(part)
             continue
         if not isinstance(part.source, LocalPath):
@@ -117,8 +146,11 @@ def adapt_inbound_content(message: InboundMessage) -> tuple[Content, ...]:
 
 
 class ImZenContentTransformer:
+    def __init__(self, shared_filesystem_root: str | Path | None = None) -> None:
+        self._shared_filesystem_root = configure_shared_filesystem_root(shared_filesystem_root)
+
     async def transform_content(self, message: InboundMessage) -> tuple[Content, ...]:
-        return adapt_inbound_content(message)
+        return adapt_inbound_content(message, shared_filesystem_root=self._shared_filesystem_root)
 
 
 class ImZenXSlashPresenter(MarkdownSlashPresenter):

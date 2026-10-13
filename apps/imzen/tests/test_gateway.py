@@ -959,9 +959,7 @@ async def test_standalone_server_does_not_infer_shared_filesystem(tmp_path, url)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kind", ["sibling", "symlink-escape", "missing", "directory", "missing-size", "oversize"]
-)
+@pytest.mark.parametrize("kind", ["sibling", "symlink-escape", "missing", "directory", "oversize"])
 async def test_local_media_dispatch_keeps_sdk_path_guards(tmp_path, kind):
     media = tmp_path / "media"
     media.mkdir()
@@ -983,11 +981,7 @@ async def test_local_media_dispatch_keeps_sdk_path_guards(tmp_path, kind):
         attachment_id="image",
         media_type="image/png",
         source=LocalPath(str(image)),
-        size_bytes=None
-        if kind == "missing-size"
-        else 21 * 1024 * 1024
-        if kind == "oversize"
-        else image.stat().st_size,
+        size_bytes=21 * 1024 * 1024 if kind == "oversize" else image.stat().st_size,
     )
     if kind == "missing":
         image.unlink()
