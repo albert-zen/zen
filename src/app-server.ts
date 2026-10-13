@@ -167,6 +167,16 @@ export interface TurnHandle {
   done: Promise<void>;
 }
 
+/** Canonical queue identity captured inside the Thread mutation. */
+export type QueuedInputAdmission =
+  | { state: "queued"; clientId: string; queuedItemId: string }
+  | {
+      state: "admitted";
+      clientId: string;
+      queuedItemId: string;
+      turnId: string;
+    };
+
 export interface QueuedCancellationTarget {
   queuedItemId: string;
   clientId: string;
@@ -1133,79 +1143,112 @@ export class ZenAppServer {
       requestApproval?: ApprovalHandler;
       deliveryMode?: "batch-next";
       requireUnarchived?: boolean;
+      /** Defaults to waiting for first Turn admission, never Turn completion. */
+      waitForTurnAdmission?: boolean;
     } = {},
-  ): Promise<void> {
+  ): Promise<QueuedInputAdmission> {
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
-    await this.#withThreadMutation(threadId, async () => {
-      const thread = await this.#requireThread(threadId);
-      if (options.requireUnarchived === true)
-        await this.#requireUnarchived(threadId);
-      const input = await this.#prepareSkillInput(
-        thread,
-        requestedInput,
-        clientId,
-      );
-      const duplicate = thread.items.find(
-        (item) =>
-          (item.type === "user_message_queued" ||
-            item.type === "user_message") &&
-          item.clientId === clientId,
-      );
-      if (
-        duplicate?.type === "user_message_queued" ||
-        duplicate?.type === "user_message"
-      ) {
+    let added = false;
+    const admission = await this.#withThreadMutation<QueuedInputAdmission>(
+      threadId,
+      async () => {
+        const thread = await this.#requireThread(threadId);
+        if (options.requireUnarchived === true)
+          await this.#requireUnarchived(threadId);
+        const input = await this.#prepareSkillInput(
+          thread,
+          requestedInput,
+          clientId,
+        );
+        const queued = thread.items.find(
+          (item): item is QueuedUserMessageItem =>
+            item.type === "user_message_queued" && item.clientId === clientId,
+        );
+        if (queued !== undefined) {
+          if (
+            thread.items.some(
+              (item) =>
+                item.type === "user_message_queue_cancelled" &&
+                item.queuedItemId === queued.id &&
+                item.clientId === clientId,
+            )
+          )
+            throw new AppServerError(
+              "queue_id_cancelled",
+              "This queued client ID was canceled; use a new ID for a new message",
+            );
+          if (!sameUserInput(queued.input, input))
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Queue client id was already used for different input",
+            );
+          if (queued.deliveryMode !== options.deliveryMode)
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Queue client id was already used for a different delivery mode",
+            );
+          const consumed = thread.items.find(
+            (item): item is UserMessageItem =>
+              item.type === "user_message" && item.clientId === clientId,
+          );
+          return consumed === undefined
+            ? { state: "queued", clientId, queuedItemId: queued.id }
+            : {
+                state: "admitted",
+                clientId,
+                queuedItemId: queued.id,
+                turnId: consumed.turnId,
+              };
+        }
         if (
-          duplicate.type === "user_message_queued" &&
           thread.items.some(
             (item) =>
-              item.type === "user_message_queue_cancelled" &&
-              item.queuedItemId === duplicate.id &&
+              (item.type === "user_message" ||
+                item.type === "turn_replacement_requested") &&
               item.clientId === clientId,
           )
         )
           throw new AppServerError(
-            "queue_id_cancelled",
-            "This queued client ID was canceled; use a new ID for a new message",
-          );
-        const prior =
-          duplicate.type === "user_message_queued"
-            ? duplicate.input
-            : contentFromUserMessage(duplicate);
-        if (!sameUserInput(prior, input))
-          throw new AppServerError(
             "idempotency_conflict",
-            "Queue client id was already used for different input",
+            "Queue client id was already used without queued input lineage",
           );
-        if (
-          duplicate.type === "user_message_queued" &&
-          duplicate.deliveryMode !== options.deliveryMode
-        ) {
-          throw new AppServerError(
-            "idempotency_conflict",
-            "Queue client id was already used for a different delivery mode",
+        const resolved = this.#requireSelection(
+          thread.effectiveConfiguration(),
+        );
+        await this.#validateInput(input, resolved.model.inputModalities);
+        const item: QueuedUserMessageItem = {
+          id: this.#id(),
+          type: "user_message_queued",
+          threadId,
+          createdAt: this.#now(),
+          clientId,
+          input,
+          ...(options.deliveryMode === undefined
+            ? {}
+            : { deliveryMode: options.deliveryMode }),
+        };
+        await this.#commit(thread, item);
+        this.#emit({ type: "item_completed", item });
+        added = true;
+        return { state: "queued", clientId, queuedItemId: item.id };
+      },
+    );
+    // A receipt retry is a read of canonical evidence, never an implicit Resume.
+    if (added) {
+      const starting = this.resumeQueue(threadId, options);
+      if (options.waitForTurnAdmission !== false) await starting;
+      else
+        void starting.catch((error: unknown) => {
+          // resumeQueue reports the identified live attempt through queue_failed.
+          // Keep other failures observable too, without logging input or secrets.
+          console.error(
+            "Queued input could not start",
+            safeQueueFailure(error).code,
           );
-        }
-        return;
-      }
-      const resolved = this.#requireSelection(thread.effectiveConfiguration());
-      await this.#validateInput(input, resolved.model.inputModalities);
-      const queued: QueuedUserMessageItem = {
-        id: this.#id(),
-        type: "user_message_queued",
-        threadId,
-        createdAt: this.#now(),
-        clientId,
-        input,
-        ...(options.deliveryMode === undefined
-          ? {}
-          : { deliveryMode: options.deliveryMode }),
-      };
-      await this.#commit(thread, queued);
-      this.#emit({ type: "item_completed", item: queued });
-    });
-    await this.resumeQueue(threadId, options);
+        });
+    }
+    return admission;
   }
 
   /** Edits append a revision without moving, admitting, or resuming the queue. */

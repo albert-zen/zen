@@ -1097,6 +1097,10 @@ Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
 
+**Native queued-input admission receipt** — `zen/initialize.capabilities` 的 `queued-input-admission-v1` 表示原生 queue / batch-next send 在同一 Thread mutation 内从既有 human queue/user Items 派生 `admission: {state: "queued", clientId, queuedItemId} | {state: "admitted", clientId, queuedItemId, turnId}`；新入队只等待 canonical 入队提交，再异步触发现有 drain，不等待 Turn 预检、启动或审批。Core `queueMessage` 默认仍等待首次 Turn admission（不等待 Turn 完成），原生调用明确关闭该等待。重复输入仅返回原 queue identity / 原 Turn，不恢复暂停队列；没有 queue lineage 的直接 user message、不同输入或 delivery mode 返回 idempotency conflict，取消 ID 保持终态。启动失败沿现有 live `queue_failed` 报告，重启后只可从 ItemList 恢复 pending，显式 Resume 才重试；未知 journal append 返回 RPC `-32603` 与 `data.zenCode: "admission_outcome_unknown"`，不能当作拒收或自动重发。
+
+**Native inline image input** — `inline-image-input-v1` 支持 wire-only `{type: "image_bytes", mediaType, dataBase64}`，Host 经既有 base64 decoder 与 validated `importImageBytes` 转成内容寻址 `AttachmentRef` 后才接纳整条输入，不接受本地路径、不新增 canonical 类型或 media ledger。PNG/JPEG/GIF/WebP 继续遵守 Core 每图 20 MiB、16384 边长、4000 万像素限制；包含 inline image 的请求另有新的 16 图 / 32 MiB 图片总量预算（inline 解码后 bytes 与同一输入中 canonical image refs 的 byteLength），所有 encoded 大小与总预算在解码前检查。相同 bytes 导入得到相同 identity；任何部分验证失败都不追加输入 Item，接纳前已导入而未引用的 blob 仍遵循现有 attachment 生命周期，不新增清理或重试 authority。既有 canonical-only input shape 与 start/steer/replace result 保持兼容，能力缺失的客户端应在提交前拒绝新合同。
+
 原生排队输入编辑通过 append-only `user_message_queue_edited` 保存绑定原 queuedItemId/clientId 的连续 revision、editId 与完整文本/图片输入；ItemList 投影在原位置取最新版本，editId 仅从已提交 Item 派生幂等收据，修改与取消/接纳共享同 Thread mutation fence 并核验 expectedRevision，编辑不恢复队列，包含 Host skill 快照或音频的输入明确拒绝编辑而不丢失内容。
 
 队列图片只从同 Thread pending native input 的精确 queuedItemId/clientId 引用复用既有附件 read/viewer，不存新 payload 或外部路径。
