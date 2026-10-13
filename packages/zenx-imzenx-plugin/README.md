@@ -2,10 +2,23 @@
 
 IMZenX is a first-party ZenX plugin that runs the existing IMZen composition
 inside the desktop Host lifecycle. QQ, Telegram, Feishu and Weixin are supplied
-by the same pinned IM Agent SDK used by IMZen:
-`7d5f1179365679d0f95abd5cb2ce76547238d05f` on the SDK's independent
-`codex/im-input-failure-fix-sdk-compat` ref. This Git revision is not a PyPI
-release or a merge to the SDK v1 main.
+by the same reviewed SDK v1 revision used by IMZen. Its exact immutable pin is
+coordinated across the project, lock, readiness guard and channel-schema revision.
+The runtime uses one coherent Gateway store and scoped public actions, including
+fenced Thread creation profiles and preparation before startup recovery.
+
+Ordinary input now steers a steady active Turn that already has IM reply
+correlation, keeping the original reply target. Idle input starts a new Turn.
+An externally started active Turn without IM correlation, admission races and
+ended Turns can still reject input; unknown outcomes are never automatically
+replayed. Images use bounded bytes from the trusted root, with no path-only
+fallback. Permission presets are explicit registered creation profiles.
+
+The plugin build generates `python/` from `apps/imzen`; its copied project,
+lock and readiness guard must match the channel-schema SDK revision. Rebuild
+the plugin package after a pin change. An existing installed plugin/runtime
+is not updated by an SDK merge or by changing these source files; upgrading
+and explicitly preparing that plugin runtime are separate deployment actions.
 
 In direct Thread mode, IM and the desktop use **the same authenticated local ZAS and Thread**.
 IM input becomes canonical user messages and Agent replies visible in ZenX;
@@ -60,6 +73,15 @@ Connected means the SDK Gateway started, not that a real bot delivery has been
 verified. Channel transport errors remain subject to the SDK's diagnostics and
 native API delivery limits. After a failure, fix the configuration and use
 **Reconnect**. No plugin-owned retry or recovery queue is created.
+
+Legacy Gateway state is checked before the consumer opens it. A supported upgrade
+retains a private full backup and verifies native Thread/workspace ancestry. An
+unprovable conversion stops startup and shows a fixed state-upgrade explanation;
+the original file and any backup remain intact. Do not delete/reset state to
+bypass this failure. The child may announce one state-preparation phase, extending
+the normal 15-second ready deadline to a bounded 120 seconds. Repeated announcements
+cannot keep startup pending indefinitely. See the bundled Python README for the
+supported migration boundary.
 
 ## Ordinary plugin tools
 

@@ -12,7 +12,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from .config import Settings
-from .main import create_gateway
+from .main import prepare_gateway, resolve_channels
+from .migration import GatewayStateMigrationError
 from .paw import PawController, PawRoutingError, PawState
 from .paw_pipe import MAX_LINE_BYTES, PawHostClient, ThreadedPipeReader
 
@@ -91,11 +92,17 @@ async def run() -> None:
         if channel_config is not None and not isinstance(channel_config, dict):
             raise ValueError("Invalid managed IM channel configuration")
         settings = Settings.from_env(deployment)
+        channels, channel_config = resolve_channels(settings, channel_config=channel_config)
         host = PawHostClient(reader, lambda line: print(line, flush=True))
         room_state = PawState(settings.gateway_state_file.with_suffix(".paw.sqlite3"))
-        paw = PawController(host, room_state)
-        gateway, state = create_gateway(
+        paw = PawController(
+            host,
+            room_state,
+            channel_instance_ids=frozenset(channel.channel_instance_id for channel in channels),
+        )
+        gateway, state = await prepare_gateway(
             settings,
+            channels=channels,
             channel_config=channel_config,
             # ZenX launches this child alongside its own local App Server and
             # supplies that server's private connection descriptor over the pipe.
@@ -104,10 +111,11 @@ async def run() -> None:
             controller_factory=paw.wrap,
             delivery_authorizer=paw,
             outbound_presentation=paw,
+            startup_preparations=paw.startup_preparations(),
+            on_state_preparation=lambda: print(json.dumps({"type": "preparing-state"}), flush=True),
         )
         paw.attach(gateway)
         tasks.append(asyncio.create_task(host.read_responses(), name="imzenx-paw-pipe"))
-        await paw.restore()
         await gateway.start()
         print(json.dumps({"type": "ready"}), flush=True)
         tasks.append(asyncio.create_task(paw.poll(), name="imzenx-paw-room-poll"))
@@ -137,6 +145,9 @@ if __name__ == "__main__":
     try:
         with isolate_child_stdin():
             asyncio.run(run())
+    except GatewayStateMigrationError:
+        print(json.dumps({"type": "failed", "code": "state_migration_blocked"}), flush=True)
+        sys.exit(1)
     except PawRoutingError as error:
         print(json.dumps({"type": "failed", "message": str(error)}), flush=True)
         sys.exit(1)
