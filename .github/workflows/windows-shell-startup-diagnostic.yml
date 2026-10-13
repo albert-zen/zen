@@ -1,0 +1,46 @@
+name: Temporary Windows Shell startup diagnostic
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-shell-startup-diagnostic.yml
+      - apps/zenx/test/windows-shell-startup-diagnostic.test.ts
+      - apps/zenx/test/fixtures/windows-shell-startup-probe.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-shell-startup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cold-engine-readline:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/windows-shell-cold-start'
+    name: Temporary cold Windows PowerShell phase probe
+    runs-on: windows-latest
+    timeout-minutes: 5
+    env:
+      WINAPP_CLI_UPDATE_CHECK: "0"
+      WINAPP_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Match the existing Windows Shell job's dependency preparation. This is
+      # a separate hosted runner; never insert this probe before its first PTY.
+      - name: Install Microsoft WinApp CLI
+        uses: microsoft/setup-WinAppCli@b93bbddc1f7abc061ca0d3a8119e3a0c7dd71495
+        with:
+          version: v0.3.1
+      - run: winapp --version
+      - run: npm ci
+      - name: Measure cold engine and explicit PSReadLine import
+        timeout-minutes: 1
+        env:
+          ZENX_WINDOWS_SHELL_STARTUP_PROBE: "1"
+        run: node --import tsx --test --test-timeout=40000 apps/zenx/test/windows-shell-startup-diagnostic.test.ts
