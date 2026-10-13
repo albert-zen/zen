@@ -311,7 +311,10 @@ try {
     2000,
   );
   inputPhase = "after-dom-scroll-up";
-  inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+  inputInspection = await retry(async () => {
+    const inspected = await backend.inspect("windows-smoke", opened.tabId);
+    return inspected.inputViewport?.scrollY === 0 ? inspected : undefined;
+  });
   await backend.pointerClick(
     "windows-smoke",
     opened.tabId,
