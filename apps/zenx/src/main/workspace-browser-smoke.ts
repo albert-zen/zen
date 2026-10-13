@@ -27,6 +27,14 @@ const slowRequestStarted = new Promise<void>((resolve) => {
 });
 const fixture = createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
+  if (request.url === "/capture-marker") {
+    response.end(`<!doctype html><title>Capture pixel fixture</title>
+      <style>html,body{margin:0;background:rgb(24,48,72)}
+      #capture-marker{position:fixed;left:16px;top:80px;width:96px;height:96px;background:rgb(12,180,64)}</style>
+      <label>Human value <input aria-label="Human value"></label>
+      <div id="capture-marker"></div>`);
+    return;
+  }
   if (request.url === "/handoff") {
     response.end(`<!doctype html><title>Synthetic handoff fixture</title>
       <main><h1>Local test only</h1>
@@ -396,6 +404,7 @@ void app.whenReady().then(async () => {
       1,
       "Ending the Agent session must preserve the shared human page",
     );
+    await assertHiddenMountedCapture(port);
     await assertStableControlLayout();
     console.log(
       JSON.stringify({
@@ -443,6 +452,271 @@ void app.whenReady().then(async () => {
     });
   }
 });
+
+async function assertHiddenMountedCapture(port: number): Promise<void> {
+  let view: WebContentsView | undefined;
+  const browser = createElectronWorkspaceBrowser({
+    artifactDirectory: path.join(directory, "hidden-capture-artifacts"),
+    onCreateView: (created) => {
+      view = created;
+    },
+  });
+  const owner = new BrowserWindow({ show: false, width: 900, height: 700 });
+  const guard = new BrowserWindow({ show: true, width: 320, height: 160 });
+  let phase = "setup";
+  const cases: string[] = [];
+  try {
+    await owner.loadURL("about:blank");
+    await guard.loadURL(
+      "data:text/html,<input autofocus aria-label='User guard'>",
+    );
+    guard.show();
+    guard.focus();
+    guard.webContents.focus(); // Owned fixture setup only.
+    browser.bindThreadSession("hidden-session", "hidden-thread");
+    const tab = await browser.open(
+      "hidden-session",
+      `http://127.0.0.1:${port}/capture-marker`,
+    );
+    assert.ok(view);
+    let captureScale = 0;
+    const originalCapture = view.webContents.capturePage.bind(view.webContents);
+    view.webContents.capturePage = async (
+      ...args: Parameters<typeof originalCapture>
+    ) => {
+      captureScale =
+        await view!.webContents.executeJavaScript("devicePixelRatio");
+      return await originalCapture(...args);
+    };
+    const originalId = view.webContents.id;
+    const bounds = { x: 20, y: 30, width: 640, height: 480 };
+    const mount = (lease: string, nextBounds = bounds) =>
+      browser.mount(owner.webContents, {
+        threadId: "hidden-thread",
+        tabId: tab.tabId,
+        lease,
+        bounds: nextBounds,
+      });
+    const assertGuard = () => {
+      assert.equal(
+        BrowserWindow.getFocusedWindow()?.id,
+        guard.id,
+        "Capture stole fixture window focus",
+      );
+      assert.equal(view!.webContents.id, originalId);
+    };
+    for (const mode of ["hidden", "minimized"] as const) {
+      phase = mode;
+      mount(mode);
+      if (mode === "minimized") {
+        owner.showInactive();
+        owner.minimize();
+        await eventually(async () => assert.equal(owner.isMinimized(), true));
+        guard.focus(); // Scenario setup, before capture acceptance begins.
+      } else owner.hide();
+      const visible = owner.isVisible(),
+        minimized = owner.isMinimized();
+      for (const marker of [
+        [12, 180, 64],
+        [210, 40, 160],
+      ]) {
+        await view.webContents.executeJavaScript(
+          `document.querySelector('#capture-marker').style.backgroundColor=${JSON.stringify(`rgb(${marker.join(",")})`)}`,
+        );
+        const observation = await browser.inspect("hidden-session", tab.tabId);
+        assert.ok(Number.isFinite(captureScale) && captureScale > 0);
+        const png = readFileSync(observation.screenshot.artifactPath);
+        const pixels = await guard.webContents.executeJavaScript(`(async()=>{
+          const encoded=${JSON.stringify(png.toString("base64"))};
+          const image=await createImageBitmap(new Blob([Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))],{type:'image/png'}));
+          try {
+            const canvas=new OffscreenCanvas(image.width,image.height);
+            const context=canvas.getContext('2d'); context.drawImage(image,0,0);
+            const samples=[[32,96],[64,128],[96,160],[320,240],[500,400]].map(([x,y])=>
+              [...context.getImageData(Math.floor(x*image.width/640),Math.floor(y*image.height/480),1,1).data]);
+            return {width:image.width,height:image.height,samples};
+          } finally { image.close(); }
+        })()`);
+        const expected = {
+          width: Math.ceil(640 * Math.max(1, captureScale)),
+          height: Math.ceil(480 * Math.max(1, captureScale)),
+        };
+        assertCapturePixels(pixels, expected, marker);
+        assert.deepEqual(
+          {
+            width: observation.screenshot.width,
+            height: observation.screenshot.height,
+          },
+          expected,
+        );
+        cases.push(
+          `${mode}:fresh-opaque-marker-${marker.join("-")}-${pixels.width}x${pixels.height}`,
+        );
+        assert.ok(observation.screenshot.bytes > 0);
+        assert.match(observation.visibleText, /Human value/u);
+        assert.equal(owner.isVisible(), visible);
+        assert.equal(owner.isMinimized(), minimized);
+        assert.ok(owner.contentView.children.includes(view));
+        assert.deepEqual(view.getBounds(), bounds);
+        assert.deepEqual(
+          await view.webContents.executeJavaScript("[innerWidth,innerHeight]"),
+          [640, 480],
+        );
+        assertGuard();
+        cases.push(`${mode}:real-capture-exact-owner-restored`);
+      }
+    }
+    owner.restore();
+    owner.hide();
+    guard.focus();
+    const nativeCapture = view.webContents.capturePage.bind(view.webContents);
+    try {
+      for (const change of [
+        "show",
+        "new-lease",
+        "hide",
+        "take-control",
+        "return-control",
+        "deadline",
+      ] as const) {
+        phase = `pending-capture-${change}`;
+        owner.hide();
+        mount(`before-${change}`);
+        if (change === "return-control")
+          browser.command(
+            owner.webContents,
+            "hidden-thread",
+            "take-control",
+            tab.tabId,
+          );
+        let entered!: () => void, finish!: () => void;
+        const captured = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        view.webContents.capturePage = async (
+          ...args: Parameters<typeof nativeCapture>
+        ) => {
+          const image = await nativeCapture(...args);
+          entered(); // A real native image exists, but its Host result is pending.
+          await gate;
+          return image;
+        };
+        const pending = browser.inspect("hidden-session", tab.tabId);
+        const rejected = assert.rejects(
+          pending,
+          change === "deadline"
+            ? /native capture timed out/u
+            : /changed|superseded|view/iu,
+        );
+        try {
+          await Promise.race([captured, pending.then(() => undefined)]);
+          if (change === "show") {
+            owner.showInactive();
+            await eventually(async () =>
+              assert.ok(owner.contentView.children.includes(view!)),
+            );
+          } else if (change === "new-lease") {
+            const newer = { x: 7, y: 8, width: 600, height: 400 };
+            mount("new-owner-lease", newer);
+            assert.ok(owner.contentView.children.includes(view));
+            assert.deepEqual(view.getBounds(), newer);
+          } else if (change === "take-control" || change === "return-control") {
+            browser.command(
+              owner.webContents,
+              "hidden-thread",
+              change,
+              tab.tabId,
+            );
+            assert.ok(
+              owner.contentView.children.includes(view),
+              "Control must immediately restore the existing mount",
+            );
+            mount(`before-${change}`);
+            assert.ok(owner.contentView.children.includes(view));
+            assert.deepEqual(view.getBounds(), bounds);
+          } else if (change === "hide") {
+            browser.mount(owner.webContents, { lease: "before-hide" });
+            assert.equal(owner.contentView.children.includes(view), false);
+          } else {
+            await rejected; // Exercise the production 10s read-only deadline.
+            assert.ok(owner.contentView.children.includes(view));
+            assert.deepEqual(view.getBounds(), bounds);
+          }
+          if (change !== "deadline") {
+            finish();
+            await rejected;
+          }
+          assertGuard();
+          cases.push(
+            `${change}:pending-result-rejected-without-overwriting-user`,
+          );
+        } finally {
+          finish();
+          await pending.catch(() => undefined);
+          if (change === "take-control")
+            browser.command(
+              owner.webContents,
+              "hidden-thread",
+              "return-control",
+              tab.tabId,
+            );
+        }
+      }
+    } finally {
+      view.webContents.capturePage = nativeCapture;
+    }
+    console.log(
+      JSON.stringify({
+        hiddenMountedCapture: "passed",
+        cases,
+        webContentsId: originalId,
+      }),
+    );
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        hiddenMountedCapture: "failed",
+        phase,
+        cases,
+        ownerVisible: owner.isVisible(),
+        ownerMinimized: owner.isMinimized(),
+        ownerAttached: view ? owner.contentView.children.includes(view) : false,
+        focusedWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+      }),
+    );
+    throw error;
+  } finally {
+    await browser.shutdown();
+    owner.destroy();
+    guard.destroy();
+  }
+}
+
+function assertCapturePixels(
+  pixels: { width: number; height: number; samples: number[][] },
+  expected: { width: number; height: number },
+  marker: readonly number[],
+): void {
+  assert.deepEqual(
+    { width: pixels.width, height: pixels.height },
+    expected,
+    "Captured PNG dimensions must match the actual capture viewport and scale",
+  );
+  assert.equal(pixels.samples.length, 5);
+  for (const [index, pixel] of pixels.samples.entries()) {
+    assert.equal(pixel.length, 4);
+    assert.equal(pixel[3], 255, "Captured fixture must not be transparent");
+    const color = index < 3 ? marker : [24, 48, 72];
+    for (let channel = 0; channel < 3; channel++)
+      assert.ok(
+        Math.abs(pixel[channel]! - color[channel]!) <= 8,
+        `Captured marker/background pixel differs: sample=${index} actual=${pixel} expected=${color}`,
+      );
+  }
+}
 
 function requiredTarget(
   inspection: BrowserInspection,
