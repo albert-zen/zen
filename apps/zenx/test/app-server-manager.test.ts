@@ -193,7 +193,20 @@ setInterval(() => {}, 1_000);
     void startup.catch(() => undefined);
     await waitFor(() => manager.processId !== undefined);
     const processId = manager.processId!;
-    await assert.rejects(startup, /Timed out starting Zen App Server/u);
+    await assert.rejects(startup, (error: unknown) => {
+      assert(error instanceof AggregateError);
+      assert(
+        error.errors.some((cause) =>
+          /Timed out starting Zen App Server/u.test(String(cause)),
+        ),
+      );
+      assert(
+        error.errors.some((cause) =>
+          /Host cleanup is unconfirmed/u.test(String(cause)),
+        ),
+      );
+      return true;
+    });
     assert.equal(manager.processId, undefined);
     assertShutdown(processId);
     assert.throws(
@@ -212,11 +225,30 @@ setInterval(() => {}, 1_000);
     );
     const cancelledProcessId = manager.processId!;
     const stopping = manager.stop();
-    await assert.rejects(
-      cancelledStartup,
-      /exited during startup|startup was cancelled/u,
-    );
-    await stopping;
+    void stopping.catch(() => undefined);
+    await assert.rejects(cancelledStartup, (error: unknown) => {
+      assert(error instanceof AggregateError);
+      assert(
+        error.errors.some((cause) =>
+          /exited during startup|startup was cancelled/u.test(String(cause)),
+        ),
+      );
+      assert(
+        error.errors.some((cause) =>
+          /Host cleanup is unconfirmed/u.test(String(cause)),
+        ),
+      );
+      return true;
+    });
+    await assert.rejects(stopping, (error: unknown) => {
+      assert(error instanceof AggregateError);
+      assert(
+        error.errors.some((cause) =>
+          /Host cleanup is unconfirmed/u.test(String(cause)),
+        ),
+      );
+      return true;
+    });
     assertShutdown(cancelledProcessId);
     assert.throws(
       () => process.kill(cancelledProcessId, 0),

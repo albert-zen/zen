@@ -36,7 +36,8 @@
     "check": "npm run brand:check && npm run prepare:first-party-plugins && npm run typecheck:prepared && npm run test:prepared && npm run build:prepared",
     "test:imzenx": "tsx --test integration/imzenx-sync.test.ts",
     "prepare:rtk": "node ./scripts/prepare-rtk.mjs",
-    "typecheck:prepared": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false"
+    "typecheck:prepared": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
+    "postinstall": "node ./scripts/prepare-shell-pty.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -48,8 +49,11 @@
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-popover": "^1.1.23",
     "@radix-ui/react-select": "^2.3.7",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "@zenx/plugin-sdk": "0.1.0",
     "i18next": "^26.4.2",
+    "node-pty": "1.1.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-i18next": "^17.0.15",

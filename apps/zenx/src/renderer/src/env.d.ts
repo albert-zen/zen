@@ -68,6 +68,7 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      shellPanel?: import("../../shell-panel.js").ShellPanelBridge;
       imzenx: {
         inspect(): Promise<ImZenXSetupView>;
         saveChannel(input: ImZenXChannelSave): Promise<ImZenXSetupView>;

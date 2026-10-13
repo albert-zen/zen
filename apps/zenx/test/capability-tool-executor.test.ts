@@ -66,7 +66,7 @@ test("hosted Agents read lifecycle readiness without disclosing or invoking plug
   assert.equal((await inspect()).plugins[0].state, "missing");
   assert.deepEqual(
     composition.toolDefinitionProjection([]).map((tool) => tool.name),
-    ["wait", "shell", "zenx_plugin"],
+    ["wait", "shell", "shell_sessions", "zenx_plugin"],
   );
   composition.replaceCapabilities({
     ...snapshot,
@@ -257,7 +257,7 @@ test("real ZenX host composition preserves builtin and capability bundle identit
     });
   assert.deepEqual(
     toolDefinitionProjection([]).map((definition) => definition.name),
-    ["wait", "shell", "fixture_inspect", "zenx_plugin"],
+    ["wait", "shell", "shell_sessions", "fixture_inspect", "zenx_plugin"],
   );
   const signal = new AbortController().signal;
   const shell = toolEnvironment.prepare({
@@ -341,7 +341,7 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
   const initial = toolDefinitionProjection([]);
   assert.deepEqual(
     initial.map((tool) => tool.name),
-    ["wait", "shell", "zenx_plugin"],
+    ["wait", "shell", "shell_sessions", "zenx_plugin"],
   );
   assert.deepEqual(initial.at(-1), {
     name: "zenx_plugin",

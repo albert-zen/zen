@@ -1,3 +1,4 @@
+import "./shell-thread-panel.css";
 import { initializeLanguage } from "./language.js";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
