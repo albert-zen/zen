@@ -462,7 +462,12 @@ export async function selectComputerProvider(
             "computer",
             "microsoft-winapp-cli",
             ["background_safe"],
-            ["uia.inspect", "uia.invoke", "uia.set_value", "wgc.capture"],
+            [
+              "uia.inspect",
+              "uia.invoke",
+              "uia.set_value",
+              "printwindow.capture",
+            ],
             bundled?.reason ?? "Packaged WinApp provider is not provisioned",
           ),
         ],
@@ -494,7 +499,12 @@ export async function selectComputerProvider(
             "computer",
             "microsoft-winapp-cli",
             ["background_safe"],
-            ["uia.inspect", "uia.invoke", "uia.set_value", "wgc.capture"],
+            [
+              "uia.inspect",
+              "uia.invoke",
+              "uia.set_value",
+              "printwindow.capture",
+            ],
             diagnostic.message,
             diagnostic.executable,
           ),
@@ -514,7 +524,7 @@ export async function selectComputerProvider(
             "uia.inspect",
             "uia.invoke",
             "uia.set_value",
-            "wgc.capture",
+            "printwindow.capture",
           ],
           executable: diagnostic.executable,
           ...(diagnostic.version === undefined
@@ -524,7 +534,7 @@ export async function selectComputerProvider(
             ? { integrity: "unverified" as const }
             : { integrity: "verified" as const }),
           permissionSummary:
-            "Exact-window UI Automation and WGC capture; no global input injection",
+            "Exact-window UI Automation and strict background PrintWindow capture; no restore, activation or global input injection",
         },
       ],
     };

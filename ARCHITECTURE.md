@@ -384,10 +384,11 @@
   瞬时且 fail-closed 的 acquire→dispatch fence，先把 Page/Runtime domain enable 作为精确 attachment setup barrier，
   再在每个 awaited setup 步骤后及发送 page code 前按有序 CDP 事件流原子重验；它不进入 Zen Core 或 durable journal，
   且 mutation 已发送后的失效继续使用 outcome-unknown/taint 与 lease 语义。
-- **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA/WGC JSON
+- **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA JSON
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
   只读窗口发现返回所属应用与可直接传给现有定向工具的精确 target；列表截断与查询过滤不改变目标身份。
+  Windows 截图由应用内固定源码、独立限时进程的 PrintWindow helper 获取，禁止激活/恢复窗口；像素仅经 Host 校验后写入瞬时 artifact，无法后台渲染时显式失败。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
