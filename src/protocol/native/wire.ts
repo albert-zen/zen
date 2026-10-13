@@ -57,3 +57,25 @@ export function nativeEventThreadId(event: AppServerEvent): string | null {
   if (event.type === "model_catalog_updated") return null;
   return event.type === "item_completed" ? event.item.threadId : event.threadId;
 }
+
+export const NATIVE_THREAD_DELETE_METHOD = "zen/thread/delete";
+export const NATIVE_THREAD_DELETED_LIST_METHOD = "zen/thread/deleted/list";
+export const NATIVE_THREAD_RESTORE_METHOD = "zen/thread/restore";
+export interface NativeThreadDeleteParams {
+  threadId: string;
+  expectedLastItemId: string;
+}
+export interface NativeThreadRestoreParams {
+  threadId: string;
+  deletionItemId: string;
+}
+export type NativeThreadDeleteResult =
+  import("../../app-server.js").DeleteThreadResult;
+export type DeletedThreadSummary =
+  import("../../app-server.js").DeletedThreadSummary;
+export interface NativeThreadDeletedListResult {
+  data: DeletedThreadSummary[];
+}
+export interface NativeThreadRestoreResult {
+  thread: ThreadSnapshot;
+}

@@ -766,6 +766,47 @@ test("plugin query intent stays on its owned page and preserves the sidebar sele
   }
 });
 
+test("deletion invalidates a selected Thread's pending resume and does not reopen late history", async () => {
+  let notify: NotificationListener | undefined;
+  const pending = deferred<ReturnType<typeof resumed>>();
+  let deleted = false;
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return await pending.promise;
+      if (method === "zen/thread/deleted/list") return { data: [] };
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    threads: async (archived) => (deleted || archived ? [] : [summary()]),
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    deleted = true;
+    await act(async () =>
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "thread_deleted_updated",
+          threadId: "thread-1",
+          deleted: true,
+        }),
+      ),
+    );
+    await act(async () => pending.resolve(resumed(thread())));
+    assert.equal(document.querySelector(".thread-row"), null);
+    assert.equal(document.querySelector("#thread-browser-toggle"), null);
+    assert.match(document.body.textContent ?? "", /Archived threads/u);
+  } finally {
+    await harness.unmount();
+  }
+});
+
 interface MountOptions {
   pluginSnapshot?: ZenXPluginSnapshot;
   request(method: string, params?: unknown): Promise<unknown>;
@@ -882,12 +923,21 @@ async function mountApp(options: MountOptions) {
       }),
     },
     settings: {
+      onManualCodeRequested: () => () => undefined,
+      onChanged: () => () => undefined,
       get: async () => ({
         profile: {
           onboardingComplete: true,
           pinnedThreadIds: [],
           providerProfiles: [],
+          defaultModel: { providerProfileId: "fake", modelId: "fake" },
+          titleModel: { providerProfileId: "fake", modelId: "fake" },
+          workspaces: [],
+          workspace: "/work/zen",
         },
+        subscription: { authenticated: false, expired: false },
+        hasApiKey: false,
+        apiKeyProviderProfileIds: [],
       }),
       markWorkspaceUsed: async () => ({
         profile: {

@@ -308,6 +308,24 @@ export const en = {
   "settingsView.takesEffectNextLaunch": "takes effect next launch",
   "settingsView.safeRestart": "Safe restart",
   "settingsView.archivedThreads": "Archived threads",
+  "settingsView.deleteThread": "Delete",
+  "settingsView.deletingThread": "Deleting…",
+  "settingsView.deleteThreadTitle": "Delete conversation?",
+  "settingsView.deleteThreadConfirmation":
+    "Move “{{name}}” to Deleted threads? You can restore it from this page.",
+  "settingsView.deleteThreadScope":
+    "This removes the conversation from normal lists and stops it from being opened or continued. Project files, child conversations, and shared attachments are kept. Restoring returns it to Archived.",
+  "settingsView.cancelDeleteThread": "Cancel",
+  "settingsView.deletedThreads": "Deleted threads",
+  "settingsView.deletedConversationUnavailable":
+    "This conversation was deleted. Restore it from Settings → Archived threads before opening it again.",
+  "settingsView.deletedThreadsDescription":
+    "Deleted conversations are kept here until you restore them to Archived.",
+  "settingsView.loadingDeletedThreads": "Loading deleted conversations…",
+  "settingsView.noDeletedThreads": "No deleted conversations.",
+  "settingsView.untitledDeletedThread": "Untitled conversation",
+  "settingsView.restoreDeletedThread": "Restore to Archived",
+
   "settingsView.restoreAnArchivedConversationToReturnItToThe":
     "Restore an archived conversation to return it to the sidebar.",
   "settingsView.loadingArchivedConversations":
@@ -1563,6 +1581,24 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.takesEffectNextLaunch": "下次启动时生效",
   "settingsView.safeRestart": "安全重启",
   "settingsView.archivedThreads": "已归档会话",
+  "settingsView.deleteThread": "删除",
+  "settingsView.deletingThread": "正在删除…",
+  "settingsView.deleteThreadTitle": "删除会话？",
+  "settingsView.deleteThreadConfirmation":
+    "将“{{name}}”移到已删除会话？你可以在此页面恢复。",
+  "settingsView.deleteThreadScope":
+    "此会话将从普通列表移除，无法打开或继续。项目文件、子会话和共享附件会保留。恢复后会回到已归档会话。",
+  "settingsView.cancelDeleteThread": "取消",
+  "settingsView.deletedThreads": "已删除会话",
+  "settingsView.deletedConversationUnavailable":
+    "此会话已删除。请先在设置 → 已归档会话中恢复，再重新打开。",
+  "settingsView.deletedThreadsDescription":
+    "已删除的会话会保留在这里，你可以将其恢复到已归档会话。",
+  "settingsView.loadingDeletedThreads": "正在加载已删除会话…",
+  "settingsView.noDeletedThreads": "没有已删除会话。",
+  "settingsView.untitledDeletedThread": "未命名会话",
+  "settingsView.restoreDeletedThread": "恢复到已归档",
+
   "settingsView.restoreAnArchivedConversationToReturnItToThe":
     "恢复已归档的会话，使其重新出现在侧边栏。",
   "settingsView.loadingArchivedConversations": "正在加载已归档会话…",

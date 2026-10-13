@@ -4,6 +4,7 @@ import type {
   CanonicalItem,
   SandboxMode,
   ThreadMetadataItem,
+  ThreadDeletedItem,
 } from "./item.js";
 import {
   isAgenticContextCompaction,
@@ -48,6 +49,12 @@ export class Thread {
     return Object.freeze([...this.#items]);
   }
 
+  /** Only a trailing tombstone is deleted; only exact restoration can follow it. */
+  get deletion(): ThreadDeletedItem | undefined {
+    const last = this.#items.at(-1);
+    return last?.type === "thread_deleted" ? last : undefined;
+  }
+
   validateAppend(item: CanonicalItem): void {
     if (item.threadId !== this.id) {
       throw new Error(
@@ -56,6 +63,21 @@ export class Thread {
     }
     if (this.#items.some((existing) => existing.id === item.id)) {
       throw new Error(`Duplicate item id ${item.id}`);
+    }
+    const deletion = this.deletion;
+    if (deletion !== undefined && item.type !== "thread_restored") {
+      throw new Error(
+        `Thread ${this.id} is deleted; restore it before appending`,
+      );
+    }
+    if (item.type === "thread_deleted" && this.#items.length === 0) {
+      throw new Error("Cannot delete a Thread without its canonical history");
+    }
+    if (
+      item.type === "thread_restored" &&
+      deletion?.id !== item.deletionItemId
+    ) {
+      throw new Error("Restoration must reference the current deletion Item");
     }
     if (
       (item.type === "turn_completed" || item.type === "turn_aborted") &&

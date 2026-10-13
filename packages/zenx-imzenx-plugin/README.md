@@ -82,7 +82,13 @@ timeout/shutdown until terminal closure, preventing overlapping retries.
   channel/allowlist contract. It never constructs a Gateway or starts transport
 - `imzenx_prepare` uses `imzenx.configure` to save only `pythonExecutable`,
   `channelsConfigFile`, `cwd`, optional `sharedFilesystemRoot`, `permissionMode`,
-  and `allowUnrestrictedFullAccess`. Preparation stores an explicit-connect gate
+  and `allowUnrestrictedFullAccess`. When `sharedFilesystemRoot` is empty, this
+  local Host composition selects an enabled channel's explicitly configured
+  inbound media directory only if it contains every other declared media root.
+  It never trusts an undeclared common ancestor. Disjoint roots stay unattested
+  until an explicit shared root is configured; that setting trusts all files
+  beneath the chosen directory and always takes precedence. SDK-default media
+  directories do not contribute a root. Preparation stores an explicit-connect gate
 - `imzenx_connect` uses `imzenx.connect`; configurations prepared with the new flow
   require `singleConsumerConfirmed: true` and `expectedConfigurationRevision`
   from the reviewed readiness result after a user/coordinator acknowledges that

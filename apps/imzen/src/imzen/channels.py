@@ -12,6 +12,48 @@ from imagent.channels.native.access import ChannelAccessPolicy
 from .config import ConfigurationError, PermissionMode
 
 
+def load_channel_config(config_file: Path) -> dict[str, Any]:
+    return _load_config(config_file)
+
+
+def shared_media_root(
+    config: dict[str, Any] | None,
+    *,
+    process_cwd: Path,
+) -> Path | None:
+    """Select a declared media directory that contains all other declared roots.
+
+    The pinned SDK accepts one root, not an allowlist. Never infer a broader
+    ancestor: disjoint roots require explicit deployment attestation. SDK-default
+    directories do not contribute a root. The caller must separately establish
+    that the App Server shares this process's filesystem.
+    """
+    if not isinstance(config, dict):
+        return None
+    roots: list[Path] = []
+    for channel_id in ("qq", "telegram", "feishu", "weixin"):
+        channel_config = config.get(channel_id)
+        if not isinstance(channel_config, dict) or channel_config.get("enabled") is not True:
+            continue
+        raw = channel_config.get("media_dir")
+        if not isinstance(raw, str):
+            continue
+        # Match the pinned SDK factories: Telegram trims path configuration,
+        # whereas QQ, Feishu and Weixin preserve whitespace in path names.
+        if channel_id == "telegram":
+            raw = raw.strip()
+        if not raw:
+            continue
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = process_cwd / candidate
+        roots.append(candidate.resolve())
+    return next(
+        (root for root in roots if all(other.is_relative_to(root) for other in roots)),
+        None,
+    )
+
+
 def build_channels(
     config_file: Path | None,
     *,

@@ -1,3 +1,4 @@
+import { ShellThreadPanel } from "./shell-thread-panel.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
@@ -190,6 +191,15 @@ export function AuxiliaryPanel({
     ([key]) => threadId !== undefined && JSON.parse(key)[0] === threadId,
   );
   const candidates: ContentTab[] = [
+    ...(threadId !== undefined
+      ? [
+          {
+            id: "terminal",
+            title: i18n.t("panels:shellTitle"),
+            icon: "terminal" as const,
+          },
+        ]
+      : []),
     ...customTabs.map((tab) => ({ ...tab, id: `custom:${tab.id}` })),
     ...(conversation && threadId !== undefined
       ? [
@@ -788,6 +798,13 @@ export function AuxiliaryPanel({
               ))}
               {threadId !== undefined ? (
                 <>
+                  <button type="button" onClick={() => void add("terminal")}>
+                    <Icon name="terminal" />
+                    <span>
+                      <strong>{i18n.t("panels:shellTitle")}</strong>
+                      <small>{i18n.t("panels:shellChooser")}</small>
+                    </span>
+                  </button>
                   <button type="button" onClick={() => void add("file")}>
                     <Icon name="file" />
                     <span>
@@ -900,6 +917,13 @@ export function AuxiliaryPanel({
                 threadId={threadId}
                 tab={tab.browser}
                 open={open === true}
+              />
+            ) : null}
+            {tab.id === "terminal" && threadId !== undefined ? (
+              <ShellThreadPanel
+                key={threadId}
+                threadId={threadId}
+                active={open === true && visible}
               />
             ) : null}
             {tab.id === "computer" && threadId !== undefined ? (

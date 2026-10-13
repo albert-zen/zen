@@ -1,3 +1,4 @@
+import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { deliverAssistantInput } from "./assistant-preset.js";
@@ -1348,6 +1349,28 @@ function installProtocolIpc(
         async (params) => await manager.request("thread/start", params),
         readProjectThreadStartOptions(selection),
       ),
+  );
+  ipcMain.handle(
+    ipcChannels.shellPanelRequest,
+    async (event, input: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const rendererUrl =
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+      if (
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+            mainFrame: event.senderFrame === event.sender.mainFrame,
+            url: event.senderFrame?.url ?? "",
+          },
+          rendererUrl,
+        )
+      )
+        throw new Error("Shell requires the trusted ZenX window");
+      validateShellPanelRequest(input);
+      return manager.shellPanelRequest(input);
+    },
   );
   registerProtocolRequestIpc(manager, (thread) => {
     void observeThreadSnapshotTitle(titles, thread).catch((error: unknown) => {

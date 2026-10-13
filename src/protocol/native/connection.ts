@@ -10,6 +10,9 @@ import {
 } from "./recovery.js";
 import {
   NATIVE_MODEL_CATALOG_UPDATED_METHOD,
+  NATIVE_THREAD_DELETE_METHOD,
+  NATIVE_THREAD_DELETED_LIST_METHOD,
+  NATIVE_THREAD_RESTORE_METHOD,
   NATIVE_INITIALIZE_METHOD,
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
@@ -61,7 +64,11 @@ export class NativeConnection {
         return;
       }
       const event = projected.event;
-      if (!this.#subscriptions.has(event.threadId)) return;
+      if (
+        !this.#subscriptions.has(event.threadId) &&
+        !(event.event.type === "thread_deleted_updated" && this.#nativeSession)
+      )
+        return;
       const barrier = this.#barriers.get(event.threadId);
       if (barrier !== undefined) barrier.push(event);
       else this.#sendEvent(event);
@@ -74,6 +81,87 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (
+      message.method === NATIVE_THREAD_DELETE_METHOD ||
+      message.method === NATIVE_THREAD_DELETED_LIST_METHOD ||
+      message.method === NATIVE_THREAD_RESTORE_METHOD
+    ) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Thread deletion is unavailable",
+          );
+        const params = message.params;
+        if (!isRecord(params))
+          throw new AppServerError(
+            "invalid_request",
+            "Thread parameters are required",
+          );
+        let result: unknown;
+        if (message.method === NATIVE_THREAD_DELETED_LIST_METHOD) {
+          if (Object.keys(params).length > 0)
+            throw new AppServerError(
+              "invalid_request",
+              "Deleted listing takes no parameters",
+            );
+          result = { data: await this.#appServer.listDeletedThreads() };
+        } else {
+          const field =
+            message.method === NATIVE_THREAD_DELETE_METHOD
+              ? "expectedLastItemId"
+              : "deletionItemId";
+          if (
+            Object.keys(params).some(
+              (key) => key !== "threadId" && key !== field,
+            ) ||
+            typeof params.threadId !== "string" ||
+            !params.threadId.trim() ||
+            params.threadId.length > 512 ||
+            typeof params[field] !== "string" ||
+            !params[field].trim() ||
+            params[field].length > 512
+          )
+            throw new AppServerError(
+              "invalid_request",
+              `threadId and ${field} are required`,
+            );
+          result =
+            message.method === NATIVE_THREAD_DELETE_METHOD
+              ? await this.#appServer.deleteThread(
+                  params.threadId,
+                  params[field],
+                )
+              : {
+                  thread: await this.#appServer.restoreThread(
+                    params.threadId,
+                    params[field],
+                  ),
+                };
+        }
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: error instanceof AppServerError ? -32602 : -32603,
+              message: error instanceof Error ? error.message : String(error),
+              ...(error instanceof AppServerError
+                ? { data: { zenCode: error.code } }
+                : {}),
+            },
+          });
+      }
+      return;
+    }
     if (message.method === NATIVE_THREAD_CREATE_CHILD_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
         this.#send({
@@ -419,9 +507,21 @@ export class NativeConnection {
     try {
       const snapshot = await this.#projection.resume(threadId);
       if (this.#closed) return;
+      if (
+        buffered.some(
+          (entry) =>
+            entry.event.type === "thread_deleted_updated" &&
+            entry.event.deleted,
+        )
+      )
+        throw new AppServerError(
+          "thread_deleted",
+          "Thread was deleted during resume; refresh before opening it",
+        );
       this.#send({ id: message.id, result: snapshot });
       for (const event of buffered) {
         if (
+          event.event.type !== "thread_deleted_updated" &&
           event.processEpoch === snapshot.processEpoch &&
           event.watermark > snapshot.watermark
         )
@@ -439,6 +539,11 @@ export class NativeConnection {
       }
     } finally {
       this.#barriers.delete(threadId);
+      // A failed resume must still deliver lifecycle discovery to this client.
+      if (!this.#closed)
+        for (const event of buffered)
+          if (event.event.type === "thread_deleted_updated")
+            this.#sendEvent(event);
     }
   }
 

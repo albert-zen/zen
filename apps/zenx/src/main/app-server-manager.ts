@@ -1,3 +1,5 @@
+import type { ShellPanelRequest, ShellPanelResult } from "../shell-panel.js";
+import { WINDOWS_SHELL_SHUTDOWN_WAIT_MS } from "./shell-process-termination.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, unlink } from "node:fs/promises";
@@ -167,7 +169,8 @@ export class AppServerManager {
         | "configuration/published"
         | "configuration/discarded"
         | "configuration/current"
-        | "fleet/result";
+        | "fleet/result"
+        | "shell-panel/result";
       resolve(event: HostEvent): void;
       reject(error: Error): void;
     }
@@ -412,7 +415,8 @@ export class AppServerManager {
       const cleanup = await Promise.allSettled([
         Promise.resolve().then(() => client?.close()),
         stopOwnedAppServerChild(child, childObservation, {
-          shutdownGraceMs: this.#options.shutdownGraceMs ?? 3_000,
+          shutdownGraceMs:
+            this.#options.shutdownGraceMs ?? defaultHostShutdownGraceMs(),
           terminationGraceMs: this.#options.terminationGraceMs ?? 3_000,
         }),
       ]);
@@ -703,6 +707,18 @@ export class AppServerManager {
         threadId,
       } satisfies HostCommand);
   }
+  async shellPanelRequest(input: ShellPanelRequest): Promise<ShellPanelResult> {
+    return await this.#sendConfigurationRequest(
+      "shell-panel/result",
+      (requestId) => ({ type: "shell-panel/request", requestId, input }),
+      (event) => {
+        if (event.type !== "shell-panel/result")
+          throw new Error("Invalid Shell response");
+        if (event.error) throw new Error(event.error);
+        return event.result ?? null;
+      },
+    );
+  }
   async fleetControl(action: string, input?: unknown): Promise<unknown> {
     return await this.#sendConfigurationRequest(
       "fleet/result",
@@ -815,7 +831,8 @@ export class AppServerManager {
       | "configuration/published"
       | "configuration/discarded"
       | "configuration/current"
-      | "fleet/result",
+      | "fleet/result"
+      | "shell-panel/result",
     command: (requestId: string) => HostCommand,
     read: (event: HostEvent) => T,
     onTimeout?: (requestId: string) => void,
@@ -1147,7 +1164,8 @@ export class AppServerManager {
     if (child !== undefined && observation !== undefined) {
       try {
         await stopOwnedAppServerChild(child, observation, {
-          shutdownGraceMs: this.#options.shutdownGraceMs ?? 3_000,
+          shutdownGraceMs:
+            this.#options.shutdownGraceMs ?? defaultHostShutdownGraceMs(),
           terminationGraceMs: this.#options.terminationGraceMs ?? 3_000,
         });
       } catch (error) {
@@ -1435,6 +1453,7 @@ export class AppServerManager {
         return;
       }
       if (
+        hostEvent?.type === "shell-panel/result" ||
         hostEvent?.type === "fleet/result" ||
         hostEvent?.type === "configuration/prepared" ||
         hostEvent?.type === "configuration/published" ||
@@ -2051,11 +2070,20 @@ async function waitForReady(
   });
 }
 
+export function defaultHostShutdownGraceMs(
+  platform = process.platform,
+): number {
+  // One native cleanup join deadline, plus transport/resource teardown margin.
+  // This is a failure deadline, not a claim all native helpers must have exited.
+  return platform === "win32" ? WINDOWS_SHELL_SHUTDOWN_WAIT_MS + 5000 : 3000;
+}
+
 export async function stopOwnedAppServerChild(
   child: ChildProcess,
   observation: OwnedChildObservation,
   options: { shutdownGraceMs: number; terminationGraceMs: number },
 ): Promise<void> {
+  let escalated = false;
   if (observation.outcome() === undefined) {
     try {
       if (child.connected)
@@ -2068,6 +2096,7 @@ export async function stopOwnedAppServerChild(
     observation.outcome() === undefined &&
     !(await terminalWithin(observation, options.shutdownGraceMs))
   ) {
+    escalated = true;
     child.kill("SIGTERM");
   }
   if (
@@ -2078,6 +2107,14 @@ export async function stopOwnedAppServerChild(
   }
   const outcome = observation.outcome() ?? (await observation.terminal);
   if (outcome.type === "spawn_error") throw outcome.error;
+  if (
+    escalated ||
+    outcome.signal !== null ||
+    (outcome.code !== null && outcome.code !== 0)
+  )
+    throw new Error(
+      "Host cleanup is unconfirmed: shutdown exceeded its deadline or exited unsuccessfully",
+    );
 }
 
 async function terminalWithin(
