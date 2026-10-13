@@ -1,11 +1,11 @@
 {
   "id": "computer",
-  "version": "1.1.3",
-  "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture avoid foreground takeover; unsupported global input never silently substitutes for them.",
+  "version": "1.1.5",
+  "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   "provider": {
     "id": "microsoft-winapp-cli",
     "platforms": ["win32"],
-    "interactionModes": ["background_safe"],
+    "interactionModes": ["background_safe", "foreground_required"],
     "capabilities": [
       "window.list",
       "uia.inspect",
@@ -123,7 +123,7 @@
     },
     {
       "name": "computer_press",
-      "description": "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
+      "description": "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -174,13 +174,21 @@
         "required": ["target", "control"],
         "additionalProperties": false
       },
-      "permissions": ["computer.accessibility.act"],
-      "interactionMode": "background_safe",
-      "capabilities": ["uia.invoke", "app_targeted", "no_global_input"]
+      "permissions": [
+        "computer.accessibility.act",
+        "computer.foreground.control"
+      ],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "uia.invoke",
+        "app_targeted",
+        "no_global_input",
+        "may_activate_target"
+      ]
     },
     {
       "name": "computer_set_value",
-      "description": "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
+      "description": "Set the supplied text on one opaque editable control through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -234,9 +242,17 @@
         "required": ["target", "control", "value"],
         "additionalProperties": false
       },
-      "permissions": ["computer.accessibility.act"],
-      "interactionMode": "background_safe",
-      "capabilities": ["uia.set_value", "app_targeted", "no_global_input"]
+      "permissions": [
+        "computer.accessibility.act",
+        "computer.foreground.control"
+      ],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "uia.set_value",
+        "app_targeted",
+        "no_global_input",
+        "may_activate_target"
+      ]
     },
     {
       "name": "computer_screenshot",

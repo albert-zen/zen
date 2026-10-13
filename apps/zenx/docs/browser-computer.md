@@ -75,3 +75,26 @@ precedents, not evidence that every Codex browser operation uses diff output:
 Private task reports retain runtime diagnostics and experiment details. Public documentation deliberately excludes user application inventories and screenshots of existing documents.
 
 The Browser registry now keeps Workspace and one external browser available together. Chrome and Edge have separate, explicitly requested native-host registration locations. A competing external connection is rejected without replacing the current one. The [concurrency contract](../../../docs/browser-concurrency.md) records tool namespaces, reference and permission isolation, and native platform validation limits.
+
+## Verified Windows semantic client
+
+Windows app builds now package the explicitly named `zenx-winapp-uia` downstream
+separately from official/system WinApp. Its source, patch, SDK and reviewed NuGet
+closure are fixed at build time. The existing compiled provider-manifest digest
+covers the native executable, complete native binary directory and supporting
+provenance. Every native launch rechecks that closure and the private contract.
+
+Only that verified client can use the strict semantic route with automatic focus
+disabled. A fresh opaque observation carries exact native process/window/control
+identity; mutations revalidate it and call one specified UIA pattern once.
+Virtual controls, ambiguity, stale identity and unsupported patterns are refused.
+The client does not request activation or global input. The target application
+can still activate itself, and final validation cannot make an external provider
+atomic. Interrupted calls that may have dispatched report an unknown outcome;
+they are not automatically repeated. Stock/system WinApp keeps explicit foreground
+permission and its activity indicator. Strict background capture is unchanged.
+
+The packaged Windows fixture checks actual Unicode readback and an independent
+button effect while a separate guard process measures foreground events and
+samples. This is bounded fixture evidence, not certification of arbitrary apps.
+See [the native acceptance scope](windows-packaged-uia-smoke.md).

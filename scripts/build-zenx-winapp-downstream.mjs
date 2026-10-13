@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  copyFile,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -16,8 +24,199 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function relativeFile(value) {
   assert.equal(typeof value, "string");
   assert.ok(value.length > 0 && !path.isAbsolute(value));
-  assert.ok(!value.includes("\\") && !value.split("/").includes(".."));
+  assert.ok(
+    !/[\\:\0]/u.test(value) &&
+      !value.split("/").some((part) => ["", ".", ".."].includes(part)),
+  );
   return value;
+}
+
+export async function readReviewedBuildInputs(root = repositoryRoot) {
+  const lockBytes = await readFile(path.join(root, lockPath));
+  const lock = validateBuildLock(JSON.parse(lockBytes.toString("utf8")));
+  const patchBytes = await readFile(path.join(root, lock.patch.path));
+  assert.equal(
+    sha256(patchBytes),
+    lock.patch.sha256,
+    "Reviewed patch hash mismatch",
+  );
+  const dependencyLockBytes = await readFile(
+    path.join(root, lock.dependencyLock.path),
+  );
+  assert.equal(
+    dependencyLockBytes.length,
+    lock.dependencyLock.sizeBytes,
+    "Reviewed dependency lock size mismatch",
+  );
+  assert.equal(
+    sha256(dependencyLockBytes),
+    lock.dependencyLock.sha256,
+    "Reviewed dependency lock hash mismatch",
+  );
+  return { lock, lockBytes, patchBytes, dependencyLockBytes };
+}
+
+// A bounded, link-free inventory is shared by the producer and assembly handoff.
+// Provenance cannot hash itself; the trusted build passes its raw digest separately.
+export async function inventoryDownstreamFiles(directory) {
+  assert.ok(
+    (await lstat(directory)).isDirectory(),
+    "Downstream root must be a real directory",
+  );
+  const files = [];
+  const directories = [];
+  const names = new Set();
+  let totalBytes = 0;
+  const visit = async (relative) => {
+    for (const name of (await readdir(path.join(directory, relative))).sort()) {
+      const file = relativeFile(path.posix.join(relative, name));
+      assert.ok(
+        !names.has(file.toLowerCase()),
+        `Case-colliding downstream path: ${file}`,
+      );
+      names.add(file.toLowerCase());
+      assert.ok(names.size <= 4096, "Downstream payload exceeds entry bound");
+      const metadata = await lstat(path.join(directory, file));
+      if (metadata.isDirectory()) {
+        directories.push(file);
+        await visit(file);
+      } else {
+        assert.ok(
+          metadata.isFile(),
+          `Downstream payload must contain only regular files: ${file}`,
+        );
+        totalBytes += metadata.size;
+        assert.ok(
+          totalBytes <= 512 * 1024 * 1024,
+          "Downstream payload exceeds size bound",
+        );
+        if (file !== "provenance.json") {
+          files.push({
+            path: file,
+            sizeBytes: metadata.size,
+            sha256: await hashFile(path.join(directory, file)),
+          });
+        }
+      }
+    }
+  };
+  await visit("");
+  return { files, directories };
+}
+
+export async function verifyDownstreamCandidate({
+  root = repositoryRoot,
+  directory,
+  provenanceSha256,
+}) {
+  assert.match(
+    provenanceSha256 ?? "",
+    /^[a-f0-9]{64}$/u,
+    "Pass the same-run downstream provenance SHA-256",
+  );
+  assert.ok(
+    (await lstat(directory)).isDirectory(),
+    "Downstream root must be a real directory",
+  );
+  const provenancePath = path.join(directory, "provenance.json");
+  const provenanceMetadata = await lstat(provenancePath);
+  assert.ok(
+    provenanceMetadata.isFile(),
+    "Downstream provenance must be a regular file",
+  );
+  assert.ok(
+    provenanceMetadata.size <= 4 * 1024 * 1024,
+    "Downstream provenance exceeds size bound",
+  );
+  const provenanceBytes = await readFile(provenancePath);
+  assert.equal(
+    sha256(provenanceBytes),
+    provenanceSha256,
+    "Downstream provenance digest mismatch",
+  );
+  const { lock, lockBytes, patchBytes, dependencyLockBytes } =
+    await readReviewedBuildInputs(root);
+  const inventory = await inventoryDownstreamFiles(directory);
+  const provenance = JSON.parse(provenanceBytes.toString("utf8"));
+  assert.equal(provenance.schemaVersion, 1);
+  assert.equal(provenance.purpose, "zenx-windows-uia-provider");
+  assert.equal(provenance.providerBuild, lock.downstream.providerBuild);
+  assert.equal(provenance.version, lock.downstream.version);
+  assert.deepEqual(provenance.upstream, lock.upstream);
+  assert.equal(provenance.patchSha256, lock.patch.sha256);
+  assert.equal(provenance.sourceLockSha256, sha256(lockBytes));
+  assert.equal(provenance.dependencyLockSha256, lock.dependencyLock.sha256);
+  assert.equal(provenance.dependencyLockMode, lock.dependencyLockMode);
+  assert.equal(provenance.dotnetSdk, lock.dotnetSdk);
+  assert.equal(provenance.nodeVersion, lock.nodeVersion);
+  assert.equal(provenance.runtimeVersion, lock.runtimeVersion);
+  assert.equal(provenance.targetRid, lock.targetRid);
+  assert.equal(provenance.bitReproducibilityVerified, false);
+  parseFeatureContract(JSON.stringify(provenance.featureContract), lock);
+  assert.deepEqual(
+    provenance.files,
+    inventory.files,
+    "Downstream shipped file inventory mismatch",
+  );
+  assert.deepEqual(
+    provenance.directories,
+    inventory.directories,
+    "Downstream directory inventory mismatch",
+  );
+  for (const [file, expected] of [
+    ["source.lock.json", lockBytes],
+    ["downstream.patch", patchBytes],
+    ["packages.lock.json", dependencyLockBytes],
+  ]) {
+    assert.ok(
+      (await readFile(path.join(directory, file))).equals(expected),
+      `Downstream reviewed input mismatch: ${file}`,
+    );
+  }
+  for (const file of [
+    "bin/winapp.exe",
+    "bin/libSkiaSharp.dll",
+    "UPSTREAM-LICENSE.txt",
+    "dotnet-info.txt",
+  ]) {
+    assert.ok(
+      inventory.files.some(
+        (entry) => entry.path === file && entry.sizeBytes > 0,
+      ),
+      `Downstream required file missing: ${file}`,
+    );
+  }
+  assert.deepEqual(provenance.executable, {
+    path: "bin/winapp.exe",
+    sha256: inventory.files.find((file) => file.path === "bin/winapp.exe")
+      .sha256,
+  });
+  for (const phase of ["before", "after"]) {
+    const output = await readFile(
+      path.join(directory, `runtime-resolution-${phase}-restore.json`),
+      "utf8",
+    );
+    assert.deepEqual(
+      parseRuntimeResolution(output, lock),
+      provenance.runtimeResolution,
+      "Downstream runtime evidence mismatch",
+    );
+  }
+  return {
+    lock,
+    provenance,
+    provenanceSha256,
+    inventory,
+    downstream: {
+      schemaVersion: 1,
+      providerBuild: lock.downstream.providerBuild,
+      upstreamCommit: lock.upstream.commit,
+      patchSha256: lock.patch.sha256,
+      sourceLockSha256: sha256(lockBytes),
+      dependencyLockSha256: lock.dependencyLock.sha256,
+      contractVersion: 1,
+    },
+  };
 }
 
 export function validateBuildLock(lock) {
@@ -33,11 +232,14 @@ export function validateBuildLock(lock) {
   relativeFile(lock.project);
   relativeFile(lock.patch.path);
   assert.match(lock.patch.sha256, /^[a-f0-9]{64}$/u);
-  assert.equal(lock.dependencyLockMode, "capture-then-locked-restore");
+  assert.equal(lock.dependencyLockMode, "frozen-locked-restore");
+  relativeFile(lock.dependencyLock.path);
+  assert.match(lock.dependencyLock.sha256, /^[a-f0-9]{64}$/u);
+  assert.equal(lock.dependencyLock.sizeBytes, 13704);
   assert.ok(Object.keys(lock.sourceFiles).length > 0);
   for (const [name, digest] of Object.entries(lock.sourceFiles)) {
     relativeFile(name);
-    assert.match(digest, /^[a-f0-9]{40}$/u);
+    if (digest !== null) assert.match(digest, /^[a-f0-9]{40}$/u);
   }
   return lock;
 }
@@ -93,11 +295,19 @@ export async function verifyAndPatchSource({
     "Upstream build checkout must be clean",
   );
   for (const [name, digest] of Object.entries(lock.sourceFiles)) {
-    assert.equal(
-      git(["rev-parse", `HEAD:${name}`]),
-      digest,
-      `Source preimage mismatch: ${name}`,
-    );
+    if (digest === null) {
+      assert.equal(
+        git(["ls-tree", "HEAD", "--", name]),
+        "",
+        `New source path already exists: ${name}`,
+      );
+    } else {
+      assert.equal(
+        git(["rev-parse", `HEAD:${name}`]),
+        digest,
+        `Source preimage mismatch: ${name}`,
+      );
+    }
   }
   // Patch the Git index, then materialize only the reviewed paths. This handles
   // Windows checkout line endings without normalizing or resetting other files.
@@ -125,11 +335,13 @@ export function parseFeatureContract(raw, lock) {
   const contract = JSON.parse(raw.trim());
   assert.deepEqual(Object.keys(contract).sort(), [
     "autoSetFocus",
+    "contractVersion",
     "providerBuild",
     "schemaVersion",
     "upstreamCommit",
   ]);
   assert.equal(contract.schemaVersion, 1);
+  assert.equal(contract.contractVersion, 1);
   assert.equal(contract.providerBuild, lock.downstream.providerBuild);
   assert.equal(contract.upstreamCommit, lock.upstream.commit);
   assert.equal(
@@ -209,8 +421,11 @@ export async function buildDownstream({
       outputDirectory !== sourceDirectory,
     "Output must be separate from the source checkout",
   );
-  const lockBytes = await readFile(path.join(root, lockPath));
-  const lock = validateBuildLock(JSON.parse(lockBytes.toString("utf8")));
+  const {
+    lock,
+    lockBytes,
+    dependencyLockBytes: resolvedLock,
+  } = await readReviewedBuildInputs(root);
   assert.equal(
     process.versions.node,
     lock.nodeVersion,
@@ -260,14 +475,9 @@ export async function buildDownstream({
     initialRuntimeOutput,
   );
   const runtimeResolution = parseRuntimeResolution(initialRuntimeOutput, lock);
-  // First checkpoint discovers the resolved dependency closure, then requires a
-  // locked restore before compiling. Its lock is an output for subsequent review;
-  // it is NOT represented as a previously reviewed transitive dependency pin.
-  run("dotnet", ["restore", project, "--use-lock-file", ...properties], {
-    cwd: sourceDirectory,
-    capture: false,
-  });
-  const resolvedLock = await readFile(dependencyLock);
+  // Install the already-reviewed raw closure before the first restore. No
+  // unconstrained dependency discovery is permitted in product builds.
+  await writeFile(dependencyLock, resolvedLock);
   await writeFile(
     path.join(outputDirectory, "packages.lock.json"),
     resolvedLock,
@@ -276,9 +486,8 @@ export async function buildDownstream({
     cwd: sourceDirectory,
     capture: false,
   });
-  assert.deepEqual(
-    await readFile(dependencyLock),
-    resolvedLock,
+  assert.ok(
+    (await readFile(dependencyLock)).equals(resolvedLock),
     "Locked restore changed dependencies",
   );
   const lockedRuntimeOutput = readRuntimeResolution();
@@ -304,9 +513,8 @@ export async function buildDownstream({
     ],
     { cwd: sourceDirectory, capture: false },
   );
-  assert.deepEqual(
-    await readFile(dependencyLock),
-    resolvedLock,
+  assert.ok(
+    (await readFile(dependencyLock)).equals(resolvedLock),
     "Publish changed dependencies",
   );
   const executable = path.join(binaryDirectory, "winapp.exe");
@@ -318,14 +526,20 @@ export async function buildDownstream({
     path.join(sourceDirectory, "LICENSE"),
     path.join(outputDirectory, "UPSTREAM-LICENSE.txt"),
   );
+  const inventory = await inventoryDownstreamFiles(outputDirectory);
+  assert.ok(
+    inventory.files.some((file) => file.path === "bin/libSkiaSharp.dll"),
+    "Native SkiaSharp runtime is missing",
+  );
   const provenance = {
     schemaVersion: 1,
-    purpose: "build-only-candidate-not-selected-by-ZenX",
+    purpose: "zenx-windows-uia-provider",
+    version: lock.downstream.version,
     providerBuild: lock.downstream.providerBuild,
     upstream: lock.upstream,
     patchSha256: patched.patchSha256,
     sourceLockSha256: sha256(lockBytes),
-    resolvedDependencyLockSha256: sha256(resolvedLock),
+    dependencyLockSha256: sha256(resolvedLock),
     dependencyLockMode: lock.dependencyLockMode,
     nodeVersion: lock.nodeVersion,
     dotnetSdk: lock.dotnetSdk,
@@ -335,15 +549,31 @@ export async function buildDownstream({
     runnerImage: process.env.ImageOS ?? null,
     runnerImageVersion: process.env.ImageVersion ?? null,
     executable: { path: "bin/winapp.exe", sha256: await hashFile(executable) },
+    ...inventory,
     featureContract: contract,
     bitReproducibilityVerified: false,
     productIntegrationVerified: false,
   };
-  await writeFile(
-    path.join(outputDirectory, "provenance.json"),
+  const provenanceBytes = Buffer.from(
     `${JSON.stringify(provenance, null, 2)}\n`,
   );
-  console.log(JSON.stringify(provenance));
+  await writeFile(
+    path.join(outputDirectory, "provenance.json"),
+    provenanceBytes,
+  );
+  const provenanceSha256 = sha256(provenanceBytes);
+  await verifyDownstreamCandidate({
+    root,
+    directory: outputDirectory,
+    provenanceSha256,
+  });
+  if (process.env.GITHUB_OUTPUT) {
+    await appendFile(
+      process.env.GITHUB_OUTPUT,
+      `provenance-sha256=${provenanceSha256}\n`,
+    );
+  }
+  console.log(JSON.stringify({ ...provenance, provenanceSha256 }));
   return provenance;
 }
 

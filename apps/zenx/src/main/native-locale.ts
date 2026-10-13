@@ -68,3 +68,7 @@ export function setNativeLanguage(next: SupportedLanguage): boolean {
 export function nativeText(key: keyof typeof en): string {
   return (language === "zh-CN" ? zhCN : en)[key];
 }
+
+export function nativeLanguage(): SupportedLanguage {
+  return language;
+}

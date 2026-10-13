@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { packZenXFirstPartyPlugins } from "./pack-first-party-plugins.mjs";
 import ts from "typescript";
+import { downstreamAssemblyArguments } from "../../../scripts/assemble-zenx-providers.mjs";
 
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -35,6 +36,10 @@ export const MACOS_CODESIGN_MODE_ENV = "ZENX_CODESIGN_MODE";
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
 async function packageZenX(arguments_) {
+  const downstreamArguments = downstreamAssemblyArguments(
+    arguments_,
+    process.platform,
+  );
   const target = arguments_.includes("--app") ? "app" : "smoke";
   const productName = target === "app" ? "ZenX" : "ZenXProviderSmoke";
   const targetDirectory = `${productName}-${process.platform}-${process.arch}`;
@@ -54,6 +59,7 @@ async function packageZenX(arguments_) {
             resources,
             "--cache",
             artifactCache,
+            ...downstreamArguments,
           ])
         ).stdout,
       );
@@ -813,6 +819,13 @@ export async function stagePackage(options) {
     await cp(path.join(options.outDirectory, "main"), stagedMain, {
       recursive: true,
     });
+    // The native overlay smoke uses its isolated preload, never the app bridge.
+    const preloadDirectory = path.join(options.appDirectory, "preload");
+    await mkdir(preloadDirectory, { recursive: true });
+    await cp(
+      path.join(options.outDirectory, "preload", "foreground-activity.cjs"),
+      path.join(preloadDirectory, "foreground-activity.cjs"),
+    );
   }
   await injectProviderManifestDigest(stagedMain, options.manifestSha256);
 }

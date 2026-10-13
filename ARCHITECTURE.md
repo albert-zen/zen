@@ -364,6 +364,7 @@
   协商实际影响且禁止静默降级；`foreground_required` 默认不投影也不执行，只有本机用户在 ZenX 中明确
   开启可撤销的 foreground computer control 后才可用，旧 permission grants 不构成授权；foreground helper
   从准备到实际进程 spawn 的每个边界都重验当前 consent，已撤销的 signal 绝不启动全局输入 helper。
+- **ZenXForegroundActivity** — Electron main projects only admitted, validated foreground Computer calls into disposable, non-activating native indicators across current displays; an indicator must be visible before input, remains until provider settlement, and its exact-owner Stop reuses cancellation/Turn interruption. It grants no consent, owns no scheduler or durable state, and never marks background-safe work as global control.
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
@@ -385,10 +386,13 @@
   再在每个 awaited setup 步骤后及发送 page code 前按有序 CDP 事件流原子重验；它不进入 Zen Core 或 durable journal，
   且 mutation 已发送后的失效继续使用 outcome-unknown/taint 与 lease 语义。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA JSON
-  投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
+  投影为既有的有界 opaque observation 与按真实影响分类的 computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
   只读窗口发现返回所属应用与可直接传给现有定向工具的精确 target；列表截断与查询过滤不改变目标身份。
-  WinApp downstream build candidate 是独立构建期产物：固定上游 source/patch/SDK，记录依赖闭包与原生 binary provenance，只供 native 验证；未经过正式 provider trust-chain 集成和 packaged 验证前，不改变运行时 provider 选择或 background 声明。
+  Stock/system WinApp UIA set-value 与 Invoke 已实测可能激活目标窗口，故在任何原生调用之前要求既有可撤销 foreground computer control 许可；app-targeted/no-global-input 不是 focus-isolated 的证明，不启用自动授权、焦点恢复或输入注入 fallback。
+- **ZenXStrictUiaComputerProvider** — Windows App build 将固定上游/patch/SDK/真实 NuGet closure 编译成独立 `zenx-winapp-uia` NativeAOT 资源，同一构建的显式 provenance digest 交给既有 assembler；compiled manifest digest 是唯一产品 trust anchor，覆盖 exe、完整 native bin 树及逐文件、source/patch/closure/provenance/license，选择与每次启动均重验，不覆盖 official archive、不在用户机器编译或降级。
+  新后台语义 route 仅在 verified packaged 身份及 live AutoSetFocus FALSE 合同成立时开放；既有 opaque observation 保存精确进程出生、HWND/class/RuntimeId/完整语义几何身份，私有原生命令拒绝虚拟、陈旧、歧义或变化目标，只对同一验证过的 UIA element 单次调用指定 ValuePattern 或 InvokePattern，不走 selector/ancestor/其它 pattern fallback。最终校验不是原子性或所有第三方应用零焦点副作用保证；此客户端不请求激活，目标应用自身仍可能改变焦点。
+  同一 Host 取消和 retirement signal 覆盖启动前边界，已可能派发但缺少可信完成回执的失败/中断保持 outcome unknown，等待实际 child/pipe close 后结算而不假称回滚或自动重试。旧 Computer profile 先恢复已提交的精确 backend，新 variant 与既有 Catalog transaction 一起提交；失败保持旧 generation，disabled/uninstalled/external override 与 foreground consent 不变，旧 grants 不构成新增授权。
   Windows 截图由应用内固定源码、独立限时进程的 PrintWindow helper 获取，禁止激活/恢复窗口；像素仅经 Host 校验后写入瞬时 artifact，无法后台渲染时显式失败。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
