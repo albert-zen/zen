@@ -946,7 +946,13 @@ async function main(): Promise<void> {
         ).split(/\r?\n/u)[0];
         return /^\d+$/.test(value ?? "") ? value : undefined;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        const code = (error as NodeJS.ErrnoException).code;
+        // Chrome can still hold its startup file open on Windows. Re-read only
+        // this owned file within the existing poll deadline; never relaunch.
+        if (
+          code === "ENOENT" ||
+          (process.platform === "win32" && code === "EBUSY")
+        )
           return undefined;
         throw error;
       }
@@ -1586,13 +1592,22 @@ async function stopOwnedChild(child: ChildProcess): Promise<void> {
 async function startNative(directory: string): Promise<Native> {
   if (process.platform === "darwin") {
     // Read-only discovery first. Missing tools is a blocker, never an install prompt.
+    // Cold xcrun lookup can exceed five seconds on a fresh hosted runner. All
+    // discovery commands share one budget and each still executes only once.
+    const discoveryDeadline = Date.now() + 20_000;
+    const discoveryTimeout = (): number => {
+      const remaining = discoveryDeadline - Date.now();
+      if (remaining <= 0)
+        throw new Error("macOS toolchain discovery timed out");
+      return remaining;
+    };
     await runFile("/usr/bin/xcode-select", ["--print-path"], {
-      timeout: 5_000,
+      timeout: Math.min(5_000, discoveryTimeout()),
     });
     const { stdout } = await runFile(
       "/usr/bin/xcrun",
       ["--sdk", "macosx", "--find", "swiftc"],
-      { timeout: 5_000 },
+      { timeout: discoveryTimeout() },
     );
     const compiler = stdout.trim();
     assert.ok(
@@ -1602,8 +1617,9 @@ async function startNative(directory: string): Promise<Native> {
     const { stdout: sdkOutput } = await runFile(
       "/usr/bin/xcrun",
       ["--sdk", "macosx", "--show-sdk-path"],
-      { timeout: 5_000 },
+      { timeout: discoveryTimeout() },
     );
+    discoveryTimeout();
     const sdk = sdkOutput.trim();
     assert.ok(path.isAbsolute(sdk), "macOS SDK must be an absolute path");
     const source = path.join(directory, "Native.swift"),

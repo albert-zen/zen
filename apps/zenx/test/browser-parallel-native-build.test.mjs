@@ -31,8 +31,10 @@ function fixture(options = {}) {
   const calls = [],
     started = [],
     written = [];
+  let now = 1_000;
   const start = runInNewContext(`${executable}; startNative`, {
     assert,
+    Date: { now: () => now },
     path: path.posix,
     process: { platform: options.platform ?? "darwin" },
     MAC_NATIVE: "fixed swift source",
@@ -49,6 +51,11 @@ function fixture(options = {}) {
               : "compile";
       calls.push({ file, args: Array.from(args), limits });
       if (stage === options.failAt) throw options.error;
+      const elapsed = options.elapsed?.[stage] ?? 0;
+      if (elapsed > limits.timeout)
+        throw new Error(`fixture ${stage} discovery exceeded its budget`);
+      now += elapsed;
+      if (stage === options.pauseAfter) now += options.pauseMs;
       if (stage === "compiler")
         return { stdout: options.compiler ?? `${compiler}\n` };
       if (stage === "sdk") return { stdout: options.sdk ?? `${sdk}\n` };
@@ -90,7 +97,7 @@ test("parallel Mac helper selects and passes the exact macOS SDK as a single arg
   );
   assert.deepEqual(
     f.calls.map(({ limits }) => limits.timeout),
-    [5000, 5000, 5000, 60000],
+    [5000, 20000, 20000, 60000],
   );
   assert.deepEqual(f.started, [
     { file: "/tmp/owned fixture/native-fixture", args: [] },
@@ -109,7 +116,7 @@ for (const field of ["compiler", "sdk"]) {
     );
   });
 }
-for (const stage of ["compiler", "sdk", "compile"]) {
+for (const stage of ["developer", "compiler", "sdk", "compile"]) {
   test(`parallel Mac helper retains ${stage} failure without retry or launch`, async () => {
     const error = new Error(`original ${stage} failure`);
     const f = fixture({ failAt: stage, error });
@@ -135,3 +142,50 @@ test("Windows native fixture does not discover or compile a macOS SDK", async ()
     },
   ]);
 });
+
+// Cold xcrun lookup can exceed five seconds on a fresh hosted macOS runner.
+// The three read-only discoveries share one budget; nothing is retried.
+test("parallel Mac discovery admits a cold lookup within one 20-second budget", async () => {
+  const f = fixture({
+    elapsed: { developer: 1000, compiler: 9000, sdk: 2000 },
+  });
+  await f.start("/tmp/owned");
+  assert.deepEqual(
+    f.calls.map(({ limits }) => limits.timeout),
+    [5000, 19000, 10000, 60000],
+  );
+  assert.equal(f.calls.length, 4);
+  assert.equal(f.started.length, 1);
+});
+
+test("parallel Mac discovery failure uses only the remaining budget without replay", async () => {
+  const f = fixture({
+    elapsed: { developer: 1000, compiler: 14000, sdk: 6000 },
+  });
+  await assert.rejects(
+    f.start("/tmp/owned"),
+    /sdk discovery exceeded its budget/,
+  );
+  assert.deepEqual(
+    f.calls.map(({ limits }) => limits.timeout),
+    [5000, 19000, 5000],
+  );
+  assert.equal(f.written.length, 0);
+  assert.equal(f.started.length, 0);
+});
+
+for (const stage of ["developer", "compiler", "sdk"]) {
+  test(`parallel Mac discovery refuses work after the shared deadline at ${stage}`, async () => {
+    const f = fixture({ pauseAfter: stage, pauseMs: 20000 });
+    await assert.rejects(
+      f.start("/tmp/owned"),
+      /macOS toolchain discovery timed out/,
+    );
+    assert.equal(
+      f.calls.length,
+      ["developer", "compiler", "sdk"].indexOf(stage) + 1,
+    );
+    assert.equal(f.written.length, 0);
+    assert.equal(f.started.length, 0);
+  });
+}
