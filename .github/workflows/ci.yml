@@ -263,6 +263,68 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
+      - name: Inspect the generated RuntimeId ABI without element contents
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $source = Join-Path $PWD ".native-sources/winappcli/src/winapp-CLI/WinApp.Cli"
+          $files = @(Get-ChildItem -LiteralPath (Join-Path $source "obj") -Recurse -File -Filter "*.NativeMethods.g.cs" |
+            Where-Object { $_.FullName -match '[\\/]Generated[\\/]CsWin32[\\/]' })
+          function Find-Definition($lines, $pattern) {
+            for ($start = 0; $start -lt $lines.Length; $start++) {
+              if ($lines[$start] -notmatch $pattern) { continue }
+              $depth = 0; $opened = $false
+              for ($end = $start; $end -lt $lines.Length; $end++) {
+                if ($lines[$end].Contains("{")) { $opened = $true }
+                $depth += ([regex]::Matches($lines[$end], '\{')).Count
+                $depth -= ([regex]::Matches($lines[$end], '\}')).Count
+                if ($opened -and $depth -eq 0) { return @{ start = $start; end = $end } }
+              }
+              throw "Generated ABI definition was incomplete."
+            }
+            return $null
+          }
+          $snippets = [System.Collections.Generic.List[string]]::new()
+          $foundArray = $false; $foundMethod = $false
+          foreach ($file in $files) {
+            $lines = [System.IO.File]::ReadAllLines($file.FullName)
+            $relative = [System.IO.Path]::GetRelativePath($source, $file.FullName)
+            $array = Find-Definition $lines '^\s*(?:public|internal).*\bstruct\s+SAFEARRAY\b'
+            if ($null -ne $array) {
+              if ($array.end - $array.start -gt 256) { throw "Generated SAFEARRAY exceeds diagnostic bound." }
+              $snippets.Add("FILE ${relative}:$($array.start + 1) SAFEARRAY")
+              $first = [Math]::Max(0, $array.start - 8); $last = $array.end
+              $snippets.Add(($lines[$first..$last] -join "`n"))
+              $foundArray = $true
+            }
+            $element = Find-Definition $lines '^\s*(?:public|internal).*\binterface\s+IUIAutomationElement\b'
+            if ($null -ne $element) {
+              for ($line = $element.start; $line -le $element.end; $line++) {
+                if ($lines[$line] -notmatch '\bGetRuntimeId\s*\(') { continue }
+                $snippets.Add("FILE ${relative}:$($line + 1) IUIAutomationElement.GetRuntimeId")
+                $first = [Math]::Max($element.start, $line - 12); $last = [Math]::Min($element.end, $line + 12)
+                $snippets.Add(($lines[$first..$last] -join "`n"))
+                $foundMethod = $true
+              }
+            }
+          }
+          if (!$foundArray -or !$foundMethod) { throw "Expected generated RuntimeId ABI symbols were unavailable." }
+          $text = $snippets -join "`n`n"
+          if ([System.Text.Encoding]::UTF8.GetByteCount($text) -gt 65536) { throw "Generated ABI exceeds diagnostic byte bound." }
+          $evidence = Join-Path $env:RUNNER_TEMP "zenx-winapp-interop"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          [System.IO.File]::WriteAllText((Join-Path $evidence "runtime-id-abi.txt"), $text, [System.Text.UTF8Encoding]::new($false))
+          Write-Host "::group::Generated RuntimeId ABI (no element data)"
+          Write-Host $text
+          Write-Host "::endgroup::"
+      - name: Retain the bounded generated RuntimeId ABI
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenx-winapp-runtime-id-abi-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-winapp-interop/runtime-id-abi.txt
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-windows-user-browser-smoke:
     name: ZenX Windows attached user-browser smoke

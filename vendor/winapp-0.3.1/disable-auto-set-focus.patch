@@ -75,10 +75,10 @@ index 5149796..8046f17 100644
          return EnumerateWindows((pid, title) =>
 diff --git a/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
 new file mode 100644
-index 0000000..1fecdd6
+index 0000000..4e19ea2
 --- /dev/null
 +++ b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
-@@ -0,0 +1,503 @@
+@@ -0,0 +1,534 @@
 +// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 +// Licensed under the MIT License.
 +
@@ -113,6 +113,8 @@ index 0000000..1fecdd6
 +    private const int MaxNodes = 2048;
 +    private const string Build = "zenx-winapp-0.3.1-af0.2";
 +    private const string Commit = "c8ada4a403c43b96780b87abc454cba51f649c60";
++
++    private enum RuntimeReadContext { RootInitial, RootRecheck, WalkRoot, WalkChild, WalkVirtual, ActionControl }
 +
 +    private sealed class Refusal(string code) : Exception
 +    {
@@ -155,7 +157,7 @@ index 0000000..1fecdd6
 +                var visited = new HashSet<string>(StringComparer.Ordinal);
 +                var nodes = 0;
 +                Walk(automation.get_RawViewWalker(), rootElement, 0, controls, visited, ref nodes);
-+                Require(SameRoot(root, CaptureRoot(rootElement, root.Hwnd, root.Pid)), "root_changed");
++                Require(SameRoot(root, CaptureRoot(rootElement, root.Hwnd, root.Pid, RuntimeReadContext.RootRecheck)), "root_changed");
 +                autoSetFocus = service.ZenXAutoSetFocus;
 +                Require(autoSetFocus == false, "auto_focus_enabled");
 +            }
@@ -264,7 +266,7 @@ index 0000000..1fecdd6
 +    {
 +        autoSetFocus = service.ZenXAutoSetFocus;
 +        Require(autoSetFocus == false, "auto_focus_enabled");
-+        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid)), "root_changed");
++        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid, RuntimeReadContext.RootRecheck)), "root_changed");
 +        VerifyNativeAncestry(Handle(expectedRoot.Hwnd, false), Handle(expected.Hwnd, false), expectedRoot.Pid, expected.Pid);
 +        VerifyUiaAncestry(service.ZenXStrictClient, root, element);
 +        var stillUnique = UniqueNativeElement(service.ZenXStrictClient, root, Handle(expected.Hwnd, false));
@@ -275,7 +277,8 @@ index 0000000..1fecdd6
 +        Require(autoSetFocus == false, "auto_focus_enabled");
 +    }
 +
-+    private static Root CaptureRoot(IUIAutomationElement element, string hwndText, int pid)
++    private static Root CaptureRoot(IUIAutomationElement element, string hwndText, int pid,
++        RuntimeReadContext runtimeContext = RuntimeReadContext.RootInitial)
 +    {
 +        var hwnd = Handle(hwndText, false);
 +        Require(PInvoke.IsWindow(hwnd) && PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOT) == hwnd, "root_not_top_level");
@@ -285,7 +288,7 @@ index 0000000..1fecdd6
 +        using var process = Process.GetProcessById(pid);
 +        var ticks = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
 +        Require(!process.HasExited, "root_process_changed");
-+        return new Root(hwndText, pid, ticks, NativeClass(hwnd), RuntimeId(element));
++        return new Root(hwndText, pid, ticks, NativeClass(hwnd), RuntimeId(element, runtimeContext));
 +    }
 +
 +    private static void VerifyNativeAncestry(HWND root, HWND child, int rootPid, int childPid)
@@ -313,7 +316,7 @@ index 0000000..1fecdd6
 +        List<Control> controls, HashSet<string> visited, ref int nodes)
 +    {
 +        Require(++nodes <= MaxNodes && depth <= MaxDepth && controls.Count < MaxControls, "scan_limit");
-+        var control = CaptureControl(element);
++        var control = CaptureControl(element, depth == 0 ? RuntimeReadContext.WalkRoot : RuntimeReadContext.WalkChild);
 +        Require(visited.Add(string.Join(",", control.RuntimeId)), "duplicate_runtime_identity");
 +        controls.Add(control);
 +        var child = walker.GetFirstChildElement(element);
@@ -324,14 +327,17 @@ index 0000000..1fecdd6
 +        }
 +    }
 +
-+    private static Control CaptureControl(IUIAutomationElement element)
++    private static Control CaptureControl(IUIAutomationElement element,
++        RuntimeReadContext runtimeContext = RuntimeReadContext.ActionControl)
 +    {
 +        var hwnd = element.get_CurrentNativeWindowHandle();
++        var readContext = runtimeContext == RuntimeReadContext.WalkChild && hwnd.IsNull
++            ? RuntimeReadContext.WalkVirtual : runtimeContext;
 +        var rect = element.get_CurrentBoundingRectangle();
 +        var invoke = ReadPattern(element, UIA_PATTERN_ID.UIA_InvokePatternId) is IUIAutomationInvokePattern;
 +        var value = ReadPattern(element, UIA_PATTERN_ID.UIA_ValuePatternId) as IUIAutomationValuePattern;
 +        return new Control(((long)(nint)hwnd).ToString(CultureInfo.InvariantCulture), element.get_CurrentProcessId(),
-+            hwnd.IsNull ? "" : NativeClass(hwnd), RuntimeId(element), ReadBstr(element.get_CurrentName()),
++            hwnd.IsNull ? "" : NativeClass(hwnd), RuntimeId(element, readContext), ReadBstr(element.get_CurrentName()),
 +            ReadBstr(element.get_CurrentAutomationId()), ReadBstr(element.get_CurrentClassName()),
 +            ReadBstr(element.get_CurrentFrameworkId()), (int)element.get_CurrentControlType(),
 +            new Bounds(rect.left, rect.top, checked(rect.right - rect.left), checked(rect.bottom - rect.top)),
@@ -345,21 +351,46 @@ index 0000000..1fecdd6
 +        catch (COMException error) when (error.HResult == unchecked((int)0x80040204)) { return null; } // UIA_E_NOTSUPPORTED
 +    }
 +
-+    private static unsafe int[] RuntimeId(IUIAutomationElement element)
++    private static unsafe int[] RuntimeId(IUIAutomationElement element, RuntimeReadContext context)
 +    {
 +        var array = element.GetRuntimeId();
-+        Require(array != null, "runtime_identity_unavailable");
++        if (array == null) { throw RuntimeRefusal(context, "null"); }
 +        try
 +        {
-+            Require(array->cDims == 1 && array->cbElements == sizeof(int) && array->pvData != null,
-+                "runtime_identity_unavailable");
++            var dimensions = array->cDims;
++            var elementSize = array->cbElements;
++            if (dimensions != 1) { throw RuntimeRefusal(context, "dimensions", dimensions, elementSize); }
++            if (elementSize != sizeof(int)) { throw RuntimeRefusal(context, "element_size", dimensions, elementSize); }
++            if (array->pvData == null) { throw RuntimeRefusal(context, "data_null", dimensions, elementSize); }
++            // Do not read the bound until the same original shape guards have passed.
 +            var length = array->rgsabound[0].cElements;
-+            Require(length is > 0 and <= 64, "runtime_identity_unavailable");
++            if (length is 0 or > 64) { throw RuntimeRefusal(context, "length", dimensions, elementSize, length); }
 +            var result = new int[(int)length];
 +            new ReadOnlySpan<int>(array->pvData, (int)length).CopyTo(result);
 +            return result;
 +        }
 +        finally { PInvoke.SafeArrayDestroy(array); }
++    }
++
++    private static Refusal RuntimeRefusal(RuntimeReadContext context, string reason,
++        ushort? dimensions = null, uint? elementSize = null, uint? length = null)
++    {
++        var scope = context switch
++        {
++            RuntimeReadContext.RootInitial => "root_initial",
++            RuntimeReadContext.RootRecheck => "root_recheck",
++            RuntimeReadContext.WalkRoot => "walk_root",
++            RuntimeReadContext.WalkChild => "walk_child",
++            RuntimeReadContext.WalkVirtual => "walk_virtual",
++            RuntimeReadContext.ActionControl => "action_control",
++            _ => throw new InvalidOperationException("Invalid internal runtime identity context.")
++        };
++        // Only controlled context/reason labels and bounded SAFEARRAY shape numbers.
++        // Never report element text, values, RuntimeId contents or pointer addresses.
++        var d = dimensions?.ToString(CultureInfo.InvariantCulture) ?? "na";
++        var b = elementSize?.ToString(CultureInfo.InvariantCulture) ?? "na";
++        var n = length?.ToString(CultureInfo.InvariantCulture) ?? "na";
++        return new Refusal($"runtime_identity_{scope}_{reason}_d{d}_b{b}_n{n}");
 +    }
 +
 +    private static unsafe int NativePid(HWND hwnd)
