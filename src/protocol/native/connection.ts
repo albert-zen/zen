@@ -141,6 +141,9 @@ export class NativeConnection {
                     "guidance" | "follow_up" | "replacement",
                 }),
           },
+          this.#requestApproval === undefined
+            ? {}
+            : { requestApproval: this.#requestApproval },
         );
         this.#send({ id: message.id, result });
       } catch (error) {

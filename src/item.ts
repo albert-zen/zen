@@ -270,6 +270,8 @@ export interface ThreadMessageSender {
   /** Present only when the receiving Host captured an authenticated Fleet peer. */
   deviceId?: string;
   threadId: string;
+  /** Host-captured display snapshot only; never an identity or authorization key. */
+  threadName?: string;
   /** Local canonical Turn; remote peers cannot assert a local Turn. */
   turnId?: string;
   toolCallId: string;
@@ -1236,6 +1238,7 @@ function unreachableItemType(value: never): never {
 
 function validateThreadMessageSender(value: unknown, label: string): void {
   const sender = requireRecord(value, label);
+  requireOptionalNonEmptyString(sender.threadName, `${label}.threadName`);
   for (const field of ["threadId", "toolCallId", "callId"])
     requireNonEmptyString(sender[field], `${label}.${field}`);
   if (sender.deviceId === undefined)

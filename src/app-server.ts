@@ -1164,6 +1164,7 @@ export class ZenAppServer {
   async sendThreadMessage(
     threadId: string,
     requested: ThreadMessageInput,
+    options: { requestApproval?: ApprovalHandler } = {},
   ): Promise<ThreadMessageReceipt> {
     const input = structuredClone(requested);
     if (
@@ -1196,8 +1197,10 @@ export class ZenAppServer {
         "invalid_request",
         "Thread message sender does not match a canonical tool call",
       );
+    const sourceName = (await this.#threadMetadata.read(source.id)).name;
     const sender: ThreadMessageSender = {
       threadId: source.id,
+      ...(sourceName ? { threadName: sourceName.slice(0, 512) } : {}),
       toolCallId: call.id,
       callId: call.callId,
       turnId: call.turnId,
@@ -1205,7 +1208,13 @@ export class ZenAppServer {
     const clientId = `zenx-self-control:${createHash("sha256")
       .update(JSON.stringify([sender.threadId, sender.toolCallId]))
       .digest("hex")}`;
-    return await this.#deliverThreadMessage(threadId, input, sender, clientId);
+    return await this.#deliverThreadMessage(
+      threadId,
+      input,
+      sender,
+      clientId,
+      options,
+    );
   }
 
   /** Called only by the authenticated receiving Fleet Host, never the native local RPC. */
@@ -1253,6 +1262,7 @@ export class ZenAppServer {
     input: ThreadMessageInput,
     sender: ThreadMessageSender,
     clientId: string,
+    options: { requestApproval?: ApprovalHandler } = {},
   ): Promise<ThreadMessageReceipt> {
     const content: UserInput = [{ type: "text", text: input.text }];
     const messageType = input.messageType ?? "guidance";
@@ -1281,7 +1291,7 @@ export class ZenAppServer {
             threadId,
             expectedTurnId,
             content,
-            { clientId, requireUnarchived: true },
+            { ...options, clientId, requireUnarchived: true },
             sender,
           );
           void replacement.turn.done.catch(() => undefined);
@@ -1463,7 +1473,7 @@ export class ZenAppServer {
       };
     });
     if (receipt.queued && !receipt.duplicate) {
-      await this.resumeQueue(threadId, { requireUnarchived: true });
+      await this.resumeQueue(threadId, { ...options, requireUnarchived: true });
       const thread = await this.#requireThread(threadId);
       const delivered = thread.items.find(
         (item): item is ThreadMessageItem =>

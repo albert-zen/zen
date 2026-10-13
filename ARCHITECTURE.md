@@ -1206,3 +1206,5 @@ Native Fleet 对端通过 `thread-message-v1` capability 协商支持此消息�
 不能冒充本机验证的来源。旧 native Host 与不支持该 provenance 合同的 SSH Agent
 发送明确拒绝且不降级为人类消息；显式 trusted UI 的旧发送协议保持兼容。
 显式 replacement 沿既有 replacement intent 保存同一 sender，失败不重放工具副作用。
+来源可读名称是 Host 捕获的有界展示快照，不参与 identity、幂等比较或授权；远端
+来源始终可见地区分，精确 device / Thread / tool proof 放在来源详情中。

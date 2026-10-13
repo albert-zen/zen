@@ -210,6 +210,11 @@ function item(value: unknown, threadId: string): RemoteItemView {
     const source = value.sender;
     sender = {
       threadId: string(source.threadId, "sender Thread"),
+      ...(source.threadName === undefined
+        ? {}
+        : {
+            threadName: string(source.threadName, "sender display name", 1024),
+          }),
       toolCallId: string(source.toolCallId, "sender tool call"),
       callId: string(source.callId, "sender call"),
       ...(source.deviceId === undefined

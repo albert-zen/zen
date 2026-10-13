@@ -486,10 +486,20 @@ function QueuedMessageRow({
               {hasText ? (
                 <span ref={textRef} id={textId} className="queue-preview-text">
                   {message.sender === undefined ? null : (
-                    <small className="thread-message-sender">
-                      {t("threadMessageFrom", {
-                        threadId: message.sender.threadId,
-                      })}
+                    <small
+                      className="thread-message-sender"
+                      title={`${message.sender.deviceId === undefined ? "" : `${t("threadMessageRemoteDetails")}\n`}${JSON.stringify(message.sender)}`}
+                    >
+                      {t(
+                        message.sender.deviceId === undefined
+                          ? "threadMessageFrom"
+                          : "remoteThreadMessageFrom",
+                        {
+                          name:
+                            message.sender.threadName ??
+                            t("threadMessageUnnamed"),
+                        },
+                      )}
                       <br />
                     </small>
                   )}
@@ -558,7 +568,7 @@ function QueuedMessageRow({
           ) : null}
         </div>
         <div className="queue-row-actions">
-          {onEdit === undefined ? null : (
+          {onEdit === undefined || message.sender !== undefined ? null : (
             <button
               type="button"
               className={`queue-row-edit${editing ? " is-pending" : ""}`}

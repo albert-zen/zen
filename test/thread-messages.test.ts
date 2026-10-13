@@ -701,3 +701,180 @@ test("canonical sender validation and queue projection preserve origin boundarie
     /Remote sender/,
   );
 });
+
+for (const replacement of [false, true]) {
+  test(`native agent ${replacement ? "replacement" : "idle"} launch retains target approval routing`, async () => {
+    const { NativeConnection } =
+      await import("../src/protocol/native/connection.js");
+    const { NativeRecoveryProjection } =
+      await import("../src/protocol/native/recovery.js");
+    const entered = deferred();
+    const f = fixture({
+      provider: "native-approval",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        if (
+          !request.messages.some(
+            (message) =>
+              "text" in message && message.text?.includes("Run approved shell"),
+          )
+        ) {
+          entered.resolve();
+          await new Promise<void>((_resolve, reject) =>
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              { once: true },
+            ),
+          );
+          return;
+        }
+        if (!request.messages.some((message) => message.role === "tool"))
+          yield {
+            type: "tool_call",
+            callId: "approval-target",
+            name: "shell",
+            arguments: { command: "printf approved" },
+          };
+        else yield { type: "text_delta", delta: "done" };
+      },
+    });
+    const source = await sender(f, "approval");
+    const target = await f.server.startThread({ approvalPolicy: "always" });
+    const active = replacement
+      ? await f.server.startTurn(target.id, "hold")
+      : undefined;
+    if (active) await entered.promise;
+    const projection = new NativeRecoveryProjection(f.server);
+    const approvals: import("../src/tool.js").ApprovalRequest[] = [];
+    const replies: unknown[] = [];
+    const connection = new NativeConnection({
+      projection,
+      appServer: f.server,
+      isInitialized: () => true,
+      requestApproval: async (request) => {
+        approvals.push(request);
+        return "accept";
+      },
+      send: (message) => {
+        if ("id" in message && message.id === 1) replies.push(message);
+      },
+    });
+    try {
+      await connection.receive({
+        id: 1,
+        method: "zen/thread/message",
+        params: {
+          threadId: target.id,
+          sourceThreadId: source.threadId,
+          sourceToolCallId: source.toolCallId,
+          sourceCallId: source.callId,
+          text: "Run approved shell",
+          ...(replacement ? { messageType: "replacement" } : {}),
+        },
+      });
+      const snapshot = await idle(f, target.id);
+      assert.equal(approvals.length, 1);
+      assert.equal(approvals[0]!.threadId, target.id);
+      assert.notEqual(approvals[0]!.threadId, source.threadId);
+      assert.equal(approvals[0]!.turnId, snapshot.turns.at(-1)!.id);
+      assert.equal(
+        snapshot.items.find((item) => item.type === "tool_result")?.exitCode,
+        0,
+      );
+      assert.equal(replies.length, 1);
+    } finally {
+      await active?.done;
+      connection.close();
+      projection.close();
+    }
+  });
+}
+
+test(
+  "late native approval cannot execute an interrupted and deleted target",
+  { timeout: 5000 },
+  async () => {
+    const { NativeConnection } =
+      await import("../src/protocol/native/connection.js");
+    const { NativeRecoveryProjection } =
+      await import("../src/protocol/native/recovery.js");
+    const { mkdtemp, access, rm } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(os.tmpdir(), "agent-approval-"));
+    const marker = join(directory, "must-not-run");
+    const entered = deferred(),
+      release = deferred();
+    let approval: import("../src/tool.js").ApprovalRequest | undefined;
+    const f = fixture({
+      provider: "late-approval",
+      async *stream(): AsyncIterable<ModelEvent> {
+        yield {
+          type: "tool_call",
+          callId: "late-tool",
+          name: "shell",
+          arguments: {
+            command: `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync(process.argv[1], 'ran')" ${JSON.stringify(marker)}`,
+          },
+        };
+      },
+    });
+    const source = await sender(f, "late");
+    const target = await f.server.startThread({ approvalPolicy: "always" });
+    const projection = new NativeRecoveryProjection(f.server);
+    const connection = new NativeConnection({
+      projection,
+      appServer: f.server,
+      isInitialized: () => true,
+      send: () => {},
+      requestApproval: async (request) => {
+        approval = request;
+        entered.resolve();
+        await release.promise;
+        return "accept";
+      },
+    });
+    try {
+      await connection.receive({
+        id: 1,
+        method: "zen/thread/message",
+        params: {
+          threadId: target.id,
+          sourceThreadId: source.threadId,
+          sourceToolCallId: source.toolCallId,
+          sourceCallId: source.callId,
+          text: "run tool",
+        },
+      });
+      await entered.promise;
+      assert.equal(approval!.threadId, target.id);
+      await assert.rejects(
+        f.server.setThreadArchived(target.id, true),
+        /running turn/,
+      );
+      await f.server.interruptTurn(target.id, approval!.turnId);
+      assert.equal(approval!.signal.aborted, true);
+      const snapshot = await idle(f, target.id);
+      await f.server.setThreadArchived(target.id, true);
+      await f.server.deleteThread(target.id, snapshot.items.at(-1)!.id);
+      release.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await assert.rejects(access(marker));
+      await assert.rejects(
+        f.server.sendThreadMessage(target.id, {
+          sender: source,
+          text: "run tool",
+        }),
+        /deleted/,
+      );
+    } finally {
+      if (approval !== undefined)
+        await f.server
+          .interruptTurn(target.id, approval.turnId)
+          .catch(() => undefined);
+      release.resolve();
+      connection.close();
+      projection.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);

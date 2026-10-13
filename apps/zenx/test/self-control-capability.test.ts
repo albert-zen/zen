@@ -478,12 +478,24 @@ test("an Agent drives the complete bounded tracer bullet through App Server wire
       targetRead.thread.turns.map((turn) => turn.status),
       ["completed", "completed"],
     );
-    assert.deepEqual(
+    assert.equal(
       targetRead.thread.turns
         .flatMap((turn) => turn.items)
-        .filter((item) => item.type === "userMessage")
-        .map((item) => item.content.map((part) => part.text).join("")),
+        .filter((item) => item.type === "userMessage").length,
+      0,
+    );
+    const nativeTarget = await client.request("zen/thread/read", {
+      threadId: target!.id,
+    });
+    const inbound = nativeTarget.thread.items.filter(
+      (item) => item.type === "thread_message",
+    );
+    assert.deepEqual(
+      inbound.map((item) => textFromUserInput(item.content)),
       ["Child initial prompt.", "Child follow-up prompt."],
+    );
+    assert.ok(
+      inbound.every((item) => item.sender.threadId === source.thread.id),
     );
   } finally {
     client.close();

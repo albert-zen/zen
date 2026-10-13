@@ -324,6 +324,7 @@ export function ThreadView({
   const editableQueue = new Map(
     nativeQueue.flatMap((item) => {
       if (
+        item.type !== "user_message_queued" ||
         !thread?.queuedMessages?.some(
           (message) =>
             message.id === item.id && message.clientId === item.clientId,
@@ -2967,10 +2968,19 @@ function UserMessage({
       }
     >
       {item.type === "threadMessage" ? (
-        <small className="thread-message-sender">
-          {i18n.t("shell:threadMessageFrom", {
-            threadId: item.sender.threadId,
-          })}
+        <small
+          className="thread-message-sender"
+          title={`${item.sender.deviceId === undefined ? "" : `${i18n.t("shell:threadMessageRemoteDetails")}\n`}${JSON.stringify(item.sender)}`}
+        >
+          {i18n.t(
+            item.sender.deviceId === undefined
+              ? "shell:threadMessageFrom"
+              : "shell:remoteThreadMessageFrom",
+            {
+              name:
+                item.sender.threadName ?? i18n.t("shell:threadMessageUnnamed"),
+            },
+          )}
         </small>
       ) : null}
       {attachments.length === 0 ? null : (
