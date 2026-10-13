@@ -260,7 +260,11 @@ class PawController:
                 return tuple(
                     replace(out, content=out.content + (TextContent(extra),)) for out in result
                 )
-            if self._state.get(message.conversation_ref) and canonical != "threads":
+            if self._state.get(message.conversation_ref) and canonical not in {
+                "threads",
+                "queued",
+                "unqueue",
+            }:
                 return (
                     self._legacy.present_response(
                         message,

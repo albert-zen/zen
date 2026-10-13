@@ -189,6 +189,7 @@ const preparedConfig = {
   sharedFilesystemRoot: "",
   permissionMode: "approval-required",
   allowUnrestrictedFullAccess: false,
+  inputContinuation: "steer",
 };
 const ready = {
   ready: true,
@@ -1286,6 +1287,147 @@ test("live IM localization preserves provider-declared fields, transient credent
   } finally {
     await act(async () => {
       await i18n.changeLanguage("en");
+    });
+    await harness.close();
+  }
+});
+
+test("IM continuation defaults independently and shows saved versus active queue configuration", async () => {
+  const { inputContinuation: _omitted, ...prior } = preparedConfig;
+  let saved: unknown = prior;
+  let active: unknown = prior;
+  const harness = await mountImPage(async () => ({
+    state: "connected",
+    configuration: saved,
+    activeConfiguration: active,
+  }));
+  try {
+    const selector = () =>
+      document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Ordinary IM input"]',
+      );
+    assert.equal(selector()?.dataset.value, "steer");
+    assert.equal(harness.drafts.current.imzenx?.dirty, false);
+    assert.match(
+      document.body.textContent ?? "",
+      /Independent from Composer, Room and Trigger settings/,
+    );
+    assert.equal(
+      harness.calls.some(
+        ({ command }) => command === "prepare" || command === "connect",
+      ),
+      false,
+    );
+    await act(async () => harness.root.render(null));
+    delete harness.drafts.current.imzenx;
+    saved = { ...prior, inputContinuation: "queue" };
+    await harness.render();
+    assert.equal(selector()?.dataset.value, "queue");
+    assert.equal(harness.drafts.current.imzenx?.dirty, false);
+    assert.match(
+      document.body.textContent ?? "",
+      /current connection still uses the previous runtime configuration/,
+    );
+    active = saved;
+    await act(async () => harness.root.render(null));
+    delete harness.drafts.current.imzenx;
+    await harness.render();
+    assert.equal(selector()?.dataset.value, "queue");
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /current connection still uses the previous runtime configuration/,
+    );
+  } finally {
+    await harness.close();
+  }
+});
+
+test("IM continuation keyboard edits preserve a newer draft across late Save and never connect", async () => {
+  const saving = deferred<unknown>();
+  const harness = await mountImPage(async (command) => {
+    if (command === "prepare") return saving.promise;
+    if (command === "readiness") return ready;
+    return {
+      state: "connected",
+      configuration: preparedConfig,
+      activeConfiguration: preparedConfig,
+    };
+  });
+  const selector = () =>
+    document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Ordinary IM input"]',
+    )!;
+  const key = async (element: HTMLElement, value: string) =>
+    act(async () => {
+      element.dispatchEvent(
+        new harness.dom.window.KeyboardEvent("keydown", {
+          key: value,
+          bubbles: true,
+        }),
+      );
+    });
+  const choose = async (value: string) => {
+    await act(async () => selector().focus());
+    await key(selector(), "ArrowDown");
+    const option = document.querySelector<HTMLElement>(
+      `[role="option"][data-value="${value}"]`,
+    );
+    assert(option);
+    await act(async () => option.focus());
+    await key(option, "Enter");
+  };
+  try {
+    await act(async () => {
+      for (const details of document.querySelectorAll<HTMLDetailsElement>(
+        ".imzenx-settings, .imzenx-settings details",
+      ))
+        details.open = true;
+      selector().focus();
+    });
+    await key(selector(), "ArrowDown");
+    const popup = document.querySelector<HTMLElement>('[role="listbox"]');
+    assert(popup);
+    await key(popup, "Escape");
+    assert.equal(document.querySelector('[role="listbox"]'), null);
+    assert.equal(document.activeElement, selector());
+    assert.equal(harness.drafts.current.imzenx?.dirty, false);
+    await choose("queue");
+    assert.equal(
+      harness.drafts.current.imzenx?.config.inputContinuation,
+      "queue",
+    );
+    assert.equal(harness.drafts.current.imzenx?.dirty, true);
+    await click(button("Check readiness"));
+    assert.equal(button("Confirm connection…").disabled, true);
+    await click(button("Save preparation"));
+    assert.deepEqual(
+      harness.calls.find(({ command }) => command === "prepare")?.input,
+      { ...preparedConfig, inputContinuation: "queue" },
+    );
+    await choose("steer");
+    saving.resolve({
+      state: "connected",
+      configuration: { ...preparedConfig, inputContinuation: "queue" },
+      activeConfiguration: preparedConfig,
+    });
+    await act(async () => {
+      await saving.promise;
+    });
+    assert.equal(
+      harness.drafts.current.imzenx?.config.inputContinuation,
+      "steer",
+    );
+    assert.equal(harness.drafts.current.imzenx?.dirty, true);
+    assert.equal(selector().dataset.value, "steer");
+    assert.equal(
+      harness.calls.some(({ command }) => command === "connect"),
+      false,
+    );
+  } finally {
+    saving.resolve({
+      state: "connected",
+      configuration: preparedConfig,
+      activeConfiguration: preparedConfig,
     });
     await harness.close();
   }

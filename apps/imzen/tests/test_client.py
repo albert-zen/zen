@@ -3,21 +3,68 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from imagent.applications.adapters.appserver.client import (
     AppServerClient,
+    AppServerDispatchPosition,
     AppServerError,
+    AppServerResponse,
     AppServerSupervisor,
 )
 
 from imzen.client import ImZenAppServerClient
 
 
+class InitializationSocket:
+    """Let the real client establish readiness before scripted resume RPCs."""
+
+    def __init__(self):
+        self.incoming = asyncio.Queue()
+
+    async def send(self, raw):
+        request = json.loads(raw)
+        assert request["method"] in {"initialize", "initialized"}
+        if "id" in request:
+            await self.incoming.put(json.dumps({"id": request["id"], "result": {}}))
+
+    async def recv(self):
+        return await self.incoming.get()
+
+    async def close(self):
+        pass
+
+
 def create_client():
+    async def websocket_factory(*args, **kwargs):
+        return InitializationSocket()
+
     return ImZenAppServerClient(
-        supervisor=AppServerSupervisor(app_server_url="ws://127.0.0.1:4500"),
+        supervisor=AppServerSupervisor(
+            app_server_url="ws://127.0.0.1:4500", websocket_factory=websocket_factory
+        ),
         client_info={"name": "test", "version": "test"},
+    )
+
+
+def script_resume_transport(monkeypatch, resume):
+    """Keep the real SDK lifecycle owner; script only its transport boundary."""
+
+    original_request = AppServerClient._request_without_initialize_with_dispatch_position
+
+    async def request(self, method, params, **options):
+        if method != "thread/resume":
+            return await original_request(self, method, params, **options)
+        assert self.initialized
+        assert self._transport is not None
+        assert options == {"expected_connection_epoch": self.connection_epoch}
+        return AppServerResponse(
+            await resume(self, **params), AppServerDispatchPosition(self.connection_epoch, 0)
+        )
+
+    monkeypatch.setattr(
+        AppServerClient, "_request_without_initialize_with_dispatch_position", request
     )
 
 
@@ -103,22 +150,22 @@ async def test_reads_and_direct_resumes_serialize_only_the_same_thread(monkeypat
         try:
             if len(calls) == 1:
                 first_entered.set()
-                await release.wait()
+                await asyncio.wait_for(release.wait(), timeout=3)
             return {"thread": {"id": thread, "turns": [], "status": {"type": "idle"}}}
         finally:
             active.remove(thread)
 
-    monkeypatch.setattr(AppServerClient, "resume_thread", resume)
+    script_resume_transport(monkeypatch, resume)
     client = create_client()
     first = asyncio.create_task(client.read_thread("same"))
-    await first_entered.wait()
+    await asyncio.wait_for(first_entered.wait(), timeout=3)
 
     async def same_thread():
         same_started.set()
         return await client.resume_thread(threadId="same")
 
     queued = asyncio.create_task(same_thread())
-    await same_started.wait()
+    await asyncio.wait_for(same_started.wait(), timeout=3)
     try:
         other = await client.read_thread("independent")
         assert other["thread"]["id"] == "independent"
@@ -142,21 +189,21 @@ async def test_resume_failure_and_queued_cancellation_leave_no_false_success(mon
         calls += 1
         if calls == 1:
             entered.set()
-            await release.wait()
+            await asyncio.wait_for(release.wait(), timeout=3)
             raise ConnectionError("synthetic connection loss")
         return {"thread": {"id": kwargs["threadId"], "turns": []}}
 
-    monkeypatch.setattr(AppServerClient, "resume_thread", resume)
+    script_resume_transport(monkeypatch, resume)
     client = create_client()
     first = asyncio.create_task(client.read_thread("same"))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=3)
 
     async def queued_read():
         queued_started.set()
         return await client.read_thread("same")
 
     queued = asyncio.create_task(queued_read())
-    await queued_started.wait()
+    await asyncio.wait_for(queued_started.wait(), timeout=3)
     queued.cancel()
     with pytest.raises(asyncio.CancelledError):
         await queued
@@ -179,14 +226,13 @@ async def test_active_cancellation_keeps_native_owner_and_recovery_shares_admiss
         calls.append(kwargs)
         if len(calls) == 1:
             entered.set()
-            await release.wait()
+            await asyncio.wait_for(release.wait(), timeout=3)
         return {"thread": {"id": kwargs["threadId"], "turns": []}}
 
-    monkeypatch.setattr(AppServerClient, "resume_thread", resume)
-    monkeypatch.setattr(AppServerClient, "resume_thread_for_recovery", resume)
+    script_resume_transport(monkeypatch, resume)
     client = create_client()
     first = asyncio.create_task(client.resume_thread({"threadId": "same"}))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=3)
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first
@@ -196,7 +242,7 @@ async def test_active_cancellation_keeps_native_owner_and_recovery_shares_admiss
         return await client.resume_thread_for_recovery({"threadId": "same"}, cwd="synthetic")
 
     queued = asyncio.create_task(recovery())
-    await queued_started.wait()
+    await asyncio.wait_for(queued_started.wait(), timeout=3)
     assert (await client.read_thread("independent"))["thread"]["id"] == "independent"
     assert calls == [{"threadId": "same"}, {"threadId": "independent"}]
     assert not queued.done()
@@ -210,6 +256,7 @@ async def test_active_cancellation_keeps_native_owner_and_recovery_shares_admiss
 async def test_close_fences_waiters_and_survives_repeated_caller_cancellation(monkeypatch):
     entered = asyncio.Event()
     native_finished = asyncio.Event()
+    native_reset = asyncio.Event()
     close_entered = asyncio.Event()
     close_release = asyncio.Event()
     queued_started = asyncio.Event()
@@ -220,46 +267,57 @@ async def test_close_fences_waiters_and_survives_repeated_caller_cancellation(mo
         calls.append(kwargs["threadId"])
         entered.set()
         try:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(native_reset.wait(), timeout=3)
+            raise AppServerError("app-server client is closed")
         finally:
             native_finished.set()
 
-    async def close(self):
+    async def reset(self, **kwargs):
         nonlocal closes
         closes += 1
         close_entered.set()
-        await close_release.wait()
+        await asyncio.wait_for(close_release.wait(), timeout=3)
+        native_reset.set()
+        await original_reset(self, **kwargs)
 
-    monkeypatch.setattr(AppServerClient, "resume_thread", resume)
-    monkeypatch.setattr(AppServerClient, "close", close)
+    script_resume_transport(monkeypatch, resume)
+    original_reset = AppServerClient._reset_connection
+    monkeypatch.setattr(AppServerClient, "_reset_connection", reset)
     client = create_client()
     first = asyncio.create_task(client.read_thread("same"))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=3)
 
     async def queued_read():
         queued_started.set()
         return await client.read_thread("same")
 
     queued = asyncio.create_task(queued_read())
-    await queued_started.wait()
-    for _ in range(2):
-        closing = asyncio.create_task(client.close())
-        await close_entered.wait()
-        # A different-thread admission observes the close fence immediately.
-        with pytest.raises(AppServerError, match="client is closed"):
-            await client.read_thread("other")
-        closing.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await closing
-    assert not native_finished.is_set()
-    close_release.set()
+    await asyncio.wait_for(queued_started.wait(), timeout=3)
+    closing = asyncio.create_task(client.close())
+    await asyncio.wait_for(close_entered.wait(), timeout=3)
+    try:
+        for _ in range(2):
+            closing.cancel()
+            # A distinct public call both checks the fence and gives the cancelled
+            # close waiter an explicit scheduling barrier. Cleanup remains owned.
+            with pytest.raises(AppServerError, match="client is closed"):
+                await asyncio.create_task(client.read_thread("other"))
+            assert not closing.done()
+        assert not native_finished.is_set()
+    finally:
+        close_release.set()
+        await asyncio.gather(first, queued, closing, return_exceptions=True)
+    with pytest.raises(asyncio.CancelledError):
+        await closing
     await client.close()
     assert native_finished.is_set()
+    assert client._transport is None
+    assert not client._codex_resume_tasks
     assert closes == 1
     assert calls == ["same"]
-    with pytest.raises(asyncio.CancelledError):
-        await first
     with pytest.raises(AppServerError, match="client is closed"):
+        await first
+    with pytest.raises(AppServerError, match="^thread/resume connection changed before dispatch$"):
         await queued
     with pytest.raises(AppServerError, match="client is closed"):
         await client.resume_thread_for_recovery(threadId="same")
@@ -274,8 +332,10 @@ async def test_owner_cancelled_before_first_step_still_releases_thread_admission
         calls += 1
         return {"thread": {"id": kwargs["threadId"], "turns": []}}
 
-    monkeypatch.setattr(AppServerClient, "resume_thread", resume)
+    script_resume_transport(monkeypatch, resume)
     client = create_client()
+    # This case cancels the resume owner, not the real initialization reader.
+    await client.initialize()
     create_task = asyncio.create_task
 
     def cancelled_owner(coroutine):
