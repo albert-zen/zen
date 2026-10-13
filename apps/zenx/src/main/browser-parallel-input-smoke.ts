@@ -921,6 +921,11 @@ async function main(): Promise<void> {
       [
         `--user-data-dir=${profile}`,
         "--remote-debugging-port=0",
+        // Renderer AX metadata is required by this owned Mac fixture's strict
+        // native focused-element/value preflight. This grants no OS permission.
+        ...(process.platform === "darwin"
+          ? ["--force-renderer-accessibility"]
+          : []),
         "--no-first-run",
         "--no-default-browser-check",
         "--window-size=1000,720",

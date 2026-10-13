@@ -121,3 +121,49 @@ test("endpoint polling stops on owned browser exit before another file read", as
   assert.equal(f.reads.length, 1);
   assert.equal(f.elapsed(), 50);
 });
+
+// Exercise the real owned-browser launch expression, including its argv/options.
+const launches = [];
+function findLaunch(node) {
+  if (ts.isCallExpression(node) && node.expression.getText(ast) === "spawn")
+    launches.push(node);
+  ts.forEachChild(node, findLaunch);
+}
+findLaunch(main);
+assert.equal(launches.length, 1);
+const launchExpression = ts.transpileModule(launches[0].getText(ast), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText;
+for (const platform of ["darwin", "win32"]) {
+  test(`owned ${platform} launch enables renderer AX only for the Mac native preflight`, () => {
+    const calls = [];
+    runInNewContext(launchExpression, {
+      process: { platform },
+      executable: "/owned test browser/chrome",
+      profile: "/tmp/owned/browser-profile",
+      origin: "http://127.0.0.1:12345",
+      spawn: (file, args, options) =>
+        calls.push({
+          file,
+          args: Array.from(args),
+          options: JSON.parse(JSON.stringify(options)),
+        }),
+    });
+    assert.deepEqual(calls, [
+      {
+        file: "/owned test browser/chrome",
+        args: [
+          "--user-data-dir=/tmp/owned/browser-profile",
+          "--remote-debugging-port=0",
+          ...(platform === "darwin" ? ["--force-renderer-accessibility"] : []),
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--window-size=1000,720",
+          "--window-position=300,180",
+          "http://127.0.0.1:12345/user",
+        ],
+        options: { stdio: ["ignore", "ignore", "pipe"], windowsHide: false },
+      },
+    ]);
+  });
+}

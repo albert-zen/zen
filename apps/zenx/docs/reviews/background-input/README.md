@@ -240,6 +240,11 @@ the native fixture has permission and its exact foreground target matches; no
 permission prompts or settings changes are made. A missing macOS accessibility
 grant leaves that OS-input layer explicitly unverified.
 
+The owned Mac Chrome fixture explicitly enables renderer accessibility for its
+strict native focused-element/value preflight; this condition neither grants OS
+permission nor establishes AX readiness in an arbitrary user browser, and is not
+a requirement of the production Agent CDP path.
+
 Run the parallel fixture on an interactive test desktop with:
 
 ```
