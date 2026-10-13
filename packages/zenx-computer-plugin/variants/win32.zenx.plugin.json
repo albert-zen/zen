@@ -1,7 +1,7 @@
 {
   "id": "computer",
-  "version": "1.1.4",
-  "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA set-value may activate the target and requires explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
+  "version": "1.1.5",
+  "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   "provider": {
     "id": "microsoft-winapp-cli",
     "platforms": ["win32"],
@@ -123,7 +123,7 @@
     },
     {
       "name": "computer_press",
-      "description": "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
+      "description": "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -174,9 +174,17 @@
         "required": ["target", "control"],
         "additionalProperties": false
       },
-      "permissions": ["computer.accessibility.act"],
-      "interactionMode": "background_safe",
-      "capabilities": ["uia.invoke", "app_targeted", "no_global_input"]
+      "permissions": [
+        "computer.accessibility.act",
+        "computer.foreground.control"
+      ],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "uia.invoke",
+        "app_targeted",
+        "no_global_input",
+        "may_activate_target"
+      ]
     },
     {
       "name": "computer_set_value",

@@ -434,6 +434,24 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       invocation.threadId ?? null,
       computerTargetKey(target),
     ]);
+    // Decide from the actual selected service before consuming observations or
+    // dispatching either semantic mutation; stale profile metadata cannot grant
+    // foreground effects, and targeted UIA is not necessarily focus-isolated.
+    const foregroundRequired =
+      (toolName === "computer_press" || toolName === "computer_set_value") &&
+      this.manifest.tools.some(
+        (tool) =>
+          tool.name === toolName &&
+          tool.interactionMode === "foreground_required",
+      );
+    let signal = invocation.signal;
+    if (foregroundRequired) {
+      this.#assertForegroundControlAllowed(toolName);
+      signal = AbortSignal.any([signal, this.#foregroundConsent.signal]);
+      await foregroundTakeoverNotice(signal);
+      signal.throwIfAborted();
+      this.#assertForegroundControlAllowed(toolName);
+    }
     let result: unknown;
     switch (toolName) {
       case "computer_inspect": {
@@ -483,33 +501,17 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           key,
           control,
           invocation.threadId !== undefined,
-          invocation.signal,
+          signal,
         );
         this.#presentation.invalidate(key);
         result = {
-          ...(await this.#backend.press(target, native, invocation.signal)),
+          ...(await this.#backend.press(target, native, signal)),
           control,
+          ...(foregroundRequired ? { impact: "foreground_takeover" } : {}),
         };
         break;
       }
       case "computer_set_value": {
-        // A targeted/no-global-input provider can still activate its target.
-        // Decide from the actual provider declaration before consuming an
-        // observation or starting native work; old accessibility grants cannot
-        // authorize foreground effects.
-        const foregroundRequired = this.manifest.tools.some(
-          (tool) =>
-            tool.name === toolName &&
-            tool.interactionMode === "foreground_required",
-        );
-        let signal = invocation.signal;
-        if (foregroundRequired) {
-          this.#assertForegroundControlAllowed(toolName);
-          signal = AbortSignal.any([signal, this.#foregroundConsent.signal]);
-          await foregroundTakeoverNotice(signal);
-          signal.throwIfAborted();
-          this.#assertForegroundControlAllowed(toolName);
-        }
         requireScopedWindow(target, "computer_set_value");
         const value = requiredString(invocation.arguments, "value", true);
         if (value.length > 4_000) {

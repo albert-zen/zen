@@ -35,9 +35,9 @@ export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.4",
+  version: "1.1.5",
   description:
-    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA set-value may activate the target and requires explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
+    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   provider: {
     id: "microsoft-winapp-cli",
     platforms: ["win32"],
@@ -86,8 +86,15 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
           return {
             ...tool,
             description:
-              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
-            capabilities: ["uia.invoke", "app_targeted", "no_global_input"],
+              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
+            interactionMode: "foreground_required",
+            permissions: [...tool.permissions, "computer.foreground.control"],
+            capabilities: [
+              "uia.invoke",
+              "app_targeted",
+              "no_global_input",
+              "may_activate_target",
+            ],
           };
         case "computer_set_value":
           return {

@@ -318,7 +318,7 @@ test("Windows provider diagnostics scope focus guarantees to strict capture", as
     assert.equal(selection.diagnostics[0]?.status, "selected");
     assert.equal(
       selection.diagnostics[0]?.permissionSummary,
-      "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value may activate its target and requires explicit foreground permission; UIA Invoke focus isolation is unverified. No global input injection.",
+      "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value and Invoke may activate their target and require explicit foreground permission. No global input injection.",
     );
   } finally {
     await selection.backend?.close();

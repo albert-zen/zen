@@ -535,7 +535,7 @@ export async function selectComputerProvider(
             ? { integrity: "unverified" as const }
             : { integrity: "verified" as const }),
           permissionSummary:
-            "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value may activate its target and requires explicit foreground permission; UIA Invoke focus isolation is unverified. No global input injection.",
+            "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value and Invoke may activate their target and require explicit foreground permission. No global input injection.",
         },
       ],
     };
