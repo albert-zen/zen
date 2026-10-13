@@ -86,10 +86,56 @@ void app.whenReady().then(async () => {
   let lastFrameSubscription = 0;
   let phase = "setup";
   let layoutStarted = false;
+  const traceStarted = Date.now();
+  const sharedTrace: Array<Record<string, unknown>> = [];
+  let sharedTraceDropped = 0;
+  const traceCleanup: Array<() => void> = [];
+  const traceShared = (event: string) => {
+    try {
+      if (sharedTrace.length === 48) {
+        sharedTrace.shift();
+        sharedTraceDropped++;
+      }
+      sharedTrace.push({
+        event,
+        phase,
+        elapsedMs: Date.now() - traceStarted,
+        captureCalls,
+        frameSubscriptions,
+        frameCallbacks,
+        frameStops,
+        ownerVisible:
+          owner && !owner.isDestroyed() ? owner.isVisible() : undefined,
+        ownerMinimized:
+          owner && !owner.isDestroyed() ? owner.isMinimized() : undefined,
+        ownerHasView:
+          owner && !owner.isDestroyed() && createdView
+            ? owner.contentView.children.includes(createdView)
+            : undefined,
+        viewBounds:
+          createdView && !createdView.webContents.isDestroyed()
+            ? createdView.getBounds()
+            : undefined,
+      });
+    } catch {
+      /* Fixture diagnostics never replace operation failures. */
+    }
+  };
   const browser = createElectronWorkspaceBrowser({
     artifactDirectory: path.join(directory, "artifacts"),
     onCreateView: (view) => {
       createdView = view;
+      const started = () => traceShared("document-navigation-start");
+      const inPage = () => traceShared("document-in-page-navigation");
+      const finished = () => traceShared("document-load-finished");
+      view.webContents.on("did-start-navigation", started);
+      view.webContents.on("did-navigate-in-page", inPage);
+      view.webContents.on("did-finish-load", finished);
+      traceCleanup.push(() => {
+        view.webContents.removeListener("did-start-navigation", started);
+        view.webContents.removeListener("did-navigate-in-page", inPage);
+        view.webContents.removeListener("did-finish-load", finished);
+      });
       const begin = view.webContents.beginFrameSubscription.bind(
         view.webContents,
       );
@@ -125,6 +171,7 @@ void app.whenReady().then(async () => {
         ...args: Parameters<typeof capture>
       ) => {
         const call = ++captureCalls;
+        traceShared("capture-begin");
         try {
           if (!owner?.contentView.children.includes(view)) {
             assert.ok(frameSubscriptions > 0);
@@ -139,7 +186,9 @@ void app.whenReady().then(async () => {
               "The readiness subscription must stop before native capture",
             );
           }
-          return await capture(...args);
+          const image = await capture(...args);
+          traceShared("capture-image");
+          return image;
         } catch (error) {
           try {
             console.error("Owned shared-browser capture failed", {
@@ -173,6 +222,20 @@ void app.whenReady().then(async () => {
     const port = await listen();
     const url = `http://127.0.0.1:${String(port)}/shared`;
     owner = new BrowserWindow({ show: false, width: 900, height: 700 });
+    const ownerShow = () => traceShared("owner-show");
+    const ownerHide = () => traceShared("owner-hide");
+    const ownerRestore = () => traceShared("owner-restore");
+    const ownerMinimize = () => traceShared("owner-minimize");
+    owner.on("show", ownerShow);
+    owner.on("hide", ownerHide);
+    owner.on("restore", ownerRestore);
+    owner.on("minimize", ownerMinimize);
+    traceCleanup.push(() => {
+      owner?.removeListener("show", ownerShow);
+      owner?.removeListener("hide", ownerHide);
+      owner?.removeListener("restore", ownerRestore);
+      owner?.removeListener("minimize", ownerMinimize);
+    });
     await owner.loadURL("about:blank");
 
     const humanTabs = browser.command(
@@ -223,7 +286,7 @@ void app.whenReady().then(async () => {
       1,
       "live capture must release its temporary renderer",
     );
-    phase = "shared-browser-operations";
+    phase = "unmounted-inspection";
     const unmountedInspection = await browser.inspect("shared-session", tabId);
     assert.match(unmountedInspection.visibleText, /Human value/u);
     assert.ok(
@@ -282,6 +345,7 @@ void app.whenReady().then(async () => {
     await createdView.webContents.executeJavaScript(
       "document.querySelector('#capture-marker').style.backgroundColor='rgb(210,40,160)'",
     );
+    phase = "unmounted-action-inspection";
     const afterHiddenAction = await browser.inspect("shared-session", tabId);
     await assertUnmountedPixels(afterHiddenAction, [210, 40, 160]);
     console.log(
@@ -312,6 +376,7 @@ void app.whenReady().then(async () => {
       1,
       "the temporary renderer must close when an operation fails",
     );
+    phase = "unmounted-to-owner-handoff-inspection";
     const handoffInspection = browser.inspect("shared-session", tabId);
     await eventually(async () => {
       assert.equal(
@@ -320,14 +385,18 @@ void app.whenReady().then(async () => {
         "the Agent inspection must start on the temporary renderer",
       );
     });
+    traceShared("handoff-mount-request");
     browser.mount(owner.webContents, {
       threadId: "shared-thread",
       tabId,
       lease: "shared-smoke",
       bounds: { x: 20, y: 20, width: 700, height: 500 },
     });
+    traceShared("handoff-mounted");
     owner.showInactive();
+    traceShared("handoff-owner-show-requested");
     await handoffInspection;
+    traceShared("handoff-inspection-accepted");
     assert.equal(
       BrowserWindow.getAllWindows().length,
       1,
@@ -341,6 +410,7 @@ void app.whenReady().then(async () => {
       "The mounted human view must be the Agent target WebContents",
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
+    phase = "mounted-initial-inspection";
     let inspection = await browser.inspect("shared-session", tabId);
     assert.equal(inspection.url, url);
     assert.match(inspection.visibleText, /Human value/u);
@@ -349,6 +419,7 @@ void app.whenReady().then(async () => {
       "document.querySelector('input').focus();document.querySelector('input').select()",
     );
     createdView.webContents.insertText("typed by human");
+    phase = "mounted-human-input-inspection";
     inspection = await browser.inspect("shared-session", tabId);
     assert.equal(
       requiredTarget(inspection, "Human value", "type").value,
@@ -376,6 +447,7 @@ void app.whenReady().then(async () => {
       "Agent action must mutate the mounted human page",
     );
 
+    phase = "before-human-route-inspection";
     inspection = await browser.inspect("shared-session", tabId);
     const beforeHumanRoute = requiredTarget(
       inspection,
@@ -396,6 +468,7 @@ void app.whenReady().then(async () => {
       "a human SPA route change must invalidate the earlier observation",
     );
 
+    phase = "before-agent-navigation-inspection";
     inspection = await browser.inspect("shared-session", tabId);
     const agentNavigation = requiredTarget(
       inspection,
@@ -451,6 +524,7 @@ void app.whenReady().then(async () => {
       "document.querySelector('#login').click();document.querySelector('input').focus()",
     );
     createdView.webContents.insertText("human draft");
+    phase = "human-control-inspection";
     const humanObservation = await browser.inspect("shared-session", tabId);
     assert.match(humanObservation.visibleText, /Signed in to local fixture/u);
     assert.equal(
@@ -483,6 +557,7 @@ void app.whenReady().then(async () => {
       browser.navigate("shared-session", tabId, url),
       /fresh observation/u,
     );
+    phase = "returned-control-inspection";
     let handedBack = await browser.inspect("shared-session", tabId);
     await assert.rejects(
       browser.closeTab(
@@ -512,6 +587,7 @@ void app.whenReady().then(async () => {
       "return-control",
       tabId,
     );
+    phase = "human-confirmation-inspection";
     handedBack = await browser.inspect("shared-session", tabId);
     assert.match(handedBack.visibleText, /Confirmed Agent reviewed draft/u);
     assert.equal(
@@ -581,6 +657,15 @@ void app.whenReady().then(async () => {
       }),
     );
   } catch (error) {
+    try {
+      console.error("Owned shared-browser phase trace", {
+        phase,
+        sharedTrace,
+        sharedTraceDropped,
+      });
+    } catch {
+      /* Keep the original failure. */
+    }
     const failures = [error];
     if (!layoutStarted) {
       layoutStarted = true;
@@ -598,6 +683,13 @@ void app.whenReady().then(async () => {
     );
     process.exitCode = 1;
   } finally {
+    for (const cleanup of traceCleanup) {
+      try {
+        cleanup();
+      } catch {
+        /* Diagnostic listeners cannot change cleanup. */
+      }
+    }
     await browser.shutdown();
     owner?.destroy();
     await closeFixture();
