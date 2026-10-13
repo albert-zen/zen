@@ -26,6 +26,7 @@ import {
 
 interface NativeControl {
   hwnd: string;
+  runtimeId: number[];
   name: string;
   invokePattern: boolean;
   valuePattern: boolean;
@@ -34,8 +35,8 @@ interface NativeControl {
 interface NativeReceipt {
   schemaVersion: number;
   contractVersion: number;
-  autoSetFocus: boolean;
-  operation: string;
+  autoSetFocus: boolean | null;
+  operation: string | null;
   outcome: string;
   error: string | null;
   root: Record<string, unknown>;
@@ -156,6 +157,12 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
         false,
       );
     }
+    assert.equal(
+      selection.manifest.permissions.some(
+        (permission) => permission.id === "computer.foreground.control",
+      ),
+      false,
+    );
     let overlayCalls = 0;
     computer = new ComputerZenXCapabilityPackage(
       selection.backend,
@@ -287,6 +294,13 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
     );
     assert.equal(nativeInspection.autoSetFocus, false);
     const nativeSnapshot = structuredClone(nativeInspection);
+    const anonymousVirtualControls = nativeSnapshot.controls.filter(
+      (control) => control.hwnd === "0" && control.runtimeId.length === 0,
+    );
+    assert.ok(
+      anonymousVirtualControls.length > 0,
+      "native inspection must retain actual anonymous virtual structure rows",
+    );
     const button = findControl(second, "ZenX packaged invoke", "press");
     await invoke("computer_press", {
       target: selectedTarget,
@@ -312,6 +326,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       JSON.stringify({
         provider: diagnostic,
         unicodeReadback: true,
+        anonymousVirtualControls: anonymousVirtualControls.length,
         invokeCount: 1,
         foregroundAllowed: false,
         overlayCalls,
@@ -422,6 +437,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
     const transport = nativeLaunch;
     const raw = async (
       request: Record<string, unknown>,
+      invalidRequest = false,
     ): Promise<NativeReceipt> => {
       const result = await runner.run(transport.executable, transport.args, {
         ...transport.options,
@@ -433,7 +449,16 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       const receipt = JSON.parse(result.stdout) as NativeReceipt;
       assert.equal(receipt.schemaVersion, 1);
       assert.equal(receipt.contractVersion, 1);
-      assert.equal(receipt.autoSetFocus, false);
+      if (invalidRequest) {
+        // A malformed identity is rejected by parsing, before any UIA client exists.
+        assert.equal(receipt.outcome, "not_dispatched");
+        assert.equal(receipt.error, "bad_request");
+        assert.equal(receipt.operation, null);
+        assert.equal(receipt.autoSetFocus, null);
+      } else {
+        assert.equal(receipt.operation, request.operation);
+        assert.equal(receipt.autoSetFocus, false);
+      }
       return receipt;
     };
     const nativeEditor = nativeSnapshot.controls.find(
@@ -459,6 +484,54 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
     });
     assert.equal(virtualRefusal.outcome, "not_dispatched");
     await assertMissing(directory, "virtual-invoked");
+    const anonymousRefusals: string[] = [];
+    for (const operation of ["invoke", "set_value"]) {
+      const refusal = await raw({
+        schemaVersion: 1,
+        operation,
+        root: nativeSnapshot.root,
+        control: anonymousVirtualControls[0],
+        ...(operation === "set_value"
+          ? { value: "anonymous must not write" }
+          : {}),
+      });
+      assert.equal(refusal.outcome, "not_dispatched");
+      assert.equal(refusal.error, "native_identity_required");
+      anonymousRefusals.push(refusal.error);
+    }
+    let invalidIdentityRefusals = 0;
+    for (const field of ["root", "control"] as const) {
+      for (const runtimeId of [[], null, Array(65).fill(1), [1.5]]) {
+        await raw(
+          {
+            schemaVersion: 1,
+            operation: "invoke",
+            root:
+              field === "root"
+                ? { ...nativeSnapshot.root, runtimeId }
+                : nativeSnapshot.root,
+            control:
+              field === "control"
+                ? { ...nativeEditor, runtimeId }
+                : nativeEditor,
+          },
+          true,
+        );
+        invalidIdentityRefusals++;
+      }
+    }
+    for (const runtimeId of [null, Array(65).fill(1), [1.5]]) {
+      await raw(
+        {
+          schemaVersion: 1,
+          operation: "invoke",
+          root: nativeSnapshot.root,
+          control: { ...anonymousVirtualControls[0], runtimeId },
+        },
+        true,
+      );
+      invalidIdentityRefusals++;
+    }
 
     await writeFile(path.join(directory, "replace-editor"), "replace");
     const replaced = await readFixture<{ oldHwnd: string; hwnd: string }>(
@@ -495,6 +568,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       nativeFixture: "independent WinForms processes",
       foregroundAllowed: false,
       unicodeReadback: true,
+      anonymousVirtualControls: anonymousVirtualControls.length,
       invokeCount: 1,
       overlayCalls,
       focus,
@@ -502,6 +576,8 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       dispatchedCancellation: "unknown after real child and pipe close",
       nativeRefusals: {
         virtual: virtualRefusal.error,
+        anonymousVirtual: anonymousRefusals,
+        invalidIdentityRefusals,
         staleReplacement: staleRefusal.error,
         ambiguousRoot: true,
       },

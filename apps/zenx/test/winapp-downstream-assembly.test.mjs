@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   inventoryDownstreamFiles,
+  detachDownstreamDebugSymbols,
   parseRuntimeResolution,
   readReviewedBuildInputs,
   verifyDownstreamCandidate,
@@ -64,6 +65,7 @@ async function fixture(t) {
     "bin/winapp.exe": "native executable fixture",
     "bin/libSkiaSharp.dll": "native DLL fixture",
     "bin/winapp.pdb": "debug symbols fixture",
+    "bin/other.pdb": "unknown runtime file retained despite extension",
     "source.lock.json": lockBytes,
     "packages.lock.json": dependencyLockBytes,
     "downstream.patch": patchBytes,
@@ -73,6 +75,11 @@ async function fixture(t) {
     "runtime-resolution-after-restore.json": JSON.stringify(runtime),
   }))
     await writeFile(path.join(directory, file), bytes);
+  const symbolsDirectory = path.join(temporary, "symbols");
+  const partition = await detachDownstreamDebugSymbols({
+    outputDirectory: directory,
+    symbolsDirectory,
+  });
   const inventory = await inventoryDownstreamFiles(directory);
   const provenance = {
     schemaVersion: 1,
@@ -95,6 +102,7 @@ async function fixture(t) {
         .sha256,
     },
     ...inventory,
+    detachedDebugSymbols: partition.detachedDebugSymbols,
     featureContract: {
       schemaVersion: 1,
       contractVersion: 1,
@@ -113,6 +121,7 @@ async function fixture(t) {
   return {
     temporary,
     directory,
+    symbolsDirectory,
     provenance,
     seal,
     provenanceSha256: await seal(),
@@ -175,6 +184,16 @@ test("assembly seals direct native executable, every shipped file, and the whole
   assert.equal(entry.version, "0.3.1-zenx.af0.2");
   assert.deepEqual(entry.platforms, ["win32"]);
   assert.equal(entry.runtime, undefined);
+  assert.ok(
+    !entry.assets.some(
+      (asset) => asset.path === "zenx-winapp-uia/bin/winapp.pdb",
+    ),
+  );
+  assert.ok(
+    entry.assets.some(
+      (asset) => asset.path === "zenx-winapp-uia/bin/other.pdb",
+    ),
+  );
   assert.deepEqual(
     Object.keys(entry.downstream).sort(),
     [
@@ -247,6 +266,22 @@ test("untrusted or mutated staging inputs cannot enter the provider manifest", a
       f.provenanceSha256 = await f.seal();
     },
     async (f) => {
+      delete f.provenance.detachedDebugSymbols;
+      f.provenanceSha256 = await f.seal();
+    },
+    async (f) => {
+      f.provenance.detachedDebugSymbols.publishPath = "bin/libSkiaSharp.dll";
+      f.provenanceSha256 = await f.seal();
+    },
+    async (f) => {
+      await writeFile(
+        path.join(f.directory, "bin/winapp.pdb"),
+        "unexpected symbols",
+      );
+      Object.assign(f.provenance, await inventoryDownstreamFiles(f.directory));
+      f.provenanceSha256 = await f.seal();
+    },
+    async (f) => {
       f.provenance.bitReproducibilityVerified = true;
       f.provenanceSha256 = await f.seal();
     },
@@ -304,4 +339,19 @@ test("the official WinApp npm archive pin is unchanged by downstream integration
     assembly,
     /const winapp = await assembleNpmProvider\(\s*"microsoft-winapp-cli"/u,
   );
+});
+
+test("product assembly does not depend on the detached symbol evidence directory", async (t) => {
+  const f = await fixture(t);
+  await rm(f.symbolsDirectory, { recursive: true });
+  const entry = await assembleDownstreamProvider({
+    ...f,
+    providersDirectory: path.join(f.temporary, "providers"),
+  });
+  assert.ok(
+    entry.assets.every(
+      (asset) => !asset.path.includes("symbols-provenance.json"),
+    ),
+  );
+  await verifyDownstreamCandidate(f);
 });

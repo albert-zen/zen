@@ -48,12 +48,6 @@
       "title": "Capture a targeted window",
       "description": "Capture one explicitly targeted HWND without restoring or activating it. Unavailable background frames fail closed.",
       "scope": "local-device"
-    },
-    {
-      "id": "computer.foreground.control",
-      "title": "Control the foreground desktop",
-      "description": "Use global pointer, keyboard, focus, or scrolling. ZenX exposes these as explicitly labeled, cancellable foreground takeover.",
-      "scope": "local-device"
     }
   ],
   "tools": [

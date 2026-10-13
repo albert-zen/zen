@@ -243,6 +243,13 @@ test("strict Windows Computer profile upgrades retain disablement and do not app
         persisted.packages.computer.manifest.provider.id,
         "zenx-winapp-uia",
       );
+      assert.equal(
+        persisted.packages.computer.manifest.permissions.some(
+          (permission: { id: string }) =>
+            permission.id === "computer.foreground.control",
+        ),
+        false,
+      );
     } finally {
       await service?.close();
       await rm(root, { recursive: true, force: true });

@@ -33,10 +33,28 @@ by inspection without editing, rounding, omitting or inventing fields.
 - `valueReadOnly`: boolean if ValuePattern exists, otherwise null
 
 Identity strings are limited to 1024 UTF-16 units, without truncation. HWND `"0"`
-may appear for readable virtual controls; these cannot be action targets.
+may appear for readable virtual controls; these cannot be action targets. Only
+these HWND-less rows may have `runtimeId: []`, explicitly meaning that the provider
+supplied no identity. This is a read-only observation, not a generated, substitute
+or actionable identity. Root and native control identities always contain 1–64
+integers. A direct action request with HWND `"0"`, including an empty RuntimeId,
+is refused before element lookup or pattern dispatch.
 Inspection covers at most 256 controls, depth 32 and 2048 traversal visits. An
 incomplete, duplicate, failed or over-limit walk returns a refusal, not a partial
 actionable tree. No current text value or password value is included in inspection.
+
+The empty-identity exception requires an already identified HWND `"0"` walk node
+whose SAFEARRAY is non-null, one-dimensional, has 4-byte elements and a non-null
+data pointer, but has zero elements. Null arrays/data, invalid dimensions or
+element sizes, and lengths above 64 remain refusals for every node. Empty root,
+native and action-time identities remain refusals. All nonempty identities retain
+duplicate detection. Empty virtual identities are not inserted into that identity
+set, but every visit consumes the same limits and traverses all children; anonymous
+cycles or over-deep chains therefore fail rather than yielding partial success.
+
+Completed inspection means the bounded raw-view traversal retained all observed
+rows, not that every row has revalidatable native identity. Consumers must expose
+empty-identity virtual rows with no actions and no stable capture identity.
 
 ## Responses
 
@@ -95,3 +113,11 @@ The narrow source tests prevent accidental fallback/contract regressions and
 verify patch structure. They do not establish C# compilation, generated COM
 interface compatibility, NativeAOT viability or real Windows UIA behavior. Those
 require the pinned Windows build and packaged-provider smoke fixture.
+
+The packaged fixture must retain the actual empty-identity virtual receipt, prove
+it remains read-only, exercise direct HWND `"0"` refusals, and independently prove
+native Unicode/empty-string readback and Invoke effects. Malformed root/native
+RuntimeIds can be tested through real JSON requests. Bad native SAFEARRAY layouts,
+null data and anonymous provider cycles are covered by source/order and traversal
+budget checks unless a real provider fixture explicitly exercises them; source
+tests must not be reported as native behavioral execution.

@@ -42,7 +42,7 @@ directory. The same staging input and the SHA-256 of its raw `provenance.json`
 are passed explicitly to both smoke and real app packaging:
 
 ```sh
-node scripts/build-zenx-winapp-downstream.mjs --source SOURCE --output CANDIDATE
+node scripts/build-zenx-winapp-downstream.mjs --source SOURCE --output CANDIDATE --symbols-output SYMBOLS
 node apps/zenx/scripts/package-zenx-portable.mjs --app --downstream CANDIDATE --downstream-sha256 PROVENANCE_SHA256
 ```
 
@@ -75,6 +75,41 @@ manifest asset. The runner image/toolchain are recorded.
 not been established. Native build success also does not stand in for product UIA
 acceptance; `productIntegrationVerified` remains false in build provenance.
 
+## Detached build-only debug symbols
+
+The producer moves only the exact regular top-level `bin/winapp.pdb` from the
+native publish output into the explicit `--symbols-output` directory before
+capturing the product inventory. Source, product and symbols directories must be
+separate; both output directories must be fresh and on the same filesystem for
+the symbol move. Missing or non-regular expected symbols fail the build. No
+extension, basename or directory-ignore rule excludes additional files: unknown
+DLLs, executables, other PDBs and nested `winapp.pdb` files remain runtime assets.
+
+Before moving the file, the producer inventories every original publish file.
+Afterward it verifies the detached symbol bytes and requires the runtime file
+inventory plus the one symbol record to equal the complete original inventory,
+with the original directory layout unchanged. The product's `files` and
+`directories` remain the exact shipped closure. Its explicit
+`detachedDebugSymbols` record identifies the non-shipping original path, filename,
+size and SHA-256; it never adds the PDB to the product manifest or a runtime read.
+
+The separate `symbols-provenance.json` binds the PDB and original publish inventory
+to the raw product-provenance digest, provider/source/patch/closure identity and
+SDK/runtime. The producer verifies the detached file again before creating this
+completion evidence. Both workflows retain only `winapp.pdb` and
+`symbols-provenance.json` in an independent same-run debug-symbol artifact for
+14 days. Product candidate and actual-app proof artifacts stay separate. The
+assembler still copies every candidate file, seals the entire runtime `bin`
+directory without ignored paths, and never filters publish files itself.
+
+For the measured af0.2 publish, this reduces unique binary closure size from
+139,807,304 to 32,791,112 bytes, removing the 107,016,192-byte PDB from the product.
+These are uncompressed byte counts, not a compressed artifact-size or latency
+claim. The unchanged separate executable, directory and per-file checks still
+rehash all runtime bytes on their existing boundaries. Symbol retention neither
+relaxes runtime integrity nor establishes bit reproducibility or product UIA
+acceptance.
+
 ## Validation boundaries
 
 Dependency-free tests exercise source patching, raw-byte preservation through a
@@ -82,7 +117,7 @@ Windows-style Git clone, frozen closure/runtime constraints, strict identity and
 assembly tamper rejection:
 
 ```sh
-node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs
+node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs apps/zenx/test/winapp-downstream-symbols.test.mjs
 ```
 
 These tests do not compile C#, prove generated COM interface shape or execute

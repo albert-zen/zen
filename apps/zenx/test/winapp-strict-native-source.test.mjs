@@ -111,3 +111,87 @@ test("request objects reject unknown, duplicate and missing fields before dispat
       added.indexOf("var service = resolveService();"),
   );
 });
+
+// These are source-contract guards. Actual COM/provider behavior is established
+// separately by the packaged Windows fixture, not by these text assertions.
+test("only a fully validated empty virtual RuntimeId can remain a read-only row", () => {
+  const source = added.slice(
+    added.indexOf("private static unsafe int[] RuntimeId("),
+    added.indexOf("private static Refusal RuntimeRefusal("),
+  );
+  const exception =
+    "if (length == 0 && context == RuntimeReadContext.WalkVirtual) { return []; }";
+  assert.ok(source.includes(exception));
+  for (const guard of [
+    "if (array == null)",
+    "if (dimensions != 1)",
+    "if (elementSize != sizeof(int))",
+    "if (array->pvData == null)",
+    "var length = array->rgsabound[0].cElements;",
+  ]) {
+    assert.ok(source.indexOf(guard) >= 0);
+    assert.ok(source.indexOf(guard) < source.indexOf(exception));
+  }
+  assert.ok(
+    source.indexOf(exception) < source.indexOf("if (length is 0 or > 64)"),
+  );
+  assert.ok(
+    source.indexOf("if (length is 0 or > 64)") <
+      source.indexOf("new ReadOnlySpan<int>"),
+  );
+  assert.match(source, /finally \{ PInvoke\.SafeArrayDestroy\(array\); \}/);
+  assert.equal((source.match(/return \[\];/g) ?? []).length, 1);
+  assert.match(
+    added,
+    /runtimeContext == RuntimeReadContext\.WalkChild && hwnd\.IsNull/,
+  );
+});
+
+test("anonymous virtual visits retain every traversal budget and nonempty identity uniqueness", () => {
+  const walk = added.slice(
+    added.indexOf("private static void Walk("),
+    added.indexOf("private static Control CaptureControl("),
+  );
+  assert.match(
+    walk,
+    /\+\+nodes <= MaxNodes && depth <= MaxDepth && controls\.Count < MaxControls/,
+  );
+  assert.ok(walk.indexOf("++nodes") < walk.indexOf("CaptureControl("));
+  assert.match(walk, /control\.RuntimeId\.Length == 0 \|\| visited\.Add/);
+  assert.match(walk, /"duplicate_runtime_identity"/);
+  assert.match(walk, /controls\.Add\(control\)/);
+  assert.match(
+    walk,
+    /Walk\(walker, child, depth \+ 1, controls, visited, ref nodes\)/,
+  );
+  assert.match(walk, /walker\.GetNextSiblingElement\(child\)/);
+  assert.doesNotMatch(walk, /catch|continue|return/);
+});
+
+test("empty native/root action identities remain invalid and HWND0 stops before UIA access", () => {
+  const parseRoot = added.slice(
+    added.indexOf("private static Root ParseRoot("),
+    added.indexOf("private static Control ParseControl("),
+  );
+  assert.match(parseRoot, /ParseRuntimeId\(element\)/);
+  assert.doesNotMatch(parseRoot, /allowEmpty/);
+  assert.match(added, /ParseRuntimeId\(element, allowEmpty: hwnd == "0"\)/);
+  assert.match(
+    added,
+    /ParseRuntimeId\(JsonElement element, bool allowEmpty = false\)/,
+  );
+  assert.match(
+    added,
+    /array\.GetArrayLength\(\) <= 64 && \(allowEmpty \|\| array\.GetArrayLength\(\) > 0\)/,
+  );
+  const mutate = added.slice(
+    added.indexOf("private static string? Mutate("),
+    added.indexOf("private static IUIAutomationElement UniqueNativeElement("),
+  );
+  assert.ok(
+    mutate.indexOf("Handle(expected.Hwnd, false)") <
+      mutate.indexOf("automation.ElementFromHandle("),
+  );
+  assert.equal((mutate.match(/\.Invoke\(\)/g) ?? []).length, 1);
+  assert.equal((mutate.match(/\.SetValue\(/g) ?? []).length, 1);
+});

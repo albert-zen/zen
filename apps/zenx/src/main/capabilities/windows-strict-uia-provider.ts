@@ -46,6 +46,9 @@ export const windowsStrictUiaCapabilityManifest: ZenXPluginManifestV2 = {
       "single_pattern_dispatch",
     ],
   },
+  permissions: windowsComputerCapabilityManifest.permissions
+    .filter((permission) => permission.id !== "computer.foreground.control")
+    .map((permission) => structuredClone(permission)),
   tools: windowsComputerCapabilityManifest.tools.map((tool) => {
     if (tool.name !== "computer_press" && tool.name !== "computer_set_value")
       return structuredClone(tool);
@@ -223,9 +226,15 @@ export class WinAppStrictUiaComputerBackend implements ZenXComputerBackend {
         entries: uniqueComputerCaptureEntries(
           publicControls,
           fingerprints.map((fingerprint) => fingerprint.identifier),
+        ).map((entry, index) =>
+          // An anonymous virtual row is observable, but has no continuity identity.
+          ordered[index]!.runtimeId.length === 0
+            ? { value: entry.value }
+            : entry,
         ),
         coverage: {
           scope: "exact_window_strict_native_uia_capture",
+          // Complete bounded traversal does not imply every row is identifiable.
           sourceComplete: true,
           reasons: [],
           itemTotal: publicControls.length,

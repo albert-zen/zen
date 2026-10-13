@@ -144,10 +144,10 @@ jobs:
         with:
           dotnet-version: 10.0.401
       - name: Validate downstream build and assembly contracts
-        run: node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs
+        run: node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs apps/zenx/test/winapp-downstream-symbols.test.mjs
       - name: Build one native provider for this authorized app-build run
         id: build-downstream
-        run: node scripts/build-zenx-winapp-downstream.mjs --source .native-sources/winappcli --output "${{ runner.temp }}/zenx-winapp-downstream"
+        run: node scripts/build-zenx-winapp-downstream.mjs --source .native-sources/winappcli --output "${{ runner.temp }}/zenx-winapp-downstream" --symbols-output "${{ runner.temp }}/zenx-winapp-symbols"
       - name: Cache verified provider archives
         uses: actions/cache@v4
         with:
@@ -323,6 +323,17 @@ jobs:
         with:
           name: zenx-winapp-runtime-id-abi-${{ github.sha }}
           path: ${{ runner.temp }}/zenx-winapp-interop/runtime-id-abi.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Retain detached native debug symbols as same-run build evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenx-winapp-debug-symbols-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/zenx-winapp-symbols/winapp.pdb
+            ${{ runner.temp }}/zenx-winapp-symbols/symbols-provenance.json
           if-no-files-found: warn
           retention-days: 14
 

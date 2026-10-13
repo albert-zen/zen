@@ -9,6 +9,8 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
+  rename,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -104,6 +106,225 @@ export async function inventoryDownstreamFiles(directory) {
   return { files, directories };
 }
 
+function publishedBinInventory(inventory) {
+  return {
+    files: inventory.files
+      .filter((file) => file.path.startsWith("bin/"))
+      .sort((left, right) =>
+        left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+      ),
+    directories: inventory.directories
+      .filter((name) => name === "bin" || name.startsWith("bin/"))
+      .sort(),
+  };
+}
+
+function validateDetachedDebugSymbols(symbols) {
+  assert.ok(
+    symbols && typeof symbols === "object",
+    "Missing detached debug-symbol evidence",
+  );
+  assert.deepEqual(Object.keys(symbols).sort(), [
+    "fileName",
+    "publishPath",
+    "sha256",
+    "sizeBytes",
+  ]);
+  assert.equal(symbols.publishPath, "bin/winapp.pdb");
+  assert.equal(symbols.fileName, "winapp.pdb");
+  assert.ok(
+    Number.isSafeInteger(symbols.sizeBytes) &&
+      symbols.sizeBytes > 0 &&
+      symbols.sizeBytes <= 512 * 1024 * 1024,
+  );
+  assert.match(symbols.sha256, /^[a-f0-9]{64}$/u);
+}
+
+function assertSeparateDirectories(...directories) {
+  for (let left = 0; left < directories.length; left += 1) {
+    for (let right = left + 1; right < directories.length; right += 1) {
+      const normalize = (directory) =>
+        process.platform === "win32" ? directory.toLowerCase() : directory;
+      const relative = path.relative(
+        normalize(directories[left]),
+        normalize(directories[right]),
+      );
+      const reverse = path.relative(
+        normalize(directories[right]),
+        normalize(directories[left]),
+      );
+      const contains = (value) =>
+        value === "" ||
+        (!path.isAbsolute(value) &&
+          value !== ".." &&
+          !value.startsWith(`..${path.sep}`));
+      assert.ok(
+        !contains(relative) && !contains(reverse),
+        "Source, product and symbols directories must be separate, without overlap",
+      );
+    }
+  }
+}
+
+async function outputPath(directory) {
+  assert.ok(
+    typeof directory === "string" && directory.length > 0,
+    "Pass an explicit output directory",
+  );
+  const absolute = path.resolve(directory);
+  return path.join(
+    await realpath(path.dirname(absolute)),
+    path.basename(absolute),
+  );
+}
+
+function assertPublishPartition({
+  originalPublish,
+  runtimePublish,
+  detachedDebugSymbols,
+}) {
+  validateDetachedDebugSymbols(detachedDebugSymbols);
+  assert.ok(
+    !runtimePublish.files.some(
+      (file) => file.path.toLowerCase() === "bin/winapp.pdb",
+    ) &&
+      !runtimePublish.directories.some(
+        (name) => name.toLowerCase() === "bin/winapp.pdb",
+      ),
+    "Known debug symbols must not remain in the product",
+  );
+  const rejoined = [
+    ...runtimePublish.files,
+    {
+      path: detachedDebugSymbols.publishPath,
+      sizeBytes: detachedDebugSymbols.sizeBytes,
+      sha256: detachedDebugSymbols.sha256,
+    },
+  ].sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  assert.deepEqual(
+    originalPublish.files,
+    rejoined,
+    "Runtime and symbols do not exactly partition the original publish files",
+  );
+  assert.deepEqual(
+    originalPublish.directories,
+    runtimePublish.directories,
+    "Publish directory layout changed while detaching symbols",
+  );
+}
+
+export async function detachDownstreamDebugSymbols({
+  outputDirectory,
+  symbolsDirectory,
+}) {
+  outputDirectory = await realpath(outputDirectory);
+  symbolsDirectory = await outputPath(symbolsDirectory);
+  assertSeparateDirectories(outputDirectory, symbolsDirectory);
+  const originalPublish = publishedBinInventory(
+    await inventoryDownstreamFiles(outputDirectory),
+  );
+  const knownSymbol = originalPublish.files.find(
+    (file) => file.path === "bin/winapp.pdb",
+  );
+  assert.ok(
+    knownSymbol && knownSymbol.sizeBytes > 0,
+    "Expected the exact regular top-level bin/winapp.pdb debug-symbol file",
+  );
+  const detachedDebugSymbols = {
+    publishPath: knownSymbol.path,
+    fileName: "winapp.pdb",
+    sizeBytes: knownSymbol.sizeBytes,
+    sha256: knownSymbol.sha256,
+  };
+  validateDetachedDebugSymbols(detachedDebugSymbols);
+  // A fresh, physically separate directory prevents symbols from entering the
+  // product copy. No extension, basename or directory-ignore rule is involved.
+  await mkdir(symbolsDirectory);
+  await rename(
+    path.join(outputDirectory, knownSymbol.path),
+    path.join(symbolsDirectory, "winapp.pdb"),
+  );
+  assert.equal(
+    await hashFile(path.join(symbolsDirectory, "winapp.pdb")),
+    knownSymbol.sha256,
+    "Detached debug-symbol bytes changed",
+  );
+  const runtimePublish = publishedBinInventory(
+    await inventoryDownstreamFiles(outputDirectory),
+  );
+  const partition = { originalPublish, runtimePublish, detachedDebugSymbols };
+  assertPublishPartition(partition);
+  return partition;
+}
+
+export async function writeDownstreamSymbolsEvidence({
+  symbolsDirectory,
+  partition,
+  productProvenanceBytes,
+}) {
+  const product = JSON.parse(productProvenanceBytes.toString("utf8"));
+  assert.deepEqual(
+    product.detachedDebugSymbols,
+    partition.detachedDebugSymbols,
+  );
+  assert.deepEqual(
+    publishedBinInventory(product),
+    partition.runtimePublish,
+    "Product provenance changed the partitioned runtime closure",
+  );
+  assertPublishPartition(partition);
+  assert.ok(
+    (await lstat(symbolsDirectory)).isDirectory(),
+    "Symbols output must be a real directory",
+  );
+  assert.deepEqual(
+    await readdir(symbolsDirectory),
+    ["winapp.pdb"],
+    "Symbols evidence contains an unexpected file",
+  );
+  const symbolPath = path.join(symbolsDirectory, "winapp.pdb");
+  const metadata = await lstat(symbolPath);
+  assert.ok(metadata.isFile(), "Detached symbols must be a regular file");
+  assert.equal(metadata.size, partition.detachedDebugSymbols.sizeBytes);
+  assert.equal(
+    await hashFile(symbolPath),
+    partition.detachedDebugSymbols.sha256,
+  );
+  const evidence = {
+    schemaVersion: 1,
+    purpose: "zenx-windows-uia-detached-debug-symbols",
+    providerBuild: product.providerBuild,
+    upstream: product.upstream,
+    patchSha256: product.patchSha256,
+    sourceLockSha256: product.sourceLockSha256,
+    dependencyLockSha256: product.dependencyLockSha256,
+    dotnetSdk: product.dotnetSdk,
+    runtimeVersion: product.runtimeVersion,
+    targetRid: product.targetRid,
+    productProvenanceSha256: sha256(productProvenanceBytes),
+    originalPublish: partition.originalPublish,
+    detachedDebugSymbols: partition.detachedDebugSymbols,
+    files: [
+      {
+        path: "winapp.pdb",
+        sizeBytes: metadata.size,
+        sha256: partition.detachedDebugSymbols.sha256,
+      },
+    ],
+    bitReproducibilityVerified: false,
+    productIntegrationVerified: false,
+  };
+  const bytes = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    path.join(symbolsDirectory, "symbols-provenance.json"),
+    bytes,
+    { flag: "wx" },
+  );
+  return { evidence, symbolsProvenanceSha256: sha256(bytes) };
+}
+
 export async function verifyDownstreamCandidate({
   root = repositoryRoot,
   directory,
@@ -152,6 +373,16 @@ export async function verifyDownstreamCandidate({
   assert.equal(provenance.runtimeVersion, lock.runtimeVersion);
   assert.equal(provenance.targetRid, lock.targetRid);
   assert.equal(provenance.bitReproducibilityVerified, false);
+  validateDetachedDebugSymbols(provenance.detachedDebugSymbols);
+  assert.ok(
+    !inventory.files.some(
+      (file) => file.path.toLowerCase() === "bin/winapp.pdb",
+    ) &&
+      !inventory.directories.some(
+        (name) => name.toLowerCase() === "bin/winapp.pdb",
+      ),
+    "Known debug symbols must not remain in the product",
+  );
   parseFeatureContract(JSON.stringify(provenance.featureContract), lock);
   assert.deepEqual(
     provenance.files,
@@ -407,20 +638,21 @@ export async function buildDownstream({
   root = repositoryRoot,
   sourceDirectory,
   outputDirectory,
+  symbolsDirectory,
 }) {
   assert.equal(
     process.platform,
     "win32",
     "Native downstream builds require Windows; no runtime compilation fallback",
   );
-  assert.ok(sourceDirectory && outputDirectory, "Pass --source and --output");
-  sourceDirectory = path.resolve(sourceDirectory);
-  outputDirectory = path.resolve(outputDirectory);
   assert.ok(
-    !outputDirectory.startsWith(`${sourceDirectory}${path.sep}`) &&
-      outputDirectory !== sourceDirectory,
-    "Output must be separate from the source checkout",
+    sourceDirectory && outputDirectory && symbolsDirectory,
+    "Pass --source, --output and --symbols-output",
   );
+  sourceDirectory = await realpath(path.resolve(sourceDirectory));
+  outputDirectory = await outputPath(outputDirectory);
+  symbolsDirectory = await outputPath(symbolsDirectory);
+  assertSeparateDirectories(sourceDirectory, outputDirectory, symbolsDirectory);
   const {
     lock,
     lockBytes,
@@ -526,6 +758,10 @@ export async function buildDownstream({
     path.join(sourceDirectory, "LICENSE"),
     path.join(outputDirectory, "UPSTREAM-LICENSE.txt"),
   );
+  const partition = await detachDownstreamDebugSymbols({
+    outputDirectory,
+    symbolsDirectory,
+  });
   const inventory = await inventoryDownstreamFiles(outputDirectory);
   assert.ok(
     inventory.files.some((file) => file.path === "bin/libSkiaSharp.dll"),
@@ -550,6 +786,7 @@ export async function buildDownstream({
     runnerImageVersion: process.env.ImageVersion ?? null,
     executable: { path: "bin/winapp.exe", sha256: await hashFile(executable) },
     ...inventory,
+    detachedDebugSymbols: partition.detachedDebugSymbols,
     featureContract: contract,
     bitReproducibilityVerified: false,
     productIntegrationVerified: false,
@@ -567,13 +804,24 @@ export async function buildDownstream({
     directory: outputDirectory,
     provenanceSha256,
   });
+  const { symbolsProvenanceSha256 } = await writeDownstreamSymbolsEvidence({
+    symbolsDirectory,
+    partition,
+    productProvenanceBytes: provenanceBytes,
+  });
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(
       process.env.GITHUB_OUTPUT,
-      `provenance-sha256=${provenanceSha256}\n`,
+      `provenance-sha256=${provenanceSha256}\nsymbols-provenance-sha256=${symbolsProvenanceSha256}\n`,
     );
   }
-  console.log(JSON.stringify({ ...provenance, provenanceSha256 }));
+  console.log(
+    JSON.stringify({
+      ...provenance,
+      provenanceSha256,
+      symbolsProvenanceSha256,
+    }),
+  );
   return provenance;
 }
 
@@ -584,10 +832,15 @@ if (
   const args = process.argv.slice(2);
   assert.equal(
     args.length,
-    4,
-    "Usage: node build-zenx-winapp-downstream.mjs --source DIR --output DIR",
+    6,
+    "Usage: node build-zenx-winapp-downstream.mjs --source DIR --output DIR --symbols-output DIR",
   );
   assert.equal(args[0], "--source");
   assert.equal(args[2], "--output");
-  await buildDownstream({ sourceDirectory: args[1], outputDirectory: args[3] });
+  assert.equal(args[4], "--symbols-output");
+  await buildDownstream({
+    sourceDirectory: args[1],
+    outputDirectory: args[3],
+    symbolsDirectory: args[5],
+  });
 }

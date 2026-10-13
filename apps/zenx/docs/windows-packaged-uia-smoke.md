@@ -41,8 +41,17 @@ before the remaining negative cases run.
   native PID must no longer exist before the target is released. The target
   can still complete a dispatched side effect, which is why this is not
   reported as rolled back or `not_dispatched`.
-- A genuine HWND-less ToolStrip control is read from the native inspection and
-  submitted to the private transport. Its mutation must be `not_dispatched`.
+- Genuine HWND-less ToolStrip controls remain in the native inspection, including
+  at least one actual anonymous structure row with an empty RuntimeId. Empty
+  identity is accepted only for these read-only HWND0 rows; the full bounded
+  subtree is still traversed, and the host gives them no actions or capture
+  continuity identity. Native children keep their full exact identity.
+- Both Invoke and SetValue on an anonymous row must be `not_dispatched`, as must
+  Invoke on the real virtual ToolStrip item. Empty root/native identities and
+  null, oversized, or fractional RuntimeIds are rejected as malformed requests
+  before constructing UIA. This JSON matrix does not simulate corrupt COM
+  SAFEARRAY shapes or anonymous cycles; source-contract checks cover their
+  validation and traversal-budget branches separately.
 - The editor HWND is destroyed and replaced, with both handles briefly alive
   to avoid handle reuse. The old native identity must be `not_dispatched`.
 - A second same-process window with the same title is shown after the focus

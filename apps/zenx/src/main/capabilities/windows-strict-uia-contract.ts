@@ -161,7 +161,7 @@ export function validateStrictUiaControl(
   if (
     !handle(control.hwnd, true) ||
     !pid(control.pid) ||
-    !runtimeId(control.runtimeId) ||
+    !runtimeId(control.runtimeId, control.hwnd === "0") ||
     ![
       "nativeClassName",
       "name",
@@ -222,10 +222,10 @@ function integer(value: unknown): value is number {
 function pid(value: unknown): value is number {
   return integer(value) && value > 0;
 }
-function runtimeId(value: unknown): value is number[] {
+function runtimeId(value: unknown, allowEmpty = false): value is number[] {
   return (
     Array.isArray(value) &&
-    value.length >= 1 &&
+    value.length >= (allowEmpty ? 0 : 1) &&
     value.length <= 64 &&
     value.every(integer)
   );

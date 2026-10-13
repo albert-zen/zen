@@ -75,10 +75,10 @@ index 5149796..8046f17 100644
          return EnumerateWindows((pid, title) =>
 diff --git a/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
 new file mode 100644
-index 0000000..4e19ea2
+index 0000000..83e6b3d
 --- /dev/null
 +++ b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
-@@ -0,0 +1,534 @@
+@@ -0,0 +1,540 @@
 +// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 +// Licensed under the MIT License.
 +
@@ -317,7 +317,9 @@ index 0000000..4e19ea2
 +    {
 +        Require(++nodes <= MaxNodes && depth <= MaxDepth && controls.Count < MaxControls, "scan_limit");
 +        var control = CaptureControl(element, depth == 0 ? RuntimeReadContext.WalkRoot : RuntimeReadContext.WalkChild);
-+        Require(visited.Add(string.Join(",", control.RuntimeId)), "duplicate_runtime_identity");
++        // Empty virtual identities are readable rows, never comparable identities.
++        // Every visit still consumes the budgets above and walks all children below.
++        Require(control.RuntimeId.Length == 0 || visited.Add(string.Join(",", control.RuntimeId)), "duplicate_runtime_identity");
 +        controls.Add(control);
 +        var child = walker.GetFirstChildElement(element);
 +        while (child is not null)
@@ -364,6 +366,9 @@ index 0000000..4e19ea2
 +            if (array->pvData == null) { throw RuntimeRefusal(context, "data_null", dimensions, elementSize); }
 +            // Do not read the bound until the same original shape guards have passed.
 +            var length = array->rgsabound[0].cElements;
++            // Only an already identified HWND0 walk node may lack a RuntimeId.
++            // Root, native and action reads retain the nonempty identity requirement.
++            if (length == 0 && context == RuntimeReadContext.WalkVirtual) { return []; }
 +            if (length is 0 or > 64) { throw RuntimeRefusal(context, "length", dimensions, elementSize, length); }
 +            var result = new int[(int)length];
 +            new ReadOnlySpan<int>(array->pvData, (int)length).CopyTo(result);
@@ -491,7 +496,7 @@ index 0000000..4e19ea2
 +        var readOnly = element.GetProperty("valueReadOnly");
 +        var valuePattern = element.GetProperty("valuePattern").GetBoolean();
 +        Require(valuePattern == (readOnly.ValueKind != JsonValueKind.Null), "bad_request");
-+        return new Control(hwnd, PositiveInt(element, "pid"), Text(element, "nativeClassName"), ParseRuntimeId(element),
++        return new Control(hwnd, PositiveInt(element, "pid"), Text(element, "nativeClassName"), ParseRuntimeId(element, allowEmpty: hwnd == "0"),
 +            Text(element, "name"), Text(element, "automationId"), Text(element, "className"), Text(element, "frameworkId"),
 +            PositiveInt(element, "controlType"), new Bounds(bounds.GetProperty("left").GetInt32(), bounds.GetProperty("top").GetInt32(),
 +                bounds.GetProperty("width").GetInt32(), bounds.GetProperty("height").GetInt32()),
@@ -500,10 +505,11 @@ index 0000000..4e19ea2
 +            valuePattern, valuePattern ? readOnly.GetBoolean() : null);
 +    }
 +
-+    private static int[] ParseRuntimeId(JsonElement element)
++    private static int[] ParseRuntimeId(JsonElement element, bool allowEmpty = false)
 +    {
 +        var array = element.GetProperty("runtimeId");
-+        Require(array.ValueKind == JsonValueKind.Array && array.GetArrayLength() is > 0 and <= 64, "bad_request");
++        Require(array.ValueKind == JsonValueKind.Array
++            && array.GetArrayLength() <= 64 && (allowEmpty || array.GetArrayLength() > 0), "bad_request");
 +        return array.EnumerateArray().Select(value => value.GetInt32()).ToArray();
 +    }
 +
