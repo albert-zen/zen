@@ -1101,6 +1101,10 @@ class FakeImage {
 }
 
 class FakeWebContents extends EventEmitter {
+  frame?: (image: {
+    isEmpty(): boolean;
+    getSize(): { width: number; height: number };
+  }) => void;
   readonly debuggerApi = new FakeDebugger();
   readonly debugger = this.debuggerApi;
   readonly session = {
@@ -1155,6 +1159,15 @@ class FakeWebContents extends EventEmitter {
     this.nextCapture = undefined;
     if (next !== undefined) return next.promise;
     return Promise.resolve(new FakeImage());
+  }
+  beginFrameSubscription(
+    _dirty: boolean,
+    callback: NonNullable<FakeWebContents["frame"]>,
+  ) {
+    this.frame = callback;
+  }
+  endFrameSubscription() {
+    this.frame = undefined;
   }
   setWindowOpenHandler() {
     return undefined;
@@ -1565,3 +1578,347 @@ test("Workspace preserves stable native refusal but never classifies an unknown 
     }
   }
 });
+
+test("borrowed rendering respects unchanged mounts, new leases and stale hide requests", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-render-lease-"));
+  const sender = new FakeWebContents(99),
+    window = new FakeWindow(sender),
+    view = new FakeView();
+  let witness:
+    | import("../src/main/workspace-browser-renderer.js").WorkspaceBrowserRenderMount
+    | undefined;
+  const releases: Array<boolean | undefined> = [];
+  const browser = new WorkspaceBrowser({
+    artifactDirectory: directory,
+    dependencies: {
+      createView: () => view as never,
+      windowFor: () => window as never,
+      renderWhileUnmounted: async (_view, current, operation) => {
+        witness = current();
+        return await operation();
+      },
+      releaseUnmountedView: () => {
+        releases.push(witness?.isCurrent());
+        if (witness?.isCurrent()) witness.invalidate();
+      },
+    },
+  });
+  try {
+    browser.bindThreadSession("session", "thread");
+    const tab = await browser.open("session", "https://example.test/start");
+    const bounds = { x: 20, y: 30, width: 640, height: 480 };
+    const mount = (lease: string, next = bounds) =>
+      browser.mount(sender as never, {
+        threadId: "thread",
+        tabId: tab.tabId,
+        lease,
+        bounds: next,
+      });
+    mount("old");
+    await browser.inspect("session", tab.tabId);
+    const first = witness!;
+    assert.equal(first.isCurrent(), true);
+    const count = releases.length;
+    view.setBounds({ x: 0, y: 0, width: 640, height: 480 }); // Temporary compositor origin.
+    mount("old");
+    assert.equal(
+      releases.length,
+      count,
+      "identical UI notification must not interrupt the borrow",
+    );
+    assert.equal(first.isCurrent(), true);
+    assert.deepEqual(view.getBounds(), { x: 0, y: 0, width: 640, height: 480 });
+    const newer = { x: 7, y: 8, width: 600, height: 400 };
+    mount("new", newer);
+    assert.equal(releases.length, count + 1);
+    assert.equal(
+      releases.at(-1),
+      true,
+      "return old view before publishing a newer mount",
+    );
+    assert.equal(first.isCurrent(), false);
+    assert.deepEqual(view.getBounds(), newer);
+    await browser.inspect("session", tab.tabId);
+    const fresh = witness!;
+    browser.mount(sender as never, { lease: "old" });
+    assert.equal(fresh.isCurrent(), true);
+    browser.mount(sender as never, { lease: "new" });
+    assert.equal(fresh.isCurrent(), false);
+    assert.equal(
+      releases.at(-1),
+      false,
+      "hide invalidates before release so cleanup cannot reattach the view",
+    );
+  } finally {
+    await browser.shutdown();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+class PhysicalView extends FakeView {
+  parent?: PhysicalWindow;
+  visible = true;
+  override setVisible(value = true) {
+    this.visible = value;
+    return undefined;
+  }
+  getVisible() {
+    return this.visible;
+  }
+}
+class PhysicalWindow extends EventEmitter {
+  visible = false;
+  destroyed = false;
+  readonly children: PhysicalView[] = [];
+  readonly contentView = {
+    children: this.children,
+    addChildView: (view: PhysicalView) => {
+      view.parent?.contentView.removeChildView(view);
+      this.children.push(view);
+      view.parent = this;
+    },
+    removeChildView: (view: PhysicalView) => {
+      const index = this.children.indexOf(view);
+      if (index >= 0) this.children.splice(index, 1);
+      if (view.parent === this) view.parent = undefined;
+    },
+  };
+  constructor(readonly webContents = new FakeWebContents(99)) {
+    super();
+  }
+  getContentSize() {
+    return [1200, 800];
+  }
+  isDestroyed() {
+    return this.destroyed;
+  }
+  isVisible() {
+    return this.visible;
+  }
+  isMinimized() {
+    return false;
+  }
+  setIgnoreMouseEvents(value: boolean) {
+    assert.equal(value, true);
+  }
+  showInactive() {
+    this.visible = true;
+    for (const view of this.children) {
+      const callback = view.webContents.frame;
+      setTimeout(
+        () =>
+          callback?.({ isEmpty: () => false, getSize: () => view.getBounds() }),
+        10,
+      );
+    }
+  }
+  destroy() {
+    assert.equal(this.children.length, 0);
+    this.destroyed = true;
+    this.emit("closed");
+  }
+}
+
+for (const command of ["take-control", "return-control"] as const) {
+  for (const stage of ["compositor-wait", "capture-pending"] as const) {
+    for (const issuer of ["mount-owner", "other-ui-owner"] as const) {
+      test(`${command} from ${issuer} during ${stage} returns the physical view before invalidating observation`, async () => {
+        const { WorkspaceBrowserRenderer } =
+          await import("../src/main/workspace-browser-renderer.js");
+        const directory = await mkdtemp(
+          path.join(os.tmpdir(), "zenx-control-render-"),
+        );
+        const owner = new PhysicalWindow(),
+          other = new PhysicalWindow(new FakeWebContents(100));
+        const view = new PhysicalView(),
+          temporary: PhysicalWindow[] = [];
+        const renderer = new WorkspaceBrowserRenderer(
+          () => {
+            const window = new PhysicalWindow();
+            temporary.push(window);
+            return window as never;
+          },
+          () => 1,
+        );
+        const browser = new WorkspaceBrowser({
+          artifactDirectory: directory,
+          dependencies: {
+            createView: () => view as never,
+            windowFor: (sender) => (sender.id === 99 ? owner : other) as never,
+            renderWhileUnmounted: (v, current, operation) =>
+              renderer.render(v, current, operation),
+            releaseUnmountedView: (v) => renderer.release(v),
+            closeUnmountedRenderer: () => renderer.close(),
+          },
+        });
+        const captured = deferred<void>(),
+          finish = deferred<FakeImage>();
+        const nativeCapture = view.webContents.capturePage.bind(
+          view.webContents,
+        );
+        try {
+          browser.bindThreadSession("session", "thread");
+          const tab = await browser.open(
+            "session",
+            "https://example.test/start",
+          );
+          const bounds = { x: 20, y: 30, width: 640, height: 480 };
+          const mount = (lease = "old") =>
+            browser.mount(owner.webContents as never, {
+              threadId: "thread",
+              tabId: tab.tabId,
+              lease,
+              bounds,
+            });
+          mount();
+          if (command === "return-control")
+            browser.command(
+              owner.webContents as never,
+              "thread",
+              "take-control",
+              tab.tabId,
+            );
+          let captureCalls = 0;
+          view.webContents.capturePage = () => {
+            captureCalls++;
+            captured.resolve();
+            return finish.promise;
+          };
+          const pending = browser.inspect("session", tab.tabId);
+          const rejected = assert.rejects(pending, /stale|changed/);
+          if (stage === "capture-pending") await captured.promise;
+          else await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(view.parent, temporary[0]);
+          const sender = issuer === "mount-owner" ? owner : other;
+          browser.command(
+            sender.webContents as never,
+            "thread",
+            command,
+            tab.tabId,
+          );
+          assert.equal(
+            view.parent,
+            owner,
+            "control command must return immediately, before native settlement",
+          );
+          assert.deepEqual(view.getBounds(), bounds);
+          finish.resolve(new FakeImage());
+          await rejected;
+          assert.equal(captureCalls, stage === "capture-pending" ? 1 : 0);
+          assert.equal(temporary[0]!.destroyed, true);
+          mount();
+          assert.equal(view.parent, owner);
+          mount("new");
+          assert.equal(view.parent, owner);
+          view.webContents.capturePage = nativeCapture;
+          await browser.inspect("session", tab.tabId);
+          assert.equal(view.parent, owner);
+          assert.equal(owner.visible, false);
+          // A later legitimate owner must not be overwritten by old cleanup.
+          browser.mount(other.webContents as never, {
+            threadId: "thread",
+            tabId: tab.tabId,
+            lease: "successor",
+            bounds,
+          });
+          await browser.inspect("session", tab.tabId);
+          assert.equal(view.parent, other);
+          assert.equal(owner.children.length, 0);
+        } finally {
+          finish.resolve(new FakeImage());
+          await browser.shutdown();
+          await rm(directory, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+}
+
+for (const action of ["scroll", "click"] as const)
+  test(`Workspace ${action} forwards cancellation into the pending compositor lease before dispatch`, async () => {
+    const { WorkspaceBrowserRenderer } =
+      await import("../src/main/workspace-browser-renderer.js");
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-frame-abort-"),
+    );
+    const owner = new PhysicalWindow(),
+      view = new PhysicalView();
+    const renderer = new WorkspaceBrowserRenderer(
+      () => new PhysicalWindow() as never,
+      () => 1,
+    );
+    let observedSignal: AbortSignal | undefined;
+    const browser = new WorkspaceBrowser({
+      artifactDirectory: directory,
+      dependencies: {
+        createView: () => view as never,
+        windowFor: () => owner as never,
+        renderWhileUnmounted: (target, current, operation, signal) => {
+          observedSignal = signal;
+          return renderer.render(target, current, operation, signal);
+        },
+        releaseUnmountedView: (target) => renderer.release(target),
+        closeUnmountedRenderer: () => renderer.close(),
+      },
+    });
+    try {
+      browser.bindThreadSession("session", "thread");
+      const tab = await browser.open("session", "https://example.test/start");
+      browser.mount(owner.webContents as never, {
+        threadId: "thread",
+        tabId: tab.tabId,
+        lease: "ui",
+        bounds: { x: 20, y: 30, width: 640, height: 480 },
+      });
+      view.webContents.debuggerApi.defaultValue = actionInspection;
+      const observation = await browser.inspect("session", tab.tabId);
+      const evaluations = view.webContents.debuggerApi.evaluations;
+      view.webContents.beginFrameSubscription = () => {
+        view.webContents.frame = undefined;
+      };
+      const controller = new AbortController(),
+        reason = new Error("cancel before frame");
+      const pending =
+        action === "scroll"
+          ? browser.scroll(
+              "session",
+              tab.tabId,
+              observation.observationId,
+              "down",
+              100,
+              controller.signal,
+            )
+          : browser.click(
+              "session",
+              tab.tabId,
+              observation.observationId,
+              observation.targets[0]!.targetId,
+              controller.signal,
+            );
+      const rejected = assert.rejects(pending, (error) => error === reason);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(observedSignal, controller.signal);
+      assert.notEqual(view.parent, owner);
+      controller.abort(reason);
+      assert.equal(
+        view.parent,
+        owner,
+        "cancel immediately returns the physical view",
+      );
+      await rejected;
+      assert.equal(
+        view.webContents.debuggerApi.evaluations,
+        evaluations,
+        "cancelled readiness dispatches no page code",
+      );
+      assert.equal(
+        browser.command(owner.webContents as never, "thread", "list")[0]!
+          .agentActionOutcomeUnknown,
+        false,
+        "no page action was dispatched",
+      );
+    } finally {
+      await browser.shutdown();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });

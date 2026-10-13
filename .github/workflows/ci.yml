@@ -266,7 +266,8 @@ jobs:
           CI: "1"
           ZENX_REQUIRE_PLAYWRIGHT: "1"
         run: npm --workspace apps/zenx run smoke:providers
-      - name: Exercise real Electron background input without changing the focused window
+      - name: Exercise Workspace background capture and targeted input
+        timeout-minutes: 3
         working-directory: apps/zenx
         run: npx --no-install electron ./out/main/workspace-browser-smoke.js
       - name: Prepare a pinned headed Chromium for parallel input
