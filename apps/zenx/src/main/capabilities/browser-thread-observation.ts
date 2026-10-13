@@ -9,6 +9,8 @@ import type {
 
 export interface BrowserThreadTarget extends BrowserTabSummary {
   backendId?: "workspace" | "connected";
+  connectionId?: string;
+  connectionLabel?: string;
   id: string;
   mode: "live" | "snapshot";
 }

@@ -66,6 +66,8 @@ export const en = {
   approvalScopeLabel: "Permission scope",
   approvalOnceScope: "This call and its nested operations only",
   approvalCapabilityScope: "Remember this tool capability",
+  approvalTargetRemembered:
+    "Remember permission for {{tool}} on {{target}} only. Other browser instances need separate approval.",
   approvalRequestDetails: "Full request",
   approvalCommandLabel: "Command",
   approvalCodeLabel: "Code",
@@ -684,6 +686,8 @@ export const zhCN = {
   approvalScopeLabel: "权限范围",
   approvalOnceScope: "仅本次调用及其嵌套操作",
   approvalCapabilityScope: "记住此工具能力",
+  approvalTargetRemembered:
+    "仅记住 {{tool}} 在 {{target}} 上的权限。其他浏览器实例需要单独批准。",
   approvalRequestDetails: "完整请求",
   approvalCommandLabel: "命令",
   approvalCodeLabel: "代码",

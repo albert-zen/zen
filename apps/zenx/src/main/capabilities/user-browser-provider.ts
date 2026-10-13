@@ -1721,14 +1721,23 @@ export async function connectUserBrowserCdp(
   signal?: AbortSignal,
   options: {
     authorization?: string;
+    /** Host-selected bridge instance route, never accepted from tool arguments. */
+    connectionPath?: string;
     liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
   } = {},
 ): Promise<UserBrowserConnection> {
   const base = validateCdpEndpoint(endpoint);
+  const connectionPath = options.connectionPath ?? "";
+  if (
+    connectionPath !== "" &&
+    !/^\/instances\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/u.test(connectionPath)
+  )
+    throw new Error("Invalid Host browser instance route");
+  const scopedBase = new URL(`${connectionPath}/`, base);
   const timeout = AbortSignal.timeout(5_000);
   const probeSignal =
     signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
-  const response = await fetch(new URL("/json/version", base), {
+  const response = await fetch(new URL("json/version", scopedBase), {
     signal: probeSignal,
     headers: {
       accept: "application/json",
@@ -1739,7 +1748,7 @@ export async function connectUserBrowserCdp(
     redirect: "error",
   });
   const finalUrl = validateCdpEndpoint(response.url);
-  if (finalUrl.pathname !== "/json/version") {
+  if (finalUrl.pathname !== `${connectionPath}/json/version`) {
     throw new Error("User browser CDP version response URL is invalid");
   }
   if (!response.ok) {
@@ -1764,7 +1773,10 @@ export async function connectUserBrowserCdp(
     !isLoopbackHostname(socketUrl.hostname) ||
     socketUrl.hostname !== base.hostname ||
     effectivePort(socketUrl) !== effectivePort(base) ||
-    !/^\/devtools\/browser\/[^/]+$/u.test(socketUrl.pathname) ||
+    !socketUrl.pathname.startsWith(`${connectionPath}/devtools/browser/`) ||
+    !/^\/devtools\/browser\/[^/]+$/u.test(
+      socketUrl.pathname.slice(connectionPath.length),
+    ) ||
     socketUrl.username.length > 0 ||
     socketUrl.password.length > 0 ||
     socketUrl.search.length > 0 ||
@@ -1776,7 +1788,7 @@ export async function connectUserBrowserCdp(
   }
   const client = await JsonRpcUserBrowserCdpClient.connect(
     socketUrl.toString(),
-    base,
+    scopedBase,
     probeSignal,
     options,
   );
@@ -2010,7 +2022,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const timeout = AbortSignal.timeout(5_000);
     const requestSignal =
       signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
-    const response = await fetch(new URL("/json/list", this.#httpBase), {
+    const response = await fetch(new URL("json/list", this.#httpBase), {
       signal: requestSignal,
       headers: {
         accept: "application/json",
@@ -2021,7 +2033,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       redirect: "error",
     });
     const finalUrl = validateCdpEndpoint(response.url);
-    if (finalUrl.pathname !== "/json/list" || !response.ok) {
+    if (
+      finalUrl.pathname !== new URL("json/list", this.#httpBase).pathname ||
+      !response.ok
+    ) {
       throw new Error("User browser CDP target reconciliation failed");
     }
     const value: unknown = await response.json();

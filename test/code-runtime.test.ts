@@ -36,6 +36,7 @@ import {
   ToolEnvironment,
   type NestedToolInvocationPort,
   type ToolExecutionResult,
+  type ToolInvocation,
 } from "../src/tool.js";
 import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
@@ -1191,3 +1192,74 @@ test("experimental shell presentation reduces direct model input while run_code 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+for (const approvalPolicy of ["always", "never"] as const) {
+  test(`run_code scoped children inherit exact admitted parent policy (${approvalPolicy})`, async () => {
+    const name = "browser_scoped";
+    const policyStore = new InMemoryToolPolicyStore({ [name]: "approved" });
+    await policyStore.setScoped(name, "a", "approved");
+    const executions: string[] = [];
+    const browser = {
+      ...testToolRuntime({
+        name,
+        execute: async (call) => {
+          executions.push(String(call.arguments.instance));
+          return { output: String(call.arguments.instance), exitCode: 0 };
+        },
+      }),
+      approvalScope: (call: ToolInvocation) => ({
+        key: String(call.arguments.instance),
+        label: `Browser ${String(call.arguments.instance)}`,
+        generation: "one",
+      }),
+    };
+    const tools = new ToolEnvironment({
+      policyStore,
+      runtimes: [new RunCodeToolRuntime(), browser],
+    });
+    const server = runtimeServer({
+      tools,
+      approvalPolicy,
+      model: oneRunCodeModel(
+        `text(await tools.browser_scoped({instance: "a"})); text(await tools.browser_scoped({instance: "b"}));`,
+      ),
+    });
+    try {
+      let prompts = 0;
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(thread.id, "check scoped children", {
+          requestApproval: async (request) => {
+            prompts += 1;
+            assert.equal(request.toolName, "run_code");
+            return "accept";
+          },
+        })
+      ).done;
+      assert.deepEqual(
+        executions,
+        approvalPolicy === "never" ? ["a", "b"] : ["a"],
+      );
+      assert.equal(prompts, approvalPolicy === "never" ? 0 : 1);
+      const snapshot = await server.readThread(thread.id);
+      const bCall = snapshot.items.find(
+        (item) =>
+          item.type === "tool_call" &&
+          item.name === name &&
+          item.arguments.instance === "b",
+      );
+      assert(bCall?.type === "tool_call");
+      const bResult = snapshot.items.find(
+        (item) => item.type === "tool_result" && item.callId === bCall.callId,
+      );
+      assert(bResult?.type === "tool_result");
+      assert.equal(
+        bResult.executionStatus,
+        approvalPolicy === "never" ? "completed" : "declined",
+      );
+      assert.equal(await policyStore.getScoped(name, "b"), undefined);
+    } finally {
+      await tools.close();
+    }
+  });
+}

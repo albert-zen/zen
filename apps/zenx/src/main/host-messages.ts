@@ -256,6 +256,7 @@ export type HostEvent =
       invocationId: string;
       generationToken: string;
       invocation: {
+        approvalScope?: import("../../../../src/tool.js").ToolApprovalScope;
         callId: string;
         canonicalToolCallId?: string;
         threadId?: string;

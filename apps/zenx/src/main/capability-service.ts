@@ -1,3 +1,7 @@
+import {
+  unavailableBrowserConnections,
+  type BrowserConnectionSource,
+} from "./capabilities/browser-connections.js";
 import { BrowserBackendRegistry } from "./capabilities/browser-backend-registry.js";
 import type {
   BrowserThreadRequest,
@@ -108,6 +112,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #pluginRuntimeSupervisor: PluginRuntimeSupervisor;
   readonly #userDataDirectory: string;
   readonly #browserBackend?: ZenXBrowserBackend;
+  readonly #connectedBrowserSource?: BrowserConnectionSource;
   readonly #browserBackendAuthoritative: boolean;
   readonly #workspaceBrowserBackend?: ZenXBrowserBackend;
   readonly #connectedBrowserEnabled?: boolean;
@@ -170,6 +175,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     /** App-owned shared resource, also needed to restore a committed concurrent generation. */
     workspaceBrowserBackend?: ZenXBrowserBackend;
     connectedBrowserEnabled?: boolean;
+    connectedBrowserSource?: BrowserConnectionSource;
     computerBackend?: ZenXComputerBackend;
     computerManifest?: ZenXPluginManifestV2;
     allowForegroundRequired?: boolean;
@@ -263,6 +269,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     );
     this.#userDataDirectory = options.userDataDirectory;
     this.#browserBackend = options.browserBackend;
+    this.#connectedBrowserSource = options.connectedBrowserSource;
     this.#workspaceBrowserBackend =
       options.workspaceBrowserBackend ??
       (options.browserBackendAuthoritative
@@ -419,7 +426,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       this.#browserBackend !== undefined &&
       this.#connectedBrowserEnabled !== undefined
     ) {
-      return await this.#resolveConcurrentBrowserProfileProvider();
+      return await this.#resolveConcurrentBrowserProfileProvider(
+        this.#connectedBrowserSource !== undefined,
+      );
     }
 
     const selection =
@@ -448,7 +457,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     };
   }
 
-  async #resolveConcurrentBrowserProfileProvider(): Promise<{
+  async #resolveConcurrentBrowserProfileProvider(multi = false): Promise<{
     capabilityPackage?: ZenXCapabilityPackage;
     diagnostics: ZenXPluginDiagnostics["providerDiagnostics"];
   }> {
@@ -467,20 +476,26 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         ],
       };
     }
-    const external = this.#connectedBrowserEnabled
-      ? await selectBrowserProviderVariant("user-browser-cdp", {
-          ...this.#providerCatalogOptions,
-          userDataDirectory: this.#userDataDirectory,
-          bundledProvidersOnly: this.#bundledProvidersOnly,
-          resourcesDirectory: this.#resourcesDirectory,
-        })
-      : undefined;
+    const external =
+      this.#connectedBrowserEnabled && !multi
+        ? await selectBrowserProviderVariant("user-browser-cdp", {
+            ...this.#providerCatalogOptions,
+            userDataDirectory: this.#userDataDirectory,
+            bundledProvidersOnly: this.#bundledProvidersOnly,
+            resourcesDirectory: this.#resourcesDirectory,
+          })
+        : undefined;
     return {
       capabilityPackage: new BrowserBackendRegistry(
         workspace,
         external?.backend,
         external?.diagnostics.find((value) => value.status === "unavailable")
           ?.reason,
+        multi
+          ? this.#connectedBrowserEnabled
+            ? (this.#connectedBrowserSource ?? unavailableBrowserConnections)
+            : unavailableBrowserConnections
+          : undefined,
       ),
       diagnostics: external?.diagnostics ?? [],
     };
@@ -490,6 +505,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     capabilityPackage?: ZenXCapabilityPackage;
     diagnostics: ZenXPluginDiagnostics["providerDiagnostics"];
   }> {
+    if (providerId === "multi-browser")
+      return await this.#resolveConcurrentBrowserProfileProvider(true);
     if (providerId === "concurrent-browser")
       return await this.#resolveConcurrentBrowserProfileProvider();
     const selection = await selectBrowserProviderVariant(providerId, {
@@ -1489,11 +1506,19 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   hostSnapshot(): ZenXCapabilityHostSnapshot {
-    return this.#registry.hostSnapshot();
+    const snapshot = this.#registry.hostSnapshot();
+    return this.#browserProfilePackage?.manifest.provider.id === "multi-browser"
+      ? {
+          ...snapshot,
+          browserConnections: this.#connectedBrowserEnabled
+            ? (this.#connectedBrowserSource?.connections() ?? [])
+            : [],
+        }
+      : snapshot;
   }
 
   captureHostSnapshot(): ZenXCapabilityGenerationSnapshot {
-    const snapshot = this.#registry.hostSnapshot();
+    const snapshot = this.hostSnapshot();
     const generationToken = this.#pluginRuntimeSupervisor.captureHostGeneration(
       snapshot.definitions.map((definition) => definition.name),
     );

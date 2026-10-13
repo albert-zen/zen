@@ -1181,6 +1181,7 @@ export class CodexConnection {
     await this.#eventChain;
     request.signal.throwIfAborted();
     if (
+      request.approvalTarget === undefined &&
       request.scope !== "once" &&
       this.#acceptedCommandThreads.has(request.threadId)
     ) {
@@ -1199,8 +1200,14 @@ export class CodexConnection {
             itemId: request.itemId,
             startedAtMs: Date.now(),
             environmentId: null,
-            reason: null,
+            reason:
+              request.approvalTarget === undefined
+                ? null
+                : "This approval is limited to the displayed tool and target. Choosing allow for session approves only this call, without remembering a session grant.",
             command: request.command,
+            ...(request.approvalTarget === undefined
+              ? {}
+              : { approvalTarget: { ...request.approvalTarget } }),
             ...(request.scope === undefined
               ? {}
               : { approvalScope: request.scope }),
@@ -1228,7 +1235,13 @@ export class CodexConnection {
     if (!isRecord(response) || !isApprovalDecision(response.decision)) {
       throw new Error("Client returned an invalid approval decision");
     }
-    if (request.scope !== "once" && response.decision === "acceptForSession") {
+    // Scoped decisions belong to Core's exact tool/target store. Neither an
+    // existing legacy session grant nor this response may broaden that target.
+    if (
+      request.approvalTarget === undefined &&
+      request.scope !== "once" &&
+      response.decision === "acceptForSession"
+    ) {
       this.#acceptedCommandThreads.add(request.threadId);
     }
     return response.decision;
