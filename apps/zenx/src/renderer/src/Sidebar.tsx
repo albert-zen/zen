@@ -1925,9 +1925,11 @@ function ThreadRow({
         <span
           className="thread-project"
           title={
-            thread.status === "systemError"
-              ? undefined
-              : (thread.currentMetadata.cwd ?? undefined)
+            thread.status !== "systemError" && thread.currentMetadata.cwd
+              ? i18n.t("shell:workingDirectoryPath", {
+                  path: thread.currentMetadata.cwd,
+                })
+              : undefined
           }
         >
           <Icon name="folder" size={12} />

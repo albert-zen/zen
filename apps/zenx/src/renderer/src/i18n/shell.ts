@@ -657,6 +657,8 @@ export const zhCN = {
   threadTriggerOnEvent: "符合条件时触发",
   threadOtherTriggersUnknown: "其他触发时间暂不可用",
   threadAutomationCount: "{{count}} 个自动化",
+  threadAutomationCount_one: "{{count}} 个自动化",
+  threadAutomationCount_other: "{{count}} 个自动化",
   threadUnreadReply: "Agent 有未读回复",
   renameThreadNamed: "重命名 {{title}}",
 

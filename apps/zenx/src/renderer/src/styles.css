@@ -9963,6 +9963,7 @@ button:disabled {
 /* Information uses the existing row's space; only factual states reserve width.
    Hover actions cover the tail with a surface fade rather than a vacant column. */
 .thread-row-shell {
+  --thread-state-space: 0px;
   --thread-row-surface: var(--color-surface-sidebar);
   border-radius: 10px;
 }
