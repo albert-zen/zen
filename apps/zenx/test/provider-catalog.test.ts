@@ -307,6 +307,24 @@ test("packaged WinApp uses its verified launch binding as the single integrity c
   }
 });
 
+test("Windows provider diagnostics scope focus guarantees to strict capture", async () => {
+  const selection = await selectComputerProvider({
+    userDataDirectory: "/tmp/zenx",
+    platform: "win32",
+    winAppRunner: new BundledWinAppLaunchRunner(),
+  });
+  try {
+    assert.ok(selection.backend, JSON.stringify(selection.diagnostics));
+    assert.equal(selection.diagnostics[0]?.status, "selected");
+    assert.equal(
+      selection.diagnostics[0]?.permissionSummary,
+      "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value may activate its target and requires explicit foreground permission; UIA Invoke focus isolation is unverified. No global input injection.",
+    );
+  } finally {
+    await selection.backend?.close();
+  }
+});
+
 test("pins and validates the Playwright CLI machine-readable contract", async () => {
   const runner = new ScriptedRunner([
     {

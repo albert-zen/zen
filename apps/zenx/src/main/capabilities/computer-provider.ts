@@ -493,6 +493,23 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         break;
       }
       case "computer_set_value": {
+        // A targeted/no-global-input provider can still activate its target.
+        // Decide from the actual provider declaration before consuming an
+        // observation or starting native work; old accessibility grants cannot
+        // authorize foreground effects.
+        const foregroundRequired = this.manifest.tools.some(
+          (tool) =>
+            tool.name === toolName &&
+            tool.interactionMode === "foreground_required",
+        );
+        let signal = invocation.signal;
+        if (foregroundRequired) {
+          this.#assertForegroundControlAllowed(toolName);
+          signal = AbortSignal.any([signal, this.#foregroundConsent.signal]);
+          await foregroundTakeoverNotice(signal);
+          signal.throwIfAborted();
+          this.#assertForegroundControlAllowed(toolName);
+        }
         requireScopedWindow(target, "computer_set_value");
         const value = requiredString(invocation.arguments, "value", true);
         if (value.length > 4_000) {
@@ -503,17 +520,13 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           key,
           control,
           invocation.threadId !== undefined,
-          invocation.signal,
+          signal,
         );
         this.#presentation.invalidate(key);
         result = {
-          ...(await this.#backend.setValue(
-            target,
-            native,
-            value,
-            invocation.signal,
-          )),
+          ...(await this.#backend.setValue(target, native, value, signal)),
           control,
+          ...(foregroundRequired ? { impact: "foreground_takeover" } : {}),
         };
         break;
       }

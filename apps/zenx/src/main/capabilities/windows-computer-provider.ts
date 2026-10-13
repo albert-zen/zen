@@ -35,13 +35,13 @@ export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.3",
+  version: "1.1.4",
   description:
-    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture avoid foreground takeover; unsupported global input never silently substitutes for them.",
+    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA set-value may activate the target and requires explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   provider: {
     id: "microsoft-winapp-cli",
     platforms: ["win32"],
-    interactionModes: ["background_safe"],
+    interactionModes: ["background_safe", "foreground_required"],
     capabilities: [
       "window.list",
       "uia.inspect",
@@ -93,8 +93,15 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
           return {
             ...tool,
             description:
-              "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
-            capabilities: ["uia.set_value", "app_targeted", "no_global_input"],
+              "Set the supplied text on one opaque editable control through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
+            interactionMode: "foreground_required",
+            permissions: [...tool.permissions, "computer.foreground.control"],
+            capabilities: [
+              "uia.set_value",
+              "app_targeted",
+              "no_global_input",
+              "may_activate_target",
+            ],
           };
         case "computer_screenshot":
           return {
@@ -913,6 +920,7 @@ export async function runBoundedProcess(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
+    let failure: Error | undefined;
     const maxStdout = options.maxStdoutBytes ?? MAX_WINAPP_STDOUT_BYTES;
     const maxStderr = options.maxStderrBytes ?? MAX_WINAPP_STDERR_BYTES;
     const finish = (callback: () => void): void => {
@@ -920,12 +928,18 @@ export async function runBoundedProcess(
       settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
-      void Promise.resolve(releaseBinding?.()).catch(() => undefined);
-      callback();
+      void Promise.resolve()
+        .then(() => releaseBinding?.())
+        .catch(() => undefined)
+        .then(callback);
     };
     const failAndKill = (error: Error): void => {
+      if (settled || failure !== undefined) return;
+      failure = error;
+      // Requesting termination does not prove it happened. Keep the invocation
+      // (and the host's foreground activity) live until actual child/pipe close.
+      // A failed kill must never become a falsely confirmed cancellation.
       child.kill("SIGKILL");
-      finish(() => reject(error));
     };
     const timer = setTimeout(() => {
       failAndKill(
@@ -943,6 +957,7 @@ export async function runBoundedProcess(
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     child.stdout?.on("data", (chunk: Buffer) => {
+      if (failure !== undefined) return;
       stdoutBytes += chunk.length;
       if (stdoutBytes > maxStdout) {
         failAndKill(new Error("WinApp CLI stdout exceeded its bounded limit"));
@@ -951,6 +966,7 @@ export async function runBoundedProcess(
       stdout.push(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
+      if (failure !== undefined) return;
       stderrBytes += chunk.length;
       if (stderrBytes > maxStderr) {
         failAndKill(new Error("WinApp CLI stderr exceeded its bounded limit"));
@@ -960,9 +976,17 @@ export async function runBoundedProcess(
     });
     child.stdin?.on("error", (error) => failAndKill(error));
     if (options.stdin !== undefined) child.stdin?.end(options.stdin, "utf8");
-    child.once("error", (error) => finish(() => reject(error)));
+    // Node emits close after a spawn error too. Do not confuse an error from
+    // a termination request with proof that an already-running child stopped.
+    child.once("error", (error) => {
+      failure ??= error;
+    });
     child.once("close", (code, exitSignal) => {
       finish(() => {
+        if (failure !== undefined) {
+          reject(failure);
+          return;
+        }
         if (code === 0) {
           resolve({
             stdout: Buffer.concat(stdout).toString("utf8"),

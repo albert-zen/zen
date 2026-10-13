@@ -91,3 +91,25 @@ supports PrintWindow-renderable windows, not arbitrary GPU surfaces or a
 separate desktop session. If system policy blocks PowerShell/Add-Type, capture
 reports the failure; UIA operations remain available. Update Computer in Plugin
 settings to receive the revised capture description and capability declaration.
+
+## Windows semantic focus boundary (1.1.4)
+
+WinApp 0.3.1 `set-value` was observed activating a background WinForms window.
+Its CUIAutomation8 client leaves `IUIAutomation2.AutoSetFocus` at its default;
+Microsoft documents that this setting can focus controls before `SetValue` and
+`Invoke`. Targeted UIA and no global input are not proof of focus isolation.
+
+This revision conservatively requires the existing, explicit Foreground computer
+control setting for the WinApp `computer_set_value` path, before resolving or
+consuming its observation. Revocation prevents subsequent dispatch and requests cancellation of launched work;
+termination requests remain pending until the child process and its pipes close.
+It cannot undo a UIA operation already delivered to an application.
+It never enables the setting, restores old focus, or substitutes global input.
+This is a temporary safety boundary, not a completed background-text-input fix.
+The existing `computer_press` path has not been certified focus-isolated either.
+
+The native smoke includes fixture-only direct CUIAutomation8 `SetValue` and
+`Invoke` comparisons with default AutoSetFocus versus FALSE, with independent
+continuous focus/pointer samples, provider identity and complete Unicode checks.
+No experimental client is exposed as a production background-safe path. A green
+screenshot epoch does not certify semantic actions or other apps/providers.

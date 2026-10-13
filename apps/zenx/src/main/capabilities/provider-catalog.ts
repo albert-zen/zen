@@ -461,7 +461,7 @@ export async function selectComputerProvider(
           unavailableDiagnostic(
             "computer",
             "microsoft-winapp-cli",
-            ["background_safe"],
+            windowsComputerCapabilityManifest.provider.interactionModes,
             [
               "uia.inspect",
               "uia.invoke",
@@ -498,7 +498,7 @@ export async function selectComputerProvider(
           unavailableDiagnostic(
             "computer",
             "microsoft-winapp-cli",
-            ["background_safe"],
+            windowsComputerCapabilityManifest.provider.interactionModes,
             [
               "uia.inspect",
               "uia.invoke",
@@ -519,7 +519,8 @@ export async function selectComputerProvider(
           capabilityId: "computer",
           providerId: "microsoft-winapp-cli",
           status: "selected",
-          interactionModes: ["background_safe"],
+          interactionModes:
+            windowsComputerCapabilityManifest.provider.interactionModes,
           capabilities: [
             "uia.inspect",
             "uia.invoke",
@@ -534,7 +535,7 @@ export async function selectComputerProvider(
             ? { integrity: "unverified" as const }
             : { integrity: "verified" as const }),
           permissionSummary:
-            "Exact-window UI Automation and strict background PrintWindow capture; no restore, activation or global input injection",
+            "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value may activate its target and requires explicit foreground permission; UIA Invoke focus isolation is unverified. No global input injection.",
         },
       ],
     };
