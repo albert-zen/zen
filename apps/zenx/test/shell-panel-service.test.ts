@@ -106,16 +106,23 @@ async function until(
   predicate: (read: ShellSessionRead) => boolean,
 ) {
   const deadline = Date.now() + 5000;
+  let last: ShellSessionRead | undefined;
   while (Date.now() < deadline) {
     const read = (await service.request({
       operation: "read",
       threadId: "human",
       taskId,
     })) as ShellSessionRead;
+    last = read;
     if (predicate(read)) return read;
     await new Promise((r) => setTimeout(r, 10));
   }
-  throw new Error("Timed out observing terminal");
+  throw new Error(
+    `Timed out observing terminal: ${JSON.stringify({
+      status: last?.session.status,
+      output: last?.output.slice(-4096),
+    })}`,
+  );
 }
 
 test("real PTY shares human input/output and task identity with Agent read/wait", async () => {
@@ -223,7 +230,12 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
     assert.equal(f.operations(), 0);
   } finally {
     await f.tools.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 });
 
@@ -346,7 +358,12 @@ test("stopping a terminal closes its foreground fixture process", async () => {
       }
     }
     await f.tools.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 });
 
@@ -417,7 +434,12 @@ test("manual Shell dispatch is fenced against an in-flight permission downgrade"
     releaseCommit();
     await tools.close();
     await app.closeRuntimeConfiguration();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 });
 
@@ -460,7 +482,12 @@ test("human PTY outlives the Agent deadline and still exits on Host disposal", a
     const agent = await f.tools.execute(
       f.tools.prepare(
         invocation("shell", {
-          command: `${JSON.stringify(process.execPath)} -e "setTimeout(()=>{},30000)"`,
+          // Keep the deadline fixture in the shell process itself. Ordinary
+          // Windows Shell cancellation intentionally does not own descendants.
+          command:
+            process.platform === "win32"
+              ? "for /L %i in (1,0,2) do @rem"
+              : "while :; do :; done",
           yield_time_ms: 1000,
         }),
       ),
@@ -501,6 +528,11 @@ test("human PTY outlives the Agent deadline and still exits on Host disposal", a
     assert.deepEqual(f.tools.taskManager.listShellSessions("human"), []);
   } finally {
     await f.tools.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 });
