@@ -1,4 +1,10 @@
 export const en = {
+  sidebarWidth: "Sidebar width",
+  sidebarWidthPixels: "{{width}} pixels",
+  sidebarResizeHelp:
+    "Drag to resize · Arrow keys to adjust · Enter to collapse",
+  sidebarWidthSaveFailed:
+    "Sidebar width could not be saved. Resize again to retry.",
   approvalQuestionOnce: "Allow this action?",
   approvalQuestionCapability: "Allow tool access?",
   approvalAllowAccess: "Allow access",
@@ -620,6 +626,10 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  sidebarWidth: "侧边栏宽度",
+  sidebarWidthPixels: "{{width}} 像素",
+  sidebarResizeHelp: "拖动调整宽度 · 方向键微调 · 回车收起",
+  sidebarWidthSaveFailed: "侧边栏宽度未能保存，请再次调整以重试。",
   approvalQuestionOnce: "允许这次操作？",
   approvalQuestionCapability: "允许工具访问？",
   approvalAllowAccess: "允许访问",

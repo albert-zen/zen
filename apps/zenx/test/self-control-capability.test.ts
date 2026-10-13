@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -159,6 +166,22 @@ test("real ZenX host control tools make active semantics explicit", async () => 
   const capabilities = await grantedSelfControl(directory, requestPort);
   const tools = capabilityTools(capabilities);
   const manager = managerFor(directory, capabilities);
+  const replacementReady = path.join(directory, "replacement-ready");
+  const replacementRelease = path.join(directory, "replacement-release");
+  // Hold the replacement target alive while Windows discovers its ownership.
+  // A ready file proves the child is running, not that discovery is complete.
+  // The deadline is a fixture fail-safe, never the normal completion path.
+  await writeFile(
+    path.join(directory, "replacement-target.cjs"),
+    `const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(replacementReady)}, 'ready');
+setInterval(() => {
+  if (fs.existsSync(${JSON.stringify(replacementRelease)})) process.exit(0);
+}, 20);
+setTimeout(() => process.exit(1), 30000);
+`,
+  );
+  let observedThreadId: string | undefined;
   await requestPort.attach(manager, directory);
   try {
     await manager.start();
@@ -168,6 +191,7 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       sandbox: "danger-full-access",
     });
     const threadId = stringField(created, "threadId");
+    observedThreadId = threadId;
 
     const firstCommand = waitForCommand(
       manager,
@@ -206,10 +230,16 @@ test("real ZenX host control tools make active semantics explicit", async () => 
     );
     const second = await invoke(tools, "zenx_threads_send", {
       threadId,
-      text: slowShell("replace-finished"),
+      text: "!shell node replacement-target.cjs",
     });
     const secondTurnId = stringField(second, "turnId");
     await secondCommand;
+    await waitForFixtureFile(replacementReady, "replacement process readiness");
+    const replacementStatus = await invoke(tools, "zenx_threads_status", {
+      threadId,
+    });
+    assert.equal(replacementStatus.status, "active");
+    assert.equal(replacementStatus.activeTurnId, secondTurnId);
     const successorCompleted = waitForManagerTurnCompleted(
       manager,
       threadId,
@@ -353,7 +383,45 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       /Unexpected argument: mode/u,
     );
   } finally {
-    await manager.stop();
+    // Read the existing task authority before stopping the Host, whose nested
+    // cleanup failure may otherwise hide the exact cancellation receipt.
+    if (observedThreadId !== undefined) {
+      try {
+        const listed = await manager.shellPanelRequest({
+          operation: "list",
+          threadId: observedThreadId,
+        });
+        if (listed && "sessions" in listed) {
+          for (const session of listed.sessions) {
+            if (
+              !["cancel_requested", "cancellation_unconfirmed"].includes(
+                session.status,
+              )
+            )
+              continue;
+            const receipt = await manager.shellPanelRequest({
+              operation: "read",
+              threadId: observedThreadId,
+              taskId: session.taskId,
+            });
+            console.error(
+              "Self-control fixture pending Shell cleanup",
+              JSON.stringify(receipt),
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Self-control fixture cleanup observation failed", error);
+      }
+    }
+    // Give native cleanup its full owned join before fallback release. Releasing
+    // earlier could make the child exit while its initial snapshot is pending.
+    // This cannot turn an unconfirmed Stop into successful Host cleanup.
+    try {
+      await manager.stop();
+    } finally {
+      await writeFile(replacementRelease, "release");
+    }
     await capabilities.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -1016,6 +1084,20 @@ function selfControlResult(text: string): { threadId: string } {
   };
   assert.equal(envelope.capabilityId, ZENX_SELF_CONTROL_CAPABILITY_ID);
   return envelope.result;
+}
+
+async function waitForFixtureFile(file: string, stage: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      await readFile(file);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out after 10000ms during ${stage}`);
 }
 
 function slowShell(label: string): string {

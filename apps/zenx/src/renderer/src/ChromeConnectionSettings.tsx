@@ -80,7 +80,7 @@ export function ChromeConnectionSettings({
       <p className="settings-note">
         {t("chromeConnectionSettings.workspaceAlwaysAvailable")}
       </p>
-      <label className="settings-row">
+      <label className="settings-row browser-connection-toggle">
         <span>{t("chromeConnectionSettings.enableExternalBrowser")}</span>
         <input
           type="checkbox"
