@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { access, stat, writeFile } from "node:fs/promises";
+import { access, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ToolInvocation } from "../../../../src/tool.js";
@@ -165,25 +165,27 @@ public static class ZenXMarkerCheck {
 }
 '@
 [Console]::Out.WriteLine([ZenXMarkerCheck]::Count([Console]::In.ReadToEnd()))`;
-  const verifiedPixels = await runBoundedProcess(
-    windowsBackgroundCaptureCommand().executable,
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(verifyPixels, "utf16le").toString("base64"),
-    ],
-    {
-      timeoutMs: 10_000,
-      signal: controller.signal,
-      stdin: screenshot.artifactPath,
-      maxStdoutBytes: 1024,
-    },
+  const countFixturePixels = async (artifactPath: string) => {
+    const verifiedPixels = await runBoundedProcess(
+      windowsBackgroundCaptureCommand().executable,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(verifyPixels, "utf16le").toString("base64"),
+      ],
+      {
+        timeoutMs: 10_000,
+        signal: controller.signal,
+        stdin: artifactPath,
+        maxStdoutBytes: 1024,
+      },
+    );
+    return verifiedPixels.stdout.trim().split(",").map(Number);
+  };
+  const [bluePixels, magentaPixels] = await countFixturePixels(
+    screenshot.artifactPath,
   );
-  const [bluePixels, magentaPixels] = verifiedPixels.stdout
-    .trim()
-    .split(",")
-    .map(Number);
   if (!(bluePixels! >= 500 && magentaPixels! >= 50))
     throw new Error(
       "Occluded screenshot is missing the target fixture's distinctive marker pixels",
@@ -199,12 +201,30 @@ public static class ZenXMarkerCheck {
     controller.signal,
   );
   await assert.rejects(
-    execute(
-      computer,
-      "computer_screenshot",
-      { target: refreshedTarget },
-      controller.signal,
-    ),
+    async () => {
+      try {
+        const partial = await execute<{ artifactPath: string }>(
+          computer,
+          "computer_screenshot",
+          { target: refreshedTarget },
+          controller.signal,
+        );
+        console.log(
+          "Synthetic partial-frame capture returned: " +
+            JSON.stringify({
+              pixels: await countFixturePixels(partial.artifactPath),
+            }),
+        );
+      } finally {
+        console.log(
+          "Synthetic partial-print fixture probe: " +
+            (await readFile(
+              path.join(probeDirectory, "partial-print-probe.json"),
+              "utf8",
+            )),
+        );
+      }
+    },
     /capture_unrendered/u,
     "Partially painted native frames must fail without foreground fallback",
   );

@@ -26,10 +26,19 @@ using System.Runtime.InteropServices;
 using System.Threading;
 public class ZenXPartialPrintForm : System.Windows.Forms.Form {
   public bool PartialPrint;
+  public string ProbePath;
+  public int PrintCalls, PrintClientCalls;
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
+  public void WriteProbe() {
+    File.WriteAllText(ProbePath, "{\"phase\":\"partial-print\",\"enabled\":" + (PartialPrint ? "true" : "false") + ",\"printCalls\":" + PrintCalls + ",\"printClientCalls\":" + PrintClientCalls + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"minimized\":" + (IsIconic(Handle) ? "true" : "false") + "}");
+  }
   protected override void WndProc(ref System.Windows.Forms.Message message) {
     if (PartialPrint && (message.Msg==0x0317 || message.Msg==0x0318)) {
+      if (message.Msg==0x0317) PrintCalls++; else PrintClientCalls++;
       using (var graphics=System.Drawing.Graphics.FromHdc(message.WParam))
         graphics.FillRectangle(System.Drawing.Brushes.White, 0, 0, 20, 20);
+      WriteProbe();
       message.Result=new IntPtr(1);
       return;
     }
@@ -62,6 +71,7 @@ public static class ZenXCaptureSampler {
 }
 "@
 $form = New-Object ZenXPartialPrintForm
+$form.ProbePath = Join-Path $ProbeDirectory "partial-print-probe.json"
 $form.Text = $Title
 $form.Width = 640
 $form.Height = 360
@@ -106,6 +116,7 @@ $timer.add_Tick({
   }
   if (-not $form.PartialPrint -and (Test-Path (Join-Path $ProbeDirectory "unrendered"))) {
     $form.PartialPrint = $true
+    $form.WriteProbe()
     Set-Content -LiteralPath (Join-Path $ProbeDirectory "unrendered-ready") -Value "ready"
   }
   if (-not $script:minimized -and (Test-Path (Join-Path $ProbeDirectory "minimize"))) {
