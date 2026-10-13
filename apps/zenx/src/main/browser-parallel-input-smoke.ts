@@ -1477,15 +1477,31 @@ async function startNative(directory: string): Promise<Native> {
     await runFile("/usr/bin/xcode-select", ["--print-path"], {
       timeout: 5_000,
     });
-    const { stdout } = await runFile("/usr/bin/xcrun", ["--find", "swiftc"], {
-      timeout: 5_000,
-    });
+    const { stdout } = await runFile(
+      "/usr/bin/xcrun",
+      ["--sdk", "macosx", "--find", "swiftc"],
+      { timeout: 5_000 },
+    );
+    const compiler = stdout.trim();
+    assert.ok(
+      path.isAbsolute(compiler),
+      "Swift compiler must be an absolute path",
+    );
+    const { stdout: sdkOutput } = await runFile(
+      "/usr/bin/xcrun",
+      ["--sdk", "macosx", "--show-sdk-path"],
+      { timeout: 5_000 },
+    );
+    const sdk = sdkOutput.trim();
+    assert.ok(path.isAbsolute(sdk), "macOS SDK must be an absolute path");
     const source = path.join(directory, "Native.swift"),
       binary = path.join(directory, "native-fixture");
     await writeFile(source, MAC_NATIVE);
     await runFile(
-      stdout.trim(),
+      compiler,
       [
+        "-sdk",
+        sdk,
         "-swift-version",
         "5",
         "-module-cache-path",
