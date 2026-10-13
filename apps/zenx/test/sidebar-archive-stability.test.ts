@@ -112,14 +112,64 @@ test("a slow archive does not steal focus after selecting another thread", async
   );
 });
 
+test("a delayed refresh anchors at the user's latest scroll position", async () => {
+  await withSidebar(
+    "inbox",
+    async ({ clickArchive, scroller, flushRemoval }) => {
+      scroller.scrollTop = 400;
+      await clickArchive("thread-7");
+      assert.ok(document.querySelector('[data-thread-id="thread-7"]'));
+      scroller.scrollTop = 700;
+      scroller.dispatchEvent(new window.Event("scroll"));
+      await act(async () => flushRemoval());
+      assert.equal(scroller.scrollTop, 660);
+    },
+    async () => undefined,
+    true,
+  );
+});
+
+test("collapsing a project while archive is pending retires hidden anchors", async () => {
+  let finish!: () => void;
+  const pending = new Promise<void>((r) => (finish = r));
+  await withSidebar(
+    "projects",
+    async ({ clickArchive, scroller }) => {
+      scroller.scrollTop = 400;
+      await clickArchive("thread-7");
+      const toggle =
+        document.querySelector<HTMLButtonElement>(".project-toggle")!;
+      await act(async () => {
+        toggle.focus();
+        toggle.click();
+      });
+      const target = document.querySelector<HTMLElement>(
+        '[data-thread-id="thread-7"]',
+      )!;
+      assert.ok(target.isConnected && target.closest("[inert]"));
+      scroller.scrollTop = 700;
+      scroller.dispatchEvent(new window.Event("scroll"));
+      await act(async () => finish());
+      assert.equal(
+        scroller.scrollTop,
+        700,
+        "hidden row removal must not move visible viewport",
+      );
+    },
+    async () => pending,
+  );
+});
+
 async function withSidebar(
   mode: "projects" | "inbox",
   run: (harness: {
     scroller: HTMLElement;
+    flushRemoval(): void;
     clickArchive(threadId: string): Promise<void>;
     focusCalls: { target: HTMLElement; options?: FocusOptions }[];
   }) => Promise<void>,
-  operation = async () => undefined,
+  operation: () => Promise<void> = async () => undefined,
+  delayRemoval = false,
 ) {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
   const previous = {
@@ -139,6 +189,12 @@ async function withSidebar(
   const focus = dom.window.HTMLElement.prototype.focus;
   dom.window.HTMLElement.prototype.focus = function (options?: FocusOptions) {
     focusCalls.push({ target: this, options });
+    // Chromium cannot focus the CSS-hidden menu trigger until its row owns focus.
+    if (
+      this.classList.contains("thread-menu-trigger") &&
+      !this.closest(".thread-row-shell")?.contains(document.activeElement)
+    )
+      return;
     if (this.id.includes("heading") && !options?.preventScroll) {
       const scroller = document.querySelector<HTMLElement>(".sidebar-scroll");
       if (scroller) scroller.scrollTop = 0;
@@ -168,6 +224,7 @@ async function withSidebar(
     };
   };
   const root = createRoot(document.getElementById("root")!);
+  let flushRemoval: () => void = () => undefined;
   function Harness() {
     const [threads, setThreads] = useState(
       Array.from({ length: 12 }, (_, i) => summary(`thread-${i}`)),
@@ -185,9 +242,12 @@ async function withSidebar(
       onOpenSettings: noop,
       onChangeThreadLifecycle: async (thread) => {
         await operation();
-        setThreads((value) =>
-          value.filter((entry) => entry.threadId !== thread.threadId),
-        );
+        const remove = () =>
+          setThreads((value) =>
+            value.filter((entry) => entry.threadId !== thread.threadId),
+          );
+        if (delayRemoval) flushRemoval = remove;
+        else remove();
       },
       onChangeThreadPinned: async () => undefined,
       onRenameThread: async () => undefined,
@@ -222,6 +282,7 @@ async function withSidebar(
     const scroller = document.querySelector<HTMLElement>(".sidebar-scroll")!;
     await run({
       scroller,
+      flushRemoval: () => flushRemoval(),
       focusCalls,
       clickArchive: async (threadId) => {
         await act(async () =>

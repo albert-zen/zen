@@ -6,14 +6,26 @@ export interface SidebarRemovalSnapshot {
   scrollTop: number;
   neighbors: HTMLElement[];
   anchors: { row: HTMLElement; top: number }[];
+  disclosureOwners: HTMLElement[];
 }
 
 export function captureSidebarRemoval(
   row: HTMLElement,
 ): SidebarRemovalSnapshot | null {
   const scroller = row.closest<HTMLElement>(".sidebar-scroll");
-  if (scroller === null) return null;
-  const rows = [...scroller.querySelectorAll<HTMLElement>(".thread-row-shell")];
+  if (scroller === null || row.closest("[inert], [hidden]")) return null;
+  const disclosureOwners: HTMLElement[] = [];
+  for (
+    let owner = row.parentElement;
+    owner !== null;
+    owner = owner.parentElement
+  ) {
+    disclosureOwners.push(owner);
+    if (owner === scroller) break;
+  }
+  const rows = [
+    ...scroller.querySelectorAll<HTMLElement>(".thread-row-shell"),
+  ].filter((entry) => !entry.closest("[inert], [hidden]"));
   const index = rows.indexOf(row);
   const neighbors = [
     ...rows.slice(index + 1),
@@ -30,6 +42,7 @@ export function captureSidebarRemoval(
     focus: document.activeElement,
     scrollTop: scroller.scrollTop,
     neighbors,
+    disclosureOwners,
     anchors: [
       ...visible,
       ...neighbors.filter((entry) => !visible.includes(entry)),
@@ -39,8 +52,16 @@ export function captureSidebarRemoval(
 
 export function restoreSidebarRemoval(snapshot: SidebarRemovalSnapshot): void {
   const { scroller, focus, neighbors, anchors } = snapshot;
-  if (!scroller.isConnected) return;
-  const anchor = anchors.find((entry) => entry.row.isConnected);
+  if (
+    !scroller.isConnected ||
+    snapshot.disclosureOwners.some((owner) =>
+      owner.matches("[inert], [hidden]"),
+    )
+  )
+    return;
+  const available = (row: HTMLElement) =>
+    row.isConnected && !row.closest("[inert], [hidden]");
+  const anchor = anchors.find((entry) => available(entry.row));
   if (anchor !== undefined) {
     // Assign instantly; native scroll anchoring may already have applied this delta.
     // Browsers clamp at the list end. No animation, including in reduced-motion mode.
@@ -54,7 +75,12 @@ export function restoreSidebarRemoval(snapshot: SidebarRemovalSnapshot): void {
     !(current === document.body && focus?.isConnected === false)
   )
     return;
-  const neighbor = neighbors.find((entry) => entry.isConnected);
+  const neighbor = neighbors.find(available);
+  // The menu trigger is visibility:hidden until its row has focus/hover.
+  // Reveal it through the visible row first; both focus moves must avoid scroll.
+  neighbor
+    ?.querySelector<HTMLElement>(".thread-row")
+    ?.focus({ preventScroll: true });
   const target =
     neighbor?.querySelector<HTMLElement>(".thread-menu-trigger") ??
     document.getElementById("sidebar-thread-list-heading");

@@ -566,11 +566,73 @@ for (const committed of [false, true]) {
       else assert.equal((await f.app.readThread(thread.id)).archived, true);
       await deleteRequest(f, thread);
       assert.equal(
+        f.messages.filter(
+          (message) =>
+            "method" in message &&
+            message.method === "zen/thread/event" &&
+            (message.params as { event?: { type?: string; deleted?: boolean } })
+              .event?.type === "thread_deleted_updated",
+        ).length,
+        1,
+        "confirmed exact retry must publish the deletion lifecycle",
+      );
+      assert.equal(
         (await backing.read(thread.id)).filter(
           (item) => item.type === "thread_deleted",
         ).length,
         1,
       );
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const committed of [false, true]) {
+  test(`failed restore append publishes lifecycle when exact retry succeeds (committed=${String(committed)})`, async () => {
+    const backing = new InMemoryThreadJournal();
+    let fail = true;
+    const journal: ThreadJournal = {
+      read: (id) => backing.read(id),
+      listThreadIds: () => backing.listThreadIds(),
+      async append(item) {
+        if (item.type === "thread_restored" && fail) {
+          fail = false;
+          if (committed) await backing.append(item);
+          throw new Error("fixture restore I/O failed");
+        }
+        await backing.append(item);
+      },
+    };
+    const f = fixture({ journal });
+    try {
+      await f.request("zen/initialize");
+      const thread = await archive(f);
+      const deletion = await deleteRequest(f, thread);
+      f.messages.length = 0;
+      const params = {
+        threadId: thread.id,
+        deletionItemId: deletion.deletionItemId,
+      };
+      assert("error" in (await f.receive("zen/thread/restore", params)));
+      assert.equal(f.messages.filter((entry) => "method" in entry).length, 0);
+      await f.request("zen/thread/restore", params);
+      const lifecycle = f.messages.filter(
+        (entry) => "method" in entry && entry.method === "zen/thread/event",
+      );
+      assert.equal(lifecycle.length, 1);
+      assert.equal(
+        (lifecycle[0] as { params: { event: { deleted: boolean } } }).params
+          .event.deleted,
+        false,
+      );
+      assert.equal(
+        (await backing.read(thread.id)).filter(
+          (item) => item.type === "thread_restored",
+        ).length,
+        1,
+      );
+      assert.equal((await f.app.readThread(thread.id)).archived, true);
     } finally {
       await f.close();
     }

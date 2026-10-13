@@ -184,16 +184,36 @@ export function Sidebar({
   }, []);
   const removalSnapshots = useRef(new Map<string, SidebarRemovalSnapshot>());
   const lifecyclePending = useRef(new Set<string>());
+  const removalTracking = useRef(new Map<string, () => void>());
+  useEffect(
+    () => () => {
+      for (const stop of removalTracking.current.values()) stop();
+      removalTracking.current.clear();
+      removalSnapshots.current.clear();
+    },
+    [],
+  );
   useLayoutEffect(() => {
     for (const [threadId, snapshot] of removalSnapshots.current) {
       if (snapshot.row.isConnected) continue;
       removalSnapshots.current.delete(threadId);
+      removalTracking.current.get(threadId)?.();
+      removalTracking.current.delete(threadId);
+      // A user may collapse or change views while the request is pending.
+      // DOM disappearance alone does not mean the archive has completed.
+      if (
+        threads.some((thread) => thread.threadId === threadId) ||
+        pinnedThreads.some((thread) => thread.threadId === threadId)
+      )
+        continue;
       restoreSidebarRemoval(snapshot);
     }
   });
   const changeThreadLifecycle = async (thread: NativeThreadSummary) => {
     if (lifecyclePending.current.has(thread.threadId)) return;
     lifecyclePending.current.add(thread.threadId);
+    removalTracking.current.get(thread.threadId)?.();
+    removalTracking.current.delete(thread.threadId);
     const row = [
       ...document.querySelectorAll<HTMLElement>(".thread-row-shell"),
     ].find((entry) => entry.dataset.threadId === thread.threadId);
@@ -214,14 +234,36 @@ export function Sidebar({
     };
     const scroller = row?.closest(".sidebar-scroll");
     scroller?.addEventListener("scroll", trackScroll);
+    const Observer = row?.ownerDocument.defaultView?.MutationObserver;
+    const disclosureObserver =
+      Observer === undefined
+        ? undefined
+        : new Observer(() => {
+            if (!row?.closest("[inert], [hidden]")) return;
+            removalSnapshots.current.delete(thread.threadId);
+            removalTracking.current.get(thread.threadId)?.();
+            removalTracking.current.delete(thread.threadId);
+          });
+    for (const owner of removalSnapshots.current.get(thread.threadId)
+      ?.disclosureOwners ?? []) {
+      disclosureObserver?.observe(owner, {
+        attributes: true,
+        attributeFilter: ["inert", "hidden"],
+      });
+    }
+    removalTracking.current.set(thread.threadId, () => {
+      scroller?.removeEventListener("scroll", trackScroll);
+      disclosureObserver?.disconnect();
+    });
     try {
       await onChangeThreadLifecycle(thread);
     } catch (error) {
       removalSnapshots.current.delete(thread.threadId);
+      removalTracking.current.get(thread.threadId)?.();
+      removalTracking.current.delete(thread.threadId);
       throw error;
     } finally {
       lifecyclePending.current.delete(thread.threadId);
-      scroller?.removeEventListener("scroll", trackScroll);
     }
   };
   const lastUsedProject =

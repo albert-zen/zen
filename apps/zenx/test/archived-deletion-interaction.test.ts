@@ -134,7 +134,7 @@ async function click(target: HTMLButtonElement) {
 async function mounted(
   run: () => Promise<void>,
   remove: () => Promise<void>,
-  restore = async () => undefined,
+  restore: () => Promise<void> = async () => undefined,
   initial = thread,
 ) {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });

@@ -209,6 +209,7 @@
 - **ComposerSubmission** — 接入端一次待确认的用户提交；只在 UI 内保留草稿、
   发送意图和稳定 `clientUserMessageId`，是否已进入会话仍完全由 App Server 的
   canonical Item 投影决定。
+- **Sidebar removal continuity** — The sidebar owns a transient DOM viewport/focus snapshot for an explicit archive action, keeps a surviving visible row anchored without animation, and moves focus to the nearest remaining row without scrolling or changing the selected conversation.
 - **Recoverable Thread deletion** — Archived, idle Threads may append a canonical
   `thread_deleted` control Item under the existing mutation lock. The current
   tombstone fences ordinary reads, lists and all execution; a native Deleted

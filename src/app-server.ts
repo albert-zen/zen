@@ -983,8 +983,12 @@ export class ZenAppServer {
         );
       const items = thread.items;
       const deletion = thread.deletion;
-      if (deletion !== undefined && items.at(-2)?.id === expectedLastItemId)
+      if (deletion !== undefined && items.at(-2)?.id === expectedLastItemId) {
+        // An earlier append may have committed before reporting an I/O error.
+        // Confirming its exact retry must also repair disposable client views.
+        this.#emit({ type: "thread_deleted_updated", threadId, deleted: true });
         return { threadId, deletionItemId: deletion.id };
+      }
       if (deletion !== undefined || items.at(-1)?.id !== expectedLastItemId)
         throw new AppServerError(
           "stale_thread",
@@ -1068,8 +1072,14 @@ export class ZenAppServer {
       if (
         last?.type === "thread_restored" &&
         last.deletionItemId === deletionItemId
-      )
+      ) {
+        this.#emit({
+          type: "thread_deleted_updated",
+          threadId,
+          deleted: false,
+        });
         return await this.#snapshot(thread);
+      }
       if (thread.deletion?.id !== deletionItemId)
         throw new AppServerError(
           "stale_thread",
