@@ -16,6 +16,9 @@ export function ChromeConnectionSettings({
   const [snapshot, setSnapshot] = useState<ChromeBridgeSettingsSnapshot | null>(
     null,
   );
+  const [registrationBrowser, setRegistrationBrowser] = useState<
+    "chrome" | "edge"
+  >("chrome");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,32 +77,43 @@ export function ChromeConnectionSettings({
             : t("chromeConnectionSettings.chromeNotConnected")}
         </span>
       </div>
-      <label className="field">
-        <span>{t("chromeConnectionSettings.browserMode")}</span>
-        <Select
-          value={selectedMode}
-          onValueChange={(value) =>
+      <p className="settings-note">
+        {t("chromeConnectionSettings.workspaceAlwaysAvailable")}
+      </p>
+      <label className="settings-row browser-connection-toggle">
+        <span>{t("chromeConnectionSettings.enableExternalBrowser")}</span>
+        <input
+          type="checkbox"
+          checked={selectedMode === "user-session"}
+          onChange={(event) =>
             setDraft({
               ...draft,
-              browserMode: value as "isolated" | "user-session",
+              browserMode: event.currentTarget.checked
+                ? "user-session"
+                : "isolated",
             })
           }
-        >
-          <option value="isolated">
-            {t("chromeConnectionSettings.zenxBrowser")}
-          </option>
-          <option value="user-session">
-            {t("chromeConnectionSettings.connectedChrome")}
-          </option>
-        </Select>
-        <small className="settings-note">
-          {t(
-            "chromeConnectionSettings.changingThisModeTakesEffectAfterRestartingZenx",
-          )}
-        </small>
+        />
       </label>
+      <p className="settings-note">
+        {t(
+          "chromeConnectionSettings.changingThisModeTakesEffectAfterRestartingZenx",
+        )}
+      </p>
       {selectedMode === "user-session" ? (
         <>
+          <label className="field">
+            <span>{t("chromeConnectionSettings.connectorBrowser")}</span>
+            <Select
+              value={registrationBrowser}
+              onValueChange={(value) =>
+                setRegistrationBrowser(value as "chrome" | "edge")
+              }
+            >
+              <option value="chrome">Google Chrome</option>
+              <option value="edge">Microsoft Edge</option>
+            </Select>
+          </label>
           <div className="settings-row">
             <div>
               <strong>
@@ -112,13 +126,19 @@ export function ChromeConnectionSettings({
               </span>
             </div>
             <div className="settings-actions">
-              {snapshot?.nativeHostRegistered ? (
+              {(
+                registrationBrowser === "edge"
+                  ? snapshot?.edgeNativeHostRegistered
+                  : snapshot?.nativeHostRegistered
+              ) ? (
                 <button
                   className="secondary-button"
                   type="button"
                   disabled={busy !== null}
                   onClick={() =>
-                    void run("remove", window.zenx.chromeBridge.remove)
+                    void run("remove", () =>
+                      window.zenx.chromeBridge.remove(registrationBrowser),
+                    )
                   }
                 >
                   {busy === "remove"
@@ -131,7 +151,9 @@ export function ChromeConnectionSettings({
                   type="button"
                   disabled={busy !== null || snapshot?.packaged === false}
                   onClick={() =>
-                    void run("prepare", window.zenx.chromeBridge.prepare)
+                    void run("prepare", () =>
+                      window.zenx.chromeBridge.prepare(registrationBrowser),
+                    )
                   }
                 >
                   {busy === "prepare"

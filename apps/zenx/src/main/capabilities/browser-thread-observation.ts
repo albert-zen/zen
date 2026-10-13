@@ -8,6 +8,7 @@ import type {
 } from "./browser-provider.js";
 
 export interface BrowserThreadTarget extends BrowserTabSummary {
+  backendId?: "workspace" | "connected";
   id: string;
   mode: "live" | "snapshot";
 }
@@ -159,12 +160,16 @@ export class BrowserThreadObservation {
     };
   }
 
-  close(): void {
+  close(): string[] {
+    const sessions = [...this.#sessions.values()].map(
+      (session) => session.providerSessionId,
+    );
     this.#closed = true;
     this.#sessions.clear();
     this.#latest.clear();
     for (const observer of this.#observers) this.#render(observer);
     this.#observers.clear();
+    return sessions;
   }
 
   #notify(threadId: string): void {

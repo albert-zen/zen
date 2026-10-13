@@ -3419,6 +3419,24 @@ button:disabled {
 .settings-card-head {
   margin-bottom: 20px;
 }
+.settings-view .settings-row.browser-connection-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+.browser-connection-toggle > span {
+  min-width: 0;
+  color: var(--text-1);
+  font-weight: 500;
+}
+.browser-connection-toggle > input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
 .settings-card-head > div,
 .settings-row > div {
   min-width: 0;

@@ -463,6 +463,8 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXBrowserBackend;
   readonly #threadObservation: BrowserThreadObservation;
+  readonly #ownsBackend: boolean;
+  #closePromise: Promise<void> | undefined;
   readonly #presentation: ObservationPresentation<
     BrowserInspection["targets"][number]
   >;
@@ -470,7 +472,9 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   constructor(
     backend: ZenXBrowserBackend,
     manifest: ZenXPluginManifestV2 = browserCapabilityManifest,
+    options: { ownsBackend?: boolean } = {},
   ) {
+    this.#ownsBackend = options.ownsBackend ?? true;
     this.#backend = backend;
     this.#threadObservation = new BrowserThreadObservation(backend);
     this.#presentation = new ObservationPresentation({
@@ -759,9 +763,29 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
+    if (this.#closePromise !== undefined) return await this.#closePromise;
     this.#presentation.close();
-    this.#threadObservation.close();
-    await this.#backend.close();
+    const sessions = this.#threadObservation.close();
+    this.#closePromise = (async () => {
+      if (this.#ownsBackend) {
+        await this.#backend.close();
+        return;
+      }
+      // The app owns the shared Workspace port. Retiring a runtime generation
+      // releases only that generation's opaque sessions, never another's lease.
+      const results = await Promise.allSettled(
+        sessions.map(async (id) => await this.#backend.closeSession(id)),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length > 0)
+        throw new AggregateError(
+          failures,
+          "Browser session lease cleanup failed",
+        );
+    })();
+    await this.#closePromise;
   }
 }
 

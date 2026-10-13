@@ -1,3 +1,4 @@
+import { concurrentBrowserManifest } from "../src/main/capabilities/browser-backend-registry.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
@@ -34,6 +35,7 @@ const expected = [
   ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.2.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.5.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-concurrent-1.0.6.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.5.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.5.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.2.tgz"],
@@ -45,6 +47,10 @@ const expected = [
 ];
 
 const providerVariants = new Map([
+  [
+    "zenx-browser-plugin-concurrent-1.0.6.tgz",
+    ["browser", "1.0.6", "concurrent-browser", 20],
+  ],
   [
     "zenx-browser-plugin-electron-1.0.5.tgz",
     ["browser", "1.0.5", "electron-dedicated-browser", 10],
@@ -112,6 +118,10 @@ test("all packaged Browser and Computer manifests match their runtime observatio
   assert.equal(peekaboo.manifest.provider.id, "peekaboo-cli");
   for (const [relative, runtime] of [
     ["zenx-browser-plugin/zenx.plugin.json", browserCapabilityManifest],
+    [
+      "zenx-browser-plugin/variants/concurrent.zenx.plugin.json",
+      concurrentBrowserManifest(),
+    ],
     [
       "zenx-browser-plugin/variants/playwright.zenx.plugin.json",
       playwright.manifest,
@@ -316,6 +326,7 @@ test("Host provider selection maps every real manifest variant deterministically
   assert.deepEqual(
     [
       firstPartyProviderTarball("browser", "electron-dedicated-browser"),
+      firstPartyProviderTarball("browser", "concurrent-browser"),
       firstPartyProviderTarball("browser", "playwright-cli"),
       firstPartyProviderTarball("browser", "user-browser-cdp"),
       firstPartyProviderTarball("computer", "macos-desktop"),
@@ -324,6 +335,7 @@ test("Host provider selection maps every real manifest variant deterministically
     ],
     [
       "zenx-browser-plugin-electron-1.0.5.tgz",
+      "zenx-browser-plugin-concurrent-1.0.6.tgz",
       "zenx-browser-plugin-playwright-1.0.5.tgz",
       "zenx-browser-plugin-user-session-1.0.5.tgz",
       "zenx-computer-plugin-macos-1.0.2.tgz",

@@ -112,6 +112,8 @@ export function firstPartyProviderTarball(
   providerId: string,
 ): string {
   if (pluginId === "browser") {
+    if (providerId === "concurrent-browser")
+      return "zenx-browser-plugin-concurrent-1.0.6.tgz";
     if (providerId === "electron-dedicated-browser")
       return "zenx-browser-plugin-electron-1.0.5.tgz";
     if (providerId === "playwright-cli")
