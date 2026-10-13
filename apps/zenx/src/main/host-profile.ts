@@ -63,7 +63,7 @@ export interface ZenXHostProfile {
   onboardingComplete: boolean;
   /** Missing in an older v3 profile means the high-impact tools stay off. */
   computerForegroundControlEnabled?: boolean;
-  /** Missing means the ordinary isolated browser provider. */
+  /** Legacy field: user-session now enables an external browser alongside Workspace. */
   browserMode?: "isolated" | "user-session";
   providerProfiles: ZenXProviderProfile[];
   defaultModel: ZenXModelReference;
@@ -355,9 +355,17 @@ export function validateHostProfile(
     value.composerSendMode === "queue" &&
     value.composerSendModeExplicit !== true &&
     migration === undefined;
-  const composerSendMode = ambiguousLegacyQueue
-    ? "soft"
-    : (value.composerSendMode ?? "soft");
+  if (
+    value.composerSendMode !== undefined &&
+    !["batch", "queue", "soft", "hard"].includes(
+      value.composerSendMode as string,
+    )
+  )
+    throw new Error("Invalid composer send mode");
+  const composerSendMode =
+    ambiguousLegacyQueue || value.composerSendModeExplicit === false
+      ? "soft"
+      : (value.composerSendMode ?? "soft");
   const composerSendModeMigration = ambiguousLegacyQueue
     ? {
         version: 1 as const,

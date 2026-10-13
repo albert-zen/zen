@@ -139,6 +139,7 @@ export function registerBundledAutomationUi(
 }
 
 interface TriggerEditor {
+  deliveryMode?: "steer" | "queue";
   id?: string;
   threadId: string;
   kind: TriggerKind;
@@ -242,6 +243,7 @@ export function editorFromTrigger(trigger: ZenXTrigger): TriggerEditor {
   return {
     id: trigger.id,
     threadId: trigger.threadId,
+    deliveryMode: trigger.deliveryMode,
     kind: trigger.kind,
     label: trigger.label,
     prompt: trigger.prompt,
@@ -265,6 +267,9 @@ export function triggerEditorInput(editor: TriggerEditor) {
     kind: editor.kind,
     label: editor.label.trim(),
     prompt: editor.prompt.trim(),
+    ...(editor.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: editor.deliveryMode }),
     ...(editor.id === undefined ? {} : { id: editor.id }),
   };
   if (!common.threadId || !common.label || !common.prompt)
@@ -1137,6 +1142,19 @@ function TriggerManager({
                 )}
               </>
             ) : null}
+            <label className="field wide">
+              <span>{i18n.t("panels:wakeupDelivery")}</span>
+              <Select
+                value={editor.deliveryMode ?? "steer"}
+                aria-label={i18n.t("panels:wakeupDelivery")}
+                onValueChange={(value) =>
+                  change({ deliveryMode: value as "steer" | "queue" })
+                }
+              >
+                <option value="steer">{i18n.t("panels:wakeupSteer")}</option>
+                <option value="queue">{i18n.t("panels:wakeupQueue")}</option>
+              </Select>
+            </label>
             <label className="field wide">
               <span>{i18n.t("panels:instructionsForTargetThread")}</span>
               <textarea
@@ -3344,6 +3362,29 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
               </button>
             ) : panel === "manage" ? (
               <>
+                {room?.assistant ? (
+                  <label className="field">
+                    <span>{i18n.t("panels:roomMessageDelivery")}</span>
+                    <Select
+                      disabled={busy}
+                      value={room.assistant.deliveryMode ?? "steer"}
+                      aria-label={i18n.t("panels:roomMessageDelivery")}
+                      onValueChange={(value) =>
+                        void run("assistant-delivery", {
+                          roomId: room.id,
+                          deliveryMode: value,
+                        })
+                      }
+                    >
+                      <option value="steer">
+                        {i18n.t("panels:wakeupSteer")}
+                      </option>
+                      <option value="queue">
+                        {i18n.t("panels:wakeupQueue")}
+                      </option>
+                    </Select>
+                  </label>
+                ) : null}
                 {room?.assistant ? (
                   <button
                     type="button"

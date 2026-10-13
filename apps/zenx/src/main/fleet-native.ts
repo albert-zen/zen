@@ -195,6 +195,7 @@ function item(value: unknown, threadId: string): RemoteItemView {
     value.threadId !== threadId ||
     ![
       "user_message",
+      "host_message",
       "thread_message",
       "agent_message",
       "turn_started",
@@ -224,7 +225,26 @@ function item(value: unknown, threadId: string): RemoteItemView {
     if (source.deviceId !== undefined && source.turnId !== undefined)
       throw new Error("Remote sender cannot assert a local Turn");
   }
+  let hostSource: Pick<RemoteItemView, "source" | "sourceId" | "mode"> = {};
+  if (value.type === "host_message") {
+    if (
+      (value.source !== "bootstrap" &&
+        value.source !== "trigger" &&
+        value.source !== "room") ||
+      (value.mode !== "start" && value.mode !== "steer") ||
+      (value.source !== "bootstrap" && value.sourceId === undefined)
+    )
+      throw new Error("Invalid Fleet Host message");
+    hostSource = {
+      source: value.source,
+      mode: value.mode,
+      ...(value.sourceId === undefined
+        ? {}
+        : { sourceId: string(value.sourceId, "Host source ID") }),
+    };
+  }
   return {
+    ...hostSource,
     ...(sender === undefined ? {} : { sender }),
     id: string(value.id, "item ID"),
     threadId,

@@ -1,3 +1,4 @@
+import { HostMessageContent } from "./HostMessageContent.js";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
@@ -11,6 +12,10 @@ export interface QueuedMessagePreview {
   text: string;
   imageCount: number;
   sender?: import("../../../../../src/item.js").ThreadMessageSender;
+  hostSource?: Pick<
+    import("../../../../../src/item.js").HostWakeupInput,
+    "source" | "sourceId"
+  >;
 }
 
 export interface QueuedMessagesProps {
@@ -445,7 +450,14 @@ function QueuedMessageRow({
         <div
           className={`queue-row-content${message.imageCount > 0 ? " has-images" : ""}`}
         >
-          {
+          {message.hostSource !== undefined ? (
+            <HostMessageContent
+              source={message.hostSource.source}
+              sourceId={message.hostSource.sourceId}
+              text={message.text}
+              onReadingChange={onReadingChange}
+            />
+          ) : (
             <div
               className={`queue-preview${expanded ? " is-expanded" : ""}${expandable ? " is-expandable" : ""}`}
               role={expandable ? "button" : undefined}
@@ -554,7 +566,7 @@ function QueuedMessageRow({
                 />
               ) : null}
             </div>
-          }
+          )}
           {message.imageCount > 0 ? (
             <QueuedImageStrip
               message={message}
@@ -568,7 +580,9 @@ function QueuedMessageRow({
           ) : null}
         </div>
         <div className="queue-row-actions">
-          {onEdit === undefined || message.sender !== undefined ? null : (
+          {onEdit === undefined ||
+          message.sender !== undefined ||
+          message.hostSource !== undefined ? null : (
             <button
               type="button"
               className={`queue-row-edit${editing ? " is-pending" : ""}`}

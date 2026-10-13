@@ -106,6 +106,15 @@ export function projectRemoteItem(item: CanonicalItem): RemoteItemView | null {
           .map((part) => part.text)
           .join("\n"),
     };
+  if (item.type === "host_message")
+    return {
+      ...base,
+      type: item.type,
+      text: item.text,
+      source: item.source,
+      ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+      mode: item.mode,
+    };
   if (item.type === "thread_message")
     return {
       ...base,

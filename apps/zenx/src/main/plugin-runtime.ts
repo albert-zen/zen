@@ -46,6 +46,7 @@ export interface PluginRuntimeInvocation {
     threadId?: string;
     canonicalToolCallId?: string;
     trustedPluginUi?: true;
+    approvalScope?: ToolInvocation["approvalScope"];
   };
   signal: AbortSignal;
 }
@@ -260,6 +261,15 @@ export class PluginRuntimeSupervisor {
     });
   }
 
+  /** Capture the current runtime identity without initiating retirement or adding a lease. */
+  captureRetirementWaiter(pluginId: string): () => Promise<void> {
+    const bundle = this.#active.get(pluginId)?.bundle;
+    const alreadyRetiring = this.#retirementBarriers.get(pluginId);
+    return async () => {
+      await Promise.all([alreadyRetiring, bundle?.whenRetired()]);
+    };
+  }
+
   captureHostGeneration(toolNames: readonly string[]): string {
     const tools = new Map<string, SupervisedPluginBundle>();
     for (const toolName of toolNames) {
@@ -326,6 +336,9 @@ export class PluginRuntimeSupervisor {
           ? {}
           : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
+        ...(invocation.approvalScope === undefined
+          ? {}
+          : { approvalScope: invocation.approvalScope }),
         ...(invocation.threadId === undefined
           ? {}
           : { threadId: invocation.threadId }),
@@ -378,8 +391,9 @@ export class PluginRuntimeSupervisor {
     const previous = this.#retirementBarriers.get(pluginId);
     const ownRetirement = bundle.retire();
     const completion = Promise.all([previous, ownRetirement]).then(() => {});
-    if (bundle.hasActivation || previous !== undefined)
-      this.#retirementBarriers.set(pluginId, completion);
+    // Also retain ordinary runtimes: disabled/re-enabled generations can still
+    // hold Host leases on the same provider even without an activation hook.
+    this.#retirementBarriers.set(pluginId, completion);
     void completion.then(
       () => {
         if (this.#retirementBarriers.get(pluginId) === completion)
@@ -414,6 +428,10 @@ class SupervisedPluginBundle implements ToolBundle {
   #prepared = 0;
   #hostGenerationLeases = 0;
   #closePromise: Promise<void> | undefined;
+  readonly #retirementObservers = new Set<{
+    resolve(): void;
+    reject(error: unknown): void;
+  }>();
 
   constructor(
     identity: PluginRuntimeIdentity,
@@ -462,6 +480,9 @@ class SupervisedPluginBundle implements ToolBundle {
           ? {}
           : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
+        ...(invocation.approvalScope === undefined
+          ? {}
+          : { approvalScope: invocation.approvalScope }),
         ...(invocation.threadId === undefined
           ? {}
           : { threadId: invocation.threadId }),
@@ -522,6 +543,14 @@ class SupervisedPluginBundle implements ToolBundle {
     }
   }
 
+  /** Observe the existing supervisor drain; this never closes an active runtime. */
+  whenRetired(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise;
+    return new Promise<void>((resolve, reject) => {
+      this.#retirementObservers.add({ resolve, reject });
+    });
+  }
+
   async retire(): Promise<void> {
     while (
       this.#prepared > 0 ||
@@ -532,7 +561,12 @@ class SupervisedPluginBundle implements ToolBundle {
         this.#drainWaiters.add(resolve);
       });
     }
-    this.#closePromise ??= this.#runtime.close();
+    if (this.#closePromise === undefined) {
+      this.#closePromise = Promise.resolve().then(() => this.#runtime.close());
+      for (const observer of this.#retirementObservers)
+        void this.#closePromise.then(observer.resolve, observer.reject);
+      this.#retirementObservers.clear();
+    }
     await this.#closePromise;
   }
 
@@ -1280,6 +1314,9 @@ export function bundledPackageRegistration(
                           invocation.context.canonicalToolCallId,
                       }),
                   name: invocation.tool,
+                  ...(invocation.context.approvalScope === undefined
+                    ? {}
+                    : { approvalScope: invocation.context.approvalScope }),
                   arguments: invocation.arguments,
                   cwd: invocation.context.cwd,
                   ...(invocation.context.threadId === undefined

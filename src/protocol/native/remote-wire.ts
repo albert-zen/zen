@@ -78,6 +78,7 @@ export interface RemoteItemView {
   createdAt: string;
   type:
     | "user_message"
+    | "host_message"
     | "thread_message"
     | "agent_message"
     | "turn_started"
@@ -85,6 +86,10 @@ export interface RemoteItemView {
     | "turn_aborted";
   text?: string;
   sender?: import("../../item.js").ThreadMessageSender;
+  /** Host-authored message provenance, never a human sender. */
+  source?: import("../../item.js").HostWakeupInput["source"];
+  sourceId?: string;
+  mode?: "start" | "steer";
 }
 export interface RemoteThreadView {
   id: string;

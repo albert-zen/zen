@@ -286,7 +286,6 @@ test(
       {
         request: (m, p) => manager.request(m, p),
         onNotification: (listener) => manager.onNotification(listener),
-        sendAssistant: (p) => deliverAssistantInput(manager, p),
       },
       new ZenXTriggerStore(path.join(dir, "rooms.json")),
     );

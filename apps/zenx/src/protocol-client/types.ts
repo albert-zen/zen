@@ -27,12 +27,26 @@ export type Thread = Omit<
   queuedMessages?: Array<
     NonNullable<CodexThread["queuedMessages"]>[number] & {
       sender?: import("../../../../src/item.js").ThreadMessageSender;
+      hostSource?: Pick<
+        import("../../../../src/item.js").HostWakeupInput,
+        "source" | "sourceId"
+      >;
     }
   >;
 };
 export type Turn = Omit<CodexTurn, "items"> & { items: ThreadItem[] };
 export type ThreadItem =
   | CodexThreadItem
+  | {
+      type: "hostMessage";
+      id: string;
+      clientId: string;
+      source: import("../../../../src/item.js").HostWakeupInput["source"];
+      sourceId?: string;
+      text: string;
+      mode: "start" | "steer";
+      deliveryAfter?: string;
+    }
   | {
       type: "threadMessage";
       id: string;
@@ -150,6 +164,7 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
@@ -243,6 +258,7 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
@@ -380,9 +396,10 @@ export interface ServerRequestParams {
     itemId: string;
     startedAtMs: number;
     environmentId: null;
-    reason: null;
+    reason: string | null;
     command: string;
     approvalScope?: "once";
+    approvalTarget?: Readonly<{ key: string; label: string }>;
     toolName?: string;
     toolArguments?: Readonly<Record<string, unknown>>;
     cwd: string;

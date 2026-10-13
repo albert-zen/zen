@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SDK_REVISION = "7d5f1179365679d0f95abd5cb2ce76547238d05f"
+SDK_REVISION = "b90a2a3b4418025fb8e81e526a9d042271138823"
 SDK_REPOSITORY = "https://github.com/albert-zen/im-agent-sdk.git"
 CHANNELS = ("qq", "telegram", "feishu", "weixin")
 MAX_FILE_BYTES = 1024 * 1024
@@ -44,7 +44,7 @@ def _access_ids(value: Any) -> set[str]:
 
 
 def _restricted(config: dict[str, Any]) -> bool:
-    # Verified against pinned imagent/channels/native/access.py. This stdlib
+    # Verified against pinned imagent/interaction/channels/ingress.py. This stdlib
     # inspection deliberately does not import SDK modules or create adapters.
     match = str(config.get("access_match") or "any").strip().lower()
     if match not in {"any", "all"}:

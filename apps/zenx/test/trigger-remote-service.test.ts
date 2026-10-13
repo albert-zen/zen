@@ -33,8 +33,16 @@ class RemoteManager implements ZenXTriggerAppServerPort {
   beforeReturn?: (registration: Registration) => Promise<void> | void;
   registrationError?: Error;
   sendError?: Error;
-  async request(): Promise<never> {
-    throw new Error("Unexpected turn/start");
+  async request(method: any, params: any): Promise<any> {
+    if (method === "zen/thread/resume")
+      throw new Error("Fixture has no canonical recovery snapshot");
+    assert.equal(method, "zen/turn/wake");
+    await this.enqueue({
+      threadId: params.threadId,
+      clientUserMessageId: params.clientId,
+      input: [{ type: "text", text: params.text }],
+    });
+    return { mode: "queue", queued: true };
   }
   async enqueue(input: ClientRequestParams["turn/queue"]): Promise<void> {
     this.queued.push(input);
@@ -122,6 +130,7 @@ const remoteInput = (
   overrides: Partial<Extract<CreateTriggerInput, { kind: "thread" }>> = {},
 ): Extract<CreateTriggerInput, { kind: "thread" }> => ({
   kind: "thread",
+  deliveryMode: "queue",
   threadId: "assistant-local",
   watchedThreadId: "same-source-id",
   label: "Remote result",
@@ -486,8 +495,7 @@ test("remote source resolution bypasses local names and exact result reads stay 
   let resolvedThreadId = "same-source-id";
   let resolvedWorkspace = "project-a";
   const port: ZenXTriggerAppServerPort = {
-    request: () => manager.request(),
-    enqueue: (params) => manager.enqueue(params),
+    request: (method, params) => manager.request(method, params),
     onNotification: (listener) => manager.onNotification(listener),
     subscribeRemoteThread: (...args) => manager.subscribeRemoteThread(...args),
     resolveRemoteThread: async (...args) => {
@@ -676,14 +684,17 @@ test("remote and timer continuations into an assistant Thread use next-cycle del
   const callbacks: Array<() => void> = [];
   let now = 100;
   const port: ZenXTriggerAppServerPort = {
-    request: () => manager.request(),
-    enqueue: (params) => manager.enqueue(params),
+    request: async (method, params: any) => {
+      if (params.mode === "queue") return manager.request(method, params);
+      sent.push({
+        threadId: params.threadId,
+        clientUserMessageId: params.clientId,
+        input: [{ type: "text", text: params.text }],
+      });
+      return { mode: "steer", turnId: `assistant-turn-${sent.length}` };
+    },
     onNotification: (listener) => manager.onNotification(listener),
     subscribeRemoteThread: (...args) => manager.subscribeRemoteThread(...args),
-    sendAssistant: async (params) => {
-      sent.push(params);
-      return { turnId: `assistant-turn-${sent.length}` };
-    },
   };
   const service = new ZenXTriggerService(port, memoryStore(), {
     now: () => now,
@@ -704,7 +715,9 @@ test("remote and timer continuations into an assistant Thread use next-cycle del
       members: [{ name: "Assistant", threadId: "assistant-local" }],
     });
     const prompt = `Read the native source and reply only to Room ${second.id}. Preserve this specific decision.`;
-    await service.create(remoteInput({ once: true, prompt }));
+    await service.create(
+      remoteInput({ once: true, prompt, deliveryMode: "steer" }),
+    );
     manager.complete(manager.registrations[0]!, "remote-result");
     await until(
       () =>

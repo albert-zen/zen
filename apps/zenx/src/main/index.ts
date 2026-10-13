@@ -1,7 +1,6 @@
 import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
-import { deliverAssistantInput } from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
@@ -155,6 +154,7 @@ import {
   configureChromeNativeHostActivationPolicy,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
+  readBrowserRegistrationTarget,
   unregisterChromeNativeHost,
 } from "./chrome-native-host-registration.js";
 
@@ -447,6 +447,21 @@ async function bootstrapZenX(): Promise<void> {
     ) {
       chromeExtensionBridge = await ChromeExtensionBridge.start({
         runtimeDirectory: join(userDataDirectory, "runtime"),
+        multiInstance: true,
+      });
+      chromeExtensionBridge.onConnectionsChanged(() => {
+        void appServerManager
+          ?.refreshCapabilitiesAfterCommit()
+          .then((result) => {
+            if (result.status === "failed")
+              console.warn(
+                "Browser connection catalog refresh failed",
+                result.message,
+              );
+          })
+          .catch((error) =>
+            console.warn("Browser connection catalog refresh failed", error),
+          );
       });
       browserEnvironment.ZENX_USER_BROWSER_CDP_ENDPOINT =
         chromeExtensionBridge.endpoint;
@@ -528,16 +543,6 @@ async function bootstrapZenX(): Promise<void> {
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
       fleet: fleetSettingsService.router,
       appServer: selfControlPort,
-      // Agent messages supplement ongoing work by default.
-      sendPreference: async () => {
-        const profile = (await settingsService!.publicSettings()).profile;
-        // Preserve an explicit user-selected send preference.
-        if (!profile.composerSendModeExplicit) return "soft";
-        return profile.composerSendMode === "soft" ||
-          profile.composerSendMode === "hard"
-          ? profile.composerSendMode
-          : "queue";
-      },
       workflows: {
         workflowConfiguration: async () =>
           await settingsService!.workflowConfiguration(),
@@ -581,16 +586,22 @@ async function bootstrapZenX(): Promise<void> {
       toolTargetTransport: (invocation) =>
         fleetToolTransport.invoke(invocation),
       userDataDirectory,
+      workspaceBrowserBackend: workspaceBrowser,
       ...(useSharedWorkspaceBrowser
         ? {
             browserBackend: workspaceBrowser,
             browserBackendAuthoritative: true,
+            connectedBrowserEnabled:
+              browserEnvironment.ZENX_BROWSER_MODE === "user-session",
           }
         : {}),
       allowForegroundRequired:
         settingsService.computerForegroundControlEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
+      ...(chromeExtensionBridge === undefined
+        ? {}
+        : { connectedBrowserSource: chromeExtensionBridge }),
       providerCatalogOptions: {
         environment: browserEnvironment,
         ...(chromeExtensionBridge === undefined
@@ -797,11 +808,38 @@ async function bootstrapZenX(): Promise<void> {
         request: (method, params) => automationManager.request(method, params),
         onNotification: (listener) =>
           automationManager.onNotification(listener),
-        readThread: (threadId) =>
-          automationManager.request("thread/read", {
+        readThread: async (threadId) => {
+          const result = await automationManager.request("thread/read", {
             threadId,
             includeTurns: true,
-          }),
+          });
+          // CAS intentionally omits Host input. Native canonical facts are the
+          // authority for automation/Room read receipts.
+          const native = await automationManager.request("zen/thread/read", {
+            threadId,
+          });
+          for (const turn of result.thread.turns) {
+            for (const item of native.thread.items) {
+              if (item.type !== "host_message" || item.turnId !== turn.id)
+                continue;
+              turn.items.push({
+                type: "hostMessage",
+                id: item.id,
+                clientId: item.clientId,
+                source: item.source,
+                text: item.text,
+                mode: item.mode,
+                ...(item.sourceId === undefined
+                  ? {}
+                  : { sourceId: item.sourceId }),
+                ...(item.deliveryAfter === undefined
+                  ? {}
+                  : { deliveryAfter: item.deliveryAfter }),
+              });
+            }
+          }
+          return result;
+        },
         resolveRemoteThread: (device, workspace, target) =>
           fleetSettingsService!.resolveRemoteThread(device, workspace, target),
         readRemoteThread: (device, workspace, threadId, turnId) =>
@@ -819,11 +857,6 @@ async function bootstrapZenX(): Promise<void> {
             options,
             signal,
           ),
-        sendAssistant: (params, signal) =>
-          deliverAssistantInput(automationManager, params, signal),
-        enqueue: async (params) => {
-          await automationManager.request("turn/queue", params);
-        },
       },
       titles: titleCoordinator,
     });
@@ -1539,25 +1572,41 @@ function installChromeBridgeIpc(options: {
             : ("inactive" as const),
       packaged: app.isPackaged,
       nativeHostRegistered: await chromeNativeHostRegistered(registration),
+      edgeNativeHostRegistered: await chromeNativeHostRegistered({
+        ...registration,
+        browser: "edge",
+      }),
       extensionDirectory,
       extensionId: ZENX_CHROME_EXTENSION_ID,
       connection: options.bridge?.status() ?? { state: "waiting", tabCount: 0 },
     };
   };
   ipcMain.handle(ipcChannels.chromeBridgeGet, snapshot);
-  ipcMain.handle(ipcChannels.chromeBridgePrepare, async () => {
-    if (!app.isPackaged) {
-      throw new Error(
-        "Build the packaged ZenX app before registering its Chrome connector",
-      );
-    }
-    await registerChromeNativeHost(registration);
-    return await snapshot();
-  });
-  ipcMain.handle(ipcChannels.chromeBridgeRemove, async () => {
-    await unregisterChromeNativeHost(registration);
-    return await snapshot();
-  });
+  ipcMain.handle(
+    ipcChannels.chromeBridgePrepare,
+    async (_event, target: unknown) => {
+      if (!app.isPackaged) {
+        throw new Error(
+          "Build the packaged ZenX app before registering its Chrome connector",
+        );
+      }
+      await registerChromeNativeHost({
+        ...registration,
+        browser: readBrowserRegistrationTarget(target),
+      });
+      return await snapshot();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.chromeBridgeRemove,
+    async (_event, target: unknown) => {
+      await unregisterChromeNativeHost({
+        ...registration,
+        browser: readBrowserRegistrationTarget(target),
+      });
+      return await snapshot();
+    },
+  );
   ipcMain.handle(ipcChannels.chromeBridgeOpenExtension, async () => {
     const failure = await shell.openPath(extensionDirectory);
     if (failure.length > 0) {

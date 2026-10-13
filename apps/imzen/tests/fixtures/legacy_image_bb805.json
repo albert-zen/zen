@@ -1,0 +1,36 @@
+{
+  "provenance": {
+    "sdk_commit": "bb8055054e4b77b2677682e708dd6f394b56406c",
+    "original_main_sdk_commit": "7d5f1179365679d0f95abd5cb2ce76547238d05f",
+    "scope": "Actual bb805 materializer + actual NativeTransport normalization; synthetic downloader/native peer, no QQ network or account. Custom path-only is separately labeled and is not a QQ-generated message.",
+    "public_api": "ImageMediaMaterializer.materialize via materialize_inbound_images; NativeTransportChannelAdapter.start; BaseChannelAdapter.dispatch_inbound; ZenApplicationAdapter.send_input",
+    "original_main_source_equivalence": "All four channels, common media/models/runtime, contracts/model.py and attachments.py have identical Git blobs at 7d5f11793656 and bb8055054e4b. See legacy_image_bb805.md."
+  },
+  "png_base64": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGNUDZ7KwMDAxMDAwMDAAAAMVgERBo4fdQAAAABJRU5ErkJggg==",
+  "png_sha256": "765b5503a3829491c6032117f0996b01af3677d78a3688ac10174ade20e127f5",
+  "png_size": 79,
+  "channel_typed": {
+    "attachment_id": "synthetic-old-image:attachment:0",
+    "media_type": "image/png",
+    "source": {
+      "path": "synthetic-staged.png",
+      "kind": "local_path"
+    },
+    "filename": null,
+    "size_bytes": 79,
+    "metadata": {
+      "kind": "image"
+    }
+  },
+  "custom_path_only": {
+    "attachment_id": "custom-legacy-path-only",
+    "media_type": "image/png",
+    "source": {
+      "path": "synthetic-staged.png",
+      "kind": "local_path"
+    },
+    "filename": null,
+    "size_bytes": null,
+    "metadata": {}
+  }
+}

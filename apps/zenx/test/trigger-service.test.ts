@@ -97,23 +97,17 @@ test("timer expiry creates one explicit App Server turn and auditable history", 
     const entry = completed.history[0];
     assert.equal(entry?.kind, "timer");
     assert.equal(entry?.error, null);
-    const read = await manager.request("thread/read", {
-      threadId: thread.id,
-      includeTurns: true,
-    });
+    const read = await readWakeupThread(manager, thread.id);
     const wakeup = read.thread.turns
       .flatMap((turn) => turn.items)
       .find(
         (item) =>
-          item.type === "userMessage" &&
+          item.type === "hostMessage" &&
           item.clientId === entry?.clientUserMessageId,
       );
-    assert.equal(wakeup?.type, "userMessage");
-    if (wakeup?.type === "userMessage")
-      assert.match(
-        wakeup.content[0]?.text ?? "",
-        /\[ZenX trigger wakeup\].*Injected prompt/su,
-      );
+    assert.equal(wakeup?.type, "hostMessage");
+    if (wakeup?.type === "hostMessage")
+      assert.match(wakeup.text, /\[ZenX trigger wakeup\].*Injected prompt/su);
     await triggers.stop();
   } finally {
     await manager.stop();
@@ -121,166 +115,98 @@ test("timer expiry creates one explicit App Server turn and auditable history", 
   }
 });
 
-test("isolated Room direct reply and Trigger legacy queue preserve distinct client IDs and routes", async () => {
+test("Room and completion Trigger wakeups preserve distinct Host identities and reply routes", async () => {
   const directory = await mkdtemp(
-    path.join(os.tmpdir(), "zenx-legacy-room-queue-"),
+    path.join(os.tmpdir(), "zenx-room-host-route-"),
   );
   const manager = managerFor(directory);
+  let triggers: ZenXTriggerService | undefined;
   try {
     await manager.start();
     const target = (await manager.request("thread/start", {})).thread;
     const other = (await manager.request("thread/start", {})).thread;
-    const triggers = new ZenXTriggerService(
-      {
-        request: async (method, params) =>
-          await manager.request(method, params),
-        onNotification: (listener) => manager.onNotification(listener),
-        readThread: async (threadId) =>
-          await manager.request("thread/read", {
-            threadId,
-            includeTurns: true,
-          }),
-        enqueue: async (params) => {
-          await manager.request("turn/queue", params);
-        },
-      },
+    triggers = new ZenXTriggerService(
+      manager,
       new ZenXTriggerStore(path.join(directory, "triggers.json")),
     );
-    try {
-      await triggers.start();
-      const room = await triggers.createRoom({
-        name: "isolated-legacy-route",
-        members: [
-          { name: "Monitor", threadId: target.id },
-          { name: "Other", threadId: other.id },
-        ],
-      });
-      await triggers.create({
-        threadId: target.id,
-        kind: "roomMention",
-        label: "QA reply",
-        prompt: "Reply to the exact mentioned Room message.",
-        roomId: room.id,
-        mention: "Monitor",
-      });
-      await triggers.create({
-        threadId: other.id,
-        kind: "thread",
-        watchedThreadId: target.id,
-        label: "Legacy queue follower",
-        prompt: "Review the exact completed Room member turn.",
-      });
-      const delivered = deferred<string>();
-      const disposeDelivery = manager.onNotification((method, params) => {
-        if (method !== "item/completed") return;
-        const event = params as ServerNotificationParams["item/completed"];
-        if (
-          event.threadId === other.id &&
-          event.item.type === "userMessage" &&
-          event.item.clientId !== null
-        )
-          delivered.resolve(event.item.clientId);
-      });
-      await triggers.postRoomMessage(
-        room.id,
-        "You",
-        "@Monitor please confirm the queue route",
-      );
-      const snapshot = await snapshotWhen(
-        triggers,
-        (candidate) =>
-          candidate.rooms
-            .find((item) => item.id === room.id)
-            ?.messages.some(
-              (message) =>
-                message.kind === "agent" &&
-                message.originThreadId === target.id,
-            ) === true,
-      );
-      const history = snapshot.history.find(
-        (entry) => entry.kind === "roomMention" && entry.threadId === target.id,
-      );
-      assert.ok(history);
-      assert.equal(history.replyRoomId, room.id);
-      assert.equal(history.replyAuthor, "Monitor");
-      assert.equal(history.sourceRoomId, room.id);
-      assert.ok(history.sourceRoomMessageId);
+    await triggers.start();
+    const room = await triggers.createRoom({
+      name: "Host route",
+      members: [
+        { name: "Monitor", threadId: target.id },
+        { name: "Other", threadId: other.id },
+      ],
+    });
+    await triggers.create({
+      threadId: target.id,
+      kind: "roomMention",
+      label: "Reply",
+      prompt: "Reply to the exact Room message",
+      roomId: room.id,
+      mention: "Monitor",
+    });
+    await triggers.create({
+      threadId: other.id,
+      kind: "thread",
+      watchedThreadId: target.id,
+      once: true,
+      label: "Follower",
+      prompt: "Review the exact completed Room turn",
+    });
+    await triggers.postRoomMessage(
+      room.id,
+      "You",
+      "@Monitor confirm the route",
+    );
+    const snapshot = await snapshotWhen(
+      triggers,
+      (value) =>
+        value.history.length === 2 &&
+        value.history.every((entry) => entry.status === "completed"),
+    );
+    const roomWake = snapshot.history.find(
+      (entry) => entry.kind === "roomMention",
+    )!;
+    const follower = snapshot.history.find((entry) => entry.kind === "thread")!;
+    assert.equal(roomWake.replyRoomId, room.id);
+    assert.equal(roomWake.replyAuthor, "Monitor");
+    assert.equal(follower.sourceThreadId, target.id);
+    assert.equal(follower.sourceTurnId, roomWake.turnId);
+    assert.notEqual(follower.clientUserMessageId, roomWake.clientUserMessageId);
+    for (const [id, entry, source] of [
+      [target.id, roomWake, "room"],
+      [other.id, follower, "trigger"],
+    ] as const) {
       const canonical = (
-        await manager.request("zen/thread/read", { threadId: target.id })
+        await manager.request("zen/thread/read", { threadId: id })
       ).thread.items;
-      const accepted = canonical.find(
+      const admitted = canonical.filter(
         (item) =>
-          item.type === "user_message" &&
-          item.clientId === history.clientUserMessageId,
+          item.type === "host_message" &&
+          item.clientId === entry.clientUserMessageId,
       );
-      // Room mentions in this baseline use direct start, not an invented
-      // queue mode. Their committed reply route still matches their clientId.
+      assert.equal(admitted.length, 1);
       assert.equal(
-        canonical.some((item) => item.type === "user_message_queued"),
+        admitted[0]?.type === "host_message" && admitted[0].source,
+        source,
+      );
+      assert.equal(
+        canonical.some(
+          (item) =>
+            item.type === "user_message" || item.type === "user_message_queued",
+        ),
         false,
       );
-      assert.ok(accepted);
-      assert.equal(
-        snapshot.rooms
-          .find((item) => item.id === room.id)
-          ?.messages.filter(
-            (message) =>
-              message.kind === "agent" && message.originThreadId === target.id,
-          ).length,
-        1,
-      );
-      const followed = await snapshotWhen(triggers, (candidate) =>
-        candidate.history.some(
-          (entry) =>
-            entry.kind === "thread" &&
-            entry.threadId === other.id &&
-            entry.delivery === "queued",
-        ),
-      );
-      const follower = followed.history.find(
-        (entry) => entry.kind === "thread" && entry.threadId === other.id,
-      );
-      assert.ok(follower);
-      assert.equal(follower.sourceThreadId, target.id);
-      assert.equal(follower.sourceTurnId, accepted.turnId);
-      const followerItems = (
-        await manager.request("zen/thread/read", { threadId: other.id })
-      ).thread.items;
-      const queued = followerItems.find(
-        (item) =>
-          item.type === "user_message_queued" &&
-          item.clientId === follower.clientUserMessageId,
-      );
-      assert.equal(queued?.type, "user_message_queued");
-      if (queued?.type !== "user_message_queued")
-        throw new Error("Queued wakeup missing");
-      assert.equal(queued.deliveryMode, undefined); // external trigger remains legacy FIFO
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const receivedClientId = await Promise.race([
-        delivered.promise,
-        new Promise<string>((_resolve, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("Legacy queued wakeup did not deliver")),
-            10_000,
-          );
-        }),
-      ]).finally(() => {
-        clearTimeout(timeout);
-        disposeDelivery();
-      });
-      assert.equal(receivedClientId, queued.clientId);
-      assert.ok(
-        (
-          await manager.request("zen/thread/read", { threadId: other.id })
-        ).thread.items.some(
-          (item) =>
-            item.type === "user_message" && item.clientId === queued.clientId,
-        ),
-      );
-    } finally {
-      await triggers.stop();
     }
+    assert.equal(
+      snapshot.rooms[0]?.messages.filter(
+        (message) =>
+          message.kind === "agent" && message.originThreadId === target.id,
+      ).length,
+      1,
+    );
   } finally {
+    await triggers?.stop();
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
   }
@@ -375,14 +301,8 @@ test("thread snapshots and two-member Room context route through target Threads"
           message.kind === "agent" && message.originThreadId === monitor.id,
       ),
     );
-    const monitorRead = await manager.request("thread/read", {
-      threadId: monitor.id,
-      includeTurns: true,
-    });
-    const reviewerRead = await manager.request("thread/read", {
-      threadId: reviewer.id,
-      includeTurns: true,
-    });
+    const monitorRead = await readWakeupThread(manager, monitor.id);
+    const reviewerRead = await readWakeupThread(manager, reviewer.id);
     assert.equal(monitorRead.thread.turns.length, 3);
     assert.equal(reviewerRead.thread.turns.length, 1);
 
@@ -1785,6 +1705,7 @@ for (const sourceStatus of ["completed", "failed", "interrupted"] as const) {
       await service.create({
         threadId: "parent",
         kind: "thread",
+        deliveryMode: "queue",
         label: "Result",
         prompt: "Review",
         watchedThreadId: "child",
@@ -1820,6 +1741,7 @@ test("active watch waits for terminal status, repeat deduplicates, and stop prev
     const watch = await service.create({
       threadId: "parent",
       kind: "thread",
+      deliveryMode: "queue",
       label: "Result",
       prompt: "Review",
       watchedThreadId: "child",
@@ -1863,6 +1785,7 @@ test("failed delivery consumes a one-shot, records uncertainty and never retries
     await service.create({
       threadId: "parent",
       kind: "thread",
+      deliveryMode: "queue",
       label: "Result",
       prompt: "Review",
       watchedThreadId: "child",
@@ -1898,6 +1821,7 @@ test("restart resumes repeat configuration without reading or replaying offline 
     await service.create({
       threadId: "parent",
       kind: "thread",
+      deliveryMode: "queue",
       label: "Result",
       prompt: "Review",
       watchedThreadId: "child",
@@ -1927,6 +1851,7 @@ test("one-shot self-watch only schedules one continuation", async () => {
     await service.create({
       threadId: "parent",
       kind: "thread",
+      deliveryMode: "queue",
       label: "Continue",
       prompt: "Next step",
       watchedThreadId: "parent",
@@ -1962,16 +1887,12 @@ test(
       let observedBusy = false;
       service = new ZenXTriggerService(
         {
-          request: (method, params) => manager.request(method, params),
-          onNotification: (listener) => manager.onNotification(listener),
-          enqueue: async (params) => {
-            const before = await manager.request("thread/read", {
-              threadId: parent.id,
-              includeTurns: true,
-            });
+          request: async (method, params) => {
+            const before = await readWakeupThread(manager, parent.id);
             observedBusy = before.thread.turns.at(-1)?.status === "inProgress";
-            await manager.request("turn/queue", params);
+            return await manager.request(method, params);
           },
+          onNotification: (listener) => manager.onNotification(listener),
         },
         new ZenXTriggerStore(path.join(directory, "triggers.json")),
       );
@@ -1980,6 +1901,7 @@ test(
         threadId: parent.id,
         watchedThreadId: child.id,
         kind: "thread",
+        deliveryMode: "queue",
         label: "Child finished",
         prompt: "Read the result",
         once: true,
@@ -2017,10 +1939,7 @@ test(
       assert.equal(observedBusy, true);
       assert.equal(snapshot.history[0]?.sourceTurnId, source.turn.id);
       await delivered;
-      const result = await manager.request("thread/read", {
-        threadId: parent.id,
-        includeTurns: true,
-      });
+      const result = await readWakeupThread(manager, parent.id);
       const input = userInputForClientId(
         result.thread.turns,
         snapshot.history[0]?.clientUserMessageId,
@@ -2034,7 +1953,7 @@ test(
         .flatMap((turn) => turn.items)
         .filter(
           (item) =>
-            item.type === "userMessage" &&
+            item.type === "hostMessage" &&
             item.clientId === snapshot.history[0]?.clientUserMessageId,
         );
       assert.equal(notifications.length, 1);
@@ -2047,6 +1966,397 @@ test(
     }
   },
 );
+
+test(
+  "real busy Thread receives timer, completion, signal and ordinary Room defaults as same-Turn soft steer",
+  { timeout: 20_000 },
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-all-wakeup-steer-"),
+    );
+    const manager = managerFor(directory);
+    let service: ZenXTriggerService | undefined;
+    try {
+      await manager.start();
+      const target = (await manager.request("thread/start", {})).thread;
+      const source = (await manager.request("thread/start", {})).thread;
+      service = new ZenXTriggerService(
+        manager,
+        new ZenXTriggerStore(path.join(directory, "triggers.json")),
+      );
+      await service.start();
+      const room = await service.createRoom({
+        name: "Team",
+        members: [{ name: "Worker", threadId: target.id }],
+      });
+      await service.create({
+        threadId: target.id,
+        kind: "roomMention",
+        label: "Room",
+        prompt: "Apply Room guidance",
+        roomId: room.id,
+        mention: "Worker",
+      });
+      await service.create({
+        threadId: target.id,
+        kind: "thread",
+        label: "Thread",
+        prompt: "Read completion",
+        watchedThreadId: source.id,
+        once: true,
+      });
+      await service.create({
+        threadId: target.id,
+        kind: "signal",
+        label: "Signal",
+        prompt: "Apply event",
+        signalName: "ready",
+      });
+      const initial = await manager.request("turn/start", {
+        threadId: target.id,
+        input: [
+          {
+            type: "text",
+            text: `!shell ${JSON.stringify(process.execPath)} -e "setTimeout(()=>{},2500)"`,
+          },
+        ],
+      });
+      await service.create({
+        threadId: target.id,
+        kind: "timer",
+        label: "Timer",
+        prompt: "Apply timer",
+        runAt: Date.now() + 80,
+      });
+      await service.signal("ready", "external event");
+      await service.postRoomMessage(room.id, "You", "@Worker incorporate this");
+      await manager.request("turn/start", {
+        threadId: source.id,
+        input: [{ type: "text", text: "Child result" }],
+      });
+      const admitted = await snapshotWhen(
+        service,
+        (value) =>
+          value.history.length === 4 &&
+          value.history.every((entry) => entry.status === "running"),
+      );
+      assert.ok(
+        admitted.history.every((entry) => entry.turnId === initial.turn.id),
+      );
+      const native = (
+        await manager.request("zen/thread/read", { threadId: target.id })
+      ).thread.items;
+      const messages = native.filter((item) => item.type === "host_message");
+      assert.equal(messages.length, 4);
+      assert.ok(
+        messages.every(
+          (item) =>
+            item.type === "host_message" &&
+            item.mode === "steer" &&
+            item.turnId === initial.turn.id,
+        ),
+      );
+      assert.equal(
+        native.filter((item) => item.type === "host_message_queued").length,
+        0,
+      );
+      const completed = await snapshotWhen(
+        service,
+        (value) =>
+          value.history.length === 4 &&
+          value.history.every((entry) => entry.status === "completed"),
+      );
+      assert.ok(
+        completed.history.every((entry) => entry.turnId === initial.turn.id),
+      );
+      assert.equal(
+        (
+          await manager.request("thread/read", {
+            threadId: target.id,
+            includeTurns: true,
+          })
+        ).thread.turns.length,
+        1,
+      );
+    } finally {
+      await service?.stop();
+      await manager.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+for (const afterFailure of [
+  "resume",
+  "restart",
+  "host-restart",
+  "host-offline-complete",
+  "host-offline-cancel",
+  "cancel",
+  "delete",
+] as const) {
+  test(
+    `real Room queued wakeup survives admission failure before ${afterFailure}`,
+    { timeout: 20_000 },
+    async () => {
+      const directory = await mkdtemp(
+        path.join(os.tmpdir(), "zenx-room-queue-failure-"),
+      );
+      const manager = managerFor(directory);
+      let service: ZenXTriggerService | undefined;
+      try {
+        await manager.start();
+        const target = (await manager.request("thread/start", {})).thread;
+        service = new ZenXTriggerService(
+          manager,
+          new ZenXTriggerStore(path.join(directory, "triggers.json")),
+        );
+        await service.start();
+        const room = await service.createRoom({
+          name: "Team",
+          members: [{ name: "Worker", threadId: target.id }],
+        });
+        await service.create({
+          threadId: target.id,
+          kind: "roomMention",
+          label: "Room",
+          prompt: "Resumed answer",
+          roomId: room.id,
+          mention: "Worker",
+          deliveryMode: "queue",
+        });
+        const initial = await manager.request("turn/start", {
+          threadId: target.id,
+          input: [
+            {
+              type: "text",
+              text: `!shell ${JSON.stringify(process.execPath)} -e "setTimeout(()=>{},10000)"`,
+            },
+          ],
+        });
+        const operationId = `${room.operationEpoch}:a6210a98-d106-458c-b7d1-cc5b9a9668f5`;
+        await service.prepareRoomMessage(
+          room.id,
+          operationId,
+          "@Worker answer after resume",
+        );
+        await service.postPreparedRoomMessage(
+          room.id,
+          operationId,
+          "@Worker answer after resume",
+        );
+        const queuedHistory = service.snapshot().history[0]!;
+        assert.equal(queuedHistory.delivery, "queued");
+        await manager.request("turn/interrupt", {
+          threadId: target.id,
+          turnId: initial.turn.id,
+        });
+        await manager.request("thread/archive", { threadId: target.id });
+        await assert.rejects(
+          manager.request("turn/queue/resume", { threadId: target.id }),
+        );
+        const failure = await snapshotWhen(service, (value) =>
+          Boolean(value.history[0]?.error),
+        );
+        assert.equal(failure.history[0]?.status, "starting");
+        assert.equal(failure.history[0]?.delivery, "queued");
+        assert.equal(failure.history[0]?.turnId, null);
+        assert.equal(
+          service.roomOperation(room.id, operationId).mentions[0]?.deliveries[0]
+            ?.status,
+          "failed",
+        );
+        assert.match(
+          failure.history[0]?.error ?? "",
+          /archived|forbidden|cannot/i,
+        );
+        const read = await manager.request("zen/thread/read", {
+          threadId: target.id,
+        });
+        const queued = read.thread.items.find(
+          (item) =>
+            item.type === "host_message_queued" &&
+            item.clientId === queuedHistory.clientUserMessageId,
+        )!;
+        assert.ok(queued);
+        assert.equal(
+          read.thread.items.filter((item) => item.type === "host_message")
+            .length,
+          0,
+        );
+        if (afterFailure.startsWith("host-offline")) {
+          await service.stop();
+          await manager.stop();
+          await manager.start();
+          if (afterFailure === "host-offline-cancel") {
+            await manager.request("zen/thread/queue/cancel", {
+              threadId: target.id,
+              items: [
+                {
+                  queuedItemId: queued.id,
+                  clientId: queuedHistory.clientUserMessageId,
+                },
+              ],
+            });
+          } else {
+            await manager.request("thread/unarchive", { threadId: target.id });
+            await manager.request("turn/queue/resume", { threadId: target.id });
+            for (let i = 0; i < 100; i++) {
+              const read = await manager.request("thread/read", {
+                threadId: target.id,
+                includeTurns: true,
+              });
+              if (read.thread.turns.at(-1)?.status === "completed") break;
+              await settle();
+            }
+          }
+          await service.start();
+        }
+        if (afterFailure === "restart" || afterFailure === "host-restart") {
+          await service.stop();
+          if (afterFailure === "host-restart") {
+            await manager.stop();
+            await manager.start();
+          }
+          await service.start();
+        }
+        if (afterFailure === "delete") {
+          const deleted = await manager.request("zen/thread/delete", {
+            threadId: target.id,
+            expectedLastItemId: read.thread.items.at(-1)!.id,
+          });
+          const blocked = await snapshotWhen(service, (value) =>
+            /deleted/.test(value.history[0]?.error ?? ""),
+          );
+          assert.equal(blocked.history[0]?.delivery, "queued");
+          await manager.request("zen/thread/restore", {
+            threadId: target.id,
+            deletionItemId: deleted.deletionItemId,
+          });
+          await manager.request("thread/unarchive", { threadId: target.id });
+          await manager.request("turn/queue/resume", { threadId: target.id });
+        } else {
+          if (afterFailure === "cancel") {
+            const params = {
+              threadId: target.id,
+              items: [
+                {
+                  queuedItemId: queued.id,
+                  clientId: queuedHistory.clientUserMessageId,
+                },
+              ],
+            };
+            await manager.request("zen/thread/queue/cancel", params);
+            await manager.request("zen/thread/queue/cancel", params);
+          }
+          await manager.request("thread/unarchive", { threadId: target.id });
+          await manager.request("turn/queue/resume", { threadId: target.id });
+        }
+        if (
+          afterFailure === "cancel" ||
+          afterFailure === "host-offline-cancel"
+        ) {
+          const cancelled = await snapshotWhen(
+            service,
+            (value) => value.history[0]?.delivery === "failed",
+          );
+          assert.equal(cancelled.history[0]?.status, "failed");
+          assert.equal(cancelled.history[0]?.turnId, null);
+          assert.equal(
+            cancelled.rooms[0]?.messages.filter(
+              (message) => message.kind === "agent",
+            ).length,
+            0,
+          );
+        } else {
+          const completed = await snapshotWhen(
+            service,
+            (value) => value.history[0]?.status === "completed",
+          );
+          assert.notEqual(completed.history[0]?.turnId, initial.turn.id);
+          assert.equal(completed.history[0]?.error, null);
+          assert.equal(
+            service.roomOperation(room.id, operationId).mentions[0]
+              ?.deliveries[0]?.status,
+            "completed",
+          );
+          assert.equal(
+            completed.rooms[0]?.messages.filter(
+              (message) => message.kind === "agent",
+            ).length,
+            1,
+          );
+          await manager.request("turn/queue/resume", { threadId: target.id });
+          await settle();
+          const canonical = (
+            await manager.request("zen/thread/read", { threadId: target.id })
+          ).thread.items;
+          assert.equal(
+            canonical.filter((item) => item.type === "host_message_queued")
+              .length,
+            1,
+          );
+          assert.equal(
+            canonical.filter(
+              (item) =>
+                item.type === "host_message" &&
+                item.clientId === queuedHistory.clientUserMessageId,
+            ).length,
+            1,
+          );
+          assert.equal(
+            service
+              .snapshot()
+              .rooms[0]?.messages.filter((message) => message.kind === "agent")
+              .length,
+            1,
+          );
+          if (afterFailure.startsWith("host-")) {
+            await service.stop();
+            await manager.stop();
+            if (afterFailure === "host-offline-complete") {
+              const store = new ZenXTriggerStore(
+                path.join(directory, "triggers.json"),
+              );
+              const prior = await store.read();
+              prior.history[0]!.status = "running";
+              prior.history[0]!.completedAt = null;
+              delete prior.history[0]!.delivery;
+              await store.write(prior);
+            }
+            await manager.start();
+            await service.start();
+            await snapshotWhen(
+              service,
+              (value) => value.history[0]?.status === "completed",
+            );
+            assert.equal(service.snapshot().history[0]?.status, "completed");
+            assert.equal(
+              service
+                .snapshot()
+                .rooms[0]?.messages.filter(
+                  (message) => message.kind === "agent",
+                ).length,
+              1,
+            );
+            const reread = await manager.request("zen/thread/read", {
+              threadId: target.id,
+            });
+            assert.equal(
+              reread.thread.items.filter((item) => item.type === "host_message")
+                .length,
+              1,
+            );
+          }
+        }
+      } finally {
+        await service?.stop();
+        await manager.stop();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 function memoryTriggerStore() {
   let saved: TriggerSnapshot = { triggers: [], history: [], rooms: [] };
@@ -2068,24 +2378,20 @@ class ControlledManager implements ZenXTriggerAppServerPort {
       ) => void)
     | undefined;
 
-  async request(
-    _method: "turn/start",
-    params: ClientRequestParams["turn/start"],
-  ): Promise<ClientRequestResults["turn/start"]> {
+  async request(_method: any, input: any): Promise<any> {
+    if (_method === "zen/thread/resume")
+      throw new Error("Fixture has no canonical recovery snapshot");
+    const params: ClientRequestParams["turn/start"] =
+      input.text === undefined
+        ? input
+        : {
+            threadId: input.threadId,
+            clientUserMessageId: input.clientId,
+            input: [{ type: "text", text: input.text }],
+          };
     this.requests.push(params);
     if (this.requestError !== null) throw this.requestError;
-    return {
-      turn: {
-        id: `wakeup-turn-${this.requests.length}`,
-        items: [],
-        itemsView: "full",
-        status: "inProgress",
-        error: null,
-        startedAt: Date.now(),
-        completedAt: null,
-        durationMs: null,
-      },
-    };
+    return { mode: "start", turnId: `wakeup-turn-${this.requests.length}` };
   }
 
   onNotification(
@@ -2106,6 +2412,17 @@ class ControlledManager implements ZenXTriggerAppServerPort {
 }
 
 class CompletionManager extends ControlledManager {
+  override async request(method: any, params: any): Promise<any> {
+    if (method === "zen/thread/resume")
+      throw new Error("Fixture has no canonical recovery snapshot");
+    if (params.mode !== "queue") return super.request(method, params);
+    await this.enqueue({
+      threadId: params.threadId,
+      clientUserMessageId: params.clientId,
+      input: [{ type: "text", text: params.text }],
+    });
+    return { mode: "queue", queued: true };
+  }
   queued: ClientRequestParams["turn/queue"][] = [];
   latest: Turn | undefined;
   raceRead = false;
@@ -2140,10 +2457,17 @@ class EarlyCompletionManager implements ZenXTriggerAppServerPort {
       ) => void)
     | undefined;
 
-  async request(
-    _method: "turn/start",
-    params: ClientRequestParams["turn/start"],
-  ): Promise<ClientRequestResults["turn/start"]> {
+  async request(_method: any, input: any): Promise<any> {
+    if (_method === "zen/thread/resume")
+      throw new Error("Fixture has no canonical recovery snapshot");
+    const params: ClientRequestParams["turn/start"] =
+      input.text === undefined
+        ? input
+        : {
+            threadId: input.threadId,
+            clientUserMessageId: input.clientId,
+            input: [{ type: "text", text: input.text }],
+          };
     this.requests.push(params);
     const id = `early-turn-${this.requests.length}`;
     const completed = completedTurn(id, "early", [
@@ -2157,14 +2481,7 @@ class EarlyCompletionManager implements ZenXTriggerAppServerPort {
     const event = { threadId: params.threadId, turn: completed };
     this.completions.push(event);
     this.#listener?.("turn/completed", event);
-    return {
-      turn: {
-        ...completed,
-        status: "inProgress",
-        completedAt: null,
-        durationMs: null,
-      },
-    };
+    return { mode: "start", turnId: id };
   }
 
   onNotification(
@@ -2193,10 +2510,17 @@ class EarlyEvidenceManager implements ZenXTriggerAppServerPort {
       ) => void)
     | undefined;
 
-  async request(
-    _method: "turn/start",
-    params: ClientRequestParams["turn/start"],
-  ): Promise<ClientRequestResults["turn/start"]> {
+  async request(_method: any, input: any): Promise<any> {
+    if (_method === "zen/thread/resume")
+      throw new Error("Fixture has no canonical recovery snapshot");
+    const params: ClientRequestParams["turn/start"] =
+      input.text === undefined
+        ? input
+        : {
+            threadId: input.threadId,
+            clientUserMessageId: input.clientId,
+            input: [{ type: "text", text: input.text }],
+          };
     this.requests.push(params);
     const id = `evidence-turn-${this.requests.length}`;
     const items: ThreadItem[] =
@@ -2224,14 +2548,7 @@ class EarlyEvidenceManager implements ZenXTriggerAppServerPort {
       threadId: params.threadId,
       turn: completedTurn(id, "early", items),
     });
-    return {
-      turn: {
-        ...completedTurn(id, "owned"),
-        status: "inProgress",
-        completedAt: null,
-        durationMs: null,
-      },
-    };
+    return { mode: "start", turnId: id };
   }
 
   onNotification(
@@ -2424,9 +2741,12 @@ function userInputForClientId(
     .flatMap((turn) => turn.items)
     .find(
       (candidate) =>
-        candidate.type === "userMessage" && candidate.clientId === clientId,
+        (candidate.type === "userMessage" ||
+          candidate.type === "hostMessage") &&
+        candidate.clientId === clientId,
     );
-  assert.equal(item?.type, "userMessage");
+  assert.ok(item);
+  if (item.type === "hostMessage") return item.text;
   return item.type === "userMessage"
     ? item.content.map((content) => content.text).join("\n")
     : "";
@@ -2474,4 +2794,25 @@ async function snapshotWhen(
       });
     },
   );
+}
+
+async function readWakeupThread(manager: AppServerManager, threadId: string) {
+  const result = await manager.request("thread/read", {
+    threadId,
+    includeTurns: true,
+  });
+  const canonical = (await manager.request("zen/thread/read", { threadId }))
+    .thread.items;
+  for (const turn of result.thread.turns)
+    for (const item of canonical)
+      if (item.type === "host_message" && item.turnId === turn.id)
+        turn.items.push({
+          type: "hostMessage",
+          id: item.id,
+          clientId: item.clientId,
+          source: item.source,
+          text: item.text,
+          mode: item.mode,
+        });
+  return result;
 }

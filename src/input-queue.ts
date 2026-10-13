@@ -15,15 +15,19 @@ export function pendingQueuedMessages(
   for (const item of items) {
     if (
       item.type === "user_message_queued" ||
-      item.type === "thread_message_queued"
+      item.type === "thread_message_queued" ||
+      item.type === "host_message_queued"
     ) {
       if (!queued.has(item.id)) queued.set(item.id, { ...item, revision: 0 });
     } else if (
-      (item.type === "user_message" || item.type === "thread_message") &&
+      (item.type === "user_message" ||
+        item.type === "thread_message" ||
+        item.type === "host_message") &&
       item.clientId !== undefined
     ) {
       delivered.add(item.clientId);
     } else if (
+      item.type === "host_message_cancelled" ||
       item.type === "thread_message_cancelled" ||
       item.type === "user_message_queue_cancelled" ||
       item.type === "user_message_queue_edited"
@@ -35,13 +39,16 @@ export function pendingQueuedMessages(
         prior.clientId !== item.clientId ||
         (item.type === "thread_message_cancelled") !==
           (prior.type === "thread_message_queued") ||
+        (item.type === "host_message_cancelled") !==
+          (prior.type === "host_message_queued") ||
         delivered.has(prior.clientId) ||
         cancelled.has(prior.id)
       )
         continue;
       if (
         item.type === "user_message_queue_cancelled" ||
-        item.type === "thread_message_cancelled"
+        item.type === "thread_message_cancelled" ||
+        item.type === "host_message_cancelled"
       )
         cancelled.add(prior.id);
       else if (

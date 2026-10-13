@@ -112,6 +112,10 @@ export function firstPartyProviderTarball(
   providerId: string,
 ): string {
   if (pluginId === "browser") {
+    if (providerId === "multi-browser")
+      return "zenx-browser-plugin-multi-1.0.7.tgz";
+    if (providerId === "concurrent-browser")
+      return "zenx-browser-plugin-concurrent-1.0.6.tgz";
     if (providerId === "electron-dedicated-browser")
       return "zenx-browser-plugin-electron-1.0.5.tgz";
     if (providerId === "playwright-cli")
@@ -123,7 +127,7 @@ export function firstPartyProviderTarball(
     if (providerId === "macos-desktop")
       return "zenx-computer-plugin-macos-1.0.2.tgz";
     if (providerId === "microsoft-winapp-cli")
-      return "zenx-computer-plugin-win32-1.1.2.tgz";
+      return "zenx-computer-plugin-win32-1.1.3.tgz";
     if (providerId === "peekaboo-cli")
       return "zenx-computer-plugin-peekaboo-1.0.1.tgz";
   }

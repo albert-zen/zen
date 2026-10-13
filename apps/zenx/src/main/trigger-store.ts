@@ -94,6 +94,7 @@ const STORED_STATE_KEYS = ["version", "triggers", "history", "rooms"] as const;
 const TRIGGER_BASE_KEYS = [
   "id",
   "definitionRevision",
+  "deliveryMode",
   "threadId",
   "kind",
   "label",
@@ -303,6 +304,9 @@ function canonicalTrigger(
     ...(version === "v3" && trigger.definitionRevision !== undefined
       ? { definitionRevision: trigger.definitionRevision }
       : {}),
+    ...(trigger.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: trigger.deliveryMode }),
     threadId: trigger.threadId,
     kind: trigger.kind,
     label: trigger.label,
@@ -585,6 +589,8 @@ function isTrigger(
       (version !== "v3" ||
         !Number.isSafeInteger(trigger["definitionRevision"]) ||
         (trigger["definitionRevision"] as number) < 0)) ||
+    (trigger["deliveryMode"] !== undefined &&
+      !["steer", "queue"].includes(String(trigger["deliveryMode"]))) ||
     !string(trigger["threadId"], MAX_ID_BYTES) ||
     !triggerKind(trigger["kind"]) ||
     !string(trigger["label"], MAX_TRIGGER_LABEL_BYTES) ||
@@ -607,7 +613,9 @@ function isTrigger(
       version === "v3"
         ? [...TRIGGER_BASE_KEYS, variantKey, "program"]
         : [
-            ...TRIGGER_BASE_KEYS.filter((key) => key !== "definitionRevision"),
+            ...TRIGGER_BASE_KEYS.filter(
+              (key) => key !== "definitionRevision" && key !== "deliveryMode",
+            ),
             variantKey,
           ],
     ) ||
@@ -851,7 +859,9 @@ function isRoom(value: unknown): value is ZenXRoom {
     const assistant = record(room["assistant"]);
     if (
       !assistant ||
-      !exactKeys(assistant, ["threadId", "triggerId"]) ||
+      !exactKeys(assistant, ["threadId", "triggerId", "deliveryMode"]) ||
+      (assistant["deliveryMode"] !== undefined &&
+        !["steer", "queue"].includes(String(assistant["deliveryMode"]))) ||
       !string(assistant["threadId"], MAX_ID_BYTES) ||
       !string(assistant["triggerId"], MAX_ID_BYTES) ||
       room["members"].length !== 1 ||

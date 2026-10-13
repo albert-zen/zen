@@ -323,6 +323,9 @@ export function projectCompletedItem(
       };
     case "tool_call":
       return projectCommandStarted(item, "");
+    case "host_message":
+    case "host_message_queued":
+    case "host_message_cancelled":
     case "thread_message":
     case "thread_message_queued":
     case "thread_message_cancelled":

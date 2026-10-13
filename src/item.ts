@@ -34,6 +34,9 @@ export type ItemType =
   | "user_message_queue_cancelled"
   | "user_message_queue_edited"
   | "user_message"
+  | "host_message"
+  | "host_message_queued"
+  | "host_message_cancelled"
   | "thread_message"
   | "thread_message_queued"
   | "thread_message_cancelled"
@@ -61,6 +64,9 @@ const CANONICAL_ITEM_TYPES = {
   user_message_queue_cancelled: true,
   user_message_queue_edited: true,
   user_message: true,
+  host_message: true,
+  host_message_queued: true,
+  host_message_cancelled: true,
   thread_message: true,
   thread_message_queued: true,
   thread_message_cancelled: true,
@@ -278,6 +284,34 @@ export interface ThreadMessageSender {
   callId: string;
 }
 
+/** Host-authored wakeup; source IDs are provenance, never human authority. */
+export interface HostWakeupInput {
+  clientId: string;
+  source: "bootstrap" | "trigger" | "room";
+  sourceId?: string;
+  text: string;
+}
+export interface HostMessageItem extends ItemBase, HostWakeupInput {
+  type: "host_message";
+  sender: "host";
+  turnId: string;
+  mode: "start" | "steer";
+  deliveryAfter?: string;
+}
+export interface QueuedHostMessageItem extends ItemBase, HostWakeupInput {
+  type: "host_message_queued";
+  sender: "host";
+  input: UserInput;
+  /** Whether this input may join an already admitted Turn. */
+  intent: "steer" | "queue";
+  deliveryMode: "batch-next";
+}
+export interface HostMessageCancelledItem extends ItemBase {
+  type: "host_message_cancelled";
+  queuedItemId: string;
+  clientId: string;
+}
+
 export interface ThreadMessageInput {
   sender: Pick<ThreadMessageSender, "threadId" | "toolCallId" | "callId">;
   text: string;
@@ -310,9 +344,12 @@ export interface ThreadMessageCancelledItem extends ItemBase {
   clientId: string;
 }
 
-export type QueuedInputItem = QueuedUserMessageItem | QueuedThreadMessageItem;
-export type DeliveredInputItem = UserMessageItem | ThreadMessageItem;
+export type QueuedInputItem =
+  QueuedUserMessageItem | QueuedThreadMessageItem | QueuedHostMessageItem;
+export type DeliveredInputItem =
+  UserMessageItem | ThreadMessageItem | HostMessageItem;
 export interface InitialInputMessage {
+  hostInput?: HostWakeupInput;
   input: UserInput;
   clientId: string;
   sender?: ThreadMessageSender;
@@ -478,6 +515,9 @@ export interface CodeStateItem extends ItemBase {
 }
 
 export type CanonicalItem =
+  | HostMessageItem
+  | QueuedHostMessageItem
+  | HostMessageCancelledItem
   | ThreadMessageItem
   | QueuedThreadMessageItem
   | ThreadMessageCancelledItem
@@ -861,6 +901,38 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         requireNonEmptyString(item.text, `${type}.text`);
       else validateUserInput(item.input, `${type}.input`);
       break;
+    case "host_message":
+    case "host_message_queued":
+      if (type === "host_message") requireTurnId(item, type);
+      else requireNoTurnId(item);
+      requireEnum(item.sender, ["host"], `${type}.sender`);
+      requireEnum(
+        item.source,
+        ["bootstrap", "trigger", "room"],
+        `${type}.source`,
+      );
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireNonEmptyString(item.text, `${type}.text`);
+      if (item.source !== "bootstrap")
+        requireNonEmptyString(item.sourceId, `${type}.sourceId`);
+      else requireOptionalNonEmptyString(item.sourceId, `${type}.sourceId`);
+      if (type === "host_message") {
+        requireEnum(item.mode, ["start", "steer"], `${type}.mode`);
+        requireOptionalNonEmptyString(
+          item.deliveryAfter,
+          `${type}.deliveryAfter`,
+        );
+      } else {
+        requireEnum(item.intent, ["steer", "queue"], `${type}.intent`);
+        requireEnum(item.deliveryMode, ["batch-next"], `${type}.deliveryMode`);
+        validateUserInput(item.input, `${type}.input`);
+        if (
+          JSON.stringify(item.input) !==
+          JSON.stringify([{ type: "text", text: item.text }])
+        )
+          throw new Error(`${type}.input must match Host text`);
+      }
+      break;
     case "thread_message":
     case "thread_message_queued": {
       if (type === "thread_message") requireTurnId(item, type);
@@ -904,6 +976,7 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         throw new Error(`${type}.revision must be positive`);
       validateUserInput(item.input, `${type}.input`);
       break;
+    case "host_message_cancelled":
     case "thread_message_cancelled":
     case "user_message_queue_cancelled":
       requireNoTurnId(item);

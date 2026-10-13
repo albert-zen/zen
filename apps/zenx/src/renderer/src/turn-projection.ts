@@ -14,9 +14,12 @@ import {
 
 export type TurnDisplayNode =
   | {
-      kind: "user";
+      kind: "input";
       id: string;
-      item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
+      item: Extract<
+        ThreadItem,
+        { type: "userMessage" | "threadMessage" | "hostMessage" }
+      >;
     }
   | { kind: "agent"; item: Extract<ThreadItem, { type: "agentMessage" }> }
   | {
@@ -34,8 +37,11 @@ export type TurnDisplayNode =
     };
 
 export interface TurnDisplayProjection {
-  userItems: Array<
-    Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>
+  inputItems: Array<
+    Extract<
+      ThreadItem,
+      { type: "userMessage" | "threadMessage" | "hostMessage" }
+    >
   >;
   history: TurnDisplayNode[];
   finalItem: Extract<ThreadItem, { type: "agentMessage" }> | null;
@@ -119,22 +125,35 @@ export function projectTurn(
   turn: Turn,
   observations: TraceObservationIndex = createTraceObservationIndex(turn.items),
 ): TurnDisplayProjection {
-  const userItems = turn.items.filter(
+  const inputItems = turn.items.filter(
     (
       item,
-    ): item is Extract<ThreadItem, { type: "userMessage" | "threadMessage" }> =>
-      (item.type === "userMessage" || item.type === "threadMessage") &&
+    ): item is Extract<
+      ThreadItem,
+      { type: "userMessage" | "threadMessage" | "hostMessage" }
+    > =>
+      (item.type === "userMessage" ||
+        item.type === "threadMessage" ||
+        item.type === "hostMessage") &&
       item.deliveryAfter === undefined,
   );
   const steers = turn.items.filter(
     (
       item,
-    ): item is Extract<ThreadItem, { type: "userMessage" | "threadMessage" }> =>
-      (item.type === "userMessage" || item.type === "threadMessage") &&
+    ): item is Extract<
+      ThreadItem,
+      { type: "userMessage" | "threadMessage" | "hostMessage" }
+    > =>
+      (item.type === "userMessage" ||
+        item.type === "threadMessage" ||
+        item.type === "hostMessage") &&
       item.deliveryAfter !== undefined,
   );
   const responseItems = turn.items.filter(
-    (item) => item.type !== "userMessage" && item.type !== "threadMessage",
+    (item) =>
+      item.type !== "userMessage" &&
+      item.type !== "threadMessage" &&
+      item.type !== "hostMessage",
   );
   const agentItems = responseItems.filter(
     (item): item is Extract<ThreadItem, { type: "agentMessage" }> =>
@@ -148,7 +167,12 @@ export function projectTurn(
       : responseItems.filter((item) => item.id !== finalItem.id);
   const steersByAnchor = new Map<
     string,
-    Array<Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>>
+    Array<
+      Extract<
+        ThreadItem,
+        { type: "userMessage" | "threadMessage" | "hostMessage" }
+      >
+    >
   >();
   for (const steer of steers) {
     const anchor = steer.deliveryAfter;
@@ -172,10 +196,18 @@ export function projectTurn(
   }
   const steersAfterIndex = new Map<
     number,
-    Array<Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>>
+    Array<
+      Extract<
+        ThreadItem,
+        { type: "userMessage" | "threadMessage" | "hostMessage" }
+      >
+    >
   >();
   const unanchoredSteers: Array<
-    Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>
+    Extract<
+      ThreadItem,
+      { type: "userMessage" | "threadMessage" | "hostMessage" }
+    >
   > = [];
   for (const [anchor, entries] of steersByAnchor) {
     const index = lastAnchorIndex.get(anchor);
@@ -210,7 +242,7 @@ export function projectTurn(
     const entries = steersAfterIndex.get(index);
     if (entries === undefined) return;
     history.push(
-      ...entries.map((item) => ({ kind: "user" as const, id: item.id, item })),
+      ...entries.map((item) => ({ kind: "input" as const, id: item.id, item })),
     );
   };
   for (let index = 0; index < historySource.length; index += 1) {
@@ -231,13 +263,13 @@ export function projectTurn(
   flushTrace();
   history.push(
     ...unanchoredSteers.map((item) => ({
-      kind: "user" as const,
+      kind: "input" as const,
       id: item.id,
       item,
     })),
   );
   return {
-    userItems,
+    inputItems,
     history,
     finalItem,
     terminalFallback:

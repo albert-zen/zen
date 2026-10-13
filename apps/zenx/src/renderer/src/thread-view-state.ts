@@ -20,6 +20,14 @@ function projectedQueue(
 ): NonNullable<Thread["queuedMessages"]> {
   return pendingQueuedMessages(items).map((item) => ({
     ...(item.type === "thread_message_queued" ? { sender: item.sender } : {}),
+    ...(item.type === "host_message_queued"
+      ? {
+          hostSource: {
+            source: item.source,
+            ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+          },
+        }
+      : {}),
     id: item.id,
     clientId: item.clientId,
     text: userInputText(item.input),
@@ -127,6 +135,9 @@ export function applyNativeThreadEvent(
       updatedAt: seconds(event.item.createdAt),
     };
     if (
+      event.item.type === "host_message_queued" ||
+      event.item.type === "host_message_cancelled" ||
+      event.item.type === "host_message" ||
       event.item.type === "thread_message_queued" ||
       event.item.type === "thread_message_cancelled" ||
       event.item.type === "thread_message" ||
@@ -628,6 +639,20 @@ function projectNativeItems(
 }
 
 function projectNativeCompletedItem(item: CanonicalItem): ThreadItem | null {
+  if (item.type === "host_message") {
+    return {
+      type: "hostMessage",
+      id: item.id,
+      clientId: item.clientId,
+      source: item.source,
+      ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+      text: item.text,
+      mode: item.mode,
+      ...(item.deliveryAfter === undefined
+        ? {}
+        : { deliveryAfter: item.deliveryAfter }),
+    };
+  }
   if (item.type === "thread_message") {
     return {
       type: "threadMessage",

@@ -793,6 +793,29 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536
+    },
+    {
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536,
+      "name": "zenx_rooms_assistant_delivery",
+      "description": "Trusted UI only: choose soft steer or explicit next-Turn queue for messages in this assistant Room. Independent of Trigger and Composer preferences.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "deliveryMode": {
+            "type": "string",
+            "enum": ["steer", "queue"]
+          }
+        },
+        "required": ["roomId", "deliveryMode"],
+        "additionalProperties": false
+      }
     }
   ],
   "ui": {
@@ -935,6 +958,11 @@
         "id": "preview-target",
         "title": "Preview PAW Thread settings",
         "tool": "zenx_rooms_preview_target"
+      },
+      {
+        "id": "assistant-delivery",
+        "title": "Set assistant Room message delivery",
+        "tool": "zenx_rooms_assistant_delivery"
       }
     ]
   }

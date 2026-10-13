@@ -1350,3 +1350,105 @@ test("an initially offline stream remains registered and onReady clears the tran
     await f.close();
   }
 });
+
+test("Host message recovery preserves source metadata through fragments and live events", async () => {
+  const metadata = {
+    id: "host-wake",
+    threadId: "thread-full",
+    turnId: "turn-one",
+    createdAt: "2026-10-13T00:00:00Z",
+    type: "host_message",
+    source: "trigger",
+    sourceId: "trigger-source",
+    mode: "steer",
+  };
+  const f = await fixture((rpc) => {
+    if (rpc.method === "zen/remote/resume")
+      return {
+        ...recovery(),
+        entries: [
+          {
+            kind: "item",
+            item: started,
+            turn: { id: "turn-one", status: "completed" },
+          },
+          {
+            kind: "text_fragment",
+            item: metadata,
+            offset: 0,
+            text: "Scheduled ",
+            complete: false,
+          },
+        ],
+        nextCursor: "host-page",
+      };
+    if (rpc.method === "zen/remote/resume/page")
+      return {
+        ...recovery(),
+        entries: [
+          {
+            kind: "text_fragment",
+            item: metadata,
+            offset: 10,
+            text: "context",
+            complete: true,
+          },
+          { kind: "item", item: completed },
+        ],
+        nextCursor: null,
+      };
+  });
+  try {
+    await f.enrolled();
+    const result: any = await f.client.invoke(
+      f.peer,
+      request("zenx_threads_read", {
+        target: "thread-full",
+        granularity: "item",
+        itemId: "host-wake",
+      }),
+      signal(),
+    );
+    assert.deepEqual(JSON.parse(result.content), {
+      ...metadata,
+      text: "Scheduled context",
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+test("Fleet Host message recovery rejects missing or invented source metadata", async () => {
+  for (const invalid of [
+    { source: "human", sourceId: "source", mode: "start" },
+    { source: ["trigger"], sourceId: "source", mode: "start" },
+    { source: "room", mode: "steer" },
+    { source: "trigger", sourceId: "source", mode: "replace" },
+  ]) {
+    const f = await fixture((rpc) => {
+      if (rpc.method === "zen/remote/resume")
+        return {
+          ...recovery(),
+          entries: [
+            {
+              kind: "item",
+              item: { ...message, type: "host_message", ...invalid },
+            },
+          ],
+        };
+    });
+    try {
+      await f.enrolled();
+      await assert.rejects(
+        f.client.invoke(
+          f.peer,
+          request("zenx_threads_read", { target: "thread-full" }),
+          signal(),
+        ),
+        /Invalid Fleet Host message/,
+      );
+    } finally {
+      await f.close();
+    }
+  }
+});

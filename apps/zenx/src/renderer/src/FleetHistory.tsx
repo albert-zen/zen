@@ -1,3 +1,4 @@
+import { HostMessageContent } from "./HostMessageContent.js";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import "./i18n.js";
@@ -25,6 +26,7 @@ export function FleetHistory({ value }: { value: unknown }) {
               contentText(item.content, t);
         const message =
           type === "user_message" ||
+          type === "host_message" ||
           type === "thread_message" ||
           type === "agent_message";
         const sender = record(row.sender ?? item.sender);
@@ -76,7 +78,20 @@ export function FleetHistory({ value }: { value: unknown }) {
           row.truncated || row.textTruncated || detail.length > 16384;
         return (
           <article key={string(row.itemId ?? row.id ?? item.id) || index}>
-            {message ? (
+            {type === "host_message" ? (
+              <HostMessageContent
+                source={
+                  (row.source ?? item.source) === "trigger"
+                    ? "trigger"
+                    : (row.source ?? item.source) === "room"
+                      ? "room"
+                      : "bootstrap"
+                }
+                sourceId={string(row.sourceId ?? item.sourceId) || undefined}
+                text={text}
+                truncated={Boolean(row.truncated || row.textTruncated)}
+              />
+            ) : message ? (
               <>
                 <strong>{label}</strong>
                 <p className="fleet-history-text">

@@ -559,6 +559,7 @@ export function App() {
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const messageLinkSequence = useRef(0);
   const [messageLinkRequest, setMessageLinkRequest] = useState<{
     id: number;
     threadId: string;
@@ -1620,10 +1621,7 @@ export function App() {
     if (skillDraft.skills.length > 0) {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
-      if (
-        (submission.intent === "steer" || submission.intent === "replace") &&
-        submission.expectedTurnId === null
-      )
+      if (submission.intent === "replace" && submission.expectedTurnId === null)
         throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSending"));
       const input: (
         | import("../../../../../src/item.js").UserInputPart
@@ -1638,9 +1636,12 @@ export function App() {
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         input,
-        mode: submission.intent,
+        ...(submission.intent === "start" || submission.intent === "steer"
+          ? {}
+          : { mode: submission.intent }),
         clientUserMessageId: submission.clientUserMessageId,
-        ...(submission.expectedTurnId === null
+        ...(submission.intent !== "replace" ||
+        submission.expectedTurnId === null
           ? {}
           : { expectedTurnId: submission.expectedTurnId }),
       });
@@ -1650,14 +1651,22 @@ export function App() {
       ...submission,
       text: messageText,
     });
-    if (submission.intent === "start") {
+    if (submission.intent === "start" || submission.intent === "steer") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
           i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
-      await window.zenx.protocol.request("turn/start", {
+      await window.zenx.protocol.request("zen/turn/send", {
         threadId,
-        input,
+        input: input.map((part) =>
+          part.type === "attachment"
+            ? { type: "image" as const, attachment: part.attachment }
+            : part.type === "text"
+              ? part
+              : (() => {
+                  throw new Error(i18n.t("shell:unsupportedBatchInputPart"));
+                })(),
+        ),
         clientUserMessageId: submission.clientUserMessageId,
       });
     } else if (submission.intent === "batch-next") {
@@ -1682,19 +1691,6 @@ export function App() {
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       await window.zenx.protocol.request("turn/queue", {
         threadId,
-        input,
-        clientUserMessageId: submission.clientUserMessageId,
-      });
-    } else if (submission.intent === "steer") {
-      if (submission.expectedTurnId === null)
-        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSteering"));
-      if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error(
-          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
-        );
-      await window.zenx.protocol.request("turn/steer", {
-        threadId,
-        expectedTurnId: submission.expectedTurnId,
         input,
         clientUserMessageId: submission.clientUserMessageId,
       });
@@ -2530,11 +2526,11 @@ export function App() {
         void resumeThread(id)
           .then(() => {
             if (selectedThreadIdRef.current !== id) return;
-            setMessageLinkRequest((previous) => ({
+            setMessageLinkRequest({
               ...target,
-              id: (previous?.id ?? 0) + 1,
+              id: ++messageLinkSequence.current,
               threadId: id,
-            }));
+            });
             setBrowserPanels((current) => ({
               ...current,
               [id]: true,
@@ -2881,11 +2877,11 @@ export function App() {
                 ) : null
               }
               onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest((previous) => ({
+                setMessageLinkRequest({
                   ...target,
-                  id: (previous?.id ?? 0) + 1,
+                  id: ++messageLinkSequence.current,
                   threadId,
-                }));
+                });
                 setBrowserPanels((current) => ({
                   ...current,
                   [threadId]: true,
@@ -3112,6 +3108,11 @@ export function App() {
                 messageLinkRequest?.threadId === threadDetail.id
                   ? messageLinkRequest
                   : null
+              }
+              onMessageLinkRequestHandled={(id) =>
+                setMessageLinkRequest((current) =>
+                  current?.id === id ? null : current,
+                )
               }
               navigate={openPage}
               onWidthChange={setWorkspacePanelWidth}

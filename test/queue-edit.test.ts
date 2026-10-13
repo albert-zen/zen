@@ -380,7 +380,7 @@ test("invalid or unavailable media and unsupported provenance/audio preserve the
   assert.deepEqual((await queue.read()).items, before);
 });
 
-test("JSONL reload retains edit revisions and idempotency, original enqueue retry delivers only latest input", async () => {
+test("JSONL reload retains edit revisions; original enqueue retry is read-only until explicit Resume", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-queue-edit-"));
   try {
     const journal = new JsonlThreadJournal(directory);
@@ -423,12 +423,48 @@ test("JSONL reload retains edit revisions and idempotency, original enqueue retr
       restored.startTurn(queue.threadId, "alpha", { clientId: "client-0" }),
       { code: "idempotency_conflict" },
     );
-    const done = finished(restored);
-    await restored.queueMessage(queue.threadId, "alpha", "client-0", {
-      deliveryMode: "batch-next",
+    const beforeRetry = (await restored.readThread(queue.threadId)).items;
+    const receipt = await restored.queueMessage(
+      queue.threadId,
+      "alpha",
+      "client-0",
+      {
+        deliveryMode: "batch-next",
+      },
+    );
+    assert.deepEqual(receipt, {
+      state: "queued",
+      clientId: "client-0",
+      queuedItemId: target.queuedItemId,
     });
+    assert.deepEqual(
+      (await restored.readThread(queue.threadId)).items,
+      beforeRetry,
+    );
+    const done = finished(restored);
+    await restored.resumeQueue(queue.threadId);
     await done;
     const after = await restored.readThread(queue.threadId);
+    const consumed = after.items.find(
+      (item) => item.type === "user_message" && item.clientId === "client-0",
+    );
+    assert(consumed?.type === "user_message");
+    assert.deepEqual(
+      await restored.queueMessage(queue.threadId, "alpha", "client-0", {
+        deliveryMode: "batch-next",
+      }),
+      {
+        ...receipt,
+        state: "admitted",
+        turnId: consumed.turnId,
+      },
+    );
+    await assert.rejects(
+      restored.queueMessage(queue.threadId, "latest alpha", "client-0", {
+        deliveryMode: "batch-next",
+      }),
+      { code: "idempotency_conflict" },
+    );
     assert.deepEqual(
       after.items
         .filter((item) => item.type === "user_message")

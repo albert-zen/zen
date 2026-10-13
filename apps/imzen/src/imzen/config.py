@@ -20,6 +20,7 @@ class Settings:
     app_server_url: str
     cwd: Path
     gateway_state_file: Path
+    workspace_id: str = "imzen-workspace"
     app_server_shared_filesystem_root: Path | None = None
     permission_mode: PermissionMode = "full-access"
     channels_config_file: Path | None = None
@@ -60,6 +61,9 @@ class Settings:
         )
         return cls(
             app_server_url=app_server_url,
+            workspace_id=_required(
+                values.get("IMZEN_WORKSPACE_ID") or "imzen-workspace", "IMZEN_WORKSPACE_ID"
+            ),
             cwd=cwd,
             gateway_state_file=gateway_state_file,
             app_server_shared_filesystem_root=shared_filesystem_root,

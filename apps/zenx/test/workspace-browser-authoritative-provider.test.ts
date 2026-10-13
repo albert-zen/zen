@@ -13,13 +13,13 @@ import { useWorkspaceBrowserProvider } from "../src/main/workspace-browser-provi
 test("main selects the shared browser by default and honors an explicit provider mode", () => {
   assert.equal(useWorkspaceBrowserProvider({}), true);
   assert.equal(useWorkspaceBrowserProvider({}, "isolated"), true);
-  assert.equal(useWorkspaceBrowserProvider({}, "user-session"), false);
+  assert.equal(useWorkspaceBrowserProvider({}, "user-session"), true);
   assert.equal(
     useWorkspaceBrowserProvider(
       { ZENX_BROWSER_MODE: "user-session" },
       "isolated",
     ),
-    false,
+    true,
   );
   assert.equal(
     useWorkspaceBrowserProvider(
@@ -111,3 +111,46 @@ function namedBackend(title: string): ZenXBrowserBackend {
     close: () => undefined,
   };
 }
+
+test("external opt-in selects the concurrent package without replacing the injected Workspace backend", async () => {
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-concurrent-service-"),
+  );
+  const service = new ZenXCapabilityService({
+    userDataDirectory,
+    browserBackend: namedBackend("Workspace"),
+    browserBackendAuthoritative: true,
+    connectedBrowserEnabled: true,
+    providerCatalogOptions: {
+      platform: "darwin",
+      environment: { ZENX_USER_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222" },
+      userBrowserConnector: async () => ({
+        backend: namedBackend("External"),
+        product: "fixture",
+      }),
+    },
+  });
+  try {
+    await service.initialize();
+    const provider = service.browserProfilePackage();
+    assert.equal(provider.manifest.provider.id, "concurrent-browser");
+    for (const [name, title, prefix] of [
+      ["browser_workspace_list_tabs", "Workspace", "workspace:"],
+      ["browser_connected_list_tabs", "External", "connected:"],
+    ]) {
+      const result = (await provider.invoke(name!, {
+        callId: "call",
+        name: name!,
+        arguments: { sessionId: "same" },
+        threadId: "thread",
+        cwd: "/tmp",
+        signal: new AbortController().signal,
+      })) as Array<{ title: string; tabId: string }>;
+      assert.equal(result[0]?.title, title);
+      assert.ok(result[0]?.tabId.startsWith(prefix!));
+    }
+  } finally {
+    await service.close();
+    await rm(userDataDirectory, { recursive: true, force: true });
+  }
+});

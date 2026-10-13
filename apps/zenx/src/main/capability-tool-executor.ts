@@ -22,6 +22,8 @@ import {
   PluginDiscoveryToolRuntime,
 } from "./plugin-discovery.js";
 
+import { browserConnectionScopeKey } from "./capabilities/browser-connections.js";
+
 interface PendingInvocation {
   resolve(result: ToolExecutionResult): void;
   reject(error: Error): void;
@@ -52,10 +54,43 @@ export class ZenXHostToolBundle implements ToolBundle {
     send: (event: HostEvent) => void;
     state?: CapabilityInvocationState;
   }) {
+    const browserConnections =
+      options.capabilities.browserConnections === undefined
+        ? undefined
+        : new Map(
+            options.capabilities.browserConnections.map((value) => [
+              value.connectionId,
+              Object.freeze(structuredClone(value)),
+            ]),
+          );
     this.tools = options.capabilities.definitions.map((definition) => ({
       name: definition.name,
       specification: structuredClone(definition),
-      ...(options.capabilities.remoteToolNames?.includes(definition.name)
+      ...(browserConnections !== undefined &&
+      definition.name.startsWith("browser_connected_")
+        ? {
+            approvalScope: (invocation: ToolInvocation) => {
+              const id = invocation.arguments.connectionId;
+              if (typeof id !== "string")
+                throw new Error("An explicit browser connectionId is required");
+              const connection = browserConnections.get(id);
+              if (connection?.state !== "connected")
+                throw new Error(
+                  "Browser connection is unavailable in this tool catalog; refresh the catalog",
+                );
+              return {
+                key: browserConnectionScopeKey(id),
+                label: connection.label,
+                generation: connection.generation,
+              };
+            },
+          }
+        : {}),
+      ...(options.capabilities.remoteToolNames?.includes(definition.name) &&
+      !(
+        browserConnections !== undefined &&
+        definition.name.startsWith("browser_connected_")
+      )
         ? { remoteExecution: "text-json" as const }
         : {}),
       ...hostedResourcePolicy(
@@ -136,6 +171,9 @@ export class ZenXHostToolBundle implements ToolBundle {
             : { canonicalToolCallId: invocation.canonicalToolCallId }),
           name: invocation.name,
           arguments: invocation.arguments,
+          ...(invocation.approvalScope === undefined
+            ? {}
+            : { approvalScope: invocation.approvalScope }),
           ...(targetRoute && invocation.task !== undefined
             ? {
                 task: {
@@ -218,6 +256,11 @@ export class ZenXHostToolBundle implements ToolBundle {
 // identify one page within that session. Keep keys stable across generations so
 // retiring calls remain fenced while a new snapshot is published.
 function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
+  const namespace = /^browser_(workspace|connected)_/u.exec(toolName)?.[1];
+  const browserToolName = toolName.replace(
+    /^browser_(?:workspace|connected)_/u,
+    "browser_",
+  );
   const browserPageTools = new Set([
     "browser_navigate",
     "browser_inspect",
@@ -230,9 +273,9 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
   ]);
   if (
     pluginId === "browser" &&
-    (browserPageTools.has(toolName) ||
+    (browserPageTools.has(browserToolName) ||
       ["browser_open", "browser_list_tabs", "browser_close_session"].includes(
-        toolName,
+        browserToolName,
       ))
   ) {
     return {
@@ -245,17 +288,25 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
         // an exclusive fallback; malformed calls must not bypass a live fence.
         if (
           typeof sessionId !== "string" ||
-          (browserPageTools.has(toolName) && typeof tabId !== "string")
+          (browserPageTools.has(browserToolName) && typeof tabId !== "string")
         )
           return [
             { key: "zenx:browser:invalid", access: "exclusive" as const },
           ];
         const session = [
           "zenx-browser",
+          ...(namespace === undefined ? [] : [namespace]),
+          ...(namespace === "connected" &&
+          invocation.approvalScope !== undefined
+            ? [
+                invocation.approvalScope.key,
+                invocation.approvalScope.generation,
+              ]
+            : []),
           invocation.threadId ?? null,
           sessionId,
         ];
-        return browserPageTools.has(toolName)
+        return browserPageTools.has(browserToolName)
           ? [
               { key: JSON.stringify(session), access: "shared" as const },
               {
@@ -267,7 +318,7 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
               {
                 key: JSON.stringify(session),
                 access:
-                  toolName === "browser_list_tabs"
+                  browserToolName === "browser_list_tabs"
                     ? ("shared" as const)
                     : ("exclusive" as const),
               },

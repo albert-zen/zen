@@ -243,7 +243,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
       return projects;
     },
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(
           params as {
             clientUserMessageId?: string;
@@ -366,7 +366,7 @@ test("New thread sends its selected model, reasoning and file permissions to Pro
   const harness = await mountApp(oneProject(), {
     models: [wireModel("fake", true, "Local demo"), advanced],
     request: async (method) => {
-      if (method === "turn/start") return {};
+      if (method === "zen/turn/send") return {};
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     startProjectThread: async (workspace, selection) => {
@@ -502,7 +502,7 @@ test("pending draft image pick follows promotion and releases its lease", async 
     pickImages: async () => pick.promise,
     startProjectThread: async () => create.promise,
     request: async (method) => {
-      if (method === "turn/start") return {};
+      if (method === "zen/turn/send") return {};
       throw new Error(`Unexpected protocol request: ${method}`);
     },
   });
@@ -626,7 +626,7 @@ test("thread creation failure preserves the local draft for retry", async () => 
   };
   const harness = await mountApp(projects, {
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(params);
         return {};
       }
@@ -685,7 +685,7 @@ test("turn failure retries on the created Thread with the stable message id", as
   };
   const harness = await mountApp(projects, {
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(params as { clientUserMessageId?: string });
         if (turnStarts.length === 1) throw new Error("turn rejected");
         return {};
@@ -742,7 +742,7 @@ test("late create rejection restores the latest draft and stable submission id",
       return started(liveThread(), workspace);
     },
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         ids.push(
           (params as { clientUserMessageId: string }).clientUserMessageId,
         );
@@ -803,7 +803,7 @@ test("a pending first Send finishes without stealing a newer navigation", async 
   };
   const harness = await mountApp(projects, {
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(params);
         return {};
       }
@@ -860,7 +860,7 @@ test("explicit newer draft discards stale recovery before unrelated errors", asy
       return started(liveThread(), workspace);
     },
     request: async (method) => {
-      if (method === "turn/start") return {};
+      if (method === "zen/turn/send") return {};
       throw new Error(`Unexpected protocol request: ${method}`);
     },
   });
@@ -1297,7 +1297,7 @@ test("first Turn starts before ancillary Project refresh completes", async () =>
       markWorkspaceUsed: async () => marked.promise,
       startProjectThread: async (workspace) => started(liveThread(), workspace),
       request: async (method) => {
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStarts += 1;
           return {};
         }
@@ -1350,7 +1350,7 @@ test("summary failure stays non-covering after real Thread promotion", async () 
         return [];
       },
       request: async (method) => {
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStarts += 1;
           return {};
         }
@@ -1392,7 +1392,7 @@ test("title and mark-used failures are dismissible without covering the conversa
     },
     startProjectThread: async (workspace) => started(liveThread(), workspace),
     request: async (method) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts += 1;
         return {};
       }
@@ -1717,7 +1717,7 @@ test("same-event-loop duplicate Send owns one title stage and turn request", asy
     },
     request: async (method, params) => {
       if (method === "zen/thread/resume") return resumed(liveThread());
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStartRequests.push(params);
         return {};
       }
@@ -1757,7 +1757,7 @@ test("deleted Provider history stays readable and requires an explicit model swi
           modelProvider: "deleted-provider",
           reasoningEffort: "medium",
         });
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnRequests.push(params);
         return {};
       }
@@ -1809,7 +1809,7 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   const harness = await mountThreadApp({
     request: async (method, params) => {
       if (method === "zen/thread/resume") return resumed(liveThread());
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStartRequests.push(params);
         return {};
       }
@@ -2445,17 +2445,24 @@ test("running queue, soft steer and hard steer each own one pending admission", 
   for (const [mode, method, label] of [
     ["batch", "zen/turn/send", "Next turn"],
     ["queue", "turn/queue", "Each turn"],
-    ["soft", "turn/steer", "Steer now"],
+    ["soft", "zen/turn/send", "Steer now"],
     ["hard", "turn/replace", "Interrupt and send"],
   ] as const) {
     const response = deferred<unknown>();
     let calls = 0;
     const harness = await mountThreadApp({
       composerSendMode: mode,
-      request: async (requestedMethod) => {
+      request: async (requestedMethod, params) => {
         if (requestedMethod === "zen/thread/resume")
           return resumed(runningThread());
         if (requestedMethod === method) {
+          if (mode === "soft") {
+            assert.equal((params as { mode?: string }).mode, undefined);
+            assert.equal(
+              (params as { expectedTurnId?: string }).expectedTurnId,
+              undefined,
+            );
+          }
           calls += 1;
           return await response.promise;
         }
@@ -2642,7 +2649,7 @@ test("late canonical queue ID settles only the original unknown submission, not 
             sessionId: threadId,
           });
         }
-        if (method === "turn/queue" || method === "turn/start") {
+        if (method === "turn/queue" || method === "zen/turn/send") {
           sends.push(params as { clientUserMessageId: string });
           throw new Error(
             "Input admission reply timed out; request outcome unknown. No request was resent.",
@@ -2801,7 +2808,7 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
   const harness = await mountThreadApp({
     request: async (method, params) => {
       if (method === "zen/thread/resume") return resumed(liveThread());
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStartRequests.push(
           (params ?? {}) as { clientUserMessageId?: string },
         );
@@ -3145,7 +3152,7 @@ test("selected Sidebar archive fences Send until a failed response restores Chat
             modelProvider: "fake",
           };
         if (method === "thread/archive") return await archiveResponse.promise;
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStartCalls += 1;
           return {};
         }
@@ -3236,7 +3243,7 @@ test("selected archive fences a submission already staging its title", async () 
             modelProvider: "fake",
           };
         if (method === "thread/archive") return await archiveResponse.promise;
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStartCalls += 1;
           return {};
         }
@@ -3333,7 +3340,7 @@ test("duplicate selected archive shares one pending fence owner", async () => {
           archiveCalls += 1;
           return await archiveResponse.promise;
         }
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStartCalls += 1;
           return {};
         }
@@ -4647,7 +4654,7 @@ test("reference selector sends exact locators through App with and without nativ
     const harness = await mountThreadApp({
       request: async (method, params) => {
         if (method === "zen/thread/resume") return resumed(liveThread());
-        if (method === "turn/start" || method === "zen/turn/send") {
+        if (method === "zen/turn/send") {
           sends.push({ method, params });
           return {};
         }
@@ -4691,7 +4698,7 @@ test("reference selector sends exact locators through App with and without nativ
       await dispatchComposerKey(textarea, { key: "Enter" });
       await waitFor(() => sends.length === 1);
       const send = sends[0]!;
-      assert.equal(send.method, includeSkill ? "zen/turn/send" : "turn/start");
+      assert.equal(send.method, "zen/turn/send");
       const text = send.params.input.find(
         (part: any) => part.type === "text",
       ).text;

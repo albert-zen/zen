@@ -1528,3 +1528,135 @@ test("structured unknown backend errors never claim confirmed mobile send reject
     f.transport.disconnect();
   }
 });
+
+for (const kind of ["host_message", "thread_message"] as const) {
+  test(`actual canonical ${kind} stays connected and retains provenance live and after recovery`, async () => {
+    const { projectRemoteItem } =
+      await import("../../../src/protocol/native/remote-host.js");
+    const canonical =
+      kind === "host_message"
+        ? {
+            id: "incoming",
+            threadId: "t",
+            turnId: "turn1",
+            createdAt: new Date().toISOString(),
+            type: kind,
+            sender: "host",
+            clientId: "incoming-id",
+            source: "room",
+            sourceId: "private-room-id",
+            mode: "steer",
+            text: "Room context",
+          }
+        : {
+            id: "incoming",
+            threadId: "t",
+            turnId: "turn1",
+            createdAt: new Date().toISOString(),
+            type: kind,
+            clientId: "incoming-id",
+            mode: "steer",
+            messageType: "guidance",
+            sender: {
+              threadId: "private-agent-thread",
+              turnId: "source-turn",
+              toolCallId: "tool",
+              callId: "call",
+              threadName: "Research worker",
+            },
+            content: [{ type: "text", text: "Agent context" }],
+          };
+    const item = projectRemoteItem(canonical as any)!;
+    let recovering = false;
+    const s = setup((request) =>
+      request.method === REMOTE_METHODS.resume && recovering
+        ? {
+            ...response(request),
+            watermark: 3,
+            entries: [{ kind: "item", item }],
+          }
+        : response(request),
+    );
+    await s.transport.pair(host.id, "code");
+    await s.transport.snapshot(host.id, "w");
+    const events: any[] = [];
+    s.transport.subscribe(host.id, "w", (event) => events.push(event));
+    await s.transport.read(host.id, "w", "t");
+    s.socket().notify({
+      threadId: "t",
+      processEpoch: "e1",
+      watermark: 3,
+      event: { type: "item_completed", item },
+    });
+    assert.equal(s.socket().readyState, 1);
+    const live = events.at(-1)?.items.t.find((i: any) => i.id === item.id);
+    assert.equal(live.role, kind);
+    assert.equal(live.text, item.text);
+    assert.match(
+      live.sourceLabel,
+      kind === "host_message" ? /Room/ : /Remote agent.*Research worker/,
+    );
+    assert.doesNotMatch(live.sourceLabel, /private-|source-turn|call/);
+    assert.ok(live.sourceDetails);
+    recovering = true;
+    const restored = await s.transport.read(host.id, "w", "t");
+    assert.deepEqual(restored, [live]);
+    s.transport.disconnect();
+  });
+}
+
+test("Host fragments preserve source across recovery and invalid provenance never becomes human input", async () => {
+  for (const malformed of [
+    undefined,
+    { source: "user" },
+    { sourceId: "different-trigger" },
+  ]) {
+    const item = {
+      id: "host",
+      threadId: "t",
+      turnId: "turn1",
+      createdAt: "now",
+      type: "host_message",
+      source: "trigger",
+      sourceId: "private-trigger",
+      mode: "steer",
+    };
+    const s = setup((request) =>
+      request.method === REMOTE_METHODS.resume
+        ? {
+            ...response(request),
+            entries: [
+              {
+                kind: "text",
+                item,
+                offset: 0,
+                text: "first ",
+                complete: false,
+              },
+              {
+                kind: "text",
+                item: { ...item, ...malformed },
+                offset: 6,
+                text: "second",
+                complete: true,
+              },
+            ],
+          }
+        : response(request),
+    );
+    await s.transport.pair(host.id, "code");
+    await s.transport.snapshot(host.id, "w");
+    if (malformed)
+      await assert.rejects(
+        s.transport.read(host.id, "w", "t"),
+        /source|provenance|public Item/,
+      );
+    else {
+      const result = await s.transport.read(host.id, "w", "t");
+      assert.equal(result[0]?.text, "first second");
+      assert.equal(result[0]?.role, "host_message");
+      assert.equal((result[0] as any)?.sourceLabel, "Trigger");
+    }
+    s.transport.disconnect();
+  }
+});

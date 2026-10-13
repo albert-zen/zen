@@ -10,10 +10,7 @@ import {
   type ZenXTriggerAppServerPort,
 } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
-import type {
-  ClientRequestParams,
-  ClientRequestResults,
-} from "../src/protocol-client/index.js";
+import type { ClientRequestParams } from "../src/protocol-client/index.js";
 import {
   createZenXTrustedPlugin,
   type ZenXRoomsTrustedService,
@@ -24,16 +21,37 @@ class ModelStub implements ZenXTriggerAppServerPort {
     Parameters<ZenXTriggerAppServerPort["onNotification"]>[0] | undefined;
   requests: ClientRequestParams["turn/start"][] = [];
   failure = false;
-  async request(
-    _method: "turn/start",
-    params: ClientRequestParams["turn/start"],
-  ): Promise<ClientRequestResults["turn/start"]> {
-    this.requests.push(params);
+  async request(_method: any, params: any): Promise<any> {
+    const request =
+      params.text === undefined
+        ? params
+        : {
+            threadId: params.threadId,
+            clientUserMessageId: params.clientId,
+            input: [{ type: "text", text: params.text }],
+          };
+    this.requests.push(request);
     if (this.failure) throw new Error("thread_busy");
-    return {
+    const turnId = `turn-${this.requests.length}`;
+    this.listener?.("turn/completed", {
+      threadId: params.threadId,
       turn: {
-        id: `turn-${this.requests.length}`,
+        id: turnId,
+        status: "completed",
+        itemsView: "full",
+        error: null,
+        startedAt: 0,
+        completedAt: 1,
+        durationMs: 1,
         items: [
+          {
+            type: "hostMessage",
+            id: randomUUID(),
+            clientId: params.clientId,
+            source: params.source,
+            text: params.text,
+            mode: "start",
+          },
           {
             id: randomUUID(),
             type: "agentMessage",
@@ -42,33 +60,17 @@ class ModelStub implements ZenXTriggerAppServerPort {
             text: "Mock assistant reply",
           },
         ],
-        itemsView: "full",
-        status: "completed",
-        error: null,
-        startedAt: 0,
-        completedAt: 1,
-        durationMs: 1,
-      },
-    };
-  }
-  async sendAssistant(params: ClientRequestParams["turn/queue"]) {
-    const result = await this.request("turn/start", params);
-    this.listener?.("turn/completed", {
-      threadId: params.threadId,
-      turn: {
-        ...result.turn,
-        items: [
-          {
-            type: "userMessage",
-            id: randomUUID(),
-            clientId: params.clientUserMessageId ?? null,
-            content: [{ type: "text", text: "input", text_elements: [] }],
-          },
-          ...result.turn.items,
-        ],
       },
     });
-    return { turnId: result.turn.id };
+    return { mode: "start", turnId };
+  }
+  async sendAssistant(params: ClientRequestParams["turn/queue"]) {
+    return this.request("zen/turn/wake", {
+      threadId: params.threadId,
+      clientId: params.clientUserMessageId,
+      source: "room",
+      text: JSON.stringify(params.input),
+    });
   }
   onNotification(
     listener: Parameters<ZenXTriggerAppServerPort["onNotification"]>[0],
@@ -233,11 +235,15 @@ test("model arguments cannot impersonate trusted assistant setup or pause UI", a
     setAssistantReplies: async () => {
       setups++;
     },
+    setAssistantDeliveryMode: async () => {
+      setups++;
+    },
   } as unknown as ZenXRoomsTrustedService;
   const runtime = createZenXTrustedPlugin(service);
   for (const toolName of [
     "zenx_rooms_create_assistant",
     "zenx_rooms_assistant_replies",
+    "zenx_rooms_assistant_delivery",
   ]) {
     await assert.rejects(
       runtime.invoke(toolName, {

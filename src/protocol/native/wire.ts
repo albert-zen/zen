@@ -2,22 +2,51 @@ import type { AppServerEvent } from "../../app-server.js";
 import type {
   CreateChildThreadInput,
   ThreadSnapshot,
+  QueuedInputAdmission,
 } from "../../app-server.js";
 import type { UserInput, UserInputPart } from "../../item.js";
+import type { ImageMediaType } from "../../attachment-ref.js";
 import type { SkillReference } from "../../skill-input.js";
+
+/** Wire-only bytes are imported into a canonical AttachmentRef by the Host. */
+export interface NativeImageBytesInput {
+  type: "image_bytes";
+  mediaType: ImageMediaType;
+  dataBase64: string;
+}
+export type NativeUserInputPart =
+  UserInputPart | SkillReference | NativeImageBytesInput;
+export const NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY =
+  "queued-input-admission-v1";
+export const NATIVE_INLINE_IMAGE_INPUT_CAPABILITY = "inline-image-input-v1";
+
+export const NATIVE_TURN_WAKE_METHOD = "zen/turn/wake";
+export type NativeHostWakeupParams = import("../../item.js").HostWakeupInput & {
+  threadId: string;
+  mode?: "start" | "steer" | "queue";
+  expectedTurnId?: string;
+  requireUnarchived?: boolean;
+};
+export interface NativeHostWakeupResult {
+  turnId?: string;
+  mode: "start" | "steer" | "queue";
+  queued?: boolean;
+}
 
 export interface NativeTurnSendParams {
   threadId: string;
-  mode: "start" | "queue" | "batch-next" | "steer" | "replace";
+  /** Omitted means soft steer active work, or start when idle. */
+  mode?: "start" | "queue" | "batch-next" | "steer" | "replace";
   expectedTurnId?: string;
   clientUserMessageId: string;
-  input: readonly (UserInputPart | SkillReference)[];
+  input: readonly NativeUserInputPart[];
   /** Native-only canonical admission requirement; omitted preserves defaults. */
   requireUnarchived?: boolean;
 }
 export interface NativeTurnSendResult {
   turnId?: string;
   interruptedTurnId?: string;
+  admission?: QueuedInputAdmission;
 }
 /** Older Hosts reject this method instead of ignoring a new admission field. */
 export const NATIVE_TURN_SEND_UNARCHIVED_METHOD = "zen/turn/send-unarchived";

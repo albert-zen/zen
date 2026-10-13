@@ -27,6 +27,7 @@ import type {
   UserInput,
   UserMessageItem,
   ThreadMessageItem,
+  HostMessageItem,
   InitialInputMessage,
 } from "./item.js";
 import {
@@ -62,6 +63,7 @@ import {
   toolOutputSuffix,
   type ApprovalHandler,
   type NestedToolObservation,
+  type PreparedToolInvocation,
   type ToolExecutionMode,
   type ToolExecutionResult,
   type ToolPolicy,
@@ -289,29 +291,42 @@ export class AgentRuntime {
           input: options.input,
           clientId: options.clientId,
           sender: undefined,
+          hostInput: undefined,
           mode: undefined,
           messageType: undefined,
         },
       ]) {
-        const userItem: UserMessageItem | ThreadMessageItem = {
-          id: this.#id(),
-          threadId: options.thread.id,
-          turnId,
-          createdAt: this.#now(),
-          ...(message.sender === undefined
-            ? { type: "user_message" as const }
+        const userItem: UserMessageItem | ThreadMessageItem | HostMessageItem =
+          message.hostInput !== undefined
+            ? {
+                id: this.#id(),
+                threadId: options.thread.id,
+                turnId,
+                createdAt: this.#now(),
+                type: "host_message",
+                sender: "host",
+                mode: "start",
+                ...message.hostInput,
+              }
             : {
-                type: "thread_message" as const,
-                sender: message.sender,
-                clientId: message.clientId!,
-                mode: message.mode ?? "batch-next",
-                messageType: message.messageType ?? "guidance",
-              }),
-          content: message.input,
-          ...(message.clientId === undefined
-            ? {}
-            : { clientId: message.clientId }),
-        };
+                id: this.#id(),
+                threadId: options.thread.id,
+                turnId,
+                createdAt: this.#now(),
+                ...(message.sender === undefined
+                  ? { type: "user_message" as const }
+                  : {
+                      type: "thread_message" as const,
+                      sender: message.sender,
+                      clientId: message.clientId!,
+                      mode: message.mode ?? "batch-next",
+                      messageType: message.messageType ?? "guidance",
+                    }),
+                content: message.input,
+                ...(message.clientId === undefined
+                  ? {}
+                  : { clientId: message.clientId }),
+              };
         await this.#completeItem(userItem, options);
       }
       initialInputCommitted = true;
@@ -1111,7 +1126,7 @@ export class AgentRuntime {
     try {
       decision = await waitForAbort(
         execution.admission === "inherited"
-          ? this.#tools.admitInherited(prepared)
+          ? this.#tools.admitInherited(prepared, execution.parentAdmission)
           : this.#tools.admit(prepared, {
               policy: toolPolicyFromApprovalPolicy(
                 options.configuration.approvalPolicy,
@@ -1181,6 +1196,7 @@ export class AgentRuntime {
             this.#nestedPort(
               turnId,
               toolCall,
+              prepared,
               options,
               execution.signal,
               scheduler,
@@ -1246,6 +1262,7 @@ export class AgentRuntime {
   #nestedPort(
     turnId: string,
     parent: ToolCallItem,
+    parentAdmission: PreparedToolInvocation,
     options: RunTurnOptions,
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
@@ -1334,6 +1351,7 @@ export class AgentRuntime {
           options,
           {
             admission: "inherited",
+            parentAdmission,
             signal,
             allowedToolNames,
             nestedToolNames: allowedToolNames,
@@ -1420,6 +1438,7 @@ export class AgentRuntime {
 
 interface ScheduledToolCapability {
   admission: "outer" | "inherited";
+  parentAdmission?: PreparedToolInvocation;
   signal: AbortSignal;
   allowedToolNames: ReadonlySet<string>;
   nestedToolNames: ReadonlySet<string>;

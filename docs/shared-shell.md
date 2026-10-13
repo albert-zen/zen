@@ -99,7 +99,50 @@ in a same-origin, scriptless, networkless sandboxed frame. The main renderer CSP
 is unchanged. Input writes are serialized, bounded and never automatically
 retried after an uncertain reply. No terminal output triggers Agent execution.
 
+## Pinned Windows PTY cleanup
+
+Windows interactive sessions require system ConPTY (Windows build 18309 or later)
+and the audited node-pty 1.1.0 cleanup patch. The patch removes only the asynchronous
+console-list/PID kill sweep, retaining native ConPTY-handle closure and reader
+worker disposal. The adapter still uses the public `kill()` API, including after
+observed shell exit; it does not reach into private runtime fields.
+
+Windows `npm ci` / postinstall and Windows package staging apply the same
+idempotent patch. Both the original npm file and the patched result have exact
+SHA-256 pins in `shell-pty-patch.mjs`; an unknown version or source fails without
+modification. Windows spawn independently verifies the patched bytes before
+launching. Skipping install scripts therefore requires running
+`node apps/zenx/scripts/prepare-shell-pty.mjs` before use. POSIX installation and
+runtime behavior are unchanged. Any node-pty upgrade requires reviewing the
+cleanup implementation, updating both hashes and passing the synthetic and real
+native lifecycle regressions; do not expand the version range alone.
+
+Upstream 1.1.0's asynchronous helper can fail to attach after native closure and
+later fall back to killing the original numeric PID without identity validation
+([upstream #952](https://github.com/microsoft/node-pty/issues/952),
+[#967](https://github.com/microsoft/node-pty/issues/967)). Removing that sweep
+makes the native terminal handle the cleanup boundary. It does not promise to
+terminate escaped/detached descendants. Tests prove the stale-PID path with only
+mocked process APIs and verify that patched natural exit and Stop cannot reach
+it; native Windows fixtures separately require owned foreground exit, reader
+release and actual test-subprocess settlement.
+
+A separate upstream limitation remains: natural exit can discard the native
+baton before a later public close, leaving conhost allocated
+([#965](https://github.com/microsoft/node-pty/issues/965), proposed
+[native fix #990](https://github.com/microsoft/node-pty/pull/990)). This narrow
+patch does not claim to resolve that native leak or PowerShell cold-start delays.
+No delayed scan or bare-PID kill is used as a workaround.
+
 ## Windows native acceptance
+
+Native CI observed an untouched first prompt after the five-second action
+threshold and by 6,030 ms. Test fixtures therefore use a separate ten-second
+Windows startup readiness deadline, measured from terminal creation and requiring
+both input control and a real prompt. The foreground Stop fixture also waits for
+that prompt before writing. Command/output and Stop observations remain at five
+seconds; the file and whole-step watchdogs are unchanged. This corrects a test
+budget assumption, not product startup speed or the underlying cold-start cause.
 
 The real PowerShell fixture first checks basic input, file output and resize in
 an untouched session. It then imports the built-in Utility manifest by its exact

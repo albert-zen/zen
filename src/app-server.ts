@@ -35,6 +35,10 @@ import {
 import type {
   AgentMessageItem,
   ThreadMessageItem,
+  HostMessageItem,
+  HostWakeupInput,
+  QueuedHostMessageItem,
+  HostMessageCancelledItem,
   ThreadMessageInput,
   ThreadMessageSender,
   InitialInputMessage,
@@ -175,6 +179,16 @@ export interface TurnHandle {
   done: Promise<void>;
 }
 
+/** Canonical queue identity captured inside the Thread mutation. */
+export type QueuedInputAdmission =
+  | { state: "queued"; clientId: string; queuedItemId: string }
+  | {
+      state: "admitted";
+      clientId: string;
+      queuedItemId: string;
+      turnId: string;
+    };
+
 export interface QueuedCancellationTarget {
   queuedItemId: string;
   clientId: string;
@@ -227,6 +241,7 @@ export interface CreateChildThreadInput {
 }
 
 export interface SteerTurnOptions {
+  requestApproval?: ApprovalHandler;
   clientId?: string;
   requireUnarchived?: boolean;
 }
@@ -383,6 +398,7 @@ export class ZenAppServer {
       inputModalities: readonly string[] | null;
       deliveryAnchorId?: string;
       initialInputCommitted: boolean;
+      ready: Promise<void>;
       contextCompactionNotice: string | undefined;
       contextCompactionNoticeIssued: boolean;
     }
@@ -1126,7 +1142,10 @@ export class ZenAppServer {
       clientId !== undefined &&
       thread.items.some(
         (item) =>
-          ((item.type === "thread_message" ||
+          ((item.type === "host_message" ||
+            item.type === "host_message_queued" ||
+            item.type === "host_message_cancelled" ||
+            item.type === "thread_message" ||
             item.type === "thread_message_queued" ||
             item.type === "thread_message_cancelled") &&
             item.clientId === clientId) ||
@@ -1324,6 +1343,19 @@ export class ZenAppServer {
     const receipt = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
       await this.#requireUnarchived(threadId);
+      if (
+        thread.items.some(
+          (item) =>
+            (item.type === "host_message" ||
+              item.type === "host_message_queued" ||
+              item.type === "host_message_cancelled") &&
+            item.clientId === clientId,
+        )
+      )
+        throw new AppServerError(
+          "idempotency_conflict",
+          "This client identity belongs to a Host wakeup",
+        );
       const legacy = thread.items.find(
         (item) =>
           (item.type === "user_message" ||
@@ -1473,6 +1505,9 @@ export class ZenAppServer {
       };
     });
     if (receipt.queued && !receipt.duplicate) {
+      const predecessor = this.#activeTurns.get(threadId);
+      if (messageType === "guidance" && predecessor?.controller.signal.aborted)
+        await Promise.allSettled([predecessor.done]);
       await this.resumeQueue(threadId, { ...options, requireUnarchived: true });
       const thread = await this.#requireThread(threadId);
       const delivered = thread.items.find(
@@ -1491,6 +1526,224 @@ export class ZenAppServer {
     return receipt;
   }
 
+  /** Native ordinary human ingress. Explicit control methods retain their own semantics. */
+  async sendMessage(
+    threadId: string,
+    input: RequestedUserInput,
+    options: SteerTurnOptions = {},
+  ): Promise<TurnHandle> {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const thread = await this.#requireThread(threadId);
+      const duplicate =
+        options.clientId === undefined
+          ? undefined
+          : thread.items.find(
+              (item): item is UserMessageItem =>
+                item.type === "user_message" &&
+                item.clientId === options.clientId,
+            );
+      // startTurn performs canonical identity/input validation before any execution.
+      if (duplicate !== undefined)
+        return await this.startTurn(threadId, input, options);
+      const active = this.#activeTurns.get(threadId);
+      if (active?.controller.signal.aborted) {
+        await Promise.allSettled([active.done]);
+        continue;
+      }
+      try {
+        if (
+          active !== undefined &&
+          !active.controller.signal.aborted &&
+          !this.#isTerminal(thread, active.turnId)
+        ) {
+          await active.ready;
+          return await this.steerTurn(threadId, active.turnId, input, options);
+        }
+        return await this.startTurn(threadId, input, options);
+      } catch (error) {
+        // Only definitive pre-admission races are retryable. Unknown append/transport
+        // outcomes are returned for canonical readback, never replayed here.
+        if (
+          !(error instanceof AppServerError) ||
+          !["thread_busy", "turn_not_running"].includes(error.code) ||
+          attempt === 7
+        )
+          throw error;
+      }
+    }
+    throw new AppServerError(
+      "thread_busy",
+      "Thread admission changed repeatedly",
+    );
+  }
+
+  /** Host provenance is preserved through the same canonical admission/queue boundary. */
+  async wakeTurn(
+    threadId: string,
+    requested: HostWakeupInput,
+    options: {
+      mode?: "start" | "steer" | "queue";
+      expectedTurnId?: string;
+      requireUnarchived?: boolean;
+      requestApproval?: ApprovalHandler;
+    } = {},
+  ): Promise<{
+    turnId?: string;
+    mode: "start" | "steer" | "queue";
+    queued?: boolean;
+  }> {
+    const input: HostWakeupInput = {
+      clientId: requested?.clientId,
+      source: requested?.source,
+      text: requested?.text,
+      ...(requested?.sourceId === undefined
+        ? {}
+        : { sourceId: requested.sourceId }),
+    };
+    if (
+      !input ||
+      !["bootstrap", "trigger", "room"].includes(input.source) ||
+      typeof input.clientId !== "string" ||
+      !input.clientId.trim() ||
+      typeof input.text !== "string" ||
+      !input.text.trim() ||
+      input.text.length > 100_000 ||
+      (input.source !== "bootstrap" &&
+        (typeof input.sourceId !== "string" || !input.sourceId.trim())) ||
+      (input.sourceId !== undefined &&
+        (typeof input.sourceId !== "string" || !input.sourceId.trim())) ||
+      (options.mode !== undefined &&
+        !["start", "steer", "queue"].includes(options.mode))
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Host wakeup requires a valid source, client ID and text",
+      );
+    const intent = options.mode === "queue" ? "queue" : "steer";
+    const receipt: {
+      turnId?: string;
+      mode: "start" | "steer" | "queue";
+      queued?: boolean;
+      duplicate?: boolean;
+    } = await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived !== false)
+        await this.#requireUnarchived(threadId);
+      const existing = thread.items.find(
+        (item) => "clientId" in item && item.clientId === input.clientId,
+      );
+      if (existing !== undefined) {
+        if (
+          (existing.type !== "host_message" &&
+            existing.type !== "host_message_queued") ||
+          existing.source !== input.source ||
+          existing.sourceId !== input.sourceId ||
+          existing.text !== input.text ||
+          (existing.type === "host_message_queued" &&
+            existing.intent !== intent) ||
+          (existing.type === "host_message" && intent === "queue")
+        )
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Wakeup identity was already used for different input or delivery",
+          );
+        if (
+          thread.items.some(
+            (item) =>
+              item.type === "host_message_cancelled" &&
+              item.clientId === input.clientId,
+          )
+        )
+          throw new AppServerError(
+            "queue_id_cancelled",
+            "This Host wakeup was cancelled",
+          );
+        const delivered = thread.items.find(
+          (item): item is HostMessageItem =>
+            item.type === "host_message" && item.clientId === input.clientId,
+        );
+        return {
+          duplicate: true,
+          ...(delivered === undefined
+            ? { mode: "queue" as const, queued: true }
+            : { turnId: delivered.turnId, mode: delivered.mode }),
+        };
+      }
+      const active = this.#activeTurns.get(threadId);
+      const running =
+        active !== undefined &&
+        !active.controller.signal.aborted &&
+        !this.#isTerminal(thread, active.turnId);
+      if (options.mode === "start" && running)
+        throw new AppServerError(
+          "thread_busy",
+          "Thread already has a running Turn",
+        );
+      if (
+        options.expectedTurnId !== undefined &&
+        (!running || active.turnId !== options.expectedTurnId)
+      )
+        throw new AppServerError(
+          "turn_not_running",
+          "The expected wakeup Turn is not running",
+        );
+      const content: UserInput = [{ type: "text", text: input.text }];
+      if (intent === "steer" && running && active.initialInputCommitted) {
+        await this.#validateInput(content, active.inputModalities);
+        const message: HostMessageItem = {
+          id: this.#id(),
+          threadId,
+          turnId: active.turnId,
+          createdAt: this.#now(),
+          type: "host_message",
+          sender: "host",
+          mode: "steer",
+          ...input,
+          ...(active.deliveryAnchorId === undefined
+            ? {}
+            : { deliveryAfter: active.deliveryAnchorId }),
+        };
+        await this.#commit(thread, message);
+        this.#emit({ type: "item_completed", item: message });
+        return { mode: "steer" as const, turnId: active.turnId };
+      }
+      const selection = this.#requireSelection(thread.effectiveConfiguration());
+      await this.#validateInput(content, selection.model.inputModalities);
+      const message: QueuedHostMessageItem = {
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        type: "host_message_queued",
+        sender: "host",
+        ...input,
+        input: content,
+        intent,
+        deliveryMode: "batch-next",
+      };
+      await this.#commit(thread, message);
+      this.#emit({ type: "item_completed", item: message });
+      return { mode: "queue" as const, queued: true };
+    });
+    if (receipt.queued && !receipt.duplicate) {
+      const predecessor = this.#activeTurns.get(threadId);
+      if (intent === "steer" && predecessor?.controller.signal.aborted)
+        await Promise.allSettled([predecessor.done]);
+      await this.resumeQueue(threadId, {
+        ...options,
+        requireUnarchived: options.requireUnarchived !== false,
+      });
+      const thread = await this.#requireThread(threadId);
+      const delivered = thread.items.find(
+        (item): item is HostMessageItem =>
+          item.type === "host_message" && item.clientId === input.clientId,
+      );
+      if (delivered !== undefined)
+        return { turnId: delivered.turnId, mode: delivered.mode };
+    }
+    const { duplicate: _duplicate, ...result } = receipt;
+    return result;
+  }
+
   async queueMessage(
     threadId: string,
     requestedInput: RequestedUserInput,
@@ -1499,79 +1752,112 @@ export class ZenAppServer {
       requestApproval?: ApprovalHandler;
       deliveryMode?: "batch-next";
       requireUnarchived?: boolean;
+      /** Defaults to waiting for first Turn admission, never Turn completion. */
+      waitForTurnAdmission?: boolean;
     } = {},
-  ): Promise<void> {
+  ): Promise<QueuedInputAdmission> {
     if (clientId.trim().length === 0)
       throw new AppServerError("invalid_input", "Queue client id is required");
-    await this.#withThreadMutation(threadId, async () => {
-      const thread = await this.#requireThread(threadId);
-      if (options.requireUnarchived === true)
-        await this.#requireUnarchived(threadId);
-      const input = await this.#prepareSkillInput(
-        thread,
-        requestedInput,
-        clientId,
-      );
-      const duplicate = thread.items.find(
-        (item) =>
-          (item.type === "user_message_queued" ||
-            item.type === "user_message") &&
-          item.clientId === clientId,
-      );
-      if (
-        duplicate?.type === "user_message_queued" ||
-        duplicate?.type === "user_message"
-      ) {
+    let added = false;
+    const admission = await this.#withThreadMutation<QueuedInputAdmission>(
+      threadId,
+      async () => {
+        const thread = await this.#requireThread(threadId);
+        if (options.requireUnarchived === true)
+          await this.#requireUnarchived(threadId);
+        const input = await this.#prepareSkillInput(
+          thread,
+          requestedInput,
+          clientId,
+        );
+        const queued = thread.items.find(
+          (item): item is QueuedUserMessageItem =>
+            item.type === "user_message_queued" && item.clientId === clientId,
+        );
+        if (queued !== undefined) {
+          if (
+            thread.items.some(
+              (item) =>
+                item.type === "user_message_queue_cancelled" &&
+                item.queuedItemId === queued.id &&
+                item.clientId === clientId,
+            )
+          )
+            throw new AppServerError(
+              "queue_id_cancelled",
+              "This queued client ID was canceled; use a new ID for a new message",
+            );
+          if (!sameUserInput(queued.input, input))
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Queue client id was already used for different input",
+            );
+          if (queued.deliveryMode !== options.deliveryMode)
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Queue client id was already used for a different delivery mode",
+            );
+          const consumed = thread.items.find(
+            (item): item is UserMessageItem =>
+              item.type === "user_message" && item.clientId === clientId,
+          );
+          return consumed === undefined
+            ? { state: "queued", clientId, queuedItemId: queued.id }
+            : {
+                state: "admitted",
+                clientId,
+                queuedItemId: queued.id,
+                turnId: consumed.turnId,
+              };
+        }
         if (
-          duplicate.type === "user_message_queued" &&
           thread.items.some(
             (item) =>
-              item.type === "user_message_queue_cancelled" &&
-              item.queuedItemId === duplicate.id &&
+              (item.type === "user_message" ||
+                item.type === "turn_replacement_requested") &&
               item.clientId === clientId,
           )
         )
           throw new AppServerError(
-            "queue_id_cancelled",
-            "This queued client ID was canceled; use a new ID for a new message",
-          );
-        const prior =
-          duplicate.type === "user_message_queued"
-            ? duplicate.input
-            : contentFromUserMessage(duplicate);
-        if (!sameUserInput(prior, input))
-          throw new AppServerError(
             "idempotency_conflict",
-            "Queue client id was already used for different input",
+            "Queue client id was already used without queued input lineage",
           );
-        if (
-          duplicate.type === "user_message_queued" &&
-          duplicate.deliveryMode !== options.deliveryMode
-        ) {
-          throw new AppServerError(
-            "idempotency_conflict",
-            "Queue client id was already used for a different delivery mode",
+        const resolved = this.#requireSelection(
+          thread.effectiveConfiguration(),
+        );
+        await this.#validateInput(input, resolved.model.inputModalities);
+        const item: QueuedUserMessageItem = {
+          id: this.#id(),
+          type: "user_message_queued",
+          threadId,
+          createdAt: this.#now(),
+          clientId,
+          input,
+          ...(options.deliveryMode === undefined
+            ? {}
+            : { deliveryMode: options.deliveryMode }),
+        };
+        await this.#commit(thread, item);
+        this.#emit({ type: "item_completed", item });
+        added = true;
+        return { state: "queued", clientId, queuedItemId: item.id };
+      },
+    );
+    // A receipt retry is a read of canonical evidence, never an implicit Resume.
+    if (added) {
+      const starting = this.resumeQueue(threadId, options);
+      if (options.waitForTurnAdmission !== false) await starting;
+      else
+        void starting.catch((error: unknown) => {
+          // resumeQueue reports the identified live attempt through queue_failed.
+          // Keep other failures observable too, without logging input or secrets.
+          console.error(
+            "Queued input could not start",
+            safeQueueFailure(error).code,
           );
-        }
-        return;
-      }
-      const resolved = this.#requireSelection(thread.effectiveConfiguration());
-      await this.#validateInput(input, resolved.model.inputModalities);
-      const queued: QueuedUserMessageItem = {
-        id: this.#id(),
-        type: "user_message_queued",
-        threadId,
-        createdAt: this.#now(),
-        clientId,
-        input,
-        ...(options.deliveryMode === undefined
-          ? {}
-          : { deliveryMode: options.deliveryMode }),
-      };
-      await this.#commit(thread, queued);
-      this.#emit({ type: "item_completed", item: queued });
-    });
-    await this.resumeQueue(threadId, options);
+        });
+    }
+    return admission;
   }
 
   /** Edits append a revision without moving, admitting, or resuming the queue. */
@@ -1743,7 +2029,8 @@ export class ZenAppServer {
         const queued = thread.items.find(
           (item) =>
             (item.type === "user_message_queued" ||
-              item.type === "thread_message_queued") &&
+              item.type === "thread_message_queued" ||
+              item.type === "host_message_queued") &&
             item.id === target.queuedItemId &&
             item.clientId === target.clientId,
         );
@@ -1753,7 +2040,8 @@ export class ZenAppServer {
           thread.items.some(
             (item) =>
               (item.type === "user_message" ||
-                item.type === "thread_message") &&
+                item.type === "thread_message" ||
+                item.type === "host_message") &&
               item.clientId === target.clientId,
           ) ||
           this.#reservedQueuedItems.get(threadId)?.has(target.queuedItemId)
@@ -1763,7 +2051,8 @@ export class ZenAppServer {
           thread.items.some(
             (item) =>
               (item.type === "user_message_queue_cancelled" ||
-                item.type === "thread_message_cancelled") &&
+                item.type === "thread_message_cancelled" ||
+                item.type === "host_message_cancelled") &&
               item.queuedItemId === target.queuedItemId &&
               item.clientId === target.clientId,
           )
@@ -1771,12 +2060,16 @@ export class ZenAppServer {
           status = "already_cancelled";
         else {
           const canceled:
-            QueuedUserMessageCancelledItem | ThreadMessageCancelledItem = {
+            | QueuedUserMessageCancelledItem
+            | ThreadMessageCancelledItem
+            | HostMessageCancelledItem = {
             id: this.#id(),
             type:
-              queued.type === "thread_message_queued"
-                ? "thread_message_cancelled"
-                : "user_message_queue_cancelled",
+              queued.type === "host_message_queued"
+                ? "host_message_cancelled"
+                : queued.type === "thread_message_queued"
+                  ? "thread_message_cancelled"
+                  : "user_message_queue_cancelled",
             threadId,
             createdAt: this.#now(),
             queuedItemId: target.queuedItemId,
@@ -2068,7 +2361,7 @@ export class ZenAppServer {
             queued.input,
             {
               ...options,
-              ...(queued.type === "thread_message_queued"
+              ...(queued.type !== "user_message_queued"
                 ? { requireUnarchived: true }
                 : {}),
               clientId: queued.clientId,
@@ -2079,13 +2372,24 @@ export class ZenAppServer {
               initialMessages: batch.map((item) => ({
                 input: item.input,
                 clientId: item.clientId,
-                ...(item.type === "thread_message_queued"
+                ...(item.type === "host_message_queued"
                   ? {
-                      sender: item.sender,
-                      messageType: item.messageType,
-                      mode: "batch-next" as const,
+                      hostInput: {
+                        clientId: item.clientId,
+                        text: item.text,
+                        source: item.source,
+                        ...(item.sourceId === undefined
+                          ? {}
+                          : { sourceId: item.sourceId }),
+                      },
                     }
-                  : {}),
+                  : item.type === "thread_message_queued"
+                    ? {
+                        sender: item.sender,
+                        messageType: item.messageType,
+                        mode: "batch-next" as const,
+                      }
+                    : {}),
               })),
             },
           );
@@ -2530,7 +2834,8 @@ export class ZenAppServer {
                     await this.#commit(thread, item);
                     if (
                       (item.type === "user_message" ||
-                        item.type === "thread_message") &&
+                        item.type === "thread_message" ||
+                        item.type === "host_message") &&
                       item.clientId !== undefined
                     ) {
                       const queued = internal.queuedAdmission?.items.find(
@@ -2561,8 +2866,12 @@ export class ZenAppServer {
                     );
                     for (const pending of pendingQueuedMessages(thread.items)) {
                       if (
-                        pending.type !== "thread_message_queued" ||
-                        pending.messageType !== "guidance" ||
+                        !(
+                          (pending.type === "thread_message_queued" &&
+                            pending.messageType === "guidance") ||
+                          (pending.type === "host_message_queued" &&
+                            pending.intent === "steer")
+                        ) ||
                         this.#reservedQueuedItems.get(threadId)?.has(pending.id)
                       )
                         continue;
@@ -2577,21 +2886,41 @@ export class ZenAppServer {
                         break;
                       guidanceCount++;
                       guidanceBytes += inputBytes;
-                      const message: ThreadMessageItem = {
-                        id: this.#id(),
-                        type: "thread_message",
-                        threadId,
-                        turnId,
-                        createdAt: this.#now(),
-                        clientId: pending.clientId,
-                        sender: pending.sender,
-                        content: pending.input,
-                        mode: "steer",
-                        messageType: pending.messageType,
-                        ...(active.deliveryAnchorId === undefined
-                          ? {}
-                          : { deliveryAfter: active.deliveryAnchorId }),
-                      };
+                      const message: ThreadMessageItem | HostMessageItem =
+                        pending.type === "host_message_queued"
+                          ? {
+                              id: this.#id(),
+                              type: "host_message",
+                              sender: "host",
+                              threadId,
+                              turnId,
+                              createdAt: this.#now(),
+                              clientId: pending.clientId,
+                              source: pending.source,
+                              ...(pending.sourceId === undefined
+                                ? {}
+                                : { sourceId: pending.sourceId }),
+                              text: pending.text,
+                              mode: "steer",
+                              ...(active.deliveryAnchorId === undefined
+                                ? {}
+                                : { deliveryAfter: active.deliveryAnchorId }),
+                            }
+                          : {
+                              id: this.#id(),
+                              type: "thread_message",
+                              threadId,
+                              turnId,
+                              createdAt: this.#now(),
+                              clientId: pending.clientId,
+                              sender: pending.sender,
+                              content: pending.input,
+                              mode: "steer",
+                              messageType: pending.messageType,
+                              ...(active.deliveryAnchorId === undefined
+                                ? {}
+                                : { deliveryAfter: active.deliveryAnchorId }),
+                            };
                       await this.#commit(thread, message);
                       this.#emit({ type: "item_completed", item: message });
                     }
@@ -2745,6 +3074,7 @@ export class ZenAppServer {
         done,
         inputModalities: resolved.model.inputModalities,
         initialInputCommitted: false,
+        ready: ready.promise,
         contextCompactionNotice: undefined,
         contextCompactionNoticeIssued: false,
       });
@@ -2811,13 +3141,16 @@ export class ZenAppServer {
       );
       const existingUserMessage = thread.items.find(
         (item): item is DeliveredInputItem =>
-          (item.type === "user_message" || item.type === "thread_message") &&
+          (item.type === "user_message" ||
+            item.type === "thread_message" ||
+            item.type === "host_message") &&
           item.clientId === options.clientId,
       );
       const queuedIntent = thread.items.find(
         (item): item is QueuedInputItem =>
           (item.type === "user_message_queued" ||
-            item.type === "thread_message_queued") &&
+            item.type === "thread_message_queued" ||
+            item.type === "host_message_queued") &&
           item.clientId === options.clientId,
       );
       if (queuedIntent !== undefined) {
@@ -2856,7 +3189,9 @@ export class ZenAppServer {
         }
         const successorInput = thread.items.find(
           (item): item is DeliveredInputItem =>
-            (item.type === "user_message" || item.type === "thread_message") &&
+            (item.type === "user_message" ||
+              item.type === "thread_message" ||
+              item.type === "host_message") &&
             item.turnId === existing.successorTurnId &&
             item.clientId === options.clientId,
         );
@@ -3285,11 +3620,24 @@ export class ZenAppServer {
       await this.#commit(thread, message);
       const pendingSteer = thread.items.some(
         (item) =>
-          (item.type === "user_message" || item.type === "thread_message") &&
+          (item.type === "user_message" ||
+            item.type === "thread_message" ||
+            item.type === "host_message") &&
           item.turnId === turnId &&
           item.deliveryAfter === modelResponseId,
       );
-      if (pendingSteer) {
+      if (
+        pendingSteer ||
+        pendingQueuedMessages(thread.items).some(
+          (item) =>
+            (item.type === "thread_message_queued" &&
+              item.messageType === "guidance") ||
+            (item.type === "host_message_queued" && item.intent === "steer"),
+        )
+      ) {
+        // Initial-admission bursts may exceed one bounded sample batch. Keep
+        // sampling this Turn until those soft inputs reach a safe boundary;
+        // explicit next-Turn queues never hold the current Turn open.
         return false;
       }
       const completed: TurnCompletedItem = {
@@ -3419,22 +3767,35 @@ export class ZenAppServer {
         options.initialMessages ?? [
           { input: options.input, clientId: "context-preview" },
         ]
-      ).map((message, index) => ({
-        id: `${options.turnId}:context-preview-input:${index}`,
-        threadId: options.thread.id,
-        turnId: options.turnId,
-        createdAt: this.#now(),
-        ...(message.sender === undefined
-          ? { type: "user_message" as const }
+      ).map((message, index): CanonicalItem =>
+        message.hostInput !== undefined
+          ? {
+              id: `${options.turnId}:context-preview-input:${index}`,
+              threadId: options.thread.id,
+              turnId: options.turnId,
+              createdAt: this.#now(),
+              type: "host_message",
+              sender: "host",
+              mode: "start",
+              ...message.hostInput,
+            }
           : {
-              type: "thread_message" as const,
-              sender: message.sender,
-              clientId: message.clientId,
-              mode: message.mode ?? "batch-next",
-              messageType: message.messageType ?? "guidance",
-            }),
-        content: message.input,
-      })),
+              id: `${options.turnId}:context-preview-input:${index}`,
+              threadId: options.thread.id,
+              turnId: options.turnId,
+              createdAt: this.#now(),
+              ...(message.sender === undefined
+                ? { type: "user_message" as const }
+                : {
+                    type: "thread_message" as const,
+                    sender: message.sender,
+                    clientId: message.clientId,
+                    mode: message.mode ?? "batch-next",
+                    messageType: message.messageType ?? "guidance",
+                  }),
+              content: message.input,
+            },
+      ),
     ];
     if (
       estimateModelMessageInputTokens(
@@ -3624,7 +3985,9 @@ export class ZenAppServer {
     for (const intent of intents.reverse()) {
       const successorInput = thread.items.some(
         (item) =>
-          (item.type === "user_message" || item.type === "thread_message") &&
+          (item.type === "user_message" ||
+            item.type === "thread_message" ||
+            item.type === "host_message") &&
           item.turnId === intent.successorTurnId &&
           item.clientId === intent.clientId,
       );
@@ -4304,9 +4667,11 @@ function appendSideChatSnapshotClosures(
       threadId: thread.id,
       createdAt: now(),
       type:
-        queued.type === "thread_message_queued"
-          ? "thread_message_cancelled"
-          : "user_message_queue_cancelled",
+        queued.type === "host_message_queued"
+          ? "host_message_cancelled"
+          : queued.type === "thread_message_queued"
+            ? "thread_message_cancelled"
+            : "user_message_queue_cancelled",
       queuedItemId: queued.id,
       clientId: queued.clientId,
     });
@@ -4327,7 +4692,9 @@ function remapForkItems(
       localIds.add(item.modelResponseId);
     }
     if (
-      (item.type === "user_message" || item.type === "thread_message") &&
+      (item.type === "user_message" ||
+        item.type === "thread_message" ||
+        item.type === "host_message") &&
       item.deliveryAfter !== undefined
     ) {
       localIds.add(item.deliveryAfter);
@@ -4345,6 +4712,7 @@ function remapForkItems(
     if (copied.type === "thread_restored")
       copied.deletionItemId = remap(copied.deletionItemId);
     if (
+      copied.type === "host_message_cancelled" ||
       copied.type === "thread_message_cancelled" ||
       copied.type === "user_message_queue_cancelled" ||
       copied.type === "user_message_queue_edited"
@@ -4352,7 +4720,9 @@ function remapForkItems(
       copied.queuedItemId = remap(copied.queuedItemId);
     }
     if (
-      (copied.type === "user_message" || copied.type === "thread_message") &&
+      (copied.type === "user_message" ||
+        copied.type === "thread_message" ||
+        copied.type === "host_message") &&
       copied.deliveryAfter !== undefined
     ) {
       copied.deliveryAfter = remap(copied.deliveryAfter);

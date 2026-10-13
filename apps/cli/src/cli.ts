@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { open, readFile, unlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
@@ -33,6 +34,7 @@ import { loadRemoteHostConfig } from "./remote-host-config.js";
 import { loadFleetHeadlessConfig } from "./fleet-headless-config.js";
 import { startFleetHeadlessHost } from "./fleet-headless-host.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
+import { formatApprovalPrompt } from "./approval-prompt.js";
 
 interface ParsedArguments {
   options: Map<string, string | true>;
@@ -347,21 +349,7 @@ async function chatCommand(args: ParsedArguments): Promise<void> {
     session.client.onServerRequest(
       "item/commandExecution/requestApproval",
       async (params) => {
-        const command =
-          isRecord(params) && typeof params.command === "string"
-            ? params.command
-            : "(unknown command)";
-        const toolName =
-          isRecord(params) && typeof params.toolName === "string"
-            ? params.toolName
-            : "tool";
-        const capability =
-          toolName === "run_code" ? "shell-equivalent run_code" : toolName;
-        const answer = (
-          await terminal.question(
-            `\nApprove stable ${capability} capability? This decision is remembered by tool name.\n${command}\n[y]es/[a]ll session/[n]o/[c]ancel: `,
-          )
-        )
+        const answer = (await terminal.question(formatApprovalPrompt(params)))
           .trim()
           .toLowerCase();
         const decision =
@@ -633,6 +621,20 @@ async function runOneTurn(
     resolveCompletion = resolve;
     rejectCompletion = reject;
   });
+  // Admission may race the predecessor's final notification. Only the accepted
+  // Turn can settle this send; unknown transport outcomes are never replayed.
+  const earlyCompletions = new Map<string, Record<string, unknown>>();
+  const settleCompletion = (turn: Record<string, unknown>) => {
+    if (turn.status === "failed") {
+      rejectCompletion(
+        new Error(
+          isRecord(turn.error) && typeof turn.error.message === "string"
+            ? turn.error.message
+            : "Turn failed",
+        ),
+      );
+    } else resolveCompletion();
+  };
   const streamedItems = new Set<string>();
   const disposers = [
     client.onNotification("item/agentMessage/delta", (params) => {
@@ -671,19 +673,12 @@ async function runOneTurn(
       ) {
         return;
       }
-      if (expectedTurnId !== undefined && params.turn.id !== expectedTurnId) {
+      if (typeof params.turn.id !== "string") return;
+      if (expectedTurnId === undefined) {
+        earlyCompletions.set(params.turn.id, params.turn);
         return;
       }
-      if (params.turn.status === "failed") {
-        const message =
-          isRecord(params.turn.error) &&
-          typeof params.turn.error.message === "string"
-            ? params.turn.error.message
-            : "Turn failed";
-        rejectCompletion(new Error(message));
-      } else {
-        resolveCompletion();
-      }
+      if (params.turn.id === expectedTurnId) settleCompletion(params.turn);
     }),
     client.onNotification("error", (params) => {
       if (
@@ -697,15 +692,18 @@ async function runOneTurn(
   ];
 
   try {
-    const response = await client.request("turn/start", {
+    const response = await client.request("zen/turn/send", {
       threadId,
-      input: [{ type: "text", text, text_elements: [] }],
+      clientUserMessageId: randomUUID(),
+      input: [{ type: "text", text }],
     });
-    const turn = responseResult<Record<string, unknown>>(response, "turn");
-    if (typeof turn.id !== "string") {
-      throw new Error("App Server response omitted turn.id");
+    if (!isRecord(response) || typeof response.turnId !== "string") {
+      throw new Error("App Server response omitted turnId");
     }
-    expectedTurnId = turn.id;
+    expectedTurnId = response.turnId;
+    const early = earlyCompletions.get(expectedTurnId);
+    if (early !== undefined) settleCompletion(early);
+    earlyCompletions.clear();
     await completion;
     process.stdout.write("\n");
   } finally {

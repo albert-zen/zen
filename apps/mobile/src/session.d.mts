@@ -1,7 +1,14 @@
 export type Host = { id: string; name: string; endpoint: string };
 export type Workspace = { id: string; name: string };
 export type Thread = { id: string; title: string; status: string };
-export type Item = { id: string; role: string; text: string; status: string };
+export type Item = {
+  id: string;
+  role: string;
+  text: string;
+  status: string;
+  sourceLabel?: string;
+  sourceDetails?: string;
+};
 import type {
   RemoteRoomSummary,
   RemoteRoomView,
