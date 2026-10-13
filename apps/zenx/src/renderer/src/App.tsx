@@ -21,6 +21,7 @@ import {
 } from "./compact-command.js";
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { SidebarResizer } from "./SidebarResizer.js";
 import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
 import { FleetComposerSurface } from "./FleetComposerSurface.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
@@ -2668,6 +2669,10 @@ export function App() {
         threadError={threadListErrors.active}
         threadLoading={!threadListLoaded.active}
         threads={activeSummaries}
+      />
+      <SidebarResizer
+        collapsed={sidebarCollapsed}
+        onCollapse={toggleSidebarCollapsed}
       />
 
       {projectError !== null ||
