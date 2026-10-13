@@ -113,6 +113,23 @@ test("downstream source, patch and toolchain pins agree with the isolated workfl
   assert.equal(lock.dependencyLockMode, "capture-then-locked-restore");
 });
 
+test("runner-local SDK path uses a supported step context instead of job env", async () => {
+  const workflow = await readFile(
+    path.join(root, ".github/workflows/zenx-winapp-downstream.yml"),
+    "utf8",
+  );
+  const [jobConfiguration, steps] = workflow.split("    steps:\n");
+  assert.doesNotMatch(jobConfiguration, /\$\{\{\s*runner\./u);
+  const setupDotnet = steps
+    .split(/(?=^      - )/mu)
+    .find((step) => step.includes("uses: actions/setup-dotnet@"));
+  assert.ok(setupDotnet);
+  assert.match(
+    setupDotnet,
+    /        env:\n          DOTNET_INSTALL_DIR: \$\{\{ runner\.temp \}\}\/zenx-dotnet-candidate\n/u,
+  );
+});
+
 test("patch uses generated UIA2 and confirms FALSE on the real service before retaining its client", () => {
   assert.match(patch, /\+IUIAutomation2/u);
   assert.ok(
