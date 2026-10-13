@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { once } from "node:events";
 import { mkdtempSync, readFileSync, rm } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -566,8 +567,15 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
         cases.push(`${mode}:real-capture-exact-owner-restored`);
       }
     }
+    phase = "restore-before-pending-capture";
+    const restored = once(owner, "restore", {
+      signal: AbortSignal.timeout(5_000),
+    });
     owner.restore();
+    await restored;
+    await eventually(async () => assert.equal(owner.isMinimized(), false));
     owner.hide();
+    await eventually(async () => assert.equal(owner.isVisible(), false));
     guard.focus();
     const nativeCapture = view.webContents.capturePage.bind(view.webContents);
     try {
