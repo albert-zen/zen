@@ -1195,7 +1195,11 @@ stable configured workspace identity, scoped conversation actions, and an
 explicit frozen command registry. The SDK owns generation fencing, native action
 outcomes, projection/reply routing, and admission idempotency; IMZen owns permission
 presets, bounded displayed Thread selection, ZAS resume observation, and product
-presentation. A numbered `/pick` resolves only the same conversation's recently
+presentation. Its inbound content transformer preserves legacy image inputs with
+an omitted byte size by deriving bounded metadata beneath the same selected
+trusted media root, while retaining the original source for the SDK's final
+no-follow byte acquisition; it neither expands that root nor dispatches native
+paths. A numbered `/pick` resolves only the same conversation's recently
 displayed list; a rejected oversized refresh leaves the previous numbers intact.
 Non-numeric queries may resolve an authoritative bounded search without publishing
 new numbers. `/new` clears selection and the next input creates a Thread.

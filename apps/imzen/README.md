@@ -53,6 +53,11 @@ for another root. Keep the identity and original state file when restarting.
 `IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT` declares the trusted local image root.
 The SDK reads bounded, no-follow image bytes beneath it, validates declared sizes,
 and sends a data URI to ZAS. IMZen never falls back to a path-only image payload.
+Legacy typed image inputs may omit `size_bytes`: IMZen derives bounded size
+metadata only beneath that same selected root and retains the original LocalPath
+for the SDK's no-follow read. Explicit invalid sizes are not repaired, symlinks
+are not converted into trusted canonical paths, and no broader root is inferred.
+The built-in IM channels already supply the actual size from their media staging.
 Supported image types are PNG, JPEG, GIF, and WebP, at most 20 MiB each, 16 images,
 and 32 MiB per input. Standalone IMZen requires an explicit trusted root even for
 loopback servers; a local spool or loopback address alone does not grant trust.
