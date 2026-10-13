@@ -847,9 +847,48 @@ async function writeBuildFixture(output, result) {
     writeFile(path.join(output, "main", "integrity.js"), placeholder),
     writeFile(path.join(output, "main", "result"), result),
     writeFile(path.join(output, "preload", "index.cjs"), "preload"),
+    writeFile(
+      path.join(output, "preload", "foreground-activity.cjs"),
+      "foreground-preload",
+    ),
     writeFile(path.join(output, "renderer", "index.html"), "renderer"),
   ]);
 }
+
+test("foreground smoke stages only its dedicated preload, without the app IPC bridge", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-foreground-package-"),
+  );
+  try {
+    const output = path.join(directory, "build");
+    const destination = path.join(directory, "smoke");
+    await writeBuildFixture(output, "native-foreground");
+    await stagePackage({
+      target: "smoke",
+      outDirectory: output,
+      rootDirectory: directory,
+      appDirectory: destination,
+      manifestSha256: "fixture-digest",
+    });
+    assert.equal(
+      await readFile(
+        path.join(destination, "preload", "foreground-activity.cjs"),
+        "utf8",
+      ),
+      "foreground-preload",
+    );
+    await assert.rejects(
+      access(path.join(destination, "preload", "index.cjs")),
+      { code: "ENOENT" },
+    );
+    assert.equal(
+      await readFile(path.join(output, "main", "integrity.js"), "utf8"),
+      placeholder,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("stages the real app without modifying reusable build output", async () => {
   const fixture = await createFixture();
@@ -933,6 +972,11 @@ test("stages only the provider smoke through the same digest path", async () => 
       "smoke-digest",
     );
     await access(path.join(appDirectory, "main", "code-runtime-worker.js"));
+    await access(path.join(appDirectory, "preload", "foreground-activity.cjs"));
+    await assert.rejects(
+      access(path.join(appDirectory, "preload", "index.cjs")),
+      { code: "ENOENT" },
+    );
     await assert.rejects(access(path.join(appDirectory, "out")), {
       code: "ENOENT",
     });
@@ -1486,6 +1530,10 @@ async function createFixture() {
       "worker",
     ),
     writeFile(path.join(outDirectory, "preload", "index.cjs"), "preload"),
+    writeFile(
+      path.join(outDirectory, "preload", "foreground-activity.cjs"),
+      "foreground-preload",
+    ),
     writeFile(path.join(outDirectory, "renderer", "index.html"), "renderer"),
     writeFile(path.join(rootDirectory, "node_modules", "ws", "index.js"), "ws"),
     writeFile(

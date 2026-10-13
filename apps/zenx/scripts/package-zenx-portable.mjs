@@ -813,6 +813,13 @@ export async function stagePackage(options) {
     await cp(path.join(options.outDirectory, "main"), stagedMain, {
       recursive: true,
     });
+    // The native overlay smoke uses its isolated preload, never the app bridge.
+    const preloadDirectory = path.join(options.appDirectory, "preload");
+    await mkdir(preloadDirectory, { recursive: true });
+    await cp(
+      path.join(options.outDirectory, "preload", "foreground-activity.cjs"),
+      path.join(preloadDirectory, "foreground-activity.cjs"),
+    );
   }
   await injectProviderManifestDigest(stagedMain, options.manifestSha256);
 }
