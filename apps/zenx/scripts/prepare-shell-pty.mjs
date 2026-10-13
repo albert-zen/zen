@@ -1,14 +1,19 @@
+import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { chmod, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** node-pty 1.1.0's npm archive ships its macOS spawn-helper without +x. */
+/** Prepare only the audited Windows cleanup or macOS spawn-helper permission. */
 export async function prepareShellPty(
   directory,
   platform = process.platform,
   arch = process.arch,
 ) {
+  if (platform === "win32") {
+    await applyShellPtyPatch(directory);
+    return;
+  }
   if (platform !== "darwin") return;
   for (const candidate of [
     "build/Release",
