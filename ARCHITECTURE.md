@@ -1237,3 +1237,9 @@ IMZenX may explicitly bind an external IM conversation to an existing PAW Room i
 ### Browser instance resource routing
 
 The process-local Browser backend registry owns independent capability sessions for the app-owned Workspace port and each explicitly connected external browser instance. `BrowserConnectionSource` projects only opaque installation identity, human label, connection state and Host generation; lazy instance CDP views never enumerate another instance's tabs. Native sockets, pending commands, observation references, preview selection and approvals retain that instance/generation, while the Supervisor remains the sole runtime retirement authority. This resource catalog is not a new Thread history or permission graph.
+
+Extension-created tab groups are ephemeral visual organization scoped to the current native connection and browser window; group membership is not target authorization, and ZenX never repairs a user's tab moves or overwrites a renamed existing group.
+
+### Browser targeted input
+
+Browser coordinate click and named-key input are transient, observation-bound CDP operations: one captured screenshot, CSS viewport, page-local focus and document/control generation authorize a bounded event pair on the exact tab; uncertain held input blocks further mutations until that tab is closed, with no OS-input fallback, automatic retry, or durable recovery state. CDP acknowledgement and exact Host fences authorize the planned pair; page-consumable event counters are supplementary interference evidence. Bounded open-shadow resolution and mutation observation reuse this per-document state; exact-node CDP shadow metadata distinguishes ordinary containers from actual closed roots without a tag denylist, while known closed or untracked surfaces remain locally unsupported. Structured probe denials have a bounded shared classification; arbitrary Runtime exceptions are never classified as native-surface refusal.

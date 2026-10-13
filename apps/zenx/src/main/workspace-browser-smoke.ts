@@ -1,3 +1,4 @@
+import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -5,7 +6,7 @@ import { mkdtempSync, readFileSync, rm } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { app, BrowserWindow, type WebContentsView } from "electron";
+import { app, BrowserWindow, screen, type WebContentsView } from "electron";
 
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -22,12 +23,72 @@ const directory = mkdtempSync(
 app.setPath("userData", path.join(directory, "user-data"));
 app.on("window-all-closed", () => undefined);
 
+let smokePhase = "startup";
+const captureTrace: unknown[] = [];
+let captureSequence = 0;
+/** Diagnostic-only wrapping of the exact capture call; no retries or API changes. */
+function traceCaptures(view: WebContentsView): void {
+  const capture = view.webContents.capturePage.bind(view.webContents);
+  const record = (
+    stage: "start" | "success" | "failed",
+    sequence: number,
+    phase: string,
+  ) => {
+    try {
+      captureTrace.push({
+        phase,
+        stage,
+        sequence,
+        webContentsId: view.webContents.id,
+        destroyed: view.webContents.isDestroyed(),
+        visible: view.getVisible(),
+        bounds: view.getBounds(),
+        focusedWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+        windows: BrowserWindow.getAllWindows()
+          .slice(0, 8)
+          .map((window) => ({
+            id: window.id,
+            visible: window.isVisible(),
+            minimized: window.isMinimized(),
+            attached: window.contentView.children.includes(view),
+          })),
+      });
+      if (captureTrace.length > 24) captureTrace.shift();
+    } catch {
+      /* A destroyed view cannot alter the capture outcome via diagnostics. */
+    }
+  };
+  view.webContents.capturePage = async (
+    ...args: Parameters<typeof capture>
+  ) => {
+    const sequence = ++captureSequence;
+    const phase = smokePhase;
+    record("start", sequence, phase);
+    try {
+      const image = await capture(...args);
+      record("success", sequence, phase);
+      return image;
+    } catch (error) {
+      record("failed", sequence, phase);
+      throw error;
+    }
+  };
+}
+
 let markSlowRequestStarted!: () => void;
 const slowRequestStarted = new Promise<void>((resolve) => {
   markSlowRequestStarted = resolve;
 });
 const fixture = createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
+  if (request.url === "/input") {
+    response.end(`<!doctype html><title>Targeted input fixture</title><style>body{margin:0;min-height:2200px}canvas{position:absolute;left:10px;top:100px;background:#adc}form{position:absolute;left:10px;top:200px}#file{position:absolute;left:10px;top:300px}</style>
+      <output id="result">No canvas click</output><p id="focus">Focus none</p>
+      <canvas width="200" height="80" tabindex="0" onclick="this.focus();document.querySelector('#result').textContent='Canvas clicked '+event.isTrusted"></canvas>
+      <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next</button></form><input type="file" id="file"><label for="file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
+      <script>document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
+    return;
+  }
   if (request.url === "/capture-marker") {
     response.end(`<!doctype html><title>Capture pixel fixture</title>
       <style>html,body{margin:0;background:rgb(24,48,72)}
@@ -664,6 +725,8 @@ void app.whenReady().then(async () => {
       "Ending the Agent session must preserve the shared human page",
     );
     await assertHiddenMountedCapture(port);
+    smokePhase = "targeted-setup";
+    await assertTargetedBackgroundInput(port);
     layoutStarted = true;
     await assertStableControlLayout();
     console.log(
@@ -678,6 +741,7 @@ void app.whenReady().then(async () => {
           bytes: unmountedInspection.screenshot.bytes,
         },
         checks: [
+          "targeted click/key default behaviors preserve a sentinel focused window and physical pointer for unmounted, hidden-mounted, and minimized-mounted pages",
           "unmounted live observation delivers frames and releases its renderer",
           "unmounted Agent inspect captures a screenshot and visible targets",
           "unmounted Agent action changes the same page",
@@ -709,6 +773,8 @@ void app.whenReady().then(async () => {
     } catch {
       /* Keep the original failure. */
     }
+    if (smokePhase.startsWith("targeted-"))
+      console.error(JSON.stringify({ smokePhase, captureTrace }));
     const failures = [error];
     if (!layoutStarted) {
       layoutStarted = true;
@@ -1067,6 +1133,191 @@ function assertCapturePixels(
         Math.abs(pixel[channel]! - color[channel]!) <= 8,
         `Captured marker/background pixel differs: sample=${index} actual=${pixel} expected=${color}`,
       );
+  }
+}
+
+async function assertTargetedBackgroundInput(port: number): Promise<void> {
+  const browser = createElectronWorkspaceBrowser({
+    artifactDirectory: path.join(directory, "input-artifacts"),
+    onCreateView: traceCaptures,
+  });
+  const owner = new BrowserWindow({
+    show: false,
+    width: 800,
+    height: 650,
+    focusable: false,
+  });
+  const sentinel = new BrowserWindow({ show: false, width: 400, height: 300 });
+  try {
+    await owner.loadURL("about:blank");
+    await sentinel.loadURL(
+      "data:text/html,<input autofocus aria-label='User sentinel'>",
+    );
+    sentinel.show();
+    await eventually(async () =>
+      assert.equal(BrowserWindow.getFocusedWindow(), sentinel),
+    );
+    const pointer = screen.getCursorScreenPoint();
+    browser.bindThreadSession("input-session", "input-thread");
+    const tab = await browser.open(
+      "input-session",
+      `http://127.0.0.1:${port}/input`,
+    );
+    for (const mode of [
+      "unmounted",
+      "hidden-mounted",
+      "minimized-mounted",
+    ] as const) {
+      smokePhase = `targeted-${mode}-initial-inspect`;
+      if (mode !== "unmounted") {
+        browser.mount(owner.webContents, {
+          threadId: "input-thread",
+          tabId: tab.tabId,
+          lease: "input-lease",
+          bounds: { x: 0, y: 0, width: 700, height: 500 },
+        });
+        if (mode === "minimized-mounted") {
+          owner.showInactive();
+          owner.minimize();
+          await eventually(async () => assert.equal(owner.isMinimized(), true));
+        } else owner.hide();
+      }
+      await browser.navigate(
+        "input-session",
+        tab.tabId,
+        `http://127.0.0.1:${port}/input`,
+      );
+      let inspected = await browser.inspect("input-session", tab.tabId);
+      assert.equal(
+        inspected.screenshot.status,
+        "captured",
+        `${mode}: requires real pixels`,
+      );
+      assert.ok(
+        inspected.inputViewport,
+        `${mode}: requires coherent input viewport`,
+      );
+      await browser.pointerClick(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        50,
+        130,
+      );
+      smokePhase = `targeted-${mode}-after-canvas-click`;
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /Canvas clicked true/u);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "ArrowDown",
+      );
+      smokePhase = `targeted-${mode}-after-arrow-scroll`;
+      await eventually(async () => {
+        inspected = await browser.inspect("input-session", tab.tabId);
+        assert.ok((inspected.inputViewport?.scrollY ?? 0) > 0);
+      });
+      await browser.scroll(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "up",
+        2000,
+      );
+      smokePhase = `targeted-${mode}-after-dom-scroll-up`;
+      inspected = await browser.inspect("input-session", tab.tabId);
+      await browser.pointerClick(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        40,
+        210,
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "Space",
+      );
+      smokePhase = `targeted-${mode}-after-space-key`;
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.equal(
+        requiredTarget(inspected, "Targeted text", "type").value,
+        " ",
+      );
+      await browser.type(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        requiredTarget(inspected, "Targeted text", "type").targetId,
+        "background form",
+        false,
+      );
+      smokePhase = `targeted-${mode}-after-dom-type`;
+      inspected = await browser.inspect("input-session", tab.tabId);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "Enter",
+      );
+      smokePhase = `targeted-${mode}-after-enter-key`;
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /Submitted background form/u);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "Tab",
+      );
+      smokePhase = `targeted-${mode}-after-tab-key`;
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /Focus next/u);
+      await assert.rejects(
+        browser.pointerClick(
+          "input-session",
+          tab.tabId,
+          inspected.observationId,
+          30,
+          310,
+        ),
+        (error: unknown) =>
+          error instanceof BrowserInputUnsupportedError &&
+          error.code === "BROWSER_INPUT_UNSUPPORTED" &&
+          error.reason === "native-surface",
+      );
+      await assert.rejects(
+        browser.pointerClick(
+          "input-session",
+          tab.tabId,
+          inspected.observationId,
+          30,
+          360,
+        ),
+        (error: unknown) =>
+          error instanceof BrowserInputUnsupportedError &&
+          error.code === "BROWSER_INPUT_UNSUPPORTED" &&
+          error.reason === "native-surface",
+      );
+      assert.equal(
+        BrowserWindow.getFocusedWindow(),
+        sentinel,
+        `${mode}: must preserve the focused sentinel window`,
+      );
+      assert.deepEqual(
+        screen.getCursorScreenPoint(),
+        pointer,
+        `${mode}: must not move the physical pointer`,
+      );
+      if (mode === "hidden-mounted") assert.equal(owner.isVisible(), false);
+      if (mode === "minimized-mounted") assert.equal(owner.isMinimized(), true);
+    }
+  } finally {
+    await browser.shutdown();
+    owner.destroy();
+    sentinel.destroy();
   }
 }
 
