@@ -37,14 +37,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function within<T>(promise: Promise<T>): Promise<T> {
+async function within<T>(promise: Promise<T>, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error("steering barrier timed out")),
+          () => reject(new Error(`steering barrier timed out: ${label}`)),
           10000,
         );
       }),
@@ -64,6 +64,7 @@ class EventLog<T> {
   async waitFor(
     predicate: (value: T) => boolean,
     stopped?: () => Promise<never>,
+    label = "protocol event",
   ): Promise<T> {
     const existing = this.values.find(predicate);
     if (existing !== undefined) return existing;
@@ -77,6 +78,7 @@ class EventLog<T> {
         stopped === undefined
           ? ready.promise
           : Promise.race([ready.promise, stopped()]),
+        label,
       );
     } finally {
       this.waiters.delete(handler);
@@ -213,17 +215,42 @@ class SteeringProbe {
     void this.exited.catch(() => {});
     this.child.stdin.write(JSON.stringify(config) + "\n");
   }
-  async waitFor(predicate: (value: ProbeSnapshot) => boolean) {
-    return await this.events.waitFor(predicate, () =>
-      this.exited.then(() => {
-        throw new Error("IM probe ended before the expected event");
-      }),
-    );
+  async waitFor(
+    predicate: (value: ProbeSnapshot) => boolean,
+    label = "probe event",
+  ) {
+    try {
+      return await this.events.waitFor(
+        predicate,
+        () =>
+          this.exited.then(() => {
+            throw new Error("IM probe ended before the expected event");
+          }),
+        label,
+      );
+    } catch (cause) {
+      // Synthetic fixture only. Bound diagnostics and omit image/attachment data.
+      const recent = this.events.values.slice(-8).map((event) => ({
+        id: event.id,
+        event: event.event,
+        error: event.error,
+        deliveryError: event.text?.startsWith("**Error:**"),
+        replyTo: event.replyTo,
+        wireMethods: event.wireCalls?.slice(-8).map((call) => call.method),
+      }));
+      throw new Error(
+        `${label}; recent probe events=${JSON.stringify(recent)}; stderr characters=${this.stderr.length}`,
+        { cause },
+      );
+    }
   }
-  async command(command: object): Promise<ProbeSnapshot> {
+  async command(command: Record<string, unknown>): Promise<ProbeSnapshot> {
     const id = ++this.nextId;
     this.child.stdin.write(JSON.stringify({ id, ...command }) + "\n");
-    const result = await this.waitFor((value) => value.id === id);
+    const result = await this.waitFor(
+      (value) => value.id === id,
+      `probe command ${id}: ${String(command.action)}`,
+    );
     assert.equal(result.error, undefined, `${result.error}: ${result.detail}`);
     return result;
   }
@@ -252,6 +279,42 @@ test("a cached IM probe event stays handled when the probe later exits cleanly",
   exited.resolve();
   // A formerly eager, unused shutdown promise rejected on this next task.
   await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+test("IM probe failure diagnostics identify the barrier without exposing payloads", async () => {
+  const events = new EventLog<ProbeSnapshot>();
+  for (let id = 1; id <= 12; id++) {
+    events.add({
+      id,
+      event: "delivery",
+      text: "synthetic-private-input",
+      detail: "synthetic-private-error",
+      wireCalls: [
+        { method: "turn/start", params: { image: "synthetic-private-image" } },
+      ],
+    } as ProbeSnapshot);
+  }
+  const receiver = {
+    events,
+    exited: Promise.resolve(),
+    stderr: "synthetic-private-stderr",
+  } as unknown as SteeringProbe;
+  await assert.rejects(
+    SteeringProbe.prototype.waitFor.call(
+      receiver,
+      () => false,
+      "approval request delivery",
+    ),
+    (error: Error) => {
+      assert.match(error.message, /approval request delivery/);
+      assert.match(error.message, /"id":5,/);
+      assert.doesNotMatch(error.message, /"id":4,/);
+      assert.match(error.message, /turn\/start/);
+      assert.match(error.message, /stderr characters=24/);
+      assert.doesNotMatch(error.message, /synthetic-private/);
+      return true;
+    },
+  );
 });
 
 test(
@@ -347,6 +410,8 @@ test(
       const completed = async (turnId: string) =>
         await events.waitFor(
           (event) => event.type === "turn_completed" && event.turnId === turnId,
+          undefined,
+          `native turn_completed for ${turnId}`,
         );
       probe = new SteeringProbe({
         threadId,
@@ -358,7 +423,7 @@ test(
           IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT: root,
         },
       });
-      await probe.waitFor((event) => event.event === "ready");
+      await probe.waitFor((event) => event.event === "ready", "Gateway ready");
       const command = async (messageId: string, text: string) =>
         await probe!.command({ action: "emit", messageId, text });
       const listed = await command("native-threads", "/threads");
@@ -412,7 +477,7 @@ test(
         messageId: "im-original",
         text: "im-original-input",
       });
-      await within(initialGate.arrived.promise);
+      await within(initialGate.arrived.promise, "initial model request");
       assert.deepEqual(
         started.calls.map((call) => call.method),
         ["turn/start"],
@@ -506,6 +571,7 @@ test(
         (event) =>
           event.event === "delivery" &&
           Boolean(event.text?.includes("im-active-image")),
+        "initial steered answer delivery",
       );
       assert.equal(
         answer.replyTo,
@@ -530,7 +596,7 @@ test(
         messageId: "im-next",
         text: "im-next-idle",
       });
-      await within(nextGate.arrived.promise);
+      await within(nextGate.arrived.promise, "next idle model request");
       assert.equal(next.calls.at(-1)?.method, "turn/start");
       const nextCorrelation = next.correlations.find(
         (entry) => entry.replyTo === "im-next",
@@ -543,6 +609,7 @@ test(
           event.event === "delivery" &&
           event.replyTo === "im-next" &&
           Boolean(event.text?.includes("im-next-idle")),
+        "next idle answer delivery",
       );
       assert.equal(nextAnswer.replyTo, "im-next");
 
@@ -551,7 +618,7 @@ test(
         threadId,
         input: [{ type: "text", text: "desktop-active-input" }],
       });
-      await within(externalGate.arrived.promise);
+      await within(externalGate.arrived.promise, "external model request");
       const beforeForeign = await read();
       const beforeCalls = (await probe.command({ action: "snapshot" })).calls;
       const foreign = await probe.command({
@@ -617,6 +684,7 @@ test(
         (event) =>
           event.event === "delivery" &&
           Boolean(event.text?.includes("/approve ")),
+        "approval request delivery",
       );
       const requestRef = /\/approve ([^`\s]+)/.exec(approval.text!)?.[1];
       assert(requestRef);
@@ -630,7 +698,19 @@ test(
         (item) => item.type === "turn_started",
       )!.turnId!;
       await desktop.request("zen/thread/resume", { threadId: approvedThread });
-      await command("approval-reply", `/approve ${requestRef}`);
+      const response = await command(
+        "approval-reply",
+        `/approve ${requestRef}`,
+      );
+      const responseDeliveries = response.deliveries.filter(
+        (delivery) => delivery.replyTo === "approval-reply",
+      );
+      assert(
+        responseDeliveries.some(
+          (delivery) => delivery.text === `Approval ${requestRef}: accept.`,
+        ),
+        `approval response was not accepted: ${JSON.stringify(responseDeliveries)}`,
+      );
       await completed(approvedTurn);
       await command("approval-reply", `/approve ${requestRef}`);
       assert.equal(
