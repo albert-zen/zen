@@ -327,6 +327,13 @@ export async function runTargetedInputContractSmoke(options: {
   endpoint: string;
   origin: string;
   guard(): Promise<void>;
+  onPhase?(phase: string): void;
+  onTransport?(value: {
+    kind: "close" | "error";
+    lastMethod?: string;
+    code?: number;
+    reason: string;
+  }): void;
 }): Promise<Record<string, unknown>[]> {
   const { backend, sessionId, tabId, endpoint, origin, guard } = options;
   assert.ok(backend.pointerClick && backend.keyPress);
@@ -351,6 +358,14 @@ export async function runTargetedInputContractSmoke(options: {
   // rewritten events, retries, tracker access or synthetic trusted-event shims.
   // Only the provider's browser socket/session-scoped Input is counted.
   const originalSend = WebSocket.prototype.send;
+  const observedSockets = new Map<
+    WebSocket,
+    {
+      lastMethod?: string;
+      close(code: number, reason: Buffer): void;
+      error(error: Error): void;
+    }
+  >();
   WebSocket.prototype.send = function (this: WebSocket, ...args: unknown[]) {
     if (
       this.url === version.webSocketDebuggerUrl &&
@@ -361,6 +376,34 @@ export async function runTargetedInputContractSmoke(options: {
         sessionId?: string;
         params?: { type?: string };
       };
+      let observed = observedSockets.get(this);
+      if (!observed) {
+        const socket = this;
+        const record = (
+          kind: "close" | "error",
+          reason: string,
+          code?: number,
+        ) => {
+          try {
+            options.onTransport?.({
+              kind,
+              code,
+              lastMethod: observedSockets.get(socket)?.lastMethod,
+              reason: reason.slice(0, 160),
+            });
+          } catch {
+            /* Diagnostics cannot alter transport settlement. */
+          }
+        };
+        observed = {
+          close: (code, reason) => record("close", reason.toString(), code),
+          error: (error) => record("error", error.message),
+        };
+        observedSockets.set(socket, observed);
+        socket.on("close", observed.close);
+        socket.on("error", observed.error);
+      }
+      observed.lastMethod = message.method?.slice(0, 100);
       if (message.method?.startsWith("Input.")) {
         assert.ok(
           message.sessionId,
@@ -499,6 +542,7 @@ export async function runTargetedInputContractSmoke(options: {
       "deep-shadow",
       "ordinary-dom",
     ]) {
+      options.onPhase?.(`input-contracts:${mode}:navigate`);
       await guard();
       await backend.navigate(
         sessionId,
@@ -516,6 +560,7 @@ export async function runTargetedInputContractSmoke(options: {
           return undefined;
         } // Only read-only document readiness is retried.
       }, `contract ${mode} document`);
+      options.onPhase?.(`input-contracts:${mode}:actions`);
       assert.equal(
         (await state()).visibility,
         "hidden",
@@ -716,6 +761,10 @@ export async function runTargetedInputContractSmoke(options: {
     return reports;
   } finally {
     WebSocket.prototype.send = originalSend;
+    for (const [socket, observed] of observedSockets) {
+      socket.removeListener("close", observed.close);
+      socket.removeListener("error", observed.error);
+    }
     rpc.close();
   }
 }
@@ -738,6 +787,9 @@ async function main(): Promise<void> {
   await mkdir(profile);
   const reports: Record<string, unknown>[] = [];
   let browser: ChildProcess | undefined;
+  let browserError = "";
+  let phase = "startup";
+  const transportDiagnostics: unknown[] = [];
   let native: Native | undefined;
   let connection: UserBrowserConnection | undefined;
   let browserRpc: Rpc | undefined,
@@ -780,7 +832,6 @@ async function main(): Promise<void> {
       ],
       { stdio: ["ignore", "ignore", "pipe"], windowsHide: false },
     );
-    let browserError = "";
     browser.stderr!.on("data", (raw) => {
       browserError = (browserError + String(raw)).slice(-8_192);
     });
@@ -1023,6 +1074,7 @@ async function main(): Promise<void> {
         return { front, userState, agentState };
       };
       for (const layer of ["cdp-data-isolation", "real-os-input"] as const) {
+        phase = `${scenario}:${layer}`;
         const canType = process.platform === "win32" || nativeReady.axTrusted;
         if (layer === "real-os-input" && !canType) {
           reports.push({
@@ -1233,6 +1285,7 @@ async function main(): Promise<void> {
     }
     const contractFront = await native.call("snapshot");
     const contractUser = await userRpc.evaluate<PageState>(stateScript);
+    phase = "input-contracts:setup";
     reports.push(
       ...(await runTargetedInputContractSmoke({
         backend: connection.backend,
@@ -1240,6 +1293,13 @@ async function main(): Promise<void> {
         tabId: opened.tabId,
         endpoint,
         origin,
+        onPhase: (value) => {
+          phase = value;
+        },
+        onTransport: (value) => {
+          transportDiagnostics.push({ phase, ...value });
+          if (transportDiagnostics.length > 8) transportDiagnostics.shift();
+        },
         guard: async () => {
           const [front, userState, agentVisibility] = await Promise.all([
             native!.call("snapshot"),
@@ -1307,6 +1367,15 @@ async function main(): Promise<void> {
         status: "failed",
         platform: process.platform,
         reports,
+        phase,
+        transportDiagnostics,
+        ownedBrowser: {
+          pid: browser?.pid,
+          exitCode: browser?.exitCode,
+          signalCode: browser?.signalCode,
+          killed: browser?.killed,
+          stderr: browserError,
+        },
         error: error instanceof Error ? error.message : String(error),
       }),
     );
