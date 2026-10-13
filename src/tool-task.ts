@@ -10,6 +10,7 @@ import {
   toolOutputSuffix,
   ToolOutputWindow,
   type ToolInvocation,
+  type ShellLifecycleFacts,
   type ToolRuntime,
   type ToolExecutionResult,
 } from "./tool.js";
@@ -411,6 +412,7 @@ class Task {
   #window: ToolOutputWindow;
   #modelContent: UserInput[number][] = [];
   #result: ToolExecutionResult | undefined;
+  #shellLifecycle: ShellLifecycleFacts | undefined;
   #error: unknown;
   #settled = false;
   #dispatched = false;
@@ -533,6 +535,10 @@ class Task {
           ...this.#invocation,
           signal: this.#controller.signal,
           taskContext: {
+            onShellLifecycle: (facts) => {
+              if (this.#closed) return;
+              this.#shellLifecycle = { ...facts };
+            },
             onModelContent: (content) => {
               if (this.#closed) return;
               validateUserInput(content, "$modelContent");
@@ -631,6 +637,7 @@ class Task {
     await previous;
     try {
       const status = this.status;
+      const shellLifecycle = this.#shellLifecycle;
       this.#yieldRequested = false;
       const terminal = this.terminal;
       if (
@@ -686,7 +693,14 @@ class Task {
         );
       }
       this.yielded = true;
-      return this.#receipt(status, capture, result, modelContent, diagnostic);
+      return this.#receipt(
+        status,
+        shellLifecycle,
+        capture,
+        result,
+        modelContent,
+        diagnostic,
+      );
     } finally {
       release();
     }
@@ -694,6 +708,7 @@ class Task {
   snapshot(output: string): ToolExecutionResult {
     return this.#receipt(
       this.status,
+      this.#shellLifecycle,
       { output: "" },
       undefined,
       undefined,
@@ -702,6 +717,7 @@ class Task {
   }
   #receipt(
     status: Status,
+    shellLifecycle: ShellLifecycleFacts | undefined,
     capture: Awaited<ReturnType<ToolOutputWindow["finish"]>>,
     result?: ToolExecutionResult,
     modelContent = result?.modelContent,
@@ -728,7 +744,15 @@ class Task {
           (this.#runtime.executionMode === "parallel_safe"
             ? "independent"
             : "bundle"));
-    const control = `\n[tool task ${status}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${this.#options.timeoutMs}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}`;
+    const foregroundExited =
+      status === "running" &&
+      shellLifecycle?.foreground === "exited" &&
+      shellLifecycle.stdio === "open";
+    const shellFacts =
+      shellLifecycle === undefined
+        ? ""
+        : `\nforeground: ${shellLifecycle.foreground}\nstdio: ${shellLifecycle.stdio}${shellLifecycle.foreground === "exited" ? `\nforeground_exit_code: ${shellLifecycle.foreground_exit_code}\nforeground_signal: ${shellLifecycle.foreground_signal}` : ""}${foregroundExited ? "\nThe foreground exited; output pipes remain open. Continue wait to collect output, or terminate to cancel the owned process group (including intentional background processes on POSIX). Pipe-holder identities are unavailable." : ""}`;
+    const control = `\n[tool task ${status}${foregroundExited ? " (foreground_exited)" : ""}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${this.#options.timeoutMs}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}${shellFacts}`;
     return attachToolOutputCapture(
       {
         output: capture.output,
@@ -743,6 +767,7 @@ class Task {
           resource_scope: resourceScope,
           lifetime: "host_instance",
           exit_code: terminal ? exitCode : null,
+          ...shellLifecycle,
           ...(result?.structuredContent === undefined
             ? {}
             : { result: result.structuredContent }),
@@ -803,7 +828,7 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Tools, including run_code programs, automatically return task_id when they are queued or exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report queued/running state, confirmable or best_effort cancellation, and resource_scope without exposing resource keys. Running claims/bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
+        "Tools, including run_code programs, automatically return task_id when they are queued or exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report queued/running state, confirmable or best_effort cancellation, and resource_scope without exposing resource keys. Running claims/bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart. Local shell receipts may include independent foreground/stdio observations; foreground_exit_code is available after the direct process exits, even while status is running. Only running + foreground=exited + stdio=open derives foreground_exited, a nonterminal label. EOF alone is not completion; forced pipe closure is not observed EOF. terminate/timeout targets the owned POSIX process group (direct child on Windows), including intentional background processes within that group; escaped descendants may survive.",
       inputSchema: {
         type: "object",
         properties: {

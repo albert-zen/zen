@@ -73,6 +73,8 @@ jobs:
           path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
           key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
       - run: npm ci
+      - name: Exercise shell lifecycle observations on macOS
+        run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - run: npm --workspace apps/zenx run smoke:capabilities
 
   zenx-windows-computer-smoke:
@@ -95,6 +97,8 @@ jobs:
       - name: Report WinApp CLI version
         run: winapp --version
       - run: npm ci
+      - name: Exercise shell lifecycle observations on Windows
+        run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - name: Exercise trigger process containment on Windows
         run: npm --workspace apps/zenx exec -- tsx --test test/trigger-program-runner.test.ts
       - run: npm --workspace apps/zenx run smoke:windows-computer

@@ -44,6 +44,19 @@ import {
 const TOOL_OUTPUT_CAPTURE = Symbol("tool-output-capture");
 const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
 
+/** Observed shell facts, independent of task completion or cancellation. */
+export type ShellLifecycleFacts = {
+  stdio: "open" | "eof";
+} & (
+  | { foreground: "running" }
+  | {
+      foreground: "exited";
+      /** Null means signal termination, not a successful exit. */
+      foreground_exit_code: number | null;
+      foreground_signal: NodeJS.Signals | null;
+    }
+);
+
 export interface ToolInvocation {
   callId: string;
   /** Host-minted only for direct plugin UI commands; never inherited from tool arguments. */
@@ -67,6 +80,8 @@ export interface ToolInvocation {
   /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
   taskContext?: {
     onOutput(text: string): void;
+    /** Builtin shell observations only; absent before successful spawn. */
+    onShellLifecycle?(facts: ShellLifecycleFacts): void;
     onModelContent?(content: UserInput): void;
     requestYield?(): void;
   };
@@ -1187,7 +1202,7 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Run a shell command. Independent commands can run concurrently; await commands sequentially when their effects depend on each other. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours).",
+      "Run a shell command. Independent commands can run concurrently; await commands sequentially when their effects depend on each other. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours). Shell task completion waits for the direct command process to exit and stdout/stderr to close; descendants inheriting these pipes can keep it running. Receipts may include independent foreground (running/exited) and stdio (open/eof) observations, plus foreground_exit_code and foreground_signal after exit, even while task status stays running. running (foreground_exited) means exited + open, never completion. Redirect intentional background output to files or /dev/null; backgrounding a compound command such as cd x && nohup y & may leave a subshell holding pipes. Cancellation/timeout targets the owned process group on POSIX (the direct child on Windows); backgrounding is not a detach exemption, but escaped process groups are not contained. Pipe EOF is not proof that every redirected descendant exited. Use an OS service manager for services that must outlive the Host.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1275,6 +1290,42 @@ export class ShellToolRuntime implements ToolRuntime {
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    let lifecycle: ShellLifecycleFacts | undefined;
+    let stdoutEof = false;
+    let stderrEof = false;
+    let finished = false;
+    const reportLifecycle = () => {
+      if (finished || lifecycle === undefined) return;
+      lifecycle = {
+        ...lifecycle,
+        stdio: stdoutEof && stderrEof ? "eof" : "open",
+      };
+      invocation.taskContext?.onShellLifecycle?.(lifecycle);
+    };
+    child.once("spawn", () => {
+      lifecycle = { foreground: "running", stdio: "open" };
+      reportLifecycle();
+    });
+    child.once("exit", (code, signal) => {
+      if (lifecycle === undefined) return;
+      lifecycle = {
+        foreground: "exited",
+        stdio: "open",
+        foreground_exit_code: code,
+        foreground_signal: signal,
+      };
+      reportLifecycle();
+    });
+    // Only readable end confirms EOF. close/destroy (including forced
+    // cancellation cleanup) cannot establish that writers closed their pipes.
+    child.stdout.once("end", () => {
+      stdoutEof = true;
+      reportLifecycle();
+    });
+    child.stderr.once("end", () => {
+      stderrEof = true;
+      reportLifecycle();
+    });
     const stdout = new StringDecoder("utf8"),
       stderr = new StringDecoder("utf8");
     child.stdout.on("data", (chunk: Buffer) => write(stdout.write(chunk)));
@@ -1297,7 +1348,6 @@ export class ShellToolRuntime implements ToolRuntime {
       }
     };
     const exitCode = await new Promise<number>((resolve) => {
-      let finished = false;
       const finish = (code: number) => {
         if (finished) return;
         finished = true;
