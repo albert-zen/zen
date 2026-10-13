@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import os from "node:os";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { get } from "node:http";
@@ -24,6 +25,24 @@ import {
 } from "../src/main/shell-process-termination.js";
 import { ShellPanelService } from "../src/main/shell-panel-service.js";
 import { validateShellPanelRequest } from "../src/shell-panel.js";
+
+import { createFailedStartupObserver } from "./fixtures/failed-startup-observation.js";
+
+const observeFailedStartup = createFailedStartupObserver({
+  enabled:
+    process.platform === "win32" &&
+    process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1",
+});
+
+function startupSnapshot(tools: ToolEnvironment, taskId: string) {
+  const read = tools.taskManager.readShellSession("human", taskId);
+  return {
+    status: read.session.status,
+    inputAvailable: read.session.inputAvailable,
+    output: read.output.slice(-4096),
+    prompt: /PS [^\r\n]*> /u.test(stripVTControlCharacters(read.output)),
+  };
+}
 
 function fixture(
   cwd: string,
@@ -156,8 +175,16 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
     if (process.platform === "win32") {
       // Control registration precedes PowerShell's first prompt. Exercise input
       // as a user would, after the shell has actually entered its read loop.
-      await until(f.service, created.taskId, (r) =>
-        /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
+      await observeFailedStartup(
+        "first PowerShell prompt",
+        () =>
+          until(f.service, created.taskId, (r) =>
+            /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
+          ),
+        () => {
+          const snapshot = startupSnapshot(f.tools, created.taskId);
+          return { ...snapshot, ready: snapshot.prompt };
+        },
       );
       // Establish evaluation before resizing, not merely echoed input. Keep the
       // wrapped post-resize command below as a separate regression assertion.
@@ -409,14 +436,35 @@ test("stopping a terminal closes its foreground fixture process", async () => {
       taskId: created.taskId,
       data: command,
     });
-    const deadline = Date.now() + 5000;
-    while (!pid && Date.now() < deadline) {
-      try {
-        pid = Number(await readFile(marker, "utf8"));
-      } catch {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-    }
+    await observeFailedStartup(
+      "foreground fixture start",
+      async () => {
+        const deadline = Date.now() + 5000;
+        while (!pid && Date.now() < deadline) {
+          try {
+            pid = Number(await readFile(marker, "utf8"));
+          } catch {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        }
+        assert(pid, "foreground fixture started");
+      },
+      () => {
+        let markerObserved = false;
+        try {
+          // Read-only diagnostic; do not adopt a late PID for cleanup. The
+          // existing terminal owner remains responsible for stopping its PTY.
+          markerObserved = Number(readFileSync(marker, "utf8")) > 0;
+        } catch {
+          /* Marker does not exist yet. */
+        }
+        return {
+          ...startupSnapshot(f.tools, created.taskId),
+          markerObserved,
+          ready: markerObserved,
+        };
+      },
+    );
     assert(pid, "foreground fixture started");
     await f.service.request({
       operation: "stop",
