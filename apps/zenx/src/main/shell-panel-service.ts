@@ -70,7 +70,7 @@ export class ShellPanelService {
         ...(input.operation === "create"
           ? {
               userTerminal: { cols: input.cols, rows: input.rows },
-              task: { yieldTimeMs: 1, timeoutMs: 86400000 },
+              task: { yieldTimeMs: 1 },
             }
           : {}),
       });
@@ -98,7 +98,7 @@ export class ShellPanelService {
         const result = await this.tools.execute(approved);
         const body = result.structuredContent;
         const taskId =
-          body && typeof body === "object" && !Array.isArray(body)
+          body && typeof body === "object" && "task_id" in body
             ? body.task_id
             : undefined;
         if (typeof taskId !== "string")

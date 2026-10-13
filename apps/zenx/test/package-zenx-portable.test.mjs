@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -49,6 +50,8 @@ import {
   BUNDLED_PNPM_VERSION,
   resolveBundledPnpmCli,
 } from "../src/main/plugin-profile.js";
+
+import { prepareShellPty } from "../scripts/prepare-shell-pty.mjs";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
 const run = promisify(execFile);
@@ -1578,3 +1581,44 @@ async function writePtyFixture(rootDirectory) {
   ])
     await writeFile(path.join(pty, "build", "Release", file), "fixture");
 }
+
+test("macOS PTY helper gets executable mode at install and packaging", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-pty-mode-"));
+  try {
+    const source = path.join(directory, "node_modules", "node-pty");
+    const native = path.join(source, "prebuilds", "darwin-arm64");
+    await mkdir(native, { recursive: true });
+    await mkdir(path.join(source, "lib"));
+    await mkdir(path.join(directory, "node_modules", "node-addon-api"));
+    for (const file of ["pty.node", "spawn-helper"])
+      await writeFile(path.join(native, file), "fixture");
+    for (const file of ["package.json", "LICENSE"])
+      await writeFile(path.join(source, file), "fixture");
+    const helper = path.join(native, "spawn-helper");
+    await chmod(helper, 0o644);
+    await prepareShellPty(source, "darwin", "arm64");
+    if (process.platform !== "win32")
+      assert.equal((await stat(helper)).mode & 0o777, 0o755);
+    await chmod(helper, 0o644);
+    const app = path.join(directory, "app");
+    await stageShellPty(directory, app, "darwin", "arm64");
+    if (process.platform !== "win32")
+      assert.equal(
+        (
+          await stat(
+            path.join(
+              app,
+              "node_modules",
+              "node-pty",
+              "prebuilds",
+              "darwin-arm64",
+              "spawn-helper",
+            ),
+          )
+        ).mode & 0o777,
+        0o755,
+      );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

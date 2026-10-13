@@ -1,8 +1,9 @@
 export const en = {
   shellTitle: "Terminal",
   shellChooser: "Manage shared Shell sessions and open your own terminal",
-  shellLocalHost: "This thread · Local Host",
+  shellLocalHost: "This thread · This device",
   shellNew: "New terminal",
+  shellInteractive: "Interactive shell",
   shellLoading: "Reading session directory…",
   shellUnavailable:
     "Interactive Shell requires the local ZenX desktop Host. No remote shell was opened.",
@@ -20,15 +21,19 @@ export const en = {
   shellForegroundExited:
     "Foreground exited ({{code}}). The Shell task still owns open output; completion is not confirmed.",
   shellExitCode: "Exit code: {{code}}",
-  shellUserInput:
-    "You control input. The Agent can read this same session with shell_sessions and wait, but cannot type here. Opening a terminal starts your local shell and its configured startup files.",
-  shellAgentReadOnly:
-    "Live, read-only output from the Agent’s actual Shell task. Stop process requests cancellation without consuming the Agent’s output.",
+  shellUserInput: "You control input. The Agent can read this session.",
+  shellAgentReadOnly: "Live Agent output · Read only",
   shellEmpty: "No Shell sessions yet",
   shellEmptyDetail:
     "Agent commands appear here when they run. Open your own terminal to work in this thread’s directory.",
   shellLifetime:
-    "Closing this view does not stop processes. Terminals have a 24-hour limit and end with the Host; no automatic restart. Scrollback is bounded, and completed sessions are retained briefly. This view lists local sessions only.",
+    "Your terminal runs until you exit the shell, stop it, or quit the ZenX Host. Restarting never restores processes. Older output may be discarded; ended sessions remain visible briefly. Only this device’s sessions appear here.",
+  shellCloseHint: "Closing the panel keeps sessions running.",
+  shellSessionDetails: "Session details",
+  shellTaskId: "Task ID",
+  shellSessionHelp: "About these sessions",
+  shellCreationContext:
+    "Starts your local shell in this thread’s directory, including its usual startup files. The Agent can read its output; you control input and when to stop it.",
   shellTruncated: "Older output was discarded. Showing retained scrollback.",
   shellOutput: "Shell output",
   shellFollow: "Jump to latest",
@@ -776,8 +781,9 @@ export const en = {
 export const zhCN = {
   shellTitle: "终端",
   shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
-  shellLocalHost: "当前线程 · 本机 Host",
+  shellLocalHost: "当前线程 · 本机",
   shellNew: "新建终端",
+  shellInteractive: "交互终端",
   shellLoading: "正在读取会话目录…",
   shellUnavailable: "交互 Shell 需要本机 ZenX 桌面 Host，未打开远程 Shell。",
   shellArchived: "请先恢复此线程，再创建终端或输入。",
@@ -794,15 +800,19 @@ export const zhCN = {
   shellForegroundExited:
     "前台进程已退出（{{code}}），但 Shell 任务仍持有开放的输出，尚未确认完成。",
   shellExitCode: "退出码：{{code}}",
-  shellUserInput:
-    "由你控制输入。Agent 可通过 shell_sessions 和 wait 读取同一会话，但不能在此输入。新建终端会启动本机 Shell 及其配置的启动文件。",
-  shellAgentReadOnly:
-    "Agent 真实 Shell 任务的实时只读输出。停止进程会请求取消任务，不会领取 Agent 的增量输出。",
+  shellUserInput: "由你控制输入，Agent 可以读取此会话。",
+  shellAgentReadOnly: "Agent 的实时输出 · 只读",
   shellEmpty: "还没有 Shell 会话",
   shellEmptyDetail:
     "Agent 执行的命令会显示在这里。你也可以新建终端，在当前线程的目录中操作。",
   shellLifetime:
-    "关闭视图不会停止进程。终端最多运行 24 小时，随 Host 结束，不自动重启。滚动历史有容量上限，已结束的会话仅短暂保留。此处只显示本机会话。",
+    "你的终端会持续运行，直到退出 Shell、手动停止或退出 ZenX Host。重启不会恢复进程。较早输出可能被丢弃，已结束会话仅短暂保留。此处只显示本机会话。",
+  shellCloseHint: "关闭面板后，会话会继续运行。",
+  shellSessionDetails: "会话详情",
+  shellTaskId: "任务 ID",
+  shellSessionHelp: "关于这些会话",
+  shellCreationContext:
+    "在当前线程目录中启动本机 Shell，并读取其常规启动文件。Agent 可以读取输出；输入和何时停止由你控制。",
   shellTruncated: "较早的输出已丢弃，当前显示保留的滚动历史。",
   shellOutput: "Shell 输出",
   shellFollow: "跳到最新",

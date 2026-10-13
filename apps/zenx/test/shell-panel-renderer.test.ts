@@ -201,3 +201,56 @@ test("terminal output cannot register OSC hyperlinks or clipboard actions", asyn
     dom.window.close();
   }
 });
+
+test("overview keeps IDs and lifetime limits in optional details", async () => {
+  const fixture = await mount();
+  const taskId = "opaque-task-id-not-primary-content";
+  (fixture.dom.window as any).zenx = {
+    shellPanel: {
+      request: async () => ({
+        sessions: [
+          {
+            taskId,
+            threadId: "thread",
+            origin: "user",
+            kind: "terminal",
+            command: "Interactive shell",
+            cwd: "/tmp/demo",
+            createdAt: new Date().toISOString(),
+            status: "running",
+            exitCode: null,
+            inputAvailable: true,
+            retained: false,
+          },
+        ],
+        cwd: "/tmp/demo",
+        host: "local",
+        canCreate: true,
+      }),
+    },
+  };
+  try {
+    await act(async () =>
+      fixture.root.render(
+        React.createElement(ShellThreadPanel, {
+          threadId: "thread",
+          active: true,
+        }),
+      ),
+    );
+    const card = fixture.dom.window.document.querySelector(
+      ".shell-session-card",
+    )!;
+    assert(!card.textContent!.includes(taskId));
+    const footer =
+      fixture.dom.window.document.querySelector(".shell-lifetime")!;
+    assert.equal(
+      footer.querySelector("p")!.textContent,
+      "Closing the panel keeps sessions running.",
+    );
+    assert.equal(footer.querySelector("details")!.open, false);
+    assert(!fixture.dom.window.document.body.textContent!.includes("24-hour"));
+  } finally {
+    await fixture.close();
+  }
+});

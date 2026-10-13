@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Terminal } from "@xterm/xterm";
@@ -151,6 +152,7 @@ export function ShellThreadPanel({
           className="secondary-button"
           disabled={!api || busy || !listing?.canCreate}
           onClick={() => void create()}
+          title={t("shellCreationContext")}
         >
           <Icon name="plus" />
           {t("shellNew")}
@@ -209,15 +211,24 @@ export function ShellThreadPanel({
             ) : null}
           </div>
           <div className="shell-session-identity">
-            <strong>{selected.command}</strong>
+            <strong>
+              {selected.kind === "terminal"
+                ? t("shellInteractive")
+                : selected.command}
+            </strong>
             <span>
               {t(
                 selected.origin === "user"
                   ? "shellOriginUser"
                   : "shellOriginAgent",
-              )}{" "}
-              · {selected.taskId}
+              )}
             </span>
+            <details className="shell-details">
+              <summary>{t("shellSessionDetails")}</summary>
+              <p>
+                {t("shellTaskId")}: <code>{selected.taskId}</code>
+              </p>
+            </details>
           </div>
           {stopConfirm ? (
             <div
@@ -294,7 +305,11 @@ export function ShellThreadPanel({
             >
               <Icon name="terminal" />
               <span className="shell-card-body">
-                <strong>{session.command}</strong>
+                <strong title={session.command}>
+                  {session.kind === "terminal"
+                    ? t("shellInteractive")
+                    : session.command}
+                </strong>
                 <small>
                   {t(
                     session.origin === "user"
@@ -303,7 +318,6 @@ export function ShellThreadPanel({
                   )}{" "}
                   · {session.cwd}
                 </small>
-                <small>{session.taskId}</small>
               </span>
               <span className="shell-status" data-status={session.status}>
                 {statusText(session)}
@@ -312,7 +326,14 @@ export function ShellThreadPanel({
           ))}
         </div>
       )}
-      <p className="shell-footnote shell-lifetime">{t("shellLifetime")}</p>
+      <footer className="shell-lifetime">
+        <p className="shell-footnote">{t("shellCloseHint")}</p>
+        <details className="shell-details">
+          <summary>{t("shellSessionHelp")}</summary>
+          <p>{t("shellCreationContext")}</p>
+          <p>{t("shellLifetime")}</p>
+        </details>
+      </footer>
     </section>
   );
 }

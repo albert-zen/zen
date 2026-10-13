@@ -686,11 +686,15 @@ class Task {
     this.#invocation.signal.addEventListener("abort", this.#abort, {
       once: true,
     });
-    this.#deadline = setTimeout(
-      () => this.cancel(true),
-      this.#options.timeoutMs,
-    );
-    this.#deadline.unref();
+    // A human's interactive terminal is owned until exit/Stop/Host disposal.
+    // Ordinary Agent executions retain their existing deadline unchanged.
+    if (!this.humanTerminal) {
+      this.#deadline = setTimeout(
+        () => this.cancel(true),
+        this.#options.timeoutMs,
+      );
+      this.#deadline.unref();
+    }
     if (this.#invocation.signal.aborted) this.cancel(false);
   }
   dispatch() {
@@ -937,7 +941,8 @@ class Task {
       shellLifecycle === undefined
         ? ""
         : `\nforeground: ${shellLifecycle.foreground}\nstdio: ${shellLifecycle.stdio}${shellLifecycle.foreground === "exited" ? `\nforeground_exit_code: ${shellLifecycle.foreground_exit_code}\nforeground_signal: ${shellLifecycle.foreground_signal}` : ""}${foregroundExited ? "\nThe foreground exited; output pipes remain open. Continue wait to collect output, or terminate to cancel the owned process group (including intentional background processes on POSIX). Pipe-holder identities are unavailable." : ""}`;
-    const control = `\n[tool task ${status}${foregroundExited ? " (foreground_exited)" : ""}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${this.#options.timeoutMs}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}${shellFacts}`;
+    const timeoutMs = this.humanTerminal ? null : this.#options.timeoutMs;
+    const control = `\n[tool task ${status}${foregroundExited ? " (foreground_exited)" : ""}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${timeoutMs ?? "none"}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}${shellFacts}`;
     return attachToolOutputCapture(
       {
         output: capture.output,
@@ -947,7 +952,7 @@ class Task {
           status,
           task_id: this.id,
           tool_name: this.#runtime.name,
-          timeout_ms: this.#options.timeoutMs,
+          timeout_ms: timeoutMs,
           cancellation,
           resource_scope: resourceScope,
           lifetime: "host_instance",

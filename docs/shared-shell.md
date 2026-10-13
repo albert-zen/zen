@@ -55,8 +55,11 @@ commands retain their previous turn cancellation semantics.
 - Completed/consumed sessions are retained as read-only observations for the
   manager's existing retention interval (five minutes by default), with at most
   the existing task limit (64) retained records. They cannot be waited again.
-- Human terminals have a 24-hour execution deadline. Closing the Host terminates
-  them; reopening never resurrects a process or interprets old output as commands.
+- Human terminals live until shell exit, explicit Stop or Host disposal, without
+  inheriting the Agent command deadline. Existing Agent deadlines and shared task
+  capacity stay unchanged. Receipts explicitly report no execution deadline for
+  these human-owned terminals. Reopening never resurrects a process or interprets
+  old output as commands.
 - Fleet sessions are not relabeled local or attached through a fallback. The
   panel is explicitly local. Existing Fleet tools still require their target
   context and grants. Remote PTY attach/input is outside this first version.

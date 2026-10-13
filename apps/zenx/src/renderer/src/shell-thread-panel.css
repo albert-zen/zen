@@ -18,7 +18,7 @@
   margin: 3px 0 0;
 }
 .shell-eyebrow {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -84,14 +84,14 @@
 }
 .shell-card-body small {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .shell-status {
   flex: none;
-  font-size: 10px;
+  font-size: 11px;
   border-radius: 4px;
   padding: 3px 6px;
   background: var(--color-surface-emphasis);
@@ -125,7 +125,7 @@
   overflow: auto;
 }
 .shell-session-identity span {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--color-text-muted);
 }
 .shell-terminal-wrap {
@@ -209,4 +209,22 @@
 }
 .shell-stop-confirm button + button {
   margin-left: 8px;
+}
+.shell-details {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.shell-details summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.shell-details p {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+}
+.shell-details code {
+  user-select: text;
+  font: 11px var(--font-mono, monospace);
 }

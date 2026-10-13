@@ -879,6 +879,8 @@ export async function stageShellPty(
         !filename.endsWith(".a"),
     },
   );
+  if (platform === "darwin")
+    await chmod(path.join(destination, nativeDirectory, "spawn-helper"), 0o755);
   await cp(
     path.join(rootDirectory, "node_modules", "node-addon-api"),
     path.join(appDirectory, "node_modules", "node-addon-api"),

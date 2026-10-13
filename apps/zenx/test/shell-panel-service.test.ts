@@ -8,6 +8,7 @@ import {
   ToolEnvironment,
   InMemoryToolPolicyStore,
 } from "../../../src/tool.js";
+import type { ToolTaskOptions } from "../../../src/tool-task.js";
 import type { ThreadSnapshot } from "../../../src/app-server.js";
 import type {
   ShellSessionRead,
@@ -17,7 +18,12 @@ import { desktopShellPty } from "../src/main/shell-pty.js";
 import { ShellPanelService } from "../src/main/shell-panel-service.js";
 import { validateShellPanelRequest } from "../src/shell-panel.js";
 
-function fixture(cwd: string, store = new InMemoryToolPolicyStore()) {
+function fixture(
+  cwd: string,
+  store = new InMemoryToolPolicyStore(),
+  taskOptions?: ToolTaskOptions,
+  pty = desktopShellPty,
+) {
   const snapshot: ThreadSnapshot = {
     id: "human",
     cwd,
@@ -35,9 +41,40 @@ function fixture(cwd: string, store = new InMemoryToolPolicyStore()) {
   let operations = 0;
   const tools = new ToolEnvironment({
     shellSessions: true,
+    ...(taskOptions ? { taskOptions } : {}),
     runtimes: [
       new ShellToolRuntime({
-        pty: desktopShellPty,
+        pty: {
+          async spawn(options) {
+            const trace = (stage: string) => {
+              if (process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1")
+                console.info(`[Shell PTY ${process.platform}] ${stage}`);
+            };
+            trace("spawn started");
+            const terminal = await pty.spawn(options);
+            trace("spawn returned");
+            return {
+              write(data) {
+                trace("write");
+                terminal.write(data);
+              },
+              resize(cols, rows) {
+                terminal.resize(cols, rows);
+              },
+              onData: (listener) => terminal.onData(listener),
+              onExit: (listener) =>
+                terminal.onExit((event) => {
+                  trace("observed exit");
+                  listener(event);
+                }),
+              kill(signal) {
+                trace(`kill ${signal ?? "default"} started`);
+                terminal.kill(signal);
+                trace("kill returned");
+              },
+            };
+          },
+        },
         environment: { ...process.env, SHELL: "/bin/sh", HOME: cwd },
       }),
     ],
@@ -380,6 +417,90 @@ test("manual Shell dispatch is fenced against an in-flight permission downgrade"
     releaseCommit();
     await tools.close();
     await app.closeRuntimeConfiguration();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("human PTY outlives the Agent deadline and still exits on Host disposal", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-shell-lifetime-"),
+  );
+  let observeExit!: () => void;
+  const exited = new Promise<void>((resolve) => {
+    observeExit = resolve;
+  });
+  const f = fixture(
+    directory,
+    undefined,
+    { timeoutMs: 80 },
+    {
+      async spawn(options) {
+        const terminal = await desktopShellPty.spawn(options);
+        terminal.onExit(() => observeExit());
+        return terminal;
+      },
+    },
+  );
+  try {
+    const human = (await f.service.request({
+      operation: "create",
+      threadId: "human",
+      cols: 80,
+      rows: 24,
+    })) as ShellSessionSummary;
+    await until(f.service, human.taskId, (view) => view.session.inputAvailable);
+    const invocation = (name: string, args: Record<string, unknown>) => ({
+      name,
+      arguments: args,
+      cwd: directory,
+      threadId: "human",
+      callId: "lifetime",
+      signal: new AbortController().signal,
+    });
+    const agent = await f.tools.execute(
+      f.tools.prepare(
+        invocation("shell", {
+          command: `${JSON.stringify(process.execPath)} -e "setTimeout(()=>{},30000)"`,
+          yield_time_ms: 1000,
+        }),
+      ),
+    );
+    assert.equal(
+      (agent.structuredContent as { status: string }).status,
+      "timed_out",
+    );
+    assert.equal(
+      (agent.structuredContent as { timeout_ms: number }).timeout_ms,
+      80,
+    );
+    const view = (await f.service.request({
+      operation: "read",
+      threadId: "human",
+      taskId: human.taskId,
+    })) as ShellSessionRead;
+    assert.equal(view.session.status, "running");
+    assert.equal(view.session.inputAvailable, true);
+    const receipt = await f.tools.waitRuntime.execute(
+      invocation("wait", { task_id: human.taskId, yield_time_ms: 1 }),
+    );
+    assert.equal(
+      (receipt.structuredContent as { timeout_ms: number | null }).timeout_ms,
+      null,
+    );
+    await f.tools.close();
+    await Promise.race([
+      exited,
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("PTY survived Host disposal")),
+          1000,
+        );
+        timer.unref();
+      }),
+    ]);
+    assert.deepEqual(f.tools.taskManager.listShellSessions("human"), []);
+  } finally {
+    await f.tools.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -36,7 +36,8 @@
     "check": "npm run brand:check && npm run prepare:first-party-plugins && npm run typecheck:prepared && npm run test:prepared && npm run build:prepared",
     "test:imzenx": "tsx --test integration/imzenx-sync.test.ts",
     "prepare:rtk": "node ./scripts/prepare-rtk.mjs",
-    "typecheck:prepared": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false"
+    "typecheck:prepared": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
+    "postinstall": "node ./scripts/prepare-shell-pty.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
