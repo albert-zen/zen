@@ -323,7 +323,8 @@ button:disabled {
 
 .app-shell {
   --workspace-panel-width: 0px;
-  --sidebar-track: var(--sidebar-width, 264px);
+  --sidebar-width: 264px;
+  --sidebar-track: var(--sidebar-width);
   --sidebar-divider-x: var(--sidebar-track);
   --titlebar-brand-track: var(--sidebar-track);
   --native-titlebar-height: 44px;
