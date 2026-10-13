@@ -21,14 +21,12 @@ def shared_media_root(
     *,
     process_cwd: Path,
 ) -> Path | None:
-    """Derive the tightest ancestor of enabled channels' explicit inbound media dirs.
+    """Select a declared media directory that contains all other declared roots.
 
-    The result attests exactly the directories the deployment explicitly chose
-    for inbound media, so the App Server can read channel-downloaded images
-    without a configured IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT. Channels on
-    SDK-default media directories are not covered; their deployments keep the
-    explicit setting. Returns None when no enabled channel declares media_dir or
-    the directories share no common ancestor.
+    The pinned SDK accepts one root, not an allowlist. Never infer a broader
+    ancestor: disjoint roots require explicit deployment attestation. SDK-default
+    directories do not contribute a root. The caller must separately establish
+    that the App Server shares this process's filesystem.
     """
     if not isinstance(config, dict):
         return None
@@ -38,18 +36,22 @@ def shared_media_root(
         if not isinstance(channel_config, dict) or channel_config.get("enabled") is not True:
             continue
         raw = channel_config.get("media_dir")
-        if not isinstance(raw, str) or not raw.strip():
+        if not isinstance(raw, str):
             continue
-        candidate = Path(raw.strip()).expanduser()
+        # Match the pinned SDK factories: Telegram trims path configuration,
+        # whereas QQ, Feishu and Weixin preserve whitespace in path names.
+        if channel_id == "telegram":
+            raw = raw.strip()
+        if not raw:
+            continue
+        candidate = Path(raw).expanduser()
         if not candidate.is_absolute():
             candidate = process_cwd / candidate
         roots.append(candidate.resolve())
-    if not roots:
-        return None
-    try:
-        return Path(os.path.commonpath([str(root) for root in roots]))
-    except ValueError:
-        return None
+    return next(
+        (root for root in roots if all(other.is_relative_to(root) for other in roots)),
+        None,
+    )
 
 
 def build_channels(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -841,11 +842,19 @@ def _qq_channel_config(media_dir: Path | None) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_create_gateway_derives_shared_root_from_channel_media(tmp_path: Path) -> None:
-    media = tmp_path / "inbound-media"
-    media.mkdir()
+@pytest.mark.parametrize("raw_media", ["inbound-media", " inbound-media ", "~/qq-media"])
+async def test_create_gateway_derives_shared_root_from_channel_media(
+    tmp_path: Path, monkeypatch, raw_media: str
+) -> None:
+    process_cwd = tmp_path / "process"
+    process_cwd.mkdir()
+    monkeypatch.chdir(process_cwd)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    if os.name == "nt" and raw_media.endswith(" "):
+        pytest.skip("trailing whitespace is not a native Windows directory name")
+    media = tmp_path / "qq-media" if raw_media.startswith("~/") else process_cwd / raw_media
     image = media / "photo.png"
-    image.write_bytes(b"png")
     client = FakeAppServer()
     await client.start_thread(cwd=str(tmp_path))
     gateway, state = create_gateway(
@@ -855,9 +864,12 @@ async def test_create_gateway_derives_shared_root_from_channel_media(tmp_path: P
             gateway_state_file=tmp_path / "gateway.sqlite3",
         ),
         client=client,
-        channel_config=_qq_channel_config(media),
+        local_app_server=True,
+        channel_config=_qq_channel_config(Path(raw_media)),
     )
     try:
+        assert media.is_dir()
+        image.write_bytes(b"png")
         application = next(iter(gateway._applications.values()))
         await application.send_input(
             ThreadRef("zen-main", "thread-1"),
@@ -872,8 +884,10 @@ async def test_create_gateway_derives_shared_root_from_channel_media(tmp_path: P
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("local_app_server", [False, True])
 async def test_create_gateway_prefers_explicit_shared_root_over_derivation(
     tmp_path: Path,
+    local_app_server: bool,
 ) -> None:
     explicit = tmp_path / "explicit"
     explicit.mkdir()
@@ -887,12 +901,13 @@ async def test_create_gateway_prefers_explicit_shared_root_over_derivation(
     await client.start_thread(cwd=str(tmp_path))
     gateway, state = create_gateway(
         Settings(
-            app_server_url="ws://127.0.0.1:4500",
+            app_server_url="wss://remote.invalid:4500",
             cwd=tmp_path,
             gateway_state_file=tmp_path / "gateway.sqlite3",
             app_server_shared_filesystem_root=explicit,
         ),
         client=client,
+        local_app_server=local_app_server,
         channel_config=_qq_channel_config(media),
     )
     try:
@@ -910,3 +925,123 @@ async def test_create_gateway_prefers_explicit_shared_root_over_derivation(
         await state.close()
 
     assert len(client.started_turns) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_rejects_images_outside_disjoint_media_roots(tmp_path: Path) -> None:
+    first, second = tmp_path / "qq" / "media", tmp_path / "telegram" / "media"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    image = tmp_path / "private" / "outside.png"
+    image.parent.mkdir()
+    image.write_bytes(b"synthetic image")
+    config = _qq_channel_config(first)
+    config["telegram"] = {
+        "enabled": True,
+        "bot_token": "synthetic",
+        "allowed_user_ids": ["user-1"],
+        "media_dir": str(second),
+    }
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+        ),
+        client=client,
+        local_app_server=True,
+        channel_config=config,
+    )
+    try:
+        application = next(iter(gateway._applications.values()))
+        with pytest.raises(ValueError, match="requires a configured shared_filesystem_root"):
+            await application.send_input(ThreadRef("zen-main", "thread-1"), _media_input(image))
+        assert not client.started_turns
+    finally:
+        await state.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["wss://remote.invalid:4500", "ws://127.0.0.1:4500"])
+async def test_standalone_server_does_not_infer_shared_filesystem(tmp_path: Path, url: str) -> None:
+    media = tmp_path / "local-spool"
+    media.mkdir()
+    image = media / "photo.png"
+    image.write_bytes(b"synthetic image")
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url=url,
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+        ),
+        channel_config=_qq_channel_config(media),
+    )
+    try:
+        application = next(iter(gateway._applications.values()))
+        assert application._shared_filesystem_root is None
+        assert application._client._shared_filesystem_verifier is None
+        with pytest.raises(ValueError, match="requires a configured shared_filesystem_root"):
+            await application.send_input(ThreadRef("zen-main", "thread-1"), _media_input(image))
+    finally:
+        await state.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["sibling", "symlink-escape", "missing", "directory"])
+async def test_local_media_dispatch_keeps_sdk_path_guards(tmp_path: Path, kind: str) -> None:
+    media = tmp_path / "media"
+    media.mkdir()
+    outside = tmp_path / "private.png"
+    outside.write_bytes(b"synthetic image")
+    image = media / "photo.png"
+    if kind == "sibling":
+        image = outside
+    elif kind == "symlink-escape":
+        try:
+            image.symlink_to(outside)
+        except OSError:
+            pytest.skip("file symlinks unavailable")
+    elif kind == "directory":
+        image.mkdir()
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+        ),
+        client=client,
+        channel_config=_qq_channel_config(media),
+        local_app_server=True,
+    )
+    try:
+        if kind == "missing":
+            image.write_bytes(b"synthetic image")
+        user_input = _media_input(image)
+        if kind == "missing":
+            image.unlink()
+        application = next(iter(gateway._applications.values()))
+        with pytest.raises(ValueError):
+            await application.send_input(ThreadRef("zen-main", "thread-1"), user_input)
+        assert not client.started_turns
+    finally:
+        await state.close()
+
+
+@pytest.mark.asyncio
+async def test_local_gateway_fails_when_declared_media_root_is_a_file(tmp_path: Path) -> None:
+    media = tmp_path / "media"
+    media.write_bytes(b"synthetic non-directory")
+    with pytest.raises(FileExistsError):
+        create_gateway(
+            Settings(
+                app_server_url="ws://127.0.0.1:4500",
+                cwd=tmp_path,
+                gateway_state_file=tmp_path / "gateway.sqlite3",
+            ),
+            channel_config=_qq_channel_config(media),
+            local_app_server=True,
+        )

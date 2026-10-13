@@ -97,6 +97,9 @@ async def run() -> None:
         gateway, state = create_gateway(
             settings,
             channel_config=channel_config,
+            # ZenX launches this child alongside its own local App Server and
+            # supplies that server's private connection descriptor over the pipe.
+            local_app_server=True,
             persistent_subscriptions=True,
             controller_factory=paw.wrap,
             delivery_authorizer=paw,

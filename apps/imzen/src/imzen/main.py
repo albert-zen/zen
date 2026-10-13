@@ -60,12 +60,17 @@ def create_gateway(
     client=None,
     channels=None,
     channel_config=None,
+    local_app_server: bool = False,
     persistent_subscriptions: bool = False,
     controller_factory=None,
     delivery_authorizer=None,
     outbound_presentation=None,
 ) -> tuple[ImAgentGateway, SQLiteGatewayState]:
-    """Compose the same SDK bridge for standalone IMZen and the ZenX plugin."""
+    """Compose the same SDK bridge for standalone IMZen and the ZenX plugin.
+
+    Only a host that owns both local processes may set local_app_server. A
+    loopback URL or locally existing directory alone cannot establish sharing.
+    """
     loaded_channel_config = channel_config
     if (
         channels is None
@@ -84,11 +89,10 @@ def create_gateway(
         )
     )
     shared_filesystem_root = resolved.app_server_shared_filesystem_root
-    if shared_filesystem_root is None:
-        # Unattested deployments still receive channel-downloaded images: attest
-        # exactly the media directories the enabled channels already own. The
-        # SDK resolves the attested root strictly, so create the declared media
-        # directories the channels would create on first download anyway.
+    if shared_filesystem_root is None and local_app_server:
+        # The local Host owns both processes. Select only an explicitly declared
+        # media root, never an undeclared common ancestor. The SDK resolves roots
+        # strictly; create the selected directory as its materializer would.
         shared_filesystem_root = shared_media_root(
             loaded_channel_config,
             process_cwd=Path.cwd(),

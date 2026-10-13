@@ -496,7 +496,7 @@ export const en = {
     "Use absolute paths. Channels use the IMZen configuration, and credentials stay in a private local file.",
   advancedSettings: "Advanced settings",
   sharedImageDirectoryOptional:
-    "Shared image directory (optional; empty uses the channels' configured media directories)",
+    "Shared image directory (optional; no automatic parent-directory access)",
   newConversationPermissions: "New conversation permissions",
   requireApprovalBeforeExecution: "Require approval before execution",
   allowChannelsWithoutAUserConversationAllowlist:
@@ -1182,8 +1182,7 @@ export const zhCN = {
   useAbsolutePathsChannelsUseTheImzen:
     "使用绝对路径。频道沿用 IMZen 配置，凭证保存在本机私有文件中。",
   advancedSettings: "高级设置",
-  sharedImageDirectoryOptional:
-    "图片共享目录（可选，留空时自动使用频道配置的媒体目录）",
+  sharedImageDirectoryOptional: "图片共享目录（可选；不会自动扩大至上级目录）",
   newConversationPermissions: "新会话执行权限",
   requireApprovalBeforeExecution: "执行前审批",
   allowChannelsWithoutAUserConversationAllowlist:
