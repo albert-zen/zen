@@ -255,6 +255,10 @@ jobs:
           CI: "1"
           ZENX_REQUIRE_PLAYWRIGHT: "1"
         run: npm --workspace apps/zenx run smoke:providers
+      - name: Exercise hidden and minimized Workspace browser capture
+        timeout-minutes: 3
+        working-directory: apps/zenx
+        run: npx --no-install electron ./out/main/workspace-browser-smoke.js
 
   android-mobile:
     name: Android TLS Host integration and debug APK
