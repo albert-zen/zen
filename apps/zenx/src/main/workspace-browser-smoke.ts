@@ -906,6 +906,20 @@ async function assertStableControlLayout(): Promise<void> {
       for (const width of [320, 390, 900]) {
         // Exercise real narrow workspace columns without depending on the
         // desktop window manager honoring asynchronous native window resizing.
+        await layout.webContents.executeJavaScript(
+          `document.querySelector('#fixture').style.width=${width}+'px'`,
+        );
+        // Reduced-motion CSS still permits a 0.01ms width transition. Settle
+        // fixture sizing before testing status changes, without replaying them.
+        await eventually(async () => {
+          assert.equal(
+            await layout.webContents.executeJavaScript(
+              "document.querySelector('#fixture').getBoundingClientRect().width",
+            ),
+            width,
+            "Fixture width transition must settle before status checks",
+          );
+        });
         let expected: unknown;
         let buttonsVisible = true;
         let statusesReadable = true;
@@ -926,7 +940,6 @@ async function assertStableControlLayout(): Promise<void> {
           );
           const measured = await layout.webContents
             .executeJavaScript(`(async()=>{
-            document.querySelector('#fixture').style.width=${width}+'px';
             document.querySelector('#fixture').innerHTML=${JSON.stringify(markup)};
             await new Promise(requestAnimationFrame);
             const viewport=document.querySelector('.workspace-browser-viewport').getBoundingClientRect();
