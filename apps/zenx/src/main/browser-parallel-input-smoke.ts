@@ -328,12 +328,6 @@ export async function runTargetedInputContractSmoke(options: {
   origin: string;
   guard(): Promise<void>;
   onPhase?(phase: string): void;
-  onTransport?(value: {
-    kind: "close" | "error";
-    lastMethod?: string;
-    code?: number;
-    reason: string;
-  }): void;
 }): Promise<Record<string, unknown>[]> {
   const { backend, sessionId, tabId, endpoint, origin, guard } = options;
   assert.ok(backend.pointerClick && backend.keyPress);
@@ -358,14 +352,6 @@ export async function runTargetedInputContractSmoke(options: {
   // rewritten events, retries, tracker access or synthetic trusted-event shims.
   // Only the provider's browser socket/session-scoped Input is counted.
   const originalSend = WebSocket.prototype.send;
-  const observedSockets = new Map<
-    WebSocket,
-    {
-      lastMethod?: string;
-      close(code: number, reason: Buffer): void;
-      error(error: Error): void;
-    }
-  >();
   WebSocket.prototype.send = function (this: WebSocket, ...args: unknown[]) {
     if (
       this.url === version.webSocketDebuggerUrl &&
@@ -376,34 +362,6 @@ export async function runTargetedInputContractSmoke(options: {
         sessionId?: string;
         params?: { type?: string };
       };
-      let observed = observedSockets.get(this);
-      if (!observed) {
-        const socket = this;
-        const record = (
-          kind: "close" | "error",
-          reason: string,
-          code?: number,
-        ) => {
-          try {
-            options.onTransport?.({
-              kind,
-              code,
-              lastMethod: observedSockets.get(socket)?.lastMethod,
-              reason: reason.slice(0, 160),
-            });
-          } catch {
-            /* Diagnostics cannot alter transport settlement. */
-          }
-        };
-        observed = {
-          close: (code, reason) => record("close", reason.toString(), code),
-          error: (error) => record("error", error.message),
-        };
-        observedSockets.set(socket, observed);
-        socket.on("close", observed.close);
-        socket.on("error", observed.error);
-      }
-      observed.lastMethod = message.method?.slice(0, 100);
       if (message.method?.startsWith("Input.")) {
         assert.ok(
           message.sessionId,
@@ -761,12 +719,147 @@ export async function runTargetedInputContractSmoke(options: {
     return reports;
   } finally {
     WebSocket.prototype.send = originalSend;
-    for (const [socket, observed] of observedSockets) {
-      socket.removeListener("close", observed.close);
-      socket.removeListener("error", observed.error);
-    }
     rpc.close();
   }
+}
+
+/** Passive fixture-only tracing; only the exact owned browser socket is observed. */
+function traceOwnedCdpTransport(
+  browserSocketUrl: string,
+  record: (value: Record<string, unknown>) => void,
+): () => void {
+  const originalSend = WebSocket.prototype.send;
+  const methods = new Set([
+    "Target.getTargets",
+    "Target.createTarget",
+    "Target.attachToTarget",
+    "Target.detachFromTarget",
+    "Target.detachedFromTarget",
+    "Target.targetDestroyed",
+    "Target.setDiscoverTargets",
+    "Page.enable",
+    "Page.getFrameTree",
+    "Page.createIsolatedWorld",
+    "Page.captureScreenshot",
+    "Page.frameNavigated",
+    "Page.navigatedWithinDocument",
+    "Page.frameStoppedLoading",
+    "Runtime.enable",
+    "Runtime.evaluate",
+    "Runtime.releaseObject",
+    "Runtime.executionContextCreated",
+    "Runtime.executionContextDestroyed",
+    "Runtime.executionContextsCleared",
+    "DOM.describeNode",
+    "DOM.resolveNode",
+    "Input.dispatchMouseEvent",
+    "Input.dispatchKeyEvent",
+  ]);
+  let active = true;
+  const sockets = new Map<
+    WebSocket,
+    {
+      message(raw: unknown): void;
+      close(code: number): void;
+      error(): void;
+      pending: Map<number, { method: string; at: number }>;
+      number: number;
+    }
+  >();
+  const emit = (value: Record<string, unknown>) => {
+    try {
+      if (active) record(value);
+    } catch {
+      /* Diagnostics never affect transport. */
+    }
+  };
+  const send = function (this: WebSocket, ...args: unknown[]) {
+    try {
+      if (
+        active &&
+        this.url === browserSocketUrl &&
+        typeof args[0] === "string"
+      ) {
+        let observed = sockets.get(this);
+        if (!observed && sockets.size < 4) {
+          const number = sockets.size + 1;
+          const pending = new Map<number, { method: string; at: number }>();
+          observed = {
+            number,
+            pending,
+            message: (raw) => {
+              try {
+                const message = JSON.parse(String(raw)) as {
+                  id?: number;
+                  method?: string;
+                };
+                if (Number.isSafeInteger(message.id)) {
+                  const sent = pending.get(message.id!);
+                  if (sent) {
+                    pending.delete(message.id!);
+                    emit({
+                      kind: "reply",
+                      socket: number,
+                      id: message.id,
+                      method: sent.method,
+                      elapsedMs: Date.now() - sent.at,
+                    });
+                  }
+                } else if (message.method && methods.has(message.method)) {
+                  emit({
+                    kind: "event",
+                    socket: number,
+                    method: message.method,
+                  });
+                }
+              } catch {
+                /* Malformed or late diagnostics cannot alter a reply. */
+              }
+            },
+            close: (code) => emit({ kind: "close", socket: number, code }),
+            error: () => emit({ kind: "error", socket: number }),
+          };
+          sockets.set(this, observed);
+          this.on("message", observed.message);
+          this.on("close", observed.close);
+          this.on("error", observed.error);
+        }
+        const message = JSON.parse(args[0]) as { id?: number; method?: string };
+        if (
+          observed &&
+          Number.isSafeInteger(message.id) &&
+          typeof message.method === "string"
+        ) {
+          const method = methods.has(message.method) ? message.method : "other";
+          if (observed.pending.size >= 64)
+            observed.pending.delete(observed.pending.keys().next().value!);
+          observed.pending.set(message.id!, { method, at: Date.now() });
+          emit({
+            kind: "send",
+            socket: observed.number,
+            id: message.id,
+            method,
+          });
+        }
+      }
+    } catch {
+      /* The original send must run even if diagnostics fail. */
+    }
+    return Reflect.apply(originalSend, this, args);
+  };
+  WebSocket.prototype.send = send;
+  return () => {
+    active = false;
+    if (WebSocket.prototype.send === send)
+      WebSocket.prototype.send = originalSend;
+    for (const [socket, observed] of sockets) {
+      socket.removeListener("message", observed.message);
+      socket.removeListener("close", observed.close);
+      socket.removeListener("error", observed.error);
+      observed.pending.clear();
+    }
+    sockets.clear();
+  };
 }
 
 async function main(): Promise<void> {
@@ -790,6 +883,8 @@ async function main(): Promise<void> {
   let browserError = "";
   let phase = "startup";
   const transportDiagnostics: unknown[] = [];
+  let transportDropped = 0;
+  let stopTransport: (() => void) | undefined;
   let native: Native | undefined;
   let connection: UserBrowserConnection | undefined;
   let browserRpc: Rpc | undefined,
@@ -813,12 +908,14 @@ async function main(): Promise<void> {
     assert.ok(address && typeof address !== "string");
     const origin = `http://127.0.0.1:${address.port}`;
     const executable = await findExecutable();
+    phase = "startup-native-compile";
     native = await startNative(directory);
     const nativeReady = await withDeadline(
       native.ready,
       15_000,
       "native fixture readiness",
     );
+    phase = "startup-browser-launch";
     browser = spawn(
       executable,
       [
@@ -867,6 +964,17 @@ async function main(): Promise<void> {
       Browser: string;
       webSocketDebuggerUrl: string;
     };
+    stopTransport = traceOwnedCdpTransport(
+      version.webSocketDebuggerUrl,
+      (value) => {
+        transportDiagnostics.push({ phase, at: Date.now(), ...value });
+        if (transportDiagnostics.length > 48) {
+          transportDiagnostics.shift();
+          transportDropped++;
+        }
+      },
+    );
+    phase = "startup-user-document";
     browserRpc = await Rpc.connect(version.webSocketDebuggerUrl);
     const user = await poll(
       async () =>
@@ -887,6 +995,7 @@ async function main(): Promise<void> {
         return undefined;
       } // Read-only readiness may race initial navigation.
     }, "user fixture document");
+    phase = "startup-user-focus";
     await userRpc.evaluate(`document.querySelector('#user-input').focus()`);
     await browserRpc.send("Target.activateTarget", { targetId: user.id }); // Fixture setup only.
     await native.call("activateBrowser", {
@@ -902,10 +1011,12 @@ async function main(): Promise<void> {
       hwnd: nativeBrowser.hwnd,
       title: userTitle,
     });
+    phase = "startup-connect-provider";
     connection = await connectUserBrowserCdp(endpoint);
     await connection.backend.listTabs(sessionId);
     const beforeOpen = await userRpc.evaluate<PageState>(stateScript);
     assert.equal(beforeOpen.focus, "user-input");
+    phase = "startup-open-agent";
     const opened = await connection.backend.open(sessionId, `${origin}/agent`);
     const agent = await poll(
       async () =>
@@ -915,6 +1026,7 @@ async function main(): Promise<void> {
         ),
       "agent fixture target",
     );
+    phase = "startup-agent-document";
     agentRpc = await Rpc.connect(agent.webSocketDebuggerUrl);
     await poll(async () => {
       try {
@@ -927,6 +1039,7 @@ async function main(): Promise<void> {
         return undefined;
       }
     }, "agent fixture document");
+    phase = "startup-agent-inspection";
     // The fixture DOM can exist before the provider receives the final initial
     // navigation lifecycle event. Settle only this read, before concurrent input.
     await poll(async () => {
@@ -939,6 +1052,7 @@ async function main(): Promise<void> {
         throw error;
       }
     }, "initial Agent document lifecycle");
+    phase = "startup-target-window-check";
     const userWindow = await browserRpc.send("Browser.getWindowForTarget", {
       targetId: user.id,
     });
@@ -1296,10 +1410,6 @@ async function main(): Promise<void> {
         onPhase: (value) => {
           phase = value;
         },
-        onTransport: (value) => {
-          transportDiagnostics.push({ phase, ...value });
-          if (transportDiagnostics.length > 8) transportDiagnostics.shift();
-        },
         guard: async () => {
           const [front, userState, agentVisibility] = await Promise.all([
             native!.call("snapshot"),
@@ -1369,6 +1479,7 @@ async function main(): Promise<void> {
         reports,
         phase,
         transportDiagnostics,
+        transportDropped,
         ownedBrowser: {
           pid: browser?.pid,
           exitCode: browser?.exitCode,
@@ -1381,6 +1492,7 @@ async function main(): Promise<void> {
     );
     throw error;
   } finally {
+    stopTransport?.();
     await native?.call("clear").catch(() => undefined);
     await Promise.resolve(connection?.backend.close()).catch(() => undefined);
     await browserRpc?.send("Browser.close").catch(() => undefined);
