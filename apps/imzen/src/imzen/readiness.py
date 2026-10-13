@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SDK_REVISION = "7d5f1179365679d0f95abd5cb2ce76547238d05f"
+SDK_REVISION = "bb8055054e4b77b2677682e708dd6f394b56406c"
 SDK_REPOSITORY = "https://github.com/albert-zen/im-agent-sdk.git"
 CHANNELS = ("qq", "telegram", "feishu", "weixin")
 MAX_FILE_BYTES = 1024 * 1024

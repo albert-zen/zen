@@ -403,9 +403,12 @@ async def test_threads_pick_status_history_catchup_and_unsupported_delete(
             ("m4", "/catchup 2"),
             ("m5", "/history 2"),
             ("m6", "/delete"),
-            ("m7", "continue from IM"),
         ):
             await channel.emit_message(inbound(message_id, text))
+        # The selected desktop-origin Turn must finish before a new IM Turn.
+        # Active Turns without IM reply correlation are covered by test_steering.
+        client.turn_pages["thread-new"][0]["status"] = "completed"
+        await channel.emit_message(inbound("m7", "continue from IM"))
     finally:
         await gateway.stop()
 

@@ -1,5 +1,5 @@
 /** IMZenX-owned form declarations verified against the pinned provider source.
- * SDK 7d5f1179365679d0f95abd5cb2ce76547238d05f exposes from_config methods,
+ * SDK bb8055054e4b77b2677682e708dd6f394b56406c exposes from_config methods,
  * not a field-descriptor API: imagent/channels/native/{qq,telegram,feishu}.py
  * and common access.py. This is a bounded IM configuration schema, not a new
  * plugin permission, credential store or channel runtime.
@@ -23,7 +23,7 @@ export interface ImChannelSchema {
 }
 export const IM_CHANNEL_SCHEMA_VERSION = 1;
 export const IM_CHANNEL_SDK_REVISION =
-  "7d5f1179365679d0f95abd5cb2ce76547238d05f";
+  "bb8055054e4b77b2677682e708dd6f394b56406c";
 const common: readonly ImChannelField[] = [
   {
     key: "enabled",

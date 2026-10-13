@@ -233,8 +233,10 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
 - 投递或处理失败通过 SDK 的终态 failure presenter 明确告知用户；不在 IMZen
   新建 durable queue、outbox 或自我修复状态机。
 
-SDK 依赖固定在已合入 `im-agent-sdk` `main` 的完整 ADR 0015 rollout 提交
-`57f255fb1f40a095aeabb5a6967380ba057494a3`。IMZen 只配置它实际使用的强类型
+SDK 依赖固定在 [SDK #357](https://github.com/albert-zen/im-agent-sdk/pull/357)
+已审查的不可变提交 `bb8055054e4b77b2677682e708dd6f394b56406c`，包含完整 ADR 0015 rollout
+和 compatibility 分支上的修复。该 SDK PR 仍待合入 `codex/im-input-failure-fix-sdk-compat`；
+Zen 接入保持 draft，不将其描述为 SDK v1 main。IMZen 只配置它实际使用的强类型
 I1 inbound content transformer、I2 classified failure presenter 与 request
 presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
 

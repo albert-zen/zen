@@ -1,11 +1,14 @@
 # IMZen
 
 IMZen is a thin Python client of the Zen App Server. It composes the IM Agent
-SDK at `7d5f1179365679d0f95abd5cb2ce76547238d05f`, a compatibility
-revision directly after the complete ADR 0015 rollout commit `57f255f`.
-The revision is reachable on the SDK's independent
-`codex/im-input-failure-fix-sdk-compat` ref, not a PyPI release or a merge to
-the SDK v1 main. IMZen does not implement a second
+SDK at `bb8055054e4b77b2677682e708dd6f394b56406c`, the reviewed immutable head of
+[SDK PR #357](https://github.com/albert-zen/im-agent-sdk/pull/357). This draft
+integration depends on that still-unmerged PR, which targets
+`codex/im-input-failure-fix-sdk-compat` at `7d5f1179365679d0f95abd5cb2ce76547238d05f`.
+It is not a PyPI release or SDK v1 main. Recheck the upstream merge before
+marking the integration ready; any different dependency revision requires
+coordinated lock, readiness and channel-schema updates and verification.
+IMZen does not implement a second
 Gateway, Channel runtime, Agent backend, transcript, scheduler, or recovery
 state machine.
 
@@ -121,10 +124,27 @@ Agent output is delivered unchanged.
 | Processing failures                         | Middleware error message                | SDK classified failure phase + bounded IMZen presenter          |
 | Durable queue/recovery state                | None                                    | None                                                            |
 
+## Active-Turn input
+
+The pinned Zen adapter starts a new Turn when the Thread is idle. During a
+steady active Turn previously started through IM, further input steers that
+same native Turn with an exact expected-Turn fence, retaining the original IM
+reply correlation. Images still require the explicit shared-root attestation
+and a verified connection epoch; steering does not broaden filesystem access.
+The SDK's explicit `steer_active_turn=False` constructor opt-out remains available.
+
+This does not accept every mid-turn message. An active Turn started outside IM
+has no IM reply correlation and is rejected before native input dispatch.
+Concurrent admission can still race with initial correlation or Turn completion;
+a native ended-Turn rejection remains a failure with no fallback start.
+Unknown transport outcomes are reported without automatic mutation replay.
+There is no new queue, retry policy, permission setting or Turn authority.
+
 ## SDK migration dependency
 
-The pin is the complete SDK `main` commit after the focused rollout tracked by
-[SDK issue #49](https://github.com/albert-zen/im-agent-sdk/issues/49). IMZen
+The pin retains the complete ADR 0015 rollout tracked by
+[SDK issue #49](https://github.com/albert-zen/im-agent-sdk/issues/49) plus the
+compatibility branch fixes and the reviewed Zen steering change. IMZen
 composes immutable repository and extension groups. It configures only I1
 inbound content transformation, I2 classified failure presentation, and request
 presentation in standalone IMZen. A1/O2 remain absent; IMZenX uses O1 only
