@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { WorkspaceBrowser } from "../src/main/workspace-browser.js";
+import { BrowserZenXCapabilityPackage } from "../src/main/capabilities/browser-provider.js";
 import { OBSERVATION_CAPTURE } from "../src/main/capabilities/observation-capture.js";
 
 test("Workspace Browser human view and Agent backend operate the exact same target", async () => {
@@ -117,6 +118,113 @@ test("an aborted current Agent navigation fails instead of reporting success", a
     await assert.rejects(navigating, /interrupted/u);
   } finally {
     await fixture.close();
+  }
+});
+
+test("navigation ignores a prior document finish even when native loadURL resolves early", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const opened = await f.browser.open("a", "https://example.test/prior");
+    const web = f.views[0]!.webContents;
+    const before = web.listenerCount("did-finish-load");
+    web.loadURL = async (url) => {
+      web.emit("did-start-navigation", {}, url, false, true);
+      // Confirmed Electron 43 ordering: the prior document's late finish
+      // resolves loadURL while getURL still names the prior page.
+      web.emit("did-finish-load");
+    };
+    let settled = false;
+    const next = f.browser.navigate(
+      "a",
+      opened.tabId,
+      "https://example.test/next",
+    );
+    void next.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      settled,
+      false,
+      "prior-page completion must not fulfill navigate",
+    );
+    assert.equal(web.getURL(), "https://example.test/prior");
+    web.finishLoad("https://example.test/redirected");
+    assert.equal(
+      (await next).url,
+      "https://example.test/redirected",
+      "final redirect URL remains valid",
+    );
+    assert.equal(web.listenerCount("did-finish-load"), before);
+  } finally {
+    await f.close();
+  }
+});
+
+test("early native completion still rejects superseded, closed and stopped navigation", async () => {
+  for (const ending of ["superseded", "closed", "stopped"] as const) {
+    const f = await sharedFixture();
+    try {
+      f.browser.bindThreadSession("a", "thread-a");
+      const opened = await f.browser.open("a", "https://example.test/prior");
+      const web = f.views[0]!.webContents;
+      const before = web.listenerCount("did-finish-load");
+      web.loadURL = async (url) => {
+        web.emit("did-start-navigation", {}, url, false, true);
+        web.emit("did-finish-load");
+      };
+      const first = f.browser.navigate(
+        "a",
+        opened.tabId,
+        "https://example.test/slow",
+      );
+      const rejected = assert.rejects(
+        first,
+        /superseded|no longer available|stopped/u,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      if (ending === "superseded") {
+        const second = f.browser.navigate(
+          "a",
+          opened.tabId,
+          "https://example.test/fast",
+        );
+        web.finishLoad("https://example.test/fast");
+        assert.equal((await second).url, "https://example.test/fast");
+      } else if (ending === "closed") web.close();
+      else web.emit("did-stop-loading");
+      await rejected;
+      assert.equal(web.listenerCount("did-finish-load"), before);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("same-document navigation completes without requiring a document load event", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const opened = await f.browser.open("a", "https://example.test/page");
+    const web = f.views[0]!.webContents;
+    web.loadURL = async (url) => {
+      web.emit("did-start-navigation", {}, url, true, true);
+      web.finishLoad(url, true);
+    };
+    assert.equal(
+      (
+        await f.browser.navigate(
+          "a",
+          opened.tabId,
+          "https://example.test/page#section",
+        )
+      ).url,
+      "https://example.test/page",
+    );
+    assert.equal(web.getURL(), "https://example.test/page#section");
+  } finally {
+    await f.close();
   }
 });
 
@@ -434,6 +542,455 @@ test("Workspace hidden capture retains fresh action IDs beyond the public cap an
   }
 });
 
+test("explicit human control blocks Agent mutations and return requires a new observation", async () => {
+  const fixture = await sharedFixture();
+  try {
+    const { browser, sender, views } = fixture;
+    browser.bindThreadSession("agent-session", "thread-a");
+    const tab = await browser.open(
+      "agent-session",
+      "https://example.test/start",
+    );
+    const prior = await browser.inspect("agent-session", tab.tabId);
+    const take = () =>
+      browser.command(sender as never, "thread-a", "take-control", tab.tabId);
+    assert.equal(take()[0]?.control, "human");
+    assert.equal(take()[0]?.control, "human", "takeover is idempotent");
+    await assert.rejects(
+      browser.navigate(
+        "agent-session",
+        tab.tabId,
+        "https://example.test/forbidden",
+      ),
+      /human control/u,
+    );
+    await assert.rejects(
+      browser.closeTab("agent-session", tab.tabId),
+      /human control/u,
+    );
+    await assert.rejects(
+      browser.click("agent-session", tab.tabId, prior.observationId, "old"),
+      /human control/u,
+    );
+    assert.throws(
+      () => prior[OBSERVATION_CAPTURE]!.assertCurrent!(),
+      /stale|changed/u,
+    );
+    const during = await browser.inspect("agent-session", tab.tabId);
+    assert.equal(
+      during.control,
+      "human",
+      "read-only inspection remains available",
+    );
+    browser.command(sender as never, "thread-a", "return-control", tab.tabId);
+    await assert.rejects(
+      browser.navigate(
+        "agent-session",
+        tab.tabId,
+        "https://example.test/forbidden",
+      ),
+      /fresh observation/u,
+    );
+    await assert.rejects(
+      browser.closeTab("agent-session", tab.tabId),
+      /fresh observation/u,
+    );
+    const returned = await browser.inspect("agent-session", tab.tabId);
+    assert.equal(returned.requiresFreshObservation, false);
+    browser.command(sender as never, "thread-a", "return-control", tab.tabId);
+    assert.equal(
+      (await browser.listTabs("agent-session"))[0]?.requiresFreshObservation,
+      false,
+      "repeated return does not expire the fresh observation",
+    );
+    await assert.rejects(
+      browser.navigate(
+        "agent-session",
+        tab.tabId,
+        "https://example.test/old-queued",
+      ),
+      /fresh observation/u,
+    );
+    await assert.rejects(
+      browser.closeTab("agent-session", tab.tabId),
+      /fresh observation/u,
+    );
+    await assert.rejects(
+      browser.navigate(
+        "agent-session",
+        tab.tabId,
+        "https://example.test/old-queued",
+        undefined,
+        prior.observationId,
+      ),
+      /stale/u,
+    );
+    await browser.navigate(
+      "agent-session",
+      tab.tabId,
+      "https://example.test/resumed",
+      undefined,
+      returned.observationId,
+    );
+    assert.equal(
+      views[0]!.webContents.loadCalls.length,
+      2,
+      "rejected work is never replayed",
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("takeover blocks every mutation but leaves human navigation and unrelated tabs usable", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    f.browser.bindThreadSession("b", "thread-b");
+    const tab = await f.browser.open("a", "https://example.test/start");
+    const other = await f.browser.open("a", "https://example.test/other");
+    f.browser.command(f.sender as never, "thread-a", "take-control", tab.tabId);
+    for (const mutation of [
+      () => f.browser.click("a", tab.tabId, "old", "target"),
+      () => f.browser.type("a", tab.tabId, "old", "target", "text", true),
+      () => f.browser.select("a", tab.tabId, "old", "target", "option"),
+      () => f.browser.scroll("a", tab.tabId, "old", "down", 100),
+      () =>
+        f.browser.navigate("a", tab.tabId, "https://example.test/forbidden"),
+      () => f.browser.closeTab("a", tab.tabId),
+    ])
+      await assert.rejects(mutation(), /human control/u);
+    assert.throws(
+      () =>
+        f.browser.command(
+          f.sender as never,
+          "thread-b",
+          "return-control",
+          tab.tabId,
+        ),
+      /not in this Thread/u,
+    );
+    await assert.rejects(
+      f.browser.inspect("b", tab.tabId),
+      /Unknown browser target/u,
+    );
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "navigate",
+      tab.tabId,
+      "https://example.test/human",
+    );
+    await f.browser.navigate(
+      "a",
+      other.tabId,
+      "https://example.test/unrelated",
+    );
+    assert.equal(
+      f.views[0]!.webContents.loadCalls.at(-1),
+      "https://example.test/human",
+    );
+    f.browser.mount(f.sender as never, {
+      threadId: "thread-a",
+      tabId: other.tabId,
+      lease: "other",
+      bounds: { x: 0, y: 0, width: 640, height: 480 },
+    });
+    assert.equal((await f.browser.listTabs("a"))[0]?.control, "human");
+    f.browser.closeSession("a");
+    f.browser.bindThreadSession("a", "thread-a");
+    await assert.rejects(f.browser.closeTab("a", tab.tabId), /human control/u);
+    f.browser.command(f.sender as never, "thread-a", "close", tab.tabId);
+    assert.throws(
+      () =>
+        f.browser.command(
+          f.sender as never,
+          "thread-a",
+          "return-control",
+          tab.tabId,
+        ),
+      /not in this Thread/u,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("control changes during CDP preparation reject before dispatch, even after return and a newer inspection", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/start");
+    const web = f.views[0]!.webContents;
+    web.debuggerApi.defaultValue = actionInspection;
+    const observation = await f.browser.inspect("a", tab.tabId);
+    const gate = deferred<void>();
+    web.debuggerApi.nextWorld = gate;
+    const action = f.browser.click(
+      "a",
+      tab.tabId,
+      observation.observationId,
+      observation.targets[0]!.targetId,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const before = web.debuggerApi.evaluations;
+    f.browser.command(f.sender as never, "thread-a", "take-control", tab.tabId);
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "return-control",
+      tab.tabId,
+    );
+    const current = await f.browser.inspect("a", tab.tabId);
+    gate.resolve();
+    await assert.rejects(action, /control changed.*stale/u);
+    assert.equal(
+      web.debuggerApi.evaluations,
+      before + 1,
+      "only the fresh inspection dispatches",
+    );
+    assert.equal(
+      (await f.browser.listTabs("a"))[0]?.agentActionOutcomeUnknown,
+      false,
+    );
+    web.debuggerApi.defaultValue = { ok: true };
+    const result = await f.browser.click(
+      "a",
+      tab.tabId,
+      current.observationId,
+      current.targets[0]!.targetId,
+    );
+    assert.equal(
+      result.agentActionsInFlight,
+      0,
+      "settled results are not reported as pending",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("dispatched action survives takeover truthfully; return and inspection cannot authorize another mutation while it settles", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/start");
+    const web = f.views[0]!.webContents;
+    web.debuggerApi.defaultValue = actionInspection;
+    const observation = await f.browser.inspect("a", tab.tabId);
+    const gate = deferred<unknown>();
+    web.debuggerApi.nextEvaluation = gate;
+    const action = f.browser.click(
+      "a",
+      tab.tabId,
+      observation.observationId,
+      observation.targets[0]!.targetId,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal((await f.browser.listTabs("a"))[0]?.agentActionsInFlight, 1);
+    f.browser.command(f.sender as never, "thread-a", "take-control", tab.tabId);
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "return-control",
+      tab.tabId,
+    );
+    const during = await f.browser.inspect("a", tab.tabId);
+    assert.equal(during.requiresFreshObservation, true);
+    await assert.rejects(
+      f.browser.navigate(
+        "a",
+        tab.tabId,
+        "https://example.test/no",
+        undefined,
+        during.observationId,
+      ),
+      /still in flight/u,
+    );
+    gate.resolve({ ok: true });
+    await assert.rejects(action, /outcome is unknown.*dispatch/u);
+    assert.equal((await f.browser.listTabs("a"))[0]?.agentActionsInFlight, 0);
+    assert.equal(
+      (await f.browser.listTabs("a"))[0]?.agentActionOutcomeUnknown,
+      true,
+    );
+    await assert.rejects(
+      f.browser.closeTab("a", tab.tabId, undefined, during.observationId),
+      /fresh observation/u,
+    );
+    const after = await f.browser.inspect("a", tab.tabId);
+    assert.equal(after.agentActionOutcomeUnknown, false);
+    await f.browser.closeTab("a", tab.tabId, undefined, after.observationId);
+    assert.equal((await f.browser.listTabs("a")).length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("inspection started before takeover or return cannot renew action authority", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/start");
+    for (const command of ["take-control", "return-control"]) {
+      const gate = deferred<unknown>();
+      f.views[0]!.webContents.debuggerApi.nextEvaluation = gate;
+      const inspecting = f.browser.inspect("a", tab.tabId);
+      await new Promise((resolve) => setImmediate(resolve));
+      f.browser.command(f.sender as never, "thread-a", command, tab.tabId);
+      gate.resolve(actionInspection);
+      await assert.rejects(inspecting, /stale/u);
+    }
+    await assert.rejects(
+      f.browser.closeTab("a", tab.tabId),
+      /fresh observation/u,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("initial navigation taken over or closed never reports cancellation or removes a human-owned tab", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    // The new tab becomes visible during the asynchronous initial navigation.
+    const gate = deferred<void>();
+    f.nextLoad = gate;
+    const opening = f.browser.open("a", "https://example.test/slow");
+    const [tab] = await f.browser.listTabs("a");
+    assert.ok(tab);
+    f.browser.command(f.sender as never, "thread-a", "take-control", tab.tabId);
+    gate.resolve();
+    await assert.rejects(opening, /outcome is unknown/u);
+    assert.equal((await f.browser.listTabs("a"))[0]?.control, "human");
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "return-control",
+      tab.tabId,
+    );
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    const load = deferred<void>();
+    f.views[0]!.webContents.nextLoad = load;
+    const navigation = f.browser.navigate(
+      "a",
+      tab.tabId,
+      "https://example.test/slow-again",
+      undefined,
+      fresh.observationId,
+    );
+    f.browser.command(f.sender as never, "thread-a", "close", tab.tabId);
+    load.resolve();
+    await assert.rejects(navigation, /outcome is unknown/u);
+    assert.equal((await f.browser.listTabs("a")).length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("published capability forwards navigate/close observation references without replaying queued requests", async () => {
+  const f = await sharedFixture();
+  try {
+    const capability = new BrowserZenXCapabilityPackage(f.browser);
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/start");
+    const invoke = (name: string, args: Record<string, unknown> = {}) =>
+      capability.invoke(name, {
+        name,
+        callId: "fixture",
+        cwd: process.cwd(),
+        signal: new AbortController().signal,
+        arguments: { sessionId: "a", tabId: tab.tabId, ...args },
+      });
+    f.browser.command(f.sender as never, "thread-a", "take-control", tab.tabId);
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "return-control",
+      tab.tabId,
+    );
+    const inspected = (await invoke("browser_inspect")) as {
+      observationId: string;
+    };
+    await assert.rejects(
+      invoke("browser_navigate", { url: "https://example.test/queued" }),
+      /fresh observation/u,
+    );
+    await assert.rejects(invoke("browser_close"), /fresh observation/u);
+    await invoke("browser_navigate", {
+      url: "https://example.test/next",
+      observationId: inspected.observationId,
+    });
+    const after = (await invoke("browser_inspect")) as {
+      observationId: string;
+    };
+    await invoke("browser_close", { observationId: after.observationId });
+    assert.equal((await f.browser.listTabs("a")).length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("cancellation before dispatch blocks the action; cancellation after dispatch remains uncertain", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/start");
+    const web = f.views[0]!.webContents;
+    web.debuggerApi.defaultValue = actionInspection;
+    for (const afterDispatch of [false, true]) {
+      const observed = await f.browser.inspect("a", tab.tabId);
+      const control = new AbortController();
+      const gate = deferred<unknown>();
+      const prepared = deferred<void>();
+      if (afterDispatch) web.debuggerApi.nextEvaluation = gate;
+      else web.debuggerApi.nextWorld = prepared;
+      const before = web.debuggerApi.evaluations;
+      const action = f.browser.click(
+        "a",
+        tab.tabId,
+        observed.observationId,
+        observed.targets[0]!.targetId,
+        control.signal,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      control.abort(new Error("fixture cancellation"));
+      gate.resolve({ ok: true });
+      prepared.resolve();
+      await assert.rejects(
+        action,
+        afterDispatch ? /outcome is unknown/u : /fixture cancellation/u,
+      );
+      assert.equal(
+        web.debuggerApi.evaluations,
+        before + (afterDispatch ? 1 : 0),
+      );
+      assert.equal(
+        (await f.browser.listTabs("a"))[0]?.agentActionOutcomeUnknown,
+        afterDispatch,
+      );
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+const actionInspection = {
+  documentIdentity: "doc",
+  visibleText: "fixture",
+  targets: [
+    {
+      documentIdentity: "doc",
+      selector: "button",
+      role: "button",
+      name: "Act",
+      actions: ["click"],
+      state: {},
+    },
+  ],
+};
+
 async function sharedFixture() {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-race-"),
@@ -441,11 +998,14 @@ async function sharedFixture() {
   const sender = new FakeWebContents(99);
   const window = new FakeWindow(sender);
   const views: FakeView[] = [];
+  let nextLoad: ReturnType<typeof deferred<void>> | undefined;
   const browser = new WorkspaceBrowser({
     artifactDirectory: directory,
     dependencies: {
       createView: () => {
         const view = new FakeView();
+        view.webContents.nextLoad = nextLoad;
+        nextLoad = undefined;
         views.push(view);
         return view as never;
       },
@@ -454,6 +1014,9 @@ async function sharedFixture() {
   });
   return {
     browser,
+    set nextLoad(value: ReturnType<typeof deferred<void>>) {
+      nextLoad = value;
+    },
     sender,
     views,
     close: async () => {
@@ -478,6 +1041,7 @@ class FakeDebugger {
   evaluations = 0;
   defaultValue: unknown = { visibleText: "fixture", targets: [] };
   nextEvaluation?: ReturnType<typeof deferred<unknown>>;
+  nextWorld?: ReturnType<typeof deferred<void>>;
   isAttached() {
     return this.attached;
   }
@@ -488,6 +1052,9 @@ class FakeDebugger {
     if (method === "Page.getFrameTree")
       return { frameTree: { frame: { id: "main-frame" } } };
     if (method === "Page.createIsolatedWorld") {
+      const gate = this.nextWorld;
+      this.nextWorld = undefined;
+      if (gate) await gate.promise;
       assert.equal(params?.worldName, "zenx-browser-observation-v1");
       assert.equal(params?.grantUniveralAccess, false);
       return { executionContextId: 42 };
@@ -557,8 +1124,15 @@ class FakeWebContents extends EventEmitter {
     const next = this.nextLoad;
     this.nextLoad = undefined;
     if (next !== undefined) await next.promise;
+    this.finishLoad(url);
+  }
+  finishLoad(url: string, inPage = false) {
     this.#url = url;
-    this.emit("did-navigate");
+    if (inPage) this.emit("did-navigate-in-page", {}, url, true);
+    else {
+      this.emit("did-navigate", {}, url, 200, "OK");
+      this.emit("did-finish-load");
+    }
     this.emit("did-stop-loading");
   }
   getURL() {
