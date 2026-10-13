@@ -1,4 +1,55 @@
 export const en = {
+  shellTitle: "Terminal",
+  shellChooser: "Manage shared Shell sessions and open your own terminal",
+  shellLocalHost: "This thread · This device",
+  shellNew: "New terminal",
+  shellInteractive: "Interactive shell",
+  shellLoading: "Reading session directory…",
+  shellUnavailable:
+    "Interactive Shell requires the local ZenX desktop Host. No remote shell was opened.",
+  shellArchived: "Restore this thread before creating or typing in a terminal.",
+  shellSandbox:
+    "Interactive terminals require Full Access for this thread. Existing restricted Shell commands remain available.",
+  shellSessions: "Sessions",
+  shellStop: "Stop process",
+  shellStopQuestion: "Stop this Shell session?",
+  shellStopDetail:
+    "This sends termination to the owned process. Work in this session may be interrupted. Closing this view leaves it running. Process-tree coverage depends on platform; some descendant processes may survive.",
+  shellCancel: "Cancel",
+  shellOriginUser: "You · interactive",
+  shellOriginAgent: "Agent · command",
+  shellForegroundExited:
+    "Foreground exited ({{code}}). The Shell task still owns open output; completion is not confirmed.",
+  shellExitCode: "Exit code: {{code}}",
+  shellUserInput: "You control input. The Agent can read this session.",
+  shellAgentReadOnly: "Live Agent output · Read only",
+  shellEmpty: "No Shell sessions yet",
+  shellEmptyDetail:
+    "Agent commands appear here when they run. Open your own terminal to work in this thread’s directory.",
+  shellLifetime:
+    "Your terminal runs until you exit the shell, stop it, or quit the ZenX Host. Restarting never restores processes. Older output may be discarded; ended sessions remain visible briefly. Only this device’s sessions appear here.",
+  shellCloseHint: "Closing the panel keeps sessions running.",
+  shellSessionDetails: "Session details",
+  shellTaskId: "Task ID",
+  shellSessionHelp: "About these sessions",
+  shellCreationContext:
+    "Starts your local shell in this thread’s directory, including its usual startup files. The Agent can read its output; you control input and when to stop it.",
+  shellTruncated: "Older output was discarded. Showing retained scrollback.",
+  shellOutput: "Shell output",
+  shellFollow: "Jump to latest",
+  shellInputUnconfirmed: "Input delivery is unconfirmed. It was not retried.",
+  shellInputTooLarge: "Paste is too large. Use smaller chunks.",
+  shellObservationUnknown: "Live session observation is unavailable.",
+  shellStatus_queued: "Queued",
+  shellStatus_running: "Running",
+  shellStatus_completed: "Exited",
+  shellStatus_failed: "Failed",
+  shellStatus_timed_out: "Timed out",
+  shellStatus_cancel_requested: "Stopping…",
+  shellStatus_cancellation_unconfirmed: "Stop unconfirmed",
+  shellStatus_cancelled: "Stopped",
+  shellStatus_unknown: "Unknown",
+
   imPreparedWaitingToConnect: "Preparation saved; waiting to connect",
   imLocalConsumerRunning: "Local connection process is running",
   imRuntimePreparedNotice:
@@ -456,6 +507,21 @@ export const en = {
   image: "Image",
   toolResult: "Tool result",
   browserWorkspace: "Browser workspace",
+  browserControlStatus: "Browser control status",
+  browserTakeControl: "Take control",
+  browserReturnControl: "Return to Agent",
+  browserAgentControl: "Agent control enabled",
+  browserHumanControl: "You control this tab",
+  browserAgentControlDetail:
+    "Take control to block new Agent actions on this tab. You can still browse manually.",
+  browserHumanControlDetail:
+    "New Agent actions are blocked on this tab. Returning control does not replay actions or start a Turn.",
+  browserActionsInFlight:
+    "{{count}} Agent action(s) already dispatched may still finish. Taking control does not cancel them.",
+  browserActionOutcomeUnknown:
+    "An earlier Agent action’s outcome is uncertain. Inspect the page before repeating it.",
+  browserFreshObservationRequired:
+    "Agent needs a fresh inspection after pending actions finish before acting again. No actions are replayed.",
   back: "Back",
   forward: "Forward",
   reloadPage: "Reload page",
@@ -495,7 +561,8 @@ export const en = {
   useAbsolutePathsChannelsUseTheImzen:
     "Use absolute paths. Channels use the IMZen configuration, and credentials stay in a private local file.",
   advancedSettings: "Advanced settings",
-  sharedImageDirectoryOptional: "Shared image directory (optional)",
+  sharedImageDirectoryOptional:
+    "Shared image directory (optional; no automatic parent-directory access)",
   newConversationPermissions: "New conversation permissions",
   requireApprovalBeforeExecution: "Require approval before execution",
   allowChannelsWithoutAUserConversationAllowlist:
@@ -728,6 +795,56 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  shellTitle: "终端",
+  shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
+  shellLocalHost: "当前线程 · 本机",
+  shellNew: "新建终端",
+  shellInteractive: "交互终端",
+  shellLoading: "正在读取会话目录…",
+  shellUnavailable: "交互 Shell 需要本机 ZenX 桌面 Host，未打开远程 Shell。",
+  shellArchived: "请先恢复此线程，再创建终端或输入。",
+  shellSandbox:
+    "交互终端需要此线程的完全访问权限，已有的受限 Shell 命令仍可使用。",
+  shellSessions: "会话列表",
+  shellStop: "停止进程",
+  shellStopQuestion: "停止此 Shell 会话？",
+  shellStopDetail:
+    "将请求终止此会话拥有的进程，可能中断正在进行的工作。仅关闭视图会让进程继续运行。进程树的终止范围因平台而异，部分后代进程可能仍在运行。",
+  shellCancel: "取消",
+  shellOriginUser: "你 · 交互终端",
+  shellOriginAgent: "Agent · 命令",
+  shellForegroundExited:
+    "前台进程已退出（{{code}}），但 Shell 任务仍持有开放的输出，尚未确认完成。",
+  shellExitCode: "退出码：{{code}}",
+  shellUserInput: "由你控制输入，Agent 可以读取此会话。",
+  shellAgentReadOnly: "Agent 的实时输出 · 只读",
+  shellEmpty: "还没有 Shell 会话",
+  shellEmptyDetail:
+    "Agent 执行的命令会显示在这里。你也可以新建终端，在当前线程的目录中操作。",
+  shellLifetime:
+    "你的终端会持续运行，直到退出 Shell、手动停止或退出 ZenX Host。重启不会恢复进程。较早输出可能被丢弃，已结束会话仅短暂保留。此处只显示本机会话。",
+  shellCloseHint: "关闭面板后，会话会继续运行。",
+  shellSessionDetails: "会话详情",
+  shellTaskId: "任务 ID",
+  shellSessionHelp: "关于这些会话",
+  shellCreationContext:
+    "在当前线程目录中启动本机 Shell，并读取其常规启动文件。Agent 可以读取输出；输入和何时停止由你控制。",
+  shellTruncated: "较早的输出已丢弃，当前显示保留的滚动历史。",
+  shellOutput: "Shell 输出",
+  shellFollow: "跳到最新",
+  shellInputUnconfirmed: "输入是否送达尚未确认，未自动重试。",
+  shellInputTooLarge: "粘贴内容过大，请分批输入。",
+  shellObservationUnknown: "无法确认实时会话状态。",
+  shellStatus_queued: "等待中",
+  shellStatus_running: "运行中",
+  shellStatus_completed: "已退出",
+  shellStatus_failed: "失败",
+  shellStatus_timed_out: "已超时",
+  shellStatus_cancel_requested: "正在停止…",
+  shellStatus_cancellation_unconfirmed: "停止未确认",
+  shellStatus_cancelled: "已停止",
+  shellStatus_unknown: "未知",
+
   imPreparedWaitingToConnect: "准备已保存，等待连接",
   imLocalConsumerRunning: "本机连接进程运行中",
   imRuntimePreparedNotice: "运行环境已准备。保存频道后再检查连接准备情况。",
@@ -1145,6 +1262,21 @@ export const zhCN = {
   image: "图片",
   toolResult: "工具结果",
   browserWorkspace: "浏览器工作区",
+  browserControlStatus: "浏览器控制状态",
+  browserTakeControl: "接管控制",
+  browserReturnControl: "交还 Agent",
+  browserAgentControl: "Agent 控制已启用",
+  browserHumanControl: "你正在控制此标签页",
+  browserAgentControlDetail:
+    "接管后会阻止 Agent 对此标签页发起新操作。你仍可手动浏览。",
+  browserHumanControlDetail:
+    "已阻止 Agent 对此标签页发起新操作。交还控制不会重放操作或启动 Turn。",
+  browserActionsInFlight:
+    "{{count}} 个已发出的 Agent 操作仍可能完成；接管控制不会取消它们。",
+  browserActionOutcomeUnknown:
+    "先前 Agent 操作的结果尚不确定。请先检查页面，再决定是否重复操作。",
+  browserFreshObservationRequired:
+    "待已发出的操作结束后，Agent 必须重新检查页面才能继续操作。不会重放任何操作。",
   back: "后退",
   forward: "前进",
   reloadPage: "重新加载页面",
@@ -1182,7 +1314,7 @@ export const zhCN = {
   useAbsolutePathsChannelsUseTheImzen:
     "使用绝对路径。频道沿用 IMZen 配置，凭证保存在本机私有文件中。",
   advancedSettings: "高级设置",
-  sharedImageDirectoryOptional: "图片共享目录（可选）",
+  sharedImageDirectoryOptional: "图片共享目录（可选；不会自动扩大至上级目录）",
   newConversationPermissions: "新会话执行权限",
   requireApprovalBeforeExecution: "执行前审批",
   allowChannelsWithoutAUserConversationAllowlist:

@@ -110,6 +110,7 @@ async def test_zenx_eof_stops_gateway_and_poll_tasks(monkeypatch, tmp_path):
 
     def compose(settings, **kwargs):
         assert kwargs["persistent_subscriptions"]
+        assert kwargs["local_app_server"] is True
         return Gateway(), State()
 
     loop = asyncio.get_running_loop()

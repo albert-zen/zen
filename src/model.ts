@@ -377,6 +377,8 @@ function compileCanonicalModelMessages(
       case "context_compaction":
       case "model_usage":
       case "thread_forked":
+      case "thread_deleted":
+      case "thread_restored":
       case "turn_aborted":
       case "turn_completed":
       case "user_message_queued":

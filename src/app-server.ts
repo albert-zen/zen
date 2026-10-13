@@ -148,6 +148,20 @@ export interface UnavailableThreadSnapshot {
 
 export type ThreadListEntry = ThreadSnapshot | UnavailableThreadSnapshot;
 
+/** Recovery-only product projection, intentionally without transcript contents. */
+export interface DeletedThreadSummary {
+  threadId: string;
+  name?: string;
+  cwd: string;
+  deletedAt: string;
+  deletionItemId: string;
+}
+
+export interface DeleteThreadResult {
+  threadId: string;
+  deletionItemId: string;
+}
+
 export interface TurnHandle {
   id: string;
   done: Promise<void>;
@@ -266,6 +280,7 @@ export type AppServerEvent =
   | ThreadNameUpdatedEvent
   | ThreadArchivedUpdatedEvent
   | ThreadStartedEvent
+  | { type: "thread_deleted_updated"; threadId: string; deleted: boolean }
   | ModelCatalogUpdatedEvent;
 
 export type HostOperationKind =
@@ -769,10 +784,12 @@ export class ZenAppServer {
     for (const threadId of threadIds) {
       try {
         const thread = await this.#loadThread(threadId);
-        if (thread !== undefined) {
+        if (thread !== undefined && thread.deletion === undefined) {
           snapshots.push(await this.#snapshot(thread));
         }
       } catch (error) {
+        if (error instanceof AppServerError && error.code === "thread_deleted")
+          continue;
         console.warn(`Could not load Thread ${threadId}`, error);
         snapshots.push(await this.#unavailableSnapshot(threadId, error));
       }
@@ -949,6 +966,135 @@ export class ZenAppServer {
         threadId,
         archived,
       });
+      return await this.#snapshot(thread);
+    });
+  }
+
+  async deleteThread(
+    threadId: string,
+    expectedLastItemId: string,
+  ): Promise<DeleteThreadResult> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#loadThread(threadId);
+      if (thread === undefined)
+        throw new AppServerError(
+          "thread_not_found",
+          `Unknown thread: ${threadId}`,
+        );
+      const items = thread.items;
+      const deletion = thread.deletion;
+      if (deletion !== undefined && items.at(-2)?.id === expectedLastItemId) {
+        // An earlier append may have committed before reporting an I/O error.
+        // Confirming its exact retry must also repair disposable client views.
+        this.#emit({ type: "thread_deleted_updated", threadId, deleted: true });
+        return { threadId, deletionItemId: deletion.id };
+      }
+      if (deletion !== undefined || items.at(-1)?.id !== expectedLastItemId)
+        throw new AppServerError(
+          "stale_thread",
+          "Thread changed; refresh before deleting it",
+        );
+      const metadata = await this.#threadMetadata.read(threadId);
+      if (metadata.archived !== true)
+        throw new AppServerError(
+          "thread_not_archived",
+          "Archive this Thread before deleting it",
+        );
+      if (
+        this.#activeTurns.has(threadId) ||
+        this.#replacementOperations.has(threadId) ||
+        this.#pendingReplacement(thread) !== undefined ||
+        this.#runtime.hasActiveToolTasks(threadId)
+      )
+        throw new AppServerError(
+          "thread_busy",
+          "Wait for the running turn and tools to finish before deleting this Thread",
+        );
+      const item: CanonicalItem = {
+        type: "thread_deleted",
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+      };
+      await this.#commit(thread, item);
+      this.#emit({ type: "thread_deleted_updated", threadId, deleted: true });
+      return { threadId, deletionItemId: item.id };
+    });
+  }
+
+  async listDeletedThreads(): Promise<DeletedThreadSummary[]> {
+    const deleted: DeletedThreadSummary[] = [];
+    for (const threadId of await this.#journal.listThreadIds()) {
+      try {
+        const thread = await this.#loadThread(threadId);
+        if (thread === undefined || thread.deletion === undefined) continue;
+        const metadata = await this.#threadMetadata
+          .read(threadId)
+          .catch((error: unknown) => {
+            console.warn(
+              `Could not read product metadata for deleted Thread ${threadId}`,
+              error,
+            );
+            return {} as ThreadProductMetadata;
+          });
+        const deletion = thread.deletion;
+        if (deletion === undefined) continue;
+        deleted.push({
+          threadId,
+          deletionItemId: deletion.id,
+          deletedAt: deletion.createdAt,
+          cwd: thread.effectiveConfiguration().cwd,
+          ...(metadata.name === undefined ? {} : { name: metadata.name }),
+        });
+      } catch (error) {
+        console.warn(`Could not read deleted Thread ${threadId}`, error);
+      }
+    }
+    return deleted.sort(
+      (left, right) =>
+        right.deletedAt.localeCompare(left.deletedAt) ||
+        left.threadId.localeCompare(right.threadId),
+    );
+  }
+
+  async restoreThread(
+    threadId: string,
+    deletionItemId: string,
+  ): Promise<ThreadSnapshot> {
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#loadThread(threadId);
+      if (thread === undefined)
+        throw new AppServerError(
+          "thread_not_found",
+          `Unknown thread: ${threadId}`,
+        );
+      const last = thread.items.at(-1);
+      if (
+        last?.type === "thread_restored" &&
+        last.deletionItemId === deletionItemId
+      ) {
+        this.#emit({
+          type: "thread_deleted_updated",
+          threadId,
+          deleted: false,
+        });
+        return await this.#snapshot(thread);
+      }
+      if (thread.deletion?.id !== deletionItemId)
+        throw new AppServerError(
+          "stale_thread",
+          "Thread deletion changed; refresh before restoring it",
+        );
+      // Persist archival before making the journal readable/executable again.
+      await this.#threadMetadata.setArchived(threadId, true);
+      await this.#commit(thread, {
+        type: "thread_restored",
+        id: this.#id(),
+        threadId,
+        createdAt: this.#now(),
+        deletionItemId,
+      });
+      this.#emit({ type: "thread_deleted_updated", threadId, deleted: false });
       return await this.#snapshot(thread);
     });
   }
@@ -3063,7 +3209,16 @@ export class ZenAppServer {
         `Unknown thread: ${threadId}`,
       );
     }
+    this.#requireNotDeleted(thread);
     return thread;
+  }
+
+  #requireNotDeleted(thread: Thread): void {
+    if (thread.deletion !== undefined)
+      throw new AppServerError(
+        "thread_deleted",
+        `Thread ${thread.id} is deleted; restore it before opening or changing it`,
+      );
   }
 
   /** Call under the same mutation lock used by setThreadArchived. */
@@ -3109,6 +3264,7 @@ export class ZenAppServer {
         error,
       );
     }
+    this.#requireNotDeleted(thread);
     const activeTurnId = this.#activeTurns.get(thread.id)?.turnId;
     const configuration = thread.effectiveConfiguration();
     const items = thread.items;
@@ -3189,7 +3345,7 @@ export class ZenAppServer {
     for (const threadId of threadIds) {
       try {
         const thread = await this.#loadThread(threadId);
-        if (thread !== undefined) {
+        if (thread !== undefined && thread.deletion === undefined) {
           rebuilt.set(threadId, await this.#summary(thread));
         }
       } catch (error) {
@@ -3214,7 +3370,9 @@ export class ZenAppServer {
   async #refreshThreadSummary(thread: Thread): Promise<void> {
     const summaries = await this.#captureThreadSummaries();
     const update = this.#threadSummaryWrites.then(async () => {
-      summaries.set(thread.id, await this.#summary(thread));
+      if (thread.deletion === undefined)
+        summaries.set(thread.id, await this.#summary(thread));
+      else summaries.delete(thread.id);
       await this.#saveThreadSummaries(summaries);
     });
     this.#threadSummaryWrites = update.catch(() => undefined);
@@ -3274,6 +3432,7 @@ export class ZenAppServer {
     const forkIndex = fork === undefined ? -1 : items.indexOf(fork);
     return {
       threadId: thread.id,
+      lastItemId: items.at(-1)!.id,
       currentMetadata: configuration,
       ...(metadata.parentThreadId === undefined
         ? {}
@@ -3600,6 +3759,8 @@ function forkablePrefix(
     const item = items[end]!;
     if (
       item.type !== "thread_configuration_changed" &&
+      item.type !== "thread_deleted" &&
+      item.type !== "thread_restored" &&
       !(item.type === "context_compaction" && item.turnId === undefined)
     ) {
       break;
@@ -3698,6 +3859,8 @@ function remapForkItems(
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
     if (copied.type === "thread_metadata") delete copied.parentThreadId;
+    if (copied.type === "thread_restored")
+      copied.deletionItemId = remap(copied.deletionItemId);
     if (
       copied.type === "user_message_queue_cancelled" ||
       copied.type === "user_message_queue_edited"

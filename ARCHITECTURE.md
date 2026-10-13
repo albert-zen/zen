@@ -100,6 +100,9 @@
 - **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
 - **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
+- **Shell lifecycle observations** — ShellToolRuntime 从成功 spawn、直接子进程 exit 与两个输出流 end 产生正交的 foreground/stdio 事实，ToolTaskManager 将同一时点的可选快照放入普通工具回执；这些事实不改变任务状态、close 结算、取消或 journal/restart 语义。
+- **Shared Shell view** — ToolTaskManager projects its actual Shell tasks as bounded Host-local session observations (origin, stable task ID, captured output, lifecycle); ZenX only attaches views, while human PTY input stays a Host-only capability and the Agent reads the same sessions via shell_sessions / wait. No separate execution registry, transcript authority, remote fallback or process revival is introduced.
+- **Windows Shell ownership** — ZenX injects an invocation-local launch observer that reuses exact-handle, creation-time-checked process termination; conservative ancestry snapshots never adopt ambiguous PIDs, and failed cancellation evidence remains unconfirmed in the existing ToolTaskManager rather than being inferred from pipe closure or settlement.
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
 - **Tool Resource Claims** — Runtime 可为一次调用声明瞬时共享或独占资源，统一任务管理器原子取得全部声明；显式启用排队的调用以自身 Thread 的 task_id 等待，冲突资源按到达顺序执行，互不相关的资源仍可并行，取消或超时的待执行调用不派发，已经派发的未知取消继续保留资源直到真实结束。
 - **ZenX Hosted Resource Ownership** — Browser 执行按真实的 Thread/session 隔离和页面身份协调，会话关闭独占整个会话；Computer 保留共享桌面的独占操作边界，其他插件各自独占插件资源，IPC transport 不充当所有插件共同的资源锁；这些资源只存在于 Host 生命周期内，不改变 Thread 权威或观察投影。
@@ -209,6 +212,17 @@
 - **ComposerSubmission** — 接入端一次待确认的用户提交；只在 UI 内保留草稿、
   发送意图和稳定 `clientUserMessageId`，是否已进入会话仍完全由 App Server 的
   canonical Item 投影决定。
+- **Sidebar removal continuity** — The sidebar owns a transient DOM viewport/focus snapshot for an explicit archive action, keeps a surviving visible row anchored without animation, and moves focus to the nearest remaining row without scrolling or changing the selected conversation.
+- **Recoverable Thread deletion** — Archived, idle Threads may append a canonical
+  `thread_deleted` control Item under the existing mutation lock. The current
+  tombstone fences ordinary reads, lists and all execution; a native Deleted
+  summary lists only recovery metadata, and exact-tombstone restoration appends
+  `thread_restored` after preserving Archived status. Delete is fenced by the
+  observed last Item, and restore by the deletion Item, so late retries cannot
+  re-delete a restored Thread. These controls never enter model context, never
+  cascade to children, and never remove journals, workspace files or attachment
+  blobs. Unreplayable journals cannot be deleted because idle state is unknown.
+  Lifecycle notifications and summary caches remain disposable projections.
 - **ThreadMetadataStore** — ZAS 按 threadId 持久化名称与归档状态等产品元数据的
   append-only 外部索引；归档只影响标准 `thread/list.archived` 产品筛选与生命周期通知，
   它由 App Server 投影但不进入 Agent 上下文或
@@ -249,9 +263,12 @@
   continuation 或 correlation。
 - **ImZenFailurePresenter** — 把 SDK 已分类并固定路由的终态入站失败渲染成
   IM 用户可见消息；它不决定重试，也不保存恢复状态。
-- **IMZen App Server shared filesystem root** — 部署者对本地 App Server 可读目录的
-  显式证明；SDK 仍负责把每个 local-image 路径限制在该目录内，未配置时 TCP
-  App Server 不接收本地图片路径。
+- **IMZen App Server shared filesystem root** — 部署者对 App Server 可读目录的
+  显式证明；SDK 仍负责把每个 local-image 路径限制在该目录内，显式设置始终优先。
+  只有同一 Host 启动两个本地进程的 IMZenX 组合可在未设置时自动选择：所选根必须
+  是已启用频道显式配置的 media 目录，且包含所有其他已声明根，不扩大到未声明的
+  公共祖先。独立 IMZen（包括 loopback）仍要求显式证明；无根或互不包含的媒体根
+  保持未证明状态，不向 App Server 发送本地图片路径。
 - **IMZen Gateway state file** — SDK SQLite repository 持久化 inbound/outbound
   幂等 claim 等可重建 bridge state，使 `side_effect_started` 在进程重启后仍不被
   重新授权；它不是 Zen Thread、transcript、queue 或 Agent state。
@@ -317,6 +334,7 @@
   无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
 - **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
   唤醒条件与命中历史；每次命中以稳定幂等 key 通过 App Server 提交普通输入，Thread 完成通知使用既有 canonical queue，失败明确记录且不自动补偿。
+  Windows program cleanup captures ownership only while the spawned root remains live, verifies its direct parent, and admits new descendants only through a simultaneously observed matching parent generation with nondecreasing creation times; ambiguous lineage is an explicit containment failure. Previously captured descendants remain tracked after parent exit, and termination remains bound to each exact identity. Process-table snapshots do not prove exhaustive ownership of unobserved generations.
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread；读取转录使用有界分页而非把全部历史压入一次插件命令结果。
 - **ZenXRoomSendOperation** — ZenX Rooms plugin storage 中有界的 Host 可信发送准备/提交回执，按 Host 持有的 Room epoch 与客户端非权威 UUID 绑定 Room 与正文、保存稳定消息 ID 和提交时成员唤醒匹配事实；它只供 UI 查询/明确确认，不是 Thread/Turn 会话状态或重试调度器，丢失回执只表示未知而非可重发。
@@ -371,6 +389,7 @@
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
+- **ZenXWorkspaceBrowserControl** — the existing same-Thread shared page registry owns an ephemeral, user-selected Agent/human mutation barrier and control revision. Takeover invalidates observations; only trusted Browser UI returns control. Once a tab has entered handoff mode, every Agent mutation (including navigate/close) consumes the latest post-return observation reference, so pre-takeover queued requests cannot regain authority after a later inspect. Dispatch fences cover asynchronous renderer/CDP preparation; already-dispatched work is counted until settlement and reported as uncertain across control changes, never as cancelled or automatically replayed. Inspect while work is still in flight cannot renew action authority. Human input, Thread scoping and shared-profile behavior remain unchanged; this is not a Core scheduler, durable handoff record, cross-Thread transfer, or website confirmation grant.
 - **ZenXWorkspaceBrowserUnmountedRenderer** — 共享 Browser 的页面未挂到用户窗口时，Host 在 Agent 观察或操作期间把同一 WebContentsView 临时挂到不可见的本地渲染窗口，提供有界视口并在完成、失败或用户挂载时释放；它不复制页面、不持有 Thread 状态，也不改变页面归属。
 - **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
   observer-scoped、只读、host-local 的有界 latest-frame/status 投影交给当前 renderer；它逐帧 ack、在无观察者、页面隐藏、
@@ -535,6 +554,15 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   同一 wait 读取增量输出。程序内部 await 子工具等待真实终态结果，不收到中间 running 回执。
   协调程序不占子工具的运行容量或资源锁。yield 后原父调用、能力快照和调度作用域由任务持有，
   后续子结果仍按原 lineage 提交；所属 Turn 的中断传播到任务及子调用，不重放执行栈。
+- 本地 shell 回执的 `foreground: running|exited` 指直接子进程，`stdio: open|eof` 指 stdout/stderr
+  是否都观测到 readable EOF，二者正交；`running + eof` 可达，不代表任务完成。成功 spawn 前不提供字段；
+  `exited` 时另给 `foreground_exit_code` 与 `foreground_signal`，信号终止的 code 为 null。
+  顶层 status 与 terminal-only `exit_code` 保持原义；只有 `running + exited + open` 派生显示
+  `running (foreground_exited)`。回执快照与输出窗口一起固定，捕获异步落盘期间的新事件留给下次观察。
+  普通完成仍以 Node child `close` 为边界（直接进程退出、输出管道关闭），不枚举重定向输出或逃逸的后代；
+  取消/超时沿现有 POSIX 进程组终止边界，Windows 只终止直接 child。强制销毁流不伪装成观测到 EOF，
+  `stdio: open` 也不承诺能识别持有者或其数量。事实仅随已领取回执进入 canonical tool_result，
+  重启重放旧回执而不复活 task；Fleet 当前 wire 不转发这些可选本地事实，不推断远端支持。
 - `run_code` 内部每次 nested tool call/result 都必须从 append-only ItemList 推导，并
   关联外层调用；模型上下文可以只接收程序显式返回的汇总结果，但 durable history
   不能省略中间调用。nested tool 失败明确返回程序，由程序或后续模型调用决定是否

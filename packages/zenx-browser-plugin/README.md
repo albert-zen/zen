@@ -72,3 +72,14 @@ name implementation.
 Playwright's ARIA targets can include offscreen controls that its native actions
 scroll into view. Electron and attached CDP targets are limited to the viewport.
 Independent page scrolling is available in all three providers.
+
+## Shared-page human control (1.0.5)
+
+Shared Workspace tabs expose control and mutationsRequireObservation. Human control blocks Agent mutations; only the user can return control. After takeover, every mutation, including browser_navigate/browser_close, must carry the latest observationId from a new browser_inspect after return. In-flight/unknown actions are not cancelled; never replay them automatically.
+
+The control button does not approve a website action or stop already-sent work.
+After return, inspect the same tab and verify the user’s actual changes before
+continuing. Once takeover has occurred, navigate and close consume the latest
+observation just like target actions; include observationId even if an old
+queued inspection has since finished. Other backends keep their existing
+contracts and do not gain shared-page handoff.

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import PureWindowsPath
 
 import pytest
 
-from imzen.channels import build_channels
+from imzen.channels import build_channels, shared_media_root
 from imzen.config import ConfigurationError
 
 
@@ -234,3 +235,143 @@ def test_wildcard_user_dimension_does_not_remove_conversation_restriction(tmp_pa
         )
     )
     assert len(build_channels(config, factory=factory)) == 1
+
+
+def test_shared_media_root_does_not_attest_undeclared_common_ancestor(tmp_path):
+    first = tmp_path / "one" / "inbound-media"
+    second = tmp_path / "two" / "inbound-media"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    config = {
+        "qq": {"enabled": True, "media_dir": str(first)},
+        "telegram": {"enabled": True, "media_dir": str(second)},
+    }
+
+    derived = shared_media_root(config, process_cwd=tmp_path)
+
+    assert derived is None
+
+
+def test_shared_media_root_is_the_single_channel_media_directory(tmp_path):
+    media = tmp_path / "inbound-media"
+    media.mkdir()
+
+    derived = shared_media_root(
+        {"qq": {"enabled": True, "media_dir": str(media)}},
+        process_cwd=tmp_path,
+    )
+
+    assert derived == media.resolve()
+
+
+def test_shared_media_root_is_none_without_enabled_channels(tmp_path):
+    assert shared_media_root(None, process_cwd=tmp_path) is None
+    assert shared_media_root({}, process_cwd=tmp_path) is None
+    assert shared_media_root({"qq": {"enabled": False}}, process_cwd=tmp_path) is None
+    assert shared_media_root({"qq": {"enabled": True}}, process_cwd=tmp_path) is None
+
+
+@pytest.mark.parametrize("name", [" inbound-media ", " "])
+def test_shared_media_root_preserves_qq_path_whitespace(tmp_path, monkeypatch, name):
+    from imagent.channels.native.qq import QQChannelAdapter
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("imagent.channels.native.qq.httpx.AsyncClient", lambda **kwargs: object())
+    config = {"enabled": True, "media_dir": name, "app_id": "123", "client_secret": "synthetic"}
+    native = QQChannelAdapter.from_config(config=config, middleware=None)
+
+    assert shared_media_root({"qq": config}, process_cwd=tmp_path) == native.media_materializer.root
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_shared_media_root_selects_a_declared_parent(tmp_path, reverse):
+    roots = [tmp_path / "media", tmp_path / "media" / "nested"]
+    if reverse:
+        roots.reverse()
+    config = {
+        channel: {"enabled": True, "media_dir": str(root)}
+        for channel, root in zip(("qq", "telegram"), roots, strict=True)
+    }
+    assert shared_media_root(config, process_cwd=tmp_path) == tmp_path / "media"
+
+
+def test_shared_media_root_does_not_attest_posix_root(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX path semantics")
+    assert (
+        shared_media_root(
+            {
+                "qq": {"enabled": True, "media_dir": "/tmp/qq-media"},
+                "telegram": {"enabled": True, "media_dir": "/var/cache/tg-media"},
+            },
+            process_cwd=tmp_path,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "expected"),
+    [
+        ("C:/qq/media", "C:/telegram/media", None),
+        ("C:/qq/media", "D:/qq/media", None),
+        ("C:/qq/media", "C:/qq/media/nested", "C:/qq/media"),
+        ("C:/qq/media", "c:/QQ/media", "C:/qq/media"),
+        ("//host/share/qq", "//host/other/qq", None),
+    ],
+)
+def test_shared_media_root_windows_path_semantics(monkeypatch, first, second, expected):
+    # Exercise the selector with Windows canonical paths without claiming a
+    # native Windows filesystem run on POSIX. No directory is accessed here.
+    class ResolvedWindowsPath(PureWindowsPath):
+        def expanduser(self):
+            return self
+
+        def resolve(self):
+            return self
+
+    monkeypatch.setattr("imzen.channels.Path", ResolvedWindowsPath)
+    result = shared_media_root(
+        {
+            "qq": {"enabled": True, "media_dir": first},
+            "telegram": {"enabled": True, "media_dir": second},
+        },
+        process_cwd=ResolvedWindowsPath("C:/workspace"),
+    )
+    assert result == (None if expected is None else ResolvedWindowsPath(expected))
+
+
+def test_shared_media_root_resolves_aliases_without_widening(tmp_path):
+    media = tmp_path / "media"
+    media.mkdir()
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(media, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks unavailable")
+    assert (
+        shared_media_root(
+            {
+                "qq": {"enabled": True, "media_dir": str(media)},
+                "telegram": {"enabled": True, "media_dir": str(alias)},
+            },
+            process_cwd=tmp_path,
+        )
+        == media
+    )
+
+
+@pytest.mark.parametrize("name", [" inbound-media ", " "])
+def test_shared_media_root_matches_telegram_path_normalization(tmp_path, monkeypatch, name):
+    from imagent.channels.native.telegram import TelegramChannelAdapter
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "imagent.channels.native.telegram.httpx.AsyncClient", lambda **kwargs: object()
+    )
+    config = {"enabled": True, "media_dir": name, "bot_token": "synthetic"}
+    native = TelegramChannelAdapter.from_config(config=config, middleware=None)
+
+    derived = shared_media_root({"telegram": config}, process_cwd=tmp_path)
+    # An empty normalized value uses the SDK default, which is not attested.
+    assert derived == (native.media_materializer.root if name.strip() else None)

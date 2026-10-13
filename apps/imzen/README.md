@@ -47,11 +47,22 @@ Server outcome is unknown. Conversation bindings deliberately remain in memory,
 so this database is not a second Thread, transcript, queue, or Agent runtime.
 
 `IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT` is an explicit deployment
-attestation that the external App Server can read that local directory. IMZen
-passes local-image paths only when this setting is present, and the SDK rejects
-every image outside the configured root. Leave it unset for remote or
-unshared-filesystem App Servers. Channel `media_dir` values used for images
-must be inside this root.
+attestation that the App Server can read that local directory. IMZen passes
+local-image paths only when an attested root exists, and the SDK rejects every
+image outside it. Standalone IMZen requires this setting even for loopback
+servers: a local channel spool or a loopback URL does not prove a shared
+filesystem. Leave the setting unset for remote or unshared-filesystem App
+Servers; channel `media_dir` settings may still be used for local downloads.
+
+Only IMZenX, whose Host launches both local processes, can infer a root when
+this setting is absent. It selects an enabled channel's explicitly configured
+`media_dir` only if that directory contains all other explicitly configured
+media directories, creating the selected root when missing. It never expands
+the boundary to an undeclared common ancestor. Disjoint media directories leave
+images unattested; use an explicit shared root if the deployment intends to
+trust that broader directory and all files beneath it. SDK-default media
+directories do not contribute a root. An explicit shared root always wins,
+including when it excludes a configured channel's media directory.
 
 If an enabled channel has neither `allowed_user_ids` nor
 `allowed_conversation_ids`, Full Access requires the explicit deployment
