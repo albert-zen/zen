@@ -159,6 +159,7 @@ test("real ZenX host control tools make active semantics explicit", async () => 
   const capabilities = await grantedSelfControl(directory, requestPort);
   const tools = capabilityTools(capabilities);
   const manager = managerFor(directory, capabilities);
+  let observedThreadId: string | undefined;
   await requestPort.attach(manager, directory);
   try {
     await manager.start();
@@ -168,6 +169,7 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       sandbox: "danger-full-access",
     });
     const threadId = stringField(created, "threadId");
+    observedThreadId = threadId;
 
     const firstCommand = waitForCommand(
       manager,
@@ -353,6 +355,37 @@ test("real ZenX host control tools make active semantics explicit", async () => 
       /Unexpected argument: mode/u,
     );
   } finally {
+    // Read the existing task authority before stopping the Host, whose nested
+    // cleanup failure may otherwise hide the exact cancellation receipt.
+    if (observedThreadId !== undefined) {
+      try {
+        const listed = await manager.shellPanelRequest({
+          operation: "list",
+          threadId: observedThreadId,
+        });
+        if (listed && "sessions" in listed) {
+          for (const session of listed.sessions) {
+            if (
+              !["cancel_requested", "cancellation_unconfirmed"].includes(
+                session.status,
+              )
+            )
+              continue;
+            const receipt = await manager.shellPanelRequest({
+              operation: "read",
+              threadId: observedThreadId,
+              taskId: session.taskId,
+            });
+            console.error(
+              "Self-control fixture pending Shell cleanup",
+              JSON.stringify(receipt),
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Self-control fixture cleanup observation failed", error);
+      }
+    }
     await manager.stop();
     await capabilities.close();
     await rm(directory, { recursive: true, force: true });
