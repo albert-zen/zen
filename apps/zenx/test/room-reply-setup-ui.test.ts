@@ -207,9 +207,23 @@ test("setup opens only after Host facts arrive, and Cancel/Back never creates or
       assert(context);
       assert.match(context.textContent!, /@Helper/);
       assert.match(context.textContent!, /#Work/);
+      const delivery = document.querySelectorAll<HTMLButtonElement>(
+        'form.trigger-editor [role="combobox"]',
+      );
+      assert.equal(delivery.length, 1);
       assert.equal(
-        document.querySelectorAll("form.trigger-editor select").length,
-        0,
+        delivery[0]!.getAttribute("aria-label"),
+        "This Trigger’s message delivery",
+      );
+      assert.equal(delivery[0]!.dataset.value, "steer");
+      const selects = document.querySelectorAll<HTMLSelectElement>(
+        "form.trigger-editor select",
+      );
+      assert.equal(selects.length, 1);
+      assert.equal(selects[0]!.value, "value:steer");
+      assert.deepEqual(
+        [...selects[0]!.options].map((option) => option.value),
+        ["value:steer", "value:queue"],
       );
       assert(
         ![...document.querySelectorAll("button")].some(
