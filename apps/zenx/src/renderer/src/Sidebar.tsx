@@ -1768,6 +1768,7 @@ function ThreadRow({
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreMenuFocusRef = useRef(false);
+  const menuFocusOrigin = useRef<"trigger" | "row">("trigger");
   const initialMenuFocusRef = useRef<"first" | "last">("first");
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -1840,11 +1841,14 @@ function ThreadRow({
   useLayoutEffect(() => {
     if (menuOpen || !restoreMenuFocusRef.current) return;
     restoreMenuFocusRef.current = false;
-    // The ellipsis can be hidden as soon as the editor closes. Restore to the
-    // always-visible row, without reopening its hover information.
+    // Reveal the focus-within action rail via its row before focusing an
+    // ellipsis invoker. Full-name details keep their row as the return target.
+    // Both paths run only while this editor still owns focus.
     suppressDetailsFocus.current = true;
     const row = rowRef.current?.querySelector<HTMLElement>(".thread-row");
     (row ?? menuTriggerRef.current)?.focus({ preventScroll: true });
+    if (menuFocusOrigin.current === "trigger")
+      menuTriggerRef.current?.focus({ preventScroll: true });
   }, [menuOpen]);
 
   useEffect(() => {
@@ -1890,7 +1894,10 @@ function ThreadRow({
       }
       triggers={boundTriggers}
       triggerStatus={information?.triggers.status ?? "unavailable"}
-      onRename={beginRename}
+      onRename={() => {
+        menuFocusOrigin.current = "row";
+        beginRename();
+      }}
     />
   );
   const identity = threadModelIdentity(thread);
@@ -2167,6 +2174,7 @@ function ThreadRow({
             setDetailsOpen(false);
             menuEpoch.current += 1;
             void information?.refreshTriggers();
+            menuFocusOrigin.current = "trigger";
             initialMenuFocusRef.current = "first";
             setMenuError(null);
             setRenaming(false);
@@ -2180,6 +2188,7 @@ function ThreadRow({
             setDetailsOpen(false);
             menuEpoch.current += 1;
             void information?.refreshTriggers();
+            menuFocusOrigin.current = "trigger";
             initialMenuFocusRef.current =
               event.key === "ArrowUp" ? "last" : "first";
             setMenuError(null);
