@@ -154,6 +154,7 @@ import {
   configureChromeNativeHostActivationPolicy,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
+  readBrowserRegistrationTarget,
   unregisterChromeNativeHost,
 } from "./chrome-native-host-registration.js";
 
@@ -580,10 +581,13 @@ async function bootstrapZenX(): Promise<void> {
       toolTargetTransport: (invocation) =>
         fleetToolTransport.invoke(invocation),
       userDataDirectory,
+      workspaceBrowserBackend: workspaceBrowser,
       ...(useSharedWorkspaceBrowser
         ? {
             browserBackend: workspaceBrowser,
             browserBackendAuthoritative: true,
+            connectedBrowserEnabled:
+              browserEnvironment.ZENX_BROWSER_MODE === "user-session",
           }
         : {}),
       allowForegroundRequired:
@@ -1516,25 +1520,41 @@ function installChromeBridgeIpc(options: {
             : ("inactive" as const),
       packaged: app.isPackaged,
       nativeHostRegistered: await chromeNativeHostRegistered(registration),
+      edgeNativeHostRegistered: await chromeNativeHostRegistered({
+        ...registration,
+        browser: "edge",
+      }),
       extensionDirectory,
       extensionId: ZENX_CHROME_EXTENSION_ID,
       connection: options.bridge?.status() ?? { state: "waiting", tabCount: 0 },
     };
   };
   ipcMain.handle(ipcChannels.chromeBridgeGet, snapshot);
-  ipcMain.handle(ipcChannels.chromeBridgePrepare, async () => {
-    if (!app.isPackaged) {
-      throw new Error(
-        "Build the packaged ZenX app before registering its Chrome connector",
-      );
-    }
-    await registerChromeNativeHost(registration);
-    return await snapshot();
-  });
-  ipcMain.handle(ipcChannels.chromeBridgeRemove, async () => {
-    await unregisterChromeNativeHost(registration);
-    return await snapshot();
-  });
+  ipcMain.handle(
+    ipcChannels.chromeBridgePrepare,
+    async (_event, target: unknown) => {
+      if (!app.isPackaged) {
+        throw new Error(
+          "Build the packaged ZenX app before registering its Chrome connector",
+        );
+      }
+      await registerChromeNativeHost({
+        ...registration,
+        browser: readBrowserRegistrationTarget(target),
+      });
+      return await snapshot();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.chromeBridgeRemove,
+    async (_event, target: unknown) => {
+      await unregisterChromeNativeHost({
+        ...registration,
+        browser: readBrowserRegistrationTarget(target),
+      });
+      return await snapshot();
+    },
+  );
   ipcMain.handle(ipcChannels.chromeBridgeOpenExtension, async () => {
     const failure = await shell.openPath(extensionDirectory);
     if (failure.length > 0) {

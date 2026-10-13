@@ -388,7 +388,7 @@ function browserStatusLabel(
     return i18n.t("settings:pluginAccessReview.externalEndpointConfigured");
   if (value.connector === "inactive")
     return i18n.t("settings:pluginAccessReview.connectorUnavailable");
-  return value.nativeHostRegistered
+  return value.nativeHostRegistered || value.edgeNativeHostRegistered
     ? i18n.t("settings:pluginAccessReview.chromeNotConnected")
     : i18n.t("settings:pluginAccessReview.needsSetup");
 }
@@ -418,6 +418,8 @@ function browserStatusDetail(
       "settings:pluginAccessReview.theConnectedChromeConnectorIsNotRunningApplyThe",
     );
   }
+  if (value.nativeHostRegistered || value.edgeNativeHostRegistered)
+    return i18n.t("settings:pluginAccessReview.connectRegisteredBrowser");
   return i18n.t(
     "settings:pluginAccessReview.registerTheLocalConnectorLoadTheExtensionThenClick",
   );

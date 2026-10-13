@@ -56,6 +56,7 @@ export interface ChromeBridgeSettingsSnapshot {
   connector: "chrome-extension" | "external-cdp" | "inactive";
   packaged: boolean;
   nativeHostRegistered: boolean;
+  edgeNativeHostRegistered?: boolean;
   extensionDirectory: string;
   extensionId: string;
   connection: ChromeExtensionBridgeStatus;
@@ -231,11 +232,15 @@ export class ChromeExtensionBridge {
   }
 
   #acceptNative(socket: WebSocket): void {
+    // Rejected sockets still receive events during their close handshake.
+    socket.once("error", () => socket.close());
     const previous = this.#native;
     if (previous !== undefined) {
-      this.#native = undefined;
-      this.#disconnectBrowser("Extension connection was replaced");
-      previous.close(1008, "Replaced by a new ZenX extension connection");
+      const message =
+        "Another browser is connected. Disconnect its ZenX extension before connecting this browser.";
+      socket.send(JSON.stringify({ type: "connection-rejected", message }));
+      socket.close(1008, "Another browser is already connected");
+      return;
     }
     this.#native = socket;
     socket.on("message", (data) =>
@@ -246,7 +251,6 @@ export class ChromeExtensionBridge {
       this.#native = undefined;
       this.#disconnectBrowser("Extension disconnected");
     });
-    socket.once("error", () => socket.close());
   }
 
   #receiveNative(socket: WebSocket, raw: string): void {

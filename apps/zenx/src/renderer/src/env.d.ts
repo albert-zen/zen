@@ -280,8 +280,12 @@ declare global {
       };
       chromeBridge: {
         get(): Promise<ChromeBridgeSettingsSnapshot>;
-        prepare(): Promise<ChromeBridgeSettingsSnapshot>;
-        remove(): Promise<ChromeBridgeSettingsSnapshot>;
+        prepare(
+          browser?: "chrome" | "edge",
+        ): Promise<ChromeBridgeSettingsSnapshot>;
+        remove(
+          browser?: "chrome" | "edge",
+        ): Promise<ChromeBridgeSettingsSnapshot>;
         openExtension(): Promise<void>;
       };
       computerReadiness: {

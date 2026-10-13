@@ -387,7 +387,7 @@ function electronBrowserBackend(
   return options.electronBrowserFactory?.() ?? new ElectronBrowserBackend();
 }
 
-function userBrowserManifest(): ZenXPluginManifestV2 {
+export function userBrowserManifest(): ZenXPluginManifestV2 {
   const manifest = structuredClone(browserCapabilityManifest);
   return {
     ...manifest,

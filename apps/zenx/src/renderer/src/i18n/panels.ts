@@ -329,6 +329,8 @@ export const en = {
   askTheAgentToOpenOrInspect:
     "Ask the Agent to open or inspect a tab for this thread.",
   browserPanelWidth: "Browser panel width",
+  workspaceBrowserTarget: "ZenX · ",
+  connectedBrowserTarget: "External · ",
   browser: "Browser",
   restoreBrowserPanel: "Restore browser panel",
   expandBrowserView: "Expand browser view",
@@ -1041,6 +1043,8 @@ export const zhCN = {
   yourSharedConversations: "你的共享会话",
   askTheAgentToOpenOrInspect: "请让 Agent 为此会话打开或检查标签页。",
   browserPanelWidth: "浏览器面板宽度",
+  workspaceBrowserTarget: "内置 · ",
+  connectedBrowserTarget: "外部 · ",
   browser: "浏览器",
   restoreBrowserPanel: "恢复浏览器面板",
   expandBrowserView: "展开浏览器视图",

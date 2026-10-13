@@ -803,3 +803,56 @@ test("production ZenX routes an ordinary delayed capability through unified wait
     await spool.close();
   }
 });
+
+test("concurrent browser namespaces keep page and session fences backend-local", () => {
+  const names = [
+    "browser_workspace_inspect",
+    "browser_workspace_click",
+    "browser_workspace_close_session",
+    "browser_connected_inspect",
+    "browser_connected_close_session",
+  ];
+  const definitions = names.map((name) => tool(name, name));
+  const bundle = new ZenXHostToolBundle({
+    capabilities: {
+      definitions,
+      plugins: [
+        {
+          id: "browser",
+          name: "Browser",
+          description: "Browser",
+          status: "enabled",
+          mainDocument: "Browser",
+          tools: definitions,
+        },
+      ],
+    },
+    send: () => {},
+  });
+  const claims = (name: string) => {
+    const runtime = bundle.tools.find((value) => value.name === name)!;
+    assert.equal(runtime.executionMode, "parallel_safe");
+    return runtime.resourceClaims!({
+      name,
+      callId: "same",
+      threadId: "thread",
+      arguments: { sessionId: "same", tabId: "same" },
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+    });
+  };
+  const workspace = claims(names[0]!);
+  assert.deepEqual(workspace, claims(names[1]!));
+  const connected = claims(names[3]!);
+  assert.equal(workspace.length, 2);
+  assert.equal(connected.length, 2);
+  assert.ok(
+    workspace.every((one) => connected.every((other) => one.key !== other.key)),
+  );
+  assert.deepEqual(claims(names[2]!), [
+    { key: workspace[0]!.key, access: "exclusive" },
+  ]);
+  assert.deepEqual(claims(names[4]!), [
+    { key: connected[0]!.key, access: "exclusive" },
+  ]);
+});

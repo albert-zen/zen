@@ -585,7 +585,7 @@ export const en = {
   "pluginSettings.cancel": "Cancel",
   "pluginAccessReview.accessAndSetup": "Access and setup",
   "pluginAccessReview.enablingThePluginMakesItsToolsAvailableToAgents":
-    "Enabling the plugin makes its tools available to agents. It does not grant access in macOS or connect Chrome.",
+    "Enabling the plugin makes its tools available to agents. It does not grant access in macOS or connect an external browser.",
   "pluginAccessReview.refreshStatus": "Refresh status",
   "pluginAccessReview.requestedAccess": "Requested access",
   "pluginAccessReview.thisAppVersionCannotShowTheSelectedProviderS":
@@ -606,26 +606,31 @@ export const en = {
     "Relaunch ZenX if macOS asks, then return here. ZenX checks both access paths again when this page opens.",
   "pluginAccessReview.openBrowserSettings": "Open Browser settings",
   "chromeConnectionSettings.browser": "Browser",
+  "chromeConnectionSettings.workspaceAlwaysAvailable":
+    "The built-in ZenX browser remains available. After this upgrade, both browsers request separate tool approvals; previous approvals are not reused.",
+  "chromeConnectionSettings.enableExternalBrowser":
+    "Connect an external browser alongside ZenX",
+  "chromeConnectionSettings.connectorBrowser": "Browser to register",
   "chromeConnectionSettings.chooseWhereBrowserToolsWork":
-    "Choose where Browser tools work.",
+    "Use the ZenX browser and a connected external browser together.",
   "chromeConnectionSettings.browserMode": "Browser mode",
   "chromeConnectionSettings.zenxBrowser": "ZenX browser",
   "chromeConnectionSettings.connectedChrome": "Connected Chrome",
   "chromeConnectionSettings.changingThisModeTakesEffectAfterRestartingZenx":
-    "Changing this mode takes effect after restarting ZenX.",
+    "The external connection setting takes effect after restarting ZenX.",
   "chromeConnectionSettings.1RegisterTheLocalConnector":
     "1. Register the local connector",
   "chromeConnectionSettings.letChromeConnectToThisInstalledZenxApp":
-    "Let Chrome connect to this installed ZenX app.",
+    "Register only the selected browser for this installed ZenX app.",
   "chromeConnectionSettings.2LoadTheZenxExtension":
     "2. Load the ZenX extension",
   "chromeConnectionSettings.openChromeExtensionsEnableDeveloperModeChooseLoadUnpacked":
-    "Open chrome://extensions, enable Developer mode, choose Load unpacked, then select the folder opened here.",
+    "Open chrome://extensions or edge://extensions, enable Developer mode, choose Load unpacked, then select the folder opened here.",
   "chromeConnectionSettings.3ConnectYourBrowser": "3. Connect your browser",
   "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd":
-    "Click the ZenX extension once in Chrome. Existing and new web tabs become available without connecting each tab. Click the extension again to disconnect the whole browser.",
+    "Click the ZenX extension once in Chrome or Edge. Existing and new web tabs become available without connecting each tab. Click the extension again to disconnect the whole browser.",
   "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn":
-    "Keep using your usual Chrome windows and signed-in pages. You and the Agent work in the same tabs; the sidebar shows the Agent’s latest view. Closing ZenX or disabling the extension ends the connection.",
+    "Keep using your usual browser windows and signed-in pages. Only one external browser can connect at a time; disconnect it before connecting another. You and the Agent work in the same tabs; the sidebar shows the Agent’s latest view. Closing ZenX or disabling the extension ends the connection.",
   "contextCompactionPanel.contextCompaction": "Context compaction",
   "contextCompactionPanel.controlWhenHistoryIsSummarizedAndWhichOriginalItems":
     "Control when history is summarized and which original items the model keeps.",
@@ -976,20 +981,21 @@ export const en = {
   "pluginAccessReview.offOptional": "Off (optional)",
   "pluginAccessReview.globalPointerKeyboardFocusAndScrollingRequireASeparate":
     "Global pointer, keyboard, focus and scrolling require a separate opt-in. Background-safe actions do not.",
-  "pluginAccessReview.connectedChrome": "Connected Chrome",
+  "pluginAccessReview.connectedChrome": "External browser",
   "pluginAccessReview.zenxBrowser": "ZenX browser",
   "pluginAccessReview.statusUnavailable": "Status unavailable",
   "pluginAccessReview.couldNotReadChromeConnectionStateRefreshStatusTo":
     "Could not read Chrome connection state. Refresh status to try again.",
-  "chromeConnectionSettings.chromeConnected": "Chrome connected",
-  "chromeConnectionSettings.chromeNotConnected": "Chrome not connected",
+  "chromeConnectionSettings.chromeConnected": "External browser connected",
+  "chromeConnectionSettings.chromeNotConnected":
+    "External browser not connected",
   "chromeConnectionSettings.removing": "Removing…",
   "chromeConnectionSettings.removeConnector": "Remove connector",
   "chromeConnectionSettings.registering": "Registering…",
   "chromeConnectionSettings.registerConnector": "Register connector",
   "chromeConnectionSettings.opening": "Opening…",
   "chromeConnectionSettings.showExtensionFolder": "Show extension folder",
-  "chromeConnectionSettings.waitingForChrome": "Waiting for Chrome",
+  "chromeConnectionSettings.waitingForChrome": "Waiting for browser connection",
   "workflowSettingsPanel.describeWhatThisWorkflowDoes":
     "Describe what this workflow does",
   "workflowSettingsPanel.usingTheZenxDefault": "Using the ZenX default",
@@ -1097,19 +1103,21 @@ export const en = {
   "pluginAccessReview.notRequested": "Not requested",
   "pluginAccessReview.checkFailed": "Check failed",
   "pluginAccessReview.couldNotVerify": "Could not verify",
-  "pluginAccessReview.noChromeSetupNeeded": "No Chrome setup needed",
+  "pluginAccessReview.noChromeSetupNeeded": "No external browser setup needed",
+  "pluginAccessReview.connectRegisteredBrowser":
+    "Load the extension in the browser you registered, then click it to connect.",
   "pluginAccessReview.externalEndpointConfigured":
     "External endpoint configured",
   "pluginAccessReview.connectorUnavailable": "Connector unavailable",
-  "pluginAccessReview.chromeNotConnected": "Chrome not connected",
+  "pluginAccessReview.chromeNotConnected": "External browser not connected",
   "pluginAccessReview.checkingWhichBrowserModeZenxIsUsing":
     "Checking which browser mode ZenX is using.",
   "pluginAccessReview.usesASeparateZenxBrowserSessionNoChromeConnector":
-    "Uses a separate ZenX browser session. No Chrome connector or macOS desktop permission is needed.",
+    "ZenX browser tools do not require an external connector or macOS desktop permission.",
   "pluginAccessReview.theConnectedChromeConnectorIsNotRunningApplyThe":
-    "The Connected Chrome connector is not running. Apply the browser mode and restart ZenX, then check Browser settings.",
+    "The external browser connector is not running. Apply the connection setting and restart ZenX, then check Browser settings.",
   "pluginAccessReview.registerTheLocalConnectorLoadTheExtensionThenClick":
-    "Register the local connector, load the extension, then click it in Chrome. General settings shows each step.",
+    "Register the local connector, load the extension, then click it in Chrome or Edge. General settings shows each step.",
   "subscriptionUsageCard.quotaWindow": "Quota window",
   "rtkSettingsCard.unavailable": "Unavailable",
   "rtkSettingsCard.unsavedChange": "Unsaved change",
@@ -1202,7 +1210,7 @@ export const en = {
   "pluginAccessReview.verified": "Verified",
   "pluginAccessReview.connected": "Connected",
   "pluginAccessReview.externalChromeEndpoint":
-    "ZenX is using an externally configured Chrome debugging endpoint. Check that endpoint if tabs are missing.",
+    "ZenX is using an externally configured browser debugging endpoint. Check that endpoint if tabs are missing.",
   "pluginSettings.commitPinnedGit": "Commit-pinned Git",
   "pluginSettings.tarball": "Tarball",
   "pluginSettings.enabled": "Enabled",
@@ -1240,9 +1248,9 @@ export const en = {
   "pluginSettings.enabledLower": "enabled",
   "pluginAccessReview.namedAccessSetup": "{{name}} access and setup",
   "pluginAccessReview.chromeTabsAvailable_one":
-    "{{count}} Chrome tab available. Agents and you use the same signed-in tabs.",
+    "{{count}} external tab available. Agents and you use the same signed-in tabs.",
   "pluginAccessReview.chromeTabsAvailable_other":
-    "{{count}} Chrome tabs available. Agents and you use the same signed-in tabs.",
+    "{{count}} external tabs available. Agents and you use the same signed-in tabs.",
   "chromeConnectionSettings.tabsAvailable_one": "{{count}} tab available",
   "chromeConnectionSettings.tabsAvailable_other": "{{count}} tabs available",
   "skillsSettingsPanel.namedModeSaved": "{{name}} mode saved.",
@@ -1822,7 +1830,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginSettings.cancel": "取消",
   "pluginAccessReview.accessAndSetup": "访问权限与设置",
   "pluginAccessReview.enablingThePluginMakesItsToolsAvailableToAgents":
-    "启用插件后，智能体便可使用其工具。此操作不会授予 macOS 权限或连接 Chrome。",
+    "启用插件后，智能体便可使用其工具。此操作不会授予 macOS 权限或连接外部浏览器。",
   "pluginAccessReview.refreshStatus": "刷新状态",
   "pluginAccessReview.requestedAccess": "所需权限",
   "pluginAccessReview.thisAppVersionCannotShowTheSelectedProviderS":
@@ -1842,24 +1850,28 @@ export const zhCN: Record<keyof typeof en, string> = {
     "如果 macOS 提示，请重新启动 ZenX，然后返回这里。页面打开时，ZenX 会重新检查两项权限。",
   "pluginAccessReview.openBrowserSettings": "打开浏览器设置",
   "chromeConnectionSettings.browser": "浏览器",
+  "chromeConnectionSettings.workspaceAlwaysAvailable":
+    "ZenX 内置浏览器始终可用。升级后，两种浏览器会分别请求工具授权，不沿用旧授权。",
+  "chromeConnectionSettings.enableExternalBrowser": "同时连接外部浏览器",
+  "chromeConnectionSettings.connectorBrowser": "注册的浏览器",
   "chromeConnectionSettings.chooseWhereBrowserToolsWork":
-    "选择浏览器工具的工作位置。",
+    "同时使用内置浏览器和已连接的外部浏览器。",
   "chromeConnectionSettings.browserMode": "浏览器模式",
   "chromeConnectionSettings.zenxBrowser": "ZenX 浏览器",
   "chromeConnectionSettings.connectedChrome": "已连接的 Chrome",
   "chromeConnectionSettings.changingThisModeTakesEffectAfterRestartingZenx":
-    "重新启动ZenX后，更改此模式生效。",
+    "外部浏览器连接设置将在重启 ZenX 后生效。",
   "chromeConnectionSettings.1RegisterTheLocalConnector": "1. 注册本地连接器",
   "chromeConnectionSettings.letChromeConnectToThisInstalledZenxApp":
-    "允许 Chrome 连接到本机安装的 ZenX。",
+    "仅为所选浏览器注册本机安装的 ZenX 连接器。",
   "chromeConnectionSettings.2LoadTheZenxExtension": "2. 加载 ZenX 扩展程序",
   "chromeConnectionSettings.openChromeExtensionsEnableDeveloperModeChooseLoadUnpacked":
-    "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，然后选取此处打开的文件夹。",
+    "打开 chrome://extensions 或 edge://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，然后选取此处打开的文件夹。",
   "chromeConnectionSettings.3ConnectYourBrowser": "3. 连接浏览器",
   "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd":
-    "在 Chrome 中点击一次 ZenX 扩展程序。现有和新打开的网页标签页都会可用，无需逐个连接。再次点击扩展程序即可断开整个浏览器。",
+    "在 Chrome 或 Edge 中点击一次 ZenX 扩展程序。现有和新打开的网页标签页都会可用，无需逐个连接。再次点击扩展程序即可断开整个浏览器。",
   "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn":
-    "你可以继续使用平常的 Chrome 窗口和已登录的页面。你和智能体共用同一批标签页；侧边栏显示智能体最近看到的页面。关闭 ZenX 或停用扩展程序会断开连接。",
+    "你可以继续使用平常的浏览器窗口和已登录的页面。同时只支持一个外部浏览器；连接另一个之前，请先断开当前连接。你和智能体共用同一批标签页；侧边栏显示智能体最近看到的页面。关闭 ZenX 或停用扩展程序会断开连接。",
   "contextCompactionPanel.contextCompaction": "上下文压缩",
   "contextCompactionPanel.controlWhenHistoryIsSummarizedAndWhichOriginalItems":
     "设置何时总结历史记录，以及模型保留哪些原始条目。",
@@ -2184,20 +2196,20 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.offOptional": "关闭（可选）",
   "pluginAccessReview.globalPointerKeyboardFocusAndScrollingRequireASeparate":
     "控制全局指针、键盘、焦点和滚动需要单独开启权限。后台安全操作无需此权限。",
-  "pluginAccessReview.connectedChrome": "已连接的Chrome浏览器",
+  "pluginAccessReview.connectedChrome": "外部浏览器",
   "pluginAccessReview.zenxBrowser": "ZenX浏览器",
   "pluginAccessReview.statusUnavailable": "状态不可用",
   "pluginAccessReview.couldNotReadChromeConnectionStateRefreshStatusTo":
     "无法读取Chrome连接状态。请刷新状态以重试。",
-  "chromeConnectionSettings.chromeConnected": "Chrome 已连接",
-  "chromeConnectionSettings.chromeNotConnected": "Chrome 未连接",
+  "chromeConnectionSettings.chromeConnected": "外部浏览器已连接",
+  "chromeConnectionSettings.chromeNotConnected": "外部浏览器未连接",
   "chromeConnectionSettings.removing": "正在移除…",
   "chromeConnectionSettings.removeConnector": "移除连接器",
   "chromeConnectionSettings.registering": "正在注册…",
   "chromeConnectionSettings.registerConnector": "注册连接器",
   "chromeConnectionSettings.opening": "正在打开…",
   "chromeConnectionSettings.showExtensionFolder": "显示扩展程序文件夹",
-  "chromeConnectionSettings.waitingForChrome": "等待 Chrome…",
+  "chromeConnectionSettings.waitingForChrome": "等待浏览器连接…",
   "workflowSettingsPanel.describeWhatThisWorkflowDoes": "描述此工作流的用途",
   "workflowSettingsPanel.usingTheZenxDefault": "使用 ZenX 默认设置",
   "workflowSettingsPanel.customPrompt": "自定义提示词",
@@ -2300,18 +2312,20 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.notRequested": "未申请",
   "pluginAccessReview.checkFailed": "检查失败",
   "pluginAccessReview.couldNotVerify": "无法验证",
-  "pluginAccessReview.noChromeSetupNeeded": "无需设置Chrome浏览器",
+  "pluginAccessReview.noChromeSetupNeeded": "无需设置外部浏览器",
+  "pluginAccessReview.connectRegisteredBrowser":
+    "在已注册连接器的浏览器中加载扩展程序，然后点击它进行连接。",
   "pluginAccessReview.externalEndpointConfigured": "外部端点已配置",
   "pluginAccessReview.connectorUnavailable": "连接器不可用",
-  "pluginAccessReview.chromeNotConnected": "Chrome未连接",
+  "pluginAccessReview.chromeNotConnected": "外部浏览器未连接",
   "pluginAccessReview.checkingWhichBrowserModeZenxIsUsing":
     "检查ZenX使用的浏览器模式。",
   "pluginAccessReview.usesASeparateZenxBrowserSessionNoChromeConnector":
-    "使用单独的ZenX浏览器会话。无需Chrome连接器或macOS桌面权限。",
+    "ZenX 浏览器工具不需要外部连接器或 macOS 桌面权限。",
   "pluginAccessReview.theConnectedChromeConnectorIsNotRunningApplyThe":
-    "“已连接的 Chrome”连接器未运行。请应用浏览器模式并重启 ZenX，然后检查浏览器设置。",
+    "外部浏览器连接器未运行。请应用连接设置并重启 ZenX，然后检查浏览器设置。",
   "pluginAccessReview.registerTheLocalConnectorLoadTheExtensionThenClick":
-    "注册本地连接器、加载扩展程序，然后在 Chrome 中点击它。“通用”设置列出了每一步。",
+    "注册本地连接器、加载扩展程序，然后在 Chrome 或 Edge 中点击它。“通用”设置列出了每一步。",
   "subscriptionUsageCard.quotaWindow": "配额窗口",
   "rtkSettingsCard.unavailable": "不可用",
   "rtkSettingsCard.unsavedChange": "未保存的更改",
@@ -2398,7 +2412,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.verified": "已验证",
   "pluginAccessReview.connected": "已连接",
   "pluginAccessReview.externalChromeEndpoint":
-    "ZenX 正在使用外部配置的 Chrome 调试端点。如果标签页缺失，请检查该端点。",
+    "ZenX 正在使用外部配置的浏览器调试端点。如果标签页缺失，请检查该端点。",
   "pluginSettings.commitPinnedGit": "固定提交的 Git",
   "pluginSettings.tarball": "Tarball",
   "pluginSettings.enabled": "已启用",
@@ -2432,9 +2446,9 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginSettings.enabledLower": "已启用",
   "pluginAccessReview.namedAccessSetup": "{{name}} 的访问权限与设置",
   "pluginAccessReview.chromeTabsAvailable_one":
-    "可使用 {{count}} 个 Chrome 标签页。智能体与你共用这些已登录的标签页。",
+    "可使用 {{count}} 个外部标签页。智能体与你共用这些已登录的标签页。",
   "pluginAccessReview.chromeTabsAvailable_other":
-    "可使用 {{count}} 个 Chrome 标签页。智能体与你共用这些已登录的标签页。",
+    "可使用 {{count}} 个外部标签页。智能体与你共用这些已登录的标签页。",
   "chromeConnectionSettings.tabsAvailable_one": "可使用 {{count}} 个标签页",
   "chromeConnectionSettings.tabsAvailable_other": "可使用 {{count}} 个标签页",
   "skillsSettingsPanel.namedModeSaved": "{{name}}模式已保存。",
