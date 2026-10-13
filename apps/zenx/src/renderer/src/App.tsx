@@ -559,6 +559,7 @@ export function App() {
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const messageLinkSequence = useRef(0);
   const [messageLinkRequest, setMessageLinkRequest] = useState<{
     id: number;
     threadId: string;
@@ -2530,11 +2531,11 @@ export function App() {
         void resumeThread(id)
           .then(() => {
             if (selectedThreadIdRef.current !== id) return;
-            setMessageLinkRequest((previous) => ({
+            setMessageLinkRequest({
               ...target,
-              id: (previous?.id ?? 0) + 1,
+              id: ++messageLinkSequence.current,
               threadId: id,
-            }));
+            });
             setBrowserPanels((current) => ({
               ...current,
               [id]: true,
@@ -2881,11 +2882,11 @@ export function App() {
                 ) : null
               }
               onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest((previous) => ({
+                setMessageLinkRequest({
                   ...target,
-                  id: (previous?.id ?? 0) + 1,
+                  id: ++messageLinkSequence.current,
                   threadId,
-                }));
+                });
                 setBrowserPanels((current) => ({
                   ...current,
                   [threadId]: true,
@@ -3112,6 +3113,11 @@ export function App() {
                 messageLinkRequest?.threadId === threadDetail.id
                   ? messageLinkRequest
                   : null
+              }
+              onMessageLinkRequestHandled={(id) =>
+                setMessageLinkRequest((current) =>
+                  current?.id === id ? null : current,
+                )
               }
               navigate={openPage}
               onWidthChange={setWorkspacePanelWidth}
