@@ -11,6 +11,7 @@ import {
 } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
 import type { ClientRequestParams } from "../src/protocol-client/index.js";
+import type { NativeThreadRecoverySnapshot } from "../../../src/protocol/native/recovery.js";
 import {
   createZenXTrustedPlugin,
   type ZenXRoomsTrustedService,
@@ -20,8 +21,35 @@ class ModelStub implements ZenXTriggerAppServerPort {
   listener:
     Parameters<ZenXTriggerAppServerPort["onNotification"]>[0] | undefined;
   requests: ClientRequestParams["turn/start"][] = [];
+  readRequests: string[] = [];
   failure = false;
-  async request(_method: any, params: any): Promise<any> {
+  async request(method: any, params: any): Promise<any> {
+    if (method === "zen/thread/resume") {
+      this.readRequests.push(params.threadId);
+      // A failed wake has no canonical receipt in this fixture. Recovery is
+      // read-only and must not fabricate another wake or a completion event.
+      return {
+        processEpoch: "model-stub",
+        threadId: params.threadId,
+        watermark: 0,
+        thread: {
+          id: params.threadId,
+          items: [],
+          turns: [],
+          cwd: tmpdir(),
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+          model: "fake",
+          provider: "fake",
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
+          archived: false,
+        },
+        events: [],
+      } satisfies NativeThreadRecoverySnapshot;
+    }
+    assert.equal(method, "zen/turn/wake", "Unexpected ModelStub RPC method");
     const request =
       params.text === undefined
         ? params
@@ -151,9 +179,19 @@ test("busy wakeup is explicit failure and never auto-retried", async () => {
     assert.equal(f.model.requests.length, 1);
     assert.equal(f.service.snapshot().history[0]?.status, "failed");
     assert.match(f.service.snapshot().history[0]?.error ?? "", /thread_busy/);
+    assert.deepEqual(f.model.readRequests, []);
+    const messages = structuredClone(f.service.snapshot().rooms[0]!.messages);
+    assert.equal(
+      messages.filter((message) => message.kind === "agent").length,
+      0,
+    );
     await f.service.stop();
     await f.service.start();
+    assert.deepEqual(f.model.readRequests, ["chief-thread"]);
     assert.equal(f.model.requests.length, 1);
+    assert.equal(f.service.snapshot().history[0]?.status, "failed");
+    assert.equal(f.service.snapshot().history[0]?.delivery, "unknown");
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, messages);
   } finally {
     await f.close();
   }
