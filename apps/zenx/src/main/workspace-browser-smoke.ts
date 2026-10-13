@@ -886,19 +886,42 @@ async function assertStableControlLayout(): Promise<void> {
               try {
                 const element=document.querySelector(selector), style=getComputedStyle(element), rect=element.getBoundingClientRect();
                 return {selector,tag:element.tagName,inlineWidth:element.style.width,width:style.width,minWidth:style.minWidth,maxWidth:style.maxWidth,
-                  display:style.display,position:style.position,rect:[rect.x,rect.y,rect.width,rect.height]};
+                  display:style.display,position:style.position,inlineSize:style.inlineSize,boxSizing:style.boxSizing,
+                  transition:style.transition.slice(0,160),animation:style.animation.slice(0,160),rect:[rect.x,rect.y,rect.width,rect.height]};
               } catch { return {selector,unavailable:true}; }
+            };
+            const fixtureRules=()=>{
+              try {
+                const element=document.querySelector('#fixture'), matched=[];
+                let visited=0, truncated=false;
+                const visit=(rules,depth)=>{
+                  for (const rule of rules) {
+                    if (++visited>2000||matched.length>=16||depth>8) { truncated=true; return; }
+                    if (rule.selectorText&&element.matches(rule.selectorText)&&rule.style?.length) {
+                      const sizing=['width','inline-size','min-width','max-width','display','position','flex','grid-template-columns','transition','animation']
+                        .filter((name)=>rule.style.getPropertyValue(name))
+                        .map((name)=>[name,rule.style.getPropertyValue(name).slice(0,120),rule.style.getPropertyPriority(name)]);
+                      if (sizing.length) matched.push({selector:rule.selectorText.slice(0,160),sizing});
+                    }
+                    if (rule.cssRules) visit(rule.cssRules,depth+1);
+                    if (truncated) return;
+                  }
+                };
+                for (const sheet of document.styleSheets) { visit(sheet.cssRules,0); if (truncated) break; }
+                return {matched,visited,truncated,inline:element.style.cssText.slice(0,240),parent:element.parentElement?.tagName,
+                  readyState:document.readyState,visibilityState:document.visibilityState};
+              } catch { return {unavailable:true}; }
             };
             return {viewport:[viewport.x,viewport.y,viewport.width,viewport.height],
               layout:{compatMode:document.compatMode,innerWidth,fixtureCount:document.querySelectorAll('#fixture').length,styleSheetCount:document.styleSheets.length,
-                geometry:['#fixture','.workspace-browser-panel','.workspace-browser-viewport'].map(geometry)},
+                geometry:['#fixture','.workspace-browser-panel','.workspace-browser-viewport'].map(geometry),fixtureRules:fixtureRules()},
               buttonVisible:button.x>=control.x&&button.right<=control.right&&button.y>=control.y&&button.bottom<=control.bottom,
               statusKeyboardScrollable:status.tabIndex===0&&status.clientHeight>0&&getComputedStyle(status).overflowY==='auto'};
           })()`);
           assert.equal(
             measured.viewport[2],
             width,
-            `Fixture must exercise the requested actual panel width: ${JSON.stringify(measured.layout)}`,
+            `Fixture must exercise the requested actual panel width: ${JSON.stringify({ ...measured.layout, windowVisible: layout.isVisible(), windowMinimized: layout.isMinimized() })}`,
           );
           expected ??= measured.viewport;
           assert.deepEqual(
