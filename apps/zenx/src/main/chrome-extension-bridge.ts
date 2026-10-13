@@ -312,7 +312,9 @@ export class ChromeExtensionBridge {
       );
     if (match === null) return undefined;
     const connection = this.#connections.get(match[1]!);
-    return connection?.generation === match[2] && connection.browserConnected
+    return connection !== undefined &&
+      connection.generation === match[2] &&
+      connection.browserConnected
       ? connection
       : undefined;
   }

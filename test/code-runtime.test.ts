@@ -927,16 +927,30 @@ test("wall containment aborts and settles a terminable nested child before outer
     assert.match(outerResult.output, /WALL_TIME_LIMIT/u);
     assert(pid !== undefined);
     const childPid = pid;
-    assert.throws(
-      () => process.kill(childPid, 0),
-      (error: unknown) => {
-        return (
-          error instanceof Error &&
-          "code" in error &&
-          (error as NodeJS.ErrnoException).code === "ESRCH"
+    try {
+      assert.throws(
+        () => process.kill(childPid, 0),
+        (error: unknown) => {
+          return (
+            error instanceof Error &&
+            "code" in error &&
+            (error as NodeJS.ErrnoException).code === "ESRCH"
+          );
+        },
+      );
+    } catch (error) {
+      // Failure-only evidence distinguishes a running child from delayed OS
+      // reaping. Keep the original immediate-exit assertion and failure intact.
+      if (process.platform === "linux") {
+        const state = await readFile(`/proc/${childPid}/stat`, "utf8").catch(
+          (reason: NodeJS.ErrnoException) => reason.code ?? String(reason),
         );
-      },
-    );
+        t.diagnostic(
+          `nested fixture PID ${childPid} after failed exit assertion: ${state}`,
+        );
+      }
+      throw error;
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -107,6 +107,10 @@ jobs:
         env:
           ZENX_SHELL_TEST_DIAGNOSTICS: "1"
         run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
+      - name: Verify owned ConPTY cleanup and native subprocess settlement
+        if: ${{ !cancelled() }}
+        timeout-minutes: 1
+        run: node --import tsx --test --test-timeout=40000 apps/zenx/test/shell-pty-native-cleanup.test.ts
       - name: Exercise shell lifecycle observations on Windows
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - name: Exercise trigger process containment on Windows

@@ -23,7 +23,7 @@ test("instance bridge keeps equal tab IDs and pending commands local to Chrome a
     multiInstance: true,
   });
   const sockets: WebSocket[] = [];
-  const providers: Array<{ backend: { close(): Promise<void> } }> = [];
+  const providers: Array<{ backend: { close(): void | Promise<void> } }> = [];
   try {
     const descriptor = JSON.parse(
       await readFile(path.join(root, "chrome-bridge.json"), "utf8"),

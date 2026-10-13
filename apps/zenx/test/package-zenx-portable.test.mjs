@@ -52,6 +52,8 @@ import {
 } from "../src/main/plugin-profile.js";
 
 import { prepareShellPty } from "../scripts/prepare-shell-pty.mjs";
+import { verifyShellPtyPatch } from "../scripts/shell-pty-patch.mjs";
+import { createRequire } from "node:module";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
 const run = promisify(execFile);
@@ -1530,8 +1532,12 @@ test("Shell packaging retains platform native resources including Windows ConPTY
       );
       if (platform === "darwin")
         await access(path.join(native, "spawn-helper"));
-      if (platform === "win32")
+      if (platform === "win32") {
         await access(path.join(native, "conpty", "OpenConsole.exe"));
+        await verifyShellPtyPatch(
+          path.join(destination, "node_modules", "node-pty"),
+        );
+      }
     }
     await rm(
       path.join(fixture.rootDirectory, "node_modules", "node-pty", "build"),
@@ -1571,6 +1577,14 @@ async function writePtyFixture(rootDirectory) {
     JSON.stringify({ name: "node-pty", version: "1.1.0" }),
   );
   await writeFile(path.join(pty, "lib", "index.js"), "fixture");
+  const installed = path.dirname(
+    createRequire(import.meta.url).resolve("node-pty/package.json"),
+  );
+  await writeFile(
+    path.join(pty, "lib", "windowsPtyAgent.js"),
+    await readFile(path.join(installed, "lib", "windowsPtyAgent.js")),
+  );
+
   for (const file of [
     "pty.node",
     "spawn-helper",

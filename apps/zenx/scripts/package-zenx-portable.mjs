@@ -1,3 +1,4 @@
+import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -879,6 +880,7 @@ export async function stageShellPty(
         !filename.endsWith(".a"),
     },
   );
+  if (platform === "win32") await applyShellPtyPatch(destination);
   if (platform === "darwin")
     await chmod(path.join(destination, nativeDirectory, "spawn-helper"), 0o755);
   await cp(
