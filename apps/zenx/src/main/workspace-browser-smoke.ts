@@ -64,6 +64,9 @@ const fixture = createServer((request, response) => {
   }
   response.end(`<!doctype html>
     <title>Shared browser fixture</title>
+    <style>html,body{margin:0;background:rgb(24,48,72)}
+      #capture-marker{position:fixed;left:16px;top:80px;width:96px;height:96px;background:rgb(12,180,64)}</style>
+    <div id="capture-marker"></div>
     <main>
       <label>Human value <input aria-label="Human value"></label>
       <button onclick="document.querySelector('output').textContent='Agent clicked'">Agent action</button>
@@ -76,24 +79,75 @@ void app.whenReady().then(async () => {
   let owner: BrowserWindow | undefined;
   let createdView: WebContentsView | undefined;
   let captureCalls = 0;
+  let frameSubscriptions = 0;
+  let frameCallbacks = 0;
+  let frameStops = 0;
+  let activeFrameSubscription: number | undefined;
+  let lastFrameSubscription = 0;
   let phase = "setup";
   let layoutStarted = false;
   const browser = createElectronWorkspaceBrowser({
     artifactDirectory: path.join(directory, "artifacts"),
     onCreateView: (view) => {
       createdView = view;
+      const begin = view.webContents.beginFrameSubscription.bind(
+        view.webContents,
+      );
+      const end = view.webContents.endFrameSubscription.bind(view.webContents);
+      type FrameCallback = Parameters<typeof begin>[0];
+      view.webContents.beginFrameSubscription = (
+        dirtyOrCallback: boolean | FrameCallback,
+        callback?: FrameCallback,
+      ) => {
+        const id = ++frameSubscriptions;
+        activeFrameSubscription = id;
+        const handler =
+          typeof dirtyOrCallback === "function" ? dirtyOrCallback : callback;
+        assert.ok(handler);
+        begin(
+          typeof dirtyOrCallback === "boolean" ? dirtyOrCallback : false,
+          (image, rect) => {
+            if (activeFrameSubscription === id) {
+              frameCallbacks++;
+              lastFrameSubscription = id;
+            }
+            handler(image, rect);
+          },
+        );
+      };
+      view.webContents.endFrameSubscription = () => {
+        activeFrameSubscription = undefined;
+        frameStops++;
+        end();
+      };
       const capture = view.webContents.capturePage.bind(view.webContents);
       view.webContents.capturePage = async (
         ...args: Parameters<typeof capture>
       ) => {
         const call = ++captureCalls;
         try {
+          if (!owner?.contentView.children.includes(view)) {
+            assert.ok(frameSubscriptions > 0);
+            assert.equal(
+              lastFrameSubscription,
+              frameSubscriptions,
+              "Unmounted capture must follow a frame from its current render lease",
+            );
+            assert.equal(
+              frameStops,
+              frameSubscriptions,
+              "The readiness subscription must stop before native capture",
+            );
+          }
           return await capture(...args);
         } catch (error) {
           try {
             console.error("Owned shared-browser capture failed", {
               phase,
               call,
+              frameSubscriptions,
+              frameCallbacks,
+              frameStops,
               destroyed: view.webContents.isDestroyed(),
               loading: view.webContents.isLoading(),
               viewVisible: view.getVisible(),
@@ -176,6 +230,42 @@ void app.whenReady().then(async () => {
       unmountedInspection.screenshot.bytes > 0,
       "Agent inspection must capture an unmounted Browser tab",
     );
+    const assertUnmountedPixels = async (
+      inspection: BrowserInspection,
+      marker: number[],
+    ) => {
+      assert.equal(
+        createdView!.webContents.getZoomFactor(),
+        1,
+        "Owned pixel fixture starts at default zoom",
+      );
+      const scale =
+        await createdView!.webContents.executeJavaScript("devicePixelRatio");
+      const encoded = readFileSync(inspection.screenshot.artifactPath).toString(
+        "base64",
+      );
+      const pixels = await owner!.webContents.executeJavaScript(`(async()=>{
+        const image=await createImageBitmap(new Blob([Uint8Array.from(atob(${JSON.stringify(encoded)}),c=>c.charCodeAt(0))],{type:'image/png'}));
+        try {
+          const context=new OffscreenCanvas(image.width,image.height).getContext('2d'); context.drawImage(image,0,0);
+          const samples=[[32,96],[64,128],[96,160],[320,240],[500,400]].map(([x,y])=>
+            [...context.getImageData(Math.floor(x*image.width/1280),Math.floor(y*image.height/800),1,1).data]);
+          return {width:image.width,height:image.height,samples};
+        } finally { image.close(); }
+      })()`);
+      // capturePage uses float32 SizeF multiplication before ceil.
+      assertCapturePixels(
+        pixels,
+        {
+          width: Math.ceil(Math.fround(1280 * Math.fround(Math.max(1, scale)))),
+          height: Math.ceil(Math.fround(800 * Math.fround(Math.max(1, scale)))),
+        },
+        marker,
+      );
+      assert.equal(owner!.isVisible(), false);
+      assert.equal(owner!.isMinimized(), false);
+    };
+    await assertUnmountedPixels(unmountedInspection, [12, 180, 64]);
     const hiddenInput = requiredTarget(
       unmountedInspection,
       "Human value",
@@ -189,7 +279,20 @@ void app.whenReady().then(async () => {
       "Agent hidden",
       false,
     );
+    await createdView.webContents.executeJavaScript(
+      "document.querySelector('#capture-marker').style.backgroundColor='rgb(210,40,160)'",
+    );
     const afterHiddenAction = await browser.inspect("shared-session", tabId);
+    await assertUnmountedPixels(afterHiddenAction, [210, 40, 160]);
+    console.log(
+      JSON.stringify({
+        unmountedCapture: "passed",
+        frameSubscriptions,
+        frameCallbacks,
+        frameStops,
+        freshOpaqueGenerations: 2,
+      }),
+    );
     assert.equal(
       requiredTarget(afterHiddenAction, "Human value", "type").value,
       "Agent hidden",
@@ -618,9 +721,14 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
             return {width:image.width,height:image.height,samples};
           } finally { image.close(); }
         })()`);
+        // This is capturePage ceil, distinct from FrameSubscriber round.
         const expected = {
-          width: Math.ceil(640 * Math.max(1, captureScale)),
-          height: Math.ceil(480 * Math.max(1, captureScale)),
+          width: Math.ceil(
+            Math.fround(640 * Math.fround(Math.max(1, captureScale))),
+          ),
+          height: Math.ceil(
+            Math.fround(480 * Math.fround(Math.max(1, captureScale))),
+          ),
         };
         assertCapturePixels(pixels, expected, marker);
         assert.deepEqual(

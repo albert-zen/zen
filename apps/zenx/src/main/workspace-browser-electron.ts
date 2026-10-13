@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView } from "electron";
+import { BrowserWindow, WebContentsView, screen } from "electron";
 
 import { WorkspaceBrowser } from "./workspace-browser.js";
 import { WorkspaceBrowserRenderer } from "./workspace-browser-renderer.js";
@@ -11,6 +11,7 @@ export function createElectronWorkspaceBrowser(
 ): WorkspaceBrowser {
   const unmountedRenderer = new WorkspaceBrowserRenderer(
     (options) => new BrowserWindow(options),
+    (window) => screen.getDisplayMatching(window.getBounds()).scaleFactor,
   );
   return new WorkspaceBrowser({
     ...(options.artifactDirectory === undefined
@@ -31,8 +32,8 @@ export function createElectronWorkspaceBrowser(
         return view;
       },
       windowFor: (sender) => BrowserWindow.fromWebContents(sender),
-      renderWhileUnmounted: (view, isMounted, operation) =>
-        unmountedRenderer.render(view, isMounted, operation),
+      renderWhileUnmounted: (view, isMounted, operation, signal) =>
+        unmountedRenderer.render(view, isMounted, operation, signal),
       releaseUnmountedView: (view) => unmountedRenderer.release(view),
       closeUnmountedRenderer: () => unmountedRenderer.close(),
     },

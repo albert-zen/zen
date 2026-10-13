@@ -87,6 +87,7 @@ interface WorkspaceBrowserDependencies {
     view: WebContentsView,
     currentMount: () => WorkspaceBrowserRenderMount | undefined,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T>;
   releaseUnmountedView?(view: WebContentsView): void;
   closeUnmountedRenderer?(): void;
@@ -861,42 +862,46 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       observationId,
       signal,
       async (dispatch) =>
-        this.#rendered(tab, async () => {
-          signal?.throwIfAborted();
-          this.#requireAgentTab(sessionId, tabId);
-          const navigationGeneration = tab.navigationGeneration;
-          const documentVersion = tab.documentVersion;
-          const renderRevision = tab.renderRevision;
-          assertBrowserObservation(
-            tab.observation,
-            tab.documentVersion,
-            observationId,
-          );
-          if (tab.observation.documentIdentity === undefined)
-            throw new Error(
-              "Browser document identity is unavailable; inspect again",
+        this.#rendered(
+          tab,
+          async () => {
+            signal?.throwIfAborted();
+            this.#requireAgentTab(sessionId, tabId);
+            const navigationGeneration = tab.navigationGeneration;
+            const documentVersion = tab.documentVersion;
+            const renderRevision = tab.renderRevision;
+            assertBrowserObservation(
+              tab.observation,
+              tab.documentVersion,
+              observationId,
             );
-          const expression = browserScrollScript(
-            direction,
-            pixels,
-            tab.observation.documentIdentity,
-          );
-          tab.observation = undefined;
-          await this.#evaluate(tab, expression, dispatch);
-          this.#assertAgentOperationCurrent(
-            sessionId,
-            tab,
-            navigationGeneration,
-            documentVersion,
-            "scroll",
-            renderRevision,
-          );
-          if (signal?.aborted)
-            throw new Error(
-              "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+            if (tab.observation.documentIdentity === undefined)
+              throw new Error(
+                "Browser document identity is unavailable; inspect again",
+              );
+            const expression = browserScrollScript(
+              direction,
+              pixels,
+              tab.observation.documentIdentity,
             );
-          return this.#agentSummary(sessionId, tab);
-        }),
+            tab.observation = undefined;
+            await this.#evaluate(tab, expression, dispatch);
+            this.#assertAgentOperationCurrent(
+              sessionId,
+              tab,
+              navigationGeneration,
+              documentVersion,
+              "scroll",
+              renderRevision,
+            );
+            if (signal?.aborted)
+              throw new Error(
+                "Browser scroll outcome unknown after cancellation; inspect again before interacting",
+              );
+            return this.#agentSummary(sessionId, tab);
+          },
+          signal,
+        ),
     );
     return this.#agentSummary(sessionId, tab);
   }
@@ -955,46 +960,53 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       observationId,
       signal,
       async (dispatch) =>
-        this.#rendered(tab, async () => {
-          this.#requireAgentTab(sessionId, tabId);
-          const navigationGeneration = tab.navigationGeneration;
-          const renderRevision = tab.renderRevision;
-          const target = resolveBrowserObservedTarget(
-            tab.observation,
-            tab.documentVersion,
-            observationId,
-            targetId,
-            action,
-          );
-          tab.observation = undefined;
-          const result = await this.#evaluate<{ ok: boolean; reason?: string }>(
-            tab,
-            browserActionScript(target, action, value, submit),
-            dispatch,
-          );
-          if (!result.ok)
-            throw new Error(
-              `Browser ${action} target is stale or unsafe: ${result.reason}`,
+        this.#rendered(
+          tab,
+          async () => {
+            this.#requireAgentTab(sessionId, tabId);
+            const navigationGeneration = tab.navigationGeneration;
+            const renderRevision = tab.renderRevision;
+            const target = resolveBrowserObservedTarget(
+              tab.observation,
+              tab.documentVersion,
+              observationId,
+              targetId,
+              action,
             );
-          this.#assertAgentOperationCurrent(
-            sessionId,
-            tab,
-            navigationGeneration,
-            undefined,
-            action,
-            renderRevision,
-          );
-          await settleWebContents(tab.view.webContents);
-          this.#assertAgentOperationCurrent(
-            sessionId,
-            tab,
-            navigationGeneration,
-            undefined,
-            action,
-            renderRevision,
-          );
-          return this.#agentSummary(sessionId, tab);
-        }),
+            tab.observation = undefined;
+            const result = await this.#evaluate<{
+              ok: boolean;
+              reason?: string;
+            }>(
+              tab,
+              browserActionScript(target, action, value, submit),
+              dispatch,
+            );
+            if (!result.ok)
+              throw new Error(
+                `Browser ${action} target is stale or unsafe: ${result.reason}`,
+              );
+            this.#assertAgentOperationCurrent(
+              sessionId,
+              tab,
+              navigationGeneration,
+              undefined,
+              action,
+              renderRevision,
+            );
+            await settleWebContents(tab.view.webContents);
+            this.#assertAgentOperationCurrent(
+              sessionId,
+              tab,
+              navigationGeneration,
+              undefined,
+              action,
+              renderRevision,
+            );
+            return this.#agentSummary(sessionId, tab);
+          },
+          signal,
+        ),
     );
     return this.#agentSummary(sessionId, tab);
   }
@@ -1105,7 +1117,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     }
   }
 
-  async #rendered<T>(tab: Tab, operation: () => Promise<T>): Promise<T> {
+  async #rendered<T>(
+    tab: Tab,
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (this.#dependencies.renderWhileUnmounted === undefined) {
       return await operation();
     }
@@ -1130,6 +1146,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         };
       },
       operation,
+      signal,
     );
   }
 

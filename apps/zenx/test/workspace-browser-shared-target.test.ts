@@ -1099,6 +1099,10 @@ class FakeImage {
 }
 
 class FakeWebContents extends EventEmitter {
+  frame?: (image: {
+    isEmpty(): boolean;
+    getSize(): { width: number; height: number };
+  }) => void;
   readonly debuggerApi = new FakeDebugger();
   readonly debugger = this.debuggerApi;
   readonly session = {
@@ -1153,6 +1157,15 @@ class FakeWebContents extends EventEmitter {
     this.nextCapture = undefined;
     if (next !== undefined) return next.promise;
     return Promise.resolve(new FakeImage());
+  }
+  beginFrameSubscription(
+    _dirty: boolean,
+    callback: NonNullable<FakeWebContents["frame"]>,
+  ) {
+    this.frame = callback;
+  }
+  endFrameSubscription() {
+    this.frame = undefined;
   }
   setWindowOpenHandler() {
     return undefined;
@@ -1409,6 +1422,14 @@ class PhysicalWindow extends EventEmitter {
   }
   showInactive() {
     this.visible = true;
+    for (const view of this.children) {
+      const callback = view.webContents.frame;
+      setTimeout(
+        () =>
+          callback?.({ isEmpty: () => false, getSize: () => view.getBounds() }),
+        10,
+      );
+    }
   }
   destroy() {
     assert.equal(this.children.length, 0);
@@ -1430,11 +1451,14 @@ for (const command of ["take-control", "return-control"] as const) {
           other = new PhysicalWindow(new FakeWebContents(100));
         const view = new PhysicalView(),
           temporary: PhysicalWindow[] = [];
-        const renderer = new WorkspaceBrowserRenderer(() => {
-          const window = new PhysicalWindow();
-          temporary.push(window);
-          return window as never;
-        });
+        const renderer = new WorkspaceBrowserRenderer(
+          () => {
+            const window = new PhysicalWindow();
+            temporary.push(window);
+            return window as never;
+          },
+          () => 1,
+        );
         const browser = new WorkspaceBrowser({
           artifactDirectory: directory,
           dependencies: {
@@ -1528,3 +1552,92 @@ for (const command of ["take-control", "return-control"] as const) {
     }
   }
 }
+
+for (const action of ["scroll", "click"] as const)
+  test(`Workspace ${action} forwards cancellation into the pending compositor lease before dispatch`, async () => {
+    const { WorkspaceBrowserRenderer } =
+      await import("../src/main/workspace-browser-renderer.js");
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-frame-abort-"),
+    );
+    const owner = new PhysicalWindow(),
+      view = new PhysicalView();
+    const renderer = new WorkspaceBrowserRenderer(
+      () => new PhysicalWindow() as never,
+      () => 1,
+    );
+    let observedSignal: AbortSignal | undefined;
+    const browser = new WorkspaceBrowser({
+      artifactDirectory: directory,
+      dependencies: {
+        createView: () => view as never,
+        windowFor: () => owner as never,
+        renderWhileUnmounted: (target, current, operation, signal) => {
+          observedSignal = signal;
+          return renderer.render(target, current, operation, signal);
+        },
+        releaseUnmountedView: (target) => renderer.release(target),
+        closeUnmountedRenderer: () => renderer.close(),
+      },
+    });
+    try {
+      browser.bindThreadSession("session", "thread");
+      const tab = await browser.open("session", "https://example.test/start");
+      browser.mount(owner.webContents as never, {
+        threadId: "thread",
+        tabId: tab.tabId,
+        lease: "ui",
+        bounds: { x: 20, y: 30, width: 640, height: 480 },
+      });
+      view.webContents.debuggerApi.defaultValue = actionInspection;
+      const observation = await browser.inspect("session", tab.tabId);
+      const evaluations = view.webContents.debuggerApi.evaluations;
+      view.webContents.beginFrameSubscription = () => {
+        view.webContents.frame = undefined;
+      };
+      const controller = new AbortController(),
+        reason = new Error("cancel before frame");
+      const pending =
+        action === "scroll"
+          ? browser.scroll(
+              "session",
+              tab.tabId,
+              observation.observationId,
+              "down",
+              100,
+              controller.signal,
+            )
+          : browser.click(
+              "session",
+              tab.tabId,
+              observation.observationId,
+              observation.targets[0]!.targetId,
+              controller.signal,
+            );
+      const rejected = assert.rejects(pending, (error) => error === reason);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(observedSignal, controller.signal);
+      assert.notEqual(view.parent, owner);
+      controller.abort(reason);
+      assert.equal(
+        view.parent,
+        owner,
+        "cancel immediately returns the physical view",
+      );
+      await rejected;
+      assert.equal(
+        view.webContents.debuggerApi.evaluations,
+        evaluations,
+        "cancelled readiness dispatches no page code",
+      );
+      assert.equal(
+        browser.command(owner.webContents as never, "thread", "list")[0]!
+          .agentActionOutcomeUnknown,
+        false,
+        "no page action was dispatched",
+      );
+    } finally {
+      await browser.shutdown();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });

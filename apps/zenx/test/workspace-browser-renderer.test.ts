@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import test from "node:test";
 import {
   WorkspaceBrowserRenderer,
@@ -11,9 +13,27 @@ class View {
   visible = true;
   bounds = { x: 20, y: 30, width: 640, height: 480 };
   destroyed = false;
+  autoFrame = true;
+  frame?: (image: {
+    isEmpty(): boolean;
+    getSize(): { width: number; height: number };
+  }) => void;
+  subscriptions = 0;
+  unsubscriptions = 0;
   webContents = {
     isDestroyed: () => this.destroyed,
     capturePage: async () => ({}),
+    beginFrameSubscription: (
+      _dirty: boolean,
+      callback: NonNullable<View["frame"]>,
+    ) => {
+      this.subscriptions++;
+      this.frame = callback;
+    },
+    endFrameSubscription: () => {
+      this.unsubscriptions++;
+      this.frame = undefined;
+    },
   };
   setVisible(value: boolean) {
     this.visible = value;
@@ -62,6 +82,21 @@ class Window extends EventEmitter {
   showInactive() {
     this.inactiveShows++;
     this.visible = true;
+    for (const view of this.children) {
+      const callback = view.frame;
+      if (view.autoFrame)
+        setTimeout(
+          () =>
+            callback?.({
+              isEmpty: () => false,
+              getSize: () => ({
+                width: view.bounds.width,
+                height: view.bounds.height,
+              }),
+            }),
+          10,
+        );
+    }
   }
   destroy() {
     assert.equal(this.children.length, 0, "never destroy the shared view");
@@ -79,28 +114,33 @@ function deferred() {
 async function tick() {
   await new Promise((r) => setImmediate(r));
 }
-function fixture() {
+function fixture(timeoutMs = 5_000) {
   const owner = new Window(),
     view = new View();
   owner.contentView.addChildView(view);
   let current = true,
     invalidations = 0;
   const windows: Window[] = [];
-  const renderer = new WorkspaceBrowserRenderer((options) => {
-    assert.deepEqual(options, {
-      width: 640,
-      height: 480,
-      x: -10000,
-      y: -10000,
-      show: false,
-      focusable: false,
-      skipTaskbar: true,
-      opacity: 0,
-    });
-    const window = new Window();
-    windows.push(window);
-    return window as never;
-  });
+  let scale = 1;
+  const renderer = new WorkspaceBrowserRenderer(
+    (options) => {
+      assert.deepEqual(options, {
+        width: 640,
+        height: 480,
+        x: -10000,
+        y: -10000,
+        show: false,
+        focusable: false,
+        skipTaskbar: true,
+        opacity: 0,
+      });
+      const window = new Window();
+      windows.push(window);
+      return window as never;
+    },
+    () => scale,
+    timeoutMs,
+  );
   const mount = {
     window: owner as never,
     isCurrent: () => current,
@@ -115,6 +155,9 @@ function fixture() {
     renderer,
     windows,
     mount,
+    setScale: (value: number) => {
+      scale = value;
+    },
     current: () => current,
     invalidations: () => invalidations,
     replace: () => {
@@ -124,6 +167,31 @@ function fixture() {
       renderer.render(view as never, () => mount, operation),
   };
 }
+
+test("renderer waits for a real frame beyond the old 100ms settle window", async () => {
+  const f = fixture();
+  f.view.autoFrame = false;
+  let operations = 0;
+  const pending = f.render(async () => {
+    operations++;
+  });
+  const settled = pending.catch(() => undefined);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(operations, 0, "elapsed time is not a compositor frame");
+    assert.equal(f.view.subscriptions, 1);
+    f.view.frame!({
+      isEmpty: () => false,
+      getSize: () => ({ width: 640, height: 480 }),
+    });
+    await pending;
+    assert.equal(operations, 1);
+    assert.equal(f.view.unsubscriptions, 1);
+  } finally {
+    f.renderer.close();
+    await settled;
+  }
+});
 for (const mode of ["hidden", "minimized"] as const)
   test(`${mode} mount borrows a compositor and restores exact bounds without showing its owner`, async () => {
     const f = fixture();
@@ -397,7 +465,10 @@ test("temporary attachment failure restores the unchanged owner without invoking
   temporary.contentView.addChildView = () => {
     throw error;
   };
-  const renderer = new WorkspaceBrowserRenderer(() => temporary as never);
+  const renderer = new WorkspaceBrowserRenderer(
+    () => temporary as never,
+    () => 1,
+  );
   let operations = 0;
   await assert.rejects(
     renderer.render(
@@ -464,3 +535,437 @@ for (const event of ["show", "restore"] as const) {
     });
   }
 }
+
+function frame(width = 640, height = 480, empty = false) {
+  return { isEmpty: () => empty, getSize: () => ({ width, height }) };
+}
+
+test("synchronous pre-activation, empty and wrong-size frames cannot dispatch", async () => {
+  const f = fixture();
+  f.view.autoFrame = false;
+  const subscribe = f.view.webContents.beginFrameSubscription;
+  f.view.webContents.beginFrameSubscription = (dirty, callback) => {
+    subscribe(dirty, callback);
+    callback(frame());
+  };
+  let operations = 0;
+  const pending = f.render(async () => {
+    operations++;
+  });
+  await tick();
+  assert.equal(operations, 0);
+  f.view.frame!(frame(640, 480, true));
+  f.view.frame!(frame(639, 480));
+  f.view.frame!(frame(640, 481));
+  await tick();
+  assert.equal(operations, 0);
+  f.view.frame!(frame());
+  await pending;
+  assert.equal(operations, 1);
+  assert.equal(f.view.unsubscriptions, 1);
+});
+
+for (const scale of [1.25, 2]) {
+  test(`frame dimensions use rounded physical pixels at ${scale}x, not DIP or CSS viewport`, async () => {
+    const f = fixture();
+    f.view.autoFrame = false;
+    f.setScale(scale);
+    let operations = 0;
+    const pending = f.render(async () => {
+      operations++;
+    });
+    await tick();
+    f.view.frame!(frame());
+    await tick();
+    assert.equal(operations, 0);
+    f.view.frame!(frame(Math.round(640 * scale), Math.round(480 * scale)));
+    await pending;
+    assert.equal(operations, 1);
+    assert.equal(f.view.unsubscriptions, 1);
+  });
+}
+
+test("a display-scale change in the same lease rejects an old-size frame", async () => {
+  const f = fixture();
+  f.view.autoFrame = false;
+  let operations = 0;
+  const pending = f.render(async () => {
+    operations++;
+  });
+  const rejected = assert.rejects(pending, /view changed/);
+  await tick();
+  f.setScale(2);
+  f.view.frame!(frame());
+  await rejected;
+  assert.equal(operations, 0);
+  assert.equal(f.view.unsubscriptions, 1);
+  assert.equal(f.view.parent, f.owner);
+});
+
+test("subscription setup failure cleans up without activating the temporary renderer", async () => {
+  const f = fixture(),
+    error = new Error("subscription failed");
+  f.view.webContents.beginFrameSubscription = () => {
+    f.view.subscriptions++;
+    throw error;
+  };
+  await assert.rejects(
+    f.render(async () => {
+      assert.fail("dispatch forbidden");
+    }),
+    (value) => value === error,
+  );
+  assert.equal(f.view.unsubscriptions, 1);
+  assert.equal(f.windows[0]!.inactiveShows, 0);
+  assert.equal(f.view.parent, f.owner);
+});
+
+test("missing compositor frame times out with zero operation calls and restored owner", async () => {
+  const f = fixture(5);
+  f.view.autoFrame = false;
+  await assert.rejects(
+    f.render(async () => {
+      assert.fail("dispatch forbidden");
+    }),
+    /compositor frame timed out/,
+  );
+  assert.equal(f.view.unsubscriptions, 1);
+  assert.equal(f.view.parent, f.owner);
+  assert.equal(f.windows[0]!.destroyed, true);
+});
+
+test("frame subscription cleanup failure prevents dispatch and retains the cleanup error", async () => {
+  const f = fixture(),
+    error = new Error("cannot stop subscription");
+  f.view.webContents.endFrameSubscription = () => {
+    f.view.unsubscriptions++;
+    throw error;
+  };
+  await assert.rejects(
+    f.render(async () => {
+      assert.fail("dispatch forbidden");
+    }),
+    (value) => value === error,
+  );
+  assert.equal(f.view.unsubscriptions, 1);
+  assert.equal(f.view.parent, f.owner);
+});
+
+test("native activation and subscription cleanup failures both remain visible", async () => {
+  const f = fixture(),
+    activation = new Error("showInactive failed"),
+    cleanup = new Error("end subscription failed");
+  const subscribe = f.view.webContents.beginFrameSubscription;
+  f.view.webContents.beginFrameSubscription = (dirty, callback) => {
+    subscribe(dirty, callback);
+    f.view.parent!.showInactive = () => {
+      throw activation;
+    };
+  };
+  f.view.webContents.endFrameSubscription = () => {
+    f.view.unsubscriptions++;
+    throw cleanup;
+  };
+  await assert.rejects(
+    f.render(async () => {
+      assert.fail("dispatch forbidden");
+    }),
+    (value) =>
+      value instanceof AggregateError &&
+      value.errors[0] === activation &&
+      value.errors[1] === cleanup,
+  );
+  assert.equal(f.view.unsubscriptions, 1);
+  assert.equal(f.view.parent, f.owner);
+});
+
+test("abort during frame wait returns the owner immediately and keeps the original abort reason", async () => {
+  const f = fixture(),
+    controller = new AbortController(),
+    reason = new Error("user cancelled");
+  f.view.autoFrame = false;
+  const pending = f.renderer.render(
+    f.view as never,
+    () => f.mount,
+    async () => {
+      assert.fail("dispatch forbidden");
+    },
+    controller.signal,
+  );
+  const rejected = assert.rejects(pending, (value) => value === reason);
+  await tick();
+  const late = f.view.frame!;
+  controller.abort(reason);
+  assert.equal(f.view.parent, f.owner);
+  assert.equal(f.view.unsubscriptions, 1);
+  late(frame());
+  await rejected;
+});
+
+test("already-aborted queued render never allocates a renderer or subscribes", async () => {
+  const f = fixture(),
+    controller = new AbortController(),
+    reason = new Error("cancelled before queue");
+  controller.abort(reason);
+  await assert.rejects(
+    f.renderer.render(
+      f.view as never,
+      () => f.mount,
+      async () => {
+        assert.fail("dispatch forbidden");
+      },
+      controller.signal,
+    ),
+    (value) => value === reason,
+  );
+  assert.equal(f.windows.length, 0);
+  assert.equal(f.view.subscriptions, 0);
+});
+
+test("late frame from a released lease cannot unlock the successor lease", async () => {
+  const f = fixture();
+  f.view.autoFrame = false;
+  let operations = 0;
+  const first = f.render(async () => {
+    assert.fail("old dispatch forbidden");
+  });
+  const rejected = assert.rejects(first, /view changed/);
+  await tick();
+  const late = f.view.frame!;
+  f.renderer.release(f.view as never);
+  await rejected;
+  const successor = new Window();
+  successor.contentView.addChildView(f.view);
+  const second = f.renderer.render(
+    f.view as never,
+    () => ({
+      window: successor as never,
+      isCurrent: () => true,
+      invalidate() {},
+    }),
+    async () => {
+      operations++;
+    },
+  );
+  await tick();
+  late(frame());
+  await tick();
+  assert.equal(operations, 0);
+  f.view.frame!(frame());
+  await second;
+  assert.equal(operations, 1);
+  assert.equal(f.view.unsubscriptions, 2);
+  assert.equal(f.view.parent, successor);
+});
+
+test("closing during readiness stops the subscription and rejects every late frame", async () => {
+  const f = fixture();
+  f.view.autoFrame = false;
+  const pending = f.render(async () => {
+    assert.fail("dispatch forbidden");
+  });
+  const rejected = assert.rejects(pending, /view changed/);
+  await tick();
+  const late = f.view.frame!;
+  f.renderer.close();
+  assert.equal(f.view.unsubscriptions, 1);
+  late(frame());
+  await rejected;
+});
+
+test("successful frame clears the readiness timer before a longer native operation", async () => {
+  const f = fixture(25),
+    started = deferred(),
+    done = deferred();
+  const pending = f.render(async () => {
+    started.resolve();
+    await done.promise;
+    return "captured once";
+  });
+  await started.promise;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(f.view.unsubscriptions, 1);
+  done.resolve();
+  assert.equal(await pending, "captured once");
+});
+
+test("fractional backing scale uses rounding rather than capturePage ceil", async () => {
+  const owner = new Window(),
+    view = new View(),
+    temporary = new Window();
+  view.bounds = { x: 2, y: 3, width: 641, height: 481 };
+  view.autoFrame = false;
+  owner.contentView.addChildView(view);
+  const renderer = new WorkspaceBrowserRenderer(
+    () => temporary as never,
+    () => 1.25,
+  );
+  let operations = 0;
+  const pending = renderer.render(
+    view as never,
+    () => ({ window: owner as never, isCurrent: () => true, invalidate() {} }),
+    async () => {
+      operations++;
+    },
+  );
+  await tick();
+  view.frame!(frame(802, 602)); // ceil would accept this; FrameSubscriber rounds.
+  await tick();
+  assert.equal(operations, 0);
+  view.frame!(frame(801, 601));
+  await pending;
+  assert.equal(operations, 1);
+  assert.equal(view.unsubscriptions, 1);
+});
+
+test("abort plus subscription-stop failure retains both causes and still returns the view", async () => {
+  const f = fixture(),
+    controller = new AbortController(),
+    aborted = new Error("cancelled"),
+    cleanup = new Error("end failed");
+  f.view.autoFrame = false;
+  f.view.webContents.endFrameSubscription = () => {
+    f.view.unsubscriptions++;
+    throw cleanup;
+  };
+  const pending = f.renderer.render(
+    f.view as never,
+    () => f.mount,
+    async () => {
+      assert.fail("dispatch forbidden");
+    },
+    controller.signal,
+  );
+  const rejected = assert.rejects(
+    pending,
+    (value) =>
+      value instanceof AggregateError &&
+      value.errors[0] === aborted &&
+      value.errors[1] === cleanup,
+  );
+  await tick();
+  controller.abort(aborted);
+  assert.equal(f.view.parent, f.owner);
+  await rejected;
+  assert.equal(f.view.unsubscriptions, 1);
+});
+
+test("a caller error after a valid frame is not replayed and never leaves a subscription", async () => {
+  const f = fixture(),
+    error = new Error("UnknownVizError");
+  let captures = 0;
+  await assert.rejects(
+    f.render(async () => {
+      captures++;
+      throw error;
+    }),
+    (value) => value === error,
+  );
+  assert.equal(captures, 1);
+  assert.equal(f.view.subscriptions, 1);
+  assert.equal(f.view.unsubscriptions, 1);
+  assert.equal(f.view.parent, f.owner);
+});
+
+for (const [width, height, decimalScale, expectedWidth, expectedHeight] of [
+  [395, 301, 1.3, 514, 391],
+  [390, 300, 1.15, 449, 345],
+  [395, 301, 1.1, 435, 331],
+  [395, 301, 1.35, 533, 406],
+] as const) {
+  test(`native float32 frame at ${decimalScale}x keeps exact ${expectedWidth}x${expectedHeight} acceptance`, async () => {
+    const owner = new Window(),
+      view = new View(),
+      temporary = new Window();
+    view.bounds = { x: 0, y: 0, width, height };
+    view.autoFrame = false;
+    owner.contentView.addChildView(view);
+    const renderer = new WorkspaceBrowserRenderer(
+      () => temporary as never,
+      () => Math.fround(decimalScale),
+    );
+    let operations = 0;
+    const pending = renderer.render(
+      view as never,
+      () => ({
+        window: owner as never,
+        isCurrent: () => true,
+        invalidate() {},
+      }),
+      async () => {
+        operations++;
+      },
+    );
+    const settled = pending.catch(() => undefined);
+    try {
+      await tick();
+      view.frame!(frame(expectedWidth - 1, expectedHeight));
+      view.frame!(frame(expectedWidth + 1, expectedHeight));
+      await tick();
+      assert.equal(
+        operations,
+        0,
+        "one-pixel tolerance must not weaken readiness",
+      );
+      view.frame!(frame(expectedWidth, expectedHeight));
+      await pending;
+      assert.equal(operations, 1);
+      assert.equal(view.unsubscriptions, 1);
+      assert.equal(view.parent, owner);
+    } finally {
+      renderer.close();
+      await settled;
+    }
+  });
+}
+
+test("both native PNG dimension oracles preserve float32 ceil across scale boundaries", () => {
+  const source = readFileSync(
+    new URL("../src/main/workspace-browser-smoke.ts", import.meta.url),
+    "utf8",
+  );
+  const expressions = [
+    ...source.matchAll(
+      /width: (Math\.ceil\([\s\S]*?\)),\s*height: (Math\.ceil\([\s\S]*?\)),(?=\s*\})/g,
+    ),
+  ];
+  assert.equal(
+    expressions.length,
+    2,
+    "both unmounted and hidden PNG oracles are exercised",
+  );
+  // Literal expected dimensions are derived from pinned gfx::ScaleToCeiledSize.
+  for (const [
+    decimalScale,
+    unmountedWidth,
+    unmountedHeight,
+    mountedWidth,
+    mountedHeight,
+  ] of [
+    [1, 1280, 800, 640, 480],
+    [1.1, 1408, 880, 704, 528],
+    [1.15, 1472, 920, 736, 552],
+    [1.25, 1600, 1000, 800, 600],
+    [1.3, 1664, 1040, 832, 624],
+    [1.35, 1728, 1080, 864, 648],
+    [1.5, 1920, 1200, 960, 720],
+    [2, 2560, 1600, 1280, 960],
+  ] as const) {
+    for (const [index, match] of expressions.entries()) {
+      const expected = runInNewContext(`({${match[0]}})`, {
+        scale: Math.fround(decimalScale),
+        captureScale: Math.fround(decimalScale),
+      });
+      assert.equal(
+        expected.width,
+        index === 0 ? unmountedWidth : mountedWidth,
+        `oracle ${index} width at ${decimalScale}`,
+      );
+      assert.equal(
+        expected.height,
+        index === 0 ? unmountedHeight : mountedHeight,
+        `oracle ${index} height at ${decimalScale}`,
+      );
+    }
+  }
+});

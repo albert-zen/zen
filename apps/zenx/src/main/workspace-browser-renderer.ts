@@ -19,6 +19,7 @@ interface RenderLease {
   bounds: Electron.Rectangle;
   visible: boolean;
   failure?: unknown;
+  cancelFrame?: () => void;
   interrupt(): void;
 }
 
@@ -32,15 +33,19 @@ export class WorkspaceBrowserRenderer {
     readonly createWindow: (
       options: BrowserWindowConstructorOptions,
     ) => BrowserWindow,
+    readonly displayScale: (window: BrowserWindow) => number,
+    readonly frameTimeoutMs = 5_000,
   ) {}
 
   async render<T>(
     view: WebContentsView,
     currentMount: () => WorkspaceBrowserRenderMount | undefined,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     const prior = this.#tails.get(view) ?? Promise.resolve();
     const result = prior.then(async () => {
+      signal?.throwIfAborted();
       if (this.#closed || view.webContents.isDestroyed())
         throw new Error("Browser tab closed before rendering");
       const mount = currentMount();
@@ -99,9 +104,7 @@ export class WorkspaceBrowserRenderer {
         lease.attached = true;
         view.setBounds({ x: 0, y: 0, width, height });
         view.setVisible(true);
-        window.showInactive();
-        // Keep the existing non-activating renderer's compositor-settle turn.
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this.#awaitFrame(view, lease, width, height, signal);
         if (lease.released) {
           if (lease.failure !== undefined) throw lease.failure;
           // Preserve the old unmounted-to-human-mount inspection handoff. A
@@ -170,6 +173,114 @@ export class WorkspaceBrowserRenderer {
     if (lease) this.#release(view, lease, true);
   }
 
+  #awaitFrame(
+    view: WebContentsView,
+    lease: RenderLease,
+    width: number,
+    height: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let subscribed = false;
+      let activated = false;
+      let scale = 0;
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", aborted);
+        lease.cancelFrame = undefined;
+        try {
+          if (subscribed && !view.webContents.isDestroyed())
+            view.webContents.endFrameSubscription();
+        } catch (cleanup) {
+          error =
+            error === undefined
+              ? cleanup
+              : new AggregateError(
+                  [error, cleanup],
+                  "Frame wait failed and subscription cleanup is unconfirmed",
+                );
+        }
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      const aborted = () => {
+        finish(signal?.reason ?? new Error("Browser rendering cancelled"));
+        try {
+          this.release(view);
+        } catch (error) {
+          lease.failure = error;
+        }
+      };
+      const timer = setTimeout(
+        () =>
+          finish(
+            new Error("Browser compositor frame timed out; inspect again"),
+          ),
+        this.frameTimeoutMs,
+      );
+      // A release unblocks the wait; the caller's existing ownership check
+      // rejects it, except for the existing unmounted-to-human-mount handoff.
+      lease.cancelFrame = () => finish();
+      signal?.addEventListener("abort", aborted, { once: true });
+      if (signal?.aborted) {
+        aborted();
+        return;
+      }
+      try {
+        subscribed = true;
+        view.webContents.beginFrameSubscription(false, (image) => {
+          if (settled || !activated) return;
+          try {
+            if (
+              lease.released ||
+              lease.window.isDestroyed() ||
+              !lease.window.contentView.children.includes(view) ||
+              (lease.mount && !lease.mount.isCurrent()) ||
+              this.displayScale(lease.window) !== scale
+            ) {
+              finish(
+                new Error(
+                  "Browser view changed during rendering; inspect again",
+                ),
+              );
+              return;
+            }
+            // Electron 43 uses float32 SizeF multiplication, then rounds,
+            // then wraps the physical bitmap as a 1x NativeImage. CSS zoom and
+            // innerWidth are not the source of these dimensions.
+            const size = image.getSize();
+            if (
+              !image.isEmpty() &&
+              size.width ===
+                Math.round(
+                  Math.fround(Math.fround(width) * Math.fround(scale)),
+                ) &&
+              size.height ===
+                Math.round(
+                  Math.fround(Math.fround(height) * Math.fround(scale)),
+                )
+            )
+              finish();
+          } catch (error) {
+            finish(error);
+          }
+        });
+        if (!settled) {
+          lease.window.showInactive();
+          scale = this.displayScale(lease.window);
+          if (!Number.isFinite(scale) || scale <= 0)
+            throw new Error("Browser compositor display scale is unavailable");
+          activated = true;
+        }
+      } catch (error) {
+        finish(error);
+      }
+    });
+  }
+
   #release(
     view: WebContentsView,
     lease: RenderLease,
@@ -184,6 +295,7 @@ export class WorkspaceBrowserRenderer {
       !view.webContents.isDestroyed();
     lease.released = true;
     this.#active.delete(view);
+    lease.cancelFrame?.();
     lease.mount?.window.removeListener("show", lease.interrupt);
     lease.mount?.window.removeListener("restore", lease.interrupt);
     lease.mount?.window.removeListener("hide", lease.interrupt);
