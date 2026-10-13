@@ -117,6 +117,7 @@ async function until(
   service: ShellPanelService,
   taskId: string,
   predicate: (read: ShellSessionRead) => boolean,
+  stage = "terminal",
 ) {
   const deadline = Date.now() + 5000;
   let last: ShellSessionRead | undefined;
@@ -131,7 +132,7 @@ async function until(
     await new Promise((r) => setTimeout(r, 10));
   }
   throw new Error(
-    `Timed out observing terminal: ${JSON.stringify({
+    `Timed out observing ${stage}: ${JSON.stringify({
       status: last?.session.status,
       output: last?.output.slice(-4096),
     })}`,
@@ -157,6 +158,23 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
       await until(f.service, created.taskId, (r) =>
         /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
       );
+      // Establish evaluation before resizing, not merely echoed input. Keep the
+      // wrapped post-resize command below as a separate regression assertion.
+      await f.service.request({
+        operation: "write",
+        threadId: "human",
+        taskId: created.taskId,
+        data: "123+456\r",
+      });
+      await until(
+        f.service,
+        created.taskId,
+        (r) =>
+          /(?:^|\r?\n)579\r?\n[\s\S]*PS [^\r\n]*> /u.test(
+            stripVTControlCharacters(r.output),
+          ),
+        "pre-resize PowerShell evaluation",
+      );
     }
     await f.service.request({
       operation: "resize",
@@ -165,6 +183,32 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
       cols: 92,
       rows: 30,
     });
+    if (process.platform === "win32") {
+      await f.service.request({
+        operation: "write",
+        threadId: "human",
+        taskId: created.taskId,
+        data: "234+567;'ok'>p\r",
+      });
+      try {
+        await until(
+          f.service,
+          created.taskId,
+          (r) =>
+            /(?:^|\r?\n)801\r?\n[\s\S]*PS [^\r\n]*> /u.test(
+              stripVTControlCharacters(r.output),
+            ),
+          "post-resize short PowerShell evaluation",
+        );
+      } catch (error) {
+        const executed = await readFile(path.join(directory, "p"))
+          .then((data) => data.toString("hex"))
+          .catch(() => "absent");
+        throw new Error(`Post-resize evaluation file: ${executed}`, {
+          cause: error,
+        });
+      }
+    }
     const command =
       process.platform === "win32"
         ? "Write-Output ('SHARED_' + 'PTY_PROBE')\r"
@@ -175,8 +219,11 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
       taskId: created.taskId,
       data: command,
     });
-    const observed = await until(f.service, created.taskId, (r) =>
-      r.output.includes("SHARED_PTY_PROBE"),
+    const observed = await until(
+      f.service,
+      created.taskId,
+      (r) => r.output.includes("SHARED_PTY_PROBE"),
+      "post-resize wrapped command output",
     );
     assert.equal(observed.session.kind, "terminal");
     assert.equal(
