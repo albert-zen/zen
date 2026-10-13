@@ -32,6 +32,7 @@ import type {
 } from "./capabilities/browser-provider.js";
 import {
   connectUserBrowserCdp,
+  UserBrowserDocumentChangedBeforeDispatchError,
   windowsBrowserExecutableCandidates,
   type UserBrowserConnection,
 } from "./capabilities/user-browser-provider.js";
@@ -875,6 +876,18 @@ async function main(): Promise<void> {
         return undefined;
       }
     }, "agent fixture document");
+    // The fixture DOM can exist before the provider receives the final initial
+    // navigation lifecycle event. Settle only this read, before concurrent input.
+    await poll(async () => {
+      try {
+        await connection!.backend.inspect(sessionId, opened.tabId);
+        return true;
+      } catch (error) {
+        if (error instanceof UserBrowserDocumentChangedBeforeDispatchError)
+          return undefined;
+        throw error;
+      }
+    }, "initial Agent document lifecycle");
     const userWindow = await browserRpc.send("Browser.getWindowForTarget", {
       targetId: user.id,
     });
