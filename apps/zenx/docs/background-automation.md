@@ -106,3 +106,22 @@ behavioral change and is not required to visualize the existing actions.
 
 Test/build/review evidence and exact supported provider coverage are recorded in
 the PR and delivery report; source implementation is not an installed release.
+
+### Windows dependency correction
+
+The pinned WinApp 0.3.1 screenshot implementation is not a strict-background
+primitive: it restores minimized windows and can activate a blank-frame target
+without a foreground flag. The Windows adapter now uses a fixed PrintWindow-only
+helper for screenshot acquisition, while keeping WinApp UIA actions unchanged.
+The helper has no activation/restore/input API, refuses unavailable frames, and
+runs in a bounded cancellable child process. Its source is bundled with ZenX;
+PowerShell is the system executable and request data is sent only on stdin.
+The existing Windows smoke adds an occluding foreground guard, continuous native
+focus/pointer sampling, valid magenta content, partially painted native-frame
+refusal and minimized-window refusal. Ambiguous sentinel-colored pixels alone
+are confirmed against a differently initialized second capture within the same
+timeout; full-frame stability is not required, and pixels are never composited
+across times. Changes at those ambiguous positions fail explicitly.
+Windows native execution
+is required before this change is certified; cross-platform fixture passes alone
+do not establish its native capture behavior.

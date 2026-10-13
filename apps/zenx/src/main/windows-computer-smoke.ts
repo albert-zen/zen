@@ -1,5 +1,7 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { access, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 import type { ToolInvocation } from "../../../../src/tool.js";
 import {
@@ -9,8 +11,11 @@ import {
 } from "./capabilities/computer-provider.js";
 import {
   windowsComputerCapabilityManifest,
+  runBoundedProcess,
   WinAppCliComputerBackend,
 } from "./capabilities/windows-computer-provider.js";
+
+import { windowsBackgroundCaptureCommand } from "./capabilities/windows-background-capture.js";
 
 const arguments_ = parseArguments(process.argv.slice(2));
 const expectedTarget = {
@@ -32,6 +37,16 @@ const computer = new ComputerZenXCapabilityPackage(
 );
 
 try {
+  await assert.rejects(
+    execute(
+      computer,
+      "computer_foreground_key_press",
+      { key: "enter" },
+      controller.signal,
+    ),
+    /enable Foreground computer control/u,
+    "The smoke must retain the default foreground-control refusal",
+  );
   const diagnostic = await backend.diagnose(controller.signal);
   if (!diagnostic.ready) throw new Error(diagnostic.message);
 
@@ -120,12 +135,109 @@ try {
     throw new Error("ZenX adapter returned an invalid screenshot artifact");
   }
 
+  // Decode the real PNG and find a distinctive fixture-only marker fully behind
+  // the foreground guard. File existence alone does not prove target pixels.
+  const verifyPixels = String.raw`[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -ReferencedAssemblies System.Drawing,System -TypeDefinition @'
+using System; using System.Drawing;
+public static class ZenXMarkerCheck {
+  public static string Count(string path) {
+    using (var bitmap = new Bitmap(path)) {
+      int count=0, magenta=0;
+      for (int y=0; y<bitmap.Height; y++) for (int x=0; x<bitmap.Width; x++) {
+        var pixel=bitmap.GetPixel(x,y);
+        if (pixel.R==25 && pixel.G==90 && pixel.B==210) count++;
+        if (pixel.R==255 && pixel.G==0 && pixel.B==255) magenta++;
+      }
+      return count + "," + magenta;
+    }
+  }
+}
+'@
+[Console]::Out.WriteLine([ZenXMarkerCheck]::Count([Console]::In.ReadToEnd()))`;
+  const verifiedPixels = await runBoundedProcess(
+    windowsBackgroundCaptureCommand().executable,
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(verifyPixels, "utf16le").toString("base64"),
+    ],
+    {
+      timeoutMs: 10_000,
+      signal: controller.signal,
+      stdin: screenshot.artifactPath,
+      maxStdoutBytes: 1024,
+    },
+  );
+  const [bluePixels, magentaPixels] = verifiedPixels.stdout
+    .trim()
+    .split(",")
+    .map(Number);
+  if (!(bluePixels! >= 500 && magentaPixels! >= 50))
+    throw new Error(
+      "Occluded screenshot is missing the target fixture's distinctive marker pixels",
+    );
+
+  const probeDirectory = requiredString(
+    arguments_["probe-directory"],
+    "--probe-directory",
+  );
+  await writeFile(path.join(probeDirectory, "unrendered"), "unrendered");
+  await waitForFixture(
+    path.join(probeDirectory, "unrendered-ready"),
+    controller.signal,
+  );
+  await assert.rejects(
+    execute(
+      computer,
+      "computer_screenshot",
+      { target: refreshedTarget },
+      controller.signal,
+    ),
+    /capture_unrendered/u,
+    "Partially painted native frames must fail without foreground fallback",
+  );
+  await writeFile(path.join(probeDirectory, "minimize"), "minimize");
+  await waitForFixture(
+    path.join(probeDirectory, "minimized"),
+    controller.signal,
+  );
+  try {
+    await execute(
+      computer,
+      "computer_screenshot",
+      { target: refreshedTarget },
+      controller.signal,
+    );
+    throw new Error("Minimized capture unexpectedly succeeded");
+  } catch (error) {
+    if (!String(error).includes("capture_minimized")) throw error;
+  }
   console.log(
-    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: list_windows -> exact target -> inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> scoped screenshot.`,
+    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: list_windows -> exact target -> inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> strict background screenshot with legitimate magenta while occluded -> partially painted frame rejected -> minimized capture rejected without restore.`,
   );
 } finally {
   clearTimeout(timeout);
   await computer.close?.();
+}
+
+async function waitForFixture(
+  marker: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    signal.throwIfAborted();
+    try {
+      await access(marker);
+      return;
+    } catch {
+      if (Date.now() > deadline)
+        throw new Error("Fixture state transition timed out");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 async function execute<T>(
