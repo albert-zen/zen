@@ -1,3 +1,4 @@
+import { BrowserInputUnsupportedError } from "../src/main/capabilities/browser-targeted-input.js";
 import { BrowserBackendRegistry } from "../src/main/capabilities/browser-backend-registry.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -1037,7 +1038,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-class FakeDebugger {
+class FakeDebugger extends EventEmitter {
   attached = false;
   evaluations = 0;
   defaultValue: unknown = { visibleText: "fixture", targets: [] };
@@ -1050,6 +1051,7 @@ class FakeDebugger {
     this.attached = true;
   }
   async sendCommand(method: string, params?: Record<string, unknown>) {
+    if (method === "Page.enable") return {};
     if (method === "Page.getFrameTree")
       return { frameTree: { frame: { id: "main-frame" } } };
     if (method === "Page.createIsolatedWorld") {
@@ -1282,5 +1284,284 @@ test("concurrent routing preserves human takeover, fresh return and native navig
   } finally {
     await registry.close();
     await f.close();
+  }
+});
+
+test("Workspace targeted input publishes CSS viewport and consumes a coherent screenshot observation", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    assert.equal(observed.inputViewport?.width, 640);
+    assert.equal(observed.inputViewport?.deviceScaleFactor, 2);
+    await f.browser.pointerClick(
+      "a",
+      tab.tabId,
+      observed.observationId,
+      60,
+      40,
+    );
+    assert.deepEqual(
+      input.events.map((event) => event.params.type),
+      ["mousePressed", "mouseReleased"],
+    );
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 60, 40),
+      /stale|unknown/,
+    );
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    await f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter");
+    assert.deepEqual(
+      input.events.slice(-2).map((event) => event.params.type),
+      ["keyDown", "keyUp"],
+    );
+    assert.equal(
+      input.events.every((event) => event.method.startsWith("Input.dispatch")),
+      true,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace rejects targeted input when screenshot has no coherent viewport or changed focus", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const unavailable = await f.browser.inspect("a", tab.tabId);
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, unavailable.observationId, 20, 30),
+      /coherent screenshot/,
+    );
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.snapshot.focusId = "human-selected-other-field";
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+      /focus or input changed/,
+    );
+    assert.equal(input.events.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace takeover between targeted press and release blocks old release and quarantines input", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      f.browser.command(
+        f.sender as never,
+        "thread-a",
+        "take-control",
+        tab.tabId,
+      );
+      f.browser.command(
+        f.sender as never,
+        "thread-a",
+        "return-control",
+        tab.tabId,
+      );
+    };
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 20, 30),
+      /outcome is unknown/,
+    );
+    assert.equal(input.events.length, 1);
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    assert.equal(fresh.agentActionOutcomeUnknown, true);
+    assert.equal(fresh.inputViewport, undefined);
+    await assert.rejects(
+      f.browser.navigate(
+        "a",
+        tab.tabId,
+        "https://example.test/no",
+        undefined,
+        fresh.observationId,
+      ),
+      /input is blocked/,
+    );
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter"),
+      /input is blocked/,
+    );
+    await f.browser.closeTab("a", tab.tabId, undefined, fresh.observationId);
+    assert.equal((await f.browser.listTabs("a")).length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+function installTargetedInputFixture(debuggerApi: FakeDebugger) {
+  const snapshot = {
+    documentKey: "0123456789abcdef0123456789abcdef|https://example.test/input",
+    viewport: {
+      width: 640,
+      height: 480,
+      deviceScaleFactor: 2,
+      scrollX: 0,
+      scrollY: 0,
+      visualScale: 1,
+      visualOffsetX: 0,
+      visualOffsetY: 0,
+    },
+    focusId: "input-1",
+    focusNeedsShadowEvidence: true,
+    inputRevision: 0,
+    layoutRevision: 0,
+  };
+  const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const state: {
+    snapshot: typeof snapshot;
+    events: typeof events;
+    afterInput?: () => void;
+  } = { snapshot, events };
+  const original = debuggerApi.sendCommand.bind(debuggerApi);
+  debuggerApi.sendCommand = async (method, params) => {
+    if (method.startsWith("Input.")) {
+      events.push({ method, params: params ?? {} });
+      snapshot.inputRevision++;
+      state.afterInput?.();
+      return {} as never;
+    }
+    if (method === "DOM.describeNode")
+      return {
+        node: {
+          backendNodeId: 101,
+          nodeType: 1,
+          localName: "input",
+          attributes: ["type", "text"],
+        },
+      } as never;
+    if (method === "Runtime.releaseObject") return {} as never;
+    if (method === "Runtime.evaluate") {
+      if (params?.returnByValue === false)
+        return {
+          result: { subtype: "node", objectId: "workspace:focus" },
+        } as never;
+      assert.equal(params?.contextId, 42);
+      return {
+        result: {
+          value: String(params?.expression).includes("const elements =")
+            ? { ...actionInspection, inputSnapshot: structuredClone(snapshot) }
+            : structuredClone(snapshot),
+        },
+      } as never;
+    }
+    return await original(method, params);
+  };
+  return state;
+}
+
+test("Workspace zoom keeps DOM inspection while omitting unsupported targeted input", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    input.snapshot.viewport.visualScale = 2;
+    const observed = await f.browser.inspect("a", tab.tabId);
+    assert.equal(observed.visibleText, "fixture");
+    assert.ok(observed.targets.some((target) => target.name === "Act"));
+    assert.equal(observed.inputViewport, undefined);
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 60, 40),
+      /coherent screenshot/,
+    );
+    assert.equal(input.events.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace native dialog blocks targeted input without accepting or activating it", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const debuggerApi = f.views[0]!.webContents.debuggerApi;
+    const input = installTargetedInputFixture(debuggerApi);
+    const observed = await f.browser.inspect("a", tab.tabId);
+    debuggerApi.emit("message", {}, "Page.javascriptDialogOpening");
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 20, 30),
+      /native dialog requires human control/,
+    );
+    assert.equal(input.events.length, 0);
+    debuggerApi.emit("message", {}, "Page.javascriptDialogClosed");
+    await f.browser.pointerClick(
+      "a",
+      tab.tabId,
+      observed.observationId,
+      20,
+      30,
+    );
+    assert.equal(input.events.length, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace preserves stable native refusal but never classifies an unknown Runtime exception", async () => {
+  for (const known of [true, false]) {
+    const f = await sharedFixture();
+    try {
+      f.browser.bindThreadSession("a", "thread-a");
+      const tab = await f.browser.open("a", "https://example.test/input");
+      const debuggerApi = f.views[0]!.webContents.debuggerApi;
+      const input = installTargetedInputFixture(debuggerApi);
+      const observed = await f.browser.inspect("a", tab.tabId);
+      const send = debuggerApi.sendCommand.bind(debuggerApi);
+      debuggerApi.sendCommand = async (method, params) => {
+        if (
+          method === "Runtime.evaluate" &&
+          String(params?.expression).includes("const hit = resolveHit")
+        )
+          return (
+            known
+              ? {
+                  result: {
+                    value: { browserInputUnsupported: "native-surface" },
+                  },
+                }
+              : {
+                  exceptionDetails: {
+                    text: "Uncaught",
+                    exception: {
+                      description: "BROWSER_INPUT_UNSUPPORTED:native-surface",
+                    },
+                  },
+                }
+          ) as never;
+        return await send(method, params);
+      };
+      await assert.rejects(
+        f.browser.pointerClick("a", tab.tabId, observed.observationId, 5, 5),
+        (error) =>
+          known
+            ? error instanceof BrowserInputUnsupportedError &&
+              error.reason === "native-surface"
+            : !(error instanceof BrowserInputUnsupportedError) &&
+              /evaluation failed/.test(String(error)),
+      );
+      assert.equal(input.events.length, 0);
+    } finally {
+      await f.close();
+    }
   }
 });

@@ -1,10 +1,11 @@
+import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rm } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { app, BrowserWindow, type WebContentsView } from "electron";
+import { app, BrowserWindow, screen, type WebContentsView } from "electron";
 
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -27,6 +28,14 @@ const slowRequestStarted = new Promise<void>((resolve) => {
 });
 const fixture = createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
+  if (request.url === "/input") {
+    response.end(`<!doctype html><title>Targeted input fixture</title><style>body{margin:0;min-height:2200px}canvas{position:absolute;left:10px;top:100px;background:#adc}form{position:absolute;left:10px;top:200px}#file{position:absolute;left:10px;top:300px}</style>
+      <output id="result">No canvas click</output><p id="focus">Focus none</p>
+      <canvas width="200" height="80" tabindex="0" onclick="this.focus();document.querySelector('#result').textContent='Canvas clicked '+event.isTrusted"></canvas>
+      <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next</button></form><input type="file" id="file"><label for="file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
+      <script>document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
+    return;
+  }
   if (request.url === "/handoff") {
     response.end(`<!doctype html><title>Synthetic handoff fixture</title>
       <main><h1>Local test only</h1>
@@ -396,6 +405,7 @@ void app.whenReady().then(async () => {
       1,
       "Ending the Agent session must preserve the shared human page",
     );
+    await assertTargetedBackgroundInput(port);
     await assertStableControlLayout();
     console.log(
       JSON.stringify({
@@ -409,6 +419,7 @@ void app.whenReady().then(async () => {
           bytes: unmountedInspection.screenshot.bytes,
         },
         checks: [
+          "targeted click/key default behaviors preserve a sentinel focused window and physical pointer for unmounted, hidden-mounted, and minimized-mounted pages",
           "unmounted live observation delivers frames and releases its renderer",
           "unmounted Agent inspect captures a screenshot and visible targets",
           "unmounted Agent action changes the same page",
@@ -443,6 +454,182 @@ void app.whenReady().then(async () => {
     });
   }
 });
+
+async function assertTargetedBackgroundInput(port: number): Promise<void> {
+  const browser = createElectronWorkspaceBrowser({
+    artifactDirectory: path.join(directory, "input-artifacts"),
+  });
+  const owner = new BrowserWindow({
+    show: false,
+    width: 800,
+    height: 650,
+    focusable: false,
+  });
+  const sentinel = new BrowserWindow({ show: false, width: 400, height: 300 });
+  try {
+    await owner.loadURL("about:blank");
+    await sentinel.loadURL(
+      "data:text/html,<input autofocus aria-label='User sentinel'>",
+    );
+    sentinel.show();
+    await eventually(async () =>
+      assert.equal(BrowserWindow.getFocusedWindow(), sentinel),
+    );
+    const pointer = screen.getCursorScreenPoint();
+    browser.bindThreadSession("input-session", "input-thread");
+    const tab = await browser.open(
+      "input-session",
+      `http://127.0.0.1:${port}/input`,
+    );
+    for (const mode of [
+      "unmounted",
+      "hidden-mounted",
+      "minimized-mounted",
+    ] as const) {
+      if (mode !== "unmounted") {
+        browser.mount(owner.webContents, {
+          threadId: "input-thread",
+          tabId: tab.tabId,
+          lease: "input-lease",
+          bounds: { x: 0, y: 0, width: 700, height: 500 },
+        });
+        if (mode === "minimized-mounted") {
+          owner.showInactive();
+          owner.minimize();
+          await eventually(async () => assert.equal(owner.isMinimized(), true));
+        } else owner.hide();
+      }
+      await browser.navigate(
+        "input-session",
+        tab.tabId,
+        `http://127.0.0.1:${port}/input`,
+      );
+      let inspected = await browser.inspect("input-session", tab.tabId);
+      assert.equal(
+        inspected.screenshot.status,
+        "captured",
+        `${mode}: requires real pixels`,
+      );
+      assert.ok(
+        inspected.inputViewport,
+        `${mode}: requires coherent input viewport`,
+      );
+      await browser.pointerClick(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        50,
+        130,
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /Canvas clicked true/u);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "ArrowDown",
+      );
+      await eventually(async () => {
+        inspected = await browser.inspect("input-session", tab.tabId);
+        assert.ok((inspected.inputViewport?.scrollY ?? 0) > 0);
+      });
+      await browser.scroll(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "up",
+        2000,
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      await browser.pointerClick(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        40,
+        210,
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "Space",
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.equal(
+        requiredTarget(inspected, "Targeted text", "type").value,
+        " ",
+      );
+      await browser.type(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        requiredTarget(inspected, "Targeted text", "type").targetId,
+        "background form",
+        false,
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "Enter",
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /Submitted background form/u);
+      await browser.keyPress(
+        "input-session",
+        tab.tabId,
+        inspected.observationId,
+        "Tab",
+      );
+      inspected = await browser.inspect("input-session", tab.tabId);
+      assert.match(inspected.visibleText, /Focus next/u);
+      await assert.rejects(
+        browser.pointerClick(
+          "input-session",
+          tab.tabId,
+          inspected.observationId,
+          30,
+          310,
+        ),
+        (error: unknown) =>
+          error instanceof BrowserInputUnsupportedError &&
+          error.code === "BROWSER_INPUT_UNSUPPORTED" &&
+          error.reason === "native-surface",
+      );
+      await assert.rejects(
+        browser.pointerClick(
+          "input-session",
+          tab.tabId,
+          inspected.observationId,
+          30,
+          360,
+        ),
+        (error: unknown) =>
+          error instanceof BrowserInputUnsupportedError &&
+          error.code === "BROWSER_INPUT_UNSUPPORTED" &&
+          error.reason === "native-surface",
+      );
+      assert.equal(
+        BrowserWindow.getFocusedWindow(),
+        sentinel,
+        `${mode}: must preserve the focused sentinel window`,
+      );
+      assert.deepEqual(
+        screen.getCursorScreenPoint(),
+        pointer,
+        `${mode}: must not move the physical pointer`,
+      );
+      if (mode === "hidden-mounted") assert.equal(owner.isVisible(), false);
+      if (mode === "minimized-mounted") assert.equal(owner.isMinimized(), true);
+    }
+  } finally {
+    await browser.shutdown();
+    owner.destroy();
+    sentinel.destroy();
+  }
+}
 
 function requiredTarget(
   inspection: BrowserInspection,

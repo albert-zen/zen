@@ -26,9 +26,26 @@ import {
   type BrowserScreenshotArtifact,
   type BrowserObservation,
   type BrowserTabSummary,
+  type BrowserTabGrouping,
   type BrowserTargetFingerprint,
   type ZenXBrowserBackend,
 } from "./browser-provider.js";
+import {
+  assertBrowserInputSnapshot,
+  browserInputKey,
+  browserInputPoint,
+  browserInputProbeScript,
+  browserInputSnapshotScript,
+  browserTargetedInputPolicy,
+  BrowserInputOutcomeUnknownError,
+  dispatchBrowserTargetedInput,
+  requireBrowserInputSnapshot,
+  includesBrowserInputSnapshot,
+  resolveBrowserInputEvidence,
+  type BrowserInputKey,
+  type BrowserInputObservation,
+  type BrowserInputSnapshot,
+} from "./browser-targeted-input.js";
 import {
   MAX_OBSERVATION_CAPTURE_ITEMS,
   OBSERVATION_CAPTURE,
@@ -36,6 +53,7 @@ import {
 
 const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
 const USER_BROWSER_SCREENSHOT_TIMEOUT_MS = 10_000;
+const USER_BROWSER_INPUT_OBJECT_CLEANUP_TIMEOUT_MS = 500;
 const USER_BROWSER_MAX_TARGET_EVIDENCE = 128;
 const USER_BROWSER_MAX_DISCOVERED_TARGETS = 512;
 const USER_BROWSER_MAX_OPERATION_EVIDENCE = 32;
@@ -82,6 +100,8 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   lifecycleEvidence: string[];
   taint?: string;
   unsettledMutation?: string;
+  /** Exact attachment-session dialog state; never persisted or auto-dismissed. */
+  nativeDialogOpen?: boolean;
 }
 
 interface ZenXUserBrowserDocumentExecutionFence extends UserBrowserAttachmentOwner {
@@ -125,6 +145,11 @@ export interface UserBrowserCdpTarget {
   url: string;
 }
 
+export interface UserBrowserTargetCreation {
+  targetId: string;
+  grouping: BrowserTabGrouping;
+}
+
 export interface UserBrowserCdpClient {
   observeTargetMetadata?(
     targetId: string,
@@ -136,7 +161,10 @@ export interface UserBrowserCdpClient {
     listener: BrowserLiveObservationListener,
   ): Promise<() => Promise<void>>;
   listTargets(signal?: AbortSignal): Promise<UserBrowserCdpTarget[]>;
-  createTarget(url: string, signal?: AbortSignal): Promise<string>;
+  createTarget(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<string | UserBrowserTargetCreation>;
   findTargetsByUrl(
     url: string,
     signal?: AbortSignal,
@@ -156,6 +184,16 @@ export interface UserBrowserCdpClient {
     signal?: AbortSignal,
     onDispatched?: () => void,
   ): Promise<{ value: unknown; documentIdentity: string }>;
+  targetedInput?(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+    observed: BrowserInputSnapshot,
+    action: UserBrowserTargetedInputAction,
+    signal?: AbortSignal,
+    assertCurrent?: () => void,
+    onDispatched?: () => void,
+  ): Promise<void>;
   captureScreenshot?(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -187,6 +225,10 @@ export interface UserBrowserCdpClient {
   ): string | undefined;
   close(): Promise<void> | void;
 }
+
+type UserBrowserTargetedInputAction =
+  | { kind: "click"; x: number; y: number }
+  | { kind: "key"; key: BrowserInputKey };
 
 interface UserBrowserSession {
   id: string;
@@ -517,8 +559,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         throw new Error("User browser create marker already exists");
       }
       let targetId: string | undefined;
+      let grouping: BrowserTabGrouping;
       try {
-        targetId = await this.#client.createTarget(pendingUrl, signal);
+        const created = await this.#client.createTarget(pendingUrl, signal);
+        targetId = typeof created === "string" ? created : created.targetId;
+        grouping = readUserBrowserGrouping(
+          typeof created === "string" ? undefined : created.grouping,
+        );
       } catch (error) {
         this.#recordUnresolvedCreate(session, pendingUrl, beforeTargetIds);
         const recovered = await this.#reconcileCreate(
@@ -600,7 +647,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         const summary = await this.#summary(sessionId, targetId);
         this.#assertSessionCurrent(session);
         throwIfAborted(signal);
-        return summary;
+        return { ...summary, grouping };
       } catch (error) {
         if (
           tab !== undefined &&
@@ -784,6 +831,42 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
               reason:
                 "Attached browser screenshot response was empty or malformed",
             };
+      let input: BrowserInputObservation | undefined;
+      if (
+        raw.inputSnapshot !== undefined &&
+        normalizedScreenshot.status !== "fallback" &&
+        this.#client.targetedInput !== undefined
+      ) {
+        let snapshot: BrowserInputSnapshot | undefined;
+        try {
+          snapshot = requireBrowserInputSnapshot(raw.inputSnapshot);
+        } catch {
+          // Optional coordinate/key support must not disable DOM inspection.
+        }
+        if (snapshot !== undefined) {
+          const after = await this.#client.evaluateDocument(
+            tabId,
+            browserInputSnapshotScript,
+            this.#attachmentOwner(session),
+            evaluation.documentIdentity,
+            signal,
+          );
+          if (after.documentIdentity !== evaluation.documentIdentity)
+            throw new Error(
+              "User browser document changed during input capture",
+            );
+          try {
+            assertBrowserInputSnapshot(
+              snapshot,
+              requireBrowserInputSnapshot(after.value),
+            );
+            input = { snapshot, screenshotId: observationId };
+          } catch {
+            // Keep the screenshot and DOM observation, but never authorize
+            // coordinate/key input with an incoherent viewport snapshot.
+          }
+        }
+      }
       const screenshotBytes = decodeUserBrowserScreenshot(
         normalizedScreenshot.data,
       );
@@ -857,6 +940,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         id: observationId,
         documentVersion: tab.documentVersion,
         targets,
+        ...(input === undefined ? {} : { input }),
       };
       return {
         ...summary,
@@ -864,6 +948,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         documentVersion: tab.documentVersion,
         visibleText: raw.visibleText.slice(0, 8_000),
         screenshot,
+        ...(input === undefined
+          ? {}
+          : {
+              inputViewport: input.snapshot.viewport,
+              focusedInputAvailable: input.snapshot.focusId !== null,
+              inputPolicy: browserTargetedInputPolicy,
+            }),
         targets: projected.slice(0, 80),
         [OBSERVATION_CAPTURE]: {
           ...browserDomCapture(
@@ -1003,6 +1094,122 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       signal,
     );
     observeRejection(operation);
+    return await operation;
+  }
+
+  pointerClick(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    x: number,
+    y: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    return this.#targetedInput(
+      sessionId,
+      tabId,
+      observationId,
+      { kind: "click", x, y },
+      signal,
+    );
+  }
+
+  keyPress(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    key: BrowserInputKey,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    return this.#targetedInput(
+      sessionId,
+      tabId,
+      observationId,
+      { kind: "key", key },
+      signal,
+    );
+  }
+
+  async #targetedInput(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    action: UserBrowserTargetedInputAction,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    throwIfAborted(signal);
+    const { session, tab } = this.#sessionTab(sessionId, tabId);
+    assertBrowserObservation(
+      tab.observation,
+      tab.documentVersion,
+      observationId,
+    );
+    const observation = tab.observation;
+    const input = observation.input;
+    const expectedDocumentIdentity = tab.documentIdentity;
+    const targetedInput = this.#client.targetedInput;
+    if (targetedInput === undefined)
+      throw new Error(
+        "Browser targeted input is unavailable for this attached browser client",
+      );
+    if (
+      input === undefined ||
+      input.screenshotId !== observationId ||
+      expectedDocumentIdentity === undefined
+    )
+      throw new Error(
+        "A real, coherent screenshot is required for browser targeted input; inspect again",
+      );
+    if (action.kind === "click")
+      browserInputPoint(input.snapshot, action.x, action.y);
+    else browserInputKey(action.key);
+    const version = tab.documentVersion;
+    let dispatched = false;
+    const operation = this.#startOperation(session, tab, async () => {
+      try {
+        await targetedInput.call(
+          this.#client,
+          tabId,
+          this.#attachmentOwner(session),
+          expectedDocumentIdentity,
+          input.snapshot,
+          action,
+          signal,
+          () => {
+            throwIfAborted(signal);
+            this.#assertTabCurrent(session, tabId, tab);
+            if (
+              tab.documentVersion !== version ||
+              tab.documentIdentity !== expectedDocumentIdentity ||
+              (!dispatched && tab.observation !== observation)
+            )
+              throw new UserBrowserDocumentChangedBeforeDispatchError();
+          },
+          () => {
+            dispatched = true;
+            tab.observation = undefined;
+          },
+        );
+        tab.documentVersion += 1;
+        tab.documentIdentity = undefined;
+        try {
+          return await this.#summary(sessionId, tabId, signal);
+        } catch (error) {
+          throw new BrowserInputOutcomeUnknownError(error, false);
+        }
+      } catch (error) {
+        if (
+          error instanceof UserBrowserMutationOutcomeUnknownError ||
+          (error instanceof BrowserInputOutcomeUnknownError &&
+            error.inputMayRemainPressed)
+        )
+          tab.tainted ??= describeError(error);
+        throw error;
+      }
+    });
+    observeRejection(operation);
+    // The CDP client observes cancellation itself. Do not race away before it
+    // quarantines unknown input and retains the command settlement fence.
     return await operation;
   }
 
@@ -2000,7 +2207,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     };
   }
 
-  async createTarget(url: string, signal?: AbortSignal): Promise<string> {
+  async createTarget(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<UserBrowserTargetCreation> {
     const response = asRecord(
       await this.#send(
         "Target.createTarget",
@@ -2012,7 +2222,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     );
     if (typeof response?.targetId !== "string")
       throw new Error("User browser CDP createTarget response is invalid");
-    return response.targetId;
+    return {
+      targetId: response.targetId,
+      grouping: readUserBrowserGrouping(response.grouping),
+    };
   }
 
   async findTargetsByUrl(
@@ -2125,7 +2338,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     let mutationResponseKnown = false;
     try {
       response = asRecord(
-        await this.#sendDocumentRuntimeEvaluate(
+        await this.#sendDocumentCommand(
           before,
           "Runtime.evaluate",
           {
@@ -2142,8 +2355,36 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (response?.exceptionDetails !== undefined) {
         throw new Error("User browser CDP evaluation failed");
       }
+      const rawValue = asRecord(response?.result)?.value;
+      // The post-screenshot input-only probe is optional evidence, just like
+      // the nested snapshot in DOM inspection. Only this exact trusted read gets
+      // the same downgrade; its normal document/publication fences still run.
+      const optionalInputOnly = expression === browserInputSnapshotScript;
+      const resolved = includesBrowserInputSnapshot(expression)
+        ? await resolveBrowserInputEvidence(
+            optionalInputOnly ? { inputSnapshot: rawValue } : rawValue,
+            async (method, params) => {
+              this.#assertDocumentFence(before, true);
+              return await this.#sendDocumentCommand(
+                before,
+                method,
+                {
+                  ...params,
+                  ...(method === "Runtime.evaluate"
+                    ? { contextId: before.executionContextId }
+                    : {}),
+                },
+                signal,
+              );
+            },
+            (objectId) => this.#releaseInputObject(before, objectId),
+          )
+        : rawValue;
+      const value = optionalInputOnly
+        ? asRecord(resolved)?.inputSnapshot
+        : resolved;
       const confirmation = asRecord(
-        await this.#sendDocumentRuntimeEvaluate(
+        await this.#sendDocumentCommand(
           before,
           "Runtime.evaluate",
           {
@@ -2169,7 +2410,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         "Runtime.evaluate",
       );
       return {
-        value: asRecord(response?.result)?.value,
+        value,
         documentIdentity: after.identity,
       };
     } catch (error) {
@@ -2189,6 +2430,136 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       }
       throw error;
     }
+  }
+
+  async targetedInput(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    expectedDocumentIdentity: string,
+    observed: BrowserInputSnapshot,
+    action: UserBrowserTargetedInputAction,
+    signal?: AbortSignal,
+    assertCurrent?: () => void,
+    onDispatched?: () => void,
+  ): Promise<void> {
+    throwIfAborted(signal);
+    this.#assertNoNativeDialog(targetId, owner);
+    const fence = await this.#executionDocument(targetId, owner, signal);
+    if (fence.identity !== expectedDocumentIdentity)
+      throw new UserBrowserDocumentChangedBeforeDispatchError();
+    const assertFence = () => {
+      throwIfAborted(signal);
+      assertCurrent?.();
+      this.#assertDocumentFence(fence, true);
+      this.#assertNoNativeDialog(targetId, owner);
+      this.#assertAttachmentClosedForOperation(
+        targetId,
+        owner,
+        "targeted input",
+      );
+    };
+    const probe = browserInputProbeScript(action);
+    try {
+      await dispatchBrowserTargetedInput(
+        {
+          assertCurrent: assertFence,
+          snapshot: async () => {
+            assertFence();
+            await this.#documentBarrier(fence, signal);
+            assertFence();
+            const response = asRecord(
+              await this.#sendDocumentCommand(
+                fence,
+                "Runtime.evaluate",
+                {
+                  expression: probe,
+                  awaitPromise: true,
+                  returnByValue: true,
+                  contextId: fence.executionContextId,
+                },
+                signal,
+                undefined,
+                assertFence,
+              ),
+            );
+            assertFence();
+            if (response?.exceptionDetails !== undefined)
+              throw new Error("User browser targeted input snapshot failed");
+            return requireBrowserInputSnapshot(
+              await resolveBrowserInputEvidence(
+                asRecord(response?.result)?.value,
+                async (method, params) => {
+                  assertFence();
+                  const result = await this.#sendDocumentCommand(
+                    fence,
+                    method,
+                    {
+                      ...params,
+                      ...(method === "Runtime.evaluate"
+                        ? { contextId: fence.executionContextId }
+                        : {}),
+                    },
+                    signal,
+                    undefined,
+                    assertFence,
+                  );
+                  assertFence();
+                  return result;
+                },
+                (objectId) => this.#releaseInputObject(fence, objectId),
+              ),
+            );
+          },
+          beforeDispatch: () => onDispatched?.(),
+          dispatch: async (method, params, onDispatched) => {
+            assertFence();
+            return await this.#sendDocumentCommand(
+              fence,
+              method,
+              params,
+              signal,
+              onDispatched,
+              assertFence,
+            );
+          },
+          quarantine: (error) => {
+            fence.attachmentEpoch.taint ??= describeError(error);
+          },
+        },
+        observed,
+        action,
+        signal,
+      );
+    } catch (error) {
+      if (
+        error instanceof BrowserInputOutcomeUnknownError &&
+        error.inputMayRemainPressed
+      ) {
+        throw new UserBrowserMutationOutcomeUnknownError(
+          "Browser targeted input",
+          describeError(error),
+          error.cause instanceof UserBrowserCdpOutcomeUnknownError
+            ? error.cause.settlement
+            : undefined,
+        );
+      }
+      throw error;
+    }
+  }
+
+  #assertNoNativeDialog(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+  ): void {
+    const epoch = this.#attachmentClosures.get(targetId);
+    if (
+      epoch !== undefined &&
+      sameAttachmentOwner(epoch, owner) &&
+      epoch.nativeDialogOpen
+    )
+      throw new Error(
+        "Native dialog requires human control; close the browser dialog and inspect again before targeted input",
+      );
   }
 
   async captureScreenshot(
@@ -2647,14 +3018,40 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     });
   }
 
-  async #sendDocumentRuntimeEvaluate(
+  async #releaseInputObject(
+    fence: ZenXUserBrowserDocumentExecutionFence,
+    objectId: string,
+  ): Promise<unknown> {
+    // Called only for IDs recorded as owned by resolveBrowserInputEvidence.
+    // Cancellation/control takeover must not retain a live renderer reference.
+    // The original connection, attachment epoch and context are still mandatory:
+    // never attach, choose a successor, send Input, or retry unknown cleanup.
+    return await this.#send(
+      "Runtime.releaseObject",
+      { objectId },
+      fence.sessionId,
+      undefined,
+      USER_BROWSER_INPUT_OBJECT_CLEANUP_TIMEOUT_MS,
+      undefined,
+      undefined,
+      () => this.#assertDocumentFence(fence, true),
+    );
+  }
+
+  async #sendDocumentCommand(
     fence: ZenXUserBrowserDocumentExecutionFence & {
       executionContextId: number;
     },
-    method: "Runtime.evaluate",
+    method:
+      | "Runtime.evaluate"
+      | "DOM.describeNode"
+      | "Runtime.releaseObject"
+      | "Input.dispatchMouseEvent"
+      | "Input.dispatchKeyEvent",
     params: Record<string, unknown>,
     signal?: AbortSignal,
     onDispatched?: () => void,
+    assertCurrent?: () => void,
   ): Promise<unknown> {
     const settlement = promiseCapability<void>();
     try {
@@ -2666,7 +3063,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
         async () => settlement.resolve(),
         onDispatched,
-        () => this.#assertDocumentFence(fence, true),
+        () => {
+          assertCurrent?.();
+          this.#assertDocumentFence(fence, true);
+        },
         () => {
           fence.attachmentEpoch.unsettledMutation ??= `${method} late settlement was not observed`;
           settlement.resolve();
@@ -3562,6 +3962,19 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (typeof message.sessionId !== "string") return;
     const targetId = this.#sessionTargets.get(message.sessionId);
     if (targetId === undefined) return;
+    if (
+      method === "Page.javascriptDialogOpening" ||
+      method === "Page.javascriptDialogClosed"
+    ) {
+      const epoch = this.#sessionEpochs.get(message.sessionId);
+      if (
+        epoch !== undefined &&
+        this.#attachmentClosures.get(targetId) === epoch &&
+        epoch.cdpSessionId === message.sessionId
+      )
+        epoch.nativeDialogOpen = method === "Page.javascriptDialogOpening";
+      return;
+    }
     const document = this.#targetDocuments.get(targetId);
     if (
       document !== undefined &&
@@ -4055,6 +4468,41 @@ function summarizeTarget(
     title: target.title.slice(0, 256),
     url: redactBrowserUrl(target.url),
     loading: false,
+  };
+}
+
+function readUserBrowserGrouping(value: unknown): BrowserTabGrouping {
+  const grouping = asRecord(value);
+  const reason =
+    typeof grouping?.reason === "string"
+      ? grouping.reason.slice(0, 160)
+      : undefined;
+  if (
+    grouping?.status === "grouped" &&
+    Number.isSafeInteger(grouping.groupId) &&
+    (grouping.groupId as number) >= 0
+  )
+    return {
+      status: "grouped",
+      groupId: grouping.groupId as number,
+      ...(reason === undefined ? {} : { reason }),
+    };
+  if (grouping?.status === "unknown")
+    return {
+      status: "unknown",
+      reason:
+        reason ??
+        "Grouping outcome is unknown; tab creation succeeded, do not recreate it",
+    };
+  if (grouping?.status === "failed")
+    return {
+      status: "failed",
+      reason: reason ?? "Tab was created, but browser tab grouping failed",
+    };
+  return {
+    status: "unavailable",
+    reason:
+      reason ?? "Tab grouping is unavailable through this browser connection",
   };
 }
 
