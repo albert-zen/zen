@@ -1,3 +1,4 @@
+import { textFromUserInput } from "../../../../../src/item.js";
 import type {
   ServerNotificationMethod,
   ServerNotificationParams,
@@ -18,6 +19,7 @@ function projectedQueue(
   items: readonly CanonicalItem[],
 ): NonNullable<Thread["queuedMessages"]> {
   return pendingQueuedMessages(items).map((item) => ({
+    ...(item.type === "thread_message_queued" ? { sender: item.sender } : {}),
     id: item.id,
     clientId: item.clientId,
     text: userInputText(item.input),
@@ -125,6 +127,9 @@ export function applyNativeThreadEvent(
       updatedAt: seconds(event.item.createdAt),
     };
     if (
+      event.item.type === "thread_message_queued" ||
+      event.item.type === "thread_message_cancelled" ||
+      event.item.type === "thread_message" ||
       event.item.type === "user_message_queued" ||
       event.item.type === "user_message_queue_cancelled" ||
       event.item.type === "user_message_queue_edited" ||
@@ -623,6 +628,24 @@ function projectNativeItems(
 }
 
 function projectNativeCompletedItem(item: CanonicalItem): ThreadItem | null {
+  if (item.type === "thread_message") {
+    return {
+      type: "threadMessage",
+      id: item.id,
+      clientId: item.clientId,
+      sender: item.sender,
+      content: [
+        {
+          type: "text",
+          text: textFromUserInput(item.content),
+          text_elements: [],
+        },
+      ],
+      ...(item.deliveryAfter === undefined
+        ? {}
+        : { deliveryAfter: item.deliveryAfter }),
+    };
+  }
   if (item.type === "user_message") {
     return {
       type: "userMessage",

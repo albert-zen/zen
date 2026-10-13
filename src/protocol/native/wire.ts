@@ -58,6 +58,20 @@ export function nativeEventThreadId(event: AppServerEvent): string | null {
   return event.type === "item_completed" ? event.item.threadId : event.threadId;
 }
 
+/** Host-only provenance fields, never exposed as model tool arguments. */
+export interface NativeThreadMessageParams {
+  threadId: string;
+  sourceThreadId: string;
+  sourceToolCallId: string;
+  sourceCallId: string;
+  text: string;
+  messageType?: "guidance" | "follow_up" | "replacement";
+}
+export type NativeThreadMessageResult = Awaited<
+  ReturnType<import("../../app-server.js").ZenAppServer["sendThreadMessage"]>
+>;
+export const NATIVE_THREAD_MESSAGE_METHOD = "zen/thread/message";
+
 export const NATIVE_THREAD_DELETE_METHOD = "zen/thread/delete";
 export const NATIVE_THREAD_DELETED_LIST_METHOD = "zen/thread/deleted/list";
 export const NATIVE_THREAD_RESTORE_METHOD = "zen/thread/restore";

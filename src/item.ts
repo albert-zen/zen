@@ -34,6 +34,9 @@ export type ItemType =
   | "user_message_queue_cancelled"
   | "user_message_queue_edited"
   | "user_message"
+  | "thread_message"
+  | "thread_message_queued"
+  | "thread_message_cancelled"
   | "agent_message"
   | "model_usage"
   | "reasoning"
@@ -58,6 +61,9 @@ const CANONICAL_ITEM_TYPES = {
   user_message_queue_cancelled: true,
   user_message_queue_edited: true,
   user_message: true,
+  thread_message: true,
+  thread_message_queued: true,
+  thread_message_cancelled: true,
   agent_message: true,
   model_usage: true,
   reasoning: true,
@@ -190,6 +196,7 @@ export interface TurnAbortedItem extends ItemBase {
 
 interface TurnReplacementRequestedItemBase extends ItemBase {
   type: "turn_replacement_requested";
+  sender?: ThreadMessageSender;
   turnId: string;
   successorTurnId: string;
   clientId: string;
@@ -257,6 +264,59 @@ export interface MultimodalUserMessageItem extends UserMessageItemBase {
 }
 
 export type UserMessageItem = LegacyUserMessageItem | MultimodalUserMessageItem;
+
+/** Host-captured provenance. Neither sender identity nor authority comes from message text. */
+export interface ThreadMessageSender {
+  /** Present only when the receiving Host captured an authenticated Fleet peer. */
+  deviceId?: string;
+  threadId: string;
+  /** Local canonical Turn; remote peers cannot assert a local Turn. */
+  turnId?: string;
+  toolCallId: string;
+  callId: string;
+}
+
+export interface ThreadMessageInput {
+  sender: Pick<ThreadMessageSender, "threadId" | "toolCallId" | "callId">;
+  text: string;
+  messageType?: "guidance" | "follow_up" | "replacement";
+}
+
+export interface ThreadMessageItem extends ItemBase {
+  type: "thread_message";
+  mode: "steer" | "batch-next" | "replace";
+  messageType: "guidance" | "follow_up" | "replacement";
+  turnId: string;
+  clientId: string;
+  sender: ThreadMessageSender;
+  content: UserInput;
+  deliveryAfter?: string;
+}
+
+export interface QueuedThreadMessageItem extends ItemBase {
+  type: "thread_message_queued";
+  messageType: "guidance" | "follow_up" | "replacement";
+  clientId: string;
+  sender: ThreadMessageSender;
+  input: UserInput;
+  deliveryMode: "batch-next";
+}
+
+export interface ThreadMessageCancelledItem extends ItemBase {
+  type: "thread_message_cancelled";
+  queuedItemId: string;
+  clientId: string;
+}
+
+export type QueuedInputItem = QueuedUserMessageItem | QueuedThreadMessageItem;
+export type DeliveredInputItem = UserMessageItem | ThreadMessageItem;
+export interface InitialInputMessage {
+  input: UserInput;
+  clientId: string;
+  sender?: ThreadMessageSender;
+  messageType?: "guidance" | "follow_up" | "replacement";
+  mode?: "batch-next" | "replace";
+}
 
 export interface AgentMessageItem extends ItemBase {
   type: "agent_message";
@@ -416,6 +476,9 @@ export interface CodeStateItem extends ItemBase {
 }
 
 export type CanonicalItem =
+  | ThreadMessageItem
+  | QueuedThreadMessageItem
+  | ThreadMessageCancelledItem
   | CodeStateItem
   | QueuedUserMessageItem
   | QueuedUserMessageCancelledItem
@@ -785,6 +848,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireNonEmptyString(item.reason, "turn_aborted.reason");
       break;
     case "turn_replacement_requested":
+      if (item.sender !== undefined) {
+        validateThreadMessageSender(item.sender, `${type}.sender`);
+      }
       requireTurnId(item, type);
       requireNonEmptyString(item.successorTurnId, `${type}.successorTurnId`);
       requireNonEmptyString(item.clientId, `${type}.clientId`);
@@ -793,6 +859,35 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         requireNonEmptyString(item.text, `${type}.text`);
       else validateUserInput(item.input, `${type}.input`);
       break;
+    case "thread_message":
+    case "thread_message_queued": {
+      if (type === "thread_message") requireTurnId(item, type);
+      else requireNoTurnId(item);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireEnum(
+        item.messageType,
+        ["guidance", "follow_up", "replacement"],
+        `${type}.messageType`,
+      );
+      if (type === "thread_message")
+        requireEnum(
+          item.mode,
+          ["steer", "batch-next", "replace"],
+          `${type}.mode`,
+        );
+      validateThreadMessageSender(item.sender, `${type}.sender`);
+      if (type === "thread_message") {
+        validateUserInput(item.content, `${type}.content`);
+        requireOptionalNonEmptyString(
+          item.deliveryAfter,
+          `${type}.deliveryAfter`,
+        );
+      } else {
+        validateUserInput(item.input, `${type}.input`);
+        requireEnum(item.deliveryMode, ["batch-next"], `${type}.deliveryMode`);
+      }
+      break;
+    }
     case "user_message_queued":
       requireNonEmptyString(item.clientId, `${type}.clientId`);
       validateUserInput(item.input, `${type}.input`);
@@ -807,6 +902,7 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         throw new Error(`${type}.revision must be positive`);
       validateUserInput(item.input, `${type}.input`);
       break;
+    case "thread_message_cancelled":
     case "user_message_queue_cancelled":
       requireNoTurnId(item);
       requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
@@ -1136,4 +1232,17 @@ function hasOwn(value: object, key: string): boolean {
 
 function unreachableItemType(value: never): never {
   throw new Error(`Unknown canonical Item type: ${String(value)}`);
+}
+
+function validateThreadMessageSender(value: unknown, label: string): void {
+  const sender = requireRecord(value, label);
+  for (const field of ["threadId", "toolCallId", "callId"])
+    requireNonEmptyString(sender[field], `${label}.${field}`);
+  if (sender.deviceId === undefined)
+    requireNonEmptyString(sender.turnId, `${label}.turnId`);
+  else {
+    requireNonEmptyString(sender.deviceId, `${label}.deviceId`);
+    if (sender.turnId !== undefined)
+      throw new Error("Remote sender cannot assert a local Turn identity");
+  }
 }

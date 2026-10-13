@@ -20,6 +20,7 @@ import {
   NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
   NATIVE_QUEUE_EDIT_METHOD,
+  NATIVE_THREAD_MESSAGE_METHOD,
   type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
   type NativeTurnSendResult,
@@ -81,6 +82,81 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (message.method === NATIVE_THREAD_MESSAGE_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !this.#appServer ||
+          !isRecord(params) ||
+          Object.keys(params).some(
+            (key) =>
+              ![
+                "threadId",
+                "sourceThreadId",
+                "sourceToolCallId",
+                "sourceCallId",
+                "text",
+                "messageType",
+              ].includes(key),
+          ) ||
+          ![
+            params.threadId,
+            params.sourceThreadId,
+            params.sourceToolCallId,
+            params.sourceCallId,
+            params.text,
+          ].every(
+            (value) => typeof value === "string" && value.trim().length > 0,
+          ) ||
+          (params.messageType !== undefined &&
+            !["guidance", "follow_up", "replacement"].includes(
+              String(params.messageType),
+            ))
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread message requires Host-captured source identity, target and text",
+          );
+        this.#subscriptions.add(params.threadId as string);
+        const result = await this.#appServer.sendThreadMessage(
+          params.threadId as string,
+          {
+            sender: {
+              threadId: params.sourceThreadId as string,
+              toolCallId: params.sourceToolCallId as string,
+              callId: params.sourceCallId as string,
+            },
+            text: params.text as string,
+            ...(params.messageType === undefined
+              ? {}
+              : {
+                  messageType: params.messageType as
+                    "guidance" | "follow_up" | "replacement",
+                }),
+          },
+        );
+        this.#send({ id: message.id, result });
+      } catch (error) {
+        this.#send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message: error instanceof Error ? error.message : String(error),
+            ...(error instanceof AppServerError
+              ? { data: { zenCode: error.code } }
+              : {}),
+          },
+        });
+      }
+      return;
+    }
     if (
       message.method === NATIVE_THREAD_DELETE_METHOD ||
       message.method === NATIVE_THREAD_DELETED_LIST_METHOD ||

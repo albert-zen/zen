@@ -5,6 +5,7 @@ import { WebSocket } from "ws";
 import {
   REMOTE_HOST_VERSION,
   REMOTE_UNARCHIVED_SEND_CAPABILITY,
+  REMOTE_THREAD_MESSAGE_CAPABILITY,
   REMOTE_METHODS,
   REMOTE_SHELL_MAX_COMMAND_BYTES,
   REMOTE_SHELL_MAX_TIMEOUT_MS,
@@ -194,6 +195,7 @@ function item(value: unknown, threadId: string): RemoteItemView {
     value.threadId !== threadId ||
     ![
       "user_message",
+      "thread_message",
       "agent_message",
       "turn_started",
       "turn_completed",
@@ -202,7 +204,23 @@ function item(value: unknown, threadId: string): RemoteItemView {
     (value.text !== undefined && typeof value.text !== "string")
   )
     throw new Error("Invalid Fleet public item");
+  let sender: RemoteItemView["sender"];
+  if (value.type === "thread_message") {
+    if (!record(value.sender)) throw new Error("Invalid Fleet message sender");
+    const source = value.sender;
+    sender = {
+      threadId: string(source.threadId, "sender Thread"),
+      toolCallId: string(source.toolCallId, "sender tool call"),
+      callId: string(source.callId, "sender call"),
+      ...(source.deviceId === undefined
+        ? { turnId: string(source.turnId, "sender Turn") }
+        : { deviceId: string(source.deviceId, "sender device") }),
+    };
+    if (source.deviceId !== undefined && source.turnId !== undefined)
+      throw new Error("Remote sender cannot assert a local Turn");
+  }
   return {
+    ...(sender === undefined ? {} : { sender }),
     id: string(value.id, "item ID"),
     threadId,
     createdAt: string(value.createdAt, "item date", 128),
@@ -1480,6 +1498,22 @@ export class NativeFleetClient implements NativeFleetPort {
           throw new Error(
             "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
           );
+        const agentSender =
+          request.threadId !== undefined &&
+          request.canonicalToolCallId !== undefined
+            ? {
+                threadId: request.threadId,
+                toolCallId: request.canonicalToolCallId,
+                callId: request.callId,
+              }
+            : undefined;
+        if (
+          agentSender !== undefined &&
+          !session.capabilities.includes(REMOTE_THREAD_MESSAGE_CAPABILITY)
+        )
+          throw new Error(
+            "Target Zen Host does not support source-attributed Agent messages. Update the target Host before retrying; no user-message fallback was sent.",
+          );
         const messageType = args.messageType ?? "guidance";
         if (
           !["guidance", "follow_up", "replacement"].includes(
@@ -1502,6 +1536,7 @@ export class NativeFleetClient implements NativeFleetPort {
             workspaceId,
             threadId,
             clientId: clientUserMessageId,
+            ...(agentSender === undefined ? {} : { sender: agentSender }),
             text: text(args.text),
             messageType,
           },

@@ -1187,3 +1187,22 @@ Room quotes are immutable bounded snapshots of a same-Room message captured with
 ### IMZenX PAW Room routes
 
 IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
+
+### 跨 Thread Agent 消息
+
+跨 Thread 工具发送由 Host 捕获 source Thread / Turn / canonical tool_call / callId，
+写独立 `thread_message`，不伪装 `user_message`、目标自身 `agent_message` 或 Host bootstrap。
+来源是可审计的 provenance，不是新增的人类授权；模型投影和产品历史明确区分来源。
+默认与 guidance 由 Core 在目标 mutation fence 内接纳到活跃 Turn，沿 `deliveryAfter`
+等当前模型响应的完整 tool batch 结束再采样；不打断正在执行的工具或审批。
+空闲接纳与显式 follow_up 通过 `thread_message_queued` 进入既有队列投影，逐条身份
+保留，只有同类 Agent 消息做有界 FIFO 合批。手工用户 queue 不受 Agent 默认值影响。
+队列取消通过 `thread_message_cancelled` 引用原 canonical 身份；全部投递状态从同一
+ItemList 推导。初始输入接纳期间到达的 guidance 在首次 sample 前加入同一 Turn。
+失败或中断留下可观察 pending/terminal 状态，不新增自动恢复 ledger，不重试不明传输结果。
+
+Native Fleet 对端通过 `thread-message-v1` capability 协商支持此消息；接收 Host 只从
+已有认证 session 绑定 deviceId，远端 source Thread/tool ID 明确是 peer-reported，
+不能冒充本机验证的来源。旧 native Host 与不支持该 provenance 合同的 SSH Agent
+发送明确拒绝且不降级为人类消息；显式 trusted UI 的旧发送协议保持兼容。
+显式 replacement 沿既有 replacement intent 保存同一 sender，失败不重放工具副作用。

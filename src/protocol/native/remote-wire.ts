@@ -12,6 +12,7 @@ import type {
 export const REMOTE_HOST_VERSION = 1;
 /** send admission checks archival under the canonical Core mutation lock. */
 export const REMOTE_UNARCHIVED_SEND_CAPABILITY = "send-unarchived";
+export const REMOTE_THREAD_MESSAGE_CAPABILITY = "thread-message-v1";
 export const REMOTE_METHODS = {
   hello: "zen/remote/hello",
   models: "zen/remote/models",
@@ -64,6 +65,11 @@ export interface RemoteSend {
   clientId: string;
   text: string;
   messageType?: "guidance" | "follow_up" | "replacement";
+  /** Host-captured tool invocation, attributed to the authenticated peer at receipt. */
+  sender?: Pick<
+    import("../../item.js").ThreadMessageSender,
+    "threadId" | "toolCallId" | "callId"
+  >;
 }
 export interface RemoteItemView {
   id: string;
@@ -72,11 +78,13 @@ export interface RemoteItemView {
   createdAt: string;
   type:
     | "user_message"
+    | "thread_message"
     | "agent_message"
     | "turn_started"
     | "turn_completed"
     | "turn_aborted";
   text?: string;
+  sender?: import("../../item.js").ThreadMessageSender;
 }
 export interface RemoteThreadView {
   id: string;

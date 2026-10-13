@@ -23,15 +23,22 @@ export function FleetHistory({ value }: { value: unknown }) {
                 item.text ?? item.output ?? item.message ?? item.summary,
               ) ||
               contentText(item.content, t);
-        const message = type === "user_message" || type === "agent_message";
+        const message =
+          type === "user_message" ||
+          type === "thread_message" ||
+          type === "agent_message";
         const label =
-          type === "user_message"
-            ? t("fleetHistory.you")
-            : type === "agent_message"
-              ? t("fleetHistory.agent")
-              : Object.hasOwn(historyTypeKeys, type)
-                ? t(historyTypeKeys[type]!)
-                : type.replaceAll("_", " ") || t("fleetHistory.item");
+          type === "thread_message"
+            ? t("shell:threadMessageFrom", {
+                threadId: string(record(row.sender ?? item.sender).threadId),
+              })
+            : type === "user_message"
+              ? t("fleetHistory.you")
+              : type === "agent_message"
+                ? t("fleetHistory.agent")
+                : Object.hasOwn(historyTypeKeys, type)
+                  ? t(historyTypeKeys[type]!)
+                  : type.replaceAll("_", " ") || t("fleetHistory.item");
         const detail =
           type === "tool_call"
             ? text || JSON.stringify(item.arguments ?? {}, null, 2)

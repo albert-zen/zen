@@ -16,7 +16,7 @@ export type TurnDisplayNode =
   | {
       kind: "user";
       id: string;
-      item: Extract<ThreadItem, { type: "userMessage" }>;
+      item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
     }
   | { kind: "agent"; item: Extract<ThreadItem, { type: "agentMessage" }> }
   | {
@@ -34,7 +34,9 @@ export type TurnDisplayNode =
     };
 
 export interface TurnDisplayProjection {
-  userItems: Array<Extract<ThreadItem, { type: "userMessage" }>>;
+  userItems: Array<
+    Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>
+  >;
   history: TurnDisplayNode[];
   finalItem: Extract<ThreadItem, { type: "agentMessage" }> | null;
   terminalFallback: string | null;
@@ -118,15 +120,21 @@ export function projectTurn(
   observations: TraceObservationIndex = createTraceObservationIndex(turn.items),
 ): TurnDisplayProjection {
   const userItems = turn.items.filter(
-    (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
-      item.type === "userMessage" && item.deliveryAfter === undefined,
+    (
+      item,
+    ): item is Extract<ThreadItem, { type: "userMessage" | "threadMessage" }> =>
+      (item.type === "userMessage" || item.type === "threadMessage") &&
+      item.deliveryAfter === undefined,
   );
   const steers = turn.items.filter(
-    (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
-      item.type === "userMessage" && item.deliveryAfter !== undefined,
+    (
+      item,
+    ): item is Extract<ThreadItem, { type: "userMessage" | "threadMessage" }> =>
+      (item.type === "userMessage" || item.type === "threadMessage") &&
+      item.deliveryAfter !== undefined,
   );
   const responseItems = turn.items.filter(
-    (item) => item.type !== "userMessage",
+    (item) => item.type !== "userMessage" && item.type !== "threadMessage",
   );
   const agentItems = responseItems.filter(
     (item): item is Extract<ThreadItem, { type: "agentMessage" }> =>
@@ -140,7 +148,7 @@ export function projectTurn(
       : responseItems.filter((item) => item.id !== finalItem.id);
   const steersByAnchor = new Map<
     string,
-    Array<Extract<ThreadItem, { type: "userMessage" }>>
+    Array<Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>>
   >();
   for (const steer of steers) {
     const anchor = steer.deliveryAfter;
@@ -164,10 +172,11 @@ export function projectTurn(
   }
   const steersAfterIndex = new Map<
     number,
-    Array<Extract<ThreadItem, { type: "userMessage" }>>
+    Array<Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>>
   >();
-  const unanchoredSteers: Array<Extract<ThreadItem, { type: "userMessage" }>> =
-    [];
+  const unanchoredSteers: Array<
+    Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>
+  > = [];
   for (const [anchor, entries] of steersByAnchor) {
     const index = lastAnchorIndex.get(anchor);
     if (index === undefined) {

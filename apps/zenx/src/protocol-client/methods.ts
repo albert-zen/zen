@@ -2,6 +2,7 @@ import type { ClientRequestMethod } from "./types.js";
 
 export const clientRequestMethods = [
   "zen/initialize",
+  "zen/thread/message",
   "zen/turn/send",
   "zen/turn/send-unarchived",
   "account/read",

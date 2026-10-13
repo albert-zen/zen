@@ -10,6 +10,7 @@ export interface QueuedMessagePreview {
   clientId: string;
   text: string;
   imageCount: number;
+  sender?: import("../../../../../src/item.js").ThreadMessageSender;
 }
 
 export interface QueuedMessagesProps {
@@ -484,6 +485,14 @@ function QueuedMessageRow({
             >
               {hasText ? (
                 <span ref={textRef} id={textId} className="queue-preview-text">
+                  {message.sender === undefined ? null : (
+                    <small className="thread-message-sender">
+                      {t("threadMessageFrom", {
+                        threadId: message.sender.threadId,
+                      })}
+                      <br />
+                    </small>
+                  )}
                   {message.text}
                 </span>
               ) : null}

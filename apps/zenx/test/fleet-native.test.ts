@@ -203,6 +203,7 @@ async function fixture(
                 "resumePage",
                 "send",
                 "send-unarchived",
+                "thread-message-v1",
                 "models",
               ],
             };
@@ -438,14 +439,26 @@ test("old HTTPS Hosts reject exact-ID sends before mutation while fuzzy sends re
       f.requests.filter((rpc) => rpc.method === "zen/remote/send").length,
       0,
     );
-    await f.client.invoke(
-      f.peer,
-      request("zenx_threads_send", {
-        target: "Remote task",
-        text: "legacy fuzzy send",
-      }),
-      signal(),
+    await assert.rejects(
+      f.client.invoke(
+        f.peer,
+        request("zenx_threads_send", {
+          target: "Remote task",
+          text: "agent fuzzy send",
+        }),
+        signal(),
+      ),
+      /does not support source-attributed/,
     );
+    const {
+      threadId: _source,
+      canonicalToolCallId: _call,
+      ...legacy
+    } = request("zenx_threads_send", {
+      target: "Remote task",
+      text: "legacy fuzzy send",
+    });
+    await f.client.invoke(f.peer, legacy, signal());
     assert.equal(
       f.requests.filter((rpc) => rpc.method === "zen/remote/send").length,
       1,

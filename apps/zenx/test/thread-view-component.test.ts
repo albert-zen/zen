@@ -3603,3 +3603,58 @@ function openSendOptions(): void {
     new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
   );
 }
+
+test("native Agent input displays its sender separately from human input, including queued messages", () => {
+  const sender = {
+    threadId: "worker-thread",
+    turnId: "worker-turn",
+    toolCallId: "worker-tool",
+    callId: "provider-call",
+  };
+  const inbound: ThreadItem = {
+    type: "threadMessage",
+    id: "received",
+    clientId: "agent-input",
+    sender,
+    content: [{ type: "text", text: "Worker finding", text_elements: [] }],
+  };
+  const current = {
+    ...thread([turnWithItems("completed", [inbound])]),
+    queuedMessages: [
+      {
+        id: "queued-agent",
+        clientId: "queued-agent-input",
+        text: "Next finding",
+        imageCount: 0,
+        sender,
+      },
+    ],
+  };
+  const html = renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: current,
+      onDraftChange: () => {},
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    }),
+  );
+  const dom = new JSDOM(html);
+  try {
+    const row = dom.window.document.querySelector(".thread-message-row");
+    assert.ok(row);
+    assert.match(
+      row.querySelector(".thread-message-sender")?.textContent ?? "",
+      /worker-thread/,
+    );
+    assert.match(row.textContent ?? "", /Worker finding/);
+    assert.ok(
+      dom.window.document.querySelectorAll(".thread-message-sender").length >=
+        2,
+    );
+  } finally {
+    dom.window.close();
+  }
+});

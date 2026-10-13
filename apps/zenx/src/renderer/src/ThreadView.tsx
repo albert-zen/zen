@@ -2027,7 +2027,7 @@ function TurnBlock({
     });
   };
   const renderUserItem = (
-    item: Extract<ThreadItem, { type: "userMessage" }>,
+    item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>,
   ) => {
     const wakeup = wakeups.find(
       (entry) => entry.clientUserMessageId === item.clientId,
@@ -2947,7 +2947,7 @@ function UserMessage({
   onOpenImage,
   onReadAttachment,
 }: {
-  item: Extract<ThreadItem, { type: "userMessage" }>;
+  item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
   attachments: readonly AttachmentRef[];
   turn: Turn;
   onOpenImage(
@@ -2959,7 +2959,20 @@ function UserMessage({
 }) {
   const text = item.content.map((content) => content.text).join("\n");
   return (
-    <article className="user-row">
+    <article
+      className={
+        item.type === "threadMessage"
+          ? "user-row thread-message-row"
+          : "user-row"
+      }
+    >
+      {item.type === "threadMessage" ? (
+        <small className="thread-message-sender">
+          {i18n.t("shell:threadMessageFrom", {
+            threadId: item.sender.threadId,
+          })}
+        </small>
+      ) : null}
       {attachments.length === 0 ? null : (
         <div
           className="message-images"
@@ -2983,8 +2996,16 @@ function UserMessage({
       )}
       <MessageActions
         className="user-message-actions"
-        copyLabel={i18n.t("shell:copyUserMessage")}
-        copiedLabel={i18n.t("shell:copiedUserMessage")}
+        copyLabel={i18n.t(
+          item.type === "threadMessage"
+            ? "shell:copyThreadMessage"
+            : "shell:copyUserMessage",
+        )}
+        copiedLabel={i18n.t(
+          item.type === "threadMessage"
+            ? "shell:copiedThreadMessage"
+            : "shell:copiedUserMessage",
+        )}
         text={text}
         turn={turn}
       />
