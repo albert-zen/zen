@@ -18,7 +18,7 @@ import type {
   ShellSessionRead,
   ShellSessionSummary,
 } from "../../../src/shell-session.js";
-import { desktopShellPty, wrapDesktopPty } from "../src/main/shell-pty.js";
+import { desktopShellPty } from "../src/main/shell-pty.js";
 import {
   trackWindowsShellProcess,
   WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
@@ -765,31 +765,48 @@ setTimeout(() => process.exit(1), 20000).unref();
   }
 });
 
-for (const control of ["without PSReadLine", "bundled ConPTY"] as const) {
+const windowsFolderVariables = [
+  "APPDATA",
+  "LOCALAPPDATA",
+  "USERPROFILE",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "PROGRAMW6432",
+  "PROGRAMDATA",
+  "SYSTEMDRIVE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+];
+for (const restoreFolders of [false, true]) {
   test(
-    `Windows resize control: ${control}`,
+    `Windows Utility control: standard folders ${restoreFolders ? "restored" : "filtered"}`,
     { skip: process.platform !== "win32" },
     async () => {
       const directory = await mkdtemp(
-        path.join(os.tmpdir(), "zen-pty-control-"),
+        path.join(os.tmpdir(), "zen-pty-utility-"),
       );
-      const provider =
-        control === "bundled ConPTY"
-          ? {
-              async spawn(
-                options: Parameters<typeof desktopShellPty.spawn>[0],
-              ) {
-                const pty = await import("node-pty");
-                return wrapDesktopPty(
-                  pty.spawn("powershell.exe", ["-NoLogo"], {
-                    ...options,
-                    name: "xterm-256color",
-                    useConptyDll: true,
-                  }),
-                );
-              },
-            }
-          : desktopShellPty;
+      const provider = {
+        async spawn(options: Parameters<typeof desktopShellPty.spawn>[0]) {
+          // Diagnostic only: explicitly named system folder paths, never the full
+          // Host environment, credentials or arbitrary user variables.
+          const folders = restoreFolders
+            ? Object.fromEntries(
+                Object.entries(process.env).filter(
+                  ([key, value]) =>
+                    value !== undefined &&
+                    windowsFolderVariables.includes(key.toUpperCase()),
+                ),
+              )
+            : {};
+          console.info(
+            `[Windows Utility control] restored keys ${JSON.stringify(Object.keys(folders))}`,
+          );
+          return desktopShellPty.spawn({
+            ...options,
+            env: { ...options.env, ...folders },
+          });
+        },
+      };
       const f = fixture(directory, undefined, undefined, provider);
       try {
         const created = (await f.service.request({
@@ -809,39 +826,53 @@ for (const control of ["without PSReadLine", "bundled ConPTY"] as const) {
           f.service,
           created.taskId,
           (r) => /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
-          `${control} first prompt`,
+          "Utility control first prompt",
         );
-        // Same executable/launch arguments as production. These are explicit
-        // synthetic fixture commands, never injected into a user's terminal.
+        const markerPath = path
+          .join(directory, "direct.txt")
+          .replaceAll("'", "''");
         await write(
-          "$PSVersionTable.PSVersion.ToString();(Get-Module PSReadLine).Version.ToString();123+456\r",
+          `[Console]::WriteLine('PSHOME='+$PSHOME);[Console]::WriteLine('PSModulePath='+$env:PSModulePath);[Console]::WriteLine('LOCALAPPDATA='+$env:LOCALAPPDATA);[IO.File]::WriteAllText('${markerPath}','ok');[Console]::WriteLine(('DIRECT_'+'PROBE'))\r`,
         );
-        const version = await until(
+        await until(
           f.service,
           created.taskId,
           (r) =>
-            /(?:^|\r?\n)579\r?\n[\s\S]*PS [^\r\n]*> /u.test(
+            /DIRECT_PROBE[\s\S]*PS [^\r\n]*> /u.test(
               stripVTControlCharacters(r.output),
             ),
-          `${control} pre-resize evaluation`,
+          "direct .NET output and file without resize",
         );
-        console.info(
-          `[Windows resize control ${control}] ${JSON.stringify(version.output)}`,
+        assert.equal(
+          await readFile(path.join(directory, "direct.txt"), "utf8"),
+          "ok",
         );
-        if (control === "without PSReadLine") {
-          await write(
-            "Remove-Module PSReadLine -ErrorAction Stop; if (!(Get-Module PSReadLine)) {123+457}\r",
-          );
+        // Match the actual original cmdlet and redirection, before any resize.
+        // Arithmetic alone was insufficient to isolate the earlier failure.
+        await write(
+          "Write-Output ('SHARED_' + 'PTY_PROBE'); 'ok'>utility.txt\r",
+        );
+        try {
           await until(
             f.service,
             created.taskId,
             (r) =>
-              /(?:^|\r?\n)580\r?\n[\s\S]*PS [^\r\n]*> /u.test(
+              /SHARED_PTY_PROBE[\s\S]*PS [^\r\n]*> /u.test(
                 stripVTControlCharacters(r.output),
               ),
-            "PSReadLine removal and fresh prompt",
+            "Utility output and redirection before resize",
+          );
+        } catch (error) {
+          const marker = await readFile(path.join(directory, "utility.txt"))
+            .then((b) => b.toString("hex"))
+            .catch(() => "absent");
+          throw new Error(
+            `Standard folder control ${restoreFolders}; Utility file ${marker}; ${String(error)}`,
           );
         }
+        assert(
+          (await readFile(path.join(directory, "utility.txt"))).length > 0,
+        );
         await f.service.request({
           operation: "resize",
           threadId: "human",
@@ -849,61 +880,23 @@ for (const control of ["without PSReadLine", "bundled ConPTY"] as const) {
           cols: 92,
           rows: 30,
         });
-        await write("234+567;'ok'>p\r");
-        try {
-          await until(
-            f.service,
-            created.taskId,
-            (r) =>
-              /(?:^|\r?\n)801\r?\n[\s\S]*PS [^\r\n]*> /u.test(
-                stripVTControlCharacters(r.output),
-              ),
-            `${control} post-resize short evaluation`,
-          );
-        } catch (error) {
-          const marker = await readFile(path.join(directory, "p"))
-            .then((b) => b.toString("hex"))
-            .catch(() => "absent");
-          throw new Error(
-            `${control} file marker: ${marker}; ${String(error)}`,
-          );
-        }
-        await write("Write-Output ('SHARED_' + 'PTY_PROBE')\r");
+        await write("Write-Output ('AFTER_' + 'RESIZE'); 'ok'>after.txt\r");
         await until(
           f.service,
           created.taskId,
-          (r) => r.output.includes("SHARED_PTY_PROBE"),
-          `${control} wrapped output`,
+          (r) =>
+            /AFTER_RESIZE[\s\S]*PS [^\r\n]*> /u.test(
+              stripVTControlCharacters(r.output),
+            ),
+          "Utility output and redirection after resize",
         );
+        assert((await readFile(path.join(directory, "after.txt"))).length > 0);
         await write("exit\r");
         await until(
           f.service,
           created.taskId,
           (r) => r.session.status === "completed",
-          `${control} natural exit`,
-        );
-        const stopped = (await f.service.request({
-          operation: "create",
-          threadId: "human",
-          cols: 80,
-          rows: 24,
-        })) as ShellSessionSummary;
-        await until(
-          f.service,
-          stopped.taskId,
-          (r) => /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
-          `${control} Stop fixture prompt`,
-        );
-        await f.service.request({
-          operation: "stop",
-          threadId: "human",
-          taskId: stopped.taskId,
-        });
-        await until(
-          f.service,
-          stopped.taskId,
-          (r) => r.session.status === "cancelled",
-          `${control} explicit Stop`,
+          "Utility control natural exit",
         );
       } finally {
         await f.tools.close();
