@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from imagent.channels import NativeTransportChannelAdapter, channel_from_config
-from imagent.channels.native.access import ChannelAccessPolicy
+from imagent.interaction.channels.ingress import ChannelAccessPolicy
 
 from .config import ConfigurationError, PermissionMode
 

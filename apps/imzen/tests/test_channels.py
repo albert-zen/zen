@@ -273,10 +273,12 @@ def test_shared_media_root_is_none_without_enabled_channels(tmp_path):
 
 @pytest.mark.parametrize("name", [" inbound-media ", " "])
 def test_shared_media_root_preserves_qq_path_whitespace(tmp_path, monkeypatch, name):
-    from imagent.channels.native.qq import QQChannelAdapter
+    from imagent.interaction.channels.adapters.qq import QQChannelAdapter
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("imagent.channels.native.qq.httpx.AsyncClient", lambda **kwargs: object())
+    monkeypatch.setattr(
+        "imagent.interaction.channels.adapters.qq.httpx.AsyncClient", lambda **kwargs: object()
+    )
     config = {"enabled": True, "media_dir": name, "app_id": "123", "client_secret": "synthetic"}
     native = QQChannelAdapter.from_config(config=config, middleware=None)
 
@@ -363,11 +365,12 @@ def test_shared_media_root_resolves_aliases_without_widening(tmp_path):
 
 @pytest.mark.parametrize("name", [" inbound-media ", " "])
 def test_shared_media_root_matches_telegram_path_normalization(tmp_path, monkeypatch, name):
-    from imagent.channels.native.telegram import TelegramChannelAdapter
+    from imagent.interaction.channels.adapters.telegram import TelegramChannelAdapter
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        "imagent.channels.native.telegram.httpx.AsyncClient", lambda **kwargs: object()
+        "imagent.interaction.channels.adapters.telegram.httpx.AsyncClient",
+        lambda **kwargs: object(),
     )
     config = {"enabled": True, "media_dir": name, "bot_token": "synthetic"}
     native = TelegramChannelAdapter.from_config(config=config, middleware=None)

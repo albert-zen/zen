@@ -1188,9 +1188,38 @@ Room delivered receipts derive from committed Room messages; read receipts deriv
 
 Room quotes are immutable bounded snapshots of a same-Room message captured with the prepared send operation; operation identity binds both text and quote target. Reactions are Room-domain annotations with one chosen emoji per Host-derived actor; setting the same reaction is idempotent, and reactions never wake an Agent. Both use the existing serialized Room storage, with optional fields for older profiles.
 
+### IMZen v1 consumer composition
+
+IMZen uses the SDK's public `Gateway` with a coherent `SQLiteGatewayStore`, a
+stable configured workspace identity, scoped conversation actions, and an
+explicit frozen command registry. The SDK owns generation fencing, native action
+outcomes, projection/reply routing, and admission idempotency; IMZen owns permission
+presets, bounded displayed Thread selection, ZAS resume observation, and product
+presentation. A numbered `/pick` resolves only the same conversation's recently
+displayed list; a rejected oversized refresh leaves the previous numbers intact.
+Non-numeric queries may resolve an authoritative bounded search without publishing
+new numbers. `/new` clears selection and the next input creates a Thread.
+
+ZAS `thread/resume` owns a non-reentrant per-Thread observation barrier. The product
+client serializes its authoritative-read and explicit-resume calls through that
+same public boundary per Thread, including recovery resumes. Queued callers may
+cancel without dispatch; an admitted native request keeps its transient lock until
+its actual result or SDK-bounded timeout/reset even if its caller cancels. The
+client owns and observes those original request tasks, fences new admission before
+close, closes the SDK transport, and joins the tasks; cancellation of a close
+waiter cannot abandon this cleanup. It never caches snapshots, adds outcome
+retries, or blocks an unrelated Thread behind another Thread's read.
+
+The IMZen legacy-state upgrader is a product deployment boundary: it validates a
+copy of the selected old SQLite state against authoritative native Thread/workspace
+ancestry, preserves the original backup, and only installs a validated migration.
+Ambiguous identity, unsupported records, or a native validation failure stop
+startup without silently resetting or discarding bridge state. Existing v1 state
+continues through the SDK's namespace, workspace fingerprint, and runtime fencing.
+
 ### IMZenX PAW Room routes
 
-IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
+IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. Startup preparation and Room polling are scoped to the explicitly enabled deployment channels; disabling a channel retains its Room binding and checkpoint for a later re-enable. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
 
 - **ZenX sidebar width** — A renderer-only local preference drives the existing shell track; viewport clamping, pointer gestures and collapsed/overlay presentation are disposable layout state and never alter Thread or Host facts.
 
