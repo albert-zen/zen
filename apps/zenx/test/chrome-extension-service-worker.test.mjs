@@ -354,7 +354,7 @@ async function workerFixture(options = {}) {
     },
     runtime: {
       connectNative: () => {
-        const port = nativePort();
+        const port = nativePort(options);
         ports.push(port);
         return port;
       },
@@ -415,7 +415,7 @@ function event() {
   };
 }
 
-function nativePort() {
+function nativePort(options = {}) {
   const onMessage = event();
   const onDisconnect = event();
   return {
@@ -427,11 +427,19 @@ function nativePort() {
       this.messages.push(message);
       if (message?.type === "hello") {
         queueMicrotask(() =>
-          onMessage.emit({
-            type: "ready",
-            protocolVersion: 2,
-            scope: "browser",
-          }),
+          onMessage.emit(
+            options.rejectConnection
+              ? {
+                  type: "connection-rejected",
+                  message:
+                    "Another browser is connected. Disconnect its ZenX extension before connecting this browser.",
+                }
+              : {
+                  type: "ready",
+                  protocolVersion: 2,
+                  scope: "browser",
+                },
+          ),
         );
       }
     },
@@ -453,3 +461,24 @@ async function waitFor(predicate) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("a rejected competing browser reports the conflict without discovering or attaching tabs", async () => {
+  const fixture = await workerFixture({ rejectConnection: true });
+  const titles = [];
+  fixture.chrome.action.setTitle = async (value) => {
+    titles.push(value.title);
+  };
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    titles.some((title) => /Another browser is connected/.test(title)),
+  );
+  assert.equal(fixture.ports[0].disconnected, true);
+  assert.equal(
+    fixture.ports[0].messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+    false,
+  );
+  assert.deepEqual(fixture.attachCalls, []);
+  assert.deepEqual(fixture.removed, []);
+});

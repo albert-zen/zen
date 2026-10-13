@@ -1,3 +1,4 @@
+import { BrowserBackendRegistry } from "../src/main/capabilities/browser-backend-registry.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -1201,3 +1202,85 @@ class FakeWindow extends EventEmitter {
     return [1200, 800] as const;
   }
 }
+
+test("concurrent routing preserves human takeover, fresh return and native navigation fences", async () => {
+  const f = await sharedFixture();
+  const registry = new BrowserBackendRegistry(f.browser);
+  const invoke = (name: string, args: Record<string, unknown>) =>
+    registry.invoke(name, {
+      name,
+      callId: "concurrent-call",
+      threadId: "thread-a",
+      cwd: "/tmp",
+      signal: new AbortController().signal,
+      arguments: { sessionId: "session", ...args },
+    }) as Promise<{ tabId: string; observationId: string; backendId: string }>;
+  try {
+    const tab = await invoke("browser_workspace_open", {
+      url: "https://example.test/start",
+    });
+    const nativeTab = f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "list",
+    )[0]!;
+    assert.equal(tab.tabId, `workspace:${nativeTab.id}`);
+    const old = await invoke("browser_workspace_inspect", { tabId: tab.tabId });
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "take-control",
+      nativeTab.id,
+    );
+    await assert.rejects(
+      invoke("browser_workspace_navigate", {
+        tabId: tab.tabId,
+        url: "https://example.test/denied",
+        observationId: old.observationId,
+      }),
+      /human|control/iu,
+    );
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "return-control",
+      nativeTab.id,
+    );
+    await assert.rejects(
+      invoke("browser_workspace_navigate", {
+        tabId: tab.tabId,
+        url: "https://example.test/denied",
+      }),
+      /observation/iu,
+    );
+    await assert.rejects(
+      invoke("browser_workspace_navigate", {
+        tabId: tab.tabId,
+        url: "https://example.test/denied",
+        observationId: old.observationId,
+      }),
+      /observation|fresh/iu,
+    );
+    const fresh = await invoke("browser_workspace_inspect", {
+      tabId: tab.tabId,
+    });
+    assert.notEqual(fresh.observationId, old.observationId);
+    await invoke("browser_workspace_navigate", {
+      tabId: tab.tabId,
+      url: "https://example.test/allowed",
+      observationId: fresh.observationId,
+    });
+    assert.equal(
+      f.browser.command(f.sender as never, "thread-a", "list")[0]?.url,
+      "https://example.test/allowed",
+    );
+    await invoke("browser_workspace_close_session", {});
+    assert.equal(
+      f.browser.command(f.sender as never, "thread-a", "list").length,
+      1,
+    );
+  } finally {
+    await registry.close();
+    await f.close();
+  }
+});

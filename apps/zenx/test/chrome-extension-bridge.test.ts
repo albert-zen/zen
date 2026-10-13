@@ -24,6 +24,8 @@ import {
   configureChromeNativeHostActivationPolicy,
   chromeNativeHostManifestPath,
   chromeNativeHostExecutablePath,
+  chromeNativeHostRegistryKey,
+  readBrowserRegistrationTarget,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
   unregisterChromeNativeHost,
@@ -365,7 +367,18 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
   }
 });
 
-test("replacing the native connection revokes its tab, sessions, and pending commands", async () => {
+test("a competing native connection is rejected without revoking the current browser or pending action", async (t) => {
+  const errorListenersAtRejection: number[] = [];
+  const send = WebSocket.prototype.send;
+  t.mock.method(
+    WebSocket.prototype,
+    "send",
+    function (this: WebSocket, ...args: Parameters<WebSocket["send"]>) {
+      if (String(args[0]).includes('"type":"connection-rejected"'))
+        errorListenersAtRejection.push(this.listenerCount("error"));
+      return send.apply(this, args);
+    },
+  );
   const runtimeDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-chrome-generation-"),
   );
@@ -392,7 +405,7 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       return socket;
     };
     const oldSocket = await connect();
-    let navigateDispatched = false;
+    let navigateRequestId: string | undefined;
     oldSocket.on("message", (data) => {
       const message = JSON.parse(data.toString()) as {
         type?: string;
@@ -402,7 +415,7 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       if (message.type !== "cdp-command" || message.requestId === undefined)
         return;
       if (message.method === "Page.navigate") {
-        navigateDispatched = true;
+        navigateRequestId = message.requestId;
         return;
       }
       oldSocket.send(
@@ -430,14 +443,40 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       "chrome-tab-7",
       "https://old.test/pending",
     );
-    await waitFor(() => navigateDispatched);
+    await waitFor(() => navigateRequestId !== undefined);
 
-    const currentSocket = await connect();
-    await assert.rejects(navigation);
+    const competitor = new WebSocket(descriptor.nativeWebSocketUrl, {
+      headers: { origin: ZENX_CHROME_EXTENSION_ORIGIN },
+    });
+    sockets.push(competitor);
+    const rejected = new Promise<{ type: string; message: string }>((resolve) =>
+      competitor.once("message", (data) =>
+        resolve(JSON.parse(data.toString())),
+      ),
+    );
+    const closed = new Promise<number>((resolve) =>
+      competitor.once("close", resolve),
+    );
+    assert.match((await rejected).message, /Disconnect.*before connecting/);
+    assert.equal(await closed, 1008);
+    assert.equal(oldSocket.readyState, WebSocket.OPEN);
+    assert.deepEqual(bridge.status(), { state: "connected", tabCount: 1 });
+    oldSocket.send(
+      JSON.stringify({
+        type: "cdp-result",
+        requestId: navigateRequestId,
+        result: {},
+      }),
+    );
+    await navigation;
+    assert.equal(
+      (await connection.backend.listTabs("thread"))[0]?.tabId,
+      "chrome-tab-7",
+    );
+
+    oldSocket.close();
     await waitFor(() => bridge.status().state === "waiting");
-    assert.deepEqual(await connection.backend.listTabs("thread"), []);
-    assert.equal(await connection.backend.closeSession("thread"), 0);
-
+    const currentSocket = await connect();
     currentSocket.send(
       JSON.stringify({
         type: "browser-connected",
@@ -445,7 +484,15 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       }),
     );
     await waitFor(() => bridge.status().tabCount === 1);
-    assert.deepEqual(bridge.status(), { state: "connected", tabCount: 1 });
+    assert.equal(
+      (await connection.backend.listTabs("new-session"))[0]?.tabId,
+      "chrome-tab-8",
+    );
+    assert.deepEqual(
+      errorListenersAtRejection,
+      [1],
+      "every socket must handle errors before rejection begins",
+    );
   } finally {
     await connection?.backend.close();
     for (const socket of sockets) socket.close();
@@ -642,3 +689,78 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("Chrome and Edge registration paths stay independent on each supported platform", () => {
+  const base = {
+    homeDirectory: "/home/test",
+    runtimeDirectory: "/runtime",
+    executablePath: "/app/zenx",
+    windowsLauncherPath: "/app/zenx.cmd",
+  };
+  for (const platform of ["linux", "darwin", "win32"] as const) {
+    const chrome = chromeNativeHostManifestPath({
+      ...base,
+      platform,
+      browser: "chrome",
+    });
+    const edge = chromeNativeHostManifestPath({
+      ...base,
+      platform,
+      browser: "edge",
+    });
+    assert.notEqual(chrome, edge);
+    assert.match(
+      edge,
+      platform === "linux"
+        ? /microsoft-edge\/NativeMessagingHosts/
+        : platform === "darwin"
+          ? /Microsoft Edge\/NativeMessagingHosts/
+          : /\.edge\.json$/,
+    );
+  }
+  assert.match(
+    chromeNativeHostRegistryKey({ browser: "edge" }),
+    /Microsoft\\Edge\\NativeMessagingHosts/,
+  );
+  assert.match(
+    chromeNativeHostRegistryKey({ browser: "chrome" }),
+    /Google\\Chrome\\NativeMessagingHosts/,
+  );
+  assert.equal(readBrowserRegistrationTarget(undefined), "chrome");
+  assert.equal(readBrowserRegistrationTarget("edge"), "edge");
+  assert.throws(() => readBrowserRegistrationTarget("other"), /Unsupported/);
+});
+
+test("removing Edge registration leaves Chrome registration and origin restrictions intact", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-edge-registration-"));
+  const base = {
+    platform: "linux" as const,
+    homeDirectory: root,
+    runtimeDirectory: path.join(root, "runtime"),
+    executablePath: "/app/ZenX",
+  };
+  try {
+    await registerChromeNativeHost(base);
+    await registerChromeNativeHost({ ...base, browser: "edge" });
+    assert.equal(await chromeNativeHostRegistered(base), true);
+    assert.equal(
+      await chromeNativeHostRegistered({ ...base, browser: "edge" }),
+      true,
+    );
+    const manifest = JSON.parse(
+      await readFile(
+        chromeNativeHostManifestPath({ ...base, browser: "edge" }),
+        "utf8",
+      ),
+    );
+    assert.deepEqual(manifest.allowed_origins, [ZENX_CHROME_EXTENSION_ORIGIN]);
+    await unregisterChromeNativeHost({ ...base, browser: "edge" });
+    assert.equal(
+      await chromeNativeHostRegistered({ ...base, browser: "edge" }),
+      false,
+    );
+    assert.equal(await chromeNativeHostRegistered(base), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

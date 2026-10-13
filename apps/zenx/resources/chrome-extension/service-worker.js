@@ -41,6 +41,15 @@ async function handleAction() {
         ) {
           clearTimeout(timer);
           resolve();
+        } else if (message?.type === "connection-rejected") {
+          clearTimeout(timer);
+          reject(
+            new Error(
+              typeof message.message === "string"
+                ? message.message
+                : "Another browser is connected",
+            ),
+          );
         } else if (message?.type === "cdp-command" && session.published) {
           void runCommand(session, message);
         }
@@ -79,7 +88,9 @@ async function handleAction() {
     });
     await chrome.action.setBadgeBackgroundColor({ color: "#16784a" });
     await chrome.action.setBadgeText({ text: "ON" });
-    await chrome.action.setTitle({ title: "Disconnect Chrome from ZenX" });
+    await chrome.action.setTitle({
+      title: "Disconnect this browser from ZenX",
+    });
   } catch (error) {
     await disconnect(session);
     if (connection !== undefined) return;
