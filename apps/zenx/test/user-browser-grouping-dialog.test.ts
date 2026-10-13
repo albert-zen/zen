@@ -204,7 +204,7 @@ test("a dialog after mouse press reports unknown and never releases or auto-acce
       /tainted|outcome is unknown/,
     );
   } finally {
-    await connection.backend.close().catch(() => undefined);
+    await Promise.resolve(connection.backend.close()).catch(() => undefined);
     await cdp.close();
   }
 });

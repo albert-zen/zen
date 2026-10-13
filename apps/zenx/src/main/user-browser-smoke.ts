@@ -14,6 +14,7 @@ import {
   UserBrowserDocumentChangedBeforeDispatchError,
   UserBrowserCdpOutcomeUnknownError,
   windowsBrowserExecutableCandidates,
+  type UserBrowserInputCaptureDiagnostic,
 } from "./capabilities/user-browser-provider.js";
 import type { UserBrowserLiveImageDecoder } from "./capabilities/user-browser-live-frame.js";
 import {
@@ -32,6 +33,10 @@ if (process.platform !== "win32") {
 }
 
 const fixtureRequests: string[] = [];
+const inputCaptureDiagnostics: Array<
+  UserBrowserInputCaptureDiagnostic & { phase: string }
+> = [];
+let inputPhase = "initial-inspection";
 const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
   encoded,
 ) => ({
@@ -128,6 +133,11 @@ try {
     userBrowserConnector: async (candidateEndpoint, signal) =>
       await connectUserBrowserCdp(candidateEndpoint, signal, {
         liveFrameImageDecoder: decodeNodeSmokeLiveImage,
+        onInputCaptureDiagnostic: (value) => {
+          inputCaptureDiagnostics.push({ ...value, phase: inputPhase });
+          if (inputCaptureDiagnostics.length > 8)
+            inputCaptureDiagnostics.shift();
+        },
       }),
   });
   const backend = selection.backend;
@@ -246,6 +256,7 @@ try {
     accountVisibilityBeforeOpen,
     "background_safe browser_open must preserve existing-tab visibility",
   );
+  inputPhase = "opened-inactive-inspection";
   const openedInspection = await retryDocumentInspection(() =>
     backend.inspect("windows-smoke", opened.tabId),
   );
@@ -274,6 +285,7 @@ try {
     50,
     130,
   );
+  inputPhase = "after-canvas-click";
   let inputInspection = await backend.inspect("windows-smoke", opened.tabId);
   assert.match(
     inputInspection.visibleText,
@@ -286,6 +298,7 @@ try {
     inputInspection.observationId,
     "ArrowDown",
   );
+  inputPhase = "after-arrow-scroll";
   await retry(async () => {
     inputInspection = await backend.inspect("windows-smoke", opened.tabId);
     return (inputInspection.inputViewport?.scrollY ?? 0) > 0 ? true : undefined;
@@ -297,6 +310,7 @@ try {
     "up",
     2000,
   );
+  inputPhase = "after-dom-scroll-up";
   inputInspection = await backend.inspect("windows-smoke", opened.tabId);
   await backend.pointerClick(
     "windows-smoke",
@@ -312,6 +326,7 @@ try {
     inputInspection.observationId,
     "Space",
   );
+  inputPhase = "after-space-key";
   inputInspection = await backend.inspect("windows-smoke", opened.tabId);
   assert.equal(
     inputInspection.targets.find((target) => target.name === "Targeted text")
@@ -331,6 +346,7 @@ try {
     "background form",
     false,
   );
+  inputPhase = "after-dom-type";
   inputInspection = await backend.inspect("windows-smoke", opened.tabId);
   await backend.keyPress(
     "windows-smoke",
@@ -338,6 +354,7 @@ try {
     inputInspection.observationId,
     "Enter",
   );
+  inputPhase = "after-enter-key";
   inputInspection = await backend.inspect("windows-smoke", opened.tabId);
   assert.match(
     inputInspection.visibleText,
@@ -350,6 +367,7 @@ try {
     inputInspection.observationId,
     "Tab",
   );
+  inputPhase = "after-tab-key";
   inputInspection = await backend.inspect("windows-smoke", opened.tabId);
   assert.match(
     inputInspection.visibleText,
@@ -510,7 +528,14 @@ try {
   } catch (diagnosticError) {
     targets = String(diagnosticError);
   }
-  console.error(JSON.stringify({ fixtureRequests, targets }));
+  console.error(
+    JSON.stringify({
+      fixtureRequests,
+      targets,
+      inputPhase,
+      inputCaptureDiagnostics,
+    }),
+  );
   console.error(browserObservation?.diagnostics("smoke failed", String(error)));
   throw error;
 } finally {

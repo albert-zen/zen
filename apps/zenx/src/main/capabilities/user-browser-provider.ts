@@ -45,6 +45,7 @@ import {
   type BrowserInputKey,
   type BrowserInputObservation,
   type BrowserInputSnapshot,
+  type BrowserInputViewport,
 } from "./browser-targeted-input.js";
 import {
   MAX_OBSERVATION_CAPTURE_ITEMS,
@@ -333,8 +334,59 @@ class ZenXUserBrowserAttachmentEpochBoundary {
   }
 }
 
+/** Opt-in Host diagnostics, containing no page text, URL or opaque node IDs. */
+export interface UserBrowserInputCaptureDiagnostic {
+  reason:
+    | "initial-snapshot-missing"
+    | "initial-snapshot-invalid"
+    | "after-snapshot-invalid"
+    | "snapshot-changed"
+    | "screenshot-fallback"
+    | "targeted-input-unavailable";
+  captureStatus: "captured" | "fallback";
+  before: ReturnType<typeof inputCaptureSnapshotDiagnostic>;
+  after: ReturnType<typeof inputCaptureSnapshotDiagnostic>;
+  documentChanged?: boolean;
+  focusChanged?: boolean;
+}
+
+function inputCaptureSnapshotDiagnostic(value: unknown) {
+  const raw = asRecord(value);
+  const viewport = asRecord(raw?.viewport);
+  const dimensions: Partial<BrowserInputViewport> = {};
+  for (const key of [
+    "width",
+    "height",
+    "deviceScaleFactor",
+    "scrollX",
+    "scrollY",
+    "visualScale",
+    "visualOffsetX",
+    "visualOffsetY",
+  ] as const) {
+    const scalar = viewport?.[key];
+    if (typeof scalar === "number" && Number.isFinite(scalar))
+      dimensions[key] = scalar;
+  }
+  return {
+    available: raw !== undefined,
+    ...(typeof raw?.inputRevision === "number" &&
+    Number.isSafeInteger(raw.inputRevision)
+      ? { inputRevision: raw.inputRevision }
+      : {}),
+    ...(typeof raw?.layoutRevision === "number" &&
+    Number.isSafeInteger(raw.layoutRevision)
+      ? { layoutRevision: raw.layoutRevision }
+      : {}),
+    viewport: dimensions,
+  };
+}
+
 export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   readonly #client: UserBrowserCdpClient;
+  readonly #onInputCaptureDiagnostic?: (
+    value: UserBrowserInputCaptureDiagnostic,
+  ) => void;
   readonly #sessions = new Map<string, UserBrowserSession>();
   readonly #tabs = new Map<string, UserBrowserTabState>();
   readonly #detachOperations = new Map<string, Promise<void>>();
@@ -355,9 +407,15 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
 
   constructor(
     client: UserBrowserCdpClient,
-    options: { artifactDirectory?: string } = {},
+    options: {
+      artifactDirectory?: string;
+      onInputCaptureDiagnostic?: (
+        value: UserBrowserInputCaptureDiagnostic,
+      ) => void;
+    } = {},
   ) {
     this.#client = client;
+    this.#onInputCaptureDiagnostic = options.onInputCaptureDiagnostic;
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
     );
@@ -832,6 +890,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
                 "Attached browser screenshot response was empty or malformed",
             };
       let input: BrowserInputObservation | undefined;
+      let afterInputSnapshot: unknown;
+      let inputIssue: UserBrowserInputCaptureDiagnostic["reason"] =
+        raw.inputSnapshot === undefined
+          ? "initial-snapshot-missing"
+          : normalizedScreenshot.status === "fallback"
+            ? "screenshot-fallback"
+            : "targeted-input-unavailable";
       if (
         raw.inputSnapshot !== undefined &&
         normalizedScreenshot.status !== "fallback" &&
@@ -841,6 +906,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         try {
           snapshot = requireBrowserInputSnapshot(raw.inputSnapshot);
         } catch {
+          inputIssue = "initial-snapshot-invalid";
           // Optional coordinate/key support must not disable DOM inspection.
         }
         if (snapshot !== undefined) {
@@ -855,16 +921,39 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
             throw new Error(
               "User browser document changed during input capture",
             );
+          afterInputSnapshot = after.value;
           try {
-            assertBrowserInputSnapshot(
-              snapshot,
-              requireBrowserInputSnapshot(after.value),
-            );
+            inputIssue = "after-snapshot-invalid";
+            const afterSnapshot = requireBrowserInputSnapshot(after.value);
+            inputIssue = "snapshot-changed";
+            assertBrowserInputSnapshot(snapshot, afterSnapshot);
             input = { snapshot, screenshotId: observationId };
           } catch {
             // Keep the screenshot and DOM observation, but never authorize
             // coordinate/key input with an incoherent viewport snapshot.
           }
+        }
+      }
+      if (input === undefined && this.#onInputCaptureDiagnostic !== undefined) {
+        const before = asRecord(raw.inputSnapshot);
+        const after = asRecord(afterInputSnapshot);
+        try {
+          this.#onInputCaptureDiagnostic({
+            reason: inputIssue,
+            captureStatus: normalizedScreenshot.status ?? "captured",
+            before: inputCaptureSnapshotDiagnostic(before),
+            after: inputCaptureSnapshotDiagnostic(after),
+            ...(before && after
+              ? {
+                  documentChanged: before.documentKey !== after.documentKey,
+                  focusChanged:
+                    before.focusId !== after.focusId ||
+                    before.focusBackendNodeId !== after.focusBackendNodeId,
+                }
+              : {}),
+          });
+        } catch {
+          /* Diagnostics never change the observation or its fences. */
         }
       }
       const screenshotBytes = decodeUserBrowserScreenshot(
@@ -1931,6 +2020,9 @@ export async function connectUserBrowserCdp(
     /** Host-selected bridge instance route, never accepted from tool arguments. */
     connectionPath?: string;
     liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
+    onInputCaptureDiagnostic?: (
+      value: UserBrowserInputCaptureDiagnostic,
+    ) => void;
   } = {},
 ): Promise<UserBrowserConnection> {
   const base = validateCdpEndpoint(endpoint);
@@ -1999,7 +2091,12 @@ export async function connectUserBrowserCdp(
     probeSignal,
     options,
   );
-  return { backend: new UserBrowserCdpBackend(client), product };
+  return {
+    backend: new UserBrowserCdpBackend(client, {
+      onInputCaptureDiagnostic: options.onInputCaptureDiagnostic,
+    }),
+    product,
+  };
 }
 
 export function validateUserBrowserVersion(

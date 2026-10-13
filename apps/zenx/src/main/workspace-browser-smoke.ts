@@ -22,6 +22,58 @@ const directory = mkdtempSync(
 app.setPath("userData", path.join(directory, "user-data"));
 app.on("window-all-closed", () => undefined);
 
+let smokePhase = "startup";
+const captureTrace: unknown[] = [];
+let captureSequence = 0;
+/** Diagnostic-only wrapping of the exact capture call; no retries or API changes. */
+function traceCaptures(view: WebContentsView): void {
+  const capture = view.webContents.capturePage.bind(view.webContents);
+  const record = (
+    stage: "start" | "success" | "failed",
+    sequence: number,
+    phase: string,
+  ) => {
+    try {
+      captureTrace.push({
+        phase,
+        stage,
+        sequence,
+        webContentsId: view.webContents.id,
+        destroyed: view.webContents.isDestroyed(),
+        visible: view.getVisible(),
+        bounds: view.getBounds(),
+        focusedWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+        windows: BrowserWindow.getAllWindows()
+          .slice(0, 8)
+          .map((window) => ({
+            id: window.id,
+            visible: window.isVisible(),
+            minimized: window.isMinimized(),
+            attached: window.contentView.children.includes(view),
+          })),
+      });
+      if (captureTrace.length > 24) captureTrace.shift();
+    } catch {
+      /* A destroyed view cannot alter the capture outcome via diagnostics. */
+    }
+  };
+  view.webContents.capturePage = async (
+    ...args: Parameters<typeof capture>
+  ) => {
+    const sequence = ++captureSequence;
+    const phase = smokePhase;
+    record("start", sequence, phase);
+    try {
+      const image = await capture(...args);
+      record("success", sequence, phase);
+      return image;
+    } catch (error) {
+      record("failed", sequence, phase);
+      throw error;
+    }
+  };
+}
+
 let markSlowRequestStarted!: () => void;
 const slowRequestStarted = new Promise<void>((resolve) => {
   markSlowRequestStarted = resolve;
@@ -79,6 +131,7 @@ void app.whenReady().then(async () => {
     artifactDirectory: path.join(directory, "artifacts"),
     onCreateView: (view) => {
       createdView = view;
+      traceCaptures(view);
     },
   });
   try {
@@ -105,6 +158,7 @@ void app.whenReady().then(async () => {
     assert.ok(createdView);
     let liveFrameCount = 0;
     let liveFrameError: string | undefined;
+    smokePhase = "shared-unmounted-live";
     const stopLiveObservation = browser.observeTab(
       "shared-session",
       tabId,
@@ -134,6 +188,7 @@ void app.whenReady().then(async () => {
       1,
       "live capture must release its temporary renderer",
     );
+    smokePhase = "shared-unmounted-inspect";
     const unmountedInspection = await browser.inspect("shared-session", tabId);
     assert.match(unmountedInspection.visibleText, /Human value/u);
     assert.ok(
@@ -153,6 +208,7 @@ void app.whenReady().then(async () => {
       "Agent hidden",
       false,
     );
+    smokePhase = "shared-after-hidden-action";
     const afterHiddenAction = await browser.inspect("shared-session", tabId);
     assert.equal(
       requiredTarget(afterHiddenAction, "Human value", "type").value,
@@ -173,6 +229,7 @@ void app.whenReady().then(async () => {
       1,
       "the temporary renderer must close when an operation fails",
     );
+    smokePhase = "shared-render-human-mount-handoff";
     const handoffInspection = browser.inspect("shared-session", tabId);
     await eventually(async () => {
       assert.equal(
@@ -202,6 +259,7 @@ void app.whenReady().then(async () => {
       "The mounted human view must be the Agent target WebContents",
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
+    smokePhase = "shared-mounted-inspect";
     let inspection = await browser.inspect("shared-session", tabId);
     assert.equal(inspection.url, url);
     assert.match(inspection.visibleText, /Human value/u);
@@ -209,6 +267,7 @@ void app.whenReady().then(async () => {
     await createdView.webContents.executeJavaScript(
       "document.querySelector('input').focus();document.querySelector('input').select()",
     );
+    smokePhase = "shared-human-input";
     createdView.webContents.insertText("typed by human");
     inspection = await browser.inspect("shared-session", tabId);
     assert.equal(
@@ -222,6 +281,7 @@ void app.whenReady().then(async () => {
       bounds: { x: 20, y: 20, width: 700, height: 500 },
     });
 
+    smokePhase = "shared-dom-click";
     const action = requiredTarget(inspection, "Agent action", "click");
     await browser.click(
       "shared-session",
@@ -277,6 +337,7 @@ void app.whenReady().then(async () => {
       ),
     );
 
+    smokePhase = "shared-superseded-navigation";
     const superseded = browser.navigate(
       "shared-session",
       tabId,
@@ -312,6 +373,7 @@ void app.whenReady().then(async () => {
       "document.querySelector('#login').click();document.querySelector('input').focus()",
     );
     createdView.webContents.insertText("human draft");
+    smokePhase = "shared-human-control-inspect";
     const humanObservation = await browser.inspect("shared-session", tabId);
     assert.match(humanObservation.visibleText, /Signed in to local fixture/u);
     assert.equal(
@@ -344,6 +406,7 @@ void app.whenReady().then(async () => {
       browser.navigate("shared-session", tabId, url),
       /fresh observation/u,
     );
+    smokePhase = "shared-return-control-inspect";
     let handedBack = await browser.inspect("shared-session", tabId);
     await assert.rejects(
       browser.closeTab(
@@ -405,7 +468,9 @@ void app.whenReady().then(async () => {
       1,
       "Ending the Agent session must preserve the shared human page",
     );
+    smokePhase = "targeted-setup";
     await assertTargetedBackgroundInput(port);
+    smokePhase = "control-layout";
     await assertStableControlLayout();
     console.log(
       JSON.stringify({
@@ -442,6 +507,7 @@ void app.whenReady().then(async () => {
       }),
     );
   } catch (error) {
+    console.error(JSON.stringify({ smokePhase, captureTrace }));
     console.error("ZenX shared Workspace Browser smoke failed", error);
     process.exitCode = 1;
   } finally {
@@ -458,6 +524,7 @@ void app.whenReady().then(async () => {
 async function assertTargetedBackgroundInput(port: number): Promise<void> {
   const browser = createElectronWorkspaceBrowser({
     artifactDirectory: path.join(directory, "input-artifacts"),
+    onCreateView: traceCaptures,
   });
   const owner = new BrowserWindow({
     show: false,
@@ -486,6 +553,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
       "hidden-mounted",
       "minimized-mounted",
     ] as const) {
+      smokePhase = `targeted-${mode}-initial-inspect`;
       if (mode !== "unmounted") {
         browser.mount(owner.webContents, {
           threadId: "input-thread",
@@ -521,6 +589,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
         50,
         130,
       );
+      smokePhase = `targeted-${mode}-after-canvas-click`;
       inspected = await browser.inspect("input-session", tab.tabId);
       assert.match(inspected.visibleText, /Canvas clicked true/u);
       await browser.keyPress(
@@ -529,6 +598,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
         inspected.observationId,
         "ArrowDown",
       );
+      smokePhase = `targeted-${mode}-after-arrow-scroll`;
       await eventually(async () => {
         inspected = await browser.inspect("input-session", tab.tabId);
         assert.ok((inspected.inputViewport?.scrollY ?? 0) > 0);
@@ -540,6 +610,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
         "up",
         2000,
       );
+      smokePhase = `targeted-${mode}-after-dom-scroll-up`;
       inspected = await browser.inspect("input-session", tab.tabId);
       await browser.pointerClick(
         "input-session",
@@ -555,6 +626,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
         inspected.observationId,
         "Space",
       );
+      smokePhase = `targeted-${mode}-after-space-key`;
       inspected = await browser.inspect("input-session", tab.tabId);
       assert.equal(
         requiredTarget(inspected, "Targeted text", "type").value,
@@ -568,6 +640,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
         "background form",
         false,
       );
+      smokePhase = `targeted-${mode}-after-dom-type`;
       inspected = await browser.inspect("input-session", tab.tabId);
       await browser.keyPress(
         "input-session",
@@ -575,6 +648,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
         inspected.observationId,
         "Enter",
       );
+      smokePhase = `targeted-${mode}-after-enter-key`;
       inspected = await browser.inspect("input-session", tab.tabId);
       assert.match(inspected.visibleText, /Submitted background form/u);
       await browser.keyPress(
@@ -583,6 +657,7 @@ async function assertTargetedBackgroundInput(port: number): Promise<void> {
         inspected.observationId,
         "Tab",
       );
+      smokePhase = `targeted-${mode}-after-tab-key`;
       inspected = await browser.inspect("input-session", tab.tabId);
       assert.match(inspected.visibleText, /Focus next/u);
       await assert.rejects(

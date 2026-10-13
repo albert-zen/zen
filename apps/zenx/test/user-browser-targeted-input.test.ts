@@ -1210,3 +1210,73 @@ test("unknown owned-object release is bounded and never retried", async () => {
     await f.close();
   }
 });
+
+for (const throws of [false, true]) {
+  test(`input capture diagnostics are bounded, redacted and observational (callback throws=${throws})`, async () => {
+    const cdp = await createFakeCdpServer({ targetedInput: true });
+    const diagnostics: unknown[] = [];
+    const connection = await connectUserBrowserCdp(cdp.endpoint, undefined, {
+      onInputCaptureDiagnostic: (value) => {
+        diagnostics.push(value);
+        if (throws) throw new Error("diagnostic callback failure");
+      },
+    });
+    try {
+      await connection.backend.listTabs("diagnostics");
+      const valid = await connection.backend.inspect("diagnostics", "target-1");
+      assert.ok(valid.inputViewport);
+      assert.deepEqual(
+        diagnostics,
+        [],
+        "coherent capture must not emit failure diagnostics",
+      );
+      Object.assign(cdp.inputSnapshot, { privatePageText: "SECRET_PAGE_TEXT" });
+      cdp.interceptRequests((request) => {
+        if (request.method === "Page.captureScreenshot")
+          cdp.inputSnapshot.layoutRevision++;
+      });
+      const changed = await connection.backend.inspect(
+        "diagnostics",
+        "target-1",
+      );
+      assert.ok(changed.targets.length);
+      assert.equal(changed.inputViewport, undefined);
+      assert.deepEqual(diagnostics, [
+        {
+          reason: "snapshot-changed",
+          captureStatus: "captured",
+          before: {
+            available: true,
+            inputRevision: 0,
+            layoutRevision: 0,
+            viewport: cdp.inputSnapshot.viewport,
+          },
+          after: {
+            available: true,
+            inputRevision: 0,
+            layoutRevision: 1,
+            viewport: cdp.inputSnapshot.viewport,
+          },
+          documentChanged: false,
+          focusChanged: false,
+        },
+      ]);
+      const text = JSON.stringify(diagnostics);
+      for (const privateValue of [
+        "SECRET_PAGE_TEXT",
+        cdp.inputSnapshot.documentKey,
+        cdp.inputSnapshot.focusId!,
+      ])
+        assert.ok(!text.includes(privateValue));
+      assert.ok(text.length < 1000);
+      assert.equal(
+        cdp.commandRequests().filter((r) => r.method.startsWith("Input."))
+          .length,
+        0,
+      );
+    } finally {
+      await Promise.resolve(connection.backend.close()).catch(() => undefined);
+      await cdp.close();
+    }
+  });
+}
