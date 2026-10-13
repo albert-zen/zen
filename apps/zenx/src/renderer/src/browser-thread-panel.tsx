@@ -257,7 +257,9 @@ export function BrowserThreadPanel({
               {target.backendId === "workspace"
                 ? i18n.t("panels:workspaceBrowserTarget")
                 : target.backendId === "connected"
-                  ? i18n.t("panels:connectedBrowserTarget")
+                  ? target.connectionLabel
+                    ? `${target.connectionLabel} · `
+                    : i18n.t("panels:connectedBrowserTarget")
                   : ""}
               {target.title || target.url}
             </option>

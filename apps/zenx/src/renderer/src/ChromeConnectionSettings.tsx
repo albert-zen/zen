@@ -80,6 +80,18 @@ export function ChromeConnectionSettings({
       <p className="settings-note">
         {t("chromeConnectionSettings.workspaceAlwaysAvailable")}
       </p>
+      {snapshot?.connection.connections?.length ? (
+        <ul aria-label={t("chromeConnectionSettings.connectedInstances")}>
+          {snapshot.connection.connections.map((connection) => (
+            <li key={connection.connectionId}>
+              {connection.label} ·{" "}
+              {connection.state === "connected"
+                ? t("chromeConnectionSettings.instanceConnected")
+                : t("chromeConnectionSettings.waitingForChrome")}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <label className="settings-row browser-connection-toggle">
         <span>{t("chromeConnectionSettings.enableExternalBrowser")}</span>
         <input

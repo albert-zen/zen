@@ -46,6 +46,7 @@ export interface PluginRuntimeInvocation {
     threadId?: string;
     canonicalToolCallId?: string;
     trustedPluginUi?: true;
+    approvalScope?: ToolInvocation["approvalScope"];
   };
   signal: AbortSignal;
 }
@@ -335,6 +336,9 @@ export class PluginRuntimeSupervisor {
           ? {}
           : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
+        ...(invocation.approvalScope === undefined
+          ? {}
+          : { approvalScope: invocation.approvalScope }),
         ...(invocation.threadId === undefined
           ? {}
           : { threadId: invocation.threadId }),
@@ -476,6 +480,9 @@ class SupervisedPluginBundle implements ToolBundle {
           ? {}
           : { canonicalToolCallId: invocation.canonicalToolCallId }),
         cwd: invocation.cwd,
+        ...(invocation.approvalScope === undefined
+          ? {}
+          : { approvalScope: invocation.approvalScope }),
         ...(invocation.threadId === undefined
           ? {}
           : { threadId: invocation.threadId }),
@@ -1307,6 +1314,9 @@ export function bundledPackageRegistration(
                           invocation.context.canonicalToolCallId,
                       }),
                   name: invocation.tool,
+                  ...(invocation.context.approvalScope === undefined
+                    ? {}
+                    : { approvalScope: invocation.context.approvalScope }),
                   arguments: invocation.arguments,
                   cwd: invocation.context.cwd,
                   ...(invocation.context.threadId === undefined

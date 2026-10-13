@@ -846,3 +846,110 @@ test("follow-up observation hints name only tools in the action's current namesp
     await registry.close();
   }
 });
+
+test("multiple connected instances require exact scope and keep colliding references isolated", async () => {
+  const a = fixture("Workspace"),
+    b = fixture("Chrome"),
+    c = fixture("Edge");
+  const connections = [
+    {
+      connectionId: "11111111-1111-4111-8111-111111111111",
+      generation: "one",
+      browser: "chrome" as const,
+      label: "Chrome · 11111111",
+      state: "connected" as const,
+    },
+    {
+      connectionId: "22222222-2222-4222-8222-222222222222",
+      generation: "two",
+      browser: "edge" as const,
+      label: "Edge · 22222222",
+      state: "connected" as const,
+    },
+  ];
+  let connected = 0;
+  const source = {
+    connections: () => connections,
+    connectInstance: async (id: string) => {
+      connected++;
+      return {
+        backend: id === connections[0]!.connectionId ? b.backend : c.backend,
+        product: "fixture",
+      };
+    },
+    onConnectionsChanged: () => () => {},
+  };
+  const registry = new BrowserBackendRegistry(
+    a.backend,
+    undefined,
+    undefined,
+    source,
+  );
+  const scoped = (index: number, args = {}) => ({
+    ...invocation({ connectionId: connections[index]!.connectionId, ...args }),
+    approvalScope: {
+      key: `browser-instance:${connections[index]!.connectionId}`,
+      label: connections[index]!.label,
+      generation: connections[index]!.generation,
+    },
+  });
+  const events: BrowserThreadEvent[] = [];
+  const stop = registry.observeThread(
+    { threadId: "thread", frames: false },
+    (event) => events.push(event),
+  );
+  try {
+    const discovery = await registry.invoke(
+      "browser_connections",
+      invocation(),
+    );
+    assert.doesNotMatch(
+      JSON.stringify(discovery),
+      /https:|same-tab|generation|one|two/,
+    );
+    assert.equal(connected, 0);
+    await assert.rejects(
+      registry.invoke(
+        "browser_connected_list_tabs",
+        invocation({ connectionId: connections[0]!.connectionId }),
+      ),
+      /scope|approval/i,
+    );
+    await assert.rejects(
+      registry.invoke(
+        "browser_connected_list_tabs",
+        scoped(0, { connectionId: connections[1]!.connectionId }),
+      ),
+      /scope|approval/i,
+    );
+    const tabsA = (await registry.invoke(
+      "browser_connected_list_tabs",
+      scoped(0),
+    )) as BrowserTabSummary[];
+    const tabsB = (await registry.invoke(
+      "browser_connected_list_tabs",
+      scoped(1),
+    )) as BrowserTabSummary[];
+    assert.notEqual(tabsA[0]!.tabId, tabsB[0]!.tabId);
+    await registry.invoke("browser_workspace_list_tabs", invocation());
+    const targets = events.filter((event) => event.type === "targets").at(-1);
+    assert.equal(targets?.targets.length, 3);
+    await assert.rejects(
+      registry.invoke(
+        "browser_connected_inspect",
+        scoped(1, { tabId: tabsA[0]!.tabId }),
+      ),
+      /different browser/,
+    );
+    const old = scoped(0);
+    connections[0]!.generation = "new";
+    await assert.rejects(
+      registry.invoke("browser_connected_list_tabs", old),
+      /generation|changed/,
+    );
+    assert.equal(connected, 2);
+  } finally {
+    stop();
+    await registry.close();
+  }
+});

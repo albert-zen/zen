@@ -406,3 +406,204 @@ test("retiring a registry detaches only its Workspace sessions", async () => {
   assert.equal(workspace.sessions.size, 0);
   assert.equal(workspace.closed(), 0);
 });
+
+for (const fails of [false, true]) {
+  test(`multi-instance tarball preserves trusted dispatch context and migration atomicity (${fails ? "Catalog failure" : "success"})`, async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-multi-transaction-"),
+    );
+    const userDataDirectory = path.join(root, "data"),
+      resourcesDirectory = path.join(root, "resources");
+    await cp(prepared, path.join(resourcesDirectory, "plugins"), {
+      recursive: true,
+    });
+    const disk = new JsonZenXPluginCatalogStore(
+      path.join(userDataDirectory, "capability-grants.json"),
+    );
+    let rejectSave = false;
+    const catalogStore = {
+      load: () => disk.load(),
+      save: async (value: ZenXPluginCatalogState) => {
+        if (rejectSave) {
+          rejectSave = false;
+          throw Error("fixture Catalog failure");
+        }
+        await disk.save(value);
+      },
+    };
+    const workspace = tracked("Workspace");
+    const chrome = tracked("Chrome"),
+      edge = tracked("Edge");
+    const entries = [
+      {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        generation: "chrome-generation",
+        browser: "chrome" as const,
+        label: "Chrome · 11111111",
+        state: "connected" as const,
+      },
+      {
+        connectionId: "22222222-2222-4222-8222-222222222222",
+        generation: "edge-generation",
+        browser: "edge" as const,
+        label: "Edge · 22222222",
+        state: "connected" as const,
+      },
+    ];
+    let connects = 0;
+    const source = {
+      connections: () => entries,
+      onConnectionsChanged: () => () => {},
+      connectInstance: async (id: string) => {
+        connects++;
+        return {
+          backend:
+            id === entries[0]!.connectionId ? chrome.backend : edge.backend,
+          product: "fixture",
+        };
+      },
+    };
+    const create = (multi: boolean) => {
+      let service!: ZenXCapabilityService;
+      service = new ZenXCapabilityService({
+        userDataDirectory,
+        resourcesDirectory,
+        pnpmCliPath,
+        catalogStore,
+        bundledProvidersOnly: true,
+        browserBackend: workspace.backend,
+        workspaceBrowserBackend: workspace.backend,
+        browserBackendAuthoritative: true,
+        connectedBrowserEnabled: true,
+        ...(multi ? { connectedBrowserSource: source } : {}),
+        providerCatalogOptions: {
+          platform: "darwin",
+          environment: {
+            PATH: "",
+            ZENX_BROWSER_MODE: "user-session",
+            ZENX_USER_BROWSER_CDP_ENDPOINT: "http://127.0.0.1:9222",
+          },
+          userBrowserConnector: async () => ({
+            backend: tracked("Legacy external").backend,
+            product: "fixture",
+          }),
+        },
+        trustedProfileLoaders: {
+          browser: createDelegatingFirstPartyProfileLoader(() =>
+            service.browserProfilePackage(),
+          ),
+        },
+      });
+      return service;
+    };
+    let initial: ZenXCapabilityService | undefined,
+      upgraded: ZenXCapabilityService | undefined;
+    let token: string | undefined;
+    try {
+      initial = create(false);
+      await initial.initialize();
+      await initial.installBundledPluginPackage(
+        path.join(resourcesDirectory, "plugins", tarballs.concurrent),
+        { pluginId: "browser", packageName: "@zenx/browser-plugin" },
+      );
+      await initial.close();
+      initial = undefined;
+      upgraded = create(true);
+      await upgraded.initialize();
+      assert.equal(
+        upgraded.browserProfilePackage().manifest.provider.id,
+        "concurrent-browser",
+      );
+      const before = await disk.load();
+      rejectSave = fails;
+      if (fails) {
+        await assert.rejects(
+          upgraded.syncProfileManagedProviderVariants(),
+          /Catalog failure/,
+        );
+        assert.deepEqual(await disk.load(), before);
+        assert.equal(
+          upgraded.browserProfilePackage().manifest.provider.id,
+          "concurrent-browser",
+        );
+        assert.equal(
+          await title(upgraded, "browser_connected_list_tabs"),
+          "Legacy external",
+        );
+        assert.equal(connects, 0);
+      } else {
+        await upgraded.syncProfileManagedProviderVariants();
+        assert.equal(
+          upgraded.browserProfilePackage().manifest.provider.id,
+          "multi-browser",
+        );
+        const snapshot = upgraded.captureHostSnapshot();
+        token = snapshot.generationToken;
+        assert.equal(snapshot.browserConnections?.length, 2);
+        const plain = invocation("browser_connected_list_tabs");
+        await assert.rejects(
+          upgraded.execute(
+            {
+              ...plain,
+              arguments: {
+                ...plain.arguments,
+                connectionId: entries[0]!.connectionId,
+              },
+            },
+            token,
+          ),
+          /scope/,
+        );
+        assert.equal(connects, 0);
+        for (const entry of entries) {
+          const result = await upgraded.execute(
+            {
+              ...plain,
+              arguments: {
+                ...plain.arguments,
+                connectionId: entry.connectionId,
+              },
+              approvalScope: {
+                key: `browser-instance:${entry.connectionId}`,
+                label: entry.label,
+                generation: entry.generation,
+              },
+            },
+            token,
+          );
+          assert.equal(result.exitCode, 0, result.output);
+          assert.equal(
+            JSON.parse(result.output)[0].title,
+            entry.browser === "chrome" ? "Chrome" : "Edge",
+          );
+        }
+        assert.equal(connects, 2);
+        const saved = entries[0]!.generation;
+        entries[0]!.generation = "reconnected";
+        await assert.rejects(
+          upgraded.execute(
+            {
+              ...plain,
+              arguments: {
+                ...plain.arguments,
+                connectionId: entries[0]!.connectionId,
+              },
+              approvalScope: {
+                key: `browser-instance:${entries[0]!.connectionId}`,
+                label: entries[0]!.label,
+                generation: saved,
+              },
+            },
+            token,
+          ),
+          /generation/,
+        );
+      }
+    } finally {
+      if (token !== undefined) upgraded?.releaseHostGeneration(token);
+      await upgraded?.close();
+      await initial?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}

@@ -448,6 +448,21 @@ async function bootstrapZenX(): Promise<void> {
     ) {
       chromeExtensionBridge = await ChromeExtensionBridge.start({
         runtimeDirectory: join(userDataDirectory, "runtime"),
+        multiInstance: true,
+      });
+      chromeExtensionBridge.onConnectionsChanged(() => {
+        void appServerManager
+          ?.refreshCapabilitiesAfterCommit()
+          .then((result) => {
+            if (result.status === "failed")
+              console.warn(
+                "Browser connection catalog refresh failed",
+                result.message,
+              );
+          })
+          .catch((error) =>
+            console.warn("Browser connection catalog refresh failed", error),
+          );
       });
       browserEnvironment.ZENX_USER_BROWSER_CDP_ENDPOINT =
         chromeExtensionBridge.endpoint;
@@ -595,6 +610,9 @@ async function bootstrapZenX(): Promise<void> {
         settingsService.computerForegroundControlEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
+      ...(chromeExtensionBridge === undefined
+        ? {}
+        : { connectedBrowserSource: chromeExtensionBridge }),
       providerCatalogOptions: {
         environment: browserEnvironment,
         ...(chromeExtensionBridge === undefined

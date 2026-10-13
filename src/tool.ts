@@ -49,6 +49,13 @@ import {
 const TOOL_OUTPUT_CAPTURE = Symbol("tool-output-capture");
 const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
 
+/** Host-resolved target identity; generation is revalidated by the domain Host. */
+export interface ToolApprovalScope {
+  readonly key: string;
+  readonly label: string;
+  readonly generation: string;
+}
+
 /** Observed shell facts, independent of task completion or cancellation. */
 export type ShellLifecycleFacts = {
   stdio: "open" | "eof";
@@ -66,6 +73,8 @@ export interface ToolInvocation {
   /** Host-minted human terminal request. Never accepted from tool arguments. */
   userTerminal?: { cols: number; rows: number };
   callId: string;
+  /** ToolEnvironment-minted snapshot; callers must not supply this field. */
+  readonly approvalScope?: ToolApprovalScope;
   /** Host-minted only for direct plugin UI commands; never inherited from tool arguments. */
   trustedPluginUi?: true;
   /** Runtime-owned canonical tool_call Item identity, independent of provider call IDs. */
@@ -132,6 +141,8 @@ export interface ToolRuntime {
   readonly taskPolicy?: ToolTaskPolicy;
   /** Invocation-specific Host resource claims, acquired atomically before execute. */
   resourceClaims?(invocation: ToolInvocation): readonly ToolResourceClaim[];
+  /** Trusted target resolver, called once with immutable prepared arguments. */
+  approvalScope?(invocation: ToolInvocation): ToolApprovalScope | undefined;
   /** Known model modalities required before this tool body may execute. */
   readonly requiredModelInputModalities?: readonly string[];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
@@ -188,10 +199,24 @@ export type StoredToolPolicyDecision = "approved" | "denied";
 export interface ToolPolicyStore {
   get(toolName: string): Promise<StoredToolPolicyDecision | undefined>;
   set(toolName: string, decision: StoredToolPolicyDecision): Promise<void>;
+  /** Optional as a pair; scoped admission never falls back to get/set. */
+  getScoped?(
+    toolName: string,
+    scopeKey: string,
+  ): Promise<StoredToolPolicyDecision | undefined>;
+  setScoped?(
+    toolName: string,
+    scopeKey: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void>;
 }
 
 export class InMemoryToolPolicyStore implements ToolPolicyStore {
   readonly #decisions = new Map<string, StoredToolPolicyDecision>();
+  readonly #scopedDecisions = new Map<
+    string,
+    Map<string, StoredToolPolicyDecision>
+  >();
 
   constructor(
     initial: Readonly<Record<string, StoredToolPolicyDecision>> = {},
@@ -211,11 +236,35 @@ export class InMemoryToolPolicyStore implements ToolPolicyStore {
   ): Promise<void> {
     this.#decisions.set(toolName, decision);
   }
+
+  async getScoped(
+    toolName: string,
+    scopeKey: string,
+  ): Promise<StoredToolPolicyDecision | undefined> {
+    return this.#scopedDecisions.get(toolName)?.get(scopeKey);
+  }
+
+  async setScoped(
+    toolName: string,
+    scopeKey: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void> {
+    let decisions = this.#scopedDecisions.get(toolName);
+    if (decisions === undefined) {
+      decisions = new Map();
+      this.#scopedDecisions.set(toolName, decisions);
+    }
+    decisions.set(scopeKey, decision);
+  }
 }
 
 export class SetToolPolicyStore implements ToolPolicyStore {
   readonly #approvedTools: Set<string>;
   readonly #deniedTools: Set<string>;
+  readonly #scopedDecisions = new Map<
+    string,
+    Map<string, StoredToolPolicyDecision>
+  >();
 
   constructor(options: {
     approvedTools: Set<string>;
@@ -243,9 +292,30 @@ export class SetToolPolicyStore implements ToolPolicyStore {
       this.#deniedTools.add(toolName);
     }
   }
+
+  async getScoped(
+    toolName: string,
+    scopeKey: string,
+  ): Promise<StoredToolPolicyDecision | undefined> {
+    return this.#scopedDecisions.get(toolName)?.get(scopeKey);
+  }
+
+  async setScoped(
+    toolName: string,
+    scopeKey: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void> {
+    let decisions = this.#scopedDecisions.get(toolName);
+    if (decisions === undefined) {
+      decisions = new Map();
+      this.#scopedDecisions.set(toolName, decisions);
+    }
+    decisions.set(scopeKey, decision);
+  }
 }
 
 export interface PreparedToolInvocation {
+  readonly approvalScope?: ToolApprovalScope;
   readonly owner: ToolBundleIdentity;
   readonly definition: ModelTool;
   readonly invocation: ToolInvocation;
@@ -309,6 +379,7 @@ export interface ToolTargetRouter {
 }
 
 interface PreparedRuntimeRegistration {
+  admission?: { policy: ToolPolicy; scope?: ToolApprovalScope };
   runtime?: ToolRuntime;
   route?: ToolTargetRoute;
   release: (() => void) | undefined;
@@ -333,6 +404,10 @@ export class ToolEnvironment {
   readonly #unsandboxedAdmissions = new WeakSet<PreparedToolInvocation>();
   readonly #policyStore: ToolPolicyStore;
   readonly #pendingAdmissions = new Map<string, Promise<void>>();
+  readonly #pendingScopedAdmissions = new Map<
+    string,
+    Map<string, Promise<void>>
+  >();
   #targetRouter: ToolTargetRouter | undefined;
 
   constructor(
@@ -483,6 +558,13 @@ export class ToolEnvironment {
       throw new Error(`Tool bundle is already registered: ${key}`);
     }
     const runtimes = bundle.tools.map((runtime) => {
+      if (
+        runtime.approvalScope !== undefined &&
+        runtime.enforcesSandbox === true
+      )
+        throw new Error(
+          `Tool ${runtime.name}: approvalScope cannot be combined with enforcesSandbox`,
+        );
       const definition = structuredClone(runtime.specification);
       if (runtime.name.length === 0 || definition.name.length === 0) {
         throw new Error(`Tool bundle ${key} has an empty tool name`);
@@ -578,6 +660,10 @@ export class ToolEnvironment {
     /** A target gateway has already selected this Host; domain execution stays local. */
     options: { targetRouting?: boolean } = {},
   ): PreparedToolInvocation {
+    if ("approvalScope" in invocation)
+      throw new Error(
+        "Tool approval scope must come from the trusted runtime resolver",
+      );
     const registration = this.#tools.get(invocation.name);
     const frozenInvocation: ToolInvocation = Object.freeze({
       ...invocation,
@@ -665,7 +751,19 @@ export class ToolEnvironment {
         arguments: Object.freeze(arguments_),
       });
     }
+    // Scoped targets are resolved only after local routing inputs are final.
+    // Deep-freeze before resolution so approval and dispatch see the same input.
+    let approvalScope: ToolApprovalScope | undefined;
+    if (registration.runtime.approvalScope !== undefined) {
+      deepFreeze(localInvocation.arguments);
+      approvalScope = captureApprovalScope(
+        registration.runtime.approvalScope(localInvocation),
+      );
+      if (approvalScope !== undefined)
+        localInvocation = Object.freeze({ ...localInvocation, approvalScope });
+    }
     const prepared: PreparedToolInvocation = Object.freeze({
+      ...(approvalScope === undefined ? {} : { approvalScope }),
       owner: registration.identity,
       definition: structuredClone(registration.definition),
       executionMode: executionModeFor(registration.runtime),
@@ -688,6 +786,18 @@ export class ToolEnvironment {
   ): Promise<ApprovalDecision> {
     const registration = this.#requirePrepared(prepared);
     const runtime = registration.runtime;
+    const scope = prepared.approvalScope;
+    const approvalRequest =
+      scope === undefined
+        ? options.approvalRequest
+        : {
+            ...options.approvalRequest,
+            approvalTarget: Object.freeze({
+              key: scope.key,
+              label: scope.label,
+            }),
+            command: `[Target: ${scope.label}]\n${options.approvalRequest.command}`,
+          };
     const sandbox = prepared.invocation.sandbox ?? "danger-full-access";
     if (
       sandbox !== "danger-full-access" &&
@@ -701,8 +811,13 @@ export class ToolEnvironment {
         prepared.owner.kind === "builtin" &&
         runtime?.enforcesSandbox === true &&
         !escalation
-      )
+      ) {
+        registration.admission = {
+          policy: options.policy,
+          ...(scope === undefined ? {} : { scope }),
+        };
         return "accept";
+      }
       try {
         if (
           options.policy === "full_access" ||
@@ -714,15 +829,19 @@ export class ToolEnvironment {
         }
         const decision = await waitForToolAbort(
           options.requestApproval({
-            ...options.approvalRequest,
+            ...approvalRequest,
             scope: "once",
-            command: `[One-time full file access: ${sandbox}]\n${options.approvalRequest.command}`,
+            command: `[One-time full file access: ${sandbox}]\n${approvalRequest.command}`,
           }),
           prepared.invocation.signal,
         );
-        if (decision === "accept" || decision === "acceptForSession")
+        if (decision === "accept" || decision === "acceptForSession") {
           this.#unsandboxedAdmissions.add(prepared);
-        else this.#releasePrepared(prepared);
+          registration.admission = {
+            policy: options.policy,
+            ...(scope === undefined ? {} : { scope }),
+          };
+        } else this.#releasePrepared(prepared);
         return decision;
       } catch (error) {
         this.#releasePrepared(prepared);
@@ -733,19 +852,40 @@ export class ToolEnvironment {
       runtime === this.waitRuntime ||
       registration.route?.waitPolicyExempt === true ||
       options.policy === "full_access"
-    )
+    ) {
+      registration.admission = {
+        policy: options.policy,
+        ...(scope === undefined ? {} : { scope }),
+      };
       return "accept";
+    }
 
     const toolName = prepared.invocation.name;
     try {
+      const policy = this.#policyFor(prepared);
+      let pendingAdmissions = this.#pendingAdmissions;
+      if (scope !== undefined) {
+        const scoped =
+          this.#pendingScopedAdmissions.get(toolName) ??
+          new Map<string, Promise<void>>();
+        this.#pendingScopedAdmissions.set(toolName, scoped);
+        pendingAdmissions = scoped;
+      }
+      const pendingKey = scope?.key ?? toolName;
       for (;;) {
-        const stored = await this.#policyStore.get(toolName);
-        if (stored === "approved") return "accept";
+        const stored = await policy.get();
+        if (stored === "approved") {
+          registration.admission = {
+            policy: options.policy,
+            ...(scope === undefined ? {} : { scope }),
+          };
+          return "accept";
+        }
         if (stored === "denied") {
           this.#releasePrepared(prepared);
           return "decline";
         }
-        const pending = this.#pendingAdmissions.get(toolName);
+        const pending = pendingAdmissions.get(pendingKey);
         if (pending !== undefined) {
           await waitForToolAbort(pending, prepared.invocation.signal);
           continue;
@@ -760,24 +900,29 @@ export class ToolEnvironment {
         const admission = new Promise<void>((resolve) => {
           release = resolve;
         });
-        this.#pendingAdmissions.set(toolName, admission);
+        pendingAdmissions.set(pendingKey, admission);
         try {
           const decision = await waitForToolAbort(
-            options.requestApproval(options.approvalRequest),
+            options.requestApproval(approvalRequest),
             prepared.invocation.signal,
           );
           if (decision === "accept") {
-            await this.#policyStore.set(toolName, "approved");
+            await policy.set("approved");
           } else if (decision === "decline") {
-            await this.#policyStore.set(toolName, "denied");
+            await policy.set("denied");
           }
           if (decision === "decline" || decision === "cancel") {
             this.#releasePrepared(prepared);
+          } else {
+            registration.admission = {
+              policy: options.policy,
+              ...(scope === undefined ? {} : { scope }),
+            };
           }
           return decision;
         } finally {
-          if (this.#pendingAdmissions.get(toolName) === admission) {
-            this.#pendingAdmissions.delete(toolName);
+          if (pendingAdmissions.get(pendingKey) === admission) {
+            pendingAdmissions.delete(pendingKey);
           }
           release();
         }
@@ -788,9 +933,10 @@ export class ToolEnvironment {
     }
   }
 
-  /** Inherited child admission: remembered deny wins; unknown never prompts. */
+  /** Scoped children need an exact grant or an admitted Full Access parent. */
   async admitInherited(
     prepared: PreparedToolInvocation,
+    parent?: PreparedToolInvocation,
   ): Promise<ApprovalDecision> {
     const registration = this.#requirePrepared(prepared);
     if (
@@ -799,11 +945,50 @@ export class ToolEnvironment {
     )
       return "accept";
     try {
-      const stored = await this.#policyStore.get(prepared.invocation.name);
-      if (stored === "denied") {
+      let inheritedAdmission: PreparedRuntimeRegistration["admission"];
+      if (parent !== undefined) {
+        const parentRegistration = this.#requirePrepared(parent);
+        if (
+          parent === prepared ||
+          parent.owner.kind !== "builtin" ||
+          parentRegistration.runtime === undefined ||
+          !isCompositeToolRuntime(parentRegistration.runtime) ||
+          parentRegistration.admission === undefined ||
+          parent.invocation.threadId !== prepared.invocation.threadId
+        )
+          throw new Error(
+            "Inherited approval requires an exact admitted composite parent",
+          );
+        inheritedAdmission = parentRegistration.admission;
+      }
+      if (
+        prepared.approvalScope !== undefined &&
+        inheritedAdmission?.policy === "full_access" &&
+        (inheritedAdmission.scope === undefined ||
+          (inheritedAdmission.scope.key === prepared.approvalScope.key &&
+            inheritedAdmission.scope.generation ===
+              prepared.approvalScope.generation))
+      ) {
+        // Each scoped hop narrows even an unscoped Full Access ancestor.
+        registration.admission = {
+          policy: "full_access",
+          scope: prepared.approvalScope,
+        };
+        return "accept";
+      }
+      const stored = await this.#policyFor(prepared).get();
+      if (
+        stored === "denied" ||
+        (prepared.approvalScope !== undefined && stored !== "approved")
+      ) {
         this.#releasePrepared(prepared);
         return "decline";
       }
+      // A separate scoped grant admits this call, not its ancestor's bypass.
+      registration.admission =
+        prepared.approvalScope === undefined
+          ? (inheritedAdmission ?? { policy: "ask_unknown" })
+          : { policy: "ask_unknown", scope: prepared.approvalScope };
       return "accept";
     } catch (error) {
       this.#releasePrepared(prepared);
@@ -925,6 +1110,27 @@ export class ToolEnvironment {
     this.#releasePrepared(prepared);
   }
 
+  #policyFor(prepared: PreparedToolInvocation): {
+    get(): Promise<StoredToolPolicyDecision | undefined>;
+    set(decision: StoredToolPolicyDecision): Promise<void>;
+  } {
+    const toolName = prepared.invocation.name;
+    const scope = prepared.approvalScope;
+    if (scope === undefined)
+      return {
+        get: () => this.#policyStore.get(toolName),
+        set: (decision) => this.#policyStore.set(toolName, decision),
+      };
+    const { getScoped, setScoped } = this.#policyStore;
+    if (getScoped === undefined || setScoped === undefined)
+      throw new Error("Tool policy store does not support scoped decisions");
+    return {
+      get: () => getScoped.call(this.#policyStore, toolName, scope.key),
+      set: (decision) =>
+        setScoped.call(this.#policyStore, toolName, scope.key, decision),
+    };
+  }
+
   #requirePrepared(
     prepared: PreparedToolInvocation,
   ): PreparedRuntimeRegistration {
@@ -944,6 +1150,28 @@ export class ToolEnvironment {
   }
 }
 
+function captureApprovalScope(
+  scope: ToolApprovalScope | undefined,
+): ToolApprovalScope | undefined {
+  if (scope === undefined) return undefined;
+  if (
+    scope === null ||
+    typeof scope !== "object" ||
+    typeof scope.key !== "string" ||
+    scope.key.trim().length === 0 ||
+    typeof scope.label !== "string" ||
+    scope.label.trim().length === 0 ||
+    typeof scope.generation !== "string" ||
+    scope.generation.trim().length === 0
+  )
+    throw new Error("Invalid trusted tool approval scope");
+  return Object.freeze({
+    key: scope.key,
+    label: scope.label,
+    generation: scope.generation,
+  });
+}
+
 function executionModeFor(runtime: ToolRuntime): ToolExecutionMode {
   return runtime.executionMode === "parallel_safe"
     ? "parallel_safe"
@@ -955,6 +1183,11 @@ function remoteEligibility(
 ): Pick<ToolRemoteDefinitionEntry, "eligible" | "reason"> {
   if (runtime instanceof ToolWaitRuntime)
     return { eligible: false, reason: "Task observation is Host-owned" };
+  if (runtime.approvalScope !== undefined)
+    return {
+      eligible: false,
+      reason: "Instance-scoped admission is unavailable for remote execution",
+    };
   if (isCompositeToolRuntime(runtime))
     return { eligible: false, reason: "Composite tools execute locally" };
   if ((runtime.requiredModelInputModalities?.length ?? 0) !== 0)
@@ -1203,6 +1436,8 @@ export interface ApprovalRequest {
   callId: string;
   command: string;
   scope?: "once";
+  /** Trusted target context; never a model-supplied authority. */
+  approvalTarget?: Readonly<Pick<ToolApprovalScope, "key" | "label">>;
   toolName?: string;
   toolArguments?: Readonly<Record<string, unknown>>;
   cwd: string;
