@@ -55,7 +55,6 @@ public static class ZenXPackagedFixture {
     editor.AccessibleName = "ZenX packaged editor";
     editor.Multiline = true;
     editor.SetBounds(24, 24, 550, 120);
-    editor.TextChanged += delegate { Write("editor-value", editor.Text); };
     form.Controls.Add(editor);
     return editor;
   }
@@ -76,14 +75,23 @@ public static class ZenXPackagedFixture {
     virtualButton.Name = "ZenXVirtualInvoke";
     virtualButton.Click += delegate { Write("virtual-invoked", "unexpected"); };
     strip.Items.Add(virtualButton); form.Controls.Add(strip);
-    Write("editor-value", ""); Write("invoke-count", "0");
+    Write("invoke-count", "0");
     form.Show(); form.Hide(); form.Show();
     Json("target.json", new { pid = Process.GetCurrentProcess().Id, hwnd = form.Handle.ToInt64().ToString(), title = title, editorHwnd = editor.Handle.ToInt64().ToString(), buttonHwnd = button.Handle.ToInt64().ToString() });
+    // WM_SETTEXT does not send EN_CHANGE for a multiline edit. Read the actual
+    // target control on its own UI thread, independently of the UIA receipt.
+    // null ensures the first observed empty value creates a real evidence file.
+    string observedEditorValue = null;
     bool replaced = false, duplicated = false;
     Form duplicate = null;
     var lifetime = Stopwatch.StartNew();
     var timer = new System.Windows.Forms.Timer(); timer.Interval = 10;
     timer.Tick += delegate {
+      string currentEditorValue = editor.Text;
+      if (!string.Equals(observedEditorValue, currentEditorValue, StringComparison.Ordinal)) {
+        Write("editor-value", currentEditorValue);
+        observedEditorValue = currentEditorValue;
+      }
       if (Exists("replace-editor") && !replaced) {
         replaced = true; string old = editor.Handle.ToInt64().ToString();
         // Keep the old HWND alive until the replacement obtains a different one.

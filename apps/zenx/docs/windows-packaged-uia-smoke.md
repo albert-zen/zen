@@ -25,7 +25,14 @@ exit, or missing effect files fail the smoke.
 With the guard foreground, the packaged provider writes a complete string with
 Chinese characters, an emoji, quotes, a backslash, and a newline to the native
 editor. Both the provider's full readback check and the target's independently
-written UTF-8 file must agree. The provider then invokes a native button and
+written UTF-8 file must agree. The target's existing UI timer reads the actual
+multiline editor text and writes only changes, including its first observed
+empty value, with no BOM or newline normalization. It does not depend on
+`TextChanged`: [Windows documents that multiline `WM_SETTEXT` does not send
+`EN_CHANGE`](https://learn.microsoft.com/en-us/windows/win32/controls/en-change).
+Timeout diagnostics contain only bounded lengths and first differing UTF-16
+code units from the synthetic fixture text; full-string equality is unchanged.
+The provider then invokes a native button and
 its independently written counter must become exactly one. The hook is drained
 for another 200 ms before asserting no target/other activation and no pointer
 movement. There is no focus restoration. This successful slice is printed

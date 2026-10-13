@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { WINDOWS_PACKAGED_UIA_FIXTURE } from "../src/main/windows-packaged-uia-fixture.js";
+import * as fixtureEvidence from "../src/main/windows-packaged-uia-evidence.js";
 
 import {
   assertWindowsPackagedUiaFocusEvidence,
@@ -92,4 +94,66 @@ test("rejects unrelated activation, pointer movement, and contradictory guard id
       assertWindowsPackagedUiaFocusEvidence(report, expected),
     );
   }
+});
+
+test("native target effect observer reads actual multiline text on its UI timer", () => {
+  const target = WINDOWS_PACKAGED_UIA_FIXTURE.slice(
+    WINDOWS_PACKAGED_UIA_FIXTURE.indexOf("static void Target("),
+    WINDOWS_PACKAGED_UIA_FIXTURE.indexOf("[StructLayout"),
+  );
+  assert.match(WINDOWS_PACKAGED_UIA_FIXTURE, /editor\.Multiline = true;/u);
+  assert.match(target, /string observedEditorValue = null;/u);
+  assert.match(
+    target,
+    /timer\.Tick \+= delegate \{\s*string currentEditorValue = editor\.Text;/u,
+  );
+  assert.match(
+    target,
+    /!string\.Equals\(observedEditorValue, currentEditorValue, StringComparison\.Ordinal\)/u,
+  );
+  assert.match(
+    target,
+    /Write\("editor-value", currentEditorValue\);\s*observedEditorValue = currentEditorValue;/u,
+  );
+  assert.doesNotMatch(
+    WINDOWS_PACKAGED_UIA_FIXTURE,
+    /TextChanged \+=|Write\("editor-value", ""\)/u,
+  );
+  assert.match(
+    WINDOWS_PACKAGED_UIA_FIXTURE,
+    /File\.WriteAllText\(temporary, value, new UTF8Encoding\(false\)\)/u,
+  );
+});
+
+test("synthetic effect mismatch diagnostics remain numeric and preserve exact differences", () => {
+  assert.deepEqual(
+    fixtureEvidence.describeWindowsFixtureTextMismatch("\r\n", "\n"),
+    {
+      actualLength: 2,
+      expectedLength: 1,
+      firstDifferentUtf16Offset: 0,
+      actualCodeUnit: 13,
+      expectedCodeUnit: 10,
+    },
+  );
+  assert.deepEqual(
+    fixtureEvidence.describeWindowsFixtureTextMismatch("", "中文 😀"),
+    {
+      actualLength: 0,
+      expectedLength: 5,
+      firstDifferentUtf16Offset: 0,
+      actualCodeUnit: null,
+      expectedCodeUnit: 20013,
+    },
+  );
+  assert.deepEqual(
+    fixtureEvidence.describeWindowsFixtureTextMismatch("\ufeffx", "x"),
+    {
+      actualLength: 2,
+      expectedLength: 1,
+      firstDifferentUtf16Offset: 0,
+      actualCodeUnit: 65279,
+      expectedCodeUnit: 120,
+    },
+  );
 });

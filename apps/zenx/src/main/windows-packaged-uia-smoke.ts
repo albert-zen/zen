@@ -21,6 +21,7 @@ import {
 import { WINDOWS_PACKAGED_UIA_FIXTURE } from "./windows-packaged-uia-fixture.js";
 import {
   assertWindowsPackagedUiaFocusEvidence,
+  describeWindowsFixtureTextMismatch,
   type WindowsPackagedUiaFocusEvidence,
 } from "./windows-packaged-uia-evidence.js";
 
@@ -713,7 +714,7 @@ async function waitForText(
     if (value === expected) return;
     assert.ok(
       Date.now() < deadline,
-      `Native ${name} effect did not match complete expected text`,
+      `Native ${name} effect did not match complete expected text: ${JSON.stringify(describeWindowsFixtureTextMismatch(value, expected))}`,
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
   }

@@ -70,3 +70,25 @@ export function assertWindowsPackagedUiaFocusEvidence(
     );
   }
 }
+
+/** Bounded numeric diagnostics for this disposable fixture's synthetic text only. */
+export function describeWindowsFixtureTextMismatch(
+  actual: string,
+  expected: string,
+) {
+  let offset = 0;
+  while (
+    offset < actual.length &&
+    offset < expected.length &&
+    actual.charCodeAt(offset) === expected.charCodeAt(offset)
+  )
+    offset++;
+  return {
+    actualLength: actual.length,
+    expectedLength: expected.length,
+    firstDifferentUtf16Offset: offset,
+    actualCodeUnit: offset < actual.length ? actual.charCodeAt(offset) : null,
+    expectedCodeUnit:
+      offset < expected.length ? expected.charCodeAt(offset) : null,
+  };
+}
