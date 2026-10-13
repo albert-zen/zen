@@ -117,8 +117,12 @@ The helper has no activation/restore/input API, refuses unavailable frames, and
 runs in a bounded cancellable child process. Its source is bundled with ZenX;
 PowerShell is the system executable and request data is sent only on stdin.
 The existing Windows smoke adds an occluding foreground guard, continuous native
-focus/pointer sampling, valid magenta content, partially painted native-frame
-refusal and minimized-window refusal. Ambiguous sentinel-colored pixels alone
+focus/pointer sampling, valid magenta content, actual native print-callback
+observation and minimized-window refusal. If Windows bypasses the fixture's
+partial-print callbacks, a successful capture must still contain its exact marker
+pixels. Native synthetic bitmap tests always exercise the production sentinel
+classifier's unpainted-buffer refusal; they do not replace real PrintWindow
+capture acceptance. Ambiguous sentinel-colored pixels alone
 are confirmed against a differently initialized second capture within the same
 timeout; full-frame stability is not required, and pixels are never composited
 across times. Changes at those ambiguous positions fail explicitly.

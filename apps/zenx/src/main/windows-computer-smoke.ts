@@ -15,7 +15,10 @@ import {
   WinAppCliComputerBackend,
 } from "./capabilities/windows-computer-provider.js";
 
-import { windowsBackgroundCaptureCommand } from "./capabilities/windows-background-capture.js";
+import {
+  WINDOWS_BACKGROUND_CAPTURE_SCRIPT,
+  windowsBackgroundCaptureCommand,
+} from "./capabilities/windows-background-capture.js";
 
 const arguments_ = parseArguments(process.argv.slice(2));
 const expectedTarget = {
@@ -200,34 +203,45 @@ public static class ZenXMarkerCheck {
     path.join(probeDirectory, "unrendered-ready"),
     controller.signal,
   );
-  await assert.rejects(
-    async () => {
-      try {
-        const partial = await execute<{ artifactPath: string }>(
-          computer,
-          "computer_screenshot",
-          { target: refreshedTarget },
-          controller.signal,
-        );
-        console.log(
-          "Synthetic partial-frame capture returned: " +
-            JSON.stringify({
-              pixels: await countFixturePixels(partial.artifactPath),
-            }),
-        );
-      } finally {
-        console.log(
-          "Synthetic partial-print fixture probe: " +
-            (await readFile(
-              path.join(probeDirectory, "partial-print-probe.json"),
-              "utf8",
-            )),
-        );
-      }
-    },
-    /capture_unrendered/u,
-    "Partially painted native frames must fail without foreground fallback",
+  const partialCapture = await execute<{ artifactPath: string }>(
+    computer,
+    "computer_screenshot",
+    { target: refreshedTarget },
+    controller.signal,
+  ).then(
+    (result) => ({ ok: true as const, result }),
+    (error: unknown) => ({ ok: false as const, error }),
   );
+  const printProbe = JSON.parse(
+    await readFile(
+      path.join(probeDirectory, "partial-print-probe.json"),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  assert.equal(printProbe.enabled, true);
+  assert.equal(printProbe.visible, true);
+  assert.equal(printProbe.minimized, false);
+  if (partialCapture.ok) {
+    // PW_RENDERFULLCONTENT may return the complete redirected surface without
+    // dispatching WM_PRINT. That is a valid frame, not an unpainted counterexample.
+    assert.equal(printProbe.printCalls, 0);
+    assert.equal(printProbe.printClientCalls, 0);
+    const pixels = await countFixturePixels(partialCapture.result.artifactPath);
+    assert.deepEqual(pixels, [2000, 625]);
+    console.log(
+      "Native PrintWindow bypassed partial callbacks and preserved complete fixture markers: " +
+        JSON.stringify({ ...printProbe, pixels }),
+    );
+  } else {
+    assert.match(String(partialCapture.error), /capture_unrendered/u);
+    console.log(
+      "Native partial-frame capture was rejected: " +
+        JSON.stringify(printProbe),
+    );
+  }
+  // Always exercise the actual native production classifier; the compositor
+  // behavior above must not skip its unpainted-buffer counterexamples.
+  await verifyNativeSentinelClassification(controller.signal);
   await writeFile(path.join(probeDirectory, "minimize"), "minimize");
   await waitForFixture(
     path.join(probeDirectory, "minimized"),
@@ -245,11 +259,70 @@ public static class ZenXMarkerCheck {
     if (!String(error).includes("capture_minimized")) throw error;
   }
   console.log(
-    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: list_windows -> exact target -> inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> strict background screenshot with legitimate magenta while occluded -> partially painted frame rejected -> minimized capture rejected without restore.`,
+    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: list_windows -> exact target -> inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> strict background screenshot with legitimate magenta while occluded -> native print callback behavior and production bitmap classifier verified -> minimized capture rejected without restore.`,
   );
 } finally {
   clearTimeout(timeout);
   await computer.close?.();
+}
+
+async function verifyNativeSentinelClassification(
+  signal: AbortSignal,
+): Promise<void> {
+  const declarationsEnd =
+    WINDOWS_BACKGROUND_CAPTURE_SCRIPT.indexOf("\n$request =");
+  assert.ok(
+    declarationsEnd > 0,
+    "Native helper declarations must be available",
+  );
+  // Compile the exact production declarations, then invoke the same private
+  // classifier against real System.Drawing buffers. Do not replace PrintWindow.
+  const script =
+    WINDOWS_BACKGROUND_CAPTURE_SCRIPT.slice(0, declarationsEnd) +
+    String.raw`
+$method = [ZenXBackgroundCapture].GetMethod('ConfirmSentinelPixels', [Reflection.BindingFlags]'NonPublic,Static')
+if ($null -eq $method) { throw 'Production sentinel validation method missing' }
+$a = New-Object System.Drawing.Bitmap(4,4)
+$b = New-Object System.Drawing.Bitmap(4,4)
+function Fill($bitmap, $color) {
+  $g = [Drawing.Graphics]::FromImage($bitmap)
+  try { $g.Clear($color) } finally { $g.Dispose() }
+}
+function Check([bool]$expectRejection) {
+  $rejected = $false
+  try { [void]$method.Invoke($null, [object[]]@($a,$b,0,0,4,4)) }
+  catch { if ($_.Exception.ToString() -notmatch 'capture_unrendered') { throw }; $rejected = $true }
+  if ($rejected -ne $expectRejection) { throw 'Production sentinel validation returned an unexpected result' }
+}
+try {
+  Fill $a ([Drawing.Color]::Magenta); Fill $b ([Drawing.Color]::Cyan)
+  $a.SetPixel(0,0,[Drawing.Color]::White); $b.SetPixel(0,0,[Drawing.Color]::White)
+  Check $true
+  Fill $a ([Drawing.Color]::White); Fill $b ([Drawing.Color]::White)
+  $a.SetPixel(2,2,[Drawing.Color]::Magenta); $b.SetPixel(2,2,[Drawing.Color]::Magenta)
+  $b.SetPixel(1,1,[Drawing.Color]::Blue)
+  Check $false
+  $b.SetPixel(2,2,[Drawing.Color]::Green)
+  Check $true
+  [Console]::Out.WriteLine('production-sentinel-checks-passed')
+} finally { $a.Dispose(); $b.Dispose() }
+} catch { [Console]::Error.WriteLine($_.Exception.ToString()); exit 1 }
+`;
+  const result = await runBoundedProcess(
+    windowsBackgroundCaptureCommand().executable,
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { timeoutMs: 10_000, signal, maxStdoutBytes: 1024 },
+  );
+  assert.equal(result.stdout.trim(), "production-sentinel-checks-passed");
+  console.log(
+    "Native production bitmap classifier passed all three synthetic cases",
+  );
 }
 
 async function waitForFixture(
