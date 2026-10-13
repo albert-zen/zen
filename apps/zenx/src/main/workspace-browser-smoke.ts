@@ -84,6 +84,7 @@ void app.whenReady().then(async () => {
   let frameStops = 0;
   let activeFrameSubscription: number | undefined;
   let lastFrameSubscription = 0;
+  let subscriptionNotice: { id: number; complete(): void } | undefined;
   let phase = "setup";
   let layoutStarted = false;
   const traceStarted = Date.now();
@@ -160,6 +161,12 @@ void app.whenReady().then(async () => {
             handler(image, rect);
           },
         );
+        // Notify only after this exact native subscription is installed.
+        if (subscriptionNotice?.id === id) {
+          const notice = subscriptionNotice;
+          subscriptionNotice = undefined;
+          notice.complete();
+        }
       };
       view.webContents.endFrameSubscription = () => {
         activeFrameSubscription = undefined;
@@ -377,26 +384,62 @@ void app.whenReady().then(async () => {
       "the temporary renderer must close when an operation fails",
     );
     phase = "unmounted-to-owner-handoff-inspection";
+    const capturesBeforeHandoff = captureCalls;
+    const handoffSubscription = frameSubscriptions + 1;
+    let subscriptionTimer: ReturnType<typeof setTimeout> | undefined;
+    const subscribed = new Promise<void>((resolve, reject) => {
+      subscriptionTimer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              "Handoff subscription was not installed within five seconds",
+            ),
+          ),
+        5_000,
+      );
+      subscriptionNotice = {
+        id: handoffSubscription,
+        complete: () => {
+          clearTimeout(subscriptionTimer);
+          resolve();
+        },
+      };
+    });
     const handoffInspection = browser.inspect("shared-session", tabId);
-    await eventually(async () => {
+    try {
+      await Promise.race([
+        subscribed,
+        handoffInspection.then(() => {
+          throw new Error("Inspection completed before the fixture handoff");
+        }),
+      ]);
       assert.equal(
         BrowserWindow.getAllWindows().length,
         2,
         "the Agent inspection must start on the temporary renderer",
       );
-    });
-    traceShared("handoff-mount-request");
-    browser.mount(owner.webContents, {
-      threadId: "shared-thread",
-      tabId,
-      lease: "shared-smoke",
-      bounds: { x: 20, y: 20, width: 700, height: 500 },
-    });
-    traceShared("handoff-mounted");
-    owner.showInactive();
-    traceShared("handoff-owner-show-requested");
-    await handoffInspection;
-    traceShared("handoff-inspection-accepted");
+      assert.equal(
+        captureCalls,
+        capturesBeforeHandoff,
+        "fixture handoff must precede native capture dispatch",
+      );
+      traceShared("handoff-mount-request");
+      browser.mount(owner.webContents, {
+        threadId: "shared-thread",
+        tabId,
+        lease: "shared-smoke",
+        bounds: { x: 20, y: 20, width: 700, height: 500 },
+      });
+      traceShared("handoff-mounted");
+      owner.showInactive();
+      traceShared("handoff-owner-show-requested");
+      await handoffInspection;
+      traceShared("handoff-inspection-accepted");
+    } finally {
+      clearTimeout(subscriptionTimer);
+      if (subscriptionNotice?.id === handoffSubscription)
+        subscriptionNotice = undefined;
+    }
     assert.equal(
       BrowserWindow.getAllWindows().length,
       1,
