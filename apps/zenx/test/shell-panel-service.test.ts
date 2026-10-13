@@ -27,6 +27,7 @@ import { ShellPanelService } from "../src/main/shell-panel-service.js";
 import { validateShellPanelRequest } from "../src/shell-panel.js";
 
 import { createFailedStartupObserver } from "./fixtures/failed-startup-observation.js";
+import { waitForWindowsShellReadiness } from "./fixtures/windows-shell-readiness.js";
 
 const observeFailedStartup = createFailedStartupObserver({
   enabled:
@@ -133,6 +134,40 @@ function fixture(
   );
   return { service, tools, snapshot, operations: () => operations };
 }
+async function waitForFixtureInput(
+  f: ReturnType<typeof fixture>,
+  taskId: string,
+  createdAt: number,
+  stage: string,
+) {
+  if (process.platform !== "win32") {
+    await until(f.service, taskId, (r) => r.session.inputAvailable);
+    return;
+  }
+  const elapsedMs = await observeFailedStartup(
+    stage,
+    () =>
+      waitForWindowsShellReadiness(async () => {
+        const read = (await f.service.request({
+          operation: "read",
+          threadId: "human",
+          taskId,
+        })) as ShellSessionRead;
+        return {
+          inputAvailable: read.session.inputAvailable,
+          status: read.session.status,
+          output: read.output,
+        };
+      }, createdAt),
+    () => {
+      const snapshot = startupSnapshot(f.tools, taskId);
+      return { ...snapshot, ready: snapshot.inputAvailable && snapshot.prompt };
+    },
+  );
+  if (process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1")
+    console.info(`[Shell readiness] ${JSON.stringify({ stage, elapsedMs })}`);
+}
+
 async function until(
   service: ShellPanelService,
   taskId: string,
@@ -163,6 +198,7 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-shared-pty-"));
   const f = fixture(directory);
   try {
+    const createdAt = Date.now();
     const created = (await f.service.request({
       operation: "create",
       threadId: "human",
@@ -171,21 +207,13 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
     })) as ShellSessionSummary;
     assert.equal(created.origin, "user");
     assert.equal(created.cwd, directory);
-    await until(f.service, created.taskId, (r) => r.session.inputAvailable);
+    await waitForFixtureInput(
+      f,
+      created.taskId,
+      createdAt,
+      "first PowerShell prompt",
+    );
     if (process.platform === "win32") {
-      // Control registration precedes PowerShell's first prompt. Exercise input
-      // as a user would, after the shell has actually entered its read loop.
-      await observeFailedStartup(
-        "first PowerShell prompt",
-        () =>
-          until(f.service, created.taskId, (r) =>
-            /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
-          ),
-        () => {
-          const snapshot = startupSnapshot(f.tools, created.taskId);
-          return { ...snapshot, ready: snapshot.prompt };
-        },
-      );
       // Establish evaluation before resizing, not merely echoed input. Keep the
       // wrapped post-resize command below as a separate regression assertion.
       await f.service.request({
@@ -419,13 +447,19 @@ test("stopping a terminal closes its foreground fixture process", async () => {
   const f = fixture(directory);
   let pid: number | undefined;
   try {
+    const createdAt = Date.now();
     const created = (await f.service.request({
       operation: "create",
       threadId: "human",
       cols: 80,
       rows: 24,
     })) as ShellSessionSummary;
-    await until(f.service, created.taskId, (r) => r.session.inputAvailable);
+    await waitForFixtureInput(
+      f,
+      created.taskId,
+      createdAt,
+      "foreground fixture PowerShell prompt",
+    );
     const command =
       process.platform === "win32"
         ? `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}'\r`

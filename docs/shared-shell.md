@@ -136,6 +136,14 @@ No delayed scan or bare-PID kill is used as a workaround.
 
 ## Windows native acceptance
 
+Native CI observed an untouched first prompt after the five-second action
+threshold and by 6,030 ms. Test fixtures therefore use a separate ten-second
+Windows startup readiness deadline, measured from terminal creation and requiring
+both input control and a real prompt. The foreground Stop fixture also waits for
+that prompt before writing. Command/output and Stop observations remain at five
+seconds; the file and whole-step watchdogs are unchanged. This corrects a test
+budget assumption, not product startup speed or the underlying cold-start cause.
+
 The real PowerShell fixture first checks basic input, file output and resize in
 an untouched session. It then imports the built-in Utility manifest by its exact
 `PSHOME` path before testing `Write-Output` and redirection. This is test-local
