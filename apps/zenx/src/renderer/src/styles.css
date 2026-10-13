@@ -4204,6 +4204,18 @@ button:disabled {
 .archived-thread-row + .archived-thread-row {
   border-top: 1px solid var(--border-soft);
 }
+.archived-thread-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.deleted-threads-section {
+  margin-top: 28px;
+}
+.deleted-threads-section h3 {
+  font-size: var(--font-size-body);
+}
 .archived-thread-copy {
   min-width: 0;
   display: grid;
