@@ -4,6 +4,7 @@ import os from "node:os";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { get } from "node:http";
 import { stripVTControlCharacters } from "node:util";
 import {
@@ -17,13 +18,17 @@ import type {
   ShellSessionRead,
   ShellSessionSummary,
 } from "../../../src/shell-session.js";
-import { desktopShellPty } from "../src/main/shell-pty.js";
+import { desktopShellPty, wrapDesktopPty } from "../src/main/shell-pty.js";
 import {
   trackWindowsShellProcess,
   WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
 } from "../src/main/shell-process-termination.js";
 import { ShellPanelService } from "../src/main/shell-panel-service.js";
 import { validateShellPanelRequest } from "../src/shell-panel.js";
+
+const nodePtyVersion = (
+  createRequire(import.meta.url)("node-pty/package.json") as { version: string }
+).version;
 
 function fixture(
   cwd: string,
@@ -63,18 +68,25 @@ function fixture(
               if (process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1")
                 console.info(`[Shell PTY ${process.platform}] ${stage}`);
             };
-            trace("spawn started");
+            trace(
+              `spawn started ${options.cols}x${options.rows}, OS ${os.release()}, Node ${process.version}, node-pty ${nodePtyVersion}`,
+            );
             const terminal = await pty.spawn(options);
             trace("spawn returned");
             return {
               write(data) {
-                trace("write");
+                trace(`write ${JSON.stringify(data)}`);
                 terminal.write(data);
               },
               resize(cols, rows) {
+                trace(`resize ${cols}x${rows}`);
                 terminal.resize(cols, rows);
               },
-              onData: (listener) => terminal.onData(listener),
+              onData: (listener) =>
+                terminal.onData((data) => {
+                  trace(`output ${JSON.stringify(data)}`);
+                  listener(data);
+                }),
               onExit: (listener) =>
                 terminal.onExit((event) => {
                   trace("observed exit");
@@ -204,9 +216,12 @@ test("real PTY shares human input/output and task identity with Agent read/wait"
         const executed = await readFile(path.join(directory, "p"))
           .then((data) => data.toString("hex"))
           .catch(() => "absent");
-        throw new Error(`Post-resize evaluation file: ${executed}`, {
-          cause: error,
-        });
+        throw new Error(
+          `Post-resize evaluation file: ${executed}; ${String(error)}`,
+          {
+            cause: error,
+          },
+        );
       }
     }
     const command =
@@ -749,3 +764,156 @@ setTimeout(() => process.exit(1), 20000).unref();
     });
   }
 });
+
+for (const control of ["without PSReadLine", "bundled ConPTY"] as const) {
+  test(
+    `Windows resize control: ${control}`,
+    { skip: process.platform !== "win32" },
+    async () => {
+      const directory = await mkdtemp(
+        path.join(os.tmpdir(), "zen-pty-control-"),
+      );
+      const provider =
+        control === "bundled ConPTY"
+          ? {
+              async spawn(
+                options: Parameters<typeof desktopShellPty.spawn>[0],
+              ) {
+                const pty = await import("node-pty");
+                return wrapDesktopPty(
+                  pty.spawn("powershell.exe", ["-NoLogo"], {
+                    ...options,
+                    name: "xterm-256color",
+                    useConptyDll: true,
+                  }),
+                );
+              },
+            }
+          : desktopShellPty;
+      const f = fixture(directory, undefined, undefined, provider);
+      try {
+        const created = (await f.service.request({
+          operation: "create",
+          threadId: "human",
+          cols: 80,
+          rows: 24,
+        })) as ShellSessionSummary;
+        const write = (data: string) =>
+          f.service.request({
+            operation: "write",
+            threadId: "human",
+            taskId: created.taskId,
+            data,
+          });
+        await until(
+          f.service,
+          created.taskId,
+          (r) => /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
+          `${control} first prompt`,
+        );
+        // Same executable/launch arguments as production. These are explicit
+        // synthetic fixture commands, never injected into a user's terminal.
+        await write(
+          "$PSVersionTable.PSVersion.ToString();(Get-Module PSReadLine).Version.ToString();123+456\r",
+        );
+        const version = await until(
+          f.service,
+          created.taskId,
+          (r) =>
+            /(?:^|\r?\n)579\r?\n[\s\S]*PS [^\r\n]*> /u.test(
+              stripVTControlCharacters(r.output),
+            ),
+          `${control} pre-resize evaluation`,
+        );
+        console.info(
+          `[Windows resize control ${control}] ${JSON.stringify(version.output)}`,
+        );
+        if (control === "without PSReadLine") {
+          await write(
+            "Remove-Module PSReadLine -ErrorAction Stop; if (!(Get-Module PSReadLine)) {123+457}\r",
+          );
+          await until(
+            f.service,
+            created.taskId,
+            (r) =>
+              /(?:^|\r?\n)580\r?\n[\s\S]*PS [^\r\n]*> /u.test(
+                stripVTControlCharacters(r.output),
+              ),
+            "PSReadLine removal and fresh prompt",
+          );
+        }
+        await f.service.request({
+          operation: "resize",
+          threadId: "human",
+          taskId: created.taskId,
+          cols: 92,
+          rows: 30,
+        });
+        await write("234+567;'ok'>p\r");
+        try {
+          await until(
+            f.service,
+            created.taskId,
+            (r) =>
+              /(?:^|\r?\n)801\r?\n[\s\S]*PS [^\r\n]*> /u.test(
+                stripVTControlCharacters(r.output),
+              ),
+            `${control} post-resize short evaluation`,
+          );
+        } catch (error) {
+          const marker = await readFile(path.join(directory, "p"))
+            .then((b) => b.toString("hex"))
+            .catch(() => "absent");
+          throw new Error(
+            `${control} file marker: ${marker}; ${String(error)}`,
+          );
+        }
+        await write("Write-Output ('SHARED_' + 'PTY_PROBE')\r");
+        await until(
+          f.service,
+          created.taskId,
+          (r) => r.output.includes("SHARED_PTY_PROBE"),
+          `${control} wrapped output`,
+        );
+        await write("exit\r");
+        await until(
+          f.service,
+          created.taskId,
+          (r) => r.session.status === "completed",
+          `${control} natural exit`,
+        );
+        const stopped = (await f.service.request({
+          operation: "create",
+          threadId: "human",
+          cols: 80,
+          rows: 24,
+        })) as ShellSessionSummary;
+        await until(
+          f.service,
+          stopped.taskId,
+          (r) => /PS [^\r\n]*> /u.test(stripVTControlCharacters(r.output)),
+          `${control} Stop fixture prompt`,
+        );
+        await f.service.request({
+          operation: "stop",
+          threadId: "human",
+          taskId: stopped.taskId,
+        });
+        await until(
+          f.service,
+          stopped.taskId,
+          (r) => r.session.status === "cancelled",
+          `${control} explicit Stop`,
+        );
+      } finally {
+        await f.tools.close();
+        await rm(directory, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 50,
+        });
+      }
+    },
+  );
+}
