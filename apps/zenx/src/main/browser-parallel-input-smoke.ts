@@ -1594,9 +1594,26 @@ func process(_ request: [String:Any]) {
     guard expectedPid != 0, !drift, owns(), let text = request["text"] as? String, text.count <= 32 else { emit(id,[:],"Owned foreground guard rejected input"); return }
     if expectedPid != getpid(), let expectedValue = request["expectedValue"] as? String {
       var element: CFTypeRef?; var value: CFTypeRef?
-      guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(expectedPid), kAXFocusedUIElementAttribute as CFString, &element) == .success,
-            let element, AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value) == .success,
-            (value as? String) == expectedValue else { emit(id,[:],"Owned browser's exact focused text value changed before OS input"); return }
+      let focusedStatus = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(expectedPid), kAXFocusedUIElementAttribute as CFString, &element)
+      var valueStatus: AXError? = nil
+      if focusedStatus == .success, let element {
+        valueStatus = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value)
+      }
+      guard focusedStatus == .success, element != nil, valueStatus == .success,
+            (value as? String) == expectedValue else {
+        // Failure-only metadata: never emit the text, title or element description.
+        var role: CFTypeRef?; var roleStatus: AXError? = nil
+        if focusedStatus == .success, let element {
+          roleStatus = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
+        }
+        let knownRoles = ["AXTextField", "AXTextArea", "AXWebArea", "AXComboBox", "AXWindow", "AXButton", "AXApplication"]
+        let observedRole = role as? String ?? "missing"
+        let boundedRole = knownRoles.contains(observedRole) ? observedRole : "other"
+        let valueType = value.map { String(CFGetTypeID($0)) } ?? "missing"
+        let observedLength = (value as? String)?.utf16.count ?? -1
+        emit(id,[:],"Owned browser's exact focused text value changed before OS input [focusedStatus=\(focusedStatus.rawValue), valueStatus=\(valueStatus?.rawValue ?? -1), roleStatus=\(roleStatus?.rawValue ?? -1), role=\(boundedRole), valueType=\(valueType), valueLength=\(observedLength), expectedLength=\(expectedValue.utf16.count)]")
+        return
+      }
     }
     for unit in text.utf16 {
       for down in [true,false] {
