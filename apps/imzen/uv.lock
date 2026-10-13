@@ -129,7 +129,7 @@ wheels = [
 [[package]]
 name = "im-agent-sdk"
 version = "0.1.0a1"
-source = { git = "https://github.com/albert-zen/im-agent-sdk.git?rev=5d71ddd9c86f6eefe67ac5f0b7b42aa0bdb47086#5d71ddd9c86f6eefe67ac5f0b7b42aa0bdb47086" }
+source = { git = "https://github.com/albert-zen/im-agent-sdk.git?rev=b90a2a3b4418025fb8e81e526a9d042271138823#b90a2a3b4418025fb8e81e526a9d042271138823" }
 dependencies = [
     { name = "httpx" },
 ]
@@ -174,8 +174,8 @@ feishu = [
 
 [package.metadata]
 requires-dist = [
-    { name = "im-agent-sdk", extras = ["appserver", "qq", "telegram", "weixin"], git = "https://github.com/albert-zen/im-agent-sdk.git?rev=5d71ddd9c86f6eefe67ac5f0b7b42aa0bdb47086" },
-    { name = "im-agent-sdk", extras = ["feishu"], marker = "extra == 'feishu'", git = "https://github.com/albert-zen/im-agent-sdk.git?rev=5d71ddd9c86f6eefe67ac5f0b7b42aa0bdb47086" },
+    { name = "im-agent-sdk", extras = ["appserver", "qq", "telegram", "weixin"], git = "https://github.com/albert-zen/im-agent-sdk.git?rev=b90a2a3b4418025fb8e81e526a9d042271138823" },
+    { name = "im-agent-sdk", extras = ["feishu"], marker = "extra == 'feishu'", git = "https://github.com/albert-zen/im-agent-sdk.git?rev=b90a2a3b4418025fb8e81e526a9d042271138823" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25,<2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9,<1" },
