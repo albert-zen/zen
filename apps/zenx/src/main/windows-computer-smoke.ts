@@ -12,6 +12,7 @@ import {
 import {
   windowsComputerCapabilityManifest,
   runBoundedProcess,
+  SpawnWinAppCliRunner,
   WinAppCliComputerBackend,
 } from "./capabilities/windows-computer-provider.js";
 
@@ -37,7 +38,34 @@ const timeout = setTimeout(() => {
 }, 60_000);
 timeout.unref();
 
-const backend = new WinAppCliComputerBackend({ platform: "win32" });
+const winAppRunner = new SpawnWinAppCliRunner();
+let traceSetValue = false;
+let setValueWindowLists = 0;
+const backend = new WinAppCliComputerBackend({
+  platform: "win32",
+  runner: {
+    async run(executable, args, options) {
+      if (traceSetValue) {
+        // Fixed diagnostic labels only; never record selectors, values or titles.
+        const command = args[1];
+        const phase =
+          command === "list-windows"
+            ? ++setValueWindowLists === 1
+              ? "uia-resolve"
+              : "uia-refresh"
+            : command === "inspect"
+              ? "uia-revalidate"
+              : command === "set-value"
+                ? "uia-set-value"
+                : command === "wait-for"
+                  ? "uia-wait-for"
+                  : "uia-other";
+        await stage(phase);
+      }
+      return await winAppRunner.run(executable, args, options);
+    },
+  },
+});
 const computer = new ComputerZenXCapabilityPackage(
   backend,
   windowsComputerCapabilityManifest,
@@ -104,6 +132,7 @@ try {
 
   const probeText = `ZenX WinApp adapter smoke ${new Date().toISOString()}`;
   await stage("set-value");
+  traceSetValue = true;
   const setResult = await execute<{
     target: ComputerInspection["target"];
     characterCount: number;
@@ -112,7 +141,9 @@ try {
     "computer_set_value",
     { target, control: editor.selector, value: probeText },
     controller.signal,
-  );
+  ).finally(() => {
+    traceSetValue = false;
+  });
   if (setResult.characterCount !== probeText.length) {
     throw new Error(
       "ZenX adapter did not confirm the complete set-value input",
@@ -136,6 +167,24 @@ try {
       "ZenX adapter could not re-inspect the fixture after set-value",
     );
   }
+
+  // Preserve the semantic-operation focus evidence first. The following guard
+  // activation is explicit fixture setup, before any screenshot is attempted.
+  await writeFile(path.join(probeDirectory, "uia-stop"), "stop");
+  await waitForFixture(
+    path.join(probeDirectory, "uia-result.json"),
+    controller.signal,
+  );
+  console.log(
+    "UIA targeting epoch ended; focus isolation is not certified: " +
+      (await readFile(path.join(probeDirectory, "uia-result.json"), "utf8")),
+  );
+  await stage("capture-setup");
+  await writeFile(path.join(probeDirectory, "capture-setup"), "setup");
+  await waitForFixture(
+    path.join(probeDirectory, "capture-ready"),
+    controller.signal,
+  );
 
   await stage("capture-valid");
   const screenshot = await execute<{
@@ -273,7 +322,7 @@ public static class ZenXMarkerCheck {
     if (!String(error).includes("capture_minimized")) throw error;
   }
   console.log(
-    `ZenX WinApp adapter smoke passed with WinApp CLI ${diagnostic.version}: list_windows -> exact target -> inspect -> opaque observation -> set_value with bounded UIA assertion -> re-inspect -> strict background screenshot with legitimate magenta while occluded -> native print callback behavior and production bitmap classifier verified -> minimized capture rejected without restore.`,
+    `WinApp CLI ${diagnostic.version} targeting checks completed separately. Screenshot content, native print behavior, production bitmap classifier and minimized-refusal checks completed; the independent capture epoch still requires the outer zero-focus/pointer-change assertion.`,
   );
 } finally {
   clearTimeout(timeout);

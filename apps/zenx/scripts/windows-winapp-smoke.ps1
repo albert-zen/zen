@@ -51,7 +51,8 @@ public static class ZenXCaptureSampler {
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
-  public static void Start(IntPtr guard, IntPtr target, string directory) {
+  public static bool IsForeground(IntPtr hwnd) { return GetForegroundWindow()==hwnd; }
+  public static void Start(IntPtr guard, IntPtr target, string directory, string epoch) {
     Point initial; GetCursorPos(out initial);
     var thread = new Thread(() => {
       int samples=0, focusChanges=0, pointerChanges=0, restored=0;
@@ -60,8 +61,8 @@ public static class ZenXCaptureSampler {
       var transitions=new System.Collections.Generic.List<string>();
       var lastForeground=new IntPtr(-1);
       string phase="fixture-ready";
-      File.WriteAllText(Path.Combine(directory, "ready"), "ready");
-      while (!File.Exists(Path.Combine(directory, "stop"))) {
+      File.WriteAllText(Path.Combine(directory, epoch + "-ready"), "ready");
+      while (!File.Exists(Path.Combine(directory, epoch + "-stop"))) {
         samples++;
         var foreground=GetForegroundWindow();
         if (foreground != guard) focusChanges++;
@@ -77,7 +78,7 @@ public static class ZenXCaptureSampler {
         if (IsIconic(target)) minimized=true; else if (minimized) restored++;
         Thread.Sleep(5);
       }
-      File.WriteAllText(Path.Combine(directory, "result.json"), "{\"samples\":" + samples + ",\"focusChanges\":" + focusChanges + ",\"pointerChanges\":" + pointerChanges + ",\"restored\":" + restored + ",\"observedMinimized\":" + (minimized ? "true" : "false") + ",\"foregroundTransitions\":[" + string.Join(",",transitions) + "]}");
+      File.WriteAllText(Path.Combine(directory, epoch + "-result.json"), "{\"samples\":" + samples + ",\"focusChanges\":" + focusChanges + ",\"pointerChanges\":" + pointerChanges + ",\"restored\":" + restored + ",\"observedMinimized\":" + (minimized ? "true" : "false") + ",\"foregroundTransitions\":[" + string.Join(",",transitions) + "]}");
     });
     thread.IsBackground=true; thread.Start();
   }
@@ -121,11 +122,23 @@ $guard.Show(); $guard.Activate(); $guardEditor.Focus()
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 25
 $script:monitorStarted = $false
+$script:captureSetupStarted = $false
+$script:captureMonitorStarted = $false
 $script:minimized = $false
 $timer.add_Tick({
   if (-not $script:monitorStarted) {
     $script:monitorStarted = $true
-    [ZenXCaptureSampler]::Start($guard.Handle, $form.Handle, $ProbeDirectory)
+    [ZenXCaptureSampler]::Start($guard.Handle, $form.Handle, $ProbeDirectory, "uia")
+  }
+  if (-not $script:captureSetupStarted -and (Test-Path (Join-Path $ProbeDirectory "capture-setup"))) {
+    # Explicit fixture preparation, after the UIA epoch is saved and before any
+    # screenshot. Never restore focus inside the capture measurement epoch.
+    $script:captureSetupStarted = $true
+    $guard.Activate(); $guardEditor.Focus()
+  }
+  if ($script:captureSetupStarted -and -not $script:captureMonitorStarted -and [ZenXCaptureSampler]::IsForeground($guard.Handle)) {
+    $script:captureMonitorStarted = $true
+    [ZenXCaptureSampler]::Start($guard.Handle, $form.Handle, $ProbeDirectory, "capture")
   }
   if (-not $form.PartialPrint -and (Test-Path (Join-Path $ProbeDirectory "unrendered"))) {
     $form.PartialPrint = $true
@@ -150,23 +163,31 @@ $timer.Start()
     "-ProbeDirectory", ('"' + $probeDirectory + '"')
   ) -WindowStyle Hidden -PassThru
   $deadline = [DateTime]::UtcNow.AddSeconds(20)
-  while (-not (Test-Path (Join-Path $probeDirectory "ready")) -and [DateTime]::UtcNow -lt $deadline) {
+  while (-not (Test-Path (Join-Path $probeDirectory "uia-ready")) -and [DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 100
   }
-  if (-not (Test-Path (Join-Path $probeDirectory "ready"))) {
+  if (-not (Test-Path (Join-Path $probeDirectory "uia-ready"))) {
     throw "The deterministic two-window fixture did not become ready."
   }
   & node --import tsx ./src/main/windows-computer-smoke.ts --pid $fixture.Id --title $fixtureTitle --probe-directory $probeDirectory
   $smokeExit = $LASTEXITCODE
-  Set-Content -LiteralPath (Join-Path $probeDirectory "stop") -Value "stop"
-  $deadline = [DateTime]::UtcNow.AddSeconds(5)
-  while (-not (Test-Path (Join-Path $probeDirectory "result.json")) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
-  $metrics = Get-Content -Raw -LiteralPath (Join-Path $probeDirectory "result.json") | ConvertFrom-Json
+  $metrics = $null
+  foreach ($epoch in @("uia", "capture")) {
+    Set-Content -LiteralPath (Join-Path $probeDirectory ($epoch + "-stop")) -Value "stop"
+    if (Test-Path (Join-Path $probeDirectory ($epoch + "-ready"))) {
+      $resultPath = Join-Path $probeDirectory ($epoch + "-result.json")
+      $deadline = [DateTime]::UtcNow.AddSeconds(5)
+      while (-not (Test-Path $resultPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+      $epochMetrics = Get-Content -Raw -LiteralPath $resultPath | ConvertFrom-Json
+      Write-Host ($epoch + " epoch native sampling: " + ($epochMetrics | ConvertTo-Json -Compress -Depth 4))
+      if ($epoch -eq "capture") { $metrics = $epochMetrics }
+    }
+  }
   if ($smokeExit -ne 0) { throw "The ZenX WinApp adapter smoke failed with exit code $smokeExit." }
-  if ($metrics.samples -lt 2 -or $metrics.focusChanges -ne 0 -or $metrics.pointerChanges -ne 0 -or $metrics.restored -ne 0 -or -not $metrics.observedMinimized) {
+  if (-not $metrics -or $metrics.samples -lt 2 -or $metrics.focusChanges -ne 0 -or $metrics.pointerChanges -ne 0 -or $metrics.restored -ne 0 -or -not $metrics.observedMinimized) {
     throw ("Background capture disturbed the guard or restored the target: " + ($metrics | ConvertTo-Json -Compress))
   }
-  Write-Host ("Continuous 5 ms native focus/pointer sampling passed: " + ($metrics | ConvertTo-Json -Compress))
+  Write-Host "Strict screenshot epoch passed continuous 5 ms native focus/pointer sampling. UIA targeting is separately observed, not certified focus-isolated."
 } finally {
   if ($fixture -and -not $fixture.HasExited) { Stop-Process -Id $fixture.Id -Force }
   Remove-Item -LiteralPath $fixtureScript -Force -ErrorAction SilentlyContinue

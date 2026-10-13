@@ -116,8 +116,12 @@ helper for screenshot acquisition, while keeping WinApp UIA actions unchanged.
 The helper has no activation/restore/input API, refuses unavailable frames, and
 runs in a bounded cancellable child process. Its source is bundled with ZenX;
 PowerShell is the system executable and request data is sent only on stdin.
-The existing Windows smoke adds an occluding foreground guard, continuous native
-focus/pointer sampling, valid magenta content, actual native print-callback
+The existing Windows smoke records UIA targeting separately: native evidence found
+a focus change during its set-value stage, so UIA is not certified focus-isolated.
+Only after that evidence is saved does explicit fixture setup establish an
+occluding foreground guard for an independent screenshot epoch, with no focus
+reset during capture. That epoch checks continuous native focus/pointer sampling,
+valid magenta content, actual native print-callback
 observation and minimized-window refusal. If Windows bypasses the fixture's
 partial-print callbacks, a successful capture must still contain its exact marker
 pixels. Native synthetic bitmap tests always exercise the production sentinel
