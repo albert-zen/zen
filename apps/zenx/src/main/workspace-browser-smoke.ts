@@ -487,13 +487,14 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
       // Failure-only fixture diagnostics must not alter capture or event handling.
     }
   };
-  const ownerListeners = ["show", "hide", "restore", "minimize"].map(
-    (event) => {
-      const listener = () => record(`owner:${event}`);
-      owner.on(event, listener);
-      return [event, listener] as const;
-    },
-  );
+  const onShow = () => record("owner:show");
+  const onHide = () => record("owner:hide");
+  const onRestore = () => record("owner:restore");
+  const onMinimize = () => record("owner:minimize");
+  owner.on("show", onShow);
+  owner.on("hide", onHide);
+  owner.on("restore", onRestore);
+  owner.on("minimize", onMinimize);
   try {
     await owner.loadURL("about:blank");
     await guard.loadURL(
@@ -604,8 +605,7 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
     await restored;
     await eventually(async () => assert.equal(owner.isMinimized(), false));
     record("setup:hide-request");
-    owner.hide();
-    await eventually(async () => assert.equal(owner.isVisible(), false));
+    await hideFixtureOwner(owner);
     record("setup:hidden-state");
     guard.focus();
     const nativeCapture = view.webContents.capturePage.bind(view.webContents);
@@ -620,7 +620,7 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
       ] as const) {
         phase = `pending-capture-${change}`;
         record("pending:hide-request");
-        owner.hide();
+        await hideFixtureOwner(owner);
         mount(`before-${change}`);
         if (change === "return-control")
           browser.command(
@@ -735,12 +735,22 @@ async function assertHiddenMountedCapture(port: number): Promise<void> {
     );
     throw error;
   } finally {
-    for (const [event, listener] of ownerListeners)
-      owner.removeListener(event, listener);
+    owner.removeListener("show", onShow);
+    owner.removeListener("hide", onHide);
+    owner.removeListener("restore", onRestore);
+    owner.removeListener("minimize", onMinimize);
     await browser.shutdown();
     owner.destroy();
     guard.destroy();
   }
+}
+
+async function hideFixtureOwner(owner: BrowserWindow): Promise<void> {
+  if (!owner.isVisible()) return;
+  const hidden = once(owner, "hide", { signal: AbortSignal.timeout(5_000) });
+  owner.hide();
+  await hidden;
+  await eventually(async () => assert.equal(owner.isVisible(), false));
 }
 
 function assertCapturePixels(
