@@ -24,6 +24,49 @@ export function isAllowedZenXExternalUrl(raw: string): boolean {
   return classifyZenXLink(raw).kind === "external";
 }
 
+/**
+ * Bare autolinks can inherit markdown delimiter residue (emphasis that failed
+ * to pair, e.g. `**` before CJK punctuation) and trailing CJK prose
+ * punctuation. Cut at the first CJK punctuation mark and drop trailing ASCII
+ * emphasis or sentence punctuation; neither is ever an intended link target.
+ * Full-width alphanumerics and CJK characters in a path stay untouched.
+ */
+const CJK_PROSE_PUNCTUATION =
+  /[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]/u;
+const TRAILING_LINK_RESIDUE = /[*~`_'",.;:!?]+$/u;
+
+function trimAutolinkResidue(raw: string): string {
+  // Renderers hand us the href percent-encoded; decode runs of %XX bytes to
+  // locate a cut point, then map it back so legitimate escapes survive.
+  let decoded = "";
+  const offsets: number[] = [];
+  let index = 0;
+  while (index < raw.length) {
+    if (raw[index] === "%") {
+      const bytes: number[] = [];
+      let end = index;
+      while (/^%[0-9a-f]{2}/iu.test(raw.slice(end, end + 3))) {
+        bytes.push(Number.parseInt(raw.slice(end + 1, end + 3), 16));
+        end += 3;
+      }
+      if (bytes.length > 0) {
+        for (const char of new TextDecoder().decode(Uint8Array.from(bytes))) {
+          decoded += char;
+          offsets.push(index);
+        }
+        index = end;
+        continue;
+      }
+    }
+    decoded += raw[index] ?? "";
+    offsets.push(index);
+    index += 1;
+  }
+  const cut = decoded.search(CJK_PROSE_PUNCTUATION);
+  const trimmed = cut === -1 ? raw : raw.slice(0, offsets[cut]);
+  return trimmed.replace(TRAILING_LINK_RESIDUE, "");
+}
+
 // Message links use the existing workspace file and Browser capabilities;
 // this classifier does not grant filesystem or navigation permissions.
 export function classifyMessageLink(
@@ -40,7 +83,7 @@ export function classifyMessageLink(
     raw.startsWith("\\\\")
   )
     return { kind: "rejected" };
-  const target = classifyZenXLink(raw);
+  const target = classifyZenXLink(trimAutolinkResidue(raw));
   if (target.kind === "anchor") return target;
   if (target.kind === "external")
     return target.href.startsWith("mailto:")

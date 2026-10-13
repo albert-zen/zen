@@ -175,3 +175,177 @@ test("production Markdown clicks read exact percent-encoded filenames through th
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+function linkPanelDom() {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver,
+    Node: dom.window.Node,
+    ResizeObserver: ResizeObserverStub,
+    getComputedStyle: dom.window.getComputedStyle,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  (dom.window.HTMLElement.prototype as any).attachEvent = () => {};
+  (dom.window.HTMLElement.prototype as any).detachEvent = () => {};
+  (dom.window as any).zenx = {};
+  return dom;
+}
+
+test("a handled browser message link is not replayed by panel remounts", async () => {
+  const dom = linkPanelDom();
+  const commands: { operation: string; url?: string }[] = [];
+  (dom.window as any).zenx = {
+    workspaceBrowser: {
+      command: async (
+        _threadId: string,
+        operation: string,
+        _tabId?: string,
+        url?: string,
+      ) => {
+        commands.push({ operation, url });
+        if (operation === "new")
+          return [
+            {
+              id: `tab-${String(commands.length)}`,
+              title: "Page",
+              url: url ?? "about:blank",
+              canGoBack: false,
+              canGoForward: false,
+            },
+          ];
+        return [];
+      },
+      onChanged: () => () => {},
+      onFocusAddress: () => () => {},
+      mount: async () => ({}),
+    },
+  };
+  function Harness({ showPanel }: { showPanel: boolean }) {
+    const [request, setRequest] = useState<{
+      id: number;
+      kind: "file" | "browser";
+      value: string;
+    } | null>(null);
+    const [open, setOpen] = useState(true);
+    const [tab, setTab] = useState("");
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(
+        MessageLinkContext.Provider,
+        {
+          value: (target) =>
+            setRequest({ ...target, id: (request?.id ?? 0) + 1 }),
+        },
+        React.createElement(Markdown, {
+          text: "**http://127.0.0.1:56277/sales–architecture.html**（刚重启，已验证 200）",
+        }),
+      ),
+      showPanel
+        ? React.createElement(AuxiliaryPanel, {
+            threadId: "thread-a",
+            workspacePath: "/tmp/work",
+            title: "Test",
+            open,
+            onOpenChange: setOpen,
+            selectedTab: tab,
+            onSelectTab: setTab,
+            snapshot: null,
+            messageLinkRequest: request,
+            onMessageLinkRequestHandled: (id: number) =>
+              setRequest((current) => (current?.id === id ? null : current)),
+          })
+        : null,
+    );
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(React.createElement(Harness, { showPanel: true })),
+    );
+    const anchor =
+      document.querySelector<HTMLAnchorElement>(".markdown-body a")!;
+    await act(async () => anchor.click());
+    const opened = commands.filter((command) => command.operation === "new");
+    assert.equal(opened.length, 1);
+    assert.equal(
+      opened[0]?.url,
+      new URL("http://127.0.0.1:56277/sales–architecture.html").toString(),
+    );
+    // Thread switches remount the panel (keyed by thread id); the handled
+    // request must not open the page again.
+    await act(async () =>
+      root.render(React.createElement(Harness, { showPanel: false })),
+    );
+    await act(async () =>
+      root.render(React.createElement(Harness, { showPanel: true })),
+    );
+    await act(async () =>
+      root.render(React.createElement(Harness, { showPanel: false })),
+    );
+    await act(async () =>
+      root.render(React.createElement(Harness, { showPanel: true })),
+    );
+    assert.equal(
+      commands.filter((command) => command.operation === "new").length,
+      1,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("side panel expanded state persists across thread remounts", async () => {
+  const dom = linkPanelDom();
+  function Harness() {
+    const [open, setOpen] = useState(true);
+    const [tab, setTab] = useState("");
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "thread-expand-persist",
+      workspacePath: "/tmp/work",
+      title: "Test",
+      open,
+      onOpenChange: setOpen,
+      selectedTab: tab,
+      onSelectTab: setTab,
+      snapshot: null,
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    const panel = () => document.querySelector(".auxiliary-panel")!;
+    assert.equal(panel().getAttribute("data-expanded"), "false");
+    const toggle = document.querySelector<HTMLButtonElement>(
+      ".auxiliary-panel button[aria-pressed]:not(.workspace-add-tab)",
+    )!;
+    await act(async () => toggle.click());
+    assert.equal(panel().getAttribute("data-expanded"), "true");
+    await act(async () => root.render(React.createElement("div", null)));
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.equal(panel().getAttribute("data-expanded"), "true");
+    const toggleAgain = document.querySelector<HTMLButtonElement>(
+      ".auxiliary-panel button[aria-pressed]:not(.workspace-add-tab)",
+    )!;
+    await act(async () => toggleAgain.click());
+    assert.equal(panel().getAttribute("data-expanded"), "false");
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

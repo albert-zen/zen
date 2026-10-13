@@ -61,3 +61,45 @@ test("Browser Host accepts web message URLs and rejects unsafe navigation", () =
     /credentials/u,
   );
 });
+
+test("bare message URLs shed markdown residue and CJK prose punctuation", () => {
+  // Observed failure: a model wrote `**url**（prose…）`; the emphasis fails to
+  // pair before full-width punctuation and the autolinker keeps the residue in
+  // the href, navigating to a 404.
+  const observed = classifyMessageLink(
+    "http://127.0.0.1:56277/sales–architecture.html**（刚重启，已验证",
+  );
+  assert.deepEqual(observed, {
+    kind: "browser",
+    value: new URL("http://127.0.0.1:56277/sales–architecture.html").toString(),
+  });
+  const wrapped = classifyMessageLink("https://example.com/a）");
+  assert.deepEqual(wrapped, {
+    kind: "browser",
+    value: "https://example.com/a",
+  });
+  const emphasized = classifyMessageLink("https://example.com/a**");
+  assert.deepEqual(emphasized, {
+    kind: "browser",
+    value: "https://example.com/a",
+  });
+  const sentence = classifyMessageLink("https://example.com/a。");
+  assert.deepEqual(sentence, {
+    kind: "browser",
+    value: "https://example.com/a",
+  });
+  const query = classifyMessageLink("https://example.com/?a=1，下一页");
+  assert.deepEqual(query, {
+    kind: "browser",
+    value: "https://example.com/?a=1",
+  });
+  // Legitimate targets survive: CJK characters in a path are not punctuation,
+  // and CJK punctuation inside a workspace file name stays a file link.
+  const cjkPath = classifyMessageLink("http://127.0.0.1:56277/报告.html");
+  assert.deepEqual(cjkPath, {
+    kind: "browser",
+    value: new URL("http://127.0.0.1:56277/报告.html").toString(),
+  });
+  const file = classifyMessageLink("报告（v2）.md");
+  assert.deepEqual(file, { kind: "file", value: "报告（v2）.md" });
+});

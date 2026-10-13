@@ -2967,6 +2967,11 @@ export function App() {
                   ? messageLinkRequest
                   : null
               }
+              onMessageLinkRequestHandled={(id) =>
+                setMessageLinkRequest((current) =>
+                  current?.id === id ? null : current,
+                )
+              }
               navigate={openPage}
               onWidthChange={setWorkspacePanelWidth}
               fileDrafts={fileDrafts}
