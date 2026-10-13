@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - .gitattributes
       - .github/workflows/zenx-winapp-downstream.yml
       - vendor/winapp-0.3.1/**
       - scripts/build-zenx-winapp-downstream.mjs

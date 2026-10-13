@@ -118,16 +118,58 @@ test("runner-local SDK path uses a supported step context instead of job env", a
     path.join(root, ".github/workflows/zenx-winapp-downstream.yml"),
     "utf8",
   );
-  const [jobConfiguration, steps] = workflow.split("    steps:\n");
-  assert.doesNotMatch(jobConfiguration, /\$\{\{\s*runner\./u);
-  const setupDotnet = steps
-    .split(/(?=^      - )/mu)
-    .find((step) => step.includes("uses: actions/setup-dotnet@"));
-  assert.ok(setupDotnet);
-  assert.match(
-    setupDotnet,
-    /        env:\n          DOTNET_INSTALL_DIR: \$\{\{ runner\.temp \}\}\/zenx-dotnet-candidate\n/u,
+  for (const ending of ["\n", "\r\n"]) {
+    const text = workflow.replace(/\r?\n/gu, ending).replace(/\r\n/gu, "\n");
+    const [jobConfiguration, steps] = text.split("    steps:\n");
+    assert.doesNotMatch(jobConfiguration, /\$\{\{\s*runner\./u);
+    const setupDotnet = steps
+      .split(/(?=^      - )/mu)
+      .find((step) => step.includes("uses: actions/setup-dotnet@"));
+    assert.ok(setupDotnet);
+    assert.match(
+      setupDotnet,
+      /        env:\n          DOTNET_INSTALL_DIR: \$\{\{ runner\.temp \}\}\/zenx-dotnet-candidate\n/u,
+    );
+  }
+});
+
+test("Windows-style fresh clone preserves the exact hashed patch bytes", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-eol-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source");
+  const checkout = path.join(directory, "checkout");
+  const patchFile = path.join(source, lock.patch.path);
+  await mkdir(path.dirname(patchFile), { recursive: true });
+  await writeFile(patchFile, patch);
+  await writeFile(
+    path.join(source, ".gitattributes"),
+    await readFile(path.join(root, ".gitattributes")),
   );
+  git(source, "init");
+  git(source, "config", "core.autocrlf", "false");
+  git(source, "add", ".");
+  git(
+    source,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-m",
+    "patch bytes",
+  );
+  git(
+    directory,
+    "-c",
+    "core.autocrlf=true",
+    "clone",
+    "--no-local",
+    source,
+    checkout,
+  );
+  const checkedOut = await readFile(path.join(checkout, lock.patch.path));
+  assert.equal(digest(checkedOut), lock.patch.sha256);
+  assert.equal(checkedOut.toString("utf8"), patch);
 });
 
 test("patch uses generated UIA2 and confirms FALSE on the real service before retaining its client", () => {
