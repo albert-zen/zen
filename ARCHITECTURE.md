@@ -103,6 +103,7 @@
 - **Shell lifecycle observations** — ShellToolRuntime 从成功 spawn、直接子进程 exit 与两个输出流 end 产生正交的 foreground/stdio 事实，ToolTaskManager 将同一时点的可选快照放入普通工具回执；这些事实不改变任务状态、close 结算、取消或 journal/restart 语义。
 - **Shared Shell view** — ToolTaskManager projects its actual Shell tasks as bounded Host-local session observations (origin, stable task ID, captured output, lifecycle); ZenX only attaches views, while human PTY input stays a Host-only capability and the Agent reads the same sessions via shell_sessions / wait. No separate execution registry, transcript authority, remote fallback or process revival is introduced.
 - **Windows Shell ownership** — ZenX injects an invocation-local launch observer that reuses exact-handle, creation-time-checked process termination; conservative ancestry snapshots never adopt ambiguous PIDs, and failed cancellation evidence remains unconfirmed in the existing ToolTaskManager rather than being inferred from pipe closure or settlement.
+- **Windows PTY dependency contract** — ZenX pins and verifies the node-pty cleanup implementation so public terminal close retains native-handle/reader cleanup without asynchronous unverified PID kills; install and package staging share the same fail-closed patch, with no new execution owner.
 - **ToolTaskPolicy** — 具体工具只声明取消确认能力、资源作用域和可选 timingArguments 字段映射；默认未知取消保留 owner fence 与执行容量直到真实完成或 Host 关闭，shell 在进程组停止后确认取消，composite 由同一任务管理器持有并协调嵌套调用，本身不占子工具容量。
 - **Tool Resource Claims** — Runtime 可为一次调用声明瞬时共享或独占资源，统一任务管理器原子取得全部声明；显式启用排队的调用以自身 Thread 的 task_id 等待，冲突资源按到达顺序执行，互不相关的资源仍可并行，取消或超时的待执行调用不派发，已经派发的未知取消继续保留资源直到真实结束。
 - **ZenX Hosted Resource Ownership** — Browser 执行按真实的 Thread/session 隔离和页面身份协调，会话关闭独占整个会话；Computer 保留共享桌面的独占操作边界，其他插件各自独占插件资源，IPC transport 不充当所有插件共同的资源锁；这些资源只存在于 Host 生命周期内，不改变 Thread 权威或观察投影。
@@ -1187,3 +1188,5 @@ Room quotes are immutable bounded snapshots of a same-Room message captured with
 ### IMZenX PAW Room routes
 
 IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
+
+- **ZenX sidebar width** — A renderer-only local preference drives the existing shell track; viewport clamping, pointer gestures and collapsed/overlay presentation are disposable layout state and never alter Thread or Host facts.
