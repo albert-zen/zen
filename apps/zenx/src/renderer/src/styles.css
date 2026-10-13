@@ -323,7 +323,8 @@ button:disabled {
 
 .app-shell {
   --workspace-panel-width: 0px;
-  --sidebar-track: 264px;
+  --sidebar-width: 264px;
+  --sidebar-track: var(--sidebar-width);
   --sidebar-divider-x: var(--sidebar-track);
   --titlebar-brand-track: var(--sidebar-track);
   --native-titlebar-height: 44px;
@@ -483,6 +484,68 @@ button:disabled {
   pointer-events: none;
   opacity: 0;
   transform: translateX(-12px);
+}
+/* A generous invisible hit area with a quiet, single-line visual affordance. */
+.sidebar-resizer {
+  position: absolute;
+  z-index: 61;
+  top: var(--titlebar-height);
+  bottom: 0;
+  left: calc(var(--sidebar-track) - 4px);
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-app-region: no-drag;
+  outline: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 4px;
+  background: transparent;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.sidebar-resizer[data-resizing="true"]::after {
+  background: var(--color-text-accent);
+}
+.sidebar-resizer:focus-visible {
+  outline: 2px solid var(--color-text-accent);
+  outline-offset: -2px;
+}
+.app-shell:has(> .sidebar-resizer[data-resizing="true"]) {
+  transition: none;
+  cursor: col-resize;
+  user-select: none;
+}
+.app-shell:has(> .sidebar-resizer[data-resizing="true"]) iframe {
+  pointer-events: none;
+}
+.app-shell.sidebar-collapsed > .sidebar-resizer {
+  display: none;
+}
+.sidebar-resize-notice {
+  position: absolute;
+  z-index: 62;
+  bottom: 58px;
+  left: 10px;
+  width: calc(var(--sidebar-track) - 20px);
+  padding: 8px;
+  border: 1px solid var(--color-border-control);
+  border-radius: 6px;
+  background: var(--color-surface-sidebar);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+}
+@media (forced-colors: active) {
+  .sidebar-resizer:focus-visible {
+    outline-color: Highlight;
+  }
+  .sidebar-resizer:is(:hover, :focus-visible, [data-resizing="true"])::after {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
 }
 .sidebar-header {
   flex: 0 0 auto;
@@ -5134,9 +5197,6 @@ button:disabled {
 }
 
 @media (max-width: 820px) {
-  .app-shell {
-    --sidebar-track: 230px;
-  }
   .app-shell.sidebar-collapsed {
     --titlebar-brand-track: min(232px, calc(100% - 138px));
   }
@@ -5208,6 +5268,10 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
+  .sidebar-resizer,
+  .sidebar-resize-notice {
+    display: none;
+  }
   .app-shell {
     --sidebar-track: 0px;
     --titlebar-brand-track: min(264px, calc(100% - 138px));
