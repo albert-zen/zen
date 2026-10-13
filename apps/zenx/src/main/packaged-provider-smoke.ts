@@ -1,3 +1,4 @@
+import { verifyForegroundActivityOverlay } from "./foreground-activity-smoke.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -15,6 +16,8 @@ import { packagedProviderSmokeExitCode } from "./packaged-provider-smoke-exit.js
 import { createHostedAppServer } from "../../../../apps/cli/src/host.js";
 import { ToolEnvironment, type ToolRuntime } from "../../../../src/tool.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
+
+app.on("window-all-closed", () => undefined);
 
 const portServer = createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
@@ -35,6 +38,12 @@ void app.whenReady().then(async () => {
     assert.ok(
       process.resourcesPath.length > 0,
       "packaged smoke must use process.resourcesPath",
+    );
+    console.log(
+      "Native foreground overlay fixture",
+      await verifyForegroundActivityOverlay(
+        path.join(__dirname, "../preload/foreground-activity.cjs"),
+      ),
     );
     const manifestPath = path.join(
       process.resourcesPath,

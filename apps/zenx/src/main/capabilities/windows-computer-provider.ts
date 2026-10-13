@@ -142,6 +142,7 @@ export interface WinAppCliRunOptions {
   timeoutMs: number;
   stdin?: string;
   signal?: AbortSignal;
+  onStopping?: () => void;
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   redactions?: readonly string[];
@@ -475,12 +476,13 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     target: ComputerTarget,
     control: ComputerControlSelector,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
   }> {
     this.#requireWindows();
-    const window = await this.#resolveWindow(target, signal);
+    const window = await this.#resolveWindow(target, signal, onStopping);
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
@@ -488,11 +490,19 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       winAppWindowIdentity(window),
     );
     const selector = requiredProviderSelector(fingerprint);
-    await this.#revalidateControl(window, fingerprint, "press", signal);
+    await this.#revalidateControl(
+      window,
+      fingerprint,
+      "press",
+      signal,
+      onStopping,
+    );
     const result = await this.#json<{ hwnd?: unknown }>(
       ["ui", "invoke", selector, "--window", String(window.hwnd), "--json"],
       10_000,
       signal,
+      undefined,
+      onStopping,
     );
     requireConfirmedHwnd(result.hwnd, window.hwnd, "invoke");
     return { target: resolvedTarget(window), control };
@@ -503,13 +513,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     control: ComputerControlSelector,
     value: string,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
   }> {
     this.#requireWindows();
-    const window = await this.#resolveWindow(target, signal);
+    const window = await this.#resolveWindow(target, signal, onStopping);
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
@@ -517,7 +528,13 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       winAppWindowIdentity(window),
     );
     const selector = requiredProviderSelector(fingerprint);
-    await this.#revalidateControl(window, fingerprint, "set_value", signal);
+    await this.#revalidateControl(
+      window,
+      fingerprint,
+      "set_value",
+      signal,
+      onStopping,
+    );
     const result = await this.#json<{ hwnd?: unknown }>(
       [
         "ui",
@@ -531,6 +548,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       10_000,
       signal,
       [value],
+      onStopping,
     );
     requireConfirmedHwnd(result.hwnd, window.hwnd, "set-value");
     const verification = await this.#json<{
@@ -553,6 +571,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       5_000,
       signal,
       [value],
+      onStopping,
     );
     if (
       verification.found !== true ||
@@ -565,7 +584,11 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
         "WinApp CLI set-value did not satisfy the bounded UI Automation value assertion",
       );
     }
-    const refreshedWindow = await this.#refreshWindow(window, signal);
+    const refreshedWindow = await this.#refreshWindow(
+      window,
+      signal,
+      onStopping,
+    );
     return {
       target: resolvedTarget(refreshedWindow),
       control,
@@ -719,6 +742,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   async #resolveWindow(
     target: ComputerTarget,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<WinAppWindow> {
     if (target.windowTitle === undefined) {
       throw new Error(
@@ -734,6 +758,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       ["ui", "list-windows", "--app", String(app), "--json"],
       10_000,
       signal,
+      undefined,
+      onStopping,
     );
     if (!Array.isArray(result)) {
       throw new Error("WinApp CLI list-windows returned an invalid JSON shape");
@@ -761,11 +787,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   async #refreshWindow(
     previous: WinAppWindow,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<WinAppWindow> {
     const result = await this.#json<unknown>(
       ["ui", "list-windows", "--app", String(previous.processId), "--json"],
       10_000,
       signal,
+      undefined,
+      onStopping,
     );
     if (!Array.isArray(result)) {
       throw new Error("WinApp CLI list-windows returned an invalid JSON shape");
@@ -788,6 +817,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   async #inspectWindow(
     window: WinAppWindow,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<NonNullable<WinAppInspectEnvelope["windows"]>[number]> {
     const envelope = await this.#json<WinAppInspectEnvelope>(
       [
@@ -803,6 +833,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       ],
       DEFAULT_TIMEOUT_MS,
       signal,
+      undefined,
+      onStopping,
     );
     validateInspectEnvelope(envelope);
     const inspectedWindow = envelope.windows?.find((candidate) =>
@@ -821,9 +853,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     expected: ComputerControlFingerprint,
     action: "press" | "set_value",
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void> {
     const selector = requiredProviderSelector(expected);
-    const inspectedWindow = await this.#inspectWindow(window, signal);
+    const inspectedWindow = await this.#inspectWindow(
+      window,
+      signal,
+      onStopping,
+    );
     const matches = flattenElements(inspectedWindow.elements ?? []).filter(
       (element) => element.selector === selector,
     );
@@ -864,6 +901,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     timeoutMs: number,
     signal?: AbortSignal,
     redactions?: readonly string[],
+    onStopping?: () => void,
   ): Promise<T> {
     const result = await this.#run(args, {
       timeoutMs,
@@ -871,6 +909,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       maxStdoutBytes: MAX_WINAPP_STDOUT_BYTES,
       maxStderrBytes: MAX_WINAPP_STDERR_BYTES,
       redactions,
+      onStopping,
     });
     try {
       return JSON.parse(result.stdout) as T;
@@ -943,10 +982,19 @@ export async function runBoundedProcess(
     const failAndKill = (error: Error): void => {
       if (settled || failure !== undefined) return;
       failure = error;
+      try {
+        options.onStopping?.();
+      } catch {
+        /* Presentation cannot prevent termination. */
+      }
       // Requesting termination does not prove it happened. Keep the invocation
       // (and the host's foreground activity) live until actual child/pipe close.
       // A failed kill must never become a falsely confirmed cancellation.
-      child.kill("SIGKILL");
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* Preserve the original failure and wait for native close. */
+      }
     };
     const timer = setTimeout(() => {
       failAndKill(
@@ -985,9 +1033,7 @@ export async function runBoundedProcess(
     if (options.stdin !== undefined) child.stdin?.end(options.stdin, "utf8");
     // Node emits close after a spawn error too. Do not confuse an error from
     // a termination request with proof that an already-running child stopped.
-    child.once("error", (error) => {
-      failure ??= error;
-    });
+    child.once("error", failAndKill);
     child.once("close", (code, exitSignal) => {
       finish(() => {
         if (failure !== undefined) {

@@ -1,3 +1,9 @@
+import { ForegroundActivity } from "./foreground-activity.js";
+import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
+import {
+  foregroundAgentName,
+  stopForegroundOwner,
+} from "./foreground-activity-owner.js";
 import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
@@ -20,6 +26,7 @@ import {
   ipcMain,
   Menu,
   safeStorage,
+  screen,
   session,
   shell,
   systemPreferences,
@@ -92,7 +99,11 @@ import {
   MutableAppServerRequestPort,
   ZenXSelfControlCapabilityPackage,
 } from "./capabilities/self-control-package.js";
-import { nativeText, setNativeLanguage } from "./native-locale.js";
+import {
+  nativeText,
+  nativeLanguage,
+  setNativeLanguage,
+} from "./native-locale.js";
 import { resolveLanguage } from "../locale.js";
 import { installApplicationMenu } from "./application-menu.js";
 import { ZenXDirectoryBrowser } from "./directory-browser.js";
@@ -211,6 +222,7 @@ let appServerManager: AppServerManager | undefined;
 let fleetSettingsService: FleetSettingsService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
+let foregroundActivity: ForegroundActivity | undefined;
 let imZenXSetupService: ImZenXSetupService | undefined;
 let chromeExtensionBridge: ChromeExtensionBridge | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
@@ -226,7 +238,7 @@ const ownsSingleInstance =
     "own-authority";
 const hostLifecycle = new ZenXHostLifecycle({
   platform: desktopPlatform(process.platform),
-  windowCount: () => BrowserWindow.getAllWindows().length,
+  windowCount: () => appWindows().length,
   createWindow,
   cancelBootstrap: () => bootstrapFence.cancelAndJoin(),
   stopHost: stopZenXHost,
@@ -254,6 +266,11 @@ const externalZasAcceptancePath = externalZasAcceptanceConfigPath(
 
 let rendererReady = false;
 const ownedAppWindowIds = new Set<number>();
+function appWindows(): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter((window) =>
+    ownedAppWindowIds.has(window.id),
+  );
+}
 let bootstrapFailure: string | undefined;
 
 function loadAppRenderer(window: BrowserWindow): void {
@@ -560,7 +577,7 @@ async function bootstrapZenX(): Promise<void> {
         saveWorkflowConfiguration: async (value) => {
           await settingsService!.saveWorkflowConfiguration(value);
           const publicSettings = await settingsService!.publicSettings();
-          for (const window of BrowserWindow.getAllWindows())
+          for (const window of appWindows())
             window.webContents.send(
               ipcChannels.settingsChanged,
               publicSettings,
@@ -593,7 +610,33 @@ async function bootstrapZenX(): Promise<void> {
       fleetSettingsService,
       () => {},
     );
+    const foregroundPresenter = new ElectronForegroundActivityPresenter({
+      createWindow: (options) => new BrowserWindow(options),
+      screen,
+      ipcMain,
+      preloadPath: join(__dirname, "../preload/foreground-activity.cjs"),
+      language: nativeLanguage,
+      onStop: (ids) => foregroundActivity?.stop(ids),
+      onUnavailable: (error) => foregroundActivity?.unavailable(error),
+    });
+    foregroundActivity = new ForegroundActivity({
+      presenter: foregroundPresenter,
+      agentName: (invocation) =>
+        foregroundAgentName(
+          invocation.threadId,
+          automationService?.roomsAvailable()
+            ? automationService.snapshot().rooms
+            : [],
+        ),
+      stopOwner: async (invocation) => {
+        if (appServerManager)
+          await stopForegroundOwner(appServerManager, invocation);
+      },
+      report: (error) =>
+        console.error("Foreground computer activity failed", error),
+    });
     capabilityService = new ZenXCapabilityService({
+      foregroundActivity,
       toolTargetTransport: (invocation) =>
         fleetToolTransport.invoke(invocation),
       userDataDirectory,
@@ -1031,7 +1074,7 @@ async function bootstrapZenX(): Promise<void> {
   );
   bootstrapFence.throwIfCancelled();
   rendererReady = true;
-  const existingWindow = BrowserWindow.getAllWindows()[0];
+  const existingWindow = appWindows()[0];
   const mainWindow = existingWindow ?? createWindow();
   if (existingWindow !== undefined) loadAppRenderer(existingWindow);
   bootstrapFence.throwIfCancelled();
@@ -1087,7 +1130,7 @@ if (!nativeHostMode)
       console.error("ZenX bootstrap failed", error);
       if (hostLifecycle.quitting) return;
       bootstrapFailure = error instanceof Error ? error.message : String(error);
-      const window = BrowserWindow.getAllWindows()[0] ?? createWindow();
+      const window = appWindows()[0] ?? createWindow();
       loadStartupPage(window);
     });
 
@@ -1122,7 +1165,7 @@ app.on("activate", () => {
 app.on("second-instance", () => {
   if (!ownsSingleInstance) return;
   hostLifecycle.activate();
-  const window = BrowserWindow.getAllWindows()[0];
+  const window = appWindows()[0];
   if (window?.isMinimized()) window.restore();
   window?.focus();
 });
@@ -1160,6 +1203,8 @@ async function stopZenXHost(): Promise<void> {
   } catch (error) {
     errors.push(normalizeTitleOwnershipFailure(error));
   }
+  foregroundActivity?.close();
+  foregroundActivity = undefined;
   try {
     await chromeExtensionBridge?.close();
     chromeExtensionBridge = undefined;
@@ -1405,7 +1450,7 @@ function installProtocolIpc(
     },
   );
   manager.onStatus((status) => {
-    for (const window of BrowserWindow.getAllWindows()) {
+    for (const window of appWindows()) {
       window.webContents.send(ipcChannels.status, status);
     }
   });
@@ -1432,17 +1477,17 @@ function installProtocolIpc(
           );
         });
     }
-    for (const window of BrowserWindow.getAllWindows()) {
+    for (const window of appWindows()) {
       window.webContents.send(ipcChannels.notification, method, params);
     }
   });
   manager.onApprovalRequest((approval) => {
-    for (const window of BrowserWindow.getAllWindows()) {
+    for (const window of appWindows()) {
       window.webContents.send(ipcChannels.approvalRequest, approval);
     }
   });
   manager.onApprovalResolved((approval) => {
-    for (const window of BrowserWindow.getAllWindows()) {
+    for (const window of appWindows()) {
       window.webContents.send(ipcChannels.approvalResolved, approval);
     }
   });
@@ -1488,7 +1533,7 @@ function installTitleIpc(titles: ZenXThreadTitleCoordinator): void {
     return await titles.retry(threadId);
   });
   titles.onChange((snapshot) => {
-    for (const window of BrowserWindow.getAllWindows())
+    for (const window of appWindows())
       window.webContents.send(ipcChannels.titlesChanged, snapshot);
   });
 }
@@ -2077,7 +2122,7 @@ function installSettingsIpc(
         void shell.openExternal(url);
       },
       () => {
-        for (const window of BrowserWindow.getAllWindows()) {
+        for (const window of appWindows()) {
           window.webContents.send(ipcChannels.subscriptionManualRequested);
         }
       },
@@ -2332,16 +2377,14 @@ function installCapabilityIpc(
     },
   );
   capabilities.onPanelOpen((request) => {
-    const windows = BrowserWindow.getAllWindows().filter(
-      (window) => !window.isDestroyed(),
-    );
+    const windows = appWindows().filter((window) => !window.isDestroyed());
     if (windows.length === 0)
       throw new Error("No ZenX window is available to show a panel");
     for (const window of windows)
       window.webContents.send(ipcChannels.pluginPanelOpen, request);
   });
   capabilities.onChange((snapshot) => {
-    for (const window of BrowserWindow.getAllWindows()) {
+    for (const window of appWindows()) {
       window.webContents.send(ipcChannels.pluginsChanged, snapshot);
     }
   });
