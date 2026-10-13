@@ -1,5 +1,6 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
@@ -69,6 +70,7 @@ async function fixture() {
     },
   });
   const opened: unknown[][] = [];
+  const navigationRequests: unknown[][] = [];
   const externalRequests: string[][] = [];
   let nextExternal: Promise<void> | undefined;
   dom.window.open = (...args: unknown[]) => {
@@ -84,7 +86,9 @@ async function fixture() {
       workspaceBrowser: {
         onFocusAddress: () => () => {},
         mount: async () => {},
-        command: async () => {},
+        command: async (...args: unknown[]) => {
+          navigationRequests.push(args);
+        },
       },
       browserObservation: {
         async openExternal(threadId: string, targetId: string) {
@@ -143,6 +147,7 @@ async function fixture() {
   };
   return {
     opened,
+    navigationRequests,
     externalRequests,
     deferExternal(promise: Promise<void>) {
       nextExternal = promise;
@@ -168,6 +173,83 @@ async function fixture() {
     },
   };
 }
+
+test("native URL field ends with one external arrow and retains form navigation", async () => {
+  const f = await fixture();
+  try {
+    await f.renderNative();
+    const field = document.querySelector(".workspace-browser-location")!;
+    const input = field.querySelector("input")!;
+    const form = input.form!;
+    assert.ok(field.classList.contains("browser-url-field"));
+    assert.equal(field.lastElementChild, f.button());
+    assert.equal(field.querySelectorAll("button").length, 1);
+    assert.equal(form.querySelectorAll('[type="submit"]').length, 0);
+    assert.equal(field.querySelector('[data-icon="arrow-right"]'), null);
+    assert.ok(field.querySelector('[data-icon="external-link"] path'));
+    assert.equal(f.button().disabled, false);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "https://draft.example/enter-navigation");
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    assert.deepEqual(f.opened, []);
+    // A single text input with no submit button retains native implicit Enter
+    // submission. Exercise its React submit handler; JSDOM has no key default action.
+    await act(async () => {
+      form.dispatchEvent(
+        new window.Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    assert.deepEqual(f.navigationRequests, [
+      [
+        "thread-a",
+        "navigate",
+        "tab-a",
+        "https://draft.example/enter-navigation",
+      ],
+    ]);
+    assert.deepEqual(f.opened, []);
+    await act(async () => f.button().click());
+    assert.equal(f.opened[0]![0], "https://example.com/current");
+    assert.equal(
+      f.navigationRequests.length,
+      1,
+      "External opening must not submit the address",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("URL field sizing contains its 44px narrow and touch action without clipping focus", () => {
+  const css = readFileSync(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const field = css.match(/\.browser-url-field \{([^}]+)\}/)![1]!;
+  assert.match(field, /--browser-url-action-size: 28px/);
+  assert.match(
+    field,
+    /height: calc\(var\(--browser-url-action-size\) \+ 2px\)/,
+  );
+  assert.match(field, /border: 1px solid/);
+  assert.match(field, /min-width: 0/);
+  assert.doesNotMatch(field, /overflow: hidden/);
+  const action = css.match(
+    /\.browser-url-field \.browser-external-open \{([^}]+)\}/,
+  )![1]!;
+  assert.match(action, /flex: 0 0 var\(--browser-url-action-size\)/);
+  assert.match(action, /width: var\(--browser-url-action-size\)/);
+  assert.match(action, /height: var\(--browser-url-action-size\)/);
+  assert.match(action, /color: var\(--color-text-primary\)/);
+  assert.match(
+    css,
+    /@media \(pointer: coarse\), \(max-width: 720px\) \{\s*\.workspace-browser-address \{\s*height: auto;\s*min-height: 57px;\s*\}\s*\.browser-url-field \{\s*--browser-url-action-size: 44px;/,
+  );
+});
 
 test("native shortcut opens the current host URL, never an address draft, and follows navigation", async () => {
   const f = await fixture();
@@ -236,6 +318,12 @@ test("connected shortcut sends only exact selected identity to the Host, never a
       target(),
       target({ id: "connected-b", url: "https://other.example/" }),
     ]);
+    const field = document.querySelector(".browser-panel-location")!;
+    assert.ok(field.classList.contains("browser-url-field"));
+    assert.equal(field.lastElementChild, f.button());
+    assert.equal(field.querySelectorAll("button").length, 1);
+    assert.ok(field.querySelector('[data-icon="external-link"] path'));
+    assert.equal(f.button().disabled, false);
     await act(async () => f.button().click());
     assert.deepEqual(f.externalRequests[0], ["thread-a", "connected-a"]);
     await f.targets([target({ url: "https://example.com/after-redirect" })]);

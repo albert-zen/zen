@@ -430,7 +430,7 @@ ThreadView
 - 插件 `contributions.panels` 按 order 排列在加号选择器中，打开后与文件、浏览器并列。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
 - 插件通过 Host SDK `ui.panels.open({ panelId, threadId })` 请求展示自己声明的 panel。请求只改变易失 UI 选择，不切换当前 Thread，不创建 Turn；给后台 Thread 的请求在用户选择该 Thread 时展示。没有窗口或 panel 不可用时明确报错；成功表示已分发给窗口，不代表用户已看到或确认内容。
 - Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
-- Browser 地址栏与 Attached browser 的当前页面 URL 旁提供“在外部浏览器打开当前页面”快捷按钮，使用系统默认浏览器。只打开当前已选页面的实际 HTTP(S) URL（保留 query/hash），不使用地址栏未提交草稿；Attached browser 由 Host 按当前订阅的精确目标读取并打开，工具摘要仍保持脱敏。空页面、加载中、连接失效或切换尚未得到新页面时禁用。图标沿用共享样式并具有 tooltip、可访问名称与键盘焦点。
+- Browser 地址框与 Attached browser 的当前页面 URL 框内部最右侧常显“在外部浏览器打开当前页面”外链箭头，使用系统默认浏览器；地址输入保留 Enter 导航，不再并排放置含义易混淆的 Go 箭头。只打开当前已选页面的实际 HTTP(S) URL（保留 query/hash），不使用地址栏未提交草稿；Attached browser 由 Host 按当前订阅的精确目标读取并打开，工具摘要仍保持脱敏。空页面、加载中、连接失效或切换尚未得到新页面时禁用。图标沿用共享样式并具有 tooltip、可访问名称与键盘焦点；窄窗和触屏按钮至少 44px，URL 框与工具栏随之增高。
 - 共享网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签释放页面；关闭窗口、隐藏面板或切换 Thread 时只移除 native view，Host 继续持有页面供同一 Thread 的 Agent 使用。当前最多20个共享标签，不提供书签、扩展或完整历史管理。
 - Terminal 打开当前真实 Thread 的本机 Shell 会话管理首页，显示同一 ToolTaskManager 中 Agent 命令与人工交互终端的稳定 task ID、来源、cwd 和实际状态；不跨 Thread 聚合同目录进程，不建立第二套执行注册表。远端 Fleet 会话不映射成本机会话，不静默降级。
 - New terminal 是明确的人工执行操作，在 Thread 的 canonical cwd 创建真实 PTY；仅在既有 Full Access 且 Shell 未被拒绝时可用，归档或受限策略不被自动修改。启动本机交互 Shell 可能读取其正常 startup files。人工拥有输入，Agent 通过同一 Shell 系统的 shell_sessions / wait 观察，不向人工终端交错输入；Agent 取消等待不会终止人工终端。

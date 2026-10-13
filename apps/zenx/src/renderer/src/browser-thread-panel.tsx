@@ -317,7 +317,7 @@ export function BrowserThreadPanel({
             {i18n.t("panels:followAgent")}
           </button>
         ) : null}
-        <div className="browser-panel-location">
+        <div className="browser-panel-location browser-url-field">
           <span title={selected?.url}>{selected?.url}</span>
           <BrowserExternalOpen
             url={selected?.url}
