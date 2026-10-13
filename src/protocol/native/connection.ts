@@ -1,8 +1,8 @@
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
 import { AppServerError, type ZenAppServer } from "../../app-server.js";
 import type { ApprovalHandler } from "../../tool.js";
-import { validateUserInput, type UserInputPart } from "../../item.js";
-import type { SkillReference } from "../../skill-input.js";
+import { ThreadJournalAppendOutcomeUnknownError } from "../../journal.js";
+import { prepareNativeInput } from "./input.js";
 import { isRecord, isRequest } from "../codex/wire.js";
 import {
   NativeRecoveryProjection,
@@ -10,6 +10,8 @@ import {
 } from "./recovery.js";
 import {
   NATIVE_MODEL_CATALOG_UPDATED_METHOD,
+  NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY,
+  NATIVE_INLINE_IMAGE_INPUT_CAPABILITY,
   NATIVE_THREAD_DELETE_METHOD,
   NATIVE_THREAD_DELETED_LIST_METHOD,
   NATIVE_THREAD_RESTORE_METHOD,
@@ -358,21 +360,7 @@ export class NativeConnection {
             "invalid_request",
             "requireUnarchived must be a boolean",
           );
-        const input: (UserInputPart | SkillReference)[] = params.input.map(
-          (part: unknown) => {
-            if (!isRecord(part)) throw new Error("Invalid input part");
-            if (
-              part.type === "skill" &&
-              typeof part.id === "string" &&
-              part.id.length > 0
-            )
-              return { type: "skill", id: part.id };
-            if (part.skillSource !== undefined)
-              throw new Error("Skill provenance is Host-owned");
-            validateUserInput([part], "input");
-            return part as unknown as UserInputPart;
-          },
-        );
+        const input = await prepareNativeInput(params.input, this.#appServer);
         const options = {
           clientId: params.clientUserMessageId,
           ...(message.method === NATIVE_TURN_SEND_UNARCHIVED_METHOD
@@ -386,16 +374,22 @@ export class NativeConnection {
         };
         this.#subscriptions.add(params.threadId);
         let result: NativeTurnSendResult = {};
-        if (params.mode === "queue" || params.mode === "batch-next")
-          await this.#appServer.queueMessage(
-            params.threadId,
-            input,
-            options.clientId,
-            params.mode === "batch-next"
-              ? { ...options, deliveryMode: "batch-next" }
-              : options,
-          );
-        else if (params.mode === "start") {
+        if (params.mode === "queue" || params.mode === "batch-next") {
+          result = {
+            admission: await this.#appServer.queueMessage(
+              params.threadId,
+              input,
+              options.clientId,
+              {
+                ...options,
+                waitForTurnAdmission: false,
+                ...(params.mode === "batch-next"
+                  ? { deliveryMode: "batch-next" as const }
+                  : {}),
+              },
+            ),
+          };
+        } else if (params.mode === "start") {
           const turn = await this.#appServer.startTurn(
             params.threadId,
             input,
@@ -434,11 +428,21 @@ export class NativeConnection {
         this.#send({
           id: message.id,
           error: {
-            code: -32602,
-            message: error instanceof Error ? error.message : String(error),
-            ...(error instanceof AppServerError
-              ? { data: { zenCode: error.code } }
-              : {}),
+            code:
+              error instanceof ThreadJournalAppendOutcomeUnknownError
+                ? -32603
+                : -32602,
+            message:
+              error instanceof ThreadJournalAppendOutcomeUnknownError
+                ? "Input admission outcome is unconfirmed. Read the Thread before retrying."
+                : error instanceof Error
+                  ? error.message
+                  : String(error),
+            ...(error instanceof ThreadJournalAppendOutcomeUnknownError
+              ? { data: { zenCode: "admission_outcome_unknown" } }
+              : error instanceof AppServerError
+                ? { data: { zenCode: error.code } }
+                : {}),
           },
         });
       }
@@ -449,7 +453,16 @@ export class NativeConnection {
       this.#nativeSession = true;
       this.#send({
         id: message.id,
-        result: { processEpoch: this.#projection.processEpoch },
+        result: {
+          processEpoch: this.#projection.processEpoch,
+          capabilities:
+            this.#appServer === undefined
+              ? []
+              : [
+                  NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY,
+                  NATIVE_INLINE_IMAGE_INPUT_CAPABILITY,
+                ],
+        },
       });
       return;
     }
