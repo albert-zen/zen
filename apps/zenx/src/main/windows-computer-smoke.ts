@@ -290,7 +290,7 @@ function Fill($bitmap, $color) {
 }
 function Check([bool]$expectRejection) {
   $rejected = $false
-  try { [void]$method.Invoke($null, [object[]]@($a,$b,0,0,4,4)) }
+  try { [void]$method.Invoke($null, [object[]]@($a.PSObject.BaseObject,$b.PSObject.BaseObject,0,0,4,4)) }
   catch { if ($_.Exception.ToString() -notmatch 'capture_unrendered') { throw }; $rejected = $true }
   if ($rejected -ne $expectRejection) { throw 'Production sentinel validation returned an unexpected result' }
 }
