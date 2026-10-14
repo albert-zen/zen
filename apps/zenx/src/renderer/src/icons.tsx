@@ -228,8 +228,7 @@ const paths: Record<IconName, ReactNode> = {
   ),
   pin: (
     <>
-      <path d="m5 2 6 6M4.2 7.2l4.6 4.6M3 10l3 3M6.2 3.2l6.6 6.6-2.7.3-3.9-3.9.3-2.7Z" />
-      <path d="m6 12-3 3" />
+      <path d="M5.4 2.4h5.2M8 2.4v2M6.2 4.4h3.6l1.8 4.6H4.4ZM8 9v4.6" />
     </>
   ),
   plug: (
@@ -240,7 +239,7 @@ const paths: Record<IconName, ReactNode> = {
   ),
   "pin-off": (
     <>
-      <path d="m4 2 10 12M6.2 3.2l6.6 6.6-2.1.2M4.2 7.2l4.6 4.6M3 10l3 3M6 12l-3 3" />
+      <path d="M5.4 2.4h5.2M8 2.4v2M6.2 4.4h3.6l1.8 4.6H4.4ZM8 9v2.1M2.6 13.4 13.4 2.6" />
     </>
   ),
   reasoning: (
