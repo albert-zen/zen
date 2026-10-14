@@ -1,4 +1,9 @@
 export const en = {
+  unreadMessages: "{{count}} unread messages",
+  wakeupDelivery: "This Trigger’s message delivery",
+  roomMessageDelivery: "This Room’s message delivery",
+  wakeupSteer: "Steer active work (default)",
+  wakeupQueue: "Queue for the next Turn",
   shellTitle: "Terminal",
   shellChooser: "Manage shared Shell sessions and open your own terminal",
   shellLocalHost: "This thread · This device",
@@ -89,6 +94,11 @@ export const en = {
   imWorkspaceDescription:
     "New conversations and PAW lists in IM use this directory.",
   imConnectionConfiguration: "Connection configuration",
+  imInputContinuation: "Ordinary IM input",
+  imInputContinuationSteer: "Soft steer (default)",
+  imInputContinuationQueue: "Queue for the next turn",
+  imInputContinuationDescription:
+    "Independent from Composer, Room and Trigger settings. Saving takes effect after reconnecting and does not change already accepted input.",
   imPrivatePathNotice:
     "Use absolute paths and your own IMZen-format configuration. Enter only paths here; set credential values in the private local file.",
   imPreparationDoesNotConnect:
@@ -151,7 +161,7 @@ export const en = {
   imClearCredential: "Clear {{field}}",
   imEnabledChannels: "Enabled channels: {{channels}}",
   pawWorkingConversationDisclosure:
-    "PAW creates its own working conversation in your Project. You can also choose an existing conversation. Creating PAW doesn't run the model; new messages wake it up.",
+    "PAW creates its own working conversation in your Project. You can also choose an existing conversation. Creating and saying hello runs the configured model for its welcome; your later messages continue the conversation.",
   pawNewWorkingConversation: "Create a new conversation",
   pawExistingWorkingConversation: "Use an existing conversation",
   pawExistingConversation: "Existing conversation",
@@ -181,7 +191,43 @@ export const en = {
   pawDelegateWork: "Delegate work",
   imReadinessChanged:
     "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again.",
-  mentionAgentForReply: "@mention an agent to request a reply",
+  mentionAgentForReply: "Type @ to choose a room member",
+  roomRepliesUnavailableCount_one:
+    "Automatic replies are off for {{count}} member",
+  roomRepliesUnavailableCount_other:
+    "Automatic replies are off for {{count}} members",
+  roomViewReplySettings: "View settings",
+  roomRepliesUnavailableHelp:
+    "Replies may be unconfigured, paused, or disabled for this Host. Review a member's settings to see its current setup. Viewing settings does not enable replies or replay earlier messages.",
+  roomMemberReplySettings: "Reply settings for @{{member}}",
+  roomSourceNotRecorded: "Source not recorded",
+  roomUnknownSender: "Unknown member",
+  roomMessageActions: "Message actions",
+  roomDelivered: "Delivered",
+  roomReadCount_one: "Read by {{count}}",
+  roomReadCount_other: "Read by {{count}}",
+  roomTechnicalDetails: "Technical details",
+  roomReactionSummary: "{{emoji}} · {{count}} · {{names}}",
+  roomRemoveReaction: "Remove {{emoji}} reaction",
+  roomUnnamedSender: "Unnamed conversation",
+  roomSenderProfile: "About {{name}}",
+  roomOpenSourceConversation: "Open source conversation",
+  roomSourceNotRecordedHelp:
+    "The source conversation was not saved with this message.",
+  roomSourceThread: "Thread · {{name}}",
+  roomSourceThreadHelp:
+    "Open the recorded source conversation: {{id}}. Its displayed name is current.",
+  roomSourcePaw: "Linked PAW · {{name}}",
+  roomSourcePawHelp:
+    "Current PAW binding for this source conversation; it does not change the recorded message author.",
+  roomSourcePawCount_one: "{{count}} linked PAW",
+  roomSourcePawCount_other: "{{count}} linked PAWs",
+  scrollForEarlierMessages: "Scroll up for earlier messages",
+  earliestRetainedMessages: "Start of retained history",
+  retryEarlierMessages: "Retry earlier messages",
+  roomHistoryChangedRetry:
+    "New messages arrived while loading history. Try again.",
+
   roomSettingsTitle: "{{name}} settings",
   messageRole: "Message role: {{role}}",
   sidePanelFor: "Side panel for {{title}}",
@@ -355,6 +401,49 @@ export const en = {
     "Replies paused. Messages are saved only; resuming does not replay them.",
   sending2: "Sending…",
   send: "Send",
+  manageNamedConversation: "Manage {{name}}",
+  renamePaw: "Rename PAW",
+  openPawWorkspace: "Open workspace",
+  setUpPaw: "Set up your PAW",
+  meetYourPaw: "A personal agent, just for you",
+  pawWelcomeDescription:
+    "Start a conversation, then choose a name and way of working together.",
+  pawLater: "Later",
+  pawAdvancedSetup: "Advanced setup",
+  pawOpenInstructions: "Open workspace AGENTS.md",
+  pawInstructionsBoundary:
+    "This edits the existing AGENTS.md inside this working directory, using the shared file editor and its save/conflict checks. Core reads repository-root AGENTS.md when a new Thread first receives input; if this directory is below that root, use a root-directory conversation to manage it. Missing files are not created automatically.",
+  pawIntroductionPreview: "PAW welcome",
+  pawStartTitle: "Meet your PAW",
+  pawStartHelp:
+    "Create your PAW and it will welcome you. You can choose its name together or start working right away.",
+  pawCreateAndGreet: "Create and say hello",
+  pawIntroductionRequest:
+    "Your PAW will introduce itself and ask what you’d like to call it. This runs your configured model.",
+  pawIntroductionFailed:
+    "Your PAW was created, but its introduction could not be confirmed. Check this conversation's delivery before retrying.",
+  pawEmptyChat:
+    "Your PAW is ready. Ask for an introduction, or just send a message to start working. You can change its name and work instructions later from settings.",
+  pawStartIntroduction: "Start introduction",
+  pawCancelWelcome: "Cancel welcome",
+  pawWelcomeAlreadyStarted:
+    "The PAW welcome has already started; cancelling this receipt cannot stop it.",
+  pawWelcomeStarting: "Your PAW is getting ready to say hello…",
+  pawWelcomeNoMessage:
+    "The welcome has no confirmed reply. You can check the working conversation, or send your own message here.",
+  pawWorkInstructions: "Working directory & instructions",
+  pawWorkInstructionsHelp:
+    "Open the working conversation to inspect its directory and existing AGENTS.md. File edits keep the same workspace permissions; renaming your PAW does not move the directory.",
+  pawNameStep: "What should we call your PAW?",
+  pawNameHelp:
+    "This is how your personal agent appears in conversations. You can change it anytime from its sidebar menu.",
+  pawNext: "Continue",
+  pawBack: "Back",
+  pawCapabilities: "Capabilities & setup details",
+  pawSetupStep: "Choose a place to work",
+  pawSetupHelp:
+    "Review the project and existing settings before creating your PAW. Nothing runs until you send a message.",
+  pawRetrySetup: "Retry setup checks",
   createPaw: "Create PAW",
   createRoom: "Create Room",
   newPawConversation: "New PAW conversation",
@@ -528,6 +617,9 @@ export const en = {
   forward: "Forward",
   reloadPage: "Reload page",
   browserAddress: "Browser address",
+  openCurrentPageExternally: "Open current page in external browser",
+  openCurrentPageFailed:
+    "Could not open the current page. Check that it is still connected, then try again.",
   enterAUrl: "Enter a URL",
   go: "Go",
   interactiveWebPage: "Interactive web page",
@@ -797,6 +889,11 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  unreadMessages: "{{count}} 条未读消息",
+  wakeupDelivery: "此 Trigger 的消息投递",
+  roomMessageDelivery: "此聊天室的消息投递",
+  wakeupSteer: "补充到当前工作（默认）",
+  wakeupQueue: "排队到下一轮",
   shellTitle: "终端",
   shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
   shellLocalHost: "当前线程 · 本机",
@@ -882,6 +979,11 @@ export const zhCN = {
     "本机进程状态不能证明 QQ 等渠道已完成真实消息投递",
   imWorkspaceDescription: "IM 中的新会话与 PAW 列表使用这个目录。",
   imConnectionConfiguration: "连接配置",
+  imInputContinuation: "普通 IM 输入",
+  imInputContinuationSteer: "柔性引导（默认）",
+  imInputContinuationQueue: "排队到下一轮",
+  imInputContinuationDescription:
+    "独立于输入框、Room 和 Trigger 设置。保存后重新连接生效，已接收的消息不受影响。",
   imPrivatePathNotice:
     "使用绝对路径和自己的 IMZen格式配置。这里只填写路径；凭证值在本机私有文件中设置。",
   imPreparationDoesNotConnect: "保存准备不会启动或重启连接",
@@ -939,7 +1041,7 @@ export const zhCN = {
   imClearCredential: "清除 {{field}}",
   imEnabledChannels: "启用的渠道：{{channels}}",
   pawWorkingConversationDisclosure:
-    "PAW 默认在项目中创建自己的工作会话，也可以选择已有会话。创建 PAW 不运行模型；新消息会唤醒它。",
+    "PAW 默认在项目中创建自己的工作会话，也可以选择已有会话。创建并打招呼会调用已配置的模型，之后可直接发消息继续对话。",
   pawNewWorkingConversation: "创建新会话",
   pawExistingWorkingConversation: "使用已有会话",
   pawExistingConversation: "已有会话",
@@ -967,7 +1069,37 @@ export const zhCN = {
   pawDelegateWork: "委派工作",
   imReadinessChanged:
     "检查准备情况后，IM 设置发生了变化。请重新检查准备情况，确认其他机器人消费进程已停止，再连接。",
-  mentionAgentForReply: "@提及 Agent 来请求回复",
+  mentionAgentForReply: "输入 @ 选择房间成员",
+  roomRepliesUnavailableCount_one: "{{count}} 位成员的自动回复未启用",
+  roomRepliesUnavailableCount_other: "{{count}} 位成员的自动回复未启用",
+  roomViewReplySettings: "查看设置",
+  roomRepliesUnavailableHelp:
+    "可能尚未设置回复、已暂停，或此主机已关闭自动回复。查看成员的设置可确认当前配置；查看不会启用回复，也不会重放此前的消息。",
+  roomMemberReplySettings: "@{{member}} 的回复设置",
+  roomSourceNotRecorded: "来源未记录",
+  roomUnknownSender: "未知成员",
+  roomMessageActions: "消息操作",
+  roomDelivered: "已送达",
+  roomReadCount_one: "{{count}} 人已读",
+  roomReadCount_other: "{{count}} 人已读",
+  roomTechnicalDetails: "技术详情",
+  roomReactionSummary: "{{emoji}} · {{count}} · {{names}}",
+  roomRemoveReaction: "移除 {{emoji}} 表情",
+  roomUnnamedSender: "未命名会话",
+  roomSenderProfile: "关于 {{name}}",
+  roomOpenSourceConversation: "打开来源会话",
+  roomSourceNotRecordedHelp: "这条消息未保存来源会话。",
+  roomSourceThread: "会话 · {{name}}",
+  roomSourceThreadHelp: "打开记录的来源会话：{{id}}。显示的是当前会话名称。",
+  roomSourcePaw: "关联 PAW · {{name}}",
+  roomSourcePawHelp: "来源会话当前关联的 PAW；不改变消息记录的作者身份。",
+  roomSourcePawCount_one: "关联 {{count}} 个 PAW",
+  roomSourcePawCount_other: "关联 {{count}} 个 PAW",
+  scrollForEarlierMessages: "向上滚动查看更早消息",
+  earliestRetainedMessages: "已到保留记录的开头",
+  retryEarlierMessages: "重试加载更早消息",
+  roomHistoryChangedRetry: "加载历史时有新消息到达，请重试。",
+
   roomSettingsTitle: "{{name}} 设置",
   messageRole: "消息角色：{{role}}",
   sidePanelFor: "{{title}} 的侧边面板",
@@ -1121,6 +1253,45 @@ export const zhCN = {
     "回复已暂停。消息仅会保存；恢复后不会重放。",
   sending2: "发送中…",
   send: "发送",
+  manageNamedConversation: "管理 {{name}}",
+  renamePaw: "给 PAW 改名",
+  openPawWorkspace: "打开工作空间",
+  setUpPaw: "设置你的 PAW",
+  meetYourPaw: "你的个人 Agent",
+  pawWelcomeDescription: "先开始对话，再一起决定名字和工作方式。",
+  pawLater: "稍后再说",
+  pawAdvancedSetup: "高级设置",
+  pawOpenInstructions: "打开工作目录 AGENTS.md",
+  pawInstructionsBoundary:
+    "这里通过共享文件编辑器修改当前工作目录内已有的 AGENTS.md，沿用保存与冲突检查。Core 在新会话首次收到输入时读取仓库根目录 AGENTS.md；如果当前目录位于仓库内层，请在根目录会话中管理。不会自动创建缺失文件。",
+  pawIntroductionPreview: "PAW 欢迎",
+  pawStartTitle: "认识你的 PAW",
+  pawStartHelp:
+    "创建后，PAW 会主动和你打招呼。你们可以一起决定名字，也可以直接开始工作。",
+  pawCreateAndGreet: "创建并打个招呼",
+  pawIntroductionRequest:
+    "PAW 会主动介绍自己，问问你想怎么称呼它。这会调用已配置的模型。",
+  pawIntroductionFailed:
+    "PAW 已创建，但尚无法确认欢迎请求的结果。请先检查本对话的投递状态，再重试。",
+  pawEmptyChat:
+    "PAW 已就绪。可以让它介绍自己，也可以直接发消息开始工作。以后仍可从设置修改名字和工作说明。",
+  pawStartIntroduction: "开始介绍",
+  pawCancelWelcome: "取消欢迎",
+  pawWelcomeAlreadyStarted: "PAW 已开始欢迎，取消这条回执不能停止运行。",
+  pawWelcomeStarting: "PAW 正准备和你打招呼…",
+  pawWelcomeNoMessage:
+    "尚无已确认的欢迎回复。你可以查看工作会话，也可以直接在这里发消息。",
+  pawWorkInstructions: "工作目录与说明",
+  pawWorkInstructionsHelp:
+    "打开工作会话，查看目录与已有的 AGENTS.md。文件编辑仍遵循原有工作目录权限；给 PAW 改名不会移动目录。",
+  pawNameStep: "给你的 PAW 起个名字",
+  pawNameHelp: "这个名字会显示在对话中。以后可以从侧栏菜单随时修改。",
+  pawNext: "继续",
+  pawBack: "返回",
+  pawCapabilities: "能力与设置详情",
+  pawSetupStep: "选择工作位置",
+  pawSetupHelp: "创建前确认项目和已有设置。发送消息后才开始工作。",
+  pawRetrySetup: "重试准备检查",
   createPaw: "创建 PAW",
   createRoom: "创建房间",
   newPawConversation: "新建 PAW 会话",
@@ -1285,6 +1456,8 @@ export const zhCN = {
   forward: "前进",
   reloadPage: "重新加载页面",
   browserAddress: "浏览器地址",
+  openCurrentPageExternally: "在外部浏览器打开当前页面",
+  openCurrentPageFailed: "无法打开当前页面。请确认页面仍已连接，再重试。",
   enterAUrl: "输入网址",
   go: "前往",
   interactiveWebPage: "交互式网页",

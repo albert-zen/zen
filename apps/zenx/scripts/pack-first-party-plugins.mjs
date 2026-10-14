@@ -24,7 +24,7 @@ const pluginSdkCli = path.join(
   "dist",
   "cli.js",
 );
-export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.6.tgz";
+export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.7.tgz";
 export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/fleet-plugin",
@@ -84,8 +84,14 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-win32-1.1.3.tgz",
+    "zenx-computer-plugin-win32-1.1.5.tgz",
     "variants/win32.zenx.plugin.json",
+  ),
+  plugin(
+    "@zenx/computer-plugin",
+    "zenx-computer-plugin",
+    "zenx-computer-plugin-win32-strict-1.2.0.tgz",
+    "variants/win32-strict.zenx.plugin.json",
   ),
   plugin("@zenx/rooms-plugin", "zenx-rooms-plugin", ZENX_ROOMS_TARBALL),
   plugin(
@@ -96,7 +102,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/triggers-plugin",
     "zenx-triggers-plugin",
-    "zenx-triggers-plugin-1.0.0.tgz",
+    "zenx-triggers-plugin-1.0.1.tgz",
   ),
 ]);
 
@@ -174,7 +180,7 @@ async function packFirstPartyPlugin(definition, options) {
     const result = JSON.parse(packed.stdout);
     const filename = result?.[0]?.filename;
     const expectedPacked = definition.tarball.replace(
-      /-(?:electron|concurrent|multi|playwright|user-session|macos|peekaboo|win32)(?=-\d)/u,
+      /-(?:electron|concurrent|multi|playwright|user-session|macos|peekaboo|win32-strict|win32)(?=-\d)/u,
       "",
     );
     if (typeof filename !== "string" || filename !== expectedPacked) {

@@ -32,7 +32,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
 - Thread 的名称与归档由 ZAS 产品元数据负责；当前选择、disclosure、草稿、打开的菜单和面板属于 renderer-local UI 状态。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
-- Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。是否使用独立 Pinned section、放置位置与该 section 自身的排序规则仍为 **TBD**。
+- Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。Projects Sidebar 使用独立 Pinned section，其展示顺序就是 profile-local `pinnedThreadIds` 列表顺序：新 Pin 前置，用户可以在 Pinned section 内用拖拽或 Alt+方向键交换相邻行来调整顺序；排序只置换 `pinnedThreadIds`，不写入 Thread 的 Project 内排序偏好，也不是 canonical fact。
 - Project 与 Thread 的 Sidebar 顺序是 Settings-owned host-profile local preference，不是 canonical Item/journal fact，也不跨设备同步。Project 使用 canonical Project key 排序；Thread 顺序按 owning Project 分区保存，排序操作不能改变 cwd、Project identity 或把 Thread 移到另一 Project。
 - 持久化顺序是 preference list：仍存在的已知 ID 按记录顺序出现；未知或新出现的 Project/Thread 按当前稳定投影顺序追加；已移除的 ID 被忽略，并可在后续用户排序写入时自然修剪。Settings mutation 按用户操作调用顺序串行化，最后一次操作获胜。
 
@@ -120,7 +120,8 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
 - Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则要求用户明确选择。不得用默认 Project、Documents 或 `process.cwd()` 隐式替代。
 - 点击入口、切换 Project 或目录确认只更新非持久本地 draft；第一条有效 Send 才配置 Project、创建 Thread，并立即启动 Turn，不等待 summaries / Project projection。失败必须不遮盖当前页面，并提供恢复 draft 的直接重试路径。
-- Agent 入口直接打开同一个 welcome draft，不显示单独的未选择 Thread 页面。welcome 中央 Project 控件可以在首发前切换和搜索 Project；候选列表有视口内最大高度并只在列表内部滚动。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
+- Agent 入口直接打开同一个 welcome draft，不显示单独的未选择 Thread 页面。welcome 中央 Project 控件可以在首发前切换和搜索 Project；候选列表有视口内最大高度并只在列表内部滚动。Composer 旁的 Project chip 与机器切换使用同一交互体验：可点击打开同一个带搜索、键盘导航与 Add project 的 Project popover，不是只读展示。
+- welcome draft 的未发送输入按 Project 独立保留在 renderer-local 状态（与 Thread Composer 草稿同一层级，不持久化、不进入 journal/profile）：切到 Thread 或其它页面再回到某个 Project 的 New thread 时恢复该 Project 的未发送文本与图片；不同 Project 各自保留互不覆盖；首发成功创建 Thread 后该 Project 的保留内容即被消费。首发前的 Project 切换因此是在两个 Project 的 draft 之间交换，而不是把文本跟随过去。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
 
 ### 3.4 原生应用菜单与按需面板
 
@@ -133,6 +134,10 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 ## 4. Interaction 与 state rules
 
 ### 4.1 Thread row 与管理菜单
+
+- Thread 标题用满除真实状态以外的可用宽度。绑定的 Trigger 用时钟表示，运行用明确 spinner；时钟位于 spinner 左侧，未读 Agent 回复用独立的小点。详细密度保留 Working 文字，reduced-motion 使用静态进度图形与可读状态。管理三点只在 hover / keyboard focus / 菜单打开时显示，渐变表面覆盖标题尾部，不永久空留操作栏；无 hover 的触屏保留可见的 44px 操作入口。 时钟、进度与三点使用相同 16px 图形画布和等距槽位；尾部遮罩覆盖会话行整高，左缘圆弧配柔和渐变、右缘沿行圆角，不露出上沿文字。
+- Hover / row keyboard focus 打开右侧非模态详情；不抢焦点，浮层可跨间隙进入并点击，Arrow Right 进入完整名称，Escape 关闭并还焦点。完整名称按钮直接进入原有 Thread rename；触屏三点内提供同样完整信息。详情显示已知 Project、机器、最近 canonical 消息时间以及绑定 Trigger 的最早有效未来时间；过期、读取失败或缺失投影明确不可用，不从 updatedAt 推断消息时间，不从 timer interval 私算下次运行。只有事件型 Trigger 显示符合条件时触发，全部暂停显示已暂停。
+- Thread 与 PAW/Room 名称保持各自对象身份。改名使用原有权威命令，Enter 保存、IME Enter 不提交、Escape 取消；保存中防重复、失败保留草稿并显示错误，晚到回执不能关闭新编辑器、改变新选择或抢走焦点。
 
 - Thread management menu 存在于每个 Thread row，触发器使用正常重量的 horizontal ellipsis。
 - ellipsis 默认视觉隐藏，只在 row hover、keyboard focus/focus-within 或菜单打开时显示。选中 row 本身不让它常驻。
@@ -182,6 +187,8 @@ Trace sequence projection 按 Item 顺序生成：
 
 只有一个 Item 的 trace sequence 直接显示该 Thinking / Tool Call row；连续达到两个或更多 Items 时才显示 Trace Group。sequence identity 取首个 Item 的稳定 identity，因此流式追加只更新现有 sequence，不重挂载 disclosure 或丢失键盘焦点。singleton 升级为 group 时继承用户当前的展开或收起状态；用户在 Turn 运行期间显式展开或收起后，后续 streaming patch 不得覆盖该选择。
 
+用户显式选择的 Turn、Trace Group 与 Tool row 展开/收起状态按精确 Thread / Turn / Item 身份保留；切换会话、进入 Settings 或 loading 重挂载后返回仍沿用该选择。它们仅存在于本次 renderer 内存，不写入历史或 Host 配置，也不常驻隐藏会话 DOM。
+
 Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
 Tool 状态统一投影为 `queued / running / success / failed / cancelled / approval_required`。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。
@@ -215,7 +222,9 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 | Idle     | Empty     | Send disabled      |
 
 - 不拆成常驻 Stop、Steer 和 Send 三个按钮。
-- 运行中有草稿时，primary action 与 Enter 使用现有全局发送偏好：Steer now 保留当前 Turn 并追加指导；Next turn 将排队消息一起交给下一轮；Each turn 让每条排队消息各自占用一轮；Interrupt & Send 中断当前路径后开始新轮。偏好未另行选择时沿用既有 soft steer 默认；UI 不改变已排队消息的分组或交付语义。
+- 运行中有草稿时，primary action 与 Enter 使用 Composer 自己的发送偏好：Steer now 保留当前 Turn 并追加指导；Next turn 将排队消息一起交给下一轮；Each turn 让每条排队消息各自占用一轮；Interrupt & Send 中断当前路径后开始新轮。偏好未另行选择时沿用既有 soft steer 默认；UI 不改变已排队消息的分组或交付语义。
+- 普通消息的缺省投递均为 soft steer；Composer、每个 Trigger、assistant Room、IM 与 Agent 入口的配置独立，不继承 Composer 的 queue/interrupt 选择。Composer 的普通发送交给 native Core 在接纳时选 active steer / idle start，状态竞态不把普通输入静默改成下一轮 queue。
+- Trigger/Room 输入以独立 Host 来源展示，不呈现成人类消息；来源的精确 ID 放详情。Host 与 Agent 排队输入可取消，不提供仅人类输入支持的 Edit；人类 queue 的编辑能力保持。
 - 第一层只显示既有 primary orb，不新增常驻展开按钮。orb 位于 Composer 最右侧，与右下圆角保持既有关系；hover 与 keyboard focus 打开同一个主题化非模态面板。primary 点击始终直接发送或中断，面板顶部只出现一次当前动作与后果说明，运行中其他动作只显示真实 modifier-Enter shortcut，不发明 modifier-click 或新的发送行为。
 - primary orb 保持 44px hit target 与既有较小可见圆。触摸点击直接执行当前 Send / Stop，不拦截为展开，也不添加常驻触摸选项按钮。面板内所有动作的 hit target 至少 44px 高。
 - 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。
@@ -231,6 +240,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 不在 Composer 重复显示 Turn 已经表达的运行时长或状态。
 - Approval bar 位于聊天流与 Composer 之间，不塞入 Trace Group 或 Composer toolbar。
 - 用户处于实时底部时，新 Item 自动跟随；用户向上阅读后，不改变滚动位置，并显示 **Back to live**。
+- 手动上翻、键盘阅读、展开/聚焦 transcript 或选择文字后暂停跟随，即使仍在底部附近也不自动重启。空闲会话的 ResizeObserver、Composer 高度、窗口宽度与焦点变化不吸附到底部；切换线程或页面后按精确 Thread 恢复上次阅读位置。
 - Back to live 返回实时底部后才恢复自动跟随。流式 patch 不得丢失 disclosure、焦点或草稿。
 - Composer（含审批条与上下文行）是浮在满高 transcript 滚动区底部的 overlay：transcript 滚动条贯穿右侧从上到下，列表底部保留与 bottom zone 等高的虚拟留白，Back to live 悬浮在 bottom zone 正上方并随其高度上移。所有可滚动表面使用统一的细滚动条。这是布局与视觉校准，不改变 live following 的交互合同。
 - Tool completion 与 Final Message / Turn completion 的到达顺序可能不同；UI 等到可展示终态后再切换完成态投影。
@@ -376,7 +386,7 @@ ThreadView
 - [ ] 产品壳保留正式 ZenX logo/wordmark 位置；Thread Provider logo 不替代产品标识。
 - [ ] Add project 可发现、可聚焦并遵守 canonical cwd；New thread 在首次有效 Send 前不创建 Thread，且全局/Project 内入口遵守各自已确认的选择语义。
 - [ ] canonical cwd aliases 归一为一个 Project，同时保留稳定 display path。
-- [ ] Pin 只改变 profile-local Sidebar prominence，不改变 Inbox/runtime/scheduling；不假定独立 Pinned section 或排序。
+- [ ] Pin 只改变 profile-local Sidebar prominence，不改变 Inbox/runtime/scheduling；Pinned section 的拖拽与 Alt+方向键排序只置换 `pinnedThreadIds`，持久于 host profile，且不影响 Thread 在 owning Project 内的排序。
 - [ ] Project 可在 Sidebar 全局拖动排序；Thread 只可在 owning Project 内排序，跨 Project drop 不产生 mutation，也不改变 cwd/Project identity。
 - [ ] Sidebar 排序在 host profile 中本地持久化并按 preference list reconcile；新/未知项稳定追加、已移除项忽略，重复并发操作最后一次获胜。
 - [ ] Reorder handle 仅在 hover/focus 时出现；Arrow Up/Down 提供等价键盘操作并把焦点恢复到被移动对象，窄宽度下仍可操作。
@@ -430,6 +440,7 @@ ThreadView
 - 插件 `contributions.panels` 按 order 排列在加号选择器中，打开后与文件、浏览器并列。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
 - 插件通过 Host SDK `ui.panels.open({ panelId, threadId })` 请求展示自己声明的 panel。请求只改变易失 UI 选择，不切换当前 Thread，不创建 Turn；给后台 Thread 的请求在用户选择该 Thread 时展示。没有窗口或 panel 不可用时明确报错；成功表示已分发给窗口，不代表用户已看到或确认内容。
 - Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
+- Browser 地址框与 Attached browser 的当前页面 URL 框内部最右侧常显“在外部浏览器打开当前页面”外链箭头，使用系统默认浏览器；地址输入保留 Enter 导航，不再并排放置含义易混淆的 Go 箭头。只打开当前已选页面的实际 HTTP(S) URL（保留 query/hash），不使用地址栏未提交草稿；Attached browser 由 Host 按当前订阅的精确目标读取并打开，工具摘要仍保持脱敏。空页面、加载中、连接失效或切换尚未得到新页面时禁用。图标沿用共享样式并具有 tooltip、可访问名称与键盘焦点；窄窗和触屏按钮至少 44px，URL 框与工具栏随之增高。
 - 共享网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签释放页面；关闭窗口、隐藏面板或切换 Thread 时只移除 native view，Host 继续持有页面供同一 Thread 的 Agent 使用。当前最多20个共享标签，不提供书签、扩展或完整历史管理。
 - Terminal 打开当前真实 Thread 的本机 Shell 会话管理首页，显示同一 ToolTaskManager 中 Agent 命令与人工交互终端的稳定 task ID、来源、cwd 和实际状态；不跨 Thread 聚合同目录进程，不建立第二套执行注册表。远端 Fleet 会话不映射成本机会话，不静默降级。
 - New terminal 是明确的人工执行操作，在 Thread 的 canonical cwd 创建真实 PTY；仅在既有 Full Access 且 Shell 未被拒绝时可用，归档或受限策略不被自动修改。启动本机交互 Shell 可能读取其正常 startup files。人工拥有输入，Agent 通过同一 Shell 系统的 shell_sessions / wait 观察，不向人工终端交错输入；Agent 取消等待不会终止人工终端。
@@ -452,8 +463,13 @@ ThreadView
 - Room 复用 Thread 的输入容器、自适应文本区、发送按钮视觉与候选列表。Room 仍经插件 SDK 保存消息和消费投递回执；共享外观不提供 Thread 专属的中断、停止、权限或模型控制。
 - 普通 Room 输入 `@` 弹出可搜索的成员候选；上下方向键选择、Enter/Tab 确认、Escape 关闭，选择不会同时发送消息，中文输入法确认与长按 Enter 不触发重复提交。成员选择保留 literal `@name` 及前后文本，与 Host 的 mention 匹配规则一致。Always On Assistant 不要求 `@`，新消息仍在现有下一周期 steering 路径接入。
 - Thread 的文件、线程、工作流和 Room 的成员候选共享 viewport-anchored portal 呈现，避开 Composer 底部滚动容器的裁剪；候选保持编辑器焦点，窗口变化后重新定位，不复制数据或执行语义。
-- Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 在 Message details 中保留。
+- Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 只在消息 More 菜单的技术详情中保留，不常驻显示。
 - Room 的设置与未确定投递状态保持可见且可操作。自动化卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
+- Room 的标题与重命名、工作区、设置操作共享应用外壳中的同一标题行，正文上方不再另起操作栏；保留原生窗口控件和拖动区域边界。自动回复未启用时，只在现有设置入口显示轻量状态提示，具体成员数量和配置入口收进会话设置，不额外占用常驻状态栏或标题空间。“未启用”不擅自区分未配置、暂停或 Host 全局关闭。展开和查看设置不启用 Trigger，也不重放消息。投递失败和结果待确认仍独立可见、可操作。
+- Room 向上滚动到历史边缘时自动分批读取，保留当前可见消息的位置；首次打开不自动扫全量历史，读取失败停止并提供明确重试。迟到响应不改变新的房间，实时消息和分页使用消息 ID 对齐。界面只展示 Host 当前保留的历史（现有上限 256 条），到达边界不冒充永久完整档案。
+- Room 消息头只显示一个发送者名称和时间，不叠加 Agent、成员、Thread、PAW 或来源未知标签。优先保留消息记录的有效作者名；通用 Agent 名仅可由记录的来源 Thread 匹配真实成员或明确的会话名称，没有来源时使用中性的“未知成员”，不从正文 @提及反推作者。点击名字按需展示来源会话和当前关联 PAW 的导航，关联关系不改写历史身份；原始 message/thread/turn/operation IDs 只在 More 菜单的技术详情中出现。
+- Room/PAW 消息下不常驻成功投递、已读或技术详情底栏；成功发送只追加正文并清理已确认草稿。真实失败和投递不确定状态继续在现有可操作状态区显式显示，不因简化消息而隐藏或伪装成功。
+- Room 的本人消息姓名和时间与消息右沿对齐，动作组位于其左侧；其他成员的姓名和时间保持左对齐、动作组位于右侧。动作预留空间不能把本人消息头推离右沿。Room 的 Reply、React、More 使用消息上方的轻量动作组，桌面 hover 或 keyboard focus 时显示，浮层打开期间保持可见。触摸或无 hover 时保留可见的 More 入口并能执行同样动作；不让每条消息常驻一排大按钮。已有 reactions 在正文下显示为 emoji 与数量的可切换 pill，没有 reaction 时不留空行。选择 Reply 后 Composer 保持输入焦点和清楚的作者/摘录引用，选择 reaction 不发送消息或启动 Turn。
 - Linux 与 Windows 的工作区入口避让原生最小化、最大化和关闭按钮，不能将打开面板的点击交给原生关闭区域。
 
 - Room 的自动回复设置按明确成员导航到现有 Room mention Trigger 编辑器；路由参数只表达临时 UI 意图，成员和目标从最新 Host Room / Thread 投影验证，显式 Save 才写入定义，不修改权限、不重放旧消息。Cancel / Back 返回原 Room，不把离开表单当作取消已提交的 Host 请求。Member conversation 选项以标题和短工作区 / 可区分短 ID 呈现，完整身份仍可搜索、查看并由无障碍名称读取。
@@ -463,11 +479,19 @@ ThreadView
 
 ### PAW and Room conversation workspaces
 
-The primary left navigation exposes named PAW assistants and Rooms directly, below plugin entries and as peer sections alongside the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit, with a user-chosen assistant name; PAW (P-A-W) is the reusable preset name. Product labels and new preset defaults use PAW; existing user-chosen Room/member names, saved annotations, protocol identifiers and routes stay unchanged.
+The primary left navigation exposes named PAW assistants and Rooms directly, below plugin entries and as peer sections alongside the existing project/Thread organization. Opening one selects an IM-style conversation without a second conversation rail. Creation remains explicit; personal naming happens in the conversation or later settings; PAW (P-A-W) is the reusable preset name. Product labels and new preset defaults use PAW; existing user-chosen Room/member names, saved annotations, protocol identifiers and routes stay unchanged.
 
 PAW and Rooms use the same disclosure heading and add-button treatment as Projects. Each section remembers its own expansion across navigation and restarts; collapsing does not hide its add action. Background navigation refreshes retain published rows and empty states. Only a real Rooms admission change retires that projection; unrelated plugin catalog notifications must not clear it or move Projects.
 
-Creating PAW defaults to a new idle working Thread in a configured Project, with the current Host model and permissions previewed before the explicit Create action. It creates no Turn. Binding an existing available Thread is a separate, explicit alternative. Cancel before submission creates nothing; dismissing an already submitted form does not undo accepted Host work or replace a newer navigation. Confirmed creation remains confirmed if the subsequent list refresh fails. An uncertain Thread start or preset-save failure is visible with inspection/binding guidance, and the same setup operation cannot silently start another Thread.
+First use presents a small PAW welcome in the empty sidebar section, with Set up and Later. Later only hides that welcome locally; Set up and the section's add action remain available. Existing PAWs keep their names and never get recreated or forcibly enrolled. Creation lives inline in the conversation surface, with no naming wizard, modal overlay or focus trap. It reviews the working Project, model, permissions and required plugin readiness. Missing Projects use the existing picker/settings API; failures offer inline retry/settings. “Create and say hello” explicitly starts a Host bootstrap event through the owned Trigger and an existing durable operation receipt. It never posts a visible or hidden human message. The real Agent welcomes the user and asks for a name; the renderer never fabricates an assistant message. The user may skip naming and work immediately. Closing or navigating away before submission creates nothing; uncertain Thread creation retains existing inspection/binding guidance and never blindly retries.
+
+A created PAW opens even if introduction delivery fails. Existing prepared-operation recovery handles interruption/restart; no mount effect automatically starts a turn. The initial introduction uses a distinct bootstrap operation with one deterministic valid receipt suffix within that Room's existing operation epoch. Its wakeup ID identifies Trigger history, never an invented message ID. Status and failures remain visible while the Agent's actual post becomes the first conversation message. Unknown outcomes retain that receipt; only a confirmed cancelled operation plus a new explicit Start introduction click creates a fresh receipt. Confirmed Room creation opens the conversation before any list refresh settles. Ordinary navigation does not cancel the accepted greeting; explicit Later/Close before admission does. Loading an existing PAW never initiates onboarding. Model naming reuses zenx_rooms_rename through the Host invocation boundary: only the exact bound Thread can rename a PAW; shared-Thread PAWs require an unambiguous active source Room. Forged arguments, forks, side chats and other workspace Threads gain no identity authority. Trusted UI management and ordinary Room management retain their existing scope. Settings group the displayed name, working conversation/directory and notebook links; existing AGENTS.md remains a workspace file under existing permissions, never copied into a parallel Host identity record.
+
+Every PAW/Room row has a visible More button. Right-click and Shift+F10/Context Menu open the same keyboard-operable menu: rename, existing conversation settings, and the PAW workspace. A PAW rename updates its Room display name, bound speaker name and owned mention configuration in the existing atomic store; it does not rename the working Thread or rewrite past messages. Settings retain explicit Pause/Resume and existing confirmed deletion, without disabled member-management actions that cannot apply to a PAW. A title bar omits a subtitle only when it exactly duplicates its title.
+
+Reference decisions (official documentation checked 2026-10-12): [OpenClaw bootstrapping](https://docs.openclaw.ai/start/bootstrapping) and its [BOOTSTRAP.md template](https://docs.openclaw.ai/reference/templates/BOOTSTRAP) make identity a short first conversation rather than a gate; work takes priority and agreed identity is saved through an existing configuration command. Adopt the conversational naming and success-before-confirmation pattern. Do not import its file seeding/deletion, avatar generation, provider discovery or daemon installation. Zen Core already reads repository-root AGENTS.md for a new Thread's first message (`src/workspace-instructions.ts`); preserve that boundary. [Letta memory blocks](https://docs.letta.com/v1-sdk/memory/memory-blocks) document tool-mediated self-editing with read-only blocks and per-block semantics. Adopt explicit tool-based updates, not Letta's persistence model: Zen's displayed identity stays in the bound Room/member/owned mention, while work files and the existing notebook keep their own authority.
+
+Creating PAW defaults to a new idle working Thread in a configured Project, with the current Host model and permissions previewed before the explicit Create action. The Host creation itself creates no Turn; the explicit “Create and say hello” UI action then admits a Host-origin bootstrap wakeup. The working Thread records a canonical host_message and no fabricated user_message. Binding an existing available Thread is a separate, explicit alternative. Cancel before submission creates nothing; dismissing an already submitted form does not undo accepted Host work or replace a newer navigation. Confirmed creation remains confirmed if the subsequent list refresh fails. An uncertain Thread start or preset-save failure is visible with inspection/binding guidance, and the same setup operation cannot silently start another Thread.
 
 The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
 
@@ -500,6 +524,20 @@ Normal PAW chat keeps only compact, named rename/workspace/settings controls. Do
 
 Native scrollbars retain their geometry and scrolling behavior. Their track is transparent against each surface; the thumb uses the theme's muted text color while scrolling, keyboard/focus interaction or edge/drag activity is occurring, and becomes transparent at rest. Forced-colors uses native colors. Do not hide overflow to simulate autohide, and do not count Linux/mock evidence as native Windows/macOS validation.
 
+### 2026-10-08: Room IM presentation references
+
+The message hierarchy and actions use these specific public patterns: Slack's
+[compact message display](https://slack.com/help/articles/213893898-Change-how-messages-are-displayed)
+keeps sender identity without requiring avatars; Discord exposes
+[Reply on hover and through More](https://support.discord.com/hc/en-us/articles/360057382374-Replies-FAQ)
+and supports [keyboard access to message actions](https://support.discord.com/hc/en-us/articles/1500000056121-Keyboard-Navigation-FAQ).
+[Teams reactions](https://support.microsoft.com/en-us/teams/chat/like-or-react-to-messages-in-microsoft-teams)
+appear beneath messages, and Discord's
+[reaction toggle](https://support.discord.com/hc/en-us/articles/12102061808663-Reactions-and-Super-Reactions-FAQ)
+removes one's selected reaction on a second click. These inform presentation,
+not ZenX execution or identity authority. Merging the Room status and action row
+is the user's explicit ZenX decision, not a claim about those products.
+
 ### Agent activity, approval review and pending messages
 
 Agent activity is a disposable projection of native turn items. Consecutive tool/reasoning items stay in stable disclosures; assistant/user messages remain chronological boundaries and final replies stay outside process folds. Counts describe calls, not promised successful work. Task receipts determine background lifetime independently of call disposition. A stopped turn can still have an unconfirmed background action; the latest terminal receipt retires earlier nonterminal observations across groups.
@@ -513,3 +551,15 @@ Queued messages form a compact composer-aligned pending-send shelf. Text, real i
 Queued thumbnails read only validated AttachmentRefs from the exact same-thread pending input. Show a compact first set with an actionable full-gallery disclosure; missing references or failed reads remain explicit and retryable without blocking Edit/Cancel. Opening a full image uses the existing viewer and stops being visible when its exact queue owner disappears or the selected thread changes.
 
 Queue editing owns an independent local text/image draft, preserving image order and the main Composer draft. Cancel/X discards unsent edits without changing native input; failure, revision conflict, admission races and navigation/loading preserve the draft and its request identity. An App-owned memory-only cache survives viewport remounts. Save never starts the queue: the canonical edit updates the row, and an authoritative receipt may close the editor while its draft/receipt stays cached until the exact edit fact is observed. Unsupported Host skill/audio or non-round-trippable input is not silently flattened. Editor, gallery and simultaneous approval/queue/error states keep complete text context and reachable 44px decisions in a 390×600 viewport.
+
+### Foreground computer activity
+
+Background-safe/isolated providers remain the first choice; no operation may silently escalate to global input. For the explicitly enabled, admitted foreground Computer tools, the Host shows a subtle display-edge glow plus a compact top-center “{Agent} is using your computer” status and Stop action before the existing one-second cancellation window and before native input. The indicator is notice, never permission; disabled foreground control, rejected grants and invalid requests do not display it or dispatch input.
+
+The Agent name comes from an unambiguous existing local Room member binding, otherwise “ZenX Agent”. Global input has no bounded monitor target, so all currently connected displays are marked. Edge windows are pointer-transparent; status windows are small, non-activating and excluded from application-window routing. Stop cancels only displayed local calls and interrupts only a verified canonical call’s exact still-running Turn. Concurrent calls retain the indicator until each provider settles; cancellation intent says “Stopping computer use…” and never pretends input has already stopped. Failures to display the indicator fail closed, and renderer/window loss cancels active input.
+
+Display addition/removal/geometry changes synchronously cancel current foreground admission and running calls before repaint; old display acknowledgements cannot authorize input on the changed topology. Native helper abort/timeout means termination was requested: the indicator keeps its owner and stopping state until process close confirms settlement. Stop messages retain their exact displayed owners across concurrent render updates; retired owners cannot be replaced by newer calls. The macOS status window explicitly accepts the first mouse click while inactive. Native acceptance must check one physical Stop click with a different application frontmost; a renderer-targeted CDP click does not prove that behavior.
+
+During a live foreground Computer operation, the Host registers global Escape only for that activity lifetime. The status says “Press Esc to stop” / “按 Esc 停止操作” only after registration succeeds; an occupied or unavailable shortcut instead directs the user to Stop. Escape uses the same exact live-owner cancellation and canonical Turn interruption as Stop, keeps the stopping indicator until native settlement, and is unregistered when the final owner settles or the Host closes. Background work and idle usage do not capture Escape. Existing PAW names and the “ZenX Agent” fallback remain unchanged.
+
+The actual HTML renderer is also used by `test/fixtures/foreground-activity-visual.html`. Reduced motion removes animations; forced colors retain readable status and borders. Browser preview verifies presentation only. Native focus, physical pointer pass-through, fullscreen behavior and monitor changes need their own OS evidence. This slice covers explicit foreground tools, not every possible side effect of a provider currently declared background-safe; provider-specific activation must be fixed at its real admission/dispatch boundary, not hidden by a late glow.

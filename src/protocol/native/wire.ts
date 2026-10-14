@@ -20,9 +20,23 @@ export const NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY =
   "queued-input-admission-v1";
 export const NATIVE_INLINE_IMAGE_INPUT_CAPABILITY = "inline-image-input-v1";
 
+export const NATIVE_TURN_WAKE_METHOD = "zen/turn/wake";
+export type NativeHostWakeupParams = import("../../item.js").HostWakeupInput & {
+  threadId: string;
+  mode?: "start" | "steer" | "queue";
+  expectedTurnId?: string;
+  requireUnarchived?: boolean;
+};
+export interface NativeHostWakeupResult {
+  turnId?: string;
+  mode: "start" | "steer" | "queue";
+  queued?: boolean;
+}
+
 export interface NativeTurnSendParams {
   threadId: string;
-  mode: "start" | "queue" | "batch-next" | "steer" | "replace";
+  /** Omitted means soft steer active work, or start when idle. */
+  mode?: "start" | "queue" | "batch-next" | "steer" | "replace";
   expectedTurnId?: string;
   clientUserMessageId: string;
   input: readonly NativeUserInputPart[];
@@ -72,6 +86,20 @@ export function nativeEventThreadId(event: AppServerEvent): string | null {
   if (event.type === "model_catalog_updated") return null;
   return event.type === "item_completed" ? event.item.threadId : event.threadId;
 }
+
+/** Host-only provenance fields, never exposed as model tool arguments. */
+export interface NativeThreadMessageParams {
+  threadId: string;
+  sourceThreadId: string;
+  sourceToolCallId: string;
+  sourceCallId: string;
+  text: string;
+  messageType?: "guidance" | "follow_up" | "replacement";
+}
+export type NativeThreadMessageResult = Awaited<
+  ReturnType<import("../../app-server.js").ZenAppServer["sendThreadMessage"]>
+>;
+export const NATIVE_THREAD_MESSAGE_METHOD = "zen/thread/message";
 
 export const NATIVE_THREAD_DELETE_METHOD = "zen/thread/delete";
 export const NATIVE_THREAD_DELETED_LIST_METHOD = "zen/thread/deleted/list";

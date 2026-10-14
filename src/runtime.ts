@@ -27,6 +27,9 @@ import type {
   TurnStartedItem,
   UserInput,
   UserMessageItem,
+  ThreadMessageItem,
+  HostMessageItem,
+  InitialInputMessage,
 } from "./item.js";
 import {
   AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
@@ -148,7 +151,7 @@ export interface RunTurnOptions {
   input: UserInput;
   clientId?: string;
   /** Fixed FIFO admission snapshot; each entry retains a canonical identity. */
-  initialMessages?: readonly { input: UserInput; clientId: string }[];
+  initialMessages?: readonly InitialInputMessage[];
   configuration: RuntimeConfiguration;
   modelAdapter: ModelAdapter;
   signal: AbortSignal;
@@ -345,19 +348,46 @@ export class AgentRuntime {
     try {
       this.#assertSandbox(options.configuration.sandbox);
       for (const message of options.initialMessages ?? [
-        { input: options.input, clientId: options.clientId },
+        {
+          input: options.input,
+          clientId: options.clientId,
+          sender: undefined,
+          hostInput: undefined,
+          mode: undefined,
+          messageType: undefined,
+        },
       ]) {
-        const userItem: UserMessageItem = {
-          id: this.#id(),
-          threadId: options.thread.id,
-          turnId,
-          createdAt: this.#now(),
-          type: "user_message",
-          content: message.input,
-          ...(message.clientId === undefined
-            ? {}
-            : { clientId: message.clientId }),
-        };
+        const userItem: UserMessageItem | ThreadMessageItem | HostMessageItem =
+          message.hostInput !== undefined
+            ? {
+                id: this.#id(),
+                threadId: options.thread.id,
+                turnId,
+                createdAt: this.#now(),
+                type: "host_message",
+                sender: "host",
+                mode: "start",
+                ...message.hostInput,
+              }
+            : {
+                id: this.#id(),
+                threadId: options.thread.id,
+                turnId,
+                createdAt: this.#now(),
+                ...(message.sender === undefined
+                  ? { type: "user_message" as const }
+                  : {
+                      type: "thread_message" as const,
+                      sender: message.sender,
+                      clientId: message.clientId!,
+                      mode: message.mode ?? "batch-next",
+                      messageType: message.messageType ?? "guidance",
+                    }),
+                content: message.input,
+                ...(message.clientId === undefined
+                  ? {}
+                  : { clientId: message.clientId }),
+              };
         await this.#completeItem(userItem, options);
       }
       initialInputCommitted = true;

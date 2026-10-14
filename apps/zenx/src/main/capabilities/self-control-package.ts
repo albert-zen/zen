@@ -31,6 +31,7 @@ type SelfControlRequestMethod = Extract<
   | "zen/thread/read"
   | "zen/thread/create-child"
   | "zen/turn/send-unarchived"
+  | "zen/thread/message"
   | "model/list"
   | "thread/settings/update"
   | "turn/queue"
@@ -388,7 +389,7 @@ const manifest: ZenXPluginManifestV2 = {
             type: "string",
             enum: ["follow_up", "guidance", "replacement"],
             description:
-              "follow_up: do this after current work; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to use the saved ZenX send preference.",
+              "follow_up: batch this with next work after the current Turn; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to deliver agent guidance promptly to active work, independent of the manual Composer preference.",
           },
           text: { type: "string" },
         },
@@ -581,14 +582,12 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       try {
         return await result;
       } catch (error) {
-        if (
-          invocation.arguments.threadId !== undefined &&
-          invocation.arguments.target === undefined &&
-          error instanceof ZenXProtocolError &&
-          error.code === -32601
-        )
+        if (error instanceof ZenXProtocolError && error.code === -32601)
           throw new Error(
-            "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
+            invocation.threadId !== undefined &&
+              invocation.trustedPluginUi !== true
+              ? "Target Zen Host does not support provenance-preserving Agent messages. Update the target Host before retrying."
+              : "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
             { cause: error },
           );
         throw error;
@@ -1126,6 +1125,25 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       "guidance",
       "replacement",
     ] as const);
+    if (
+      invocation.threadId !== undefined &&
+      invocation.trustedPluginUi !== true
+    ) {
+      if (invocation.canonicalToolCallId === undefined)
+        throw new Error(
+          "Agent Thread sends require Host-captured canonical tool call identity",
+        );
+      invocation.signal.throwIfAborted();
+      const result = await this.#appServer.request("zen/thread/message", {
+        threadId,
+        sourceThreadId: invocation.threadId,
+        sourceToolCallId: invocation.canonicalToolCallId,
+        sourceCallId: invocation.callId,
+        text,
+        ...(messageType === undefined ? {} : { messageType }),
+      });
+      return { source: SOURCE, threadId, ...result };
+    }
     const clientUserMessageId = messageIdentity(invocation);
     const thread = (
       await this.#appServer.request("zen/thread/read", { threadId })

@@ -51,7 +51,21 @@ public static class ZenXCaptureSampler {
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr hwnd, System.Text.StringBuilder text, int length);
+  public static string ClassName(IntPtr hwnd) {
+    var text = new System.Text.StringBuilder(256);
+    if (GetClassNameW(hwnd, text, text.Capacity)==0) throw new InvalidOperationException("Fixture HWND class is unavailable");
+    return text.ToString();
+  }
   public static bool IsForeground(IntPtr hwnd) { return GetForegroundWindow()==hwnd; }
+  // Completed generations have immutable names. A reader may retain an old
+  // snapshot without blocking the next publication; temporary files are ignored.
+  public static FileStream OpenPhase(string directory) {
+    var snapshots = Directory.GetFiles(directory, "phase-*.snapshot");
+    if (snapshots.Length == 0) throw new FileNotFoundException("No published phase");
+    Array.Sort(snapshots, StringComparer.Ordinal);
+    return File.OpenRead(snapshots[snapshots.Length - 1]);
+  }
   public static void Start(IntPtr guard, IntPtr target, string directory, string epoch) {
     Point initial; GetCursorPos(out initial);
     var thread = new Thread(() => {
@@ -67,7 +81,11 @@ public static class ZenXCaptureSampler {
         var foreground=GetForegroundWindow();
         if (foreground != guard) focusChanges++;
         if (foreground != lastForeground) {
-          try { phase=System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(Path.Combine(directory,"phase")), "[^a-z-]", ""); } catch (IOException) { }
+          try {
+            using (var stream = OpenPhase(directory))
+            using (var reader = new StreamReader(stream))
+              phase=System.Text.RegularExpressions.Regex.Replace(reader.ReadToEnd(), "[^a-z-]", "");
+          } catch (IOException) { }
           uint pid; GetWindowThreadProcessId(foreground, out pid);
           string kind=foreground==guard ? "guard" : foreground==target ? "target" : foreground==IntPtr.Zero ? "none" : "other";
           if (transitions.Count<32) transitions.Add("{\"elapsedMs\":" + elapsed.ElapsedMilliseconds + ",\"phase\":\"" + phase + "\",\"foreground\":\"" + kind + "\",\"pid\":" + pid + "}");
@@ -103,6 +121,16 @@ $magenta = New-Object System.Windows.Forms.Panel
 $magenta.BackColor = [System.Drawing.Color]::Magenta
 $magenta.SetBounds(300, 260, 25, 25)
 $form.Controls.Add($magenta)
+$button = New-Object System.Windows.Forms.Button
+$button.Name = "ZenXSmokeButton"
+$button.Text = "Probe Invoke"
+$button.SetBounds(24, 260, 120, 25)
+$script:invokeCount = 0
+$button.add_Click({
+  $script:invokeCount++
+  Set-Content -LiteralPath (Join-Path $ProbeDirectory "invoke-count") -Value ([string]$script:invokeCount)
+})
+$form.Controls.Add($button)
 # Two disposable native windows: the guard holds focus and occludes the target.
 $form.StartPosition = "Manual"
 $form.Location = New-Object System.Drawing.Point(40, 40)
@@ -119,6 +147,20 @@ $guard.Controls.Add($guardEditor)
 # Fully show the target before the guard takes focus and sampling starts.
 $form.Show(); $form.Hide(); $form.Show()
 $guard.Show(); $guard.Activate(); $guardEditor.Focus()
+# Fixture-owned identities, never a selector fallback or production HWND contract.
+@{
+  pid = $PID
+  started = ([System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks).ToString()
+  window = $form.Handle.ToInt64().ToString()
+  guardWindow = $guard.Handle.ToInt64().ToString()
+  editor = @{ hwnd = $editor.Handle.ToInt64().ToString(); className = [ZenXCaptureSampler]::ClassName($editor.Handle) }
+  button = @{ hwnd = $button.Handle.ToInt64().ToString(); className = [ZenXCaptureSampler]::ClassName($button.Handle) }
+  guard = @{ hwnd = $guardEditor.Handle.ToInt64().ToString(); className = [ZenXCaptureSampler]::ClassName($guardEditor.Handle) }
+  unsupported = @{ hwnd = $marker.Handle.ToInt64().ToString(); className = [ZenXCaptureSampler]::ClassName($marker.Handle) }
+} | ConvertTo-Json -Compress -Depth 4 | Set-Content -LiteralPath (Join-Path $ProbeDirectory "semantic-fixture.json") -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $ProbeDirectory "invoke-count") -Value "0"
+$script:semanticEpoch = ""
+$script:semanticPending = $false
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 25
 $script:monitorStarted = $false
@@ -129,6 +171,19 @@ $timer.add_Tick({
   if (-not $script:monitorStarted) {
     $script:monitorStarted = $true
     [ZenXCaptureSampler]::Start($guard.Handle, $form.Handle, $ProbeDirectory, "uia")
+  }
+  if (Test-Path (Join-Path $ProbeDirectory "semantic-setup")) {
+    $requestedEpoch = (Get-Content -Raw -LiteralPath (Join-Path $ProbeDirectory "semantic-setup")).Trim()
+    if ($requestedEpoch -in @("direct-default-value", "direct-no-focus-value", "direct-default-invoke", "direct-no-focus-invoke") -and $requestedEpoch -ne $script:semanticEpoch) {
+      # Explicit preparation between independent epochs, never restoring focus inside an operation.
+      $script:semanticEpoch = $requestedEpoch
+      $script:semanticPending = $true
+      $guard.Activate(); $guardEditor.Focus()
+    }
+  }
+  if ($script:semanticPending -and [ZenXCaptureSampler]::IsForeground($guard.Handle)) {
+    $script:semanticPending = $false
+    [ZenXCaptureSampler]::Start($guard.Handle, $form.Handle, $ProbeDirectory, $script:semanticEpoch)
   }
   if (-not $script:captureSetupStarted -and (Test-Path (Join-Path $ProbeDirectory "capture-setup"))) {
     # Explicit fixture preparation, after the UIA epoch is saved and before any
@@ -172,7 +227,7 @@ $timer.Start()
   & node --import tsx ./src/main/windows-computer-smoke.ts --pid $fixture.Id --title $fixtureTitle --probe-directory $probeDirectory
   $smokeExit = $LASTEXITCODE
   $metrics = $null
-  foreach ($epoch in @("uia", "capture")) {
+  foreach ($epoch in @("uia", "direct-default-value", "direct-no-focus-value", "direct-default-invoke", "direct-no-focus-invoke", "capture")) {
     Set-Content -LiteralPath (Join-Path $probeDirectory ($epoch + "-stop")) -Value "stop"
     if (Test-Path (Join-Path $probeDirectory ($epoch + "-ready"))) {
       $resultPath = Join-Path $probeDirectory ($epoch + "-result.json")

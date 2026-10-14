@@ -1,3 +1,5 @@
+export type WakeupDeliveryMode = "steer" | "queue";
+
 export type TriggerKind = "timer" | "thread" | "roomMention" | "signal";
 
 export type TriggerProgramStage = "predicate" | "action";
@@ -43,6 +45,7 @@ export interface TriggerProgramOutcome {
 }
 
 export interface TriggerProgramInput {
+  deliveryMode?: WakeupDeliveryMode;
   program?: TriggerProgramConfig;
   predicate?: TriggerProgramSpec;
   action?: TriggerProgramSpec;
@@ -50,6 +53,8 @@ export interface TriggerProgramInput {
 }
 
 export interface ZenXTrigger {
+  /** This Trigger alone owns its delivery preference; omission means soft steer. */
+  deliveryMode?: WakeupDeliveryMode;
   id: string;
   /** Monotonic definition mutation fence; legacy definitions start at zero. */
   definitionRevision?: number;
@@ -72,6 +77,18 @@ export interface ZenXTrigger {
   room?: { roomId: string; mention: string };
   signal?: { name: string };
   program?: TriggerProgramConfig;
+}
+
+/** Disposable scheduling facts; no definition, history, or Room content. */
+export interface TriggerSidebarSnapshot {
+  triggers: Array<{
+    id: string;
+    threadId: string;
+    kind: TriggerKind;
+    active: boolean;
+    timer?: { nextRunAt: number };
+    sourceError?: "Source observation unavailable";
+  }>;
 }
 
 export interface TriggerHistoryEntry {
@@ -128,6 +145,9 @@ export interface RoomMessage {
   originTurnId: string | null;
 }
 export interface RoomSendOperation {
+  /** Host bootstrap receipt; never a human Room message. */
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   replyTo?: RoomQuote;
   id: string;
   text: string;
@@ -139,6 +159,8 @@ export interface RoomSendOperation {
   mentions: Array<{ name: string; threadId: string; triggerIds: string[] }>;
 }
 export interface RoomDeliveryView {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   operationId: string;
   roomId: string;
   text: string;
@@ -164,7 +186,11 @@ export interface RoomDeliveryView {
   }>;
 }
 export interface ZenXRoom {
-  assistant?: { threadId: string; triggerId: string };
+  assistant?: {
+    threadId: string;
+    triggerId: string;
+    deliveryMode?: WakeupDeliveryMode;
+  };
   /** Editable planning documents; never Thread/Trigger execution authority. */
   assistantWorkspace?: AssistantWorkspace;
   id: string;

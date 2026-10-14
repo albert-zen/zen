@@ -86,6 +86,7 @@ test(
           name,
           arguments: { device: "remote", ...args },
           callId: randomUUID(),
+          trustedPluginUi: true,
           canonicalToolCallId: randomUUID(),
           threadId: "local-source",
           cwd: path.join(dir, "local"),
@@ -204,6 +205,7 @@ test(
           name,
           arguments: args,
           callId: randomUUID(),
+          trustedPluginUi: true,
           canonicalToolCallId: randomUUID(),
           threadId: "source-a",
           cwd: path.join(dir, "a"),
@@ -284,7 +286,6 @@ test(
       {
         request: (m, p) => manager.request(m, p),
         onNotification: (listener) => manager.onNotification(listener),
-        sendAssistant: (p) => deliverAssistantInput(manager, p),
       },
       new ZenXTriggerStore(path.join(dir, "rooms.json")),
     );

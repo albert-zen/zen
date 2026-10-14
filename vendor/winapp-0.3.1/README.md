@@ -1,77 +1,132 @@
-# WinApp downstream build candidate
+# ZenX Windows UIA downstream provider
 
-This is an isolated **build-time experiment**, not an installed or selected ZenX
-provider. This checkpoint does not change runtime behavior. The foreground-gate
-correction for stock/system WinApp semantic mutations is tracked separately in
-[PR #322](https://github.com/albert-zen/zen/pull/322). The official provider archive
-lock, capture helper, and app packaging are unchanged here.
+`zenx-winapp-uia` is the explicitly identified, build-time downstream of Microsoft
+WinApp CLI v0.3.1 (`c8ada4a403c43b96780b87abc454cba51f649c60`). Its build identity is
+`zenx-winapp-0.3.1-af0.2`, version `0.3.1-zenx.af0.2`, strict contract version 1.
+It is shipped separately from the unchanged official `microsoft-winapp-cli` npm
+archive and the system provider route. No native compilation occurs at runtime.
 
-## Narrow patch
+## Reviewed inputs
 
-The source lock pins Microsoft WinApp CLI v0.3.1 at
-`c8ada4a403c43b96780b87abc454cba51f649c60`. The patch asks its existing CsWin32
-generator for `IUIAutomation2`, sets `AutoSetFocus` to FALSE on the actual service
-client, and reads it back before that client is retained. Failure prevents the
-service from executing UIA work. No handwritten COM ABI, selector replacement,
-focus restoration, input injection, or new runtime fallback is introduced.
+`source.lock.json` fixes the upstream commit, changed-file Git preimages, new-file
+absence, patch digest, toolchain, target RID and reviewed NuGet dependency lock.
+Git attributes preserve the patch and source-lock LF bytes and the dependency
+lock's original CRLF bytes. The frozen `packages.lock.json` is the actual reviewed
+CI closure: 13,704 bytes, SHA-256
+`33e2b9b7fad15c4b582be384306f769ead57ac17cfc598672c3d361a54e4860a`.
+It is copied into the clean, verified source checkout **before the first restore**.
+Only `dotnet restore --locked-mode` and `publish --no-restore` are allowed; raw lock
+bytes are compared again after each command.
 
-The exact private `--zenx-uia-contract` invocation resolves the same registered
-service used by semantic actions and reports its live setting, source commit and
-explicit downstream identity. Its output does not claim that arbitrary providers
-cannot activate themselves. It is evidence about this client, not permission to
-relax the separate foreground-safety requirements.
+The native build uses Node.js 22.23.3, a job-local .NET SDK 10.0.401, .NET runtime
+10.0.12 and `win-x64`. Release/RID/self-contained properties are identical for
+MSBuild evaluation, restore and publish. `ProcessFrameworkReferences` must resolve
+the expected target framework, .NET runtime and RID-specific runtime pack both
+before and after restore. Both readbacks and SDK information are retained. A
+global `RuntimeFrameworkVersion` override is deliberately avoided because it also
+changes the unrelated Windows SDK framework.
 
-## Build and provenance
+## Native contract
 
-The dedicated Windows workflow checks out the exact upstream Git commit, checks
-the patch SHA-256 and changed-source preimages, then applies only those reviewed
-paths. It uses Node.js 22.23.3 and a job-local .NET install, and requires SDK 10.0.401
-and runtime 10.0.12, selected from Microsoft's
-[.NET 10 release metadata](https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json).
-It builds a self-contained NativeAOT win-x64 candidate, probes the actual feature
-contract, and retains the binary, MIT license, patch, lock and provenance as a
-same-run CI artifact. The output directory must be fresh; the script never clears
-an existing directory. No user-machine SDK installation or runtime compilation
-is involved, and no external release or new token is required.
+The patch obtains generated `IUIAutomation2`, sets `AutoSetFocus` to FALSE and
+reads it back on the actual service client before retaining it. The private
+`--zenx-uia-contract` probe must emit the exact schema/build/source identity,
+`contractVersion: 1` and boolean `autoSetFocus: false`. The strict command uses this
+client and its bounded request/response contract. These checks do not promise
+that an arbitrary application's own UIA provider cannot activate that application.
 
-This first checkpoint **captures** NuGet's resolved dependency closure, then uses
-locked restore and no-restore publish. The resolved lock and its hash are retained
-for review; they are not falsely described as a previously reviewed transitive
-pin. Freeze that generated closure before the next production-integration stage.
-Runtime selection uses the exact same Release/RID/self-contained properties for
-MSBuild evaluation, restore and publish. With the pinned SDK's latest-patch
-selection, `ProcessFrameworkReferences` must report the exact target framework,
-RID and expected .NET framework/runtime-pack version before and after locked
-restore. Both readbacks are retained. A global `RuntimeFrameworkVersion` override
-is deliberately avoided because it also affects the unrelated Windows SDK
-framework ([dotnet/sdk#37044](https://github.com/dotnet/sdk/issues/37044)).
+## Same-run build and assembly handoff
 
-The hosted Windows image/toolchain is recorded. Bit-identical reproducibility has
-not been established; `bitReproducibilityVerified` is explicitly false.
+The Windows packaged-provider CI job builds the candidate once in a fresh output
+directory. The same staging input and the SHA-256 of its raw `provenance.json`
+are passed explicitly to both smoke and real app packaging:
 
-A `provenance.json` appears only after the built executable successfully reports
-its exact downstream identity and boolean `autoSetFocus: false`. Other retained
-files from a failed workflow are diagnostics, not a validated candidate. The
-artifact itself is not yet covered by the app's provider trust anchor and must
-not be loaded as a product provider at this checkpoint.
+```sh
+node scripts/build-zenx-winapp-downstream.mjs --source SOURCE --output CANDIDATE --symbols-output SYMBOLS
+node apps/zenx/scripts/package-zenx-portable.mjs --app --downstream CANDIDATE --downstream-sha256 PROVENANCE_SHA256
+```
+
+The producer emits `provenanceSha256` in JSON and the `provenance-sha256` GitHub
+step output. Windows packaging requires both arguments. It does not look up or
+download a binary from a different workflow run. The separate native-review
+workflow is manual-only; its retained files are review evidence, not an automatic
+product input. macOS and Linux packaging remain unchanged.
+
+Assembly first checks the externally supplied provenance digest, exact reviewed
+source-lock/patch/dependency-lock bytes, identity, strict contract, SDK/runtime
+facts, both runtime readbacks and every shipped file's size and SHA-256. It rejects
+missing files, extra files/directories, links and unsafe paths. It copies to a
+fresh provider directory and revalidates the copy before generating the manifest.
+This is a coupling within the trusted app-build boundary: hashes alone do not
+prove that an arbitrary binary was compiled from its claimed source.
+
+The `zenx-winapp-uia` manifest entry invokes `bin/winapp.exe` directly with no Node
+runtime. It seals the complete `bin` directory without ignored paths, separately
+lists every binary file (including `winapp.exe` and `libSkiaSharp.dll`), and covers
+provenance, source lock, frozen NuGet lock, patch, upstream license, SDK details
+and runtime evidence. Its `downstream` metadata is derived from validated inputs.
+The existing compiled final-manifest SHA-256 injection remains the sole product
+trust anchor; provenance does not create a second authority.
+
+Provenance names and hashes every other shipped file and enumerates directories.
+Its own digest comes from the trusted build handoff and is then sealed as a
+manifest asset. The runner image/toolchain are recorded.
+`bitReproducibilityVerified` remains false: bit-identical NativeAOT outputs have
+not been established. Native build success also does not stand in for product UIA
+acceptance; `productIntegrationVerified` remains false in build provenance.
+
+## Detached build-only debug symbols
+
+The producer moves only the exact regular top-level `bin/winapp.pdb` from the
+native publish output into the explicit `--symbols-output` directory before
+capturing the product inventory. Source, product and symbols directories must be
+separate; both output directories must be fresh and on the same filesystem for
+the symbol move. Missing or non-regular expected symbols fail the build. No
+extension, basename or directory-ignore rule excludes additional files: unknown
+DLLs, executables, other PDBs and nested `winapp.pdb` files remain runtime assets.
+
+Before moving the file, the producer inventories every original publish file.
+Afterward it verifies the detached symbol bytes and requires the runtime file
+inventory plus the one symbol record to equal the complete original inventory,
+with the original directory layout unchanged. The product's `files` and
+`directories` remain the exact shipped closure. Its explicit
+`detachedDebugSymbols` record identifies the non-shipping original path, filename,
+size and SHA-256; it never adds the PDB to the product manifest or a runtime read.
+
+The separate `symbols-provenance.json` binds the PDB and original publish inventory
+to the raw product-provenance digest, provider/source/patch/closure identity and
+SDK/runtime. The producer verifies the detached file again before creating this
+completion evidence. Both workflows retain only `winapp.pdb` and
+`symbols-provenance.json` in an independent same-run debug-symbol artifact for
+14 days. Product candidate and actual-app proof artifacts stay separate. The
+assembler still copies every candidate file, seals the entire runtime `bin`
+directory without ignored paths, and never filters publish files itself.
+
+For the measured af0.2 publish, this reduces unique binary closure size from
+139,807,304 to 32,791,112 bytes, removing the 107,016,192-byte PDB from the product.
+These are uncompressed byte counts, not a compressed artifact-size or latency
+claim. The unchanged separate executable, directory and per-file checks still
+rehash all runtime bytes on their existing boundaries. Symbol retention neither
+relaxes runtime integrity nor establishes bit reproducibility or product UIA
+acceptance.
 
 ## Validation boundaries
 
-Run the dependency-free contract tests with:
+Dependency-free tests exercise source patching, raw-byte preservation through a
+Windows-style Git clone, frozen closure/runtime constraints, strict identity and
+assembly tamper rejection:
 
 ```sh
-node --test apps/zenx/test/winapp-downstream-build.test.mjs
+node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs apps/zenx/test/winapp-downstream-symbols.test.mjs
 ```
 
-They exercise actual Git patching and fail-closed source/patch/identity checks.
-They do not compile C#, prove the generated interface shape, or execute Windows
-UIA. The dedicated native CI must establish those facts. Later checkpoints must
-integrate explicit downstream artifact identity/executable hashes into the app's
-existing manifest trust chain and test the **real packaged** transport, including
-Unicode, button effect, virtual controls, target revalidation, interruption and
-unchanged strict capture assertions. Neither default background declarations nor
-foreground-overlay integration is included in this build experiment.
+These tests do not compile C#, prove generated COM interface shape or execute
+Windows UIA. Windows CI must establish native compilation and probe validity;
+packaged acceptance must exercise real transport and effects, target revalidation,
+Unicode, virtual controls, interruption and unchanged strict capture guarantees.
+No external release publication, persistent credentials or user-machine SDK
+installation is required.
 
-Upstream source remains MIT-licensed. The patch's context comes from
+Upstream source remains MIT-licensed. The patch context comes from
 [microsoft/winappCli](https://github.com/microsoft/winappCli/tree/c8ada4a403c43b96780b87abc454cba51f649c60);
-the build copies the full upstream license beside its output.
+the build copies its full license into the shipped provider directory.

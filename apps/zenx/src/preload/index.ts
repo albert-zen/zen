@@ -514,6 +514,12 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.computerReadinessOpenSettings, kind),
   },
   browserObservation: {
+    openExternal: async (threadId: string, targetId: string): Promise<void> =>
+      await ipcRenderer.invoke(
+        ipcChannels.browserOpenExternal,
+        threadId,
+        targetId,
+      ),
     subscribe: (
       request: BrowserThreadRequest,
       listener: (event: BrowserThreadEvent) => void,

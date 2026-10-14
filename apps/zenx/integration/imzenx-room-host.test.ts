@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 
 import { ZenAppServer } from "../../../src/app-server.js";
+import { fixture } from "../../../test/thread-message-fixture.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
 import type {
@@ -85,6 +86,24 @@ class Events<T> {
     }
   }
 }
+function terminalIdentity(value: { method: string; params: any }): {
+  threadId: string;
+  turnId: string;
+} | null {
+  if (value.method === "turn/completed")
+    return { threadId: value.params.threadId, turnId: value.params.turn.id };
+  if (
+    value.method === "zen/thread/event" &&
+    value.params.event.type === "turn_completed" &&
+    value.params.threadId === value.params.event.threadId
+  )
+    return {
+      threadId: value.params.threadId,
+      turnId: value.params.event.turnId,
+    };
+  return null;
+}
+
 interface Snapshot {
   id?: number;
   event?: string;
@@ -437,13 +456,16 @@ test(
         }),
         /Invalid PAW request fields/,
       );
-      const completed = async (threadId: string, since: number) =>
-        await notifications.wait(
+      const completed = async (threadId: string, since: number) => {
+        // Native subscription suppresses duplicate CAS projections at the
+        // real client boundary. Observe the canonical terminal identity.
+        const event = await notifications.wait(
           (value) =>
             notifications.values.indexOf(value) >= since &&
-            value.method === "turn/completed" &&
-            value.params.threadId === threadId,
+            terminalIdentity(value)?.threadId === threadId,
         );
+        return terminalIdentity(event)!;
+      };
       const firstStart = notifications.values.length;
       await emit("first-input", "synthetic-room-first 你好");
       await completed(working, firstStart);
@@ -546,7 +568,7 @@ test(
         gate.release.resolve();
       }
       const terminal = await completed(working, lastStart);
-      assert.equal(terminal.params.turn.id, active.turn.id);
+      assert.equal(terminal.turnId, active.turn.id);
       // The canonical admission observer below verifies the mode; the Room post
       // itself deliberately supplies no scheduling flag or Composer preference.
       const admission = wireCalls
@@ -730,9 +752,8 @@ test(
         await notifications.wait(
           (value) =>
             notifications.values.indexOf(value) >= configStart &&
-            value.method === "turn/completed" &&
-            value.params.threadId === working &&
-            value.params.turn.id !== configTurn.turn.id,
+            terminalIdentity(value)?.threadId === working &&
+            terminalIdentity(value)?.turnId !== configTurn.turn.id,
         );
         const delivered = (
           await native.request("zen/thread/read", { threadId: working })
@@ -791,3 +812,80 @@ test(
     }
   },
 );
+
+test("Room Host completion observer preserves exact native Turn identity after CAS projection suppression", async () => {
+  const release = deferred<void>();
+  const f = fixture({
+    provider: "room-observer",
+    async *stream() {
+      await release.promise;
+      yield { type: "text_delta", delta: "Real Host completion" };
+    },
+  });
+  const server = await serveCodexWebSocket({
+    appServer: f.server,
+    zenHome: os.tmpdir(),
+    listen: "ws://127.0.0.1:0",
+  });
+  const client = await ZenXProtocolClient.connect({
+    url: server.url,
+    clientInfo: {
+      name: "room-observer",
+      title: "Room observer",
+      version: "test",
+    },
+  });
+  const events = new Events<{ method: string; params: any }>();
+  try {
+    for (const method of ["turn/completed", "zen/thread/event"] as const)
+      client.onNotification(method, (params) => events.add({ method, params }));
+    const threadId = (await client.request("thread/start", {})).thread.id;
+    const receipt = await client.request("zen/turn/wake", {
+      threadId,
+      clientId: "exact-room-client",
+      source: "room",
+      sourceId: "exact-room",
+      text: "Actual Room input",
+    });
+    release.resolve();
+    const event = await events.wait(
+      (value) => terminalIdentity(value)?.threadId === threadId,
+    );
+    assert.equal(event.method, "zen/thread/event");
+    assert.deepEqual(terminalIdentity(event), {
+      threadId,
+      turnId: receipt.turnId,
+    });
+    const read = await client.request("zen/thread/read", { threadId });
+    assert.equal(read.thread.turns.at(-1)?.status, "completed");
+    assert(
+      read.thread.items.some(
+        (item) =>
+          item.type === "host_message" &&
+          item.clientId === "exact-room-client" &&
+          item.source === "room" &&
+          item.sourceId === "exact-room" &&
+          item.turnId === receipt.turnId,
+      ),
+    );
+    assert.equal(
+      events.values.filter((value) => value.method === "turn/completed").length,
+      0,
+      "The client still suppresses duplicate legacy completion",
+    );
+    assert.equal(
+      terminalIdentity({
+        method: "zen/thread/event",
+        params: {
+          threadId: "foreign",
+          event: { type: "turn_completed", threadId, turnId: receipt.turnId },
+        },
+      }),
+      null,
+    );
+  } finally {
+    release.resolve();
+    client.close();
+    await server.close();
+  }
+});

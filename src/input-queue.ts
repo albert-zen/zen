@@ -1,23 +1,34 @@
-import type { CanonicalItem, QueuedUserMessageItem } from "./item.js";
+import type { CanonicalItem, QueuedInputItem } from "./item.js";
 
 /** Disposable canonical projection; the initial Item remains the queue anchor. */
-export interface PendingQueuedUserMessage extends QueuedUserMessageItem {
-  revision: number;
-}
+export type PendingQueuedInput = QueuedInputItem & { revision: number };
+/** Compatibility alias; pending input can now preserve an Agent sender. */
+export type PendingQueuedUserMessage = PendingQueuedInput;
 
-/** Pending means neither accepted by a user message nor canonically canceled. */
+/** Pending means neither accepted by a canonical input nor canonically canceled. */
 export function pendingQueuedMessages(
   items: readonly CanonicalItem[],
-): PendingQueuedUserMessage[] {
-  const queued = new Map<string, PendingQueuedUserMessage>();
+): PendingQueuedInput[] {
+  const queued = new Map<string, PendingQueuedInput>();
   const delivered = new Set<string>();
   const cancelled = new Set<string>();
   for (const item of items) {
-    if (item.type === "user_message_queued") {
+    if (
+      item.type === "user_message_queued" ||
+      item.type === "thread_message_queued" ||
+      item.type === "host_message_queued"
+    ) {
       if (!queued.has(item.id)) queued.set(item.id, { ...item, revision: 0 });
-    } else if (item.type === "user_message" && item.clientId !== undefined) {
+    } else if (
+      (item.type === "user_message" ||
+        item.type === "thread_message" ||
+        item.type === "host_message") &&
+      item.clientId !== undefined
+    ) {
       delivered.add(item.clientId);
     } else if (
+      item.type === "host_message_cancelled" ||
+      item.type === "thread_message_cancelled" ||
       item.type === "user_message_queue_cancelled" ||
       item.type === "user_message_queue_edited"
     ) {
@@ -26,12 +37,24 @@ export function pendingQueuedMessages(
         prior === undefined ||
         prior.threadId !== item.threadId ||
         prior.clientId !== item.clientId ||
+        (item.type === "thread_message_cancelled") !==
+          (prior.type === "thread_message_queued") ||
+        (item.type === "host_message_cancelled") !==
+          (prior.type === "host_message_queued") ||
         delivered.has(prior.clientId) ||
         cancelled.has(prior.id)
       )
         continue;
-      if (item.type === "user_message_queue_cancelled") cancelled.add(prior.id);
-      else if (item.revision === prior.revision + 1) {
+      if (
+        item.type === "user_message_queue_cancelled" ||
+        item.type === "thread_message_cancelled" ||
+        item.type === "host_message_cancelled"
+      )
+        cancelled.add(prior.id);
+      else if (
+        prior.type === "user_message_queued" &&
+        item.revision === prior.revision + 1
+      ) {
         queued.set(prior.id, {
           ...prior,
           revision: item.revision,

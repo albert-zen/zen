@@ -26,6 +26,9 @@ export interface RoomMessage {
 }
 
 export interface RoomOperation {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
+  cancelled?: true;
   id: string;
   text: string;
   messageId: string | null;
@@ -35,7 +38,11 @@ export interface RoomOperation {
 }
 
 export interface Room {
-  assistant?: { threadId: string; triggerId: string };
+  assistant?: {
+    threadId: string;
+    triggerId: string;
+    deliveryMode?: "steer" | "queue";
+  };
   id: string;
   name: string;
   members: RoomMember[];
@@ -112,6 +119,10 @@ export interface ZenXRoomsTrustedService {
   createAssistantRoom?(
     input: CreateAssistantRoomInput | { name: string; members: RoomMember[] },
   ): Promise<Room>;
+  setAssistantDeliveryMode?(
+    roomId: string,
+    mode: "steer" | "queue",
+  ): Promise<void>;
   setAssistantReplies?(roomId: string, enabled: boolean): Promise<void>;
   createRoom(input: { name: string; members: RoomMember[] }): Promise<Room>;
   renameRoom(roomId: string, name: string): Promise<void>;
@@ -129,6 +140,15 @@ export interface ZenXRoomsTrustedService {
     operationId: string,
     text: string,
     replyToMessageId?: string,
+  ): Promise<RoomOperation>;
+  prepareAssistantIntroduction?(
+    roomId: string,
+    operationId: string,
+    language: "en" | "zh",
+  ): Promise<RoomOperation>;
+  startAssistantIntroduction?(
+    roomId: string,
+    operationId: string,
   ): Promise<RoomOperation>;
   postPreparedRoomMessage?(
     roomId: string,
@@ -150,6 +170,11 @@ export interface ZenXRoomsTrustedService {
   acknowledgeRoomOperation?(roomId: string, operationId: string): Promise<void>;
   snapshot(): {
     rooms: Room[];
+    history?: Array<{
+      id: string;
+      status: "starting" | "running" | "completed" | "failed";
+      error: string | null;
+    }>;
     triggers?: Array<{
       id?: string;
       active: boolean;
@@ -238,10 +263,16 @@ export function createZenXTrustedPlugin(
           if (!Number.isSafeInteger(cursor) || cursor < 0)
             throw new Error("Invalid Room list cursor");
           return {
+            readCursorVersion: 1,
             nextCursor: cursor + 1 < state.rooms.length ? cursor + 1 : null,
             rooms: state.rooms.slice(cursor, cursor + 1).map((room) => ({
               ...readSafeRoom(room),
               messageCount: room.messages.length,
+              ...roomMessageReadProjection(
+                room.messages,
+                record(args["readCursors"])?.[room.id],
+                args["readSince"],
+              ),
               messages: room.messages
                 .slice(-1)
                 .map(
@@ -268,6 +299,26 @@ export function createZenXTrustedPlugin(
                             t.id === room.assistant!.triggerId,
                         ) === true
                       : undefined,
+                    introduction: (() => {
+                      const operation = room.operations
+                        ?.filter(
+                          (entry) => entry.kind === "assistantIntroduction",
+                        )
+                        .at(-1);
+                      if (!operation) return undefined;
+                      const history = state.history?.find(
+                        (entry) => entry.id === operation.wakeupId,
+                      );
+                      return {
+                        operationId: operation.id,
+                        state: operation.cancelled
+                          ? "cancelled"
+                          : operation.wakeupId
+                            ? (history?.status ?? "unknown")
+                            : "prepared",
+                        error: history?.error ?? null,
+                      };
+                    })(),
                     operationEpoch: room.operationEpoch ?? "legacy",
                     pendingCount: (room.operations ?? []).filter(
                       (operation) => !operation.acknowledged,
@@ -332,6 +383,8 @@ export function createZenXTrustedPlugin(
             (operation) => !operation.acknowledged,
           );
           const page = pending.slice(cursor, cursor + 8).map((operation) => ({
+            kind: operation.kind,
+            wakeupId: operation.wakeupId,
             id: operation.id,
             text: Array.from(operation.text).slice(0, 120).join(""),
             messageId: operation.messageId,
@@ -345,6 +398,25 @@ export function createZenXTrustedPlugin(
                 : null,
           };
         }
+        case "zenx_rooms_prepare_introduction":
+          if (uiInput === null || !service.prepareAssistantIntroduction)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["roomId", "operationId", "language"]);
+          if (args["language"] !== "en" && args["language"] !== "zh")
+            throw new Error("Unsupported welcome language");
+          return await service.prepareAssistantIntroduction(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+            args["language"],
+          );
+        case "zenx_rooms_start_introduction":
+          if (uiInput === null || !service.startAssistantIntroduction)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["roomId", "operationId"]);
+          return await service.startAssistantIntroduction(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+          );
         case "zenx_rooms_prepare_message":
           if (uiInput === null || !service.prepareRoomMessage)
             throw new Error("Trusted Room UI required");
@@ -438,6 +510,19 @@ export function createZenXTrustedPlugin(
             operationId: string(args, "operationId", MAX_ID_BYTES),
             target: selected,
           });
+        }
+        case "zenx_rooms_assistant_delivery": {
+          if (uiInput === null || !service.setAssistantDeliveryMode)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["roomId", "deliveryMode"]);
+          const mode = args["deliveryMode"];
+          if (mode !== "steer" && mode !== "queue")
+            throw new Error("deliveryMode must be steer or queue");
+          await service.setAssistantDeliveryMode(
+            string(args, "roomId", MAX_ID_BYTES),
+            mode,
+          );
+          return { updated: true };
         }
         case "zenx_rooms_assistant_replies":
           if (uiInput === null || !service.setAssistantReplies)
@@ -566,6 +651,59 @@ function members(value: unknown): RoomMember[] {
       threadId: string(member, "threadId", MAX_ID_BYTES),
     };
   });
+}
+
+/** Read-only metadata over retained canonical Room messages; never a delivery receipt. */
+export function roomMessageReadProjection(
+  messages: readonly RoomMessage[],
+  readCursor: unknown,
+  readSince: unknown,
+) {
+  const latest = messages.at(-1);
+  const agent = messages.findLast((message) => message.kind === "agent");
+  const candidate = record(readCursor);
+  const validCursor =
+    candidate &&
+    typeof candidate["id"] === "string" &&
+    typeof candidate["createdAt"] === "number" &&
+    Number.isFinite(candidate["createdAt"])
+      ? { id: candidate["id"], createdAt: candidate["createdAt"] }
+      : null;
+  const index = validCursor
+    ? messages.findIndex((message) => message.id === validCursor.id)
+    : -1;
+  const since = validCursor?.createdAt ?? readSince;
+  return {
+    ...(latest
+      ? {
+          lastMessage: {
+            id: latest.id,
+            createdAt: latest.createdAt,
+            kind: latest.kind,
+          },
+        }
+      : {}),
+    ...(agent
+      ? { lastAgentMessage: { id: agent.id, createdAt: agent.createdAt } }
+      : {}),
+    ...(typeof since === "number" &&
+    Number.isFinite(since) &&
+    !(
+      validCursor &&
+      index < 0 &&
+      messages.some(
+        (message) => message.kind === "agent" && message.createdAt === since,
+      )
+    )
+      ? {
+          unreadCount: messages.filter(
+            (message, position) =>
+              message.kind === "agent" &&
+              (index >= 0 ? position > index : message.createdAt > since),
+          ).length,
+        }
+      : {}),
+  };
 }
 
 function readSafeRoom(room: Room) {
