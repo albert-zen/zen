@@ -23,6 +23,7 @@ import {
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
+  createContext,
   useEffect,
   useContext,
   useCallback,
@@ -127,6 +128,21 @@ import {
   type ContextCompactionProjection,
 } from "./context-compaction-projection.js";
 
+export type MessageForkTarget = { sourceThreadId: string; itemId: string };
+export type MessageForkHandler = (
+  target: MessageForkTarget,
+  owner: { isCurrent(): boolean; isVisible(): boolean },
+) => Promise<void>;
+/** App-owned request handling is shared by main and embedded Thread viewports. */
+export const MessageForkContext = createContext<MessageForkHandler | null>(
+  null,
+);
+const CanonicalMessageForkContext = createContext<{
+  threadId: string;
+  items: Map<string, string | undefined>;
+  isCurrent(itemId: string): boolean;
+} | null>(null);
+
 interface ThreadViewProps {
   composerId?: string;
   composerSendMode?: ComposerSendMode;
@@ -204,16 +220,57 @@ export function ThreadView(props: ThreadViewProps) {
       items === undefined ? undefined : projectThreadAttachmentItems(items),
     [items],
   );
+  const forkSource = useMemo(
+    () =>
+      props.thread === null
+        ? null
+        : {
+            threadId: props.thread.id,
+            items: new Map(
+              (items ?? [])
+                .filter(
+                  (item) =>
+                    item.type === "agent_message" &&
+                    item.threadId === props.thread?.id,
+                )
+                .map((item) => [item.id, item.turnId]),
+            ),
+          },
+    [props.thread?.id, items],
+  );
+  const forkSourceRef = useRef(forkSource);
+  forkSourceRef.current = forkSource;
+  const mounted = useRef(true);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const forkContext =
+    forkSource === null
+      ? null
+      : {
+          ...forkSource,
+          // A Turn finishing may fold or remount its message controls. Only leaving
+          // the source viewport or losing the canonical Item invalidates ownership.
+          isCurrent: (itemId: string) =>
+            mounted.current &&
+            forkSourceRef.current?.threadId === forkSource.threadId &&
+            forkSourceRef.current.items.has(itemId),
+        };
   // Native history and its image placeholders commit together, even while a
   // separate media refresh/payload read is pending. A newer canonical snapshot
   // also removes old references synchronously; never merge stale Host results.
 
   return (
     <ThreadReadingContext.Provider value={readingState}>
-      <ThreadViewContent
-        {...props}
-        threadAttachments={canonicalAttachments ?? props.threadAttachments}
-      />
+      <CanonicalMessageForkContext.Provider value={forkContext}>
+        <ThreadViewContent
+          {...props}
+          threadAttachments={canonicalAttachments ?? props.threadAttachments}
+        />
+      </CanonicalMessageForkContext.Provider>
     </ThreadReadingContext.Provider>
   );
 }
@@ -3322,18 +3379,26 @@ function AgentMessage({
   turn: Turn;
   usage?: ModelUsageAggregate;
 }) {
+  const source = useContext(CanonicalMessageForkContext);
+  const onFork = useContext(MessageForkContext);
+  const forkTarget =
+    source !== null && onFork !== null && source.items.get(item.id) === turn.id
+      ? { sourceThreadId: source.threadId, itemId: item.id }
+      : undefined;
   return (
     <article className="agent-copy" data-read-message-id={item.id}>
       <Markdown text={item.text} />
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
-      {showActions ? (
+      {showActions || forkTarget !== undefined ? (
         <MessageActions
           className="assistant-message-actions"
           copyLabel={i18n.t("shell:copyAssistantMessage")}
           copiedLabel={i18n.t("shell:copiedAssistantMessage")}
           text={item.text}
           turn={turn}
-          usage={usage}
+          usage={showActions ? usage : undefined}
+          showMetadata={showActions}
+          forkTarget={forkTarget}
         />
       ) : null}
     </article>
@@ -3347,6 +3412,8 @@ function MessageActions({
   text,
   turn,
   usage,
+  showMetadata = true,
+  forkTarget,
 }: {
   className: string;
   copyLabel: string;
@@ -3354,6 +3421,8 @@ function MessageActions({
   text: string;
   turn: Turn;
   usage?: ModelUsageAggregate;
+  showMetadata?: boolean;
+  forkTarget?: MessageForkTarget;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -3367,7 +3436,7 @@ function MessageActions({
   };
   return (
     <div className={`message-actions ${className}`}>
-      {turn.completedAt === null ? null : (
+      {!showMetadata || turn.completedAt === null ? null : (
         <time
           className="message-time"
           dateTime={new Date(turn.completedAt * 1_000).toISOString()}
@@ -3392,7 +3461,66 @@ function MessageActions({
       >
         <Icon name={copied ? "check" : "copy"} size={14} />
       </button>
+      {forkTarget === undefined ? null : (
+        <MessageForkButton target={forkTarget} />
+      )}
     </div>
+  );
+}
+
+function MessageForkButton({ target }: { target: MessageForkTarget }) {
+  const fork = useContext(MessageForkContext);
+  const source = useContext(CanonicalMessageForkContext);
+  const busy = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const errorId = useId();
+  const run = async () => {
+    if (busy.current || fork === null) return;
+    const trigger = button.current;
+    const stillVisible = () =>
+      trigger !== null && trigger === button.current && trigger.isConnected;
+    busy.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await fork(target, {
+        isCurrent: () => source?.isCurrent(target.itemId) ?? false,
+        isVisible: stillVisible,
+      });
+    } catch (cause) {
+      if (stillVisible())
+        setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      busy.current = false;
+      if (stillVisible()) setPending(false);
+    }
+  };
+  const label = i18n.t(
+    pending ? "shell:forkingMessage" : "shell:forkFromMessage",
+  );
+  return (
+    <>
+      <button
+        ref={button}
+        className="message-fork"
+        type="button"
+        disabled={pending}
+        aria-label={label}
+        title={label}
+        aria-busy={pending}
+        aria-describedby={error === null ? undefined : errorId}
+        onClick={() => void run()}
+      >
+        <Icon name="fork" size={14} />
+      </button>
+      {error === null ? null : (
+        <span className="message-fork-error" role="alert" id={errorId}>
+          {i18n.t("shell:messageForkFailed", { error })}
+        </span>
+      )}
+    </>
   );
 }
 
