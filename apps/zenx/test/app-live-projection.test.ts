@@ -2156,3 +2156,75 @@ test("message action row appears only after the source Turn finishes, then Fork 
     await harness.unmount();
   }
 });
+
+test("Sidebar debug mode targets its exact Thread, defaults off, exits, and never enables capture", async () => {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed({
+          ...threadWithMessage("debug target"),
+          id: (params as { threadId: string }).threadId,
+        });
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  const click = async (selector: string) =>
+    act(async () =>
+      document.querySelector<HTMLButtonElement>(selector)!.click(),
+    );
+  try {
+    await click('[data-thread-id="thread-1"] .thread-row');
+    assert.equal(document.querySelector(".thread-view-switch"), null);
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    await click("#thread-menu-trigger-thread-2");
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[data-thread-action="debug"]',
+    )!;
+    assert.equal(toggle.getAttribute("role"), "menuitemcheckbox");
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    await act(async () => toggle.click());
+    await waitFor(() => document.querySelector(".thread-debugger"));
+    assert.deepEqual(
+      requests.filter((r) => r.method === "zen/thread/resume").at(-1)?.params,
+      { threadId: "thread-2" },
+    );
+    assert.equal(
+      document.querySelectorAll(".thread-debug-tabs button[aria-pressed]")
+        .length,
+      2,
+    );
+    await click("#thread-menu-trigger-thread-2");
+    assert.equal(
+      document
+        .querySelector('[data-thread-action="debug"]')
+        ?.getAttribute("aria-checked"),
+      "true",
+    );
+    await click('[data-thread-action="debug"]');
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+    assert.equal(document.activeElement?.id, "thread-composer");
+    await click("#thread-menu-trigger-thread-2");
+    await click('[data-thread-action="debug"]');
+    await waitFor(() => document.querySelector(".thread-debugger"));
+    await click(".thread-debug-exit");
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    assert.equal(document.querySelector(".thread-view-switch"), null);
+    await click("#thread-menu-trigger-thread-2");
+    await click('[data-thread-action="debug"]');
+    await waitFor(() => document.querySelector(".thread-debugger"));
+    await click('[data-thread-id="thread-1"] .thread-row');
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    await click('[data-thread-id="thread-2"] .thread-row');
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    assert.ok(!requests.some((r) => /capture|debug/i.test(r.method)));
+  } finally {
+    await harness.unmount();
+  }
+});

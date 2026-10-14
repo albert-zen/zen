@@ -1,4 +1,5 @@
 import "./dom-primitives.js";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
@@ -80,34 +81,40 @@ test("Items preserves canonical order and renders hidden metadata alongside shar
     );
     assert.equal(document.querySelector('[role="switch"]'), null);
   }));
-test("Agent switches inline, remote surfaces lack request access, and conversation returns", async () =>
+test("normal views have no debug navigation row; controlled debug exits inline", async () =>
   dom(async (root) => {
-    await act(async () =>
+    const props = {
+      thread,
+      approvals: [],
+      composer: emptyComposerState(),
+      onDraftChange: noop,
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    };
+    const render = (debugMode = false) =>
       root.render(
         createElement(ThreadView, {
-          thread,
-          approvals: [],
-          composer: emptyComposerState(),
-          onDraftChange: noop,
-          onInterrupt: noop,
-          onRespondToApproval: noop,
-          onSubmit: noop,
+          ...props,
+          debugMode,
+          onExitDebug: () => render(false),
         }),
-      ),
-    );
-    const buttons = [
-      ...document.querySelectorAll<HTMLButtonElement>(
-        ".thread-view-switch button",
-      ),
-    ];
-    await act(async () => buttons[1]!.click());
+      );
+    await act(async () => render());
+    assert.equal(document.querySelector(".thread-view-switch"), null);
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    assert.ok(document.querySelector(".thread-view"));
+    await act(async () => render(true));
     assert.ok(document.querySelector(".thread-debugger"));
     assert.equal(document.querySelector('[role="dialog"]'), null);
     assert.equal(
-      document.querySelectorAll(".thread-debug-tabs button").length,
+      document.querySelectorAll(".thread-debug-tabs button[aria-pressed]")
+        .length,
       1,
     );
-    await act(async () => buttons[0]!.click());
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-debug-exit")!.click(),
+    );
     assert.equal(document.querySelector(".thread-debugger"), null);
     assert.ok(document.querySelector(".thread-view"));
   }));
@@ -175,13 +182,14 @@ test("tool results use inert shared fallback; opaque reasoning and hostile strin
     });
     assert.ok(d.textContent?.includes("OPAQUE_SECRET"));
   }));
-test("switching threads exits debug and remounting cannot retain previous Item JSON", async () =>
+test("debugger remounts for a different Thread without retaining Item JSON", async () =>
   dom(async (root) => {
-    const render = async (value: typeof thread) =>
+    const render = async (value: typeof thread, debugMode = true) =>
       act(async () =>
         root.render(
           createElement(ThreadView, {
             thread: value,
+            debugMode,
             approvals: [],
             composer: emptyComposerState(),
             onDraftChange: noop,
@@ -192,22 +200,24 @@ test("switching threads exits debug and remounting cannot retain previous Item J
         ),
       );
     await render(thread);
-    await act(async () =>
-      document
-        .querySelectorAll<HTMLButtonElement>(".thread-view-switch button")[1]!
-        .click(),
-    );
     const d = document.querySelector<HTMLDetailsElement>(".thread-debug-json")!;
     await act(async () => {
       d.open = true;
       d.dispatchEvent(new window.Event("toggle"));
     });
-    await render({ ...thread, id: "another", canonicalItems: [] });
+    await render({ ...thread, id: "another", canonicalItems: [] }, false);
     assert.equal(document.querySelector(".thread-debugger"), null);
-    await act(async () =>
-      document
-        .querySelectorAll<HTMLButtonElement>(".thread-view-switch button")[1]!
-        .click(),
-    );
+    await render({ ...thread, id: "another", canonicalItems: [] });
     assert.equal(document.querySelectorAll("[data-item-id]").length, 0);
   }));
+
+test("normal conversation fills its flex surface when history and Composer are absolute", () => {
+  const css = readFileSync(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.thread-conversation-surface > \.thread-view\s*\{[^}]*flex:\s*1;/,
+  );
+});

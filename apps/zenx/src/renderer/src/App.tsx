@@ -138,7 +138,7 @@ import {
 } from "./plugin-contributions.js";
 import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
-import { Sidebar } from "./Sidebar.js";
+import { Sidebar, ThreadDebugMenuContext } from "./Sidebar.js";
 import {
   derivePinnedThreads,
   EMPTY_SIDEBAR_ORDER,
@@ -428,6 +428,7 @@ function AppContent() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
+  const [debugThreadId, setDebugThreadId] = useState<string | null>(null);
   const messageForkRequests = useRef(new Map<string, Promise<void>>());
   const messageForkNavigation = useRef(0);
   const pendingResumeProjectionRef = useRef<{
@@ -439,6 +440,7 @@ function AppContent() {
     new Map<string, ThreadProjectionCacheEntry>(),
   );
   const invalidateThreadSelection = () => {
+    setDebugThreadId(null);
     selectionEpoch.current += 1;
     pendingResumeProjectionRef.current = null;
   };
@@ -1022,10 +1024,20 @@ function AppContent() {
       });
   };
 
+  const exitDebugMode = () => {
+    const epoch = selectionEpoch.current;
+    setDebugThreadId(null);
+    requestAnimationFrame(() => {
+      if (selectionEpoch.current === epoch)
+        document.getElementById("thread-composer")?.focus();
+    });
+  };
+
   const resumeThread = async (
     threadId: string,
     preserveNavigation = false,
     propagateFailure = false,
+    debugMode = false,
   ) => {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
@@ -1036,6 +1048,7 @@ function AppContent() {
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
+      setDebugThreadId(debugMode ? threadId : null);
       setPage("agent");
       setSidebarOpen(false);
     }
@@ -1127,6 +1140,7 @@ function AppContent() {
       if (selectionEpoch.current === epoch) {
         if (pendingResumeProjectionRef.current?.epoch === epoch)
           pendingResumeProjectionRef.current = null;
+        setDebugThreadId(null);
         setThreadError(describeError(error));
       }
       if (propagateFailure) throw error;
@@ -2908,123 +2922,142 @@ function AppContent() {
             <Icon name="panel-right" />
           </button>
         ) : null}
-        <Sidebar
-          triggerAdmissionId={sidebarTriggerAdmissionId(pluginSnapshot)}
-          unreadThreadIds={unreadThreads}
-          roomConversations={roomsAdmitted ? roomConversations : undefined}
-          selectedRoomId={selectedRoomId}
-          collapsed={sidebarCollapsed}
-          liveThread={threadDetail}
-          mode={sidebarMode}
-          open={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-          onChangeThreadLifecycle={(summary) =>
-            performThreadLifecycle(summary, true)
-          }
-          onChangeThreadPinned={changeThreadPinned}
-          onReorderProject={(sourceKey, targetKey, placement) =>
-            queueSidebarOrderMutation((current) =>
-              moveSidebarProject(
-                current,
-                projects,
-                sourceKey,
-                targetKey,
-                placement,
-              ),
-            )
-          }
-          onReorderThread={(
-            sourceProjectKey,
-            sourceThreadId,
-            targetProjectKey,
-            targetThreadId,
-            placement,
-          ) =>
-            queueSidebarOrderMutation((current) =>
-              moveSidebarThread(
-                current,
-                activeSummaries,
-                projects,
-                sourceProjectKey,
-                sourceThreadId,
-                targetProjectKey,
-                targetThreadId,
-                placement,
-              ),
-            )
-          }
-          onReorderPinnedThread={(sourceThreadId, targetThreadId, placement) =>
-            queuePinMutation((current) =>
-              movePinnedThreadIds(
-                current,
-                sourceThreadId,
-                targetThreadId,
-                placement,
-              ),
-            )
-          }
-          onNewThread={(workspace) => {
-            openNewThreadDraft(workspace);
+        <ThreadDebugMenuContext.Provider
+          value={{
+            threadId: page === "agent" ? debugThreadId : null,
+            toggle: (threadId) => {
+              if (page === "agent" && debugThreadId === threadId)
+                exitDebugMode();
+              else void resumeThread(threadId, false, false, true);
+            },
           }}
-          onAddProject={() => openProjectPicker("add-project")}
-          newThreadDisabled={newThreadPending}
-          onRemoveProject={(workspace) => {
-            void window.zenx.settings
-              .removeWorkspace(workspace)
-              .then(async () => await loadProjects())
-              .catch((error: unknown) => setRequestError(describeError(error)));
-          }}
-          onEditProject={(workspace, name) => {
-            editingProjectFocusWorkspace.current = workspace;
-            setEditingProject({ workspace, name });
-          }}
-          onSetDefaultProject={(workspace) => {
-            void window.zenx.settings
-              .addWorkspace(workspace)
-              .then(
-                async () =>
-                  await window.zenx.settings.setDefaultWorkspace(workspace),
-              )
-              .then(async () => await loadProjects())
-              .catch((error: unknown) => setRequestError(describeError(error)));
-          }}
-          onOpenContribution={(route) => {
-            const target = pluginSnapshot?.pages.find(
-              (candidate) => candidate.route === pluginRoutePath(route),
-            );
-            if (target?.surfaceId !== undefined) {
-              openPage(route);
-              if (target.pluginId === "zenx-rooms")
-                void roomConversations.refresh();
+        >
+          <Sidebar
+            triggerAdmissionId={sidebarTriggerAdmissionId(pluginSnapshot)}
+            unreadThreadIds={unreadThreads}
+            roomConversations={roomsAdmitted ? roomConversations : undefined}
+            selectedRoomId={selectedRoomId}
+            collapsed={sidebarCollapsed}
+            liveThread={threadDetail}
+            mode={sidebarMode}
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+            onChangeThreadLifecycle={(summary) =>
+              performThreadLifecycle(summary, true)
             }
-          }}
-          onOpenSettings={() => openPage("settings")}
-          onRetryThreads={() => void loadThreadSummaries(true)}
-          onRenameThread={renameThread}
-          onForkThread={forkThread}
-          onSelectThread={(threadId) => void resumeThread(threadId)}
-          pendingApprovalThreadIds={pendingThreadIds}
-          pluginContributions={pluginContributions}
-          selectedPage={selectedSidebarPage}
-          selectedThreadId={page === "agent" ? selectedThreadId : null}
-          serverStatus={serverStatus}
-          projects={projects}
-          onChangeProjectPinned={(key) =>
-            queueSidebarOrderMutation((current) => ({
-              ...current,
-              pinnedProjectKeys: current.pinnedProjectKeys?.includes(key)
-                ? current.pinnedProjectKeys.filter(
-                    (candidate) => candidate !== key,
-                  )
-                : [...(current.pinnedProjectKeys ?? []), key],
-            }))
-          }
-          sidebarOrder={sidebarOrder}
-          pinnedThreads={pinnedSummaries}
-          threadError={threadListErrors.active}
-          threadLoading={!threadListLoaded.active}
-          threads={activeSummaries}
-        />
+            onChangeThreadPinned={changeThreadPinned}
+            onReorderProject={(sourceKey, targetKey, placement) =>
+              queueSidebarOrderMutation((current) =>
+                moveSidebarProject(
+                  current,
+                  projects,
+                  sourceKey,
+                  targetKey,
+                  placement,
+                ),
+              )
+            }
+            onReorderThread={(
+              sourceProjectKey,
+              sourceThreadId,
+              targetProjectKey,
+              targetThreadId,
+              placement,
+            ) =>
+              queueSidebarOrderMutation((current) =>
+                moveSidebarThread(
+                  current,
+                  activeSummaries,
+                  projects,
+                  sourceProjectKey,
+                  sourceThreadId,
+                  targetProjectKey,
+                  targetThreadId,
+                  placement,
+                ),
+              )
+            }
+            onReorderPinnedThread={(
+              sourceThreadId,
+              targetThreadId,
+              placement,
+            ) =>
+              queuePinMutation((current) =>
+                movePinnedThreadIds(
+                  current,
+                  sourceThreadId,
+                  targetThreadId,
+                  placement,
+                ),
+              )
+            }
+            onNewThread={(workspace) => {
+              openNewThreadDraft(workspace);
+            }}
+            onAddProject={() => openProjectPicker("add-project")}
+            newThreadDisabled={newThreadPending}
+            onRemoveProject={(workspace) => {
+              void window.zenx.settings
+                .removeWorkspace(workspace)
+                .then(async () => await loadProjects())
+                .catch((error: unknown) =>
+                  setRequestError(describeError(error)),
+                );
+            }}
+            onEditProject={(workspace, name) => {
+              editingProjectFocusWorkspace.current = workspace;
+              setEditingProject({ workspace, name });
+            }}
+            onSetDefaultProject={(workspace) => {
+              void window.zenx.settings
+                .addWorkspace(workspace)
+                .then(
+                  async () =>
+                    await window.zenx.settings.setDefaultWorkspace(workspace),
+                )
+                .then(async () => await loadProjects())
+                .catch((error: unknown) =>
+                  setRequestError(describeError(error)),
+                );
+            }}
+            onOpenContribution={(route) => {
+              const target = pluginSnapshot?.pages.find(
+                (candidate) => candidate.route === pluginRoutePath(route),
+              );
+              if (target?.surfaceId !== undefined) {
+                openPage(route);
+                if (target.pluginId === "zenx-rooms")
+                  void roomConversations.refresh();
+              }
+            }}
+            onOpenSettings={() => openPage("settings")}
+            onRetryThreads={() => void loadThreadSummaries(true)}
+            onRenameThread={renameThread}
+            onForkThread={forkThread}
+            onSelectThread={(threadId) => void resumeThread(threadId)}
+            pendingApprovalThreadIds={pendingThreadIds}
+            pluginContributions={pluginContributions}
+            selectedPage={selectedSidebarPage}
+            selectedThreadId={page === "agent" ? selectedThreadId : null}
+            serverStatus={serverStatus}
+            projects={projects}
+            onChangeProjectPinned={(key) =>
+              queueSidebarOrderMutation((current) => ({
+                ...current,
+                pinnedProjectKeys: current.pinnedProjectKeys?.includes(key)
+                  ? current.pinnedProjectKeys.filter(
+                      (candidate) => candidate !== key,
+                    )
+                  : [...(current.pinnedProjectKeys ?? []), key],
+              }))
+            }
+            sidebarOrder={sidebarOrder}
+            pinnedThreads={pinnedSummaries}
+            threadError={threadListErrors.active}
+            threadLoading={!threadListLoaded.active}
+            threads={activeSummaries}
+          />
+        </ThreadDebugMenuContext.Provider>
         <SidebarResizer
           collapsed={sidebarCollapsed}
           onCollapse={toggleSidebarCollapsed}
@@ -3136,6 +3169,10 @@ function AppContent() {
               </ImZenXDraftContext.Provider>
             ) : (
               <AgentSurface
+                debugMode={
+                  debugThreadId !== null && debugThreadId === selectedThreadId
+                }
+                onExitDebug={exitDebugMode}
                 onRecoverQueuedEdit={(threadId) => {
                   // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
                   if (
@@ -3683,6 +3720,8 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  debugMode,
+  onExitDebug,
   onRecoverQueuedEdit,
   queueEditStore,
   threadHeader,
@@ -3742,6 +3781,8 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  debugMode: boolean;
+  onExitDebug(): void;
   onRecoverQueuedEdit(threadId: string): void;
   queueEditStore: QueueEditStore;
   onOpenMessageLink(
@@ -3984,6 +4025,8 @@ function AgentSurface({
         <>
           <ThreadView
             localModelDebug
+            debugMode={debugMode}
+            onExitDebug={onExitDebug}
             composerSendMode={composerSendMode}
             onComposerSendModeChange={onComposerSendModeChange}
             onOpenMessageLink={(target) => {

@@ -56,13 +56,6 @@ const props = (thread: ReturnType<typeof fixture>) => ({
   onRespondToApproval: noop,
   onSubmit: noop,
 });
-async function debug() {
-  await act(async () =>
-    document
-      .querySelectorAll<HTMLButtonElement>(".thread-view-switch button")[1]!
-      .click(),
-  );
-}
 
 test("debugger keeps thread cwd for a relative Markdown image", async () =>
   dom(async (root) => {
@@ -83,7 +76,15 @@ test("debugger keeps thread cwd for a relative Markdown image", async () =>
       ),
     );
     assert.deepEqual(reads, [["./plot.png", "/project/actual-thread"]]);
-    await debug();
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          ...props(fixture("![image](./plot.png)")),
+          debugMode: true,
+        }),
+      ),
+    );
+
     assert.deepEqual(reads, [
       ["./plot.png", "/project/actual-thread"],
       ["./plot.png", "/project/actual-thread"],
@@ -105,7 +106,16 @@ test("debugger preserves main conversation message-link routing", async () =>
       document.querySelector(".markdown-body a"),
       "conversation link exists",
     );
-    await debug();
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          ...props(fixture("[result](./result.txt)")),
+          debugMode: true,
+          onOpenMessageLink: (target) => opened.push(target),
+        }),
+      ),
+    );
+
     const link = document.querySelector<HTMLAnchorElement>(".markdown-body a");
     assert.ok(link, "debugger should retain the same read-only link");
     await act(async () => link.click());
