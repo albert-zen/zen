@@ -10129,7 +10129,7 @@ button:disabled {
 }
 .thread-running-spinner {
   display: block;
-  animation: thread-spinner-turn 900ms linear infinite;
+  animation: thread-spinner-turn 1.8s linear infinite;
 }
 @keyframes thread-spinner-turn {
   to {
