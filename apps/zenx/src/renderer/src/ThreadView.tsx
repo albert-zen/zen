@@ -516,6 +516,7 @@ function ThreadViewContent({
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(readingState.scroll?.following ?? true);
+  const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -594,7 +595,11 @@ function ThreadViewContent({
   }, [readingState]);
   const pauseFollowing = useCallback(() => {
     shouldFollowRef.current = false;
-    setAtLive(false);
+    const scroll = scrollRef.current;
+    setAtLive(
+      scroll !== null &&
+        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+    );
     saveReadingPosition();
   }, [saveReadingPosition]);
   const followBottom = useCallback(() => {
@@ -605,6 +610,8 @@ function ThreadViewContent({
       return;
     }
     scroll.scrollTop = scroll.scrollHeight;
+    observedScrollTop.current = scroll.scrollTop;
+    setAtLive(true);
     saveReadingPosition();
   }, [pauseFollowing, saveReadingPosition]);
 
@@ -642,8 +649,12 @@ function ThreadViewContent({
     if (!scroll) return;
     const saved = readingState.scroll;
     shouldFollowRef.current = saved?.following ?? true;
-    scroll.scrollTop = saved?.top ?? scroll.scrollHeight;
-    setAtLive(shouldFollowRef.current);
+    scroll.scrollTop =
+      saved?.following === false ? saved.top : scroll.scrollHeight;
+    observedScrollTop.current = scroll.scrollTop;
+    setAtLive(
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+    );
     saveReadingPosition();
   }, [readingState, saveReadingPosition]);
 
@@ -671,20 +682,21 @@ function ThreadViewContent({
     document.addEventListener("selectionchange", selection);
     return () => document.removeEventListener("selectionchange", selection);
   }, [pauseFollowing]);
-  const streamingRef = useRef(false);
-  streamingRef.current = runningTurn !== null;
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     const content = scroll?.firstElementChild;
     if (!scroll || !content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (streamingRef.current) followBottom();
-      else if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1)
-        pauseFollowing();
-      // Idle layout changes can expose a Back to live action, never activate it.
+      // Layout can settle after completion (Markdown, images, canonical fold).
+      // Follow ownership survives completion; only reader input releases it.
+      followBottom();
+      setAtLive(
+        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+      );
     });
     observer.observe(content);
     observer.observe(scroll);
+    if (bottomZoneRef.current) observer.observe(bottomZoneRef.current);
     return () => observer.disconnect();
   }, [followBottom, pauseFollowing]);
 
@@ -1044,14 +1056,23 @@ function ThreadViewContent({
     >
       <div
         className="messages"
+        style={{ overflowAnchor: atLive ? "none" : undefined }}
         ref={scrollRef}
         onWheel={(event) => {
-          if (
-            event.deltaY >= 0 ||
-            isNestedTranscriptScroll(event.target, event.currentTarget)
-          )
+          if (isNestedTranscriptScroll(event.target, event.currentTarget))
             return;
-          pauseFollowing();
+          if (event.deltaY < 0) pauseFollowing();
+          else if (
+            event.deltaY > 0 &&
+            event.currentTarget.scrollHeight -
+              event.currentTarget.scrollTop -
+              event.currentTarget.clientHeight <=
+              1 &&
+            !transcriptHasSelection(event.currentTarget)
+          ) {
+            shouldFollowRef.current = true;
+            followBottom();
+          }
         }}
         onPointerDownCapture={(event) => {
           if (!isNestedTranscriptScroll(event.target, event.currentTarget))
@@ -1059,29 +1080,43 @@ function ThreadViewContent({
         }}
         onFocusCapture={pauseFollowing}
         onKeyDownCapture={(event) => {
+          if (isNestedTranscriptScroll(event.target, event.currentTarget))
+            return;
+          const downward =
+            ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
+            !(event.key === " " && event.shiftKey);
+          const upward =
+            ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+            (event.key === " " && event.shiftKey);
+          if (!downward && !upward) return;
+          const target = event.currentTarget;
           if (
-            [
-              "ArrowUp",
-              "ArrowDown",
-              "PageUp",
-              "PageDown",
-              "Home",
-              "End",
-              " ",
-            ].includes(event.key) &&
-            !isNestedTranscriptScroll(event.target, event.currentTarget)
-          )
-            pauseFollowing();
+            downward &&
+            target.scrollHeight - target.scrollTop - target.clientHeight <= 1 &&
+            !transcriptHasSelection(target)
+          ) {
+            shouldFollowRef.current = true;
+            followBottom();
+          } else pauseFollowing();
         }}
         onScroll={(event) => {
           const target = event.currentTarget;
-          // A scroll event (including one generated by layout/anchoring) may
-          // pause following, but proximity to bottom never resumes it.
-          if (
-            transcriptHasSelection(target) ||
-            target.scrollHeight - target.scrollTop - target.clientHeight > 1
-          )
-            pauseFollowing();
+          const top = target.scrollTop;
+          const atBottom = target.scrollHeight - top - target.clientHeight <= 1;
+          // Native/programmatic scroll delivery can lag behind content growth.
+          // A changed range alone is not reader movement. Explicitly reaching
+          // the bottom restores follow intent; upward reading releases it.
+          if (transcriptHasSelection(target)) pauseFollowing();
+          else if (Math.abs(top - observedScrollTop.current) > 0.5) {
+            // Content shrinking can clamp the native offset to the new floor.
+            // That is layout, not an upward gesture or a new follow request.
+            const clamped = atBottom && observedScrollTop.current > top;
+            if (!clamped)
+              shouldFollowRef.current =
+                top > observedScrollTop.current && atBottom;
+          }
+          observedScrollTop.current = top;
+          setAtLive(atBottom);
           saveReadingPosition();
         }}
       >
@@ -1170,6 +1205,7 @@ function ThreadViewContent({
             shouldFollowRef.current = true;
             document.getSelection()?.removeAllRanges();
             scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
+            observedScrollTop.current = scroll.scrollTop;
             setAtLive(true);
             saveReadingPosition();
           }}
