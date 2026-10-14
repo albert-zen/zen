@@ -35,6 +35,15 @@ reads it back on the actual service client before retaining it. The private
 client and its bounded request/response contract. These checks do not promise
 that an arbitrary application's own UIA provider cannot activate that application.
 
+Unexpected strict-command exceptions retain the existing `not_dispatched` or
+`unknown` outcome and return a bounded `provider_error_<phase>_<category>_h<hex>`
+reason. Phases and exception categories are source-defined labels; the HRESULT is
+eight hexadecimal digits. No exception message, stack, type name, UI content or
+identity is included. Explicit refusal codes and all native safety checks are
+unchanged. This diagnostic distinguishes failures in fresh client setup, process
+metadata, property/pattern reads and traversal; it does not retry an operation or
+claim that a failing native call succeeded.
+
 ## Same-run build and assembly handoff
 
 The Windows packaged-provider CI job builds the candidate once in a fresh output
