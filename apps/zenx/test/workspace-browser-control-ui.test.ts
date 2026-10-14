@@ -113,7 +113,7 @@ async function withPanel(
   }
 }
 
-test("explicit takeover locks repeat requests, preserves human navigation and shows dispatched actions", async () => {
+test("permission switch locks repeat requests, preserves human navigation and shows dispatched actions", async () => {
   await withPanel(async ({ render, button, calls, pending }) => {
     await render({ agentActionsInFlight: 2 });
     assert.match(
@@ -121,18 +121,18 @@ test("explicit takeover locks repeat requests, preserves human navigation and sh
       /2.*already dispatched.*may still finish/s,
     );
     await act(async () => {
-      button("Take control").click();
-      button("Take control").click();
+      button("Allow Agent to operate this tab").click();
+      button("Allow Agent to operate this tab").click();
     });
     assert.deepEqual(calls, [["thread-a", "take-control", "tab-a", undefined]]);
-    assert.equal(button("Take control").disabled, true);
+    assert.equal(button("Allow Agent to operate this tab").disabled, true);
     assert.equal(button("Reload page").disabled, false);
     await act(async () => button("Reload page").click());
     assert.equal(calls.length, 2);
     await act(async () => pending[0]!.resolve());
     await render({ control: "human", agentActionsInFlight: 1 });
-    assert.match(document.body.textContent!, /You control this tab/);
-    await act(async () => button("Return to Agent").click());
+    assert.match(document.body.textContent!, /Not allowed/);
+    await act(async () => button("Allow Agent to operate this tab").click());
     assert.equal(calls[2]![1], "return-control");
     await act(async () => pending[2]!.resolve());
     await render({
@@ -154,7 +154,7 @@ test("explicit takeover locks repeat requests, preserves human navigation and sh
 
 test("failed control request remains retryable and navigation does not erase its error", async () => {
   await withPanel(async ({ button, calls, pending }) => {
-    await act(async () => button("Take control").click());
+    await act(async () => button("Allow Agent to operate this tab").click());
     await act(async () => pending[0]!.reject(new Error("Takeover failed")));
     assert.match(
       document.querySelector('[role="alert"]')!.textContent!,
@@ -162,7 +162,7 @@ test("failed control request remains retryable and navigation does not erase its
     );
     await act(async () => button("Reload page").click());
     assert.match(document.body.textContent!, /Takeover failed/);
-    await act(async () => button("Take control").click());
+    await act(async () => button("Allow Agent to operate this tab").click());
     assert.equal(calls.length, 3);
     await act(async () => {
       pending[1]!.resolve();
@@ -179,37 +179,37 @@ test("old errors and requests cannot leak across tab, Thread, close or unmount",
       () => render({}, "thread-a", false),
     ]) {
       await render();
-      await act(async () => button("Take control").click());
+      await act(async () => button("Allow Agent to operate this tab").click());
       const old = pending.at(-1)!;
       await next();
       await act(async () => old.reject(new Error("stale error")));
       assert.doesNotMatch(document.body.textContent!, /stale error/);
     }
     await render();
-    assert.equal(button("Take control").disabled, false);
-    await act(async () => button("Take control").click());
+    assert.equal(button("Allow Agent to operate this tab").disabled, false);
+    await act(async () => button("Allow Agent to operate this tab").click());
     await unmount();
     await act(async () => pending.at(-1)!.reject(new Error("unmounted error")));
     assert.equal(document.body.textContent, "");
   });
 });
 
-test("control status and actions localize in Chinese", async () => {
+test("permission switch and rules localize in Chinese", async () => {
   await withPanel(async ({ render, button }) => {
     await act(async () => {
       await i18n.changeLanguage("zh-CN");
     });
-    assert.ok(button("接管控制"));
+    assert.ok(button("允许 Agent 操作此标签页"));
     await render({ control: "human", agentActionsInFlight: 2 });
-    assert.ok(button("交还 Agent"));
-    assert.match(document.body.textContent!, /你正在控制此标签页/);
+    assert.ok(button("允许 Agent 操作此标签页"));
+    assert.match(document.body.textContent!, /未允许/);
     assert.match(document.body.textContent!, /2.*已发出/);
   });
 });
 
 test("displayed failure is scoped to its tab and control has accessible context", async () => {
   await withPanel(async ({ render, button, pending }) => {
-    const control = button("Take control");
+    const control = button("Allow Agent to operate this tab");
     assert.ok(
       document.getElementById(control.getAttribute("aria-describedby")!),
     );
@@ -221,6 +221,42 @@ test("displayed failure is scoped to its tab and control has accessible context"
     await render({ id: "tab-b" });
     assert.doesNotMatch(document.body.textContent!, /Only tab A failed/);
     await render({}, "thread-a", false);
-    assert.equal(button("Take control").disabled, true);
+    assert.equal(button("Allow Agent to operate this tab").disabled, true);
+  });
+});
+
+test("one stable permission switch ends the address bar without a status row or continuation action", async () => {
+  await withPanel(async ({ render, button }) => {
+    const label = "Allow Agent to operate this tab";
+    const control = button(label);
+    assert.equal(control.getAttribute("role"), "switch");
+    assert.equal(control.getAttribute("aria-checked"), "true");
+    assert.equal(control.textContent, "");
+    assert.equal(document.querySelector(".workspace-browser-control"), null);
+    assert.equal(
+      document
+        .querySelector(".workspace-browser-address")!
+        .querySelector(":scope > button:last-of-type"),
+      control,
+    );
+    assert.match(control.title, /does not mean it is currently running/);
+    assert.match(control.title, /always browse and sign in manually/);
+    assert.match(
+      control.title,
+      /does not start a task, continue a conversation, or replay/,
+    );
+    await render({ control: "human" });
+    assert.equal(button(label).getAttribute("aria-checked"), "false");
+    assert.match(button(label).title, /Not allowed/);
+    assert.equal(button(label).getAttribute("aria-label"), label);
+    assert.equal(
+      document.getElementById(control.getAttribute("aria-describedby")!)!
+        .textContent,
+      button(label).title,
+    );
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /Done, continue|You control|Agent control enabled/,
+    );
   });
 });
