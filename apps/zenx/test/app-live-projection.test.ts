@@ -766,7 +766,108 @@ test("plugin query intent stays on its owned page and preserves the sidebar sele
   }
 });
 
+test("deletion invalidates a selected Thread's pending resume and does not reopen late history", async () => {
+  let notify: NotificationListener | undefined;
+  const pending = deferred<ReturnType<typeof resumed>>();
+  let deleted = false;
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return await pending.promise;
+      if (method === "zen/thread/deleted/list") return { data: [] };
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    threads: async (archived) => (deleted || archived ? [] : [summary()]),
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await act(async () => row.click());
+    deleted = true;
+    await act(async () =>
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "thread_deleted_updated",
+          threadId: "thread-1",
+          deleted: true,
+        }),
+      ),
+    );
+    await act(async () => pending.resolve(resumed(thread())));
+    assert.equal(document.querySelector(".thread-row"), null);
+    assert.equal(document.querySelector("#thread-browser-toggle"), null);
+    assert.match(document.body.textContent ?? "", /Archived threads/u);
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("App message requests survive acknowledgements, repeated clicks, and Thread remounts", async () => {
+  const reads: string[] = [];
+  const harness = await mountApp({
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") {
+        const id = (params as { threadId: string }).threadId;
+        return resumed(
+          threadWithAgentMessage(
+            id,
+            "[first](first.md) [second](second.md)",
+            false,
+          ),
+        );
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    readFile: async (threadId, path) => {
+      reads.push(`${threadId}:${path}`);
+      throw new Error("Expected unavailable fixture file");
+    },
+  });
+  const selectThread = async (name: string) => {
+    const row = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (value) => value.textContent?.includes(name),
+      ),
+    );
+    await act(async () => row.click());
+    await waitFor(() => document.querySelector(".markdown-body a"));
+  };
+  const clickLink = async (index: number) =>
+    act(async () =>
+      document
+        .querySelectorAll<HTMLAnchorElement>(".markdown-body a")
+        [index]!.click(),
+    );
+  try {
+    await selectThread("Thread one");
+    await clickLink(0);
+    await clickLink(1);
+    await clickLink(1);
+    assert.deepEqual(reads, [
+      "thread-1:first.md",
+      "thread-1:second.md",
+      "thread-1:second.md",
+    ]);
+    await selectThread("Thread two");
+    await selectThread("Thread one");
+    assert.equal(reads.length, 3);
+    await clickLink(0);
+    assert.equal(reads.at(-1), "thread-1:first.md");
+    assert.equal(reads.length, 4);
+  } finally {
+    await harness.unmount();
+  }
+});
+
 interface MountOptions {
+  readFile?(threadId: string, path: string): Promise<never>;
   pluginSnapshot?: ZenXPluginSnapshot;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
@@ -808,6 +909,7 @@ async function mountApp(options: MountOptions) {
     detachEvent: { value: () => undefined },
   });
   const zenx = {
+    workspaceFiles: { read: options.readFile },
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
@@ -882,12 +984,21 @@ async function mountApp(options: MountOptions) {
       }),
     },
     settings: {
+      onManualCodeRequested: () => () => undefined,
+      onChanged: () => () => undefined,
       get: async () => ({
         profile: {
           onboardingComplete: true,
           pinnedThreadIds: [],
           providerProfiles: [],
+          defaultModel: { providerProfileId: "fake", modelId: "fake" },
+          titleModel: { providerProfileId: "fake", modelId: "fake" },
+          workspaces: [],
+          workspace: "/work/zen",
         },
+        subscription: { authenticated: false, expired: false },
+        hasApiKey: false,
+        apiKeyProviderProfileIds: [],
       }),
       markWorkspaceUsed: async () => ({
         profile: {

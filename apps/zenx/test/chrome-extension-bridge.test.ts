@@ -7,6 +7,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import WebSocket from "ws";
+import {
+  fakeBrowserInputSnapshot,
+  fakeInputScreenshotData,
+} from "./fixtures/user-browser-cdp.js";
 
 import {
   ChromeExtensionBridge,
@@ -24,6 +28,8 @@ import {
   configureChromeNativeHostActivationPolicy,
   chromeNativeHostManifestPath,
   chromeNativeHostExecutablePath,
+  chromeNativeHostRegistryKey,
+  readBrowserRegistrationTarget,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
   unregisterChromeNativeHost,
@@ -175,6 +181,16 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
     );
     const forwardedMethods: string[] = [];
     const forwardedTargets: number[] = [];
+    const inputCommands: Array<{
+      method: string;
+      tabId?: number;
+      params?: Record<string, unknown>;
+    }> = [];
+    const inputSnapshots = new Map([
+      [42, fakeBrowserInputSnapshot()],
+      [43, fakeBrowserInputSnapshot()],
+      [44, fakeBrowserInputSnapshot()],
+    ]);
     let documentUrl = "https://example.test/account";
     native.on("message", (data) => {
       const message = JSON.parse(data.toString()) as {
@@ -190,7 +206,15 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
       forwardedMethods.push(method);
       if (message.tabId !== undefined) forwardedTargets.push(message.tabId);
       let result: unknown = {};
-      if (method === "Target.createTarget") {
+      const inputSnapshot = inputSnapshots.get(message.tabId ?? 42)!;
+      if (method.startsWith("Input.")) {
+        inputCommands.push({
+          method,
+          tabId: message.tabId,
+          params: message.params,
+        });
+        inputSnapshot.inputRevision++;
+      } else if (method === "Target.createTarget") {
         documentUrl = String(message.params?.url);
         native!.send(
           JSON.stringify({
@@ -198,7 +222,10 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
             tab: { id: 44, title: "New tab", url: documentUrl },
           }),
         );
-        result = { targetId: "chrome-tab-44" };
+        result = {
+          targetId: "chrome-tab-44",
+          grouping: { status: "grouped", groupId: 73 },
+        };
       } else if (method === "Page.getFrameTree") {
         result = {
           frameTree: {
@@ -207,6 +234,19 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
         };
       } else if (method === "Page.createIsolatedWorld") {
         result = { executionContextId: 100 };
+      } else if (method === "DOM.describeNode") {
+        result = {
+          node: {
+            backendNodeId:
+              message.params?.backendNodeId ??
+              (String(message.params?.objectId).includes("hitNode")
+                ? 102
+                : 101),
+            nodeType: 1,
+            localName: "input",
+            attributes: ["type", "text"],
+          },
+        };
       } else if (method === "Runtime.evaluate") {
         const expression = String(message.params?.expression ?? "");
         result = {
@@ -215,25 +255,45 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
               ? { ok: true }
               : expression === "void 0"
                 ? undefined
-                : {
-                    visibleText: "Signed in as Alice",
-                    targets: [
-                      {
-                        selector: "#continue",
-                        tag: "button",
-                        role: "button",
-                        name: "Continue",
-                        type: "",
-                        id: "continue",
-                        fieldName: "",
-                        autocomplete: "",
-                        href: "",
-                        actions: ["click"],
-                      },
-                    ],
-                  },
+                : expression.includes("zenx-browser-targeted-input-v2") &&
+                    !expression.includes("visibleText:")
+                  ? {
+                      ...structuredClone(inputSnapshot),
+                      ...(expression.includes("const hit = resolveHit")
+                        ? { pointerPoint: { x: 1, y: 1 } }
+                        : {}),
+                    }
+                  : {
+                      inputSnapshot: structuredClone(inputSnapshot),
+                      visibleText: "Signed in as Alice",
+                      targets: [
+                        {
+                          selector: "#continue",
+                          tag: "button",
+                          role: "button",
+                          name: "Continue",
+                          type: "",
+                          id: "continue",
+                          fieldName: "",
+                          autocomplete: "",
+                          href: "",
+                          actions: ["click"],
+                        },
+                      ],
+                    },
           },
         };
+        if (
+          message.params?.returnByValue === false &&
+          expression.includes("zenx-browser-targeted-input-v2")
+        ) {
+          result = {
+            result: {
+              subtype: "node",
+              objectId: `${message.tabId}:${expression.includes("state?.hitNode") ? "hitNode" : "focusNode"}`,
+            },
+          };
+        }
       } else if (method === "Page.captureScreenshot") {
         // chrome.debugger rejects view captures; real attached Chrome requires
         // a compositor-surface capture, bounded to the viewport.
@@ -254,7 +314,7 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
           return;
         }
         result = {
-          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          data: fakeInputScreenshotData(),
         };
       } else if (method === "Page.navigate") {
         documentUrl = String(message.params?.url ?? documentUrl);
@@ -301,6 +361,46 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
         inspection.observationId,
         actionTarget.targetId,
       );
+      const pointerObservation = await connection.backend.inspect(
+        "thread-1",
+        "chrome-tab-42",
+      );
+      await connection.backend.pointerClick!(
+        "thread-1",
+        "chrome-tab-42",
+        pointerObservation.observationId,
+        10,
+        20,
+      );
+      const keyObservation = await connection.backend.inspect(
+        "thread-1",
+        "chrome-tab-43",
+      );
+      await connection.backend.keyPress!(
+        "thread-1",
+        "chrome-tab-43",
+        keyObservation.observationId,
+        "Enter",
+      );
+      assert.deepEqual(
+        inputCommands.map((command) => [
+          command.tabId,
+          command.method,
+          command.params?.type,
+        ]),
+        [
+          [42, "Input.dispatchMouseEvent", "mousePressed"],
+          [42, "Input.dispatchMouseEvent", "mouseReleased"],
+          [43, "Input.dispatchKeyEvent", "keyDown"],
+          [43, "Input.dispatchKeyEvent", "keyUp"],
+        ],
+      );
+      assert.equal(
+        forwardedMethods.some((method) =>
+          /activate|bringToFront/i.test(method),
+        ),
+        false,
+      );
       const navigated = await connection.backend.navigate(
         "thread-1",
         "chrome-tab-42",
@@ -316,6 +416,7 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
       );
       assert.equal(created.tabId, "chrome-tab-44");
       assert.equal(created.url, "https://example.test/new");
+      assert.deepEqual(created.grouping, { status: "grouped", groupId: 73 });
       for (const method of [
         "Page.enable",
         "Runtime.enable",
@@ -365,7 +466,18 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
   }
 });
 
-test("replacing the native connection revokes its tab, sessions, and pending commands", async () => {
+test("a competing native connection is rejected without revoking the current browser or pending action", async (t) => {
+  const errorListenersAtRejection: number[] = [];
+  const send = WebSocket.prototype.send;
+  t.mock.method(
+    WebSocket.prototype,
+    "send",
+    function (this: WebSocket, ...args: Parameters<WebSocket["send"]>) {
+      if (String(args[0]).includes('"type":"connection-rejected"'))
+        errorListenersAtRejection.push(this.listenerCount("error"));
+      return send.apply(this, args);
+    },
+  );
   const runtimeDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-chrome-generation-"),
   );
@@ -392,7 +504,7 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       return socket;
     };
     const oldSocket = await connect();
-    let navigateDispatched = false;
+    let navigateRequestId: string | undefined;
     oldSocket.on("message", (data) => {
       const message = JSON.parse(data.toString()) as {
         type?: string;
@@ -402,7 +514,7 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       if (message.type !== "cdp-command" || message.requestId === undefined)
         return;
       if (message.method === "Page.navigate") {
-        navigateDispatched = true;
+        navigateRequestId = message.requestId;
         return;
       }
       oldSocket.send(
@@ -430,14 +542,40 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       "chrome-tab-7",
       "https://old.test/pending",
     );
-    await waitFor(() => navigateDispatched);
+    await waitFor(() => navigateRequestId !== undefined);
 
-    const currentSocket = await connect();
-    await assert.rejects(navigation);
+    const competitor = new WebSocket(descriptor.nativeWebSocketUrl, {
+      headers: { origin: ZENX_CHROME_EXTENSION_ORIGIN },
+    });
+    sockets.push(competitor);
+    const rejected = new Promise<{ type: string; message: string }>((resolve) =>
+      competitor.once("message", (data) =>
+        resolve(JSON.parse(data.toString())),
+      ),
+    );
+    const closed = new Promise<number>((resolve) =>
+      competitor.once("close", resolve),
+    );
+    assert.match((await rejected).message, /Disconnect.*before connecting/);
+    assert.equal(await closed, 1008);
+    assert.equal(oldSocket.readyState, WebSocket.OPEN);
+    assert.deepEqual(bridge.status(), { state: "connected", tabCount: 1 });
+    oldSocket.send(
+      JSON.stringify({
+        type: "cdp-result",
+        requestId: navigateRequestId,
+        result: {},
+      }),
+    );
+    await navigation;
+    assert.equal(
+      (await connection.backend.listTabs("thread"))[0]?.tabId,
+      "chrome-tab-7",
+    );
+
+    oldSocket.close();
     await waitFor(() => bridge.status().state === "waiting");
-    assert.deepEqual(await connection.backend.listTabs("thread"), []);
-    assert.equal(await connection.backend.closeSession("thread"), 0);
-
+    const currentSocket = await connect();
     currentSocket.send(
       JSON.stringify({
         type: "browser-connected",
@@ -445,7 +583,15 @@ test("replacing the native connection revokes its tab, sessions, and pending com
       }),
     );
     await waitFor(() => bridge.status().tabCount === 1);
-    assert.deepEqual(bridge.status(), { state: "connected", tabCount: 1 });
+    assert.equal(
+      (await connection.backend.listTabs("new-session"))[0]?.tabId,
+      "chrome-tab-8",
+    );
+    assert.deepEqual(
+      errorListenersAtRejection,
+      [1],
+      "every socket must handle errors before rejection begins",
+    );
   } finally {
     await connection?.backend.close();
     for (const socket of sockets) socket.close();
@@ -642,3 +788,78 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("Chrome and Edge registration paths stay independent on each supported platform", () => {
+  const base = {
+    homeDirectory: "/home/test",
+    runtimeDirectory: "/runtime",
+    executablePath: "/app/zenx",
+    windowsLauncherPath: "/app/zenx.cmd",
+  };
+  for (const platform of ["linux", "darwin", "win32"] as const) {
+    const chrome = chromeNativeHostManifestPath({
+      ...base,
+      platform,
+      browser: "chrome",
+    });
+    const edge = chromeNativeHostManifestPath({
+      ...base,
+      platform,
+      browser: "edge",
+    });
+    assert.notEqual(chrome, edge);
+    assert.match(
+      edge,
+      platform === "linux"
+        ? /microsoft-edge\/NativeMessagingHosts/
+        : platform === "darwin"
+          ? /Microsoft Edge\/NativeMessagingHosts/
+          : /\.edge\.json$/,
+    );
+  }
+  assert.match(
+    chromeNativeHostRegistryKey({ browser: "edge" }),
+    /Microsoft\\Edge\\NativeMessagingHosts/,
+  );
+  assert.match(
+    chromeNativeHostRegistryKey({ browser: "chrome" }),
+    /Google\\Chrome\\NativeMessagingHosts/,
+  );
+  assert.equal(readBrowserRegistrationTarget(undefined), "chrome");
+  assert.equal(readBrowserRegistrationTarget("edge"), "edge");
+  assert.throws(() => readBrowserRegistrationTarget("other"), /Unsupported/);
+});
+
+test("removing Edge registration leaves Chrome registration and origin restrictions intact", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-edge-registration-"));
+  const base = {
+    platform: "linux" as const,
+    homeDirectory: root,
+    runtimeDirectory: path.join(root, "runtime"),
+    executablePath: "/app/ZenX",
+  };
+  try {
+    await registerChromeNativeHost(base);
+    await registerChromeNativeHost({ ...base, browser: "edge" });
+    assert.equal(await chromeNativeHostRegistered(base), true);
+    assert.equal(
+      await chromeNativeHostRegistered({ ...base, browser: "edge" }),
+      true,
+    );
+    const manifest = JSON.parse(
+      await readFile(
+        chromeNativeHostManifestPath({ ...base, browser: "edge" }),
+        "utf8",
+      ),
+    );
+    assert.deepEqual(manifest.allowed_origins, [ZENX_CHROME_EXTENSION_ORIGIN]);
+    await unregisterChromeNativeHost({ ...base, browser: "edge" });
+    assert.equal(
+      await chromeNativeHostRegistered({ ...base, browser: "edge" }),
+      false,
+    );
+    assert.equal(await chromeNativeHostRegistered(base), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

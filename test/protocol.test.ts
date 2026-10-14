@@ -2364,6 +2364,82 @@ test("routes transient command approval and persists only command facts", async 
   }
 });
 
+for (const firstTarget of [undefined, "Chrome a"] as const) {
+  test(`session approval cache stays separate from scoped targets (${firstTarget ?? "legacy"})`, async () => {
+    const prompts: string[] = [];
+    const connection = new CodexConnection({
+      appServer: testHost("always"),
+      zenHome: path.join(os.tmpdir(), "zen-home"),
+      send: (message) => {
+        if (
+          "method" in message &&
+          message.method === "item/commandExecution/requestApproval" &&
+          "id" in message
+        ) {
+          assert(isRecord(message.params));
+          if (message.params.command === "legacy command") {
+            assert.equal(message.params.approvalTarget, undefined);
+            assert.equal(message.params.reason, null);
+          } else {
+            assert(isRecord(message.params.approvalTarget));
+            assert.equal(
+              message.params.approvalTarget.key,
+              message.params.approvalTarget.label,
+            );
+            assert.match(String(message.params.reason), /only this call/u);
+          }
+          prompts.push(String(message.params.command));
+          void connection.receive({
+            id: message.id,
+            result: { decision: "acceptForSession" },
+          });
+        }
+      },
+    });
+    const approve = (target?: string) =>
+      connection.requestApproval({
+        threadId: "same-thread",
+        turnId: "turn",
+        itemId: "item",
+        callId: "call",
+        command:
+          target === undefined
+            ? "legacy command"
+            : `[Target: ${target}]\nnavigate`,
+        ...(target === undefined
+          ? {}
+          : { approvalTarget: { key: target, label: target } }),
+        toolName: target === undefined ? "shell" : "browser_connected_navigate",
+        cwd: process.cwd(),
+        signal: new AbortController().signal,
+      });
+    try {
+      await approve(firstTarget);
+      await approve("Edge b");
+      await approve("Chrome a");
+      assert.equal(
+        prompts.length,
+        3,
+        "every scoped request reaches its user approval handler",
+      );
+      await approve();
+      assert.equal(
+        prompts.length,
+        firstTarget === undefined ? 3 : 4,
+        "scoped acceptance never populates the legacy thread cache",
+      );
+      await approve();
+      assert.equal(
+        prompts.length,
+        firstTarget === undefined ? 3 : 4,
+        "legacy session behavior remains unchanged",
+      );
+    } finally {
+      connection.close();
+    }
+  });
+}
+
 test("acceptForSession remains connection-local and suppresses later approval prompts", async () => {
   const server = await serveCodexWebSocket({
     appServer: testHost("always"),

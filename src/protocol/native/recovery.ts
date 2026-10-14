@@ -216,6 +216,7 @@ export class NativeRecoveryProjection {
 function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
   switch (event.type) {
     case "thread_started":
+    case "thread_deleted_updated":
     case "thread_archived_updated":
     case "thread_name_updated":
     case "thread_settings_updated":
@@ -251,6 +252,8 @@ function eventRepresentedInSnapshot(
     case "queue_failed":
     case "queue_admission_started":
       return true; // Ephemeral feedback is not journal-backed state.
+    case "thread_deleted_updated":
+      return true; // A readable snapshot supersedes earlier delete/restore events.
     case "thread_started":
       return snapshot.id === event.threadId;
     case "thread_archived_updated":

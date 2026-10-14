@@ -230,6 +230,31 @@ export function ThreadConversationViewport({
       if (!current() || method !== "zen/thread/event") return;
       const event = params as NativeProjectedThreadEvent;
       if (event.threadId !== threadId) return;
+      if (
+        event.event.type === "thread_deleted_updated" &&
+        event.event.deleted
+      ) {
+        if (
+          processEpoch !== null &&
+          (event.processEpoch !== processEpoch || event.watermark <= watermark)
+        )
+          return;
+        // Revoke this viewport independently of the primary App selection. This
+        // also fences its pending resume and attachment/usage responses.
+        generation.current += 1;
+        buffered = null;
+        projection = null;
+        setThread(null);
+        setSettings(null);
+        setAttachments({});
+        setUsage(undefined);
+        setQueueFailure(null);
+        setLoading(false);
+        setError(
+          i18n.t("settings:settingsView.deletedConversationUnavailable"),
+        );
+        return;
+      }
       if (buffered !== null) buffered.push(event);
       else apply(event);
     });

@@ -15,6 +15,10 @@ import {
 } from "./capabilities/user-browser-provider.js";
 
 const ALLOWED_TAB_COMMANDS = new Set([
+  "DOM.describeNode",
+  "Runtime.releaseObject",
+  "Input.dispatchMouseEvent",
+  "Input.dispatchKeyEvent",
   "Page.captureScreenshot",
   "Page.createIsolatedWorld",
   "Page.enable",
@@ -34,6 +38,8 @@ const ALLOWED_TAB_EVENTS = new Set([
   "Page.frameStartedLoading",
   "Page.frameStartedNavigating",
   "Page.navigatedWithinDocument",
+  "Page.javascriptDialogOpening",
+  "Page.javascriptDialogClosed",
   "Page.screencastFrame",
   "Runtime.executionContextCreated",
   "Runtime.executionContextDestroyed",
@@ -44,7 +50,16 @@ export const ZENX_CHROME_EXTENSION_ID = "jenndkelhapgbokkmmfifkmiadkeflci";
 export const ZENX_CHROME_EXTENSION_ORIGIN = `chrome-extension://${ZENX_CHROME_EXTENSION_ID}/`;
 export const ZENX_CHROME_NATIVE_HOST_NAME = "com.zenx.chrome_bridge";
 
+export interface BrowserConnectionSnapshot {
+  connectionId: string;
+  generation: string;
+  browser: "chrome" | "edge";
+  label: string;
+  state: "waiting" | "connected";
+}
+
 export interface ChromeExtensionBridgeStatus {
+  connections?: BrowserConnectionSnapshot[];
   state: "waiting" | "connected";
   tabCount: number;
 }
@@ -56,6 +71,7 @@ export interface ChromeBridgeSettingsSnapshot {
   connector: "chrome-extension" | "external-cdp" | "inactive";
   packaged: boolean;
   nativeHostRegistered: boolean;
+  edgeNativeHostRegistered?: boolean;
   extensionDirectory: string;
   extensionId: string;
   connection: ChromeExtensionBridgeStatus;
@@ -80,6 +96,36 @@ interface PendingCommand {
   navigatedUrl?: string;
 }
 
+interface BridgeConnection {
+  id: string;
+  readonly generation: string;
+  browser: "chrome" | "edge";
+  native?: WebSocket;
+  nativeReady: boolean;
+  browserConnected: boolean;
+  cdpSockets: Set<WebSocket>;
+  sessions: Map<string, CdpSession>;
+  pending: Map<string, PendingCommand>;
+  tabs: Map<number, ConnectedTab>;
+}
+
+function createBridgeConnection(
+  id: string,
+  browser: "chrome" | "edge",
+): BridgeConnection {
+  return {
+    id,
+    browser,
+    generation: randomUUID(),
+    nativeReady: false,
+    browserConnected: false,
+    cdpSockets: new Set(),
+    sessions: new Map(),
+    pending: new Map(),
+    tabs: new Map(),
+  };
+}
+
 export class ChromeExtensionBridge {
   readonly endpoint: string;
   readonly #authorization: string;
@@ -87,17 +133,16 @@ export class ChromeExtensionBridge {
   readonly #server: ReturnType<typeof createServer>;
   readonly #nativeServer: WebSocketServer;
   readonly #cdpServer: WebSocketServer;
-  readonly #cdpSockets = new Set<WebSocket>();
-  readonly #sessions = new Map<string, CdpSession>();
-  readonly #pending = new Map<string, PendingCommand>();
-  #native?: WebSocket;
-  readonly #tabs = new Map<number, ConnectedTab>();
-  #browserConnected = false;
-  #nativeReady = false;
+  readonly #multiInstance: boolean;
+  readonly #legacy = createBridgeConnection("legacy", "chrome");
+  readonly #connections = new Map<string, BridgeConnection>();
+  readonly #nativeSockets = new Set<WebSocket>();
+  readonly #listeners = new Set<() => void>();
   #closed = false;
 
   private constructor(options: {
     endpoint: string;
+    multiInstance: boolean;
     authorization: string;
     runtimeDirectory: string;
     server: ReturnType<typeof createServer>;
@@ -105,6 +150,7 @@ export class ChromeExtensionBridge {
     cdpServer: WebSocketServer;
   }) {
     this.endpoint = options.endpoint;
+    this.#multiInstance = options.multiInstance;
     this.#authorization = options.authorization;
     this.#runtimeDirectory = options.runtimeDirectory;
     this.#server = options.server;
@@ -114,6 +160,7 @@ export class ChromeExtensionBridge {
 
   static async start(options: {
     runtimeDirectory: string;
+    multiInstance?: boolean;
   }): Promise<ChromeExtensionBridge> {
     const nativeToken = randomBytes(32).toString("base64url");
     const cdpToken = randomBytes(32).toString("base64url");
@@ -136,7 +183,9 @@ export class ChromeExtensionBridge {
         return;
       }
       if (
-        /^\/devtools\/browser\/[A-Za-z0-9-]+$/u.test(url.pathname) &&
+        bridge !== undefined &&
+        bridge.#connectionForPath(url.pathname) !== undefined &&
+        url.pathname.includes("/devtools/browser/") &&
         request.headers.authorization === authorization
       ) {
         cdpServer.handleUpgrade(request, socket, head, (webSocket) =>
@@ -159,6 +208,7 @@ export class ChromeExtensionBridge {
     });
     bridge = new ChromeExtensionBridge({
       endpoint: `http://127.0.0.1:${String(port)}`,
+      multiInstance: options.multiInstance ?? false,
       authorization,
       runtimeDirectory: options.runtimeDirectory,
       server,
@@ -166,7 +216,14 @@ export class ChromeExtensionBridge {
       cdpServer,
     });
     nativeServer.on("connection", (socket) => bridge!.#acceptNative(socket));
-    cdpServer.on("connection", (socket) => bridge!.#acceptCdp(socket));
+    cdpServer.on("connection", (socket, request) => {
+      const connection = bridge!.#connectionForPath(request.url ?? "");
+      if (connection === undefined) {
+        socket.close(1008, "Browser connection changed");
+        return;
+      }
+      bridge!.#acceptCdp(connection, socket);
+    });
     await bridge.#writeDescriptor(
       `ws://127.0.0.1:${String(port)}/native/${nativeToken}`,
     );
@@ -174,23 +231,108 @@ export class ChromeExtensionBridge {
   }
 
   status(): ChromeExtensionBridgeStatus {
+    const connected = this.#multiInstance
+      ? [...this.#connections.values()]
+      : [this.#legacy];
     return {
-      state: this.#browserConnected ? "connected" : "waiting",
-      tabCount: this.#tabs.size,
+      state: connected.some((value) => value.browserConnected)
+        ? "connected"
+        : "waiting",
+      tabCount: connected.reduce((total, value) => total + value.tabs.size, 0),
+      ...(this.#multiInstance ? { connections: this.connections() } : {}),
     };
   }
 
+  connections(): BrowserConnectionSnapshot[] {
+    return [...this.#connections.values()].map((value) => ({
+      connectionId: value.id,
+      generation: value.generation,
+      browser: value.browser,
+      label: `${value.browser === "edge" ? "Edge" : "Chrome"} · ${value.id.slice(0, 8)}`,
+      state: value.browserConnected ? "connected" : "waiting",
+    }));
+  }
+
+  onConnectionsChanged(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  #changed(): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener();
+      } catch {
+        /* Observers cannot alter connection authority. */
+      }
+    }
+  }
+
+  async connectInstance(
+    connectionId: string,
+    generation: string,
+    signal?: AbortSignal,
+  ): Promise<UserBrowserConnection> {
+    const connection = this.#connections.get(connectionId);
+    if (!connection?.browserConnected || connection.generation !== generation)
+      throw new Error(
+        "Browser connection generation changed; discover connections again",
+      );
+    const result = await connectUserBrowserCdp(this.endpoint, signal, {
+      authorization: this.#authorization,
+      connectionPath: `/instances/${connectionId}/${generation}`,
+    });
+    if (
+      this.#connections.get(connectionId) !== connection ||
+      !connection.browserConnected
+    ) {
+      await result.backend.close();
+      throw new Error(
+        "Browser connection generation changed during connection",
+      );
+    }
+    return result;
+  }
+
   async connectProvider(signal?: AbortSignal): Promise<UserBrowserConnection> {
+    if (this.#multiInstance)
+      throw new Error(
+        "An explicit browser connectionId and generation are required",
+      );
     return await connectUserBrowserCdp(this.endpoint, signal, {
       authorization: this.#authorization,
     });
   }
 
+  #connectionForPath(raw: string): BridgeConnection | undefined {
+    const pathname = new URL(raw, this.endpoint).pathname;
+    if (!this.#multiInstance)
+      return /^\/(?:json\/(?:version|list)|devtools\/browser\/[A-Za-z0-9-]+)$/u.test(
+        pathname,
+      )
+        ? this.#legacy
+        : undefined;
+    const match =
+      /^\/instances\/([a-f0-9-]{36})\/([a-f0-9-]{36})\/(?:json\/(?:version|list)|devtools\/browser\/[A-Za-z0-9-]+)$/u.exec(
+        pathname,
+      );
+    if (match === null) return undefined;
+    const connection = this.#connections.get(match[1]!);
+    return connection !== undefined &&
+      connection.generation === match[2] &&
+      connection.browserConnected
+      ? connection
+      : undefined;
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    this.#native?.close(1001, "ZenX closed");
-    for (const socket of this.#cdpSockets) socket.close(1001, "ZenX closed");
+    for (const socket of this.#nativeSockets) socket.close(1001, "ZenX closed");
+    for (const connection of [this.#legacy, ...this.#connections.values()])
+      for (const socket of connection.cdpSockets)
+        socket.close(1001, "ZenX closed");
+    this.#listeners.clear();
     await Promise.all([
       closeWebSocketServer(this.#nativeServer),
       closeWebSocketServer(this.#cdpServer),
@@ -212,45 +354,95 @@ export class ChromeExtensionBridge {
       response.writeHead(401).end();
       return;
     }
+    const connection = this.#connectionForPath(request.url ?? "");
+    if (connection === undefined) {
+      response.writeHead(404).end();
+      return;
+    }
+    const prefix = this.#multiInstance
+      ? `/instances/${connection.id}/${connection.generation}`
+      : "";
     response.setHeader("content-type", "application/json");
-    if (request.url === "/json/version") {
+    if (request.url === `${prefix}/json/version`) {
       response.end(
         JSON.stringify({
           Browser: "Chrome/136.0.0.0+ZenX",
           ProtocolVersion: "1.3",
-          webSocketDebuggerUrl: `${this.endpoint.replace("http:", "ws:")}/devtools/browser/${randomUUID()}`,
+          webSocketDebuggerUrl: `${this.endpoint.replace("http:", "ws:")}${prefix}/devtools/browser/${randomUUID()}`,
         }),
       );
       return;
     }
-    if (request.url === "/json/list") {
-      response.end(JSON.stringify([...this.#tabs.values()].map(target)));
+    if (request.url === `${prefix}/json/list`) {
+      response.end(JSON.stringify([...connection.tabs.values()].map(target)));
       return;
     }
     response.writeHead(404).end();
   }
 
   #acceptNative(socket: WebSocket): void {
-    const previous = this.#native;
-    if (previous !== undefined) {
-      this.#native = undefined;
-      this.#disconnectBrowser("Extension connection was replaced");
-      previous.close(1008, "Replaced by a new ZenX extension connection");
+    socket.once("error", () => socket.close());
+    if (this.#nativeSockets.size >= 64) {
+      socket.send(
+        JSON.stringify({
+          type: "connection-rejected",
+          message:
+            "ZenX has reached its browser connection limit. Disconnect an unused instance first.",
+        }),
+      );
+      socket.close(1008, "Browser connection limit");
+      return;
     }
-    this.#native = socket;
+    this.#nativeSockets.add(socket);
+    const helloTimer = setTimeout(
+      () => socket.close(1008, "Browser handshake timed out"),
+      5_000,
+    );
+    helloTimer.unref();
+    socket.once("message", () => clearTimeout(helloTimer));
+    socket.once("close", () => clearTimeout(helloTimer));
+    const connection = this.#multiInstance
+      ? createBridgeConnection("pending", "chrome")
+      : this.#legacy;
+    if (!this.#multiInstance && connection.native !== undefined) {
+      socket.send(
+        JSON.stringify({
+          type: "connection-rejected",
+          message:
+            "Another browser is connected. Disconnect its ZenX extension before connecting this browser.",
+        }),
+      );
+      socket.close(1008, "Another browser is already connected");
+      socket.once("close", () => this.#nativeSockets.delete(socket));
+      return;
+    }
+    connection.native = socket;
     socket.on("message", (data) =>
-      this.#receiveNative(socket, data.toString()),
+      this.#receiveNative(connection, socket, data.toString()),
     );
     socket.once("close", () => {
-      if (this.#native !== socket) return;
-      this.#native = undefined;
-      this.#disconnectBrowser("Extension disconnected");
+      this.#nativeSockets.delete(socket);
+      if (connection.native !== socket) return;
+      connection.native = undefined;
+      this.#disconnectBrowser(connection, "Extension disconnected");
+      if (
+        this.#multiInstance &&
+        this.#connections.get(connection.id) === connection
+      ) {
+        this.#connections.delete(connection.id);
+        for (const cdp of connection.cdpSockets)
+          cdp.close(1001, "Browser disconnected");
+        this.#changed();
+      }
     });
-    socket.once("error", () => socket.close());
   }
 
-  #receiveNative(socket: WebSocket, raw: string): void {
-    if (this.#native !== socket) return;
+  #receiveNative(
+    connection: BridgeConnection,
+    socket: WebSocket,
+    raw: string,
+  ): void {
+    if (connection.native !== socket) return;
     let message: Record<string, unknown>;
     try {
       message = asRecord(JSON.parse(raw)) ?? {};
@@ -259,22 +451,60 @@ export class ChromeExtensionBridge {
       return;
     }
     if (message.type === "hello") {
-      if (message.protocolVersion !== 2 || message.scope !== "browser") {
+      if (
+        connection.nativeReady ||
+        message.scope !== "browser" ||
+        (this.#multiInstance
+          ? message.protocolVersion !== 3
+          : ![2, 3].includes(Number(message.protocolVersion)))
+      ) {
         socket.close(
           1008,
           "Reload the ZenX Browser Bridge extension to connect Chrome",
         );
         return;
       }
-      this.#nativeReady = true;
+      if (this.#multiInstance) {
+        const id = stringValue(message.instanceId);
+        if (
+          id === undefined ||
+          !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(id) ||
+          !["chrome", "edge"].includes(String(message.browser))
+        ) {
+          socket.close(
+            1008,
+            "Reload the extension with a valid browser instance identity",
+          );
+          return;
+        }
+        if (this.#connections.has(id)) {
+          socket.send(
+            JSON.stringify({
+              type: "connection-rejected",
+              message:
+                "This browser instance is already connected. Disconnect that instance before reconnecting.",
+            }),
+          );
+          socket.close(1008, "Duplicate browser instance");
+          return;
+        }
+        connection.id = id;
+        connection.browser = message.browser as "chrome" | "edge";
+        this.#connections.set(id, connection);
+      }
+      connection.nativeReady = true;
       socket.send(
-        JSON.stringify({ type: "ready", protocolVersion: 2, scope: "browser" }),
+        JSON.stringify({
+          type: "ready",
+          protocolVersion: message.protocolVersion,
+          scope: "browser",
+        }),
       );
       return;
     }
-    if (!this.#nativeReady) return;
+    if (!connection.nativeReady) return;
     if (message.type === "browser-connected") {
-      if (this.#browserConnected || !Array.isArray(message.tabs)) {
+      if (connection.browserConnected || !Array.isArray(message.tabs)) {
         socket.close(1007, "Invalid browser connection");
         return;
       }
@@ -283,28 +513,29 @@ export class ChromeExtensionBridge {
         socket.close(1007, "Invalid tab metadata");
         return;
       }
-      this.#browserConnected = true;
-      for (const tab of tabs) this.#updateTab(tab!);
+      connection.browserConnected = true;
+      for (const tab of tabs) this.#updateTab(connection, tab!);
+      if (this.#multiInstance) this.#changed();
       return;
     }
-    if (!this.#browserConnected) return;
+    if (!connection.browserConnected) return;
     if (message.type === "tab-updated") {
       const tab = readTab(message.tab);
-      if (tab !== undefined) this.#updateTab(tab);
+      if (tab !== undefined) this.#updateTab(connection, tab);
       return;
     }
     if (message.type === "tab-removed") {
       const tabId = numberValue(message.tabId);
       if (tabId !== undefined)
-        this.#detachTab(tabId, "Chrome tab is unavailable");
+        this.#detachTab(connection, tabId, "Chrome tab is unavailable");
       return;
     }
     if (message.type === "cdp-result") {
       const requestId = stringValue(message.requestId);
       if (requestId === undefined) return;
-      const pending = this.#pending.get(requestId);
+      const pending = connection.pending.get(requestId);
       if (pending === undefined) return;
-      this.#pending.delete(requestId);
+      connection.pending.delete(requestId);
       if (message.error !== undefined) {
         const error = asRecord(message.error);
         this.#reply(
@@ -324,9 +555,9 @@ export class ChromeExtensionBridge {
         const tab =
           pending.tabId === undefined
             ? undefined
-            : this.#tabs.get(pending.tabId);
+            : connection.tabs.get(pending.tabId);
         if (pending.navigatedUrl !== undefined && tab !== undefined) {
-          this.#updateTab({ ...tab, url: pending.navigatedUrl });
+          this.#updateTab(connection, { ...tab, url: pending.navigatedUrl });
         }
         this.#reply(
           pending.socket,
@@ -343,7 +574,7 @@ export class ChromeExtensionBridge {
       const method = stringValue(message.method);
       const params = asRecord(message.params) ?? {};
       const currentTab =
-        tabId === undefined ? undefined : this.#tabs.get(tabId);
+        tabId === undefined ? undefined : connection.tabs.get(tabId);
       if (
         currentTab === undefined ||
         tabId !== currentTab.id ||
@@ -353,22 +584,28 @@ export class ChromeExtensionBridge {
         return;
       const navigatedUrl = mainFrameUrlFromEvent(method, params);
       if (navigatedUrl !== undefined)
-        this.#updateTab({ ...currentTab, url: navigatedUrl });
-      for (const [sessionId, session] of this.#sessions) {
+        this.#updateTab(connection, { ...currentTab, url: navigatedUrl });
+      for (const [sessionId, session] of connection.sessions) {
         if (session.targetId !== targetId(currentTab)) continue;
         sendJson(session.socket, { method, params, sessionId });
       }
     }
   }
 
-  #acceptCdp(socket: WebSocket): void {
-    this.#cdpSockets.add(socket);
-    socket.on("message", (data) => this.#receiveCdp(socket, data.toString()));
-    socket.once("close", () => this.#dropCdp(socket));
+  #acceptCdp(connection: BridgeConnection, socket: WebSocket): void {
+    connection.cdpSockets.add(socket);
+    socket.on("message", (data) =>
+      this.#receiveCdp(connection, socket, data.toString()),
+    );
+    socket.once("close", () => this.#dropCdp(connection, socket));
     socket.once("error", () => socket.close());
   }
 
-  #receiveCdp(socket: WebSocket, raw: string): void {
+  #receiveCdp(
+    connection: BridgeConnection,
+    socket: WebSocket,
+    raw: string,
+  ): void {
     let request: Record<string, unknown>;
     try {
       request = asRecord(JSON.parse(raw)) ?? {};
@@ -390,14 +627,14 @@ export class ChromeExtensionBridge {
     }
     if (method === "Target.getTargets") {
       this.#reply(socket, id, {
-        targetInfos: [...this.#tabs.values()].map(targetInfo),
+        targetInfos: [...connection.tabs.values()].map(targetInfo),
       });
       return;
     }
     if (method === "Target.createTarget") {
       if (
-        !this.#browserConnected ||
-        this.#native?.readyState !== WebSocket.OPEN
+        !connection.browserConnected ||
+        connection.native?.readyState !== WebSocket.OPEN
       ) {
         this.#reply(socket, id, undefined, {
           code: -32000,
@@ -416,8 +653,8 @@ export class ChromeExtensionBridge {
         return;
       }
       const requestId = randomUUID();
-      this.#pending.set(requestId, { socket, id });
-      this.#native.send(
+      connection.pending.set(requestId, { socket, id });
+      connection.native.send(
         JSON.stringify({
           type: "cdp-command",
           requestId,
@@ -431,7 +668,7 @@ export class ChromeExtensionBridge {
       const requestedTarget = stringValue(params.targetId);
       if (
         requestedTarget === undefined ||
-        ![...this.#tabs.values()].some(
+        ![...connection.tabs.values()].some(
           (tab) => targetId(tab) === requestedTarget,
         )
       ) {
@@ -442,14 +679,17 @@ export class ChromeExtensionBridge {
         return;
       }
       const nextSession = randomUUID();
-      this.#sessions.set(nextSession, { socket, targetId: requestedTarget });
+      connection.sessions.set(nextSession, {
+        socket,
+        targetId: requestedTarget,
+      });
       this.#reply(socket, id, { sessionId: nextSession });
       return;
     }
     if (method === "Target.detachFromTarget") {
       const detached = stringValue(params.sessionId) ?? sessionId;
       const existing =
-        detached === undefined ? undefined : this.#sessions.get(detached);
+        detached === undefined ? undefined : connection.sessions.get(detached);
       if (detached === undefined || existing?.socket !== socket) {
         this.#reply(socket, id, undefined, {
           code: -32000,
@@ -457,20 +697,20 @@ export class ChromeExtensionBridge {
         });
         return;
       }
-      this.#sessions.delete(detached);
+      connection.sessions.delete(detached);
       this.#reply(socket, id, {});
       return;
     }
     const session =
-      sessionId === undefined ? undefined : this.#sessions.get(sessionId);
-    const tab = [...this.#tabs.values()].find(
+      sessionId === undefined ? undefined : connection.sessions.get(sessionId);
+    const tab = [...connection.tabs.values()].find(
       (tab) => targetId(tab) === session?.targetId,
     );
     if (
       sessionId === undefined ||
       session?.socket !== socket ||
       tab === undefined ||
-      this.#native?.readyState !== WebSocket.OPEN
+      connection.native?.readyState !== WebSocket.OPEN
     ) {
       this.#reply(
         socket,
@@ -495,7 +735,7 @@ export class ChromeExtensionBridge {
       return;
     }
     const requestId = randomUUID();
-    this.#pending.set(requestId, {
+    connection.pending.set(requestId, {
       socket,
       id,
       sessionId,
@@ -504,7 +744,7 @@ export class ChromeExtensionBridge {
         ? { navigatedUrl: params.url }
         : {}),
     });
-    this.#native.send(
+    connection.native.send(
       JSON.stringify({
         type: "cdp-command",
         requestId,
@@ -529,22 +769,26 @@ export class ChromeExtensionBridge {
     });
   }
 
-  #detachTab(tabId: number, reason: string): void {
-    const previous = this.#tabs.get(tabId);
+  #detachTab(
+    connection: BridgeConnection,
+    tabId: number,
+    reason: string,
+  ): void {
+    const previous = connection.tabs.get(tabId);
     if (previous === undefined) return;
     const previousTargetId = targetId(previous);
-    this.#tabs.delete(tabId);
-    for (const [sessionId, session] of [...this.#sessions]) {
+    connection.tabs.delete(tabId);
+    for (const [sessionId, session] of [...connection.sessions]) {
       if (session.targetId !== previousTargetId) continue;
-      this.#sessions.delete(sessionId);
+      connection.sessions.delete(sessionId);
       sendJson(session.socket, {
         method: "Target.detachedFromTarget",
         params: { sessionId, targetId: previousTargetId, reason },
       });
     }
-    for (const [requestId, pending] of [...this.#pending]) {
+    for (const [requestId, pending] of [...connection.pending]) {
       if (pending.tabId !== tabId) continue;
-      this.#pending.delete(requestId);
+      connection.pending.delete(requestId);
       this.#reply(
         pending.socket,
         pending.id,
@@ -556,27 +800,28 @@ export class ChromeExtensionBridge {
         pending.sessionId,
       );
     }
-    this.#broadcast({
+    this.#broadcast(connection, {
       method: "Target.targetDestroyed",
       params: { targetId: previousTargetId },
     });
   }
 
-  #updateTab(tab: ConnectedTab): void {
-    const existed = this.#tabs.has(tab.id);
-    this.#tabs.set(tab.id, tab);
-    this.#broadcast({
+  #updateTab(connection: BridgeConnection, tab: ConnectedTab): void {
+    const existed = connection.tabs.has(tab.id);
+    connection.tabs.set(tab.id, tab);
+    this.#broadcast(connection, {
       method: existed ? "Target.targetInfoChanged" : "Target.targetCreated",
       params: { targetInfo: targetInfo(tab) },
     });
   }
 
-  #disconnectBrowser(reason: string): void {
-    this.#browserConnected = false;
-    this.#nativeReady = false;
-    for (const tabId of [...this.#tabs.keys()]) this.#detachTab(tabId, reason);
-    for (const [requestId, pending] of this.#pending) {
-      this.#pending.delete(requestId);
+  #disconnectBrowser(connection: BridgeConnection, reason: string): void {
+    connection.browserConnected = false;
+    connection.nativeReady = false;
+    for (const tabId of [...connection.tabs.keys()])
+      this.#detachTab(connection, tabId, reason);
+    for (const [requestId, pending] of connection.pending) {
+      connection.pending.delete(requestId);
       this.#reply(
         pending.socket,
         pending.id,
@@ -587,18 +832,18 @@ export class ChromeExtensionBridge {
     }
   }
 
-  #dropCdp(socket: WebSocket): void {
-    this.#cdpSockets.delete(socket);
-    for (const [sessionId, session] of [...this.#sessions]) {
-      if (session.socket === socket) this.#sessions.delete(sessionId);
+  #dropCdp(connection: BridgeConnection, socket: WebSocket): void {
+    connection.cdpSockets.delete(socket);
+    for (const [sessionId, session] of [...connection.sessions]) {
+      if (session.socket === socket) connection.sessions.delete(sessionId);
     }
-    for (const [requestId, pending] of [...this.#pending]) {
-      if (pending.socket === socket) this.#pending.delete(requestId);
+    for (const [requestId, pending] of [...connection.pending]) {
+      if (pending.socket === socket) connection.pending.delete(requestId);
     }
   }
 
-  #broadcast(message: unknown): void {
-    for (const socket of this.#cdpSockets) sendJson(socket, message);
+  #broadcast(connection: BridgeConnection, message: unknown): void {
+    for (const socket of connection.cdpSockets) sendJson(socket, message);
   }
 
   async #writeDescriptor(nativeWebSocketUrl: string): Promise<void> {

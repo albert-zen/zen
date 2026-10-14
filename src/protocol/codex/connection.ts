@@ -848,7 +848,8 @@ export class CodexConnection {
     if (
       event.type === "model_catalog_updated" ||
       event.type === "queue_failed" ||
-      event.type === "queue_admission_started"
+      event.type === "queue_admission_started" ||
+      event.type === "thread_deleted_updated"
     )
       return;
     if (event.type === "thread_started") {
@@ -1164,6 +1165,7 @@ export class CodexConnection {
     await this.#eventChain;
     request.signal.throwIfAborted();
     if (
+      request.approvalTarget === undefined &&
       request.scope !== "once" &&
       this.#acceptedCommandThreads.has(request.threadId)
     ) {
@@ -1182,8 +1184,14 @@ export class CodexConnection {
             itemId: request.itemId,
             startedAtMs: Date.now(),
             environmentId: null,
-            reason: null,
+            reason:
+              request.approvalTarget === undefined
+                ? null
+                : "This approval is limited to the displayed tool and target. Choosing allow for session approves only this call, without remembering a session grant.",
             command: request.command,
+            ...(request.approvalTarget === undefined
+              ? {}
+              : { approvalTarget: { ...request.approvalTarget } }),
             ...(request.scope === undefined
               ? {}
               : { approvalScope: request.scope }),
@@ -1211,7 +1219,13 @@ export class CodexConnection {
     if (!isRecord(response) || !isApprovalDecision(response.decision)) {
       throw new Error("Client returned an invalid approval decision");
     }
-    if (request.scope !== "once" && response.decision === "acceptForSession") {
+    // Scoped decisions belong to Core's exact tool/target store. Neither an
+    // existing legacy session grant nor this response may broaden that target.
+    if (
+      request.approvalTarget === undefined &&
+      request.scope !== "once" &&
+      response.decision === "acceptForSession"
+    ) {
       this.#acceptedCommandThreads.add(request.threadId);
     }
     return response.decision;
@@ -1295,6 +1309,7 @@ export class CodexConnection {
 
   #sendErrorNotification(error: unknown, event: AppServerEvent): void {
     if (
+      event.type === "thread_deleted_updated" ||
       event.type === "thread_started" ||
       event.type === "thread_name_updated" ||
       event.type === "thread_settings_updated" ||
@@ -1360,6 +1375,8 @@ function eventRepresentedInSnapshot(
   snapshot: ThreadSnapshot,
 ): boolean {
   switch (event.type) {
+    case "thread_deleted_updated":
+      return true; // A readable snapshot supersedes earlier delete/restore events.
     case "queue_failed":
     case "queue_admission_started":
       return true;
