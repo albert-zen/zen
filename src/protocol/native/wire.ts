@@ -58,6 +58,12 @@ export type NativeCreateChildThreadParams = CreateChildThreadInput;
 export interface NativeCreateChildThreadResult {
   thread: ThreadSnapshot;
 }
+export const NATIVE_QUEUE_STEER_METHOD = "zen/thread/queue/steer";
+export type NativeQueueSteerParams =
+  import("../../app-server.js").QueuedSteerTarget & { threadId: string };
+export type NativeQueueSteerResult =
+  import("../../app-server.js").QueuedSteerResult;
+
 export const NATIVE_QUEUE_EDIT_METHOD = "zen/thread/queue/edit";
 export interface NativeQueueEditParams {
   threadId: string;

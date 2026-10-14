@@ -1321,3 +1321,16 @@ Extension-created tab groups are ephemeral visual organization scoped to the cur
 ### Browser targeted input
 
 Browser coordinate click and named-key input are transient, observation-bound CDP operations: one captured screenshot, CSS viewport, page-local focus and document/control generation authorize a bounded event pair on the exact tab; uncertain held input blocks further mutations until that tab is closed, with no OS-input fallback, automatic retry, or durable recovery state. CDP acknowledgement and exact Host fences authorize the planned pair; page-consumable event counters are supplementary interference evidence. Bounded open-shadow resolution and mutation observation reuse this per-document state; exact-node CDP shadow metadata distinguishes ordinary containers from actual closed roots without a tag denylist, while known closed or untracked surfaces remain locally unsupported. Structured probe denials have a bounded shared classification; arbitrary Runtime exceptions are never classified as native-surface refusal.
+
+### Queued input promotion
+
+`zen/thread/queue/steer` promotes an existing canonical queued identity and expected
+revision under the Thread mutation lock: it commits the exact pending input to an
+active Turn at the next safe point, or starts that selected input when idle using
+the existing queue admission reservation. It never cancels/recreates the message.
+The original queued Item, client identity, source/provenance, attachments and
+creation timestamp remain unchanged; the delivered Item records its own actual
+admission timestamp. Concurrent drain/edit/cancel operations share the same fence,
+and retries/reload read the existing canonical delivery receipt. Transport failure
+does not imply delivery or permit client-side cancel/resend. This is a one-message
+action; it does not rewrite any ingress preference or an explicitly queued sibling.

@@ -11,9 +11,12 @@ Thread tools accept `target`: full ID, unique prefix or exact title. Use `worksp
 to disambiguate; ambiguous targets return candidates and never write. Discover
 Threads with `zenx_threads_list` (query, workspace, archived, limit and cursor).
 
-Send only target/text, optionally messageType: follow_up queues work, guidance adds
-to current work, replacement interrupts and changes it. Omit for the saved ZenX
-preference. The application owns IDs, retry deduplication and exact-Turn checks.
+For normal communication, send target/text and omit messageType. The default is
+`guidance`: soft-steer active work at the next safe point, or start when idle.
+Use explicit `follow_up` only when work should wait until the current Turn ends;
+`replacement` interrupts and changes the task. The manual Composer preference
+never changes Thread-message delivery. Explicit per-message intent is preserved.
+The application owns IDs, retry deduplication and exact-Turn checks.
 
 Read original history with `zenx_threads_read`: turns (default), items,
 agent_messages, or item. Item/message pages optionally take turnId. Follow nextCursor

@@ -214,6 +214,15 @@ export interface QueuedCancellationResult extends QueuedCancellationTarget {
   status: "cancelled" | "already_cancelled" | "already_started" | "not_found";
 }
 
+/** A promotion targets the exact queued revision, never reconstructed input. */
+export interface QueuedSteerTarget extends QueuedCancellationTarget {
+  expectedRevision: number;
+}
+export interface QueuedSteerResult extends QueuedCancellationTarget {
+  status: "steered" | "started" | "already_started";
+  turnId: string;
+}
+
 export interface QueuedEditTarget extends QueuedCancellationTarget {
   expectedRevision: number;
   /** Unique per Save; an exact retry reuses this ID and original request. */
@@ -2114,6 +2123,189 @@ export class ZenAppServer {
         });
     }
     return admission;
+  }
+
+  /** Promote one canonical queue identity without cancel/resend or new input. */
+  async steerQueuedMessage(
+    threadId: string,
+    requested: QueuedSteerTarget,
+    options: { requestApproval?: ApprovalHandler } = {},
+  ): Promise<QueuedSteerResult> {
+    const target = { ...requested };
+    if (
+      [target.queuedItemId, target.clientId].some(
+        (value) =>
+          typeof value !== "string" || !value.trim() || value.length > 512,
+      ) ||
+      !Number.isSafeInteger(target.expectedRevision) ||
+      target.expectedRevision < 0
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Queue identity and expected revision are required",
+      );
+    while (true) {
+      const plan = await this.#withThreadMutation(threadId, async () => {
+        const thread = await this.#requireThread(threadId);
+        await this.#requireUnarchived(threadId);
+        const original = thread.items.find(
+          (item) =>
+            (item.type === "user_message_queued" ||
+              item.type === "thread_message_queued" ||
+              item.type === "host_message_queued") &&
+            item.id === target.queuedItemId &&
+            item.clientId === target.clientId,
+        );
+        if (original === undefined)
+          throw new AppServerError(
+            "queue_not_found",
+            "Queued message was not found",
+          );
+        const delivered = thread.items.find(
+          (item): item is DeliveredInputItem =>
+            (item.type === "user_message" ||
+              item.type === "thread_message" ||
+              item.type === "host_message") &&
+            item.clientId === target.clientId,
+        );
+        if (delivered !== undefined)
+          return {
+            result: {
+              ...target,
+              status: "already_started" as const,
+              turnId: delivered.turnId,
+            },
+          };
+        const pending = pendingQueuedMessages(thread.items).find(
+          (item) => item.id === target.queuedItemId,
+        );
+        if (pending === undefined)
+          throw new AppServerError(
+            "queue_cancelled",
+            "This queued message was cancelled",
+          );
+        if (pending.revision !== target.expectedRevision)
+          throw new AppServerError(
+            "queue_revision_conflict",
+            "This queued message changed. Review the current version before sending",
+          );
+        const active = this.#activeTurns.get(threadId);
+        if (active !== undefined) {
+          if (
+            active.controller.signal.aborted ||
+            this.#isTerminal(thread, active.turnId)
+          )
+            return { wait: active.done };
+          // Wait outside the lock, only for the fixed initial input batch. The
+          // launch/resume owner may already have reserved this very identity.
+          if (
+            !active.initialInputCommitted ||
+            this.#reservedQueuedItems.get(threadId)?.has(pending.id)
+          )
+            return { wait: active.ready };
+          await this.#validateInput(pending.input, active.inputModalities);
+          if (active.controller.signal.aborted) return { wait: active.done };
+          const base = {
+            id: this.#id(),
+            threadId,
+            turnId: active.turnId,
+            createdAt: this.#now(),
+            clientId: pending.clientId,
+            ...(active.deliveryAnchorId === undefined
+              ? {}
+              : { deliveryAfter: active.deliveryAnchorId }),
+          };
+          const item: DeliveredInputItem =
+            pending.type === "thread_message_queued"
+              ? {
+                  ...base,
+                  type: "thread_message",
+                  sender: pending.sender,
+                  messageType: pending.messageType,
+                  mode: "steer",
+                  content: pending.input,
+                }
+              : pending.type === "host_message_queued"
+                ? {
+                    ...base,
+                    type: "host_message",
+                    sender: "host",
+                    source: pending.source,
+                    ...(pending.sourceId === undefined
+                      ? {}
+                      : { sourceId: pending.sourceId }),
+                    text: pending.text,
+                    mode: "steer",
+                  }
+                : { ...base, type: "user_message", content: pending.input };
+          await this.#commit(thread, item);
+          this.#emit({ type: "item_completed", item });
+          return {
+            result: {
+              ...target,
+              status: "steered" as const,
+              turnId: active.turnId,
+            },
+          };
+        }
+        return { pending };
+      });
+      if (plan.result !== undefined) return plan.result;
+      if (plan.wait !== undefined) {
+        await Promise.allSettled([plan.wait]);
+        continue;
+      }
+      const pending = plan.pending!;
+      try {
+        // The launch rechecks this revision and reserves it under the same
+        // mutation lock used by edit/cancel/normal queue draining.
+        const turn = await this.#launchTurn(
+          threadId,
+          pending.input,
+          {
+            ...options,
+            clientId: pending.clientId,
+            requireUnarchived: true,
+          },
+          {
+            preparedInput: true,
+            queuedAdmission: { items: [pending], attemptId: randomUUID() },
+            initialMessages: [
+              {
+                input: pending.input,
+                clientId: pending.clientId,
+                ...(pending.type === "thread_message_queued"
+                  ? {
+                      sender: pending.sender,
+                      messageType: pending.messageType,
+                      mode: "batch-next" as const,
+                    }
+                  : pending.type === "host_message_queued"
+                    ? {
+                        hostInput: {
+                          clientId: pending.clientId,
+                          text: pending.text,
+                          source: pending.source,
+                          ...(pending.sourceId === undefined
+                            ? {}
+                            : { sourceId: pending.sourceId }),
+                        },
+                      }
+                    : {}),
+              },
+            ],
+          },
+        );
+        return { ...target, status: "started", turnId: turn.id };
+      } catch (error) {
+        if (
+          error instanceof QueueBatchChanged ||
+          (error instanceof AppServerError && error.code === "thread_busy")
+        )
+          continue;
+        throw error;
+      }
+    }
   }
 
   /** Edits append a revision without moving, admitting, or resuming the queue. */

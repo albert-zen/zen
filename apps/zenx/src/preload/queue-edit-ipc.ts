@@ -1,4 +1,7 @@
-import type { NativeQueueEditResult } from "../../../../src/protocol/native/wire.js";
+import type {
+  NativeQueueSteerResult,
+  NativeQueueEditResult,
+} from "../../../../src/protocol/native/wire.js";
 import type {
   ClientRequestMethod,
   ClientRequestResults,
@@ -39,7 +42,9 @@ export type QueueEditIpcReply = NativeQueueEditResult | QueueEditIpcRejection;
 export type ProtocolIpcResult<M extends ClientRequestMethod> =
   M extends "zen/thread/queue/edit"
     ? QueueEditIpcReply
-    : ClientRequestResults[M];
+    : M extends "zen/thread/queue/steer"
+      ? NativeQueueSteerResult | QueueEditIpcRejection
+      : ClientRequestResults[M];
 
 export function queueEditIpcRejection(
   error: unknown,
@@ -55,15 +60,21 @@ export function queueEditIpcRejection(
 export function unwrapQueueEditIpcReply(
   reply: QueueEditIpcReply,
 ): NativeQueueEditResult {
+  return unwrapQueueMutationIpcReply(reply);
+}
+
+export function unwrapQueueMutationIpcReply<
+  T extends NativeQueueEditResult | NativeQueueSteerResult,
+>(reply: T | QueueEditIpcRejection): T {
   if (isRecord(reply) && reply.type === rejectionType) {
     const safe = queueEditIpcRejection(reply);
     if (safe === undefined)
-      throw new Error("Queue edit outcome is unconfirmed.");
-    throw Object.assign(new Error("Queued message edit was rejected."), {
+      throw new Error("Queue operation outcome is unconfirmed.");
+    throw Object.assign(new Error("Queued message operation was rejected."), {
       data: safe.data,
     });
   }
-  return reply as NativeQueueEditResult;
+  return reply as T;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
