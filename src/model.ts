@@ -169,6 +169,16 @@ export function isRetryableModelSampleError(error: unknown): boolean {
   return candidate.retryable === true && candidate.status === undefined;
 }
 
+/**
+ * Marks a model-sample failure as transient stream corruption: the Runtime
+ * may replay the sample before any tool side effect exists. Adapters without
+ * a structured error class (e.g. the subscription transport) use this to
+ * participate in the same contract.
+ */
+export function retryableModelSampleError(message: string): Error {
+  return Object.assign(new Error(message), { retryable: true });
+}
+
 export function compileModelMessages(
   items: readonly CanonicalItem[],
   targetSelection?: CanonicalProviderSelection,
