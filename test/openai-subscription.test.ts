@@ -1491,6 +1491,187 @@ test("marks truncated or corrupt subscription streams as retryable sample failur
   });
 });
 
+test("subscription stream retries classify transport failures without leaking credentials", async (t) => {
+  for (const [label, error, retryable] of [
+    [
+      "socket failure",
+      new TypeError(`terminated ${secretAccessToken}`, {
+        cause: { code: "UND_ERR_SOCKET" },
+      }),
+      true,
+    ],
+    [
+      "body timeout",
+      new TypeError("terminated", { cause: { code: "UND_ERR_BODY_TIMEOUT" } }),
+      true,
+    ],
+    ["programming error", new Error("reader invariant failed"), false],
+    ["unexpected TypeError", new TypeError("invalid decoder input"), false],
+    [
+      "plain abort",
+      Object.assign(new Error("cancelled"), { name: "AbortError" }),
+      false,
+    ],
+    [
+      "plain timeout",
+      Object.assign(new Error("expired"), { name: "TimeoutError" }),
+      false,
+    ],
+  ] as const) {
+    await t.test(label, async () => {
+      const adapter = new OpenAiSubscriptionModel({
+        acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+        fetch: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(error);
+              },
+            }),
+          ),
+      });
+      await assert.rejects(
+        collect(adapter.stream(request())),
+        (actual: unknown) => {
+          assert.ok(actual instanceof Error);
+          assert.equal(
+            (actual as { retryable?: boolean }).retryable === true,
+            retryable,
+          );
+          if (!retryable) assert.equal(actual, error);
+          assert.equal(actual.message.includes(secretAccessToken), false);
+          return true;
+        },
+      );
+    });
+  }
+});
+
+test("subscription malformed tool output is retryable but invalid request tools are not", async (t) => {
+  for (const [label, fields] of [
+    ["invalid JSON", { arguments: "{broken" }],
+    ["non-object JSON", { arguments: "[]" }],
+    ["non-string arguments", { arguments: 123 }],
+    ["invalid name", { name: "invalid.tool" }],
+    ["missing name", { name: null }],
+    ["empty call id", { call_id: " " }],
+    ["missing call id", { call_id: null }],
+  ] as const) {
+    await t.test(label, async () => {
+      const adapter = new OpenAiSubscriptionModel({
+        acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+        fetch: async () =>
+          sseResponse([
+            {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                output: [
+                  {
+                    type: "function_call",
+                    call_id: "call_1",
+                    name: "shell",
+                    arguments: "{}",
+                    ...(fields as Record<string, unknown>),
+                  },
+                ],
+              },
+            },
+          ]),
+      });
+      await assert.rejects(
+        collect(adapter.stream(request({ tools: [shellTool()] }))),
+        (error: unknown) => {
+          assert.equal((error as { retryable?: boolean }).retryable, true);
+          return true;
+        },
+      );
+    });
+  }
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => {
+      throw new Error("must not reach authentication");
+    },
+  });
+  await assert.rejects(
+    collect(
+      adapter.stream(
+        request({ tools: [{ ...shellTool(), name: "invalid.tool" }] }),
+      ),
+    ),
+    (error: unknown) => {
+      assert.match((error as Error).message, /tool name is unsupported/u);
+      assert.notEqual((error as { retryable?: boolean }).retryable, true);
+      return true;
+    },
+  );
+});
+
+test("subscription sample replays do not restart admission retries", async () => {
+  let calls = 0;
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    fetch: async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("busy", { status: 503 })
+        : sseResponse([
+            {
+              type: "response.completed",
+              response: { status: "completed", output: [] },
+            },
+          ]);
+    },
+  });
+  await assert.rejects(
+    collect(adapter.stream(request({ isSamplingRetry: true }))),
+    /HTTP 503/u,
+  );
+  assert.equal(calls, 1);
+});
+
+test("subscription terminal reasons stay non-retryable through every supported terminal event", async (t) => {
+  for (const type of ["response.done", "response.completed"]) {
+    for (const status of ["incomplete", "failed"]) {
+      await t.test(`${type} ${status}`, async () => {
+        const adapter = new OpenAiSubscriptionModel({
+          acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+          fetch: async () =>
+            sseResponse([
+              {
+                type,
+                response: {
+                  status,
+                  incomplete_details: { reason: "content_filter" },
+                  error: { code: "invalid_request", message: "denied" },
+                  usage: { input_tokens: 3, output_tokens: 2 },
+                },
+              },
+            ]),
+        });
+        const events: ModelEvent[] = [];
+        await assert.rejects(
+          async () => {
+            for await (const event of adapter.stream(request()))
+              events.push(event);
+          },
+          (error: unknown) => {
+            assert.notEqual((error as { retryable?: boolean }).retryable, true);
+            assert.match(
+              (error as Error).message,
+              status === "incomplete" ? /content_filter/u : /invalid_request/u,
+            );
+            return true;
+          },
+        );
+        assert.deepEqual(events, [
+          { type: "usage", inputTokens: 3, outputTokens: 2 },
+        ]);
+      });
+    }
+  }
+});
+
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
   return {
     model: "gpt-5.6-terra",
