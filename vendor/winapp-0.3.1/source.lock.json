@@ -15,7 +15,7 @@
   "runtimeVersion": "10.0.12",
   "patch": {
     "path": "vendor/winapp-0.3.1/disable-auto-set-focus.patch",
-    "sha256": "20b35d4747c6155de4704d93b2f388bb51cfd4179b2e930cb50c4cac140566dd"
+    "sha256": "8b09be221d60cf51be31cfebf8c56a12d9cefc412b1b6926942583ec77f34900"
   },
   "sourceFiles": {
     "src/winapp-CLI/WinApp.Cli/NativeMethods.txt": "c61454eb1b8c80e87cb3ae075fd452cff12c4c30",

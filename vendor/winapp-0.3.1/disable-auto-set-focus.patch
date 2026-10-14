@@ -78,7 +78,7 @@ new file mode 100644
 index 0000000..83e6b3d
 --- /dev/null
 +++ b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
-@@ -0,0 +1,540 @@
+@@ -0,0 +1,594 @@
 +// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 +// Licensed under the MIT License.
 +
@@ -136,13 +136,16 @@ index 0000000..83e6b3d
 +        string? operation = null;
 +        bool? autoSetFocus = null;
 +        var dispatched = false;
++        var phase = "parse_request";
 +        using var response = new MemoryStream();
 +        try
 +        {
 +            var request = ParseRequest();
 +            operation = request.Operation;
++            phase = "resolve_service";
 +            var service = resolveService();
 +            var automation = service.ZenXStrictClient;
++            phase = "read_autofocus";
 +            autoSetFocus = service.ZenXAutoSetFocus;
 +            Require(autoSetFocus == false, "auto_focus_enabled");
 +
@@ -151,20 +154,24 @@ index 0000000..83e6b3d
 +            string? value = null;
 +            if (operation == "inspect")
 +            {
++                phase = "inspect_element";
 +                var rootElement = automation.ElementFromHandle(Handle(request.Hwnd!, false));
-+                root = CaptureRoot(rootElement, request.Hwnd!, request.Pid);
++                root = CaptureRoot(rootElement, request.Hwnd!, request.Pid, ref phase);
 +                controls = [];
 +                var visited = new HashSet<string>(StringComparer.Ordinal);
 +                var nodes = 0;
-+                Walk(automation.get_RawViewWalker(), rootElement, 0, controls, visited, ref nodes);
-+                Require(SameRoot(root, CaptureRoot(rootElement, root.Hwnd, root.Pid, RuntimeReadContext.RootRecheck)), "root_changed");
++                phase = "raw_walker";
++                Walk(automation.get_RawViewWalker(), rootElement, 0, controls, visited, ref nodes, ref phase);
++                Require(SameRoot(root, CaptureRoot(rootElement, root.Hwnd, root.Pid, ref phase, RuntimeReadContext.RootRecheck)), "root_changed");
++                phase = "read_autofocus";
 +                autoSetFocus = service.ZenXAutoSetFocus;
 +                Require(autoSetFocus == false, "auto_focus_enabled");
 +            }
 +            else
 +            {
-+                value = Mutate(service, request, ref dispatched, ref autoSetFocus);
++                value = Mutate(service, request, ref dispatched, ref autoSetFocus, ref phase);
 +            }
++            phase = "serialize_response";
 +            using (var writer = new Utf8JsonWriter(response))
 +            {
 +                WriteEnvelope(writer, operation, autoSetFocus, "completed", null);
@@ -184,7 +191,7 @@ index 0000000..83e6b3d
 +        catch (Exception error)
 +        {
 +            // No retry, selector lookup, ancestor activation or alternate pattern here.
-+            var code = error is Refusal refusal ? refusal.Code : "provider_error";
++            var code = error is Refusal refusal ? refusal.Code : ProviderError(error, phase);
 +            response.SetLength(0);
 +            response.Position = 0;
 +            using var writer = new Utf8JsonWriter(response);
@@ -197,54 +204,80 @@ index 0000000..83e6b3d
 +        return 0;
 +    }
 +
-+    private static string? Mutate(UiAutomationService service, Request request, ref bool dispatched, ref bool? autoSetFocus)
++    private static string ProviderError(Exception error, string phase)
 +    {
++        // Source-defined phase/category labels and a fixed-width HRESULT only.
++        // Never expose exception messages, type names, stacks or UI identities.
++        var category = error switch
++        {
++            COMException => "com",
++            System.ComponentModel.Win32Exception => "win32",
++            InvalidCastException => "invalid_cast",
++            InvalidOperationException => "invalid_operation",
++            OverflowException => "overflow",
++            _ => "other"
++        };
++        var hresult = unchecked((uint)error.HResult).ToString("x8", CultureInfo.InvariantCulture);
++        return $"provider_error_{phase}_{category}_h{hresult}";
++    }
++
++    private static string? Mutate(UiAutomationService service, Request request, ref bool dispatched, ref bool? autoSetFocus, ref string phase)
++    {
++        phase = "mutation_identity";
 +        var expectedRoot = request.Root!;
 +        var expected = request.Control!;
 +        var rootHwnd = Handle(expectedRoot.Hwnd, false);
 +        var hwnd = Handle(expected.Hwnd, false); // HWND 0 / virtual controls are never actionable.
 +        var automation = service.ZenXStrictClient;
 +        var root = automation.ElementFromHandle(rootHwnd);
-+        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid)), "root_changed");
++        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid, ref phase)), "root_changed");
++        phase = "mutation_native_ancestry";
 +        VerifyNativeAncestry(rootHwnd, hwnd, expectedRoot.Pid, expected.Pid);
 +
++        phase = "mutation_uia_identity";
 +        var element = UniqueNativeElement(automation, root, hwnd);
 +        var fromHwnd = automation.ElementFromHandle(hwnd);
 +        Require(automation.CompareElements(element, fromHwnd), "native_identity_changed");
-+        Require(SameControl(expected, CaptureControl(element)), "control_changed");
++        Require(SameControl(expected, CaptureControl(element, ref phase)), "control_changed");
 +        Require(expected.Enabled && !expected.Offscreen && !expected.Password, "control_ineligible");
 +        Require(expected.Bounds.Width > 0 && expected.Bounds.Height > 0, "control_ineligible");
++        phase = "mutation_uia_ancestry";
 +        VerifyUiaAncestry(automation, root, element);
 +
 +        if (request.Operation == "invoke")
 +        {
 +            Require(expected.InvokePattern, "pattern_unavailable");
++            phase = "invoke_pattern";
 +            var pattern = element.GetCurrentPattern(UIA_PATTERN_ID.UIA_InvokePatternId) as IUIAutomationInvokePattern;
 +            Require(pattern is not null, "pattern_unavailable");
-+            Revalidate(service, expectedRoot, expected, root, element, ref autoSetFocus);
++            Revalidate(service, expectedRoot, expected, root, element, ref autoSetFocus, ref phase);
 +            // Same verified element/client. UIA providers may still change or activate
 +            // themselves during the call; no client can eliminate that last-instant race.
++            phase = "invoke_dispatch";
 +            dispatched = true;
 +            pattern!.Invoke();
 +            return null;
 +        }
 +
 +        Require(expected.ValuePattern && expected.ValueReadOnly == false, "pattern_unavailable");
++        phase = "value_pattern";
 +        var valuePattern = element.GetCurrentPattern(UIA_PATTERN_ID.UIA_ValuePatternId) as IUIAutomationValuePattern;
 +        Require(valuePattern is not null && !valuePattern.get_CurrentIsReadOnly(), "pattern_unavailable");
 +        var input = request.Value!;
 +        var bstr = Marshal.StringToBSTR(input);
 +        try
 +        {
-+            Revalidate(service, expectedRoot, expected, root, element, ref autoSetFocus);
++            Revalidate(service, expectedRoot, expected, root, element, ref autoSetFocus, ref phase);
 +            unsafe
 +            {
++                phase = "value_dispatch";
 +                dispatched = true;
 +                valuePattern!.SetValue(new BSTR((char*)bstr));
 +            }
 +        }
 +        finally { Marshal.FreeBSTR(bstr); }
 +        // Read the entire BSTR, not a preview, prefix or separately re-resolved element.
++        phase = "value_readback";
 +        var readback = ReadBstr(valuePattern!.get_CurrentValue(), MaxValueLength);
 +        Require(string.Equals(input, readback, StringComparison.Ordinal), "readback_mismatch");
 +        return readback;
@@ -262,33 +295,42 @@ index 0000000..83e6b3d
 +    }
 +
 +    private static void Revalidate(UiAutomationService service, Root expectedRoot, Control expected,
-+        IUIAutomationElement root, IUIAutomationElement element, ref bool? autoSetFocus)
++        IUIAutomationElement root, IUIAutomationElement element, ref bool? autoSetFocus, ref string phase)
 +    {
++        phase = "read_autofocus";
 +        autoSetFocus = service.ZenXAutoSetFocus;
 +        Require(autoSetFocus == false, "auto_focus_enabled");
-+        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid, RuntimeReadContext.RootRecheck)), "root_changed");
++        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid, ref phase, RuntimeReadContext.RootRecheck)), "root_changed");
++        phase = "revalidate_ancestry";
 +        VerifyNativeAncestry(Handle(expectedRoot.Hwnd, false), Handle(expected.Hwnd, false), expectedRoot.Pid, expected.Pid);
 +        VerifyUiaAncestry(service.ZenXStrictClient, root, element);
++        phase = "revalidate_uia_identity";
 +        var stillUnique = UniqueNativeElement(service.ZenXStrictClient, root, Handle(expected.Hwnd, false));
 +        Require(service.ZenXStrictClient.CompareElements(element, stillUnique), "native_identity_changed");
-+        Require(SameControl(expected, CaptureControl(element)), "control_changed");
++        Require(SameControl(expected, CaptureControl(element, ref phase)), "control_changed");
 +        // Read the live setting last, immediately before the one pattern call.
++        phase = "read_autofocus";
 +        autoSetFocus = service.ZenXAutoSetFocus;
 +        Require(autoSetFocus == false, "auto_focus_enabled");
 +    }
 +
-+    private static Root CaptureRoot(IUIAutomationElement element, string hwndText, int pid,
++    private static Root CaptureRoot(IUIAutomationElement element, string hwndText, int pid, ref string phase,
 +        RuntimeReadContext runtimeContext = RuntimeReadContext.RootInitial)
 +    {
++        phase = "root_native_identity";
 +        var hwnd = Handle(hwndText, false);
 +        Require(PInvoke.IsWindow(hwnd) && PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOT) == hwnd, "root_not_top_level");
 +        Require(PInvoke.IsWindowVisible(hwnd) && !PInvoke.IsIconic(hwnd), "root_not_visible");
++        phase = "root_uia_identity";
 +        Require(NativePid(hwnd) == pid && element.get_CurrentProcessId() == pid, "root_process_changed");
 +        Require(element.get_CurrentNativeWindowHandle() == hwnd, "root_identity_changed");
++        phase = "root_process_metadata";
 +        using var process = Process.GetProcessById(pid);
 +        var ticks = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
 +        Require(!process.HasExited, "root_process_changed");
-+        return new Root(hwndText, pid, ticks, NativeClass(hwnd), RuntimeId(element, runtimeContext));
++        phase = "root_native_class";
++        var className = NativeClass(hwnd);
++        return new Root(hwndText, pid, ticks, className, RuntimeId(element, runtimeContext, ref phase));
 +    }
 +
 +    private static void VerifyNativeAncestry(HWND root, HWND child, int rootPid, int childPid)
@@ -313,33 +355,44 @@ index 0000000..83e6b3d
 +    }
 +
 +    private static void Walk(IUIAutomationTreeWalker walker, IUIAutomationElement element, int depth,
-+        List<Control> controls, HashSet<string> visited, ref int nodes)
++        List<Control> controls, HashSet<string> visited, ref int nodes, ref string phase)
 +    {
 +        Require(++nodes <= MaxNodes && depth <= MaxDepth && controls.Count < MaxControls, "scan_limit");
-+        var control = CaptureControl(element, depth == 0 ? RuntimeReadContext.WalkRoot : RuntimeReadContext.WalkChild);
++        var control = CaptureControl(element, ref phase, depth == 0 ? RuntimeReadContext.WalkRoot : RuntimeReadContext.WalkChild);
 +        // Empty virtual identities are readable rows, never comparable identities.
 +        // Every visit still consumes the budgets above and walks all children below.
 +        Require(control.RuntimeId.Length == 0 || visited.Add(string.Join(",", control.RuntimeId)), "duplicate_runtime_identity");
 +        controls.Add(control);
++        phase = "walk_first_child";
 +        var child = walker.GetFirstChildElement(element);
 +        while (child is not null)
 +        {
-+            Walk(walker, child, depth + 1, controls, visited, ref nodes);
++            Walk(walker, child, depth + 1, controls, visited, ref nodes, ref phase);
++            phase = "walk_next_sibling";
 +            child = walker.GetNextSiblingElement(child);
 +        }
 +    }
 +
-+    private static Control CaptureControl(IUIAutomationElement element,
++    private static Control CaptureControl(IUIAutomationElement element, ref string phase,
 +        RuntimeReadContext runtimeContext = RuntimeReadContext.ActionControl)
 +    {
++        phase = "control_handle";
 +        var hwnd = element.get_CurrentNativeWindowHandle();
 +        var readContext = runtimeContext == RuntimeReadContext.WalkChild && hwnd.IsNull
 +            ? RuntimeReadContext.WalkVirtual : runtimeContext;
++        phase = "control_bounds";
 +        var rect = element.get_CurrentBoundingRectangle();
++        phase = "control_invoke_pattern";
 +        var invoke = ReadPattern(element, UIA_PATTERN_ID.UIA_InvokePatternId) is IUIAutomationInvokePattern;
++        phase = "control_value_pattern";
 +        var value = ReadPattern(element, UIA_PATTERN_ID.UIA_ValuePatternId) as IUIAutomationValuePattern;
-+        return new Control(((long)(nint)hwnd).ToString(CultureInfo.InvariantCulture), element.get_CurrentProcessId(),
-+            hwnd.IsNull ? "" : NativeClass(hwnd), RuntimeId(element, readContext), ReadBstr(element.get_CurrentName()),
++        phase = "control_native_identity";
++        var pid = element.get_CurrentProcessId();
++        var nativeClassName = hwnd.IsNull ? "" : NativeClass(hwnd);
++        var runtimeId = RuntimeId(element, readContext, ref phase);
++        phase = "control_properties";
++        return new Control(((long)(nint)hwnd).ToString(CultureInfo.InvariantCulture), pid,
++            nativeClassName, runtimeId, ReadBstr(element.get_CurrentName()),
 +            ReadBstr(element.get_CurrentAutomationId()), ReadBstr(element.get_CurrentClassName()),
 +            ReadBstr(element.get_CurrentFrameworkId()), (int)element.get_CurrentControlType(),
 +            new Bounds(rect.left, rect.top, checked(rect.right - rect.left), checked(rect.bottom - rect.top)),
@@ -353,8 +406,9 @@ index 0000000..83e6b3d
 +        catch (COMException error) when (error.HResult == unchecked((int)0x80040204)) { return null; } // UIA_E_NOTSUPPORTED
 +    }
 +
-+    private static unsafe int[] RuntimeId(IUIAutomationElement element, RuntimeReadContext context)
++    private static unsafe int[] RuntimeId(IUIAutomationElement element, RuntimeReadContext context, ref string phase)
 +    {
++        phase = "runtime_id";
 +        var array = element.GetRuntimeId();
 +        if (array == null) { throw RuntimeRefusal(context, "null"); }
 +        try
