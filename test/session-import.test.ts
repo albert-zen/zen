@@ -654,3 +654,111 @@ test("deterministic imported title prevents discovery from inferring a title wit
   );
   assert.equal(thread.name, "Imported · remember this");
 });
+
+test("imported timestamps distinguish original records from synthetic checkpoint history through replay and fork", async () => {
+  for (const checkpoint of [false, true]) {
+    const journal = new InMemoryThreadJournal();
+    const app = server(journal);
+    const initial = rollout(
+      message("user", "old"),
+      message("assistant", "old answer"),
+    );
+    const checkpointTime = "2026-10-12T12:00:00.000Z";
+    const records = checkpoint
+      ? initial +
+        JSON.stringify({
+          type: "compacted",
+          timestamp: checkpointTime,
+          payload: {
+            replacement_history: [
+              message("user", "carried"),
+              message("assistant", "summary"),
+            ],
+          },
+        }) +
+        "\n" +
+        JSON.stringify({
+          type: "event_msg",
+          timestamp: checkpointTime,
+          payload: { type: "task_complete" },
+        }) +
+        "\n" +
+        JSON.stringify({
+          type: "response_item",
+          timestamp: "2026-10-12T13:00:00.000Z",
+          payload: message("user", "tail"),
+        }) +
+        "\n"
+      : initial;
+    const imported = await app.importThread(parseCodexRollout(records), {
+      cwd: os.tmpdir(),
+    });
+    const timestamps = (
+      items: readonly import("../src/item.js").CanonicalItem[],
+    ) =>
+      compileModelMessages(items).flatMap((entry) =>
+        entry.role === "user" && entry.userTimestamp !== undefined
+          ? [entry.userTimestamp]
+          : [],
+      );
+    const expected = checkpoint ? [null, null] : [stamp];
+    assert.deepEqual(timestamps(imported.thread.items), expected);
+    if (checkpoint)
+      assert.equal(
+        imported.thread.items.find((entry) => entry.type === "user_message")
+          ?.createdAt,
+        checkpointTime,
+        "checkpoint times remain canonical but are not claimed as receipt times",
+      );
+    const restored = server(journal);
+    assert.deepEqual(
+      timestamps((await restored.readThread(imported.thread.id)).items),
+      expected,
+    );
+    if (checkpoint) {
+      // The final imported Turn is interrupted, so latest-complete copies a
+      // shorter prefix than importedFrom.historyItemCount describes.
+      const partial = await restored.forkThread({
+        sourceThreadId: imported.thread.id,
+        through: { type: "latest-complete" },
+        workspace: { type: "same-directory" },
+      });
+      assert.deepEqual(timestamps(partial.items), [null]);
+      await (
+        await restored.startTurn(partial.id, "local after partial fork")
+      ).done;
+      const partialSnapshot = await restored.readThread(partial.id);
+      const partialLocalTime = partialSnapshot.items.findLast(
+        (entry) => entry.type === "user_message",
+      )!.createdAt;
+      assert.deepEqual(timestamps(partialSnapshot.items), [
+        null,
+        partialLocalTime,
+      ]);
+      const repeated = await restored.forkThread({
+        sourceThreadId: partial.id,
+        through: { type: "latest-complete" },
+        workspace: { type: "same-directory" },
+      });
+      assert.deepEqual(timestamps(repeated.items), [null, partialLocalTime]);
+      assert.deepEqual(
+        timestamps((await server(journal).readThread(repeated.id)).items),
+        [null, partialLocalTime],
+      );
+    }
+    await (
+      await restored.startTurn(imported.thread.id, "new local input")
+    ).done;
+    const snapshot = await restored.readThread(imported.thread.id);
+    const localTime = snapshot.items.findLast(
+      (entry) => entry.type === "user_message",
+    )!.createdAt;
+    assert.deepEqual(timestamps(snapshot.items), [...expected, localTime]);
+    const fork = await restored.forkThread({
+      sourceThreadId: imported.thread.id,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    });
+    assert.deepEqual(timestamps(fork.items), [...expected, localTime]);
+  }
+});

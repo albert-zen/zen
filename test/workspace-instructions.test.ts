@@ -197,7 +197,13 @@ test("ordinary Turns do not reload empty snapshots or historical threads", async
     assert.doesNotMatch(JSON.stringify(requests.at(-1)), /LATE_RULES/u);
     assert.deepEqual(
       compileModelMessages((await restarted.readThread("historical")).items)[0],
-      { role: "user", content: [{ type: "text", text: "old empty thread" }] },
+      {
+        role: "user",
+        content: [{ type: "text", text: "old empty thread" }],
+        userTimestamp: (await restarted.readThread("historical")).items.find(
+          (item) => item.type === "user_message",
+        )?.createdAt,
+      },
     );
   } finally {
     await rm(root, { recursive: true, force: true });
