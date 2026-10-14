@@ -188,7 +188,7 @@ test("inline editors autosave real files, preserve in-flight input, and expose c
 
     await click("Files");
     await click("app.ts");
-    assert.ok(document.querySelector<HTMLTextAreaElement>(".file-editor"));
+    assert.ok(document.querySelector(".file-source-editor .cm-editor"));
     await edit("export const value = 2;\n");
     await settle();
     assert.equal(

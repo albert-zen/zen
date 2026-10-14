@@ -201,7 +201,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     assert.ok(stopped > 0);
     await act(async () =>
       [
-        ...document.querySelectorAll<HTMLButtonElement>(".file-list button"),
+        ...document.querySelectorAll<HTMLButtonElement>('[role="treeitem"]'),
       ][0]!.click(),
     );
     assert.equal(
@@ -478,7 +478,7 @@ for (const throughHostSdk of [false, true]) {
       );
       await act(async () => choose("File").click());
       await act(async () =>
-        document.querySelector<HTMLButtonElement>(".file-list button")!.click(),
+        document.querySelector<HTMLButtonElement>('[role="treeitem"]')!.click(),
       );
       await act(async () =>
         document

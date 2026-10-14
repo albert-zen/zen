@@ -200,6 +200,7 @@
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
 - **ZenXThreadWorkspace** — Thread 右侧唯一的平级内容选项卡容器；每个文件、共享浏览器页面、Computer 观察或插件注册的 panel 直接占一个顶层 Tab，通过加号选择内容类型，不增加 Browser/Files 分类路由层。Host 持有打开顺序与选中项，插件仍用自身 surface 渲染内容；打开、宽度和编辑草稿是本机 UI 状态，真实文件写入由 Host 校验并使用版本冲突保护，不引入会话语义。
+- **ZenXWorkspaceFileExplorer** — Renderer-local lazy folder expansion and debounced filename/path search reuse the Host’s Thread-cwd-scoped listing/search boundary; bounded highlighted source views share a raw-source-preserving CodeMirror adapter with Markdown, while existing draft/autosave/conflict ownership remains unchanged. No file index or new durable state is introduced.
 - **ZenXSidebarMenuPopover** — 项目与会话菜单共用锚点定位的临时浮层，在侧栏右侧显示并按视口边界回退，不参与列表布局或持久化状态。
 - **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
 - **ZenXGitWorktreeGrouping** — Host 仅在 Project 列表投影中用本机 Git 的 canonical common-directory 身份将同一仓库的工作树归组；显式配置的路径各自保留独立 Project，Thread cwd、配置 workspace 和新建执行路径不变，Git 不可用时退回路径身份。
