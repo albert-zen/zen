@@ -1,5 +1,0 @@
-# Preserve reviewed trust inputs on every checkout, including core.autocrlf=true.
-vendor/winapp-0.3.1/disable-auto-set-focus.patch text eol=lf
-vendor/winapp-0.3.1/source.lock.json text eol=lf
-# The reviewed CI lock has CRLF bytes. Do not normalize its Git blob or checkout.
-vendor/winapp-0.3.1/packages.lock.json -text whitespace=cr-at-eol
