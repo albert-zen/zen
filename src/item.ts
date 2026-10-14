@@ -11,7 +11,10 @@ import {
   type AttachmentRef,
 } from "./attachment-ref.js";
 
-/** Observation receipt for a copied tool call, never an executed child operation. */
+/**
+ * Observation receipt for a copied tool call, never an executed child operation.
+ * The historical wire name is shared by side-chat and exact-item fork closures.
+ */
 export const SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE =
   "zen.side-chat-tool-snapshot.v1";
 
