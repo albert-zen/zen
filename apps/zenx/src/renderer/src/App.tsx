@@ -3085,6 +3085,7 @@ function AppContent() {
               threads={[...activeSummaries, ...archivedSummaries]}
               snapshot={pluginSnapshot}
               section={roomPanel === "open" ? "" : roomPanel}
+              sectionRequest={roomQuery.get("request") ?? undefined}
               navigate={openPage}
               onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
             />
@@ -3399,7 +3400,7 @@ function PageTitleBar({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{subtitle}</p>
+          {subtitle !== title ? <p>{subtitle}</p> : null}
         </div>
       </div>
     </div>

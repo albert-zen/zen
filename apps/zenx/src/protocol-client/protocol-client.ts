@@ -60,6 +60,7 @@ const inputAdmissionMethods = new Set<string>([
   "turn/replace",
   "turn/queue",
   "zen/turn/send",
+  "zen/turn/wake",
 ]);
 
 export class ZenXProtocolClient {
@@ -496,7 +497,7 @@ export class ZenXProtocolClient {
       );
       return;
     }
-    if (method === "zen/thread/resume") {
+    if (method === "zen/thread/resume" || method === "zen/turn/wake") {
       const threadId = (params as ClientRequestParams["zen/thread/resume"])
         .threadId;
       this.#subscribedThreads.add(threadId);
