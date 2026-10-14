@@ -1,0 +1,230 @@
+.shell-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 20px;
+  gap: 12px;
+  overflow: auto;
+}
+.shell-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.shell-panel-heading h3 {
+  font-size: 20px;
+  margin: 3px 0 0;
+}
+.shell-eyebrow {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.shell-panel :is(.primary-button, .secondary-button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.shell-panel :is(.primary-button, .secondary-button) svg {
+  width: 14px;
+  height: 14px;
+}
+.shell-directory {
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+.shell-session-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shell-session-card {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  padding: 13px 12px;
+  gap: 10px;
+  text-align: left;
+  color: inherit;
+  background: var(--color-surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.shell-session-card:hover {
+  border-color: var(--color-text-muted);
+}
+.shell-session-card > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 2px;
+}
+.shell-card-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.shell-card-body strong {
+  font: 12px var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell-card-body small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell-status {
+  flex: none;
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: var(--color-surface-emphasis);
+  color: var(--color-text-muted);
+}
+.shell-status[data-status="running"] {
+  color: var(--color-status-success);
+  background: var(--color-status-success-soft);
+}
+.shell-status[data-status="failed"],
+.shell-status[data-status="timed_out"] {
+  color: var(--color-status-danger);
+}
+.shell-session-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shell-stop {
+  margin-left: auto;
+}
+.shell-session-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.shell-session-identity strong {
+  font: 12px var(--font-mono, monospace);
+  max-height: 4em;
+  overflow: auto;
+}
+.shell-session-identity span {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.shell-terminal-wrap {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-height: 260px;
+  flex: 1;
+}
+.shell-terminal {
+  background: var(--color-surface-control);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  padding: 0;
+  width: 100%;
+  flex: 1;
+  min-height: 240px;
+  overflow: hidden;
+}
+.shell-terminal .xterm {
+  height: 100%;
+}
+.shell-follow {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+}
+.shell-footnote {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0;
+}
+.shell-lifetime {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.shell-notice,
+.shell-exit {
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--color-text-muted);
+}
+.shell-error {
+  font-size: 12px;
+  color: var(--color-status-danger);
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.shell-empty {
+  margin: auto;
+  padding: 45px 12px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.shell-empty svg {
+  width: 28px;
+  height: 28px;
+  opacity: 0.65;
+}
+.shell-empty h4 {
+  color: var(--color-text-primary);
+  margin: 16px 0 8px;
+  font-weight: 550;
+}
+.shell-empty p {
+  max-width: 300px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.shell-stop-confirm {
+  padding: 12px;
+  border: 1px solid var(--color-status-warning);
+  border-radius: 7px;
+}
+.shell-stop-confirm p {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+.shell-stop-confirm button + button {
+  margin-left: 8px;
+}
+.shell-details {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.shell-details summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.shell-details p {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+}
+.shell-details code {
+  user-select: text;
+  font: 11px var(--font-mono, monospace);
+}

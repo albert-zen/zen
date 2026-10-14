@@ -96,7 +96,11 @@ export function applyNativeThreadEvent(
       ? { ...thread, name: event.name, updatedAt: nowSeconds }
       : thread;
   }
-  if (event.type === "thread_archived_updated") return thread;
+  if (
+    event.type === "thread_archived_updated" ||
+    event.type === "thread_deleted_updated"
+  )
+    return thread;
   if (event.type === "thread_settings_updated") {
     return event.threadId === thread.id
       ? {

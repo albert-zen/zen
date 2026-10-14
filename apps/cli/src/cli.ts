@@ -33,6 +33,7 @@ import { loadRemoteHostConfig } from "./remote-host-config.js";
 import { loadFleetHeadlessConfig } from "./fleet-headless-config.js";
 import { startFleetHeadlessHost } from "./fleet-headless-host.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
+import { formatApprovalPrompt } from "./approval-prompt.js";
 
 interface ParsedArguments {
   options: Map<string, string | true>;
@@ -347,21 +348,7 @@ async function chatCommand(args: ParsedArguments): Promise<void> {
     session.client.onServerRequest(
       "item/commandExecution/requestApproval",
       async (params) => {
-        const command =
-          isRecord(params) && typeof params.command === "string"
-            ? params.command
-            : "(unknown command)";
-        const toolName =
-          isRecord(params) && typeof params.toolName === "string"
-            ? params.toolName
-            : "tool";
-        const capability =
-          toolName === "run_code" ? "shell-equivalent run_code" : toolName;
-        const answer = (
-          await terminal.question(
-            `\nApprove stable ${capability} capability? This decision is remembered by tool name.\n${command}\n[y]es/[a]ll session/[n]o/[c]ancel: `,
-          )
-        )
+        const answer = (await terminal.question(formatApprovalPrompt(params)))
           .trim()
           .toLowerCase();
         const decision =

@@ -235,3 +235,109 @@ test(
     });
   },
 );
+
+for (const code of ["state_migration_blocked", "unknown_failure"]) {
+  test(
+    `child startup failure ${code} has a fixed safe explanation`,
+    { skip: process.platform === "win32" },
+    async (t) => {
+      const root = await mkdtemp(
+        path.join(os.tmpdir(), "imzenx-state-failure-"),
+      );
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const executable = path.join(root, "python-fixture");
+      const failure = JSON.stringify({
+        type: "failed",
+        code,
+        error: "/private/workspace secret-token",
+      });
+      await writeFile(
+        executable,
+        `#!${process.execPath}\nimport readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});lines.once('line',()=>process.stdout.write(${JSON.stringify(failure + "\n")}));lines.once('close',()=>process.exit(0));`,
+        { mode: 0o700 },
+      );
+      const runtime = new ImZenXRuntime({
+        dataDirectory: root,
+        isServerReady: () => true,
+        onServerStatus: () => () => {},
+        readConnection: async () => ({
+          url: "ws://127.0.0.1:4500",
+          authentication: { tokenFile: path.join(root, "token") },
+        }),
+      });
+      t.after(() => runtime.close());
+      const { sdk } = createFixturePluginHost({ pluginId: "imzenx" });
+      await runtime.start(sdk);
+      runtime.activate(Promise.resolve());
+      await waitFor(() => runtime.status().state === "unconfigured");
+      await assert.rejects(
+        invoke(runtime, "imzenx_configure", {
+          pythonExecutable: executable,
+          channelsConfigFile: path.join(root, "channels.json"),
+          cwd: root,
+        }),
+        code === "state_migration_blocked"
+          ? /original database and any backup are preserved/
+          : /Check Python and channel configuration/,
+      );
+      assert.equal(runtime.status().state, "failed");
+      assert.doesNotMatch(
+        JSON.stringify(runtime.status()),
+        /secret-token|private\/workspace/,
+      );
+    },
+  );
+}
+
+test(
+  "state preparation grants one bounded readiness extension",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "imzenx-state-preparation-"),
+    );
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const executable = path.join(root, "python-fixture");
+    const output =
+      [
+        { type: "preparing-state" },
+        { type: "preparing-state" },
+        { type: "ready" },
+      ]
+        .map(JSON.stringify)
+        .join("\n") + "\n";
+    await writeFile(
+      executable,
+      `#!${process.execPath}\nimport readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});lines.once('line',()=>process.stdout.write(${JSON.stringify(output)}));lines.once('close',()=>process.exit(0));`,
+      { mode: 0o700 },
+    );
+    const delays = [];
+    const originalTimeout = globalThis.setTimeout;
+    t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+      delays.push(delay);
+      return originalTimeout(callback, delay, ...args);
+    });
+    const runtime = new ImZenXRuntime({
+      dataDirectory: root,
+      isServerReady: () => true,
+      onServerStatus: () => () => {},
+      readConnection: async () => ({
+        url: "ws://127.0.0.1:4500",
+        authentication: { tokenFile: path.join(root, "token") },
+      }),
+    });
+    t.after(() => runtime.close());
+    const { sdk } = createFixturePluginHost({ pluginId: "imzenx" });
+    await runtime.start(sdk);
+    runtime.activate(Promise.resolve());
+    await waitFor(() => runtime.status().state === "unconfigured");
+    await invoke(runtime, "imzenx_configure", {
+      pythonExecutable: executable,
+      channelsConfigFile: path.join(root, "channels.json"),
+      cwd: root,
+    });
+    assert.equal(runtime.status().state, "connected");
+    assert.equal(delays.filter((delay) => delay === 15000).length, 1);
+    assert.equal(delays.filter((delay) => delay === 120000).length, 1);
+  },
+);

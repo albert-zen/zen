@@ -26,6 +26,7 @@ export function isAllowedZenXExternalUrl(raw: string): boolean {
 
 // Message links use the existing workspace file and Browser capabilities;
 // this classifier does not grant filesystem or navigation permissions.
+// Keep destinations intact: only the Markdown parser knows bare-link provenance.
 export function classifyMessageLink(
   raw: string,
 ):

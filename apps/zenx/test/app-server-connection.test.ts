@@ -172,7 +172,20 @@ test("startup rejects a Host that exits while its descriptor is publishing", asy
           process.kill(processId!, "SIGKILL");
         },
       }),
-      /startup was invalidated/u,
+      (error: unknown) => {
+        assert(error instanceof AggregateError);
+        assert(
+          error.errors.some((cause) =>
+            /startup was invalidated/u.test(String(cause)),
+          ),
+        );
+        assert(
+          error.errors.some((cause) =>
+            /Host cleanup is unconfirmed/u.test(String(cause)),
+          ),
+        );
+        return true;
+      },
     );
     assert.equal(killed, true);
     assert.equal(manager.processId, undefined);

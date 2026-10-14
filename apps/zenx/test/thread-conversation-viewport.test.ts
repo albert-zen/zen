@@ -277,3 +277,36 @@ test("events arriving during resume replay once; stale process and foreign Threa
     );
   });
 });
+
+test("deletion immediately clears a side conversation and fences late resume", async () => {
+  await harness(async (h) => {
+    await h.render(["left", "right"]);
+    await h.resolve("left");
+    await h.notify("right", 1, {
+      type: "thread_deleted_updated",
+      threadId: "right",
+      deleted: true,
+    });
+    await h.resolve("right");
+    assert.equal(
+      document.querySelectorAll(".thread-conversation-viewport").length,
+      1,
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /This conversation was deleted/u,
+    );
+    assert.equal(document.querySelector("#side-composer-right"), null);
+    await h.notify("left", 2, {
+      type: "thread_deleted_updated",
+      threadId: "left",
+      deleted: true,
+    });
+    assert.equal(
+      document.querySelectorAll(".thread-conversation-viewport").length,
+      0,
+    );
+    assert.equal(document.querySelector("#side-composer-left"), null);
+    assert.equal(h.sent.length, 0);
+  });
+});

@@ -1,3 +1,4 @@
+import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
@@ -22,6 +23,7 @@ import {
 } from "./compact-command.js";
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { SidebarResizer } from "./SidebarResizer.js";
 import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
 import { FleetComposerSurface } from "./FleetComposerSurface.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
@@ -558,6 +560,7 @@ export function App() {
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const messageLinkSequence = useRef(0);
   const [messageLinkRequest, setMessageLinkRequest] = useState<{
     id: number;
     threadId: string;
@@ -587,6 +590,13 @@ export function App() {
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
     NativeThreadSummary[]
   >([]);
+  const [deletedThreadSummaries, setDeletedThreadSummaries] = useState<
+    DeletedThreadSummary[]
+  >([]);
+  const [deletedThreadError, setDeletedThreadError] = useState<string | null>(
+    null,
+  );
+  const [deletedThreadLoading, setDeletedThreadLoading] = useState(true);
   const [threadListLoaded, setThreadListLoaded] = useState({
     active: false,
     archived: false,
@@ -787,6 +797,34 @@ export function App() {
     }
     setThreadListLoaded({ active: true, archived: true });
   };
+
+  const deletedLoadEpoch = useRef(0);
+  const loadDeletedThreads = async (showLoading = false) => {
+    const epoch = ++deletedLoadEpoch.current;
+    if (showLoading) setDeletedThreadLoading(true);
+    try {
+      const result = await window.zenx.protocol.request(
+        "zen/thread/deleted/list",
+        {},
+      );
+      if (deletedLoadEpoch.current !== epoch) return;
+      setDeletedThreadSummaries(result.data);
+      setDeletedThreadError(null);
+    } catch (error) {
+      if (deletedLoadEpoch.current !== epoch) return;
+      setDeletedThreadError(describeError(error));
+    } finally {
+      if (deletedLoadEpoch.current === epoch) setDeletedThreadLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (
+      page === "settings" &&
+      settingsTab === "archived" &&
+      serverStatus.type === "ready"
+    )
+      void loadDeletedThreads(true);
+  }, [page, settingsTab, serverStatus.type]);
 
   const loadProjects = async () => {
     const epoch = ++projectLoadEpoch.current;
@@ -1090,6 +1128,26 @@ export function App() {
         ) {
           void loadThreadSummaries();
           void loadProjects();
+        }
+        if (method === "zen/thread/event") {
+          const lifecycle = (
+            params as ServerNotificationParams["zen/thread/event"]
+          ).event;
+          if (lifecycle.type === "thread_deleted_updated")
+            void loadDeletedThreads();
+          if (
+            lifecycle.type === "thread_deleted_updated" &&
+            lifecycle.deleted
+          ) {
+            threadProjectionCacheRef.current.delete(lifecycle.threadId);
+            setThreadSummaries((current) =>
+              current.filter((entry) => entry.threadId !== lifecycle.threadId),
+            );
+            setArchivedThreadSummaries((current) =>
+              current.filter((entry) => entry.threadId !== lifecycle.threadId),
+            );
+            clearSelectedThreadForArchive(lifecycle.threadId);
+          }
         }
         const pendingResume = pendingResumeProjectionRef.current;
         const notification = {
@@ -2303,6 +2361,40 @@ export function App() {
     await loadProjects();
   };
 
+  const deleteArchivedThread = async (summary: NativeThreadSummary) => {
+    if (summary.lastItemId === undefined)
+      throw new Error(i18n.t("settings:settingsView.unavailableJournal"));
+    await window.zenx.protocol.request("zen/thread/delete", {
+      threadId: summary.threadId,
+      expectedLastItemId: summary.lastItemId,
+    });
+    threadProjectionCacheRef.current.delete(summary.threadId);
+    setArchivedThreadSummaries((current) =>
+      current.filter((entry) => entry.threadId !== summary.threadId),
+    );
+    clearSelectedThreadForArchive(summary.threadId);
+    await Promise.all([
+      loadThreadSummaries(),
+      loadDeletedThreads(),
+      loadProjects(),
+    ]);
+  };
+
+  const restoreDeletedThread = async (summary: DeletedThreadSummary) => {
+    await window.zenx.protocol.request("zen/thread/restore", {
+      threadId: summary.threadId,
+      deletionItemId: summary.deletionItemId,
+    });
+    setDeletedThreadSummaries((current) =>
+      current.filter((entry) => entry.threadId !== summary.threadId),
+    );
+    await Promise.all([
+      loadThreadSummaries(),
+      loadDeletedThreads(),
+      loadProjects(),
+    ]);
+  };
+
   const toggleSidebarCollapsed = () => {
     setSidebarCollapsed((current) => {
       const next = !current;
@@ -2442,11 +2534,11 @@ export function App() {
         void resumeThread(id)
           .then(() => {
             if (selectedThreadIdRef.current !== id) return;
-            setMessageLinkRequest((previous) => ({
+            setMessageLinkRequest({
               ...target,
-              id: (previous?.id ?? 0) + 1,
+              id: ++messageLinkSequence.current,
               threadId: id,
-            }));
+            });
             setBrowserPanels((current) => ({
               ...current,
               [id]: true,
@@ -2682,6 +2774,10 @@ export function App() {
         threadLoading={!threadListLoaded.active}
         threads={activeSummaries}
       />
+      <SidebarResizer
+        collapsed={sidebarCollapsed}
+        onCollapse={toggleSidebarCollapsed}
+      />
 
       {projectError !== null ||
       requestError !== null ||
@@ -2742,7 +2838,15 @@ export function App() {
             archivedError={threadListErrors.archived}
             archivedLoading={!threadListLoaded.archived}
             archivedThreads={archivedSummaries}
-            onRetryArchived={() => void loadThreadSummaries(true)}
+            deletedThreads={deletedThreadSummaries}
+            deletedError={deletedThreadError}
+            deletedLoading={deletedThreadLoading}
+            onDelete={deleteArchivedThread}
+            onRestoreDeleted={restoreDeletedThread}
+            onRetryArchived={() => {
+              void loadThreadSummaries(true);
+              void loadDeletedThreads(true);
+            }}
             onTabChange={setSettingsTab}
             onUnarchive={performThreadLifecycle}
             onOpenSidebar={openSidebar}
@@ -2795,11 +2899,11 @@ export function App() {
                 ) : null
               }
               onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest((previous) => ({
+                setMessageLinkRequest({
                   ...target,
-                  id: (previous?.id ?? 0) + 1,
+                  id: ++messageLinkSequence.current,
                   threadId,
-                }));
+                });
                 setBrowserPanels((current) => ({
                   ...current,
                   [threadId]: true,
@@ -3026,6 +3130,11 @@ export function App() {
                 messageLinkRequest?.threadId === threadDetail.id
                   ? messageLinkRequest
                   : null
+              }
+              onMessageLinkRequestHandled={(id) =>
+                setMessageLinkRequest((current) =>
+                  current?.id === id ? null : current,
+                )
               }
               navigate={openPage}
               onWidthChange={setWorkspacePanelWidth}

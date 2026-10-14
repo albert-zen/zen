@@ -18,6 +18,8 @@ export interface CurrentMetadata {
 
 export interface ThreadSummary {
   threadId: string;
+  /** Canonical delete fence; absent only on legacy or unavailable projections. */
+  lastItemId?: string;
   parentThreadId?: string;
   currentMetadata: CurrentMetadata;
   name?: string;
@@ -34,6 +36,7 @@ export interface ThreadSummary {
 
 export interface UnavailableThreadSummary {
   threadId: string;
+  lastItemId?: string;
   parentThreadId?: string;
   name?: string;
   archived: boolean;
@@ -139,6 +142,9 @@ export function isNativeThreadSummary(
       (typeof value.parentThreadId !== "string" ||
         value.parentThreadId.length === 0 ||
         value.parentThreadId === value.threadId)) ||
+    (value.lastItemId !== undefined &&
+      (typeof value.lastItemId !== "string" ||
+        value.lastItemId.length === 0)) ||
     typeof value.archived !== "boolean" ||
     (value.name !== undefined && typeof value.name !== "string") ||
     typeof value.preview !== "string"
