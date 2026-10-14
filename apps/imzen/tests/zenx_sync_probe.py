@@ -34,6 +34,9 @@ async def main():
                 await asyncio.sleep(0.01)
         print(json.dumps({"event": "synchronized", "messages": sent_texts(channel)}), flush=True)
         await channel.emit_message(inbound("im-new-command", "/new"))
+        await channel.emit_message(
+            inbound("im-permission-command", "/permission approval-required")
+        )
         await channel.emit_message(inbound("im-new-input", "im-new-thread"))
         print(json.dumps({"event": "created-from-im"}), flush=True)
         await asyncio.to_thread(sys.stdin.read)

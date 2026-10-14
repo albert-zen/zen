@@ -32,6 +32,10 @@ test("shared browser pages are peer workspace tabs and the type picker unmounts 
     canGoBack: false,
     canGoForward: false,
     sharedWithAgent: true,
+    control: "agent",
+    agentActionsInFlight: 0,
+    agentActionOutcomeUnknown: false,
+    requiresFreshObservation: false,
   });
   let pages = [page("1")];
   let changed: (value: {

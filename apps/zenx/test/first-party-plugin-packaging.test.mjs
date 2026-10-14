@@ -1,3 +1,7 @@
+import {
+  concurrentBrowserManifest,
+  multiBrowserManifest,
+} from "../src/main/capabilities/browser-backend-registry.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
@@ -33,12 +37,14 @@ const expected = [
   ["@zenx/fleet-plugin", "zenx-fleet-plugin-1.0.0.tgz"],
   ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.2.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.4.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.4.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.4.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.6.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-multi-1.0.8.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-concurrent-1.0.7.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.5.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.6.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.2.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.1.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.2.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.3.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.7.tgz"],
   ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.0.tgz"],
@@ -46,16 +52,24 @@ const expected = [
 
 const providerVariants = new Map([
   [
-    "zenx-browser-plugin-electron-1.0.4.tgz",
-    ["browser", "1.0.4", "electron-dedicated-browser", 10],
+    "zenx-browser-plugin-multi-1.0.8.tgz",
+    ["browser", "1.0.8", "multi-browser", 25],
   ],
   [
-    "zenx-browser-plugin-playwright-1.0.4.tgz",
-    ["browser", "1.0.4", "playwright-cli", 10],
+    "zenx-browser-plugin-concurrent-1.0.7.tgz",
+    ["browser", "1.0.7", "concurrent-browser", 24],
   ],
   [
-    "zenx-browser-plugin-user-session-1.0.4.tgz",
-    ["browser", "1.0.4", "user-browser-cdp", 10],
+    "zenx-browser-plugin-electron-1.0.6.tgz",
+    ["browser", "1.0.6", "electron-dedicated-browser", 12],
+  ],
+  [
+    "zenx-browser-plugin-playwright-1.0.5.tgz",
+    ["browser", "1.0.5", "playwright-cli", 10],
+  ],
+  [
+    "zenx-browser-plugin-user-session-1.0.6.tgz",
+    ["browser", "1.0.6", "user-browser-cdp", 12],
   ],
   [
     "zenx-computer-plugin-macos-1.0.2.tgz",
@@ -66,8 +80,8 @@ const providerVariants = new Map([
     ["computer", "1.0.1", "peekaboo-cli", 7],
   ],
   [
-    "zenx-computer-plugin-win32-1.1.2.tgz",
-    ["computer", "1.1.2", "microsoft-winapp-cli", 5],
+    "zenx-computer-plugin-win32-1.1.3.tgz",
+    ["computer", "1.1.3", "microsoft-winapp-cli", 5],
   ],
 ]);
 
@@ -112,6 +126,14 @@ test("all packaged Browser and Computer manifests match their runtime observatio
   assert.equal(peekaboo.manifest.provider.id, "peekaboo-cli");
   for (const [relative, runtime] of [
     ["zenx-browser-plugin/zenx.plugin.json", browserCapabilityManifest],
+    [
+      "zenx-browser-plugin/variants/multi.zenx.plugin.json",
+      multiBrowserManifest(),
+    ],
+    [
+      "zenx-browser-plugin/variants/concurrent.zenx.plugin.json",
+      concurrentBrowserManifest(),
+    ],
     [
       "zenx-browser-plugin/variants/playwright.zenx.plugin.json",
       playwright.manifest,
@@ -316,6 +338,8 @@ test("Host provider selection maps every real manifest variant deterministically
   assert.deepEqual(
     [
       firstPartyProviderTarball("browser", "electron-dedicated-browser"),
+      firstPartyProviderTarball("browser", "concurrent-browser"),
+      firstPartyProviderTarball("browser", "multi-browser"),
       firstPartyProviderTarball("browser", "playwright-cli"),
       firstPartyProviderTarball("browser", "user-browser-cdp"),
       firstPartyProviderTarball("computer", "macos-desktop"),
@@ -323,12 +347,14 @@ test("Host provider selection maps every real manifest variant deterministically
       firstPartyProviderTarball("computer", "microsoft-winapp-cli"),
     ],
     [
-      "zenx-browser-plugin-electron-1.0.4.tgz",
-      "zenx-browser-plugin-playwright-1.0.4.tgz",
-      "zenx-browser-plugin-user-session-1.0.4.tgz",
+      "zenx-browser-plugin-electron-1.0.6.tgz",
+      "zenx-browser-plugin-concurrent-1.0.7.tgz",
+      "zenx-browser-plugin-multi-1.0.8.tgz",
+      "zenx-browser-plugin-playwright-1.0.5.tgz",
+      "zenx-browser-plugin-user-session-1.0.6.tgz",
       "zenx-computer-plugin-macos-1.0.2.tgz",
       "zenx-computer-plugin-peekaboo-1.0.1.tgz",
-      "zenx-computer-plugin-win32-1.1.2.tgz",
+      "zenx-computer-plugin-win32-1.1.3.tgz",
     ],
   );
   assert.throws(

@@ -22,6 +22,8 @@ export type ItemType =
   | "thread_metadata"
   | "thread_forked"
   | "thread_instruction"
+  | "thread_deleted"
+  | "thread_restored"
   | "thread_configuration_changed"
   | "context_compaction"
   | "turn_started"
@@ -45,6 +47,8 @@ const CANONICAL_ITEM_TYPES = {
   thread_metadata: true,
   thread_forked: true,
   thread_instruction: true,
+  thread_deleted: true,
+  thread_restored: true,
   thread_configuration_changed: true,
   context_compaction: true,
   turn_started: true,
@@ -114,6 +118,16 @@ export interface ThreadForkedItem extends ItemBase {
 export interface ThreadInstructionItem extends ItemBase {
   type: "thread_instruction";
   text: string;
+}
+
+/** Recoverable lifecycle controls; never model input or a purge instruction. */
+export interface ThreadDeletedItem extends ItemBase {
+  type: "thread_deleted";
+}
+
+export interface ThreadRestoredItem extends ItemBase {
+  type: "thread_restored";
+  deletionItemId: string;
 }
 
 /** Host-origin wakeup input; never a human message or fabricated agent output. */
@@ -427,6 +441,8 @@ export type CanonicalItem =
   | ThreadMetadataItem
   | ThreadForkedItem
   | ThreadInstructionItem
+  | ThreadDeletedItem
+  | ThreadRestoredItem
   | ThreadConfigurationChangedItem
   | ContextCompactionItem
   | TurnStartedItem
@@ -612,6 +628,16 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         item.workspace,
         ["same-directory"],
         "thread_forked.workspace",
+      );
+      break;
+    case "thread_deleted":
+      requireNoTurnId(item);
+      break;
+    case "thread_restored":
+      requireNoTurnId(item);
+      requireNonEmptyString(
+        item.deletionItemId,
+        "thread_restored.deletionItemId",
       );
       break;
     case "host_message":

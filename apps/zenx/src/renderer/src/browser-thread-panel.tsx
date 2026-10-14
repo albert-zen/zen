@@ -254,6 +254,13 @@ export function BrowserThreadPanel({
           ) : null}
           {targets.map((target) => (
             <option key={target.id} value={target.id}>
+              {target.backendId === "workspace"
+                ? i18n.t("panels:workspaceBrowserTarget")
+                : target.backendId === "connected"
+                  ? target.connectionLabel
+                    ? `${target.connectionLabel} · `
+                    : i18n.t("panels:connectedBrowserTarget")
+                  : ""}
               {target.title || target.url}
             </option>
           ))}

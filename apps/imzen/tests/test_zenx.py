@@ -264,3 +264,87 @@ async def test_host_private_channel_map_enters_existing_gateway_composition_with
         assert channel.sent == []
     finally:
         await state.close()
+
+
+@pytest.mark.asyncio
+async def test_pick_accepts_a_unique_displayed_title_and_rejects_ambiguous_titles(tmp_path):
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    await client.start_thread(cwd=str(tmp_path))
+    client.threads["thread-1"]["name"] = "Build editor"
+    client.threads["thread-2"]["name"] = "Build browser"
+    gateway, state, channel = compose_zenx(tmp_path, client)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("list", "/threads"))
+        await channel.emit_message(inbound("ambiguous", "/pick Build"))
+        assert "ambiguous" in sent_texts(channel)[-1]
+        await channel.emit_message(inbound("pick", '/pick "Build editor"'))
+        await channel.emit_message(inbound("input", "continue"))
+        assert client.started_turns[-1][0] == "thread-1"
+        await channel.emit_message(inbound("new", "/new"))
+        await channel.emit_message(inbound("stale", "/pick 1"))
+        assert "Use /threads first" in sent_texts(channel)[-1]
+    finally:
+        await gateway.stop()
+
+
+async def test_oversized_thread_refresh_keeps_the_previously_displayed_number(tmp_path):
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    client.threads["thread-1"]["name"] = "Previously displayed"
+    gateway, state, channel = compose_zenx(tmp_path, client)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("visible", "/threads"))
+        for number in range(200):
+            client.threads[f"hidden-{number}"] = {
+                "id": f"hidden-{number}",
+                "cwd": str(tmp_path),
+                "name": f"Hidden {number} " + "normal title " * 10,
+                "updatedAt": 500 - number,
+                "status": {"type": "idle"},
+            }
+        # Put the new authoritative order ahead of the formerly displayed item.
+        client.threads = dict(reversed(client.threads.items()))
+        await channel.emit_message(inbound("too-large", "/threads"))
+        assert "Error" in sent_texts(channel)[-1]
+        await channel.emit_message(inbound("pick-visible", "/pick 1"))
+        binding = await gateway.actions(
+            inbound("unused", "").conversation_ref, actor="owner"
+        ).get_binding()
+        assert binding.thread_ref.thread_id == "thread-1"
+    finally:
+        await gateway.stop()
+        await state.close()
+
+
+@pytest.mark.parametrize("prior_list", [False, True])
+async def test_pick_query_without_a_current_view_does_not_publish_hidden_numbers(
+    tmp_path, monkeypatch, prior_list
+):
+    from types import SimpleNamespace
+
+    import imzen.controller as controller
+
+    client = FakeAppServer()
+    await client.start_thread(cwd=str(tmp_path))
+    client.threads["thread-1"]["name"] = "Design review"
+    gateway, state, channel = compose_zenx(tmp_path, client)
+    await gateway.start()
+    try:
+        if prior_list:
+            await channel.emit_message(inbound("old-list", "/threads"))
+            now = controller.time.monotonic()
+            monkeypatch.setattr(controller, "time", SimpleNamespace(monotonic=lambda: now + 901))
+        await channel.emit_message(inbound("query-pick", "/pick Design"))
+        binding = await gateway.actions(
+            inbound("unused", "").conversation_ref, actor="owner"
+        ).get_binding()
+        assert binding.thread_ref is not None
+        assert binding.thread_ref.thread_id == "thread-1"
+        await channel.emit_message(inbound("unseen-number", "/pick 1"))
+        assert "Use /threads first" in sent_texts(channel)[-1]
+    finally:
+        await gateway.stop()
+        await state.close()
