@@ -172,6 +172,8 @@ const CanonicalMessageForkContext = createContext<{
 
 interface ThreadViewProps {
   localModelDebug?: boolean;
+  debugMode?: boolean;
+  onExitDebug?(): void;
   composerId?: string;
   composerSendMode?: ComposerSendMode;
   onComposerSendModeChange?(mode: ComposerSendMode): Promise<void>;
@@ -241,9 +243,7 @@ interface ThreadViewProps {
 }
 
 export function ThreadView(props: ThreadViewProps) {
-  const { t } = useTranslation("shell");
-  const [debugThread, setDebugThread] = useState<string | null>(null);
-  const debugging = props.thread !== null && debugThread === props.thread.id;
+  const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
   debuggingRef.current = debugging;
   const readingState = useThreadReadingState(props.thread?.id);
@@ -302,33 +302,13 @@ export function ThreadView(props: ThreadViewProps) {
       <CanonicalMessageForkContext.Provider value={forkContext}>
         <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
           <div className="thread-conversation-surface">
-            {items !== undefined && props.thread ? (
-              <nav
-                className="thread-view-switch"
-                aria-label={t("debugViewLabel")}
-              >
-                <button
-                  type="button"
-                  aria-pressed={!debugging}
-                  onClick={() => setDebugThread(null)}
-                >
-                  {t("debugConversation")}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={debugging}
-                  onClick={() => setDebugThread(props.thread!.id)}
-                >
-                  {t("debugView")}
-                </button>
-              </nav>
-            ) : null}
             {debugging && props.thread && items !== undefined ? (
               <ThreadDebugger
                 key={props.thread.id}
                 thread={props.thread}
                 items={items}
                 localModelDebug={props.localModelDebug}
+                onExit={props.onExitDebug}
                 onOpenMessageLink={props.onOpenMessageLink}
                 onReadAttachment={props.onReadAttachment}
               />

@@ -127,6 +127,12 @@ interface SidebarProps {
   threads: readonly NativeThreadSummary[];
 }
 
+/** Transient navigation intent, never a Thread setting or Host capture switch. */
+export const ThreadDebugMenuContext = createContext<{
+  threadId: string | null;
+  toggle(threadId: string): void;
+} | null>(null);
+
 export function Sidebar({
   collapsed = false,
   unreadThreadIds = new Set<string>(),
@@ -1890,6 +1896,7 @@ function ThreadRow({
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const information = useContext(SidebarSettingsContext);
+  const debugMenu = useContext(ThreadDebugMenuContext);
   const detailsRef = useRef<HTMLDivElement>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2388,6 +2395,15 @@ function ThreadRow({
         </SidebarMenuPopover>
       ) : null}
       <ThreadItemMenu
+        debugging={debugMenu?.threadId === thread.threadId}
+        onToggleDebug={
+          debugMenu
+            ? () => {
+                closeMenu();
+                debugMenu.toggle(thread.threadId);
+              }
+            : undefined
+        }
         details={detailsContents}
         archived={thread.archived}
         busyAction={busyAction}
@@ -2552,6 +2568,8 @@ function ThreadInformation({
 }
 
 export function ThreadItemMenu({
+  debugging = false,
+  onToggleDebug,
   details,
   archived,
   busyAction,
@@ -2575,6 +2593,8 @@ export function ThreadItemMenu({
   onRename,
   onUnarchive,
 }: {
+  debugging?: boolean;
+  onToggleDebug?(): void;
   details?: ReactNode;
   archived: boolean;
   busyAction:
@@ -2733,6 +2753,23 @@ export function ThreadItemMenu({
         </button>
       ) : (
         <>
+          {onToggleDebug ? (
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={debugging}
+              tabIndex={-1}
+              data-thread-action="debug"
+              disabled={busy}
+              onClick={onToggleDebug}
+            >
+              <Icon name="terminal" />
+              {i18n.t("shell:debugMode")}
+              <span className="thread-debug-menu-state" aria-hidden="true">
+                {debugging ? "✓" : ""}
+              </span>
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitem"
@@ -2933,7 +2970,7 @@ function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
   if (container === null) return [];
   return Array.from(
     container.querySelectorAll<HTMLButtonElement>(
-      'button[role="menuitem"]:not(:disabled)',
+      'button[role="menuitem"]:not(:disabled), button[role="menuitemcheckbox"]:not(:disabled)',
     ),
   );
 }

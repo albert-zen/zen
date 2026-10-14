@@ -8,8 +8,8 @@ export const en = {
   debugStructuredInJson:
     "Structured tool result is available in Exact Item JSON.",
 
-  debugViewLabel: "Conversation view",
-  debugConversation: "Conversation",
+  debugMode: "Debug mode",
+  debugExit: "Exit debug mode",
   debugView: "Debug",
   debugItems: "Items",
   debugRequests: "Actual requests",
@@ -823,8 +823,8 @@ export const zhCN = {
   debugShowFullContent: "展开全文（预览限 8,192 字符）",
   debugStructuredInJson: "结构化工具结果可在完整 Item JSON 中查看。",
 
-  debugViewLabel: "会话视图",
-  debugConversation: "对话",
+  debugMode: "调试模式",
+  debugExit: "退出调试模式",
   debugView: "调试",
   debugItems: "Items",
   debugRequests: "实际请求",

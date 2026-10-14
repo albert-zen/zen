@@ -11259,6 +11259,9 @@ button:disabled {
 }
 
 /* ItemList debugger shares the Agent viewport; each view owns its own scroller. */
+.thread-conversation-surface > .thread-view {
+  flex: 1;
+}
 .thread-conversation-surface {
   display: flex;
   flex-direction: column;
@@ -11267,7 +11270,6 @@ button:disabled {
   min-height: 0;
   overflow: hidden;
 }
-.thread-view-switch,
 .thread-debug-tabs {
   display: flex;
   gap: 4px;
@@ -11276,7 +11278,6 @@ button:disabled {
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }
-.thread-view-switch button,
 .thread-debug-tabs button {
   background: transparent;
   border: 0;
@@ -11286,7 +11287,6 @@ button:disabled {
   font-size: 12px;
   cursor: pointer;
 }
-.thread-view-switch button[aria-pressed="true"],
 .thread-debug-tabs button[aria-pressed="true"] {
   color: var(--color-text-primary);
   background: var(--color-surface-active);
@@ -11395,7 +11395,6 @@ button:disabled {
   .thread-debug-items {
     padding: 0 14px 18px;
   }
-  .thread-view-switch,
   .thread-debug-tabs {
     padding-left: 10px;
     padding-right: 10px;
@@ -11483,4 +11482,11 @@ button:disabled {
 .trigger-card[data-source-trigger="selected"] {
   outline: 2px solid var(--color-text-secondary);
   outline-offset: 2px;
+}
+
+.thread-debug-exit {
+  margin-left: auto;
+}
+.thread-debug-menu-state {
+  margin-left: auto;
 }
