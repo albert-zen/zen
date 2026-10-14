@@ -84,7 +84,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-win32-1.1.3.tgz",
+    "zenx-computer-plugin-win32-1.1.5.tgz",
     "variants/win32.zenx.plugin.json",
   ),
   plugin("@zenx/rooms-plugin", "zenx-rooms-plugin", ZENX_ROOMS_TARBALL),

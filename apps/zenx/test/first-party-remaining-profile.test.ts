@@ -1025,7 +1025,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 resources,
                 "plugins",
                 platform === "win32"
-                  ? "zenx-computer-plugin-win32-1.1.3.tgz"
+                  ? "zenx-computer-plugin-win32-1.1.5.tgz"
                   : "zenx-computer-plugin-macos-1.0.2.tgz",
               ),
               { pluginId: "computer", packageName: "@zenx/computer-plugin" },

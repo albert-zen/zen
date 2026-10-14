@@ -142,6 +142,7 @@ export interface ZenXComputerBackend {
     target: ComputerTarget,
     control: ComputerControlSelector,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
@@ -152,6 +153,7 @@ export interface ZenXComputerBackend {
     control: ComputerControlSelector,
     value: string,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
@@ -447,6 +449,21 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       invocation.threadId ?? null,
       computerTargetKey(target),
     ]);
+    // Decide from the actual selected service before consuming observations or
+    // dispatching either semantic mutation; stale profile metadata cannot grant
+    // foreground effects, and targeted UIA is not necessarily focus-isolated.
+    const foregroundRequired =
+      (toolName === "computer_press" || toolName === "computer_set_value") &&
+      this.manifest.tools.some(
+        (tool) =>
+          tool.name === toolName &&
+          tool.interactionMode === "foreground_required",
+      );
+    let signal = invocation.signal;
+    if (foregroundRequired) {
+      this.#assertForegroundControlAllowed(toolName);
+      signal = AbortSignal.any([signal, this.#foregroundConsent.signal]);
+    }
     let result: unknown;
     switch (toolName) {
       case "computer_inspect": {
@@ -492,17 +509,28 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       case "computer_press": {
         requireScopedWindow(target, "computer_press");
         const control = requiredControl(invocation.arguments);
-        const native = await this.#actionControl(
-          key,
-          control,
-          invocation.threadId !== undefined,
-          invocation.signal,
-        );
-        this.#presentation.invalidate(key);
-        result = {
-          ...(await this.#backend.press(target, native, invocation.signal)),
-          control,
+        const execute = async (
+          signal: AbortSignal,
+          onStopping?: () => void,
+        ) => {
+          if (foregroundRequired)
+            this.#assertForegroundControlAllowed(toolName);
+          const native = await this.#actionControl(
+            key,
+            control,
+            invocation.threadId !== undefined,
+            signal,
+          );
+          this.#presentation.invalidate(key);
+          return {
+            ...(await this.#backend.press(target, native, signal, onStopping)),
+            control,
+            ...(foregroundRequired ? { impact: "foreground_takeover" } : {}),
+          };
         };
+        result = foregroundRequired
+          ? await this.#withForegroundActivity(invocation, signal, execute)
+          : await execute(signal);
         break;
       }
       case "computer_set_value": {
@@ -512,22 +540,34 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           throw new Error("computer_set_value is limited to 4000 characters");
         }
         const control = requiredControl(invocation.arguments);
-        const native = await this.#actionControl(
-          key,
-          control,
-          invocation.threadId !== undefined,
-          invocation.signal,
-        );
-        this.#presentation.invalidate(key);
-        result = {
-          ...(await this.#backend.setValue(
-            target,
-            native,
-            value,
-            invocation.signal,
-          )),
-          control,
+        const execute = async (
+          signal: AbortSignal,
+          onStopping?: () => void,
+        ) => {
+          if (foregroundRequired)
+            this.#assertForegroundControlAllowed(toolName);
+          const native = await this.#actionControl(
+            key,
+            control,
+            invocation.threadId !== undefined,
+            signal,
+          );
+          this.#presentation.invalidate(key);
+          return {
+            ...(await this.#backend.setValue(
+              target,
+              native,
+              value,
+              signal,
+              onStopping,
+            )),
+            control,
+            ...(foregroundRequired ? { impact: "foreground_takeover" } : {}),
+          };
         };
+        result = foregroundRequired
+          ? await this.#withForegroundActivity(invocation, signal, execute)
+          : await execute(signal);
         break;
       }
       case "computer_screenshot":
@@ -663,21 +703,24 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     }
   }
 
-  async #withForegroundActivity(
+  async #withForegroundActivity<T>(
     invocation: ToolInvocation,
     signal: AbortSignal,
-    operation: (signal: AbortSignal, onStopping?: () => void) => Promise<void>,
-  ): Promise<void> {
+    operation: (signal: AbortSignal, onStopping?: () => void) => Promise<T>,
+  ): Promise<T> {
     const execute = async (signal: AbortSignal, onStopping?: () => void) => {
       await foregroundTakeoverNotice(signal);
       signal.throwIfAborted();
-      await operation(signal, onStopping);
+      return await operation(signal, onStopping);
     };
     if (this.#foregroundActivity) {
-      await this.#foregroundActivity.run({ ...invocation, signal }, execute);
+      return await this.#foregroundActivity.run(
+        { ...invocation, signal },
+        execute,
+      );
     } else {
       // Non-desktop provider tests and explicitly owned native smoke fixtures.
-      await execute(signal);
+      return await execute(signal);
     }
   }
 

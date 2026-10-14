@@ -37,7 +37,7 @@ const timeout = setTimeout(() => {
   controller.abort(
     new DOMException("Windows adapter smoke timed out", "AbortError"),
   );
-}, 60_000);
+}, 120_000);
 timeout.unref();
 
 const winAppRunner = new SpawnWinAppCliRunner();
@@ -132,7 +132,20 @@ try {
     throw new Error("ZenX adapter found no editable fixture control");
   }
 
-  const probeText = `ZenX WinApp adapter smoke ${new Date().toISOString()}`;
+  const probeText = `ZenX WinApp 中文 😀 "quoted" \\ ${new Date().toISOString()}`;
+  await assert.rejects(
+    execute(
+      computer,
+      "computer_set_value",
+      { target, control: editor.selector, value: probeText },
+      controller.signal,
+    ),
+    /foreground_required.*enable Foreground computer control/u,
+    "Default strict mode must refuse before invoking WinApp or consuming the observation",
+  );
+  // Explicit authorization belongs only to this disposable smoke fixture.
+  // Product settings are never modified or auto-enabled by this test.
+  computer.setForegroundControlAllowed(true);
   await stage("set-value");
   traceSetValue = true;
   const setResult = await execute<{
@@ -146,6 +159,7 @@ try {
   ).finally(() => {
     traceSetValue = false;
   });
+  computer.setForegroundControlAllowed(false);
   if (setResult.characterCount !== probeText.length) {
     throw new Error(
       "ZenX adapter did not confirm the complete set-value input",
@@ -181,6 +195,109 @@ try {
     "UIA targeting epoch ended; focus isolation is not certified: " +
       (await readFile(path.join(probeDirectory, "uia-result.json"), "utf8")),
   );
+  // Direct CUIAutomation8 isolates client AutoSetFocus from WinApp's wrapper.
+  // These are fixture-only experiments, not a production background fallback.
+  const fixture = JSON.parse(
+    (
+      await readFile(path.join(probeDirectory, "semantic-fixture.json"), "utf8")
+    ).replace(/^\uFEFF/u, ""),
+  );
+  let invokeCount = 0;
+  for (const action of ["set-value", "invoke"] as const) {
+    for (const suppressAutoFocus of [false, true]) {
+      const epoch = `direct-${suppressAutoFocus ? "no-focus" : "default"}-${action === "set-value" ? "value" : "invoke"}`;
+      await stage("semantic-setup");
+      await writeFile(path.join(probeDirectory, "semantic-setup"), epoch);
+      await waitForFixture(
+        path.join(probeDirectory, `${epoch}-ready`),
+        controller.signal,
+      );
+      const result = await runBoundedProcess(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-MTA",
+          "-File",
+          path.resolve("scripts/windows-semantic-focus-probe.ps1"),
+        ],
+        {
+          timeoutMs: 15_000,
+          signal: controller.signal,
+          stdin: JSON.stringify({
+            fixture,
+            action,
+            suppressAutoFocus,
+            value: `${probeText} ${epoch}`,
+            phasePath: path.join(probeDirectory, "phase"),
+          }),
+        },
+      );
+      const { observation: report, rejections } = JSON.parse(
+        result.stdout.replace(/^\uFEFF/u, ""),
+      );
+      if (suppressAutoFocus && action === "set-value") {
+        assert.deepEqual(rejections, [
+          "wrong-process",
+          "same-pid-sibling",
+          "stale-hwnd",
+          "unsupported-pattern",
+        ]);
+      }
+      assert.equal(
+        report.defaultAutoSetFocus,
+        true,
+        "record the default instead of assuming it",
+      );
+      assert.equal(report.configuredAutoSetFocus, !suppressAutoFocus);
+      assert.equal(report.guardUnchanged, true);
+      if (action === "set-value") assert.equal(report.completeValue, true);
+      else {
+        invokeCount++;
+        const deadline = Date.now() + 3000;
+        while (
+          Number(
+            await readFile(path.join(probeDirectory, "invoke-count"), "utf8"),
+          ) !== invokeCount &&
+          Date.now() < deadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        assert.equal(
+          Number(
+            await readFile(path.join(probeDirectory, "invoke-count"), "utf8"),
+          ),
+          invokeCount,
+          "Invoke must have its native fixture effect",
+        );
+      }
+      // Include post-call time, not just the synchronous return boundary.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await writeFile(path.join(probeDirectory, `${epoch}-stop`), "stop");
+      await waitForFixture(
+        path.join(probeDirectory, `${epoch}-result.json`),
+        controller.signal,
+      );
+      const metrics = JSON.parse(
+        await readFile(
+          path.join(probeDirectory, `${epoch}-result.json`),
+          "utf8",
+        ),
+      );
+      assert.ok(metrics.samples >= 2);
+      assert.equal(metrics.foregroundTransitions[0]?.foreground, "guard");
+      assert.equal(metrics.pointerChanges, 0);
+      assert.equal(metrics.restored, 0);
+      console.log(
+        `Direct UIA ${epoch}: ` +
+          JSON.stringify({ ...report, rejections, metrics }),
+      );
+      // A zero-focus result proves only this fixture/provider combination.
+      // Record contrary evidence rather than restoring the old foreground.
+    }
+  }
+
   await stage("capture-setup");
   await writeFile(path.join(probeDirectory, "capture-setup"), "setup");
   await waitForFixture(
