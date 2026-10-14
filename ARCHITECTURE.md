@@ -51,6 +51,7 @@
 - **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取完整 canonical snapshot；Host 用 Item/Turn 边界派生分页，并在所有模型可见预览与续读前递归投影可公开的 Item：标记 opaque 的结构只保留定位字段与公开 summary，public reasoning 与工具原文字符串不改写，journal 与可信原生读取/恢复仍完整。发送幂等键和 Turn fence 从可信工具调用身份及当前快照推导；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
 - **Trigger Thread Watch** — 既有 Trigger 配置固定来源 device/workspace/Thread 与目标 Thread，可监听一次或后续各 Turn 的终态；原生远端订阅由定义版本、生命周期和订阅身份围栏保护，canonical 快照与实时事件通过命名空间去重写入既有历史，一次性监听在事件接纳时停用；sourceError 仅为易失投影，不增加 journal 或补发无关历史事件。
 - **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
+- **Model Sample 有界重放** — 模型采样在任何工具副作用产生前完成；适配器标记 retryable 的流式协议/传输失败由 AgentRuntime 在同一 Turn 内以有界次数与抖动退避重放，失败尝试的部分输出以 incomplete Item 留痕且不进入模型投影，重试耗尽或不可重试的失败仍明确落 failure Item（含已重试次数与诊断指针，全文留在 journal，模型投影只保留可操作的首行）。HTTP 准入失败仍由请求层处理；首个采样最多四次准入请求，后续每个采样仅一次请求（每轮采样含重试的默认总上限六次 HTTP 请求），永久 Provider 错误、明确 terminal 原因、取消与 journal 失败不重试。
 - **ZenX 界面控件** — Renderer 的共享 Select、Popover、Dialog 使用无样式可访问性 primitives 与既有主题 tokens 统一键盘、焦点、浮层避让及可取消动效，只管理易失展示状态。
 - **Plugin UI 主题快照** — Host renderer 向 trusted/isolated surface 提供版本化、只读的颜色、密度与 reduced-motion 变量，主题变化仅更新展示，不重载插件或放宽隔离。
 - **ZenX 插件就绪预览** — Host 通过只读 IPC 投影当前平台许可和用户配置，Renderer 在启用 Browser/Computer 前显示 manifest 请求范围及分别可操作的准备步骤；此预览不代替原生 helper 与具体工具执行时的能力检查，也不保存授权事实。
@@ -897,8 +898,9 @@ ModelAdapter 的 reasoning stream 只传递 provider-neutral lifecycle correlati
 opaque content 永不流向公共事件；OpenAI-compatible 的公开 `reasoning_content` 则作为 content
 delta 实时投影。保存 canonical reasoning 与把它编码进后续请求是两个边界：Core 保留完整标准
 Item，adapter 按目标 Provider/model 的工具续接或 preserved-thinking 合同决定是否回传，并只发送
-该合同支持的推理与流式工具参数。失败或中断只丢弃内存中的 correlation/buffer，不留下不完整
-canonical Item。
+该合同支持的推理与流式工具参数。一次采样整体通过校验后才提交 completed reasoning；失败或中断将已观察到的 trace
+一次性提交为 `incomplete: true` canonical Item，保留 opaque visibility，随后丢弃内存
+correlation/buffer；所有 incomplete Item 都不重放给模型。
 
 Reasoning control 只有一个权威：UI/Core 在 Turn admission 时冻结 canonical
 `reasoningEffort`，ModelAdapter 只把该值翻译为目标模型支持的 wire 字段。OpenAI-compatible
@@ -1112,7 +1114,7 @@ root；这些 package 关系不会长出 Project、第二套 Agent 或调度语�
 自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 只作为固定版本
 CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
 
-模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 的 `incomplete: true` 标记只供历史显示，禁止作为 Provider reasoning 重放；失败回合的文本属于 trace，不作为成功最终答复。
+模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 与 agent_message 的 `incomplete: true` 标记只供历史显示，不进入模型上下文、recent-items 计数或显式压缩保留；失败尝试的文本属于 trace，不作为成功最终答复。
 
 Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断（请求关联、分片序号、字段类型），失败时附带最近8个接收分片（各至多8KiB，明确标记截断），保留实际响应及工具参数以支持诊断；不记录请求头或请求正文，遮盖配置的API密钥，不作为会话语义来源；诊断写入失败不得替换原始模型错误。
 
@@ -1138,7 +1140,7 @@ Context pressure estimation includes tool `modelContent` as the additional user 
 
 工具适配器返回的 ToolExecutionResult 必须代表底层操作的真实最终结果（包括非零退出）；仅停止本地等待或不确认远端状态时必须 reject，不能伪造最终结果。默认取消后 reject 保留未知状态与资源 fence，但其诊断输出会回传一次。wait 的固定控制 envelope 不占用已独立校验的原工具 structuredContent 预算。
 
-模型请求在适配器共享的 request admission 边界最多尝试 4 次：临时连接错误及 HTTP 408/429/500/502/503/504 采用可取消、带抖动的指数退避，遵守 Retry-After，累计退避不超过 120 秒。成功响应开始后不重放流、Turn 或工具；耗尽后由原有 failure 路径告知用户，不引入 durable 重试状态。
+模型请求在适配器共享的 request admission 边界最多尝试 4 次：临时连接错误及 HTTP 408/429/500/502/503/504 采用可取消、带抖动的指数退避，遵守 Retry-After，累计退避不超过 120 秒。准入层不消费或重放成功响应流；Runtime 仅对明确可重试的 OpenAI-compatible 流采样失败执行上述有界重采样，不重跑 Turn 或工具。耗尽后由原有 failure 路径告知用户，不引入 durable 重试状态。
 
 ZenX 的 reasoning 状态仅是展示投影：item/started 开始转圈，item/completed 移除运行态，canonical incomplete 显示 Interrupted；Turn 终止时尚未闭合的展示行收束为 Interrupted。兼容投影允许携带可选状态元数据，旧 CAS/已完成记录缺省不显示状态；不新增运行时对象或推断工具与推理的先后生命周期。
 
