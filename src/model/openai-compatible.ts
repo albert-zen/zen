@@ -45,6 +45,8 @@ export class OpenAiCompatibleModelError extends Error {
   readonly requestId: string | undefined;
   readonly retryable: boolean;
   readonly explicitlyRejectsImageInput: boolean;
+  /** Set once the failure's raw context has been persisted to diagnostics. */
+  diagnosticId: string | undefined;
 
   constructor(
     kind: OpenAiCompatibleModelErrorKind,
@@ -54,6 +56,7 @@ export class OpenAiCompatibleModelError extends Error {
       requestId?: string;
       retryable?: boolean;
       explicitlyRejectsImageInput?: boolean;
+      diagnosticId?: string;
     } = {},
   ) {
     super(message);
@@ -64,6 +67,7 @@ export class OpenAiCompatibleModelError extends Error {
     this.retryable = options.retryable ?? false;
     this.explicitlyRejectsImageInput =
       options.explicitlyRejectsImageInput ?? false;
+    this.diagnosticId = options.diagnosticId;
   }
 }
 
@@ -202,6 +206,43 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     if (!response.ok) {
       const providerError = await readProviderError(response);
       const requestId = safeRequestId(response.headers, this.#apiKey);
+      let diagnosticId: string | undefined;
+      if (!request.signal.aborted && this.#onStreamFailure !== undefined) {
+        const escapedKey = JSON.stringify(this.#apiKey).slice(1, -1);
+        const redacted = providerError.body
+          .split(this.#apiKey)
+          .join("[redacted]")
+          .split(escapedKey)
+          .join("[redacted]");
+        try {
+          diagnosticId = randomUUID();
+          await this.#onStreamFailure({
+            timestamp: new Date().toISOString(),
+            diagnosticId,
+            model: request.model.includes(this.#apiKey)
+              ? "[redacted]"
+              : request.model.slice(0, 200),
+            status: response.status,
+            payloadIndex: 1,
+            ...(request.sessionId === undefined
+              ? {}
+              : { sessionId: request.sessionId }),
+            ...(requestId === undefined ? {} : { requestId }),
+            failure: `OpenAI-compatible model request failed with HTTP ${response.status}`,
+            payloads: [
+              {
+                index: 1,
+                text: redacted,
+                truncated:
+                  Buffer.byteLength(providerError.body) >
+                  Buffer.byteLength(redacted),
+              },
+            ],
+          });
+        } catch {
+          console.error("Model stream diagnostic could not be persisted");
+        }
+      }
       // Surface the provider's own reason (bounded, credential-redacted);
       // without it a bare status like 400 is indistinguishable from a dozen
       // different causes.
@@ -222,6 +263,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
           status: response.status,
           ...(requestId === undefined ? {} : { requestId }),
           retryable: isRetryableStatus(response.status),
+          ...(diagnosticId === undefined ? {} : { diagnosticId }),
           explicitlyRejectsImageInput:
             providerError.explicitlyRejectsImageInput,
         },
@@ -279,6 +321,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             },
       );
     } catch (error) {
+      let persisted = false;
       if (!request.signal.aborted && this.#onStreamFailure !== undefined) {
         diagnostic.failure =
           error instanceof OpenAiCompatibleModelError
@@ -286,11 +329,32 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             : "Model stream read failed";
         try {
           await this.#onStreamFailure(diagnostic);
+          persisted = true;
+          if (error instanceof OpenAiCompatibleModelError)
+            error.diagnosticId = diagnostic.diagnosticId;
         } catch {
           console.error("Model stream diagnostic could not be persisted");
         }
       }
-      throw error;
+      if (
+        error instanceof OpenAiCompatibleModelError ||
+        request.signal.aborted ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        throw error;
+      }
+      // A mid-stream transport failure is safe to replay: no Tool side effect
+      // can exist before the stream completes.
+      throw new OpenAiCompatibleModelError(
+        "transport",
+        `OpenAI-compatible model stream read failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        {
+          retryable: true,
+          ...(persisted ? { diagnosticId: diagnostic.diagnosticId } : {}),
+        },
+      );
     }
   }
 }
@@ -449,22 +513,24 @@ function shouldReplayReasoning(
   );
 }
 
-async function readProviderError(
-  response: Response,
-): Promise<{ explicitlyRejectsImageInput: boolean; message?: string }> {
+async function readProviderError(response: Response): Promise<{
+  explicitlyRejectsImageInput: boolean;
+  message?: string;
+  body: string;
+}> {
   let text: string;
   try {
     text = (await response.text()).slice(0, 16_384);
   } catch {
-    return { explicitlyRejectsImageInput: false };
+    return { explicitlyRejectsImageInput: false, body: "" };
   }
   try {
     const body = JSON.parse(text) as unknown;
     if (typeof body !== "object" || body === null || !("error" in body))
-      return { explicitlyRejectsImageInput: false };
+      return { explicitlyRejectsImageInput: false, body: text };
     const error = (body as { error?: unknown }).error;
     if (typeof error !== "object" || error === null)
-      return { explicitlyRejectsImageInput: false };
+      return { explicitlyRejectsImageInput: false, body: text };
     const value = error as {
       code?: unknown;
       type?: unknown;
@@ -478,7 +544,7 @@ async function readProviderError(
           : undefined;
     const message =
       typeof value.message === "string"
-        ? value.message.slice(0, 2_048)
+        ? value.message.slice(0, 8_192)
         : undefined;
     const detail = `${code ?? ""} ${message ?? ""}`.toLowerCase();
     return {
@@ -488,9 +554,10 @@ async function readProviderError(
           detail,
         ),
       ...(message === undefined ? {} : { message }),
+      body: text,
     };
   } catch {
-    return { explicitlyRejectsImageInput: false };
+    return { explicitlyRejectsImageInput: false, body: text };
   }
 }
 
@@ -1327,5 +1394,9 @@ function modelError(
   kind: Exclude<OpenAiCompatibleModelErrorKind, "http">,
   message: string,
 ): OpenAiCompatibleModelError {
-  return new OpenAiCompatibleModelError(kind, message);
+  // Protocol failures mean the provider delivered a malformed or truncated
+  // completion; replaying the sample is safe before any tool side effect.
+  return new OpenAiCompatibleModelError(kind, message, {
+    retryable: kind === "protocol",
+  });
 }

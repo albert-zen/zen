@@ -5,6 +5,7 @@ import type { ModelEvent, ModelRequest } from "../src/model.js";
 import {
   OpenAiCompatibleModel,
   OpenAiCompatibleModelError,
+  type ModelStreamDiagnostic,
 } from "../src/model/openai-compatible.js";
 import { createRunCodeModelTool } from "../src/tool-presentation.js";
 
@@ -1060,7 +1061,13 @@ test("rejects malformed or unavailable tool calls instead of executing raw input
 
     await assert.rejects(
       collect(adapter.stream(request({ tools: [shellTool()] }))),
-      /invalid tool arguments/u,
+      (error: unknown) => {
+        assert.ok(error instanceof OpenAiCompatibleModelError);
+        assert.match(error.message, /invalid tool arguments/u);
+        assert.equal(error.kind, "protocol");
+        assert.equal(error.retryable, true);
+        return true;
+      },
     );
   });
 
@@ -1258,6 +1265,83 @@ test("normalizes HTTP and streaming provider errors without leaking secrets", as
   });
 });
 
+test("marks truncated tool-call streams as retryable sample failures", async () => {
+  // Observed from DashScope qwen3.8-flash: the only tool-call chunk carried an
+  // id but no function name, then the provider ended the stream normally.
+  const adapter = adapterReturning(
+    streamResponse([
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call-1",
+                  type: "function",
+                  function: { arguments: "" },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      }),
+      "[DONE]",
+    ]),
+  );
+
+  await assert.rejects(
+    collect(adapter.stream(request({ tools: [shellTool()] }))),
+    (error: unknown) => {
+      assert.ok(error instanceof OpenAiCompatibleModelError);
+      assert.match(error.message, /incomplete tool call/u);
+      assert.equal(error.kind, "protocol");
+      assert.equal(error.retryable, true);
+      assert.equal(error.status, undefined);
+      return true;
+    },
+  );
+});
+
+test("marks mid-stream transport failures as retryable sample failures", async () => {
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    fetch: (async () =>
+      new Response(
+        new ReadableStream<string>({
+          start(controller) {
+            controller.enqueue(
+              sse(
+                chunk({
+                  choices: [{ index: 0, delta: { content: "partial" } }],
+                }),
+              ),
+            );
+            controller.error(new TypeError("terminated"));
+          },
+        }).pipeThrough(new TextEncoderStream()),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      )) as typeof fetch,
+  });
+
+  await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
+    assert.ok(error instanceof OpenAiCompatibleModelError);
+    assert.equal(error.kind, "transport");
+    assert.equal(error.retryable, true);
+    assert.equal(error.status, undefined);
+    return true;
+  });
+});
+
 test("HTTP failures surface the provider message with credentials redacted", async () => {
   const adapter = new OpenAiCompatibleModel({
     baseUrl: "https://provider.test/v1",
@@ -1284,6 +1368,100 @@ test("HTTP failures surface the provider message with credentials redacted", asy
     assert.match(error.message, /req-400/u);
     return true;
   });
+});
+
+test("HTTP failures are captured in model diagnostics with the redacted body", async () => {
+  const events: ModelStreamDiagnostic[] = [];
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    onStreamFailure: async (event) => {
+      events.push(event);
+    },
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({
+          error: { message: `invalid payload, key ${fakeKey} rejected` },
+        }),
+        { status: 400, headers: { "x-request-id": "req-diag" } },
+      )) as typeof fetch,
+  });
+
+  await assert.rejects(collect(adapter.stream(request())));
+  assert.equal(events.length, 1);
+  const event = events[0]!;
+  assert.equal(event.status, 400);
+  assert.equal(event.requestId, "req-diag");
+  assert.match(event.failure ?? "", /HTTP 400/u);
+  const payload = event.payloads?.[0]?.text ?? "";
+  assert.match(payload, /invalid payload/u);
+  assert.equal(payload.includes(fakeKey), false);
+});
+
+test("persisted diagnostics are linked back onto the thrown error", async () => {
+  const events: ModelStreamDiagnostic[] = [];
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    onStreamFailure: async (event) => {
+      events.push(event);
+    },
+    fetch: (async () =>
+      new Response(JSON.stringify({ error: { message: "bad request" } }), {
+        status: 400,
+      })) as typeof fetch,
+  });
+
+  await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
+    assert.ok(error instanceof OpenAiCompatibleModelError);
+    assert.equal(error.diagnosticId, events[0]?.diagnosticId);
+    return true;
+  });
+});
+
+test("stream-phase failures link their diagnostic onto the thrown error", async () => {
+  const events: ModelStreamDiagnostic[] = [];
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    onStreamFailure: async (event) => {
+      events.push(event);
+    },
+    fetch: (async () =>
+      streamResponse([
+        chunk({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call-1",
+                    type: "function",
+                    function: { arguments: "" },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        }),
+        chunk({
+          choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        }),
+        "[DONE]",
+      ])) as typeof fetch,
+  });
+
+  await assert.rejects(
+    collect(adapter.stream(request({ tools: [shellTool()] }))),
+    (error: unknown) => {
+      assert.ok(error instanceof OpenAiCompatibleModelError);
+      assert.equal(error.diagnosticId, events[0]?.diagnosticId);
+      return true;
+    },
+  );
 });
 
 test("propagates aborts during stream consumption", async () => {

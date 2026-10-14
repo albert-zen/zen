@@ -255,6 +255,77 @@ test("context ring opens an accessible popover before its compact action runs", 
   });
 });
 
+test("failed turns show a concise banner with expandable detail, retry count and diagnostics entry", async () => {
+  await withDom(async (root) => {
+    const longDetail = `provider detail ${"x".repeat(500)}`;
+    const failureItem: CanonicalItem = {
+      id: "failure-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: new Date(11_000).toISOString(),
+      type: "failure",
+      code: "runtime_error",
+      message: `OpenAI-compatible model request failed with HTTP 400: ${longDetail}\nsecond line of provider detail`,
+      retried: 2,
+      diagnosticId: "diag-1",
+    };
+    const failedTurn: Turn = {
+      ...turnWithItems("failed", []),
+      error: {
+        message: failureItem.message,
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    };
+    const view: Thread = {
+      ...thread([failedTurn]),
+      canonicalItems: [failureItem],
+    };
+    let openedFolders = 0;
+    (window as unknown as { zenx: unknown }).zenx = {
+      settings: {
+        openDiagnosticsFolder: async () => {
+          openedFolders += 1;
+        },
+      },
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: view,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+
+    const banner = requiredElement(".turn-outcome");
+    const initialText = banner.textContent ?? "";
+    assert.match(initialText, /HTTP 400: provider detail/u);
+    assert.match(initialText, /Auto-retried 2 times/u);
+    assert(!initialText.includes("second line of provider detail"));
+
+    const buttons = [
+      ...banner.querySelectorAll<HTMLButtonElement>(
+        ".turn-outcome-actions .quiet-button",
+      ),
+    ];
+    assert.equal(buttons.length, 2);
+    const detailsToggle = buttons[0]!;
+    assert.equal(detailsToggle.getAttribute("aria-expanded"), "false");
+    await act(async () => detailsToggle.click());
+    assert.equal(detailsToggle.getAttribute("aria-expanded"), "true");
+    assert.match(banner.textContent ?? "", /second line of provider detail/u);
+
+    await act(async () => buttons[1]!.click());
+    assert.equal(openedFolders, 1);
+  });
+});
+
 test("context pressure above the configured window keeps the real percent in its label", () => {
   const html = renderToStaticMarkup(
     createElement(ContextUsageIndicator, {
@@ -2574,9 +2645,9 @@ test("failed turn opens received trace and preserves the error without a final a
     /Observed trace/u,
   );
   assert.equal(document.querySelector(".turn-final"), null);
-  assert.equal(
-    document.querySelector(".turn-outcome > p")?.textContent,
-    "invalid tool call id",
+  assert.match(
+    document.querySelector(".turn-outcome")?.textContent ?? "",
+    /invalid tool call id/u,
   );
 });
 
