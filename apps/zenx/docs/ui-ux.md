@@ -577,3 +577,7 @@ Only the terminal Agent response exposes Copy and Fork in its hover/focus action
 ### 2026-10-14: Compact activity context
 
 Settled multi-tool disclosures retain the call count and the latest three action summaries, newest first, rather than reducing their title to the count alone. Failure and cancellation counts remain explicit, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
+
+### 2026-10-14: Codex conversation import in Settings
+
+Codex conversation import is available in Settings → General under Import conversations. The active-thread Sidebar has no import action. The existing preview, validation, import and open-retry dialog remains unchanged; cancelling returns to Settings and a successful import opens the imported Thread.

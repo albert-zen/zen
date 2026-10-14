@@ -5228,9 +5228,40 @@ test("import saved but native open failed retains App-level retry without reimpo
     },
   });
   try {
+    assert.equal(
+      document.querySelector(
+        '.sidebar [aria-label="Import Codex conversation"]',
+      ),
+      null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
+    );
+    const general = await waitFor(() =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(".settings-nav button"),
+      ].find((button) => button.textContent?.trim() === "General"),
+    );
+    await act(async () => general.click());
     const open = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Import Codex conversation"]',
+        '.settings-view [aria-label="Import Codex conversation"]',
+      ),
+    );
+    await act(async () => open.click());
+    const cancel = await waitFor(() =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".session-import-dialog button",
+        ),
+      ].find((button) => button.textContent === "Cancel"),
+    );
+    await act(async () => cancel.click());
+    await waitFor(() => !document.querySelector(".session-import-dialog"));
+    assert.equal(importCalls, 0);
+    assert(
+      document.querySelector(
+        '.settings-view [aria-label="Import Codex conversation"]',
       ),
     );
     await act(async () => open.click());
