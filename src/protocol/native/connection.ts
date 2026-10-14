@@ -1,8 +1,8 @@
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
 import { AppServerError, type ZenAppServer } from "../../app-server.js";
 import type { ApprovalHandler } from "../../tool.js";
-import { validateUserInput, type UserInputPart } from "../../item.js";
-import type { SkillReference } from "../../skill-input.js";
+import { ThreadJournalAppendOutcomeUnknownError } from "../../journal.js";
+import { prepareNativeInput } from "./input.js";
 import { isRecord, isRequest } from "../codex/wire.js";
 import {
   NativeRecoveryProjection,
@@ -10,12 +10,19 @@ import {
 } from "./recovery.js";
 import {
   NATIVE_MODEL_CATALOG_UPDATED_METHOD,
+  NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY,
+  NATIVE_INLINE_IMAGE_INPUT_CAPABILITY,
+  NATIVE_THREAD_DELETE_METHOD,
+  NATIVE_THREAD_DELETED_LIST_METHOD,
+  NATIVE_THREAD_RESTORE_METHOD,
   NATIVE_INITIALIZE_METHOD,
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
   NATIVE_THREAD_READ_METHOD,
   NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
+  NATIVE_QUEUE_EDIT_METHOD,
+  type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
   type NativeTurnSendResult,
 } from "./wire.js";
@@ -59,7 +66,11 @@ export class NativeConnection {
         return;
       }
       const event = projected.event;
-      if (!this.#subscriptions.has(event.threadId)) return;
+      if (
+        !this.#subscriptions.has(event.threadId) &&
+        !(event.event.type === "thread_deleted_updated" && this.#nativeSession)
+      )
+        return;
       const barrier = this.#barriers.get(event.threadId);
       if (barrier !== undefined) barrier.push(event);
       else this.#sendEvent(event);
@@ -72,6 +83,87 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (
+      message.method === NATIVE_THREAD_DELETE_METHOD ||
+      message.method === NATIVE_THREAD_DELETED_LIST_METHOD ||
+      message.method === NATIVE_THREAD_RESTORE_METHOD
+    ) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Thread deletion is unavailable",
+          );
+        const params = message.params;
+        if (!isRecord(params))
+          throw new AppServerError(
+            "invalid_request",
+            "Thread parameters are required",
+          );
+        let result: unknown;
+        if (message.method === NATIVE_THREAD_DELETED_LIST_METHOD) {
+          if (Object.keys(params).length > 0)
+            throw new AppServerError(
+              "invalid_request",
+              "Deleted listing takes no parameters",
+            );
+          result = { data: await this.#appServer.listDeletedThreads() };
+        } else {
+          const field =
+            message.method === NATIVE_THREAD_DELETE_METHOD
+              ? "expectedLastItemId"
+              : "deletionItemId";
+          if (
+            Object.keys(params).some(
+              (key) => key !== "threadId" && key !== field,
+            ) ||
+            typeof params.threadId !== "string" ||
+            !params.threadId.trim() ||
+            params.threadId.length > 512 ||
+            typeof params[field] !== "string" ||
+            !params[field].trim() ||
+            params[field].length > 512
+          )
+            throw new AppServerError(
+              "invalid_request",
+              `threadId and ${field} are required`,
+            );
+          result =
+            message.method === NATIVE_THREAD_DELETE_METHOD
+              ? await this.#appServer.deleteThread(
+                  params.threadId,
+                  params[field],
+                )
+              : {
+                  thread: await this.#appServer.restoreThread(
+                    params.threadId,
+                    params[field],
+                  ),
+                };
+        }
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: error instanceof AppServerError ? -32602 : -32603,
+              message: error instanceof Error ? error.message : String(error),
+              ...(error instanceof AppServerError
+                ? { data: { zenCode: error.code } }
+                : {}),
+            },
+          });
+      }
+      return;
+    }
     if (message.method === NATIVE_THREAD_CREATE_CHILD_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
         this.#send({
@@ -116,6 +208,63 @@ export class NativeConnection {
                 ? { data: { zenCode: error.code } }
                 : {}),
             },
+          });
+      }
+      return;
+    }
+    if (message.method === NATIVE_QUEUE_EDIT_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          params.threadId.trim().length === 0 ||
+          typeof params.queuedItemId !== "string" ||
+          typeof params.clientId !== "string" ||
+          typeof params.editId !== "string" ||
+          typeof params.expectedRevision !== "number" ||
+          !Array.isArray(params.input)
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread, queue identity, expected revision, edit ID and input are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native queue editing is unavailable",
+          );
+        const request = params as unknown as NativeQueueEditParams;
+        this.#subscriptions.add(request.threadId);
+        const result = await this.#appServer.editQueuedMessage(
+          request.threadId,
+          request,
+          request.input,
+        );
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error:
+              error instanceof AppServerError
+                ? {
+                    code: -32602,
+                    message: error.message,
+                    data: { zenCode: error.code },
+                  }
+                : {
+                    code: -32603,
+                    message:
+                      "Queue edit outcome is unconfirmed. Read the Thread or retry the same edit ID before making another edit.",
+                  },
           });
       }
       return;
@@ -211,21 +360,7 @@ export class NativeConnection {
             "invalid_request",
             "requireUnarchived must be a boolean",
           );
-        const input: (UserInputPart | SkillReference)[] = params.input.map(
-          (part: unknown) => {
-            if (!isRecord(part)) throw new Error("Invalid input part");
-            if (
-              part.type === "skill" &&
-              typeof part.id === "string" &&
-              part.id.length > 0
-            )
-              return { type: "skill", id: part.id };
-            if (part.skillSource !== undefined)
-              throw new Error("Skill provenance is Host-owned");
-            validateUserInput([part], "input");
-            return part as unknown as UserInputPart;
-          },
-        );
+        const input = await prepareNativeInput(params.input, this.#appServer);
         const options = {
           clientId: params.clientUserMessageId,
           ...(message.method === NATIVE_TURN_SEND_UNARCHIVED_METHOD
@@ -239,16 +374,22 @@ export class NativeConnection {
         };
         this.#subscriptions.add(params.threadId);
         let result: NativeTurnSendResult = {};
-        if (params.mode === "queue" || params.mode === "batch-next")
-          await this.#appServer.queueMessage(
-            params.threadId,
-            input,
-            options.clientId,
-            params.mode === "batch-next"
-              ? { ...options, deliveryMode: "batch-next" }
-              : options,
-          );
-        else if (params.mode === "start") {
+        if (params.mode === "queue" || params.mode === "batch-next") {
+          result = {
+            admission: await this.#appServer.queueMessage(
+              params.threadId,
+              input,
+              options.clientId,
+              {
+                ...options,
+                waitForTurnAdmission: false,
+                ...(params.mode === "batch-next"
+                  ? { deliveryMode: "batch-next" as const }
+                  : {}),
+              },
+            ),
+          };
+        } else if (params.mode === "start") {
           const turn = await this.#appServer.startTurn(
             params.threadId,
             input,
@@ -287,11 +428,21 @@ export class NativeConnection {
         this.#send({
           id: message.id,
           error: {
-            code: -32602,
-            message: error instanceof Error ? error.message : String(error),
-            ...(error instanceof AppServerError
-              ? { data: { zenCode: error.code } }
-              : {}),
+            code:
+              error instanceof ThreadJournalAppendOutcomeUnknownError
+                ? -32603
+                : -32602,
+            message:
+              error instanceof ThreadJournalAppendOutcomeUnknownError
+                ? "Input admission outcome is unconfirmed. Read the Thread before retrying."
+                : error instanceof Error
+                  ? error.message
+                  : String(error),
+            ...(error instanceof ThreadJournalAppendOutcomeUnknownError
+              ? { data: { zenCode: "admission_outcome_unknown" } }
+              : error instanceof AppServerError
+                ? { data: { zenCode: error.code } }
+                : {}),
           },
         });
       }
@@ -302,7 +453,16 @@ export class NativeConnection {
       this.#nativeSession = true;
       this.#send({
         id: message.id,
-        result: { processEpoch: this.#projection.processEpoch },
+        result: {
+          processEpoch: this.#projection.processEpoch,
+          capabilities:
+            this.#appServer === undefined
+              ? []
+              : [
+                  NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY,
+                  NATIVE_INLINE_IMAGE_INPUT_CAPABILITY,
+                ],
+        },
       });
       return;
     }
@@ -360,9 +520,21 @@ export class NativeConnection {
     try {
       const snapshot = await this.#projection.resume(threadId);
       if (this.#closed) return;
+      if (
+        buffered.some(
+          (entry) =>
+            entry.event.type === "thread_deleted_updated" &&
+            entry.event.deleted,
+        )
+      )
+        throw new AppServerError(
+          "thread_deleted",
+          "Thread was deleted during resume; refresh before opening it",
+        );
       this.#send({ id: message.id, result: snapshot });
       for (const event of buffered) {
         if (
+          event.event.type !== "thread_deleted_updated" &&
           event.processEpoch === snapshot.processEpoch &&
           event.watermark > snapshot.watermark
         )
@@ -380,6 +552,11 @@ export class NativeConnection {
       }
     } finally {
       this.#barriers.delete(threadId);
+      // A failed resume must still deliver lifecycle discovery to this client.
+      if (!this.#closed)
+        for (const event of buffered)
+          if (event.event.type === "thread_deleted_updated")
+            this.#sendEvent(event);
     }
   }
 

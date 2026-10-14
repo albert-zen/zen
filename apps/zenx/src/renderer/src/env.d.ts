@@ -1,3 +1,4 @@
+import type { ProtocolIpcResult } from "../../preload/queue-edit-ipc.js";
 import type { SubscriptionUsage } from "../../main/subscription-usage.js";
 import type {
   ImZenXSetupView,
@@ -67,6 +68,7 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      shellPanel?: import("../../shell-panel.js").ShellPanelBridge;
       imzenx: {
         inspect(): Promise<ImZenXSetupView>;
         saveChannel(input: ImZenXChannelSave): Promise<ImZenXSetupView>;
@@ -158,7 +160,7 @@ declare global {
         request<M extends ClientRequestMethod>(
           method: M,
           params: ClientRequestParams[M],
-        ): Promise<ClientRequestResults[M]>;
+        ): Promise<ProtocolIpcResult<M>>;
         respondToApproval(
           requestId: string,
           decision: ApprovalDecision,
@@ -279,8 +281,12 @@ declare global {
       };
       chromeBridge: {
         get(): Promise<ChromeBridgeSettingsSnapshot>;
-        prepare(): Promise<ChromeBridgeSettingsSnapshot>;
-        remove(): Promise<ChromeBridgeSettingsSnapshot>;
+        prepare(
+          browser?: "chrome" | "edge",
+        ): Promise<ChromeBridgeSettingsSnapshot>;
+        remove(
+          browser?: "chrome" | "edge",
+        ): Promise<ChromeBridgeSettingsSnapshot>;
         openExtension(): Promise<void>;
       };
       computerReadiness: {

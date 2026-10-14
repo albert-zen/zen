@@ -108,14 +108,15 @@ async def test_zenx_eof_stops_gateway_and_poll_tasks(monkeypatch, tmp_path):
         async def close(self):
             calls.append("state-close")
 
-    def compose(settings, **kwargs):
+    async def compose(settings, **kwargs):
         assert kwargs["persistent_subscriptions"]
+        assert kwargs["local_app_server"] is True
         return Gateway(), State()
 
     loop = asyncio.get_running_loop()
     monkeypatch.setattr(loop, "connect_read_pipe", connect)
     monkeypatch.setattr(zenx.sys, "stdin", SimpleNamespace(buffer=stdin))
-    monkeypatch.setattr(zenx, "create_gateway", compose)
+    monkeypatch.setattr(zenx, "prepare_gateway", compose)
     monkeypatch.setattr(zenx, "normalize_proxy_exclusions", lambda: None)
     async with asyncio.timeout(1):
         await zenx.run()
@@ -187,6 +188,7 @@ async def spawn_probe(script):
             [
                 str(Path(__file__).parents[1] / "src"),
                 str(Path(__file__).parent),
+                os.environ.get("PYTHONPATH", ""),
             ]
         ),
     }
@@ -222,10 +224,11 @@ class ProbeChannel(FakeChannelAdapter):
         )}), flush=True)
         return result
 
-def compose(settings, **kwargs):
-    channel = ProbeChannel("test")
+async def compose(settings, **kwargs):
+    kwargs.pop("on_state_preparation", None)
+    channel = kwargs["channels"][0]
     gateway, state = create_gateway(
-        settings, client=FakeAppServer(), channels=[channel], **kwargs
+        settings, client=FakeAppServer(), **kwargs
     )
     original_start = gateway.start
     async def start():
@@ -235,7 +238,8 @@ def compose(settings, **kwargs):
     gateway.start = start
     return gateway, state
 
-zenx.create_gateway = compose
+zenx.resolve_channels = lambda settings, **kwargs: ([ProbeChannel("test")], None)
+zenx.prepare_gateway = compose
 asyncio.run(zenx.run())
 """
     process = await spawn_probe(script)

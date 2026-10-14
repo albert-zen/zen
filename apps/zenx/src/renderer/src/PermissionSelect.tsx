@@ -149,6 +149,9 @@ export function PermissionSelect({
             items[next]?.focus();
           }}
         >
+          <p className="permission-menu-heading">
+            {i18n.t("shell:filePermissionsForThisThread")}
+          </p>
           {Object.entries(labels).map(([mode, label]) => (
             <button
               key={mode}

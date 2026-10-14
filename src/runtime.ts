@@ -62,6 +62,7 @@ import {
   toolOutputSuffix,
   type ApprovalHandler,
   type NestedToolObservation,
+  type PreparedToolInvocation,
   type ToolExecutionMode,
   type ToolExecutionResult,
   type ToolPolicy,
@@ -1203,7 +1204,7 @@ export class AgentRuntime {
     try {
       decision = await waitForAbort(
         execution.admission === "inherited"
-          ? this.#tools.admitInherited(prepared)
+          ? this.#tools.admitInherited(prepared, execution.parentAdmission)
           : this.#tools.admit(prepared, {
               policy: toolPolicyFromApprovalPolicy(
                 options.configuration.approvalPolicy,
@@ -1273,6 +1274,7 @@ export class AgentRuntime {
             this.#nestedPort(
               turnId,
               toolCall,
+              prepared,
               options,
               execution.signal,
               scheduler,
@@ -1338,6 +1340,7 @@ export class AgentRuntime {
   #nestedPort(
     turnId: string,
     parent: ToolCallItem,
+    parentAdmission: PreparedToolInvocation,
     options: RunTurnOptions,
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
@@ -1426,6 +1429,7 @@ export class AgentRuntime {
           options,
           {
             admission: "inherited",
+            parentAdmission,
             signal,
             allowedToolNames,
             nestedToolNames: allowedToolNames,
@@ -1512,6 +1516,7 @@ export class AgentRuntime {
 
 interface ScheduledToolCapability {
   admission: "outer" | "inherited";
+  parentAdmission?: PreparedToolInvocation;
   signal: AbortSignal;
   allowedToolNames: ReadonlySet<string>;
   nestedToolNames: ReadonlySet<string>;

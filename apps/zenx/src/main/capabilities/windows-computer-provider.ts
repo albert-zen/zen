@@ -24,6 +24,7 @@ import {
 } from "./computer-provider.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
 import { OBSERVATION_CAPTURE } from "./observation-capture.js";
+import { windowsBackgroundCaptureCommand } from "./windows-background-capture.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_WINAPP_STDOUT_BYTES = 2 * 1024 * 1024;
@@ -34,9 +35,9 @@ export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.2",
+  version: "1.1.3",
   description:
-    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and WGC capture stay background-safe; unsupported global input never silently substitutes for them.",
+    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture avoid foreground takeover; unsupported global input never silently substitutes for them.",
   provider: {
     id: "microsoft-winapp-cli",
     platforms: ["win32"],
@@ -47,7 +48,7 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
       "uia.invoke",
       "uia.set_value",
       "uia.wait_for.verify",
-      "wgc.capture",
+      "printwindow.capture",
       "cancellable",
       "bounded_output",
     ],
@@ -64,7 +65,7 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
       return {
         ...permission,
         description:
-          "Capture one explicitly targeted HWND through WinApp CLI's background-safe default capture path.",
+          "Capture one explicitly targeted HWND without restoring or activating it. Unavailable background frames fail closed.",
       };
     }
     return permission;
@@ -99,8 +100,12 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
           return {
             ...tool,
             description:
-              "Capture one exact Windows HWND through WinApp CLI's default WGC/PrintWindow path to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
-            capabilities: ["wgc.capture", "app_targeted", "no_global_input"],
+              "Capture one exact Windows HWND through a strict background PrintWindow helper. Minimized, hidden, protected or blank windows fail without activation. Returns private five-minute PNG metadata/path, never pixels in the Thread journal.",
+            capabilities: [
+              "printwindow.capture",
+              "app_targeted",
+              "no_global_input",
+            ],
           };
         default:
           return tool;
@@ -121,6 +126,7 @@ export interface WinAppCliDiagnostic {
 
 export interface WinAppCliRunOptions {
   timeoutMs: number;
+  stdin?: string;
   signal?: AbortSignal;
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
@@ -191,6 +197,8 @@ interface WinAppScreenshotEnvelope {
   processId?: number;
   windowTitle?: string;
   hwnd?: unknown;
+  method?: string;
+  pngBase64?: string;
 }
 
 interface WinAppScreenshotImage {
@@ -227,6 +235,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   readonly #observations = new ComputerObservationLedger();
   readonly #platform: NodeJS.Platform;
   readonly #runner: WinAppCliRunner;
+  readonly #captureRunner: WinAppCliRunner;
   readonly #expectedVersion?: string;
   readonly #runtimeExecutable?: string;
   readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
@@ -239,6 +248,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       command?: string;
       platform?: NodeJS.Platform;
       runner?: WinAppCliRunner;
+      captureRunner?: WinAppCliRunner;
       expectedVersion?: string;
       runtimeExecutable?: string;
       bindBeforeSpawn?: () => Promise<() => Promise<void>>;
@@ -252,6 +262,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     this.#command = options.command ?? "winapp";
     this.#platform = options.platform ?? process.platform;
     this.#runner = options.runner ?? new SpawnWinAppCliRunner();
+    this.#captureRunner = options.captureRunner ?? new SpawnWinAppCliRunner();
     this.#expectedVersion = options.expectedVersion;
     this.#runtimeExecutable = options.runtimeExecutable;
     this.#bindBeforeSpawn = options.bindBeforeSpawn;
@@ -568,19 +579,43 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     );
     let result: WinAppScreenshotEnvelope;
     try {
-      result = await this.#json<WinAppScreenshotEnvelope>(
-        [
-          "ui",
-          "screenshot",
-          "--window",
-          String(window.hwnd),
-          "--output",
-          artifactPath,
-          "--json",
-        ],
-        20_000,
-        signal,
+      const command = windowsBackgroundCaptureCommand();
+      const captured = await this.#captureRunner.run(
+        command.executable,
+        command.args,
+        {
+          timeoutMs: 20_000,
+          signal,
+          stdin: JSON.stringify({
+            hwnd: window.hwnd,
+            pid: window.processId,
+            title: window.title ?? "",
+          }),
+          maxStdoutBytes: 6 * 1024 * 1024,
+          maxStderrBytes: 16 * 1024,
+        },
       );
+      signal?.throwIfAborted();
+      result = JSON.parse(captured.stdout) as WinAppScreenshotEnvelope;
+      if (
+        result.method !== "strict-background-printwindow" ||
+        !sameHwnd(result.hwnd, window.hwnd) ||
+        result.processId !== window.processId ||
+        result.windowTitle !== (window.title ?? "")
+      ) {
+        throw new Error(
+          "Background capture did not confirm the exact target identity",
+        );
+      }
+      const png = decodeBackgroundPng(result);
+      // Refresh exact HWND/PID/title before publishing; never substitute a sibling window.
+      const current = await this.#refreshWindow(window, signal);
+      if (current.title !== window.title)
+        throw new Error("The captured window title changed; inspect again");
+      signal?.throwIfAborted();
+      await writeFile(artifactPath, png, { mode: 0o600 });
+      signal?.throwIfAborted();
+      result.filePath = artifactPath;
     } catch (error) {
       await rm(artifactPath, { force: true });
       throw error;
@@ -871,7 +906,7 @@ export async function runBoundedProcess(
     const child = spawn(invocation.executable, invocation.args, {
       shell: false,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -923,6 +958,8 @@ export async function runBoundedProcess(
       }
       stderr.push(chunk);
     });
+    child.stdin?.on("error", (error) => failAndKill(error));
+    if (options.stdin !== undefined) child.stdin?.end(options.stdin, "utf8");
     child.once("error", (error) => finish(() => reject(error)));
     child.once("close", (code, exitSignal) => {
       finish(() => {
@@ -1432,4 +1469,36 @@ function unsupportedForeground(): Error {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function decodeBackgroundPng(result: WinAppScreenshotEnvelope): Buffer {
+  const width = positiveInteger(result.width, "background capture width");
+  const height = positiveInteger(result.height, "background capture height");
+  const data = result.pngBase64;
+  if (
+    width > 8192 ||
+    height > 8192 ||
+    width * height > 16_000_000 ||
+    typeof data !== "string" ||
+    data.length > 5_592_408
+  ) {
+    throw new Error("Background capture returned an invalid or oversized PNG");
+  }
+  const png = Buffer.from(data, "base64");
+  if (
+    png.toString("base64") !== data ||
+    png.length < 33 ||
+    png.length > 4 * 1024 * 1024 ||
+    !png
+      .subarray(0, 8)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+    png.toString("ascii", 12, 16) !== "IHDR" ||
+    png.readUInt32BE(16) !== width ||
+    png.readUInt32BE(20) !== height
+  ) {
+    throw new Error(
+      "Background capture PNG dimensions or signature are invalid",
+    );
+  }
+  return png;
 }

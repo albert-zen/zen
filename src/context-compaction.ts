@@ -601,6 +601,8 @@ function isStructuralCompactionItem(item: CanonicalItem): boolean {
     item.type === "turn_replacement_requested" ||
     item.type === "thread_metadata" ||
     item.type === "thread_forked" ||
+    item.type === "thread_deleted" ||
+    item.type === "thread_restored" ||
     item.type === "thread_configuration_changed" ||
     item.type === "context_compaction" ||
     item.type === "model_usage" ||

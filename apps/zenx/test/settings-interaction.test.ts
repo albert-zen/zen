@@ -1897,7 +1897,7 @@ test("General opens the local diagnostics folder only after an explicit click", 
   }
 });
 
-test("General names both browser modes and reports an extension-folder failure", async () => {
+test("General offers an additional browser connection and reports an extension-folder failure", async () => {
   const browserSettings: PublicHostSettings = {
     ...settings,
     profile: { ...settings.profile, browserMode: "user-session" },
@@ -1926,10 +1926,22 @@ test("General names both browser modes and reports an extension-folder failure",
     },
   });
   try {
-    const mode = await waitFor(async () => await labeledSelect("Browser mode"));
+    const browser = await waitFor(
+      async () => await labeledSelect("Browser to register"),
+    );
     assert.deepEqual(
-      Array.from(mode.options).map((option) => option.textContent?.trim()),
-      ["ZenX browser", "Connected Chrome"],
+      Array.from(browser.options).map((option) => option.textContent?.trim()),
+      ["Google Chrome", "Microsoft Edge"],
+    );
+    assert.match(
+      document.body.textContent ?? "",
+      /built-in ZenX browser remains available/,
+    );
+    assert.equal(
+      Array.from(document.querySelectorAll("label")).some(
+        (label) => label.textContent?.trim() === "Browser mode",
+      ),
+      false,
     );
     assert.doesNotMatch(
       document.body.textContent ?? "",
@@ -1947,6 +1959,54 @@ test("General names both browser modes and reports an extension-folder failure",
   }
 });
 
+test("General registers only the explicitly selected Edge connector", async () => {
+  const prepared: unknown[] = [];
+  const snapshot = {
+    configuredMode: "user-session" as const,
+    effectiveMode: "user-session" as const,
+    environmentOverride: false,
+    connector: "chrome-extension" as const,
+    packaged: true,
+    nativeHostRegistered: true,
+    edgeNativeHostRegistered: false,
+    extensionDirectory: "/fixture",
+    extensionId: "fixture",
+    connection: { state: "waiting" as const, tabCount: 0 },
+  };
+  const harness = await mountSettings("general", {
+    initialSettings: {
+      ...settings,
+      profile: { ...settings.profile, browserMode: "user-session" },
+    },
+    chromeBridge: {
+      get: async () => snapshot,
+      prepare: async (browser) => {
+        prepared.push(browser);
+        return { ...snapshot, edgeNativeHostRegistered: true };
+      },
+      remove: async () => snapshot,
+      openExtension: async () => undefined,
+    },
+  });
+  try {
+    const select = await waitFor(
+      async () => await labeledSelect("Browser to register"),
+    );
+    assert.ok(exactButton("Remove connector"));
+    await changeControl(select, "edge");
+    assert.equal(prepared.length, 0);
+    await click(exactButtonRequired("Register connector"));
+    assert.deepEqual(prepared, ["edge"]);
+    assert.ok(exactButton("Remove connector"));
+    assert.match(
+      document.body.textContent ?? "",
+      /built-in ZenX browser remains available/,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("General reports a browser connection with multiple available tabs", async () => {
   const snapshot = {
     configuredMode: "user-session" as const,
@@ -1958,7 +2018,26 @@ test("General reports a browser connection with multiple available tabs", async 
     extensionDirectory:
       "/Applications/ZenX.app/Contents/Resources/chrome-extension",
     extensionId: "fixture",
-    connection: { state: "connected" as const, tabCount: 3 },
+    connection: {
+      state: "connected" as const,
+      tabCount: 3,
+      connections: [
+        {
+          connectionId: "11111111-1111-4111-8111-111111111111",
+          generation: "g1",
+          browser: "chrome" as const,
+          label: "Chrome · 11111111",
+          state: "connected" as const,
+        },
+        {
+          connectionId: "22222222-2222-4222-8222-222222222222",
+          generation: "g2",
+          browser: "edge" as const,
+          label: "Edge · 22222222",
+          state: "connected" as const,
+        },
+      ],
+    },
   };
   const harness = await mountSettings("general", {
     initialSettings: {
@@ -1975,11 +2054,17 @@ test("General reports a browser connection with multiple available tabs", async 
   try {
     await waitFor(() =>
       document.querySelector('[role="status"]')?.textContent ===
-      "Chrome connected"
+      "External browser connected"
         ? true
         : undefined,
     );
     assert.match(document.body.textContent ?? "", /3 tabs available/u);
+    assert.match(document.body.textContent ?? "", /Chrome · 11111111/);
+    assert.match(document.body.textContent ?? "", /Edge · 22222222/);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /Only one external browser/,
+    );
     assert.match(document.body.textContent ?? "", /Existing and new web tabs/u);
     assert.doesNotMatch(
       document.body.textContent ?? "",

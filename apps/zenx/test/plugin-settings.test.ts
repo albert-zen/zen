@@ -233,7 +233,7 @@ test("first Computer installation shows the selected manifest scopes before inst
   await act(async () => root.unmount());
 });
 
-test("Browser setup distinguishes the isolated session from Connected Chrome", async () => {
+test("Browser setup keeps ZenX independent and recognizes an Edge-only connector", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
   Object.assign(globalThis, {
     window: dom.window,
@@ -241,6 +241,7 @@ test("Browser setup distinguishes the isolated session from Connected Chrome", a
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   let connectedMode = false;
+  let edgeRegistered = false;
   const openedGeneral: string[] = [];
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
@@ -253,6 +254,7 @@ test("Browser setup distinguishes the isolated session from Connected Chrome", a
           connector: connectedMode ? "chrome-extension" : "inactive",
           packaged: true,
           nativeHostRegistered: false,
+          edgeNativeHostRegistered: edgeRegistered,
           extensionDirectory: "/tmp/extension",
           extensionId: "fixture",
           connection: { state: "waiting", tabCount: 0 },
@@ -273,7 +275,7 @@ test("Browser setup distinguishes the isolated session from Connected Chrome", a
   });
   assert.match(
     dom.window.document.body.textContent ?? "",
-    /No Chrome connector/u,
+    /do not require an external connector/u,
   );
   connectedMode = true;
   const button = (label: string) =>
@@ -287,6 +289,19 @@ test("Browser setup distinguishes the isolated session from Connected Chrome", a
   assert.match(
     dom.window.document.body.textContent ?? "",
     /Register the local connector/u,
+  );
+  edgeRegistered = true;
+  await act(async () => {
+    button("Refresh status").click();
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /External browser not connected/u,
+  );
+  assert.doesNotMatch(
+    dom.window.document.body.textContent ?? "",
+    /Needs setup/u,
   );
   await act(async () => button("Open Browser settings").click());
   assert.deepEqual(openedGeneral, ["browser"]);
@@ -344,7 +359,7 @@ test("Browser status leaves Checking after a failed read and refreshes on return
   });
   assert.match(
     dom.window.document.body.textContent ?? "",
-    /No Chrome setup needed/u,
+    /No external browser setup needed/u,
   );
   await act(async () => root.unmount());
 });

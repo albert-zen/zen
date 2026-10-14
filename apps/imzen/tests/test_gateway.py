@@ -1,34 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-from imagent.applications import ZenApplicationAdapter
-from imagent.applications.appserver_client import AppServerError
-from imagent.bindings import InMemoryBindingRepository
-from imagent.contracts import (
+from imagent import Gateway, GatewayExtensions, MemoryGatewayStore, SQLiteGatewayStore
+from imagent.applications import (
+    AgentInput,
     ApplicationInputRejected,
-    AttachmentContent,
-    ConversationRef,
-    InboundMessage,
-    LocalPath,
-    ProjectionPolicy,
-    TextContent,
-    TextFormat,
+    ZenApplicationAdapter,
 )
-from imagent.gateway import (
-    GatewayExtensions,
-    GatewayRepositories,
-    ImAgentGateway,
-    InboundFailurePhase,
-)
-from imagent.storage import SQLiteGatewayState
+from imagent.applications.adapters.appserver.client import AppServerError
+from imagent.gateway.input import InboundFailurePhase
+from imagent.gateway.routing import ProjectionPolicy
+from imagent.interaction.media import AttachmentContent, LocalPath
+from imagent.interaction.messages import ConversationRef, InboundMessage, TextContent, TextFormat
 from imagent.testing import FakeChannelAdapter
 
+from imzen.config import Settings
 from imzen.controller import (
     ImZenContentTransformer,
     ImZenController,
@@ -36,6 +29,7 @@ from imzen.controller import (
     ImZenRequestPresenter,
     thread_start_options,
 )
+from imzen.main import create_gateway
 
 
 class FakeAppServer:
@@ -207,10 +201,9 @@ class FakeAppServer:
     async def emit_approval(self, thread_id: str, turn_id: str, request_id: int) -> None:
         message = {
             "id": request_id,
+            "_connection_epoch": self.connection_epoch,
             "method": "item/commandExecution/requestApproval",
             "params": {
-                "_transport_request_id": request_id,
-                "_connection_epoch": self.connection_epoch,
                 "threadId": thread_id,
                 "turnId": turn_id,
                 "command": "echo hello",
@@ -255,24 +248,26 @@ def compose(
     channel = FakeChannelAdapter("test")
     application = ZenApplicationAdapter(
         application_instance_id="zen-main",
+        workspace_id="imzen-workspace",
         client=resolved_client,
         cwd=str(tmp_path),
         shared_filesystem_root=tmp_path,
         thread_start_options=thread_start_options("full-access"),
+        thread_creation_profiles={
+            mode: thread_start_options(mode) for mode in ("full-access", "approval-required")
+        },
     )
     controller = ImZenController(
         application=application, client=resolved_client, allow_unique_prefix=allow_unique_prefix
     )
-    gateway = ImAgentGateway(
+    gateway = Gateway(
+        gateway_id="imzen",
         channels=[channel],
         applications=[application],
-        repositories=GatewayRepositories(
-            bindings=InMemoryBindingRepository(),
-            idempotency=idempotency,
-        ),
+        store=idempotency if idempotency is not None else MemoryGatewayStore(),
+        controller=controller,
         projection_policy=ProjectionPolicy.FOREGROUND_ONLY,
         extensions=GatewayExtensions(
-            controller=controller,
             inbound_content_transformer=ImZenContentTransformer(),
             inbound_failure_presenter=ImZenFailurePresenter(),
             request_presenter=ImZenRequestPresenter(),
@@ -403,9 +398,12 @@ async def test_threads_pick_status_history_catchup_and_unsupported_delete(
             ("m4", "/catchup 2"),
             ("m5", "/history 2"),
             ("m6", "/delete"),
-            ("m7", "continue from IM"),
         ):
             await channel.emit_message(inbound(message_id, text))
+        # The selected desktop-origin Turn must finish before a new IM Turn.
+        # Active Turns without IM reply correlation are covered by test_steering.
+        client.turn_pages["thread-new"][0]["status"] = "completed"
+        await channel.emit_message(inbound("m7", "continue from IM"))
     finally:
         await gateway.stop()
 
@@ -538,7 +536,7 @@ async def test_generic_files_become_manifest_while_images_stay_native(tmp_path: 
             "type": "text",
             "text": f"Review these\n\n[Attachments]\n- design.txt: {document}",
         },
-        {"type": "localImage", "path": str(image)},
+        {"type": "image", "url": "data:image/png;base64,cG5n"},
     ]
 
 
@@ -596,8 +594,7 @@ async def test_attachment_only_image_stays_native_without_synthetic_text(tmp_pat
             "thread-1",
             None,
             {
-                "input_items": [{"type": "localImage", "path": str(image)}],
-                "expected_local_image_epoch": 1,
+                "input_items": [{"type": "image", "url": "data:image/png;base64,cG5n"}],
             },
         )
     ]
@@ -629,7 +626,7 @@ async def test_application_failure_is_reported_to_the_originating_message(tmp_pa
 async def test_outcome_unknown_is_not_reauthorized_after_restart(tmp_path: Path) -> None:
     state_path = tmp_path / "gateway.sqlite3"
     message = inbound("m1", "hello")
-    first_state = SQLiteGatewayState(state_path)
+    first_state = SQLiteGatewayStore(state_path)
     first_client = FakeAppServer()
     first_client.fail_turn = RuntimeError("connection lost")
     first_gateway, first_channel, _ = compose(
@@ -644,7 +641,7 @@ async def test_outcome_unknown_is_not_reauthorized_after_restart(tmp_path: Path)
         await first_gateway.stop()
         await first_state.close()
 
-    reopened_state = SQLiteGatewayState(state_path, stale_claim_after_seconds=0)
+    reopened_state = SQLiteGatewayStore(state_path, stale_claim_after_seconds=0)
     second_client = FakeAppServer()
     second_gateway, second_channel, _ = compose(
         tmp_path,
@@ -669,7 +666,7 @@ async def test_proven_start_rejection_has_one_plain_reply_and_dedupes_after_rest
 ) -> None:
     state_path = tmp_path / "gateway.sqlite3"
     message = inbound("proven-rejection", "synthetic input")
-    first_state = SQLiteGatewayState(state_path)
+    first_state = SQLiteGatewayStore(state_path)
     first_client = FakeAppServer()
     first_client.fail_turn = ApplicationInputRejected("thread_busy")
     gateway, channel, _ = compose(tmp_path, first_client, idempotency=first_state)
@@ -685,7 +682,7 @@ async def test_proven_start_rejection_has_one_plain_reply_and_dedupes_after_rest
     assert replies[0].content[0].format is TextFormat.PLAIN
     assert len(first_client.started_turns) == 1
 
-    reopened = SQLiteGatewayState(state_path, stale_claim_after_seconds=0)
+    reopened = SQLiteGatewayStore(state_path, stale_claim_after_seconds=0)
     second_client = FakeAppServer()
     second, second_channel, _ = compose(tmp_path, second_client, idempotency=reopened)
     await second.start()
@@ -769,19 +766,8 @@ async def test_prefix_default_is_exact_and_plain_messages_are_unchanged(tmp_path
 
 @pytest.mark.asyncio
 async def test_prefix_preserves_quoted_parameters_and_multipart_content(tmp_path: Path) -> None:
-    client = FakeAppServer()
-    application = ZenApplicationAdapter(
-        application_instance_id="zen-main", client=client, cwd=str(tmp_path)
-    )
-    controller = ImZenController(application=application, client=client, allow_unique_prefix=True)
-    captured = []
+    from imzen.controller import _replace_command_name
 
-    class RecordingSlash:
-        async def handle(self, message, actions):
-            captured.append(message)
-            return ()
-
-    controller._slash = RecordingSlash()
     attachment = AttachmentContent(
         attachment_id="file",
         source=LocalPath(str(tmp_path / "file.txt")),
@@ -798,12 +784,270 @@ async def test_prefix_preserves_quoted_parameters_and_multipart_content(tmp_path
             TextContent("tail text"),
         ),
     )
-    await controller.handle(message, None)
-    assert captured[0].content == (
+    rewritten = _replace_command_name(message, "answer")
+    assert rewritten.content == (
         message.content[0],
         attachment,
         TextContent('  /answer  zen-main request-1 "q=two words"\nextra line'),
         message.content[3],
     )
-    assert captured[0].message_id == message.message_id
-    assert captured[0].conversation_ref == message.conversation_ref
+    assert rewritten.message_id == message.message_id
+    assert rewritten.conversation_ref == message.conversation_ref
+
+
+def _media_input(image: Path) -> AgentInput:
+    return AgentInput(
+        client_message_id="image-message",
+        content=(
+            AttachmentContent(
+                attachment_id="image-1",
+                media_type="image/png",
+                source=LocalPath(str(image)),
+                filename="photo.png",
+                size_bytes=image.stat().st_size,
+            ),
+        ),
+    )
+
+
+def _qq_channel_config(media_dir: Path | None) -> dict[str, object]:
+    config: dict[str, object] = {
+        "enabled": True,
+        "app_id": "123",
+        "client_secret": "secret",
+        "allowed_user_ids": ["user-1"],
+    }
+    if media_dir is not None:
+        config["media_dir"] = str(media_dir)
+    return {"qq": config}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_media", ["inbound-media", " inbound-media ", "~/qq-media"])
+async def test_create_gateway_derives_shared_root_from_channel_media(
+    tmp_path, monkeypatch, raw_media
+):
+    process_cwd = tmp_path / "process"
+    process_cwd.mkdir()
+    monkeypatch.chdir(process_cwd)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    if os.name == "nt" and raw_media.endswith(" "):
+        pytest.skip("trailing whitespace is not a native Windows directory name")
+    media = tmp_path / "qq-media" if raw_media.startswith("~/") else process_cwd / raw_media
+    client = FakeAppServer()
+    channel = FakeChannelAdapter("test")
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+        ),
+        client=client,
+        channels=[channel],
+        local_app_server=True,
+        channel_config=_qq_channel_config(Path(raw_media)),
+    )
+    assert media.is_dir()
+    image = media / "photo.png"
+    image.write_bytes(b"png")
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("image", content=_media_input(image).content))
+    finally:
+        await gateway.stop()
+    assert client.started_turns[0][1:] == (
+        None,
+        {"input_items": [{"type": "image", "url": "data:image/png;base64,cG5n"}]},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_app_server", [False, True])
+async def test_create_gateway_prefers_explicit_shared_root_over_derivation(
+    tmp_path, local_app_server
+):
+    explicit, media = tmp_path / "explicit", tmp_path / "inbound-media"
+    explicit.mkdir()
+    media.mkdir()
+    image, outside = explicit / "photo.png", media / "other.png"
+    image.write_bytes(b"png")
+    outside.write_bytes(b"png")
+    client = FakeAppServer()
+    channel = FakeChannelAdapter("test")
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="wss://remote.invalid:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+            app_server_shared_filesystem_root=explicit,
+        ),
+        client=client,
+        channels=[channel],
+        local_app_server=local_app_server,
+        channel_config=_qq_channel_config(media),
+    )
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("image", content=_media_input(image).content))
+        await channel.emit_message(inbound("outside", content=_media_input(outside).content))
+    finally:
+        await gateway.stop()
+    assert len(client.started_turns) == 1
+    assert any("not accepted" in text for text in sent_texts(channel))
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_rejects_images_outside_disjoint_media_roots(tmp_path):
+    first, second = tmp_path / "qq" / "media", tmp_path / "telegram" / "media"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    image = tmp_path / "private" / "outside.png"
+    image.parent.mkdir()
+    image.write_bytes(b"synthetic image")
+    config = _qq_channel_config(first)
+    config["telegram"] = {
+        "enabled": True,
+        "bot_token": "synthetic",
+        "allowed_user_ids": ["user-1"],
+        "media_dir": str(second),
+    }
+    client = FakeAppServer()
+    channel = FakeChannelAdapter("test")
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+        ),
+        client=client,
+        channels=[channel],
+        local_app_server=True,
+        channel_config=config,
+    )
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("outside", content=_media_input(image).content))
+    finally:
+        await gateway.stop()
+    assert not client.started_turns
+    assert any("not accepted" in text for text in sent_texts(channel))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["wss://remote.invalid:4500", "ws://127.0.0.1:4500"])
+async def test_standalone_server_does_not_infer_shared_filesystem(tmp_path, url):
+    media = tmp_path / "local-spool"
+    media.mkdir()
+    image = media / "photo.png"
+    image.write_bytes(b"synthetic image")
+    client = FakeAppServer()
+    channel = FakeChannelAdapter("test")
+    gateway, state = create_gateway(
+        Settings(app_server_url=url, cwd=tmp_path, gateway_state_file=tmp_path / "gateway.sqlite3"),
+        client=client,
+        channels=[channel],
+        channel_config=_qq_channel_config(media),
+    )
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("image", content=_media_input(image).content))
+    finally:
+        await gateway.stop()
+    assert not client.started_turns
+    assert any("not accepted" in text for text in sent_texts(channel))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["sibling", "symlink-escape", "missing", "directory", "oversize"])
+async def test_local_media_dispatch_keeps_sdk_path_guards(tmp_path, kind):
+    media = tmp_path / "media"
+    media.mkdir()
+    outside = tmp_path / "private.png"
+    outside.write_bytes(b"synthetic image")
+    image = media / "photo.png"
+    if kind == "sibling":
+        image = outside
+    elif kind == "symlink-escape":
+        try:
+            image.symlink_to(outside)
+        except OSError:
+            pytest.skip("file symlinks unavailable")
+    elif kind == "directory":
+        image.mkdir()
+    else:
+        image.write_bytes(b"png")
+    attachment = AttachmentContent(
+        attachment_id="image",
+        media_type="image/png",
+        source=LocalPath(str(image)),
+        size_bytes=21 * 1024 * 1024 if kind == "oversize" else image.stat().st_size,
+    )
+    if kind == "missing":
+        image.unlink()
+    client = FakeAppServer()
+    channel = FakeChannelAdapter("test")
+    gateway, state = create_gateway(
+        Settings(
+            app_server_url="ws://127.0.0.1:4500",
+            cwd=tmp_path,
+            gateway_state_file=tmp_path / "gateway.sqlite3",
+        ),
+        client=client,
+        channels=[channel],
+        channel_config=_qq_channel_config(media),
+        local_app_server=True,
+    )
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("unsafe", content=(attachment,)))
+    finally:
+        await gateway.stop()
+    assert not client.started_turns
+    assert any("not accepted" in text for text in sent_texts(channel))
+
+
+@pytest.mark.asyncio
+async def test_local_gateway_fails_when_declared_media_root_is_a_file(tmp_path):
+    media = tmp_path / "media"
+    media.write_bytes(b"synthetic non-directory")
+    with pytest.raises(FileExistsError):
+        create_gateway(
+            Settings(
+                app_server_url="ws://127.0.0.1:4500",
+                cwd=tmp_path,
+                gateway_state_file=tmp_path / "gateway.sqlite3",
+            ),
+            channels=[FakeChannelAdapter("test")],
+            channel_config=_qq_channel_config(media),
+            local_app_server=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_conversations_keep_explicit_thread_creation_profiles(tmp_path):
+    class ConcurrentServer(FakeAppServer):
+        async def start_thread(self, **params):
+            await asyncio.sleep(0)
+            return await super().start_thread(**params)
+
+    gateway, channel, client = compose(tmp_path, ConcurrentServer())
+    await gateway.start()
+    try:
+        await channel.emit_message(
+            inbound("permission-a", "/permission approval-required", conversation_id="a")
+        )
+        await asyncio.gather(
+            channel.emit_message(inbound("a", "ask first", conversation_id="a")),
+            channel.emit_message(inbound("b", "full access", conversation_id="b")),
+        )
+        by_text = {
+            text: client.started_threads[int(thread_id.rsplit("-", 1)[1]) - 1]["approval_policy"]
+            for thread_id, text, _ in client.started_turns
+        }
+        assert by_text == {"ask first": "on-request", "full access": "never"}
+        await channel.emit_message(inbound("a", "ask first", conversation_id="a"))
+        assert len(client.started_threads) == 2
+        assert len(client.started_turns) == 2
+    finally:
+        await gateway.stop()

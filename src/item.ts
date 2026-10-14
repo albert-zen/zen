@@ -22,6 +22,8 @@ export type ItemType =
   | "thread_metadata"
   | "thread_forked"
   | "thread_instruction"
+  | "thread_deleted"
+  | "thread_restored"
   | "thread_configuration_changed"
   | "context_compaction"
   | "turn_started"
@@ -30,6 +32,7 @@ export type ItemType =
   | "turn_replacement_requested"
   | "user_message_queued"
   | "user_message_queue_cancelled"
+  | "user_message_queue_edited"
   | "user_message"
   | "agent_message"
   | "model_usage"
@@ -43,6 +46,8 @@ const CANONICAL_ITEM_TYPES = {
   thread_metadata: true,
   thread_forked: true,
   thread_instruction: true,
+  thread_deleted: true,
+  thread_restored: true,
   thread_configuration_changed: true,
   context_compaction: true,
   turn_started: true,
@@ -51,6 +56,7 @@ const CANONICAL_ITEM_TYPES = {
   turn_replacement_requested: true,
   user_message_queued: true,
   user_message_queue_cancelled: true,
+  user_message_queue_edited: true,
   user_message: true,
   agent_message: true,
   model_usage: true,
@@ -110,6 +116,16 @@ export interface ThreadForkedItem extends ItemBase {
 export interface ThreadInstructionItem extends ItemBase {
   type: "thread_instruction";
   text: string;
+}
+
+/** Recoverable lifecycle controls; never model input or a purge instruction. */
+export interface ThreadDeletedItem extends ItemBase {
+  type: "thread_deleted";
+}
+
+export interface ThreadRestoredItem extends ItemBase {
+  type: "thread_restored";
+  deletionItemId: string;
 }
 
 export interface CanonicalProviderSelection {
@@ -376,6 +392,16 @@ export interface QueuedUserMessageItem extends ItemBase {
   deliveryMode?: "batch-next";
 }
 
+/** A replacement input revision; the initial queued Item owns identity/order. */
+export interface QueuedUserMessageEditedItem extends ItemBase {
+  type: "user_message_queue_edited";
+  queuedItemId: string;
+  clientId: string;
+  editId: string;
+  revision: number;
+  input: UserInput;
+}
+
 /** A completed cancellation fact; the original queued input stays in history. */
 export interface QueuedUserMessageCancelledItem extends ItemBase {
   type: "user_message_queue_cancelled";
@@ -395,9 +421,12 @@ export type CanonicalItem =
   | CodeStateItem
   | QueuedUserMessageItem
   | QueuedUserMessageCancelledItem
+  | QueuedUserMessageEditedItem
   | ThreadMetadataItem
   | ThreadForkedItem
   | ThreadInstructionItem
+  | ThreadDeletedItem
+  | ThreadRestoredItem
   | ThreadConfigurationChangedItem
   | ContextCompactionItem
   | TurnStartedItem
@@ -584,6 +613,16 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         "thread_forked.workspace",
       );
       break;
+    case "thread_deleted":
+      requireNoTurnId(item);
+      break;
+    case "thread_restored":
+      requireNoTurnId(item);
+      requireNonEmptyString(
+        item.deletionItemId,
+        "thread_restored.deletionItemId",
+      );
+      break;
     case "thread_instruction":
       requireNoTurnId(item);
       requireNonEmptyString(item.text, "thread_instruction.text");
@@ -758,6 +797,16 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "user_message_queued":
       requireNonEmptyString(item.clientId, `${type}.clientId`);
+      validateUserInput(item.input, `${type}.input`);
+      break;
+    case "user_message_queue_edited":
+      requireNoTurnId(item);
+      requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireNonEmptyString(item.editId, `${type}.editId`);
+      requireSafeInteger(item.revision, `${type}.revision`);
+      if ((item.revision as number) < 1)
+        throw new Error(`${type}.revision must be positive`);
       validateUserInput(item.input, `${type}.input`);
       break;
     case "user_message_queue_cancelled":

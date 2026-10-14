@@ -224,19 +224,22 @@ IMZen 和 CLI、桌面、Web 一样，是 App Server 上的一种接入端；它
   状态，也不要求共用机器人账号。
 - IMZen 代码只保留环境配置、SDK channel factory 调用、产品命令/权限预设、
   通用文件到文字 manifest 的映射、错误/审批呈现和 composition root。
-- Conversation → Thread binding 使用 SDK 的内存 repository；重启后从下一条消息
-  新建 Thread，或由用户 `/threads` + `/pick` 重新选择。SDK SQLite repository
-  只持久化 inbound/outbound 幂等等 bridge state，防止重启重新授权已有或结果未知
-  的 native message；两者都不是 Zen 会话权威，也不进入 ItemList。
+- Conversation → Thread binding、generation、projection 和 inbound/outbound 幂等事实
+  使用同一个 SDK v1 SQLite store；重启保留选择，`/new` 明确清除选择。SDK 持久化
+  `side_effect_started` 与 unknown delivery 等 fence，防止重启重新授权结果未知的
+  native message。它不是 Zen 会话权威，也不进入 ItemList。旧 SDK 数据升级先备份和
+  权威核验 Thread/workspace ancestry；不能安全迁移就阻止启动，不静默清空。
 - 切换 Thread 只改变 Gateway binding，不隐式改变任何原生 UI 的 active Thread；
   status/history/catch-up 均从 Zen App Server 的权威投影读取。
 - 投递或处理失败通过 SDK 的终态 failure presenter 明确告知用户；不在 IMZen
   新建 durable queue、outbox 或自我修复状态机。
 
-SDK 依赖固定在已合入 `im-agent-sdk` `main` 的完整 ADR 0015 rollout 提交
-`57f255fb1f40a095aeabb5a6967380ba057494a3`。IMZen 只配置它实际使用的强类型
-I1 inbound content transformer、I2 classified failure presenter 与 request
-presenter；其他扩展位置缺席，因此保持 SDK 默认行为。
+SDK 依赖使用已审的主线 v1 架构，精确提交同时固定在 IMZen project/lock/readiness
+与 IMZenX channel schema，发布时重新生成插件 Python runtime。接入以 public Gateway、
+scoped ConversationActions 和冻结 CommandRegistry 组合；permission preset 通过显式
+creation profile 进入幂等指纹和 create-and-bind workflow。PAW startup preparations
+在任何旧 Thread/审批恢复或 channel 输入之前清理冲突选择。QQ 继续使用 Markdown
+transport，不加入临时旧 SDK 兼容层或恢复 path-only 图片输入。
 
 ## Web UI
 

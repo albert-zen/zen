@@ -132,6 +132,7 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/thread/queue/cancel": {
@@ -152,6 +153,9 @@ export interface ClientRequestParams {
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
   "zen/thread/read": { threadId: string };
+  "zen/thread/delete": { threadId: string; expectedLastItemId: string };
+  "zen/thread/deleted/list": Record<string, never>;
+  "zen/thread/restore": { threadId: string; deletionItemId: string };
   "zen/thread/create-child": CreateChildThreadInput;
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
@@ -220,6 +224,7 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/thread/queue/cancel": {
@@ -237,6 +242,11 @@ export interface ClientRequestResults {
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
   "zen/thread/read": { thread: ThreadSnapshot };
+  "zen/thread/delete": { threadId: string; deletionItemId: string };
+  "zen/thread/deleted/list": {
+    data: import("../../../../src/protocol/native/wire.js").DeletedThreadSummary[];
+  };
+  "zen/thread/restore": { thread: ThreadSnapshot };
   "zen/thread/create-child": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {
@@ -350,9 +360,10 @@ export interface ServerRequestParams {
     itemId: string;
     startedAtMs: number;
     environmentId: null;
-    reason: null;
+    reason: string | null;
     command: string;
     approvalScope?: "once";
+    approvalTarget?: Readonly<{ key: string; label: string }>;
     toolName?: string;
     toolArguments?: Readonly<Record<string, unknown>>;
     cwd: string;
