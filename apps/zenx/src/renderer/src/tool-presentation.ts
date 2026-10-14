@@ -95,7 +95,40 @@ export function commandPhaseLabel(phase: CommandPhase): string {
   } as const;
   return i18n.t(`shell:${keys[phase]}`);
 }
+/** Presentation only: a nonzero shell result is not proof of an execution fault
+ * or an empty search. Never inspect command/output text or change task phases. */
+export function isShellNonzeroResult(item: CommandItem): boolean {
+  if (
+    commandPhase(item) !== "failed" ||
+    !Number.isSafeInteger(item.exitCode) ||
+    item.exitCode === null ||
+    item.exitCode === 0
+  )
+    return false;
+  if (item.contentType !== "application/vnd.zen.tool-task+json")
+    return item.toolName === "shell";
+  const task = commandTask(item);
+  const data = item.structuredContent as Record<string, unknown> | undefined;
+  if (
+    task?.phase !== "failed" ||
+    data?.tool_name !== "shell" ||
+    data.exit_code !== item.exitCode
+  )
+    return false;
+  // Preserve explicit signal/lifecycle failures. Legacy and remote results may
+  // lack these facts; the deliberately broad label makes no spawn/exit claim.
+  if (data.foreground_signal !== undefined && data.foreground_signal !== null)
+    return false;
+  if (
+    data.foreground_exit_code !== undefined &&
+    data.foreground_exit_code !== item.exitCode
+  )
+    return false;
+  return data.foreground !== "running" && data.stdio !== "open";
+}
+
 export function commandStatus(item: CommandItem): string {
+  if (isShellNonzeroResult(item)) return i18n.t("shell:shellNonzeroStatus");
   const phase = commandPhase(item);
   if (phase === "completed")
     return item.toolName === "wait"

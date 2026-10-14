@@ -2061,6 +2061,10 @@ button:disabled {
 .tool-status.completed {
   color: var(--good);
 }
+.tool-status.shell-nonzero,
+.shell-nonzero-note {
+  color: var(--warn);
+}
 .tool-status.failed,
 .tool-status.declined {
   color: var(--danger);
@@ -9867,6 +9871,7 @@ button:disabled {
 .trace-counts .trace-failed {
   color: var(--danger);
 }
+.trace-counts .trace-nonzero,
 .trace-counts .trace-pending {
   color: var(--warn);
 }
@@ -10584,13 +10589,12 @@ button:disabled {
   color: var(--text-3);
   background: transparent;
   border: 0;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
 }
 .model-debug-tab[aria-pressed="true"] {
-  border-bottom-color: var(--accent);
+  background: var(--color-surface-active);
   color: var(--text);
 }
 .model-debug-tab:disabled {
@@ -10881,7 +10885,8 @@ button:disabled {
   scrollbar-width: none;
 }
 .model-debug-tab {
-  padding: 11px 0;
+  padding: 6px 10px;
+  margin: 5px 0;
   font-size: 12px;
 }
 .model-debug-content-toolbar {
