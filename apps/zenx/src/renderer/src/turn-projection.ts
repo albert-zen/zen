@@ -428,7 +428,20 @@ export function traceSummary(
   }
   if (activity.current) return commandTitle(activity.current);
   if (activity.total === 0) return i18n.t("shell:thoughts");
-  return i18n.t("shell:toolCalls", { count: activity.total });
+  // Keep the recent action context after settlement, without presenting the
+  // call count as successful work. Full chronological detail stays in the fold.
+  return [
+    i18n.t("shell:toolCalls", { count: activity.total }),
+    ...commands
+      .slice(-3)
+      .reverse()
+      .map((item) => {
+        const phase = observedCommandPhase(item, index);
+        return phase === commandPhase(item)
+          ? commandSummary(item)
+          : `${commandTitle(item)} · ${commandPhaseLabel(phase).toLowerCase()}`;
+      }),
+  ].join(" · ");
 }
 
 export function commandLabel(command: string): string {

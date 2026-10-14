@@ -225,6 +225,11 @@ test("details retain focus, title directly renames, and late save cannot close a
     )!;
     assert.ok(status.querySelector('[aria-label="1 automation"]'));
     assert.ok(status.querySelector('[aria-label="Running"]'));
+    assert.equal(
+      document.querySelector('[data-thread-id="a"] .thread-state-inline'),
+      null,
+      "running status is not duplicated beside the model",
+    );
     assert.deepEqual(
       Array.from(status.querySelectorAll("svg")).map((icon) => [
         icon.getAttribute("width"),

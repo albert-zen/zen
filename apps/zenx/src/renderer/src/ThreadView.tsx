@@ -2899,6 +2899,7 @@ function TraceSequence({
           onClick={toggleExpanded}
         >
           <TraceItemHeader
+            turnRunning={turn.status === "inProgress"}
             item={singleton}
             expandable
             observations={observations}
@@ -2910,6 +2911,7 @@ function TraceSequence({
       ) : (
         <div className="trace-item-static">
           <TraceItemHeader
+            turnRunning={turn.status === "inProgress"}
             item={singleton!}
             expandable={false}
             observations={observations}
@@ -3008,6 +3010,7 @@ function TraceSequence({
                           }}
                         >
                           <TraceItemHeader
+                            turnRunning={turn.status === "inProgress"}
                             item={item}
                             expandable
                             observations={observations}
@@ -3019,6 +3022,7 @@ function TraceSequence({
                       ) : (
                         <div className="trace-item-static">
                           <TraceItemHeader
+                            turnRunning={turn.status === "inProgress"}
                             item={item}
                             expandable={false}
                             observations={observations}
@@ -3051,6 +3055,7 @@ function TraceSequence({
 }
 
 function TraceItemHeader({
+  turnRunning,
   item,
   observations,
   expandable,
@@ -3060,7 +3065,14 @@ function TraceItemHeader({
   expandable: boolean;
   observations: TraceObservationIndex;
   approvalPending: boolean;
+  turnRunning: boolean;
 }) {
+  const active =
+    turnRunning &&
+    !approvalPending &&
+    (item.type === "reasoning"
+      ? item.status === "inProgress"
+      : observedCommandPhase(item, observations) === "running");
   return (
     <>
       <Icon
@@ -3076,7 +3088,9 @@ function TraceItemHeader({
           {toolPresentation(item.toolName ?? item.command).category}
         </strong>
       )}
-      <span title={traceItemLabel(item)}>{traceItemLabel(item)}</span>
+      <span title={traceItemLabel(item)}>
+        <ActivityText active={active}>{traceItemLabel(item)}</ActivityText>
+      </span>
       <span className="trace-item-status">
         {approvalPending ? (
           <small className="tool-status">

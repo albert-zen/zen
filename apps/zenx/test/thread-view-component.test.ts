@@ -3875,3 +3875,45 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
   assert.match(remoteHtml, /Remote: Research worker/);
   assert.match(remoteHtml, /peer-reported/);
 });
+
+test("singleton activity highlight follows actual receipt and turn lifetime", () => {
+  const base = commandItem("activity-call", "sleep 2");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  for (const turnStatus of [
+    "inProgress",
+    "completed",
+    "failed",
+    "interrupted",
+  ] as const) {
+    for (const phase of [
+      "running",
+      "completed",
+      "failed",
+      "cancelled",
+      "cancel_requested",
+      "cancellation_unconfirmed",
+      "queued",
+    ] as const) {
+      const html = renderTurns([
+        turnWithItems(turnStatus, [
+          {
+            ...base,
+            toolName: "shell",
+            contentType: "application/vnd.zen.tool-task+json",
+            structuredContent: { task_id: "activity-task", status: phase },
+          },
+        ]),
+      ]);
+      const dom = new JSDOM(html);
+      assert.equal(
+        dom.window.document
+          .querySelector(".trace-singleton .activity-text")
+          ?.getAttribute("data-active") === "true",
+        turnStatus === "inProgress" && phase === "running",
+        `${turnStatus}/${phase}`,
+      );
+      dom.window.close();
+    }
+  }
+});

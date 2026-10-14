@@ -2094,11 +2094,9 @@ function ThreadRow({
               </span>
             </>
           )}
-          {pendingApproval || hasActiveTurn ? (
+          {pendingApproval ? (
             <span className="thread-state-inline">
-              {pendingApproval
-                ? i18n.t("shell:needsYourApproval")
-                : i18n.t("shell:working")}
+              {i18n.t("shell:needsYourApproval")}
             </span>
           ) : null}
         </span>
