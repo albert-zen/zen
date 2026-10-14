@@ -34,6 +34,7 @@ import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import {
   FakeModel,
   compileModelMessages,
+  retryableModelSampleError,
   type ModelAdapter,
   type ModelEvent,
   type ModelMessage,
@@ -1788,9 +1789,8 @@ test("partial model text is retained when the model ends incomplete", async () =
 });
 
 function retryableStreamError(message: string): Error {
-  // Mirrors the OpenAiCompatibleModelError stream-failure contract without
-  // importing the concrete adapter into runtime tests.
-  return Object.assign(new Error(message), { retryable: true });
+  // The shared adapter contract for transient sample failures.
+  return retryableModelSampleError(message);
 }
 
 function retryableDiagnosedStreamError(message: string): Error {
