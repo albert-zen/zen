@@ -2665,10 +2665,30 @@ export function ContextUsageIndicator({
   });
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const cancelClose = () => clearTimeout(closeTimer.current);
+  const show = () => {
+    cancelClose();
+    setOpen(true);
+  };
+  const close = () => {
+    cancelClose();
+    setOpen(false);
+  };
+  const leave = () => {
+    cancelClose();
+    // Match the send panel's grace period for imperfect pointer paths.
+    closeTimer.current = setTimeout(() => {
+      if (!rootRef.current?.contains(document.activeElement)) setOpen(false);
+    }, 200);
+  };
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) close();
     };
     document.addEventListener("mousedown", closeOutside);
     return () => document.removeEventListener("mousedown", closeOutside);
@@ -2762,18 +2782,15 @@ export function ContextUsageIndicator({
     <div
       className="context-usage-indicator"
       ref={rootRef}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={(event) => {
-        if (!event.currentTarget.contains(document.activeElement))
-          setOpen(false);
-      }}
+      onMouseEnter={show}
+      onMouseLeave={leave}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+        if (!event.currentTarget.contains(event.relatedTarget)) close();
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
-          setOpen(false);
+          close();
         }
       }}
     >
@@ -2784,8 +2801,8 @@ export function ContextUsageIndicator({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={i18n.t("shell:openContextDetails", { details: tooltip })}
-        onClick={() => setOpen(true)}
-        onFocus={() => setOpen(true)}
+        onClick={show}
+        onFocus={show}
       >
         <svg aria-hidden="true" viewBox="0 0 20 20">
           <circle className="context-usage-track" cx="10" cy="10" r={radius} />
@@ -2837,7 +2854,7 @@ export function ContextUsageIndicator({
               type="button"
               disabled={compactDisabled || onCompact === undefined}
               onClick={() => {
-                setOpen(false);
+                close();
                 void onCompact?.();
               }}
             >

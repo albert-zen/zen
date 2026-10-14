@@ -381,7 +381,8 @@ test("context pressure above the configured window keeps the real percent in its
   assert.match(html, /stroke-dasharray="1 1"/u);
 });
 
-test("context hover remains open across a real gap corridor above and below the ring, then closes outside or on Escape", async () => {
+test("context hover remains open across a real gap corridor above and below the ring, then closes outside or on Escape", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   for (const placement of ["above", "below"] as const) {
     await withDom(async (root) => {
       const anchorTop = placement === "above" ? 300 : 4;
@@ -449,6 +450,10 @@ test("context hover remains open across a real gap corridor above and below the 
           }),
         ),
       );
+      assert.ok(document.querySelector('[role="dialog"]'));
+      await act(async () => t.mock.timers.tick(199));
+      assert.ok(document.querySelector('[role="dialog"]'));
+      await act(async () => t.mock.timers.tick(1));
       assert.equal(document.querySelector('[role="dialog"]'), null);
       await act(async () => ring.focus());
       assert.ok(document.querySelector('[role="dialog"]'));
@@ -463,6 +468,77 @@ test("context hover remains open across a real gap corridor above and below the 
       assert.equal(document.querySelector('[role="dialog"]'), null);
     });
   }
+});
+
+test("context hover grace cancels on re-entry, preserves focused actions, and dismisses immediately", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await withDom(async (root) => {
+    let compactions = 0;
+    await act(async () =>
+      root.render(
+        createElement(ContextUsageIndicator, {
+          context: usageProjection().context,
+          onCompact: async () => {
+            compactions += 1;
+          },
+        }),
+      ),
+    );
+    const ring = requiredButton(".context-usage-trigger");
+    const enter = async (element: HTMLElement) =>
+      act(async () => {
+        element.dispatchEvent(
+          new window.MouseEvent("mouseover", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        );
+      });
+    const leave = async (element: HTMLElement) =>
+      act(async () => {
+        element.dispatchEvent(
+          new window.MouseEvent("mouseout", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        );
+      });
+    await enter(ring);
+    for (let i = 0; i < 3; i += 1) {
+      await leave(ring);
+      await act(async () => t.mock.timers.tick(150));
+      await enter(requiredElement<HTMLElement>(".context-usage-popover"));
+      await act(async () => t.mock.timers.tick(250));
+      assert.ok(document.querySelector('[role="dialog"]'));
+    }
+    const compact = requiredButton(".context-usage-compact");
+    await act(async () => compact.focus());
+    await leave(compact);
+    await act(async () => t.mock.timers.tick(250));
+    assert.ok(document.querySelector('[role="dialog"]'));
+    await act(async () => compact.click());
+    assert.equal(compactions, 1);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await leave(ring);
+    await act(async () =>
+      document.body.dispatchEvent(
+        new window.MouseEvent("mousedown", { bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await leave(ring);
+    await act(async () =>
+      ring.dispatchEvent(
+        new window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await act(async () => t.mock.timers.tick(250));
+    assert.ok(document.querySelector('[role="dialog"]'));
+  });
 });
 
 test("compaction progress is a transcript item and completed items reveal exact effective messages", async () => {
