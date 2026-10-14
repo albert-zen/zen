@@ -30,3 +30,5 @@ npm run check   # format + lint + typecheck + unit
 ## ZenX UI 改动
 
 修改 ZenX 页面、组件、样式或交互前，读取 `apps/zenx/docs/ui-ux.md`。它是持久产品设计规则的唯一权威；验收遵循其中的页面清单、共享组件、平台标题栏与真实操作要求，不从历史截图反推当前合同。
+
+凡涉及 UI 的 PR，必须在 PR 正文或评论中嵌入与验收版本对应的真实界面截图，标明合成数据边界，并在合并前复核。

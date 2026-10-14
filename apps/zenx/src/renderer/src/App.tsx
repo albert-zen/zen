@@ -2909,10 +2909,6 @@ function AppContent() {
           onNewThread={(workspace) => {
             openNewThreadDraft(workspace);
           }}
-          onImportSession={() => {
-            setImportSessionOpen(true);
-            void loadComposerCatalog();
-          }}
           onAddProject={() => openProjectPicker("add-project")}
           newThreadDisabled={newThreadPending}
           onRemoveProject={(workspace) => {
@@ -3036,6 +3032,10 @@ function AppContent() {
           <main className="workspace">
             <SettingsView
               active={page === "settings"}
+              onImportSession={() => {
+                setImportSessionOpen(true);
+                void loadComposerCatalog();
+              }}
               archivedError={threadListErrors.archived}
               archivedLoading={!threadListLoaded.archived}
               archivedThreads={archivedSummaries}
