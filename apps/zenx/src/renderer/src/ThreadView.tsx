@@ -37,6 +37,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
+import type { FailureItem } from "../../../../../src/item.js";
 import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
 import type {
   NativeQueueEditParams,
@@ -1122,6 +1123,13 @@ function ThreadViewContent({
                               item.turnId === row.turn.id,
                           ) ?? false
                         }
+                        failureDetail={
+                          thread?.canonicalItems?.find(
+                            (item): item is FailureItem =>
+                              item.type === "failure" &&
+                              item.turnId === row.turn.id,
+                          ) ?? null
+                        }
                         onContinue={() =>
                           composerTextareaRef.current?.focus({
                             preventScroll: true,
@@ -2119,6 +2127,7 @@ function TurnBlock({
   pluginSnapshot,
   pluginUiRegistry,
   usage,
+  failureDetail,
 }: {
   turn: Turn;
   stopping: boolean;
@@ -2137,6 +2146,7 @@ function TurnBlock({
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
   usage?: ModelUsageAggregate;
+  failureDetail?: FailureItem | null;
 }) {
   const { i18n: activeI18n } = useTranslation("shell");
   const observations = useMemo(
@@ -2348,15 +2358,19 @@ function TurnBlock({
                     : i18n.t("shell:interrupted")}
             </strong>
           </div>
-          <p>
-            {activity.outstanding > 0
-              ? i18n.t("shell:stopUnconfirmedNote")
-              : confirmedStopped
-                ? i18n.t("shell:stoppedNote")
-                : turn.status === "failed"
-                  ? projection.terminalFallback
-                  : i18n.t("shell:interruptedNote")}
-          </p>
+          {activity.outstanding > 0 ? (
+            <p>{i18n.t("shell:stopUnconfirmedNote")}</p>
+          ) : confirmedStopped ? (
+            <p>{i18n.t("shell:stoppedNote")}</p>
+          ) : turn.status === "failed" ? (
+            <TurnFailureOutcome
+              text={projection.terminalFallback ?? ""}
+              retried={failureDetail?.retried}
+              diagnosticId={failureDetail?.diagnosticId}
+            />
+          ) : (
+            <p>{i18n.t("shell:interruptedNote")}</p>
+          )}
           {activity.outstanding > 0 && turn.error?.message ? (
             <p className="turn-outcome-error" role="alert">
               {turn.error.message}
@@ -2376,6 +2390,80 @@ function TurnBlock({
         </div>
       )}
     </section>
+  );
+}
+
+/** Failed turns show the actionable first line up front; the full provider
+ * message, retry count and diagnostics entry stay one click away. */
+function TurnFailureOutcome({
+  text,
+  retried,
+  diagnosticId,
+}: {
+  text: string;
+  retried: number | undefined;
+  diagnosticId: string | undefined;
+}) {
+  const [showDetails, setShowDetails] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState(false);
+  const firstLine = text.split("\n", 1)[0] ?? "";
+  const summary =
+    firstLine.length > 240 ? `${firstLine.slice(0, 240)}…` : firstLine;
+  const hasMore = text !== summary;
+  const hasDetails = hasMore || diagnosticId !== undefined;
+  return (
+    <div className="turn-outcome-failure">
+      <p>
+        {summary}
+        {hasMore && !showDetails ? " …" : ""}
+        {retried !== undefined ? (
+          <span className="turn-outcome-retried">
+            {` · ${i18n.t("shell:failureRetriedNote", { count: retried })}`}
+          </span>
+        ) : null}
+      </p>
+      {showDetails ? (
+        <div>
+          <p className="turn-outcome-error" role="alert">
+            {text}
+          </p>
+          {diagnosticId !== undefined ? (
+            <p>{i18n.t("shell:failureDiagnosticId", { id: diagnosticId })}</p>
+          ) : null}
+        </div>
+      ) : null}
+      {diagnosticsError ? (
+        <p role="alert">{i18n.t("shell:couldNotOpenModelDiagnostics")}</p>
+      ) : null}
+      <div className="turn-outcome-actions">
+        {hasDetails ? (
+          <button
+            type="button"
+            className="quiet-button"
+            aria-expanded={showDetails}
+            onClick={() => setShowDetails(!showDetails)}
+          >
+            {showDetails
+              ? i18n.t("shell:hideFailureDetails")
+              : i18n.t("shell:showFailureDetails")}
+          </button>
+        ) : null}
+        {diagnosticId !== undefined ? (
+          <button
+            type="button"
+            className="quiet-button"
+            onClick={() => {
+              setDiagnosticsError(false);
+              void window.zenx.settings
+                .openDiagnosticsFolder("model")
+                .catch(() => setDiagnosticsError(true));
+            }}
+          >
+            {i18n.t("shell:openDiagnosticsFolder")}
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

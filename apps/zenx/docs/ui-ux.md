@@ -564,6 +564,12 @@ During a live foreground Computer operation, the Host registers global Escape on
 
 The actual HTML renderer is also used by `test/fixtures/foreground-activity-visual.html`. Reduced motion removes animations; forced colors retain readable status and borders. Browser preview verifies presentation only. Native focus, physical pointer pass-through, fullscreen behavior and monitor changes need their own OS evidence. This slice covers explicit foreground tools, not every possible side effect of a provider currently declared background-safe; provider-specific activation must be fixed at its real admission/dispatch boundary, not hidden by a late glow.
 
+### 2026-10-14: Per-tab Browser permission
+
+A single compact permission switch sits at the far right of the existing address toolbar, with the stable label “允许 Agent 操作此标签页” / “Allow Agent to operate this tab”. It indicates permission, never who is currently operating or whether the Agent is running. The user can always browse and sign in manually. Off blocks new Agent mutations on the exact tab; on only allows them again, retaining existing fresh-observation and unknown-outcome fences. Neither state starts a task, resumes a conversation or replays an action. The toolbar has no separate completion/continue action or persistent status row. Login and confirmation requests remain in the conversation.
+
+Reuse the shared switch visual and native hover title; the stable accessible label, checked state and description convey the same permission and complete rules. Already-dispatched and uncertain-action warnings are included without changing the native page bounds. The external-open arrow remains a separate action inside the URL field.
+
 ### Message-level Fork
 
 Each durable Agent message exposes a Fork icon directly after Copy in its hover/focus action row, including intermediate replies. The action binds the source Thread and exact canonical Agent Item ID; streaming-only messages cannot be fork boundaries. It uses the native Core fork with the inclusive prefix, never later Items, historical tool replay or an automatic new Turn. The original Thread is unchanged. Pending repeated clicks share one request across viewport remounts; errors remain visible and retryable. Success opens the new Thread unless newer navigation or a newer fork action superseded that intent. Touch/no-hover actions remain visible with 44px targets and keyboard focus is explicit. Existing thread-level Copy retains its latest-complete-Turn boundary.

@@ -2,6 +2,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 /** Request admission only: never consumes or replays a successful model stream. */
 export interface ModelRequestRetryOptions {
+  /** Sampling replays own their retry budget; do not nest admission retries. */
+  allowRetries?: boolean;
   random?: () => number;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
@@ -34,7 +36,7 @@ export async function fetchModelResponse(
       ![408, 429, 500, 502, 503, 504].includes(response.status)
     )
       return response;
-    if (attempt === 3) {
+    if (attempt === 3 || options.allowRetries === false) {
       if (response !== undefined) return response;
       throw failure;
     }
@@ -71,7 +73,7 @@ function retryAfterMilliseconds(value: string): number {
   return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
 }
 
-function isTransientTransportError(error: unknown): boolean {
+export function isTransientTransportError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const cause = error.cause as { code?: string } | undefined;
   if (cause?.code !== undefined) {

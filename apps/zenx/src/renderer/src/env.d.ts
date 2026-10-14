@@ -218,7 +218,7 @@ declare global {
         recordDiagnostic(
           event: import("../../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
         ): Promise<void>;
-        openDiagnosticsFolder(): Promise<void>;
+        openDiagnosticsFolder(source?: "model"): Promise<void>;
         addProvider(
           provider: ZenXProviderProfile,
           apiKey?: string,

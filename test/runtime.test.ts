@@ -1787,6 +1787,203 @@ test("partial model text is retained when the model ends incomplete", async () =
   assert.equal(snapshot.turns[0]?.status, "failed");
 });
 
+function retryableStreamError(message: string): Error {
+  // Mirrors the OpenAiCompatibleModelError stream-failure contract without
+  // importing the concrete adapter into runtime tests.
+  return Object.assign(new Error(message), { retryable: true });
+}
+
+function retryableDiagnosedStreamError(message: string): Error {
+  return Object.assign(new Error(message), {
+    retryable: true,
+    diagnosticId: "diag-stream-1",
+  });
+}
+
+function sampleRetryRuntime(): AgentRuntime {
+  return new AgentRuntime({
+    toolEnvironment: new ToolEnvironment({
+      runtimes: [new ShellToolRuntime()],
+    }),
+    sampleRetry: { maxAttempts: 3, baseDelayMs: 0 },
+  });
+}
+
+test("HTTP credentials crossing the message bound never reach the journal or later model context", async () => {
+  const key = "private-provider-key-value";
+  const model = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: key,
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({
+          error: { message: "x".repeat(8_192 - key.length + 1) + key },
+        }),
+        { status: 400 },
+      )) as typeof fetch,
+  });
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(
+    JSON.stringify(snapshot.items).includes(key.slice(0, -1)),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(compileModelMessages(snapshot.items)).includes(
+      key.slice(0, -1),
+    ),
+    false,
+  );
+  assert.equal(
+    projectThread(snapshot, {
+      includeTurns: true,
+    }).turns[0]?.error?.message.includes(key.slice(0, -1)),
+    false,
+  );
+});
+
+test("retryable model stream failures are replayed within the turn", async () => {
+  let attempts = 0;
+  const model: ModelAdapter = {
+    provider: "retryable-stream",
+    async *stream(): AsyncIterable<ModelEvent> {
+      attempts += 1;
+      if (attempts === 1) {
+        yield { type: "reasoning_started", reasoningId: "attempt-one" };
+        yield {
+          type: "reasoning_content_delta",
+          reasoningId: "attempt-one",
+          delta: "cut off",
+        };
+        yield { type: "text_delta", delta: "partial draft" };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        throw retryableStreamError(
+          "OpenAI-compatible model stream had an incomplete tool call",
+        );
+      }
+      yield { type: "text_delta", delta: "complete answer" };
+      yield { type: "usage", inputTokens: 12, outputTokens: 4 };
+    },
+  };
+  const server = createServer({ model, runtime: sampleRetryRuntime() });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(attempts, 2);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  const partial = snapshot.items.find(
+    (item) => item.type === "agent_message" && item.text === "partial draft",
+  );
+  assert.equal(partial?.type, "agent_message");
+  assert.equal(partial.incomplete, true);
+  assert(
+    snapshot.items.some(
+      (item) =>
+        item.type === "agent_message" &&
+        item.text === "complete answer" &&
+        item.incomplete === undefined,
+    ),
+  );
+  assert.equal(
+    snapshot.items.some((item) => item.type === "failure"),
+    false,
+  );
+  assert(
+    snapshot.items.some(
+      (item) => item.type === "reasoning" && item.incomplete === true,
+    ),
+  );
+  // Each billed attempt records its own usage item.
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "model_usage").length,
+    2,
+  );
+  // Superseded partial output never re-enters the model context.
+  const messages = compileModelMessages(snapshot.items);
+  const assistantMessages = messages.filter(
+    (message) => message.role === "assistant",
+  );
+  assert.equal(assistantMessages.length, 1);
+  assert.deepEqual(assistantMessages[0], {
+    role: "assistant",
+    text: "complete answer",
+  });
+  assert.equal(
+    messages.some((message) => message.role === "reasoning"),
+    false,
+  );
+});
+
+test("sample retries are bounded and surface the failure after exhaustion", async () => {
+  let attempts = 0;
+  const model: ModelAdapter = {
+    provider: "always-failing-stream",
+    async *stream(): AsyncIterable<ModelEvent> {
+      attempts += 1;
+      yield { type: "text_delta", delta: `draft ${String(attempts)}` };
+      throw retryableDiagnosedStreamError(
+        "OpenAI-compatible model returned invalid tool arguments",
+      );
+    },
+  };
+  const server = createServer({ model, runtime: sampleRetryRuntime() });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(attempts, 3);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.message,
+    "OpenAI-compatible model returned invalid tool arguments",
+  );
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.retried,
+    2,
+  );
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.diagnosticId,
+    "diag-stream-1",
+  );
+  const partials = snapshot.items.filter(
+    (item): item is Extract<CanonicalItem, { type: "agent_message" }> =>
+      item.type === "agent_message" && item.text.startsWith("draft "),
+  );
+  assert.equal(partials.length, 3);
+  assert(partials.every((item) => item.incomplete === true));
+});
+
+test("non-retryable model errors are not replayed", async () => {
+  let attempts = 0;
+  const model: ModelAdapter = {
+    provider: "fatal-stream",
+    async *stream(): AsyncIterable<ModelEvent> {
+      attempts += 1;
+      yield { type: "text_delta", delta: "partial" };
+      throw new Error("provider configuration rejected the request shape");
+    },
+  };
+  const server = createServer({ model, runtime: sampleRetryRuntime() });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(attempts, 1);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+});
+
 test("canonical items and exposed snapshots are immutable at runtime", async () => {
   const server = createServer();
   const thread = await server.startThread();

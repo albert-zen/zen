@@ -4,6 +4,7 @@ import {
   foregroundAgentName,
   stopForegroundOwner,
 } from "./foreground-activity-owner.js";
+import { registerDiagnosticsFolderIpc } from "./diagnostics-folder-ipc.js";
 import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
@@ -1080,6 +1081,7 @@ async function bootstrapZenX(): Promise<void> {
     settingsDiagnostics,
     operationalDiagnostics,
     join(userDataDirectory, "diagnostics"),
+    join(zenDataDirectory, "diagnostics"),
     async () => {
       if (appServerManager?.status.type === "ready") return;
       const hostConfig = await withZenXProviderTransports(
@@ -1741,6 +1743,7 @@ function installSettingsIpc(
   diagnostics: SettingsDiagnosticLog,
   operationalDiagnostics: OperationalDiagnosticLog,
   diagnosticsDirectory: string,
+  modelDiagnosticsDirectory: string,
   startHostIfNeeded: () => Promise<void>,
   refreshProjects: () => Promise<void>,
 ): void {
@@ -1767,11 +1770,9 @@ function installSettingsIpc(
       }
     },
   );
-  ipcMain.handle(ipcChannels.settingsDiagnosticsOpenFolder, async () => {
-    await mkdir(diagnosticsDirectory, { recursive: true, mode: 0o700 });
-    const failure = await shell.openPath(diagnosticsDirectory);
-    if (failure.length > 0)
-      throw new Error("Could not open diagnostics folder");
+  registerDiagnosticsFolderIpc({
+    settingsDirectory: diagnosticsDirectory,
+    modelDirectory: modelDiagnosticsDirectory,
   });
   let computerVerification: ZenXComputerAccessVerification | undefined;
   let verificationStatus: string | undefined;
