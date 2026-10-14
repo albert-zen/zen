@@ -1495,6 +1495,22 @@ button:disabled {
   color: var(--text-3);
   font-size: var(--font-size-caption);
 }
+.thread-title-line .thread-title-rename {
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+}
+@media (pointer: coarse) {
+  .thread-title-line .thread-title-rename {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+  }
+}
 .thread-title-line button:hover,
 .thread-title-line button:focus-visible {
   color: var(--text);

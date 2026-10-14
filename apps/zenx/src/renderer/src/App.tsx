@@ -4517,10 +4517,12 @@ function ThreadTitleEditor({
       {editable ? (
         <button
           type="button"
+          className="thread-title-rename"
           aria-label={i18n.t("shell:renameThreadTitle")}
+          title={i18n.t("shell:renameThreadTitle")}
           onClick={() => setEditing(true)}
         >
-          {i18n.t("shell:rename")}
+          <Icon name="compose" size={16} />
         </button>
       ) : null}
       {editable && projection?.status === "generating" ? (
