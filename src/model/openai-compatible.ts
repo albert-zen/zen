@@ -1,5 +1,8 @@
 import { historicalCallId, historicalToolName } from "./imported-history.js";
-import { fetchModelResponse } from "./request-retry.js";
+import {
+  fetchModelResponse,
+  isTransientTransportError,
+} from "./request-retry.js";
 import { randomUUID } from "node:crypto";
 import type {
   ModelAdapter,
@@ -191,6 +194,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             body,
           }),
         request.signal,
+        { allowRetries: request.isSamplingRetry !== true },
       );
     } catch {
       request.signal.throwIfAborted();
@@ -689,7 +693,30 @@ async function* parseChatCompletionStream(
 
   try {
     stream: while (true) {
-      const result = await readWithAbort(reader, signal);
+      let result: ReadableStreamReadResult<Uint8Array>;
+      try {
+        result = await readWithAbort(reader, signal);
+      } catch (error) {
+        signal.throwIfAborted();
+        if (
+          error instanceof Error &&
+          (error.name === "AbortError" || error.name === "TimeoutError")
+        )
+          throw error;
+        if (
+          isTransientTransportError(error) ||
+          (error instanceof Error &&
+            (error.cause as { code?: string } | undefined)?.code ===
+              "UND_ERR_BODY_TIMEOUT")
+        ) {
+          throw modelError(
+            "transport",
+            "OpenAI-compatible model stream read failed",
+            true,
+          );
+        }
+        throw error;
+      }
       if (result.done) {
         reachedEof = true;
         break;
@@ -736,6 +763,7 @@ async function* parseChatCompletionStream(
     throw modelError(
       "protocol",
       "OpenAI-compatible model stream ended without a terminal marker",
+      true,
     );
   }
 
@@ -748,6 +776,7 @@ async function* parseChatCompletionStream(
     throw modelError(
       "protocol",
       "OpenAI-compatible model stream ended inconsistently",
+      true,
     );
   }
 
@@ -759,6 +788,7 @@ async function* parseChatCompletionStream(
     throw modelError(
       "protocol",
       "OpenAI-compatible model stream omitted its tool call",
+      true,
     );
   }
 
@@ -778,6 +808,7 @@ async function* parseChatCompletionStream(
       throw modelError(
         "protocol",
         "OpenAI-compatible model stream had an incomplete tool call",
+        true,
       );
     }
     if (!allowedToolNames.has(call.name)) {
@@ -929,6 +960,7 @@ async function* consumePayload(
         throw modelError(
           "protocol",
           "OpenAI-compatible model stream had invalid tool calls",
+          true,
         );
       }
       if (state.finishReason !== undefined && delta.tool_calls.length > 0) {
@@ -984,6 +1016,7 @@ function parseChunk(payload: string): Readonly<Record<string, unknown>> {
     throw modelError(
       "protocol",
       "OpenAI-compatible model stream contained invalid JSON",
+      true,
     );
   }
   return record(value, "stream chunk");
@@ -1074,6 +1107,7 @@ function mergeToolCalls(
       throw modelError(
         "protocol",
         "OpenAI-compatible model stream had an invalid tool call index",
+        true,
       );
     }
 
@@ -1086,6 +1120,7 @@ function mergeToolCalls(
       throw modelError(
         "protocol",
         "OpenAI-compatible model stream changed a tool call id",
+        true,
       );
     }
 
@@ -1106,6 +1141,7 @@ function mergeToolCalls(
       throw modelError(
         "protocol",
         "OpenAI-compatible model stream changed a tool name",
+        true,
       );
     }
 
@@ -1116,6 +1152,7 @@ function mergeToolCalls(
       throw modelError(
         "protocol",
         "OpenAI-compatible model stream had invalid tool arguments",
+        true,
       );
     }
 
@@ -1174,12 +1211,14 @@ function parseToolArguments(value: string): Record<string, unknown> {
     throw modelError(
       "protocol",
       "OpenAI-compatible model returned invalid tool arguments",
+      true,
     );
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw modelError(
       "protocol",
       "OpenAI-compatible model returned invalid tool arguments",
+      true,
     );
   }
   return parsed as Record<string, unknown>;
@@ -1322,6 +1361,7 @@ function isRetryableStatus(status: number): boolean {
 function modelError(
   kind: Exclude<OpenAiCompatibleModelErrorKind, "http">,
   message: string,
+  retryable = false,
 ): OpenAiCompatibleModelError {
-  return new OpenAiCompatibleModelError(kind, message);
+  return new OpenAiCompatibleModelError(kind, message, { retryable });
 }

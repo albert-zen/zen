@@ -1060,7 +1060,13 @@ test("rejects malformed or unavailable tool calls instead of executing raw input
 
     await assert.rejects(
       collect(adapter.stream(request({ tools: [shellTool()] }))),
-      /invalid tool arguments/u,
+      (error: unknown) => {
+        assert.ok(error instanceof OpenAiCompatibleModelError);
+        assert.match(error.message, /invalid tool arguments/u);
+        assert.equal(error.kind, "protocol");
+        assert.equal(error.retryable, true);
+        return true;
+      },
     );
   });
 
@@ -1255,6 +1261,87 @@ test("normalizes HTTP and streaming provider errors without leaking secrets", as
         return true;
       },
     );
+  });
+});
+
+test("marks truncated tool-call streams as retryable sample failures", async () => {
+  // Observed from DashScope qwen3.8-flash: the only tool-call chunk carried an
+  // id but no function name, then the provider ended the stream normally.
+  const adapter = adapterReturning(
+    streamResponse([
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call-1",
+                  type: "function",
+                  function: { arguments: "" },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      }),
+      chunk({
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      }),
+      "[DONE]",
+    ]),
+  );
+
+  await assert.rejects(
+    collect(adapter.stream(request({ tools: [shellTool()] }))),
+    (error: unknown) => {
+      assert.ok(error instanceof OpenAiCompatibleModelError);
+      assert.match(error.message, /incomplete tool call/u);
+      assert.equal(error.kind, "protocol");
+      assert.equal(error.retryable, true);
+      assert.equal(error.status, undefined);
+      return true;
+    },
+  );
+});
+
+test("marks mid-stream transport failures as retryable sample failures", async () => {
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    fetch: (async () =>
+      new Response(
+        new ReadableStream<string>({
+          start(controller) {
+            controller.enqueue(
+              sse(
+                chunk({
+                  choices: [{ index: 0, delta: { content: "partial" } }],
+                }),
+              ),
+            );
+            controller.error(
+              new TypeError("terminated", {
+                cause: { code: "UND_ERR_SOCKET" },
+              }),
+            );
+          },
+        }).pipeThrough(new TextEncoderStream()),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      )) as typeof fetch,
+  });
+
+  await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
+    assert.ok(error instanceof OpenAiCompatibleModelError);
+    assert.equal(error.kind, "transport");
+    assert.equal(error.retryable, true);
+    assert.equal(error.status, undefined);
+    return true;
   });
 });
 

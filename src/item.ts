@@ -367,6 +367,8 @@ export interface AgentMessageItem extends ItemBase {
   type: "agent_message";
   turnId: string;
   text: string;
+  /** Observed partial text from an interrupted model sample; never replayed. */
+  incomplete?: true;
 }
 
 /** Provider-reported usage for one stable model response. */
@@ -1059,6 +1061,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "agent_message":
       requireTurnId(item, type);
       requireString(item.text, `${type}.text`);
+      if (item.incomplete !== undefined && item.incomplete !== true) {
+        throw new Error("agent_message.incomplete must be true when present");
+      }
       break;
     case "model_usage":
       requireTurnId(item, type);
