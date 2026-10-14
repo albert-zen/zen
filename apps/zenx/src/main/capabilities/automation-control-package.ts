@@ -609,7 +609,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
       surfaceId: "triggers-page",
       panel: {
         id: "thread-wakeups",
-        title: "Trigger wakeups",
+        title: "Trigger",
         surfaceId: "trigger-panel",
       },
     });

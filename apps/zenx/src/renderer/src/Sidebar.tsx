@@ -188,6 +188,21 @@ export function Sidebar({
       return "detailed";
     }
   });
+  const [showSubagents, setShowSubagents] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem("zenx-sidebar-show-subagents") === "true"
+      );
+    } catch {
+      return false;
+    }
+  });
+  const visibleThreads = threads.filter(
+    (thread) =>
+      showSubagents ||
+      !thread.parentThreadId ||
+      pinnedThreads.some((pinned) => pinned.threadId === thread.threadId),
+  );
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   useEffect(() => {
     const api = window.zenx?.settings;
@@ -577,7 +592,28 @@ export function Sidebar({
               </strong>
             )}
             <span className="sidebar-view-actions">
-              {mode === "inbox" ? <span>{threads.length}</span> : null}
+              {mode === "inbox" ? <span>{visibleThreads.length}</span> : null}
+              <button
+                className="sidebar-inline-action sidebar-subagents-toggle"
+                type="button"
+                aria-label={i18n.t("shell:showSubagentsInSidebar")}
+                title={i18n.t("shell:showSubagentsInSidebar")}
+                aria-pressed={showSubagents}
+                onClick={() => {
+                  const next = !showSubagents;
+                  setShowSubagents(next);
+                  try {
+                    window.localStorage.setItem(
+                      "zenx-sidebar-show-subagents",
+                      String(next),
+                    );
+                  } catch {
+                    // The preference remains valid for this window.
+                  }
+                }}
+              >
+                <Icon name="users" size={14} />
+              </button>
               <button
                 className="sidebar-density-toggle"
                 type="button"
@@ -676,7 +712,7 @@ export function Sidebar({
                 {i18n.t("shell:tryAgain")}
               </button>
             </div>
-          ) : mode === "inbox" && threads.length === 0 ? (
+          ) : mode === "inbox" && visibleThreads.length === 0 ? (
             <p className="sidebar-empty">
               {i18n.t("shell:conversationsAppearHere")}
             </p>
@@ -689,7 +725,7 @@ export function Sidebar({
               onForkThread={onForkThread}
               pendingApprovalThreadIds={pendingApprovalThreadIds}
               selectedThreadId={selectedThreadId}
-              threads={threads}
+              threads={visibleThreads}
               liveThread={liveThread}
               pinnedThreadIds={pinnedThreadIds}
               watchingThreadIds={watchingThreadIds}
@@ -734,7 +770,7 @@ export function Sidebar({
                   onSidebarOrderAttempt={clearSidebarOrderError}
                   pendingApprovalThreadIds={pendingApprovalThreadIds}
                   selectedThreadId={selectedThreadId}
-                  threads={threads.filter(
+                  threads={visibleThreads.filter(
                     (thread) => !pinnedThreadIds.has(thread.threadId),
                   )}
                   liveThread={liveThread}

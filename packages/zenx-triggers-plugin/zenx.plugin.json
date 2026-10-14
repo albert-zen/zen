@@ -764,7 +764,7 @@
     "panels": [
       {
         "id": "thread-wakeups",
-        "title": "Trigger wakeups",
+        "title": "Trigger",
         "surfaceId": "trigger-panel"
       }
     ]

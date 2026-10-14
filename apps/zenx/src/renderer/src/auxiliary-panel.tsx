@@ -25,6 +25,12 @@ import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
 
+function panelIcon(pluginId: string): IconName {
+  if (pluginId === "zenx-subagents") return "users";
+  if (pluginId === "zenx-triggers") return "trigger";
+  return "layers";
+}
+
 interface ContentTab {
   id: string;
   title: string;
@@ -272,7 +278,7 @@ export function AuxiliaryPanel({
     ...panels.map((panel) => ({
       id: `plugin:${panel.key}`,
       title: panel.title,
-      icon: "layers" as const,
+      icon: panelIcon(panel.pluginId),
     })),
   ];
   const available = new Map(candidates.map((tab) => [tab.id, tab]));
@@ -879,16 +885,34 @@ export function AuxiliaryPanel({
                     </button>
                   ) : null}
                   {panels.map((panel) => (
-                    <button
-                      type="button"
-                      key={panel.key}
-                      onClick={() => void add(`plugin:${panel.key}`)}
-                    >
-                      <Icon name="layers" />
-                      <span>
-                        <strong>{panel.title}</strong>
-                      </span>
-                    </button>
+                    <div className="workspace-plugin-choice" key={panel.key}>
+                      <button
+                        type="button"
+                        onClick={() => void add(`plugin:${panel.key}`)}
+                      >
+                        <Icon name={panelIcon(panel.pluginId)} />
+                        <span>
+                          <strong>{panel.title}</strong>
+                        </span>
+                      </button>
+                      {panel.pluginId === "zenx-subagents" && snapshot ? (
+                        <GenericPluginUiHost
+                          registry={pluginUiRegistry}
+                          snapshot={snapshot}
+                          pluginId={panel.pluginId}
+                          surfaceId={panel.surfaceId}
+                          context={{
+                            threadId,
+                            quickCreate: true,
+                            active: open === true,
+                          }}
+                          theme={theme}
+                          executeCommand={window.zenx.plugins.executeCommand}
+                          readHandle={window.zenx.plugins.readHandle}
+                          navigate={navigate}
+                        />
+                      ) : null}
+                    </div>
                   ))}
                 </>
               ) : null}
