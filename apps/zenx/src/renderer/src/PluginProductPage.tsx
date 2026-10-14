@@ -107,12 +107,24 @@ export function PluginProductPage({
           className="plugin-primary-surface"
         />
         {panels.map((panel) => (
-          <aside key={panel.key} aria-label={panel.title}>
+          <aside
+            key={panel.key}
+            aria-label={
+              panel.pluginId === "zenx-triggers"
+                ? t("panels:automations")
+                : panel.title
+            }
+          >
             <PluginMenu
               snapshot={snapshot}
               pluginId={panel.pluginId}
               location="panel"
-              label={`${panel.title} commands`}
+              label={t("pluginProductPage.namedCommands", {
+                name:
+                  panel.pluginId === "zenx-triggers"
+                    ? t("panels:automations")
+                    : panel.title,
+              })}
             />
             <GenericPluginUiHost
               registry={registry}
