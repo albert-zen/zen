@@ -34,6 +34,183 @@ import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 
+test("message Fork sends the exact native Item and opens only the new Thread without a Turn", async () => {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  let resolveFork!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    resolveFork = resolve;
+  });
+  const source = threadWithMessage("boundary");
+  const copy = {
+    ...threadWithMessage("forked answer"),
+    id: "fork-1",
+    name: "Renamed source · Fork",
+  };
+  const harness = await mountApp({
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "fork-1"
+            ? copy
+            : source,
+        );
+      if (method === "zen/thread/fork") return pending;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const fork = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => {
+      fork.click();
+      fork.click();
+    });
+    assert.deepEqual(
+      requests.filter((request) => request.method === "zen/thread/fork"),
+      [
+        {
+          method: "zen/thread/fork",
+          params: {
+            sourceThreadId: "thread-1",
+            through: { type: "item", itemId: "agent-boundary" },
+            workspace: { type: "same-directory" },
+          },
+        },
+      ],
+    );
+    await act(async () =>
+      resolveFork({ thread: nativeRecoveryForThread(copy).thread }),
+    );
+    assert.deepEqual(
+      requests
+        .filter((request) => request.method === "zen/thread/resume")
+        .map((request) => request.params),
+      [{ threadId: "thread-1" }, { threadId: "fork-1" }],
+    );
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method.startsWith("turn/") ||
+          request.method === "zen/turn/send",
+      ),
+      false,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("late message Fork completion cannot replace newer navigation, including away and back", async () => {
+  let resolveFork!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    resolveFork = resolve;
+  });
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const source = threadWithMessage("boundary");
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "thread-1"
+            ? source
+            : thread("thread-2"),
+        );
+      if (method === "zen/thread/fork") return pending;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ];
+    await act(async () => rows[0]!.click());
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => button.click());
+    await act(async () => rows[1]!.click());
+    await act(async () => rows[0]!.click());
+    // The new viewport must share the still-pending exact action, not create another copy.
+    const remounted = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => remounted.click());
+    assert.equal(
+      requests.filter((request) => request.method === "zen/thread/fork").length,
+      1,
+    );
+    await act(async () =>
+      resolveFork({ thread: nativeRecoveryForThread(thread("fork-1")).thread }),
+    );
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method === "zen/thread/resume" &&
+          (request.params as { threadId: string }).threadId === "fork-1",
+      ),
+      false,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("message Fork exposes a stale-boundary failure and retries only after another explicit click", async () => {
+  let attempts = 0;
+  const methods: string[] = [];
+  const harness = await mountApp({
+    request: async (method) => {
+      methods.push(method);
+      if (method === "zen/thread/resume")
+        return resumed(threadWithMessage("boundary"));
+      if (method === "zen/thread/fork") {
+        attempts++;
+        throw new Error(
+          "The selected completed agent message is unavailable in this Thread",
+        );
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => button.click());
+    assert.equal(attempts, 1);
+    assert.equal(button.disabled, false);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /selected completed agent message is unavailable/,
+    );
+    assert.equal(
+      methods.filter((method) => method === "zen/thread/resume").length,
+      1,
+    );
+    await act(async () => button.click());
+    assert.equal(attempts, 2);
+    assert.equal(
+      methods.some(
+        (method) => method.startsWith("turn/") || method === "zen/turn/send",
+      ),
+      false,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
 test("actual App navigation restores exact thread disclosures after loading remounts", async () => {
   const a = {
     ...thread(),
@@ -1878,3 +2055,89 @@ for (const interaction of ["none", "manual", "navigate"] as const) {
     }
   });
 }
+
+test("message Fork still opens after the source Turn finishes without user navigation", async () => {
+  let notify: NotificationListener | undefined;
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const pending = deferred<unknown>();
+  const source = threadWithMessage("boundary");
+  source.turns[0]!.status = "inProgress";
+  source.turns[0]!.completedAt = null;
+  source.turns[0]!.durationMs = null;
+  source.status = { type: "active", activeFlags: [] };
+  const harness = await mountApp({
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "fork-1"
+            ? thread("fork-1")
+            : source,
+        );
+      if (method === "zen/thread/fork") return pending.promise;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => {
+      button.focus();
+      button.click();
+    });
+    assert.equal(button.disabled, true);
+    await act(async () => {
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "item_completed",
+          item: {
+            id: "turn-1-completed",
+            type: "turn_completed",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(20000).toISOString(),
+            status: "completed",
+          },
+        }),
+      );
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(2, {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        }),
+      );
+    });
+    assert.ok(
+      document.querySelector(".turn.completed"),
+      "source completed normally",
+    );
+    await act(async () =>
+      pending.resolve({
+        thread: nativeRecoveryForThread(thread("fork-1")).thread,
+      }),
+    );
+    const ids = requests
+      .filter((r) => r.method === "zen/thread/resume")
+      .map((r) => (r.params as { threadId: string }).threadId);
+    assert.ok(
+      ids.includes("fork-1"),
+      "successful fork must open when only the source Turn completed",
+    );
+  } finally {
+    await harness.unmount();
+  }
+});

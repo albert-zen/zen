@@ -18,11 +18,32 @@ class View {
     isEmpty(): boolean;
     getSize(): { width: number; height: number };
   }) => void;
+  redraw = async () => ({});
+  debuggerAttachments = 0;
+  debuggerAttached = true;
   subscriptions = 0;
   unsubscriptions = 0;
   webContents = {
     isDestroyed: () => this.destroyed,
     capturePage: async () => ({}),
+    debugger: {
+      isAttached: () => this.debuggerAttached,
+      attach: (version: string) => {
+        assert.equal(version, "1.3");
+        this.debuggerAttached = true;
+        this.debuggerAttachments++;
+      },
+      sendCommand: async (method: string, options: unknown) => {
+        assert.equal(method, "Page.captureScreenshot");
+        assert.deepEqual(options, {
+          format: "jpeg",
+          quality: 0,
+          fromSurface: true,
+          captureBeyondViewport: false,
+        });
+        return await this.redraw();
+      },
+    },
     beginFrameSubscription: (
       _dirty: boolean,
       callback: NonNullable<View["frame"]>,
@@ -968,4 +989,130 @@ test("both native PNG dimension oracles preserve float32 ceil across scale bound
       );
     }
   }
+});
+
+test("same-size stale readiness frame cannot bypass the request-driven redraw fence", async () => {
+  const f = fixture(),
+    redraw = deferred();
+  f.view.autoFrame = false;
+  let captures = 0;
+  f.view.redraw = async () => {
+    await redraw.promise;
+    return {};
+  };
+  f.view.webContents.capturePage = async () => {
+    captures++;
+    return {};
+  };
+  const result = f.render(() =>
+    captureWorkspacePage(f.view as never, () => {}),
+  );
+  await tick();
+  f.view.frame!(frame());
+  await tick();
+  assert.equal(
+    f.view.unsubscriptions,
+    1,
+    "the old surface is a valid readiness frame",
+  );
+  assert.equal(captures, 0, "readiness does not prove post-mutation pixels");
+  redraw.resolve();
+  await result;
+  assert.equal(captures, 1);
+  assert.equal(
+    f.view.debuggerAttachments,
+    0,
+    "reuse the existing target debugger",
+  );
+});
+
+test("redraw fence attaches only when needed and never detaches the shared debugger", async () => {
+  const f = fixture();
+  f.view.debuggerAttached = false;
+  await f.render(() => captureWorkspacePage(f.view as never, () => {}));
+  assert.equal(f.view.debuggerAttachments, 1);
+  assert.equal(f.view.debuggerAttached, true);
+});
+
+test("redraw failure does not fall back to copying the stale surface", async () => {
+  const f = fixture(),
+    failure = new Error("redraw failed");
+  f.view.redraw = async () => {
+    throw failure;
+  };
+  f.view.webContents.capturePage = async () => {
+    assert.fail("stale fallback forbidden");
+  };
+  await assert.rejects(
+    f.render(() => captureWorkspacePage(f.view as never, () => {})),
+    (error) => error === failure,
+  );
+  assert.equal(f.view.parent, f.owner);
+});
+
+test("a timed-out redraw never starts a late native copy", async () => {
+  const f = fixture(),
+    redraw = deferred();
+  let invalidations = 0,
+    captures = 0;
+  f.view.redraw = async () => {
+    await redraw.promise;
+    return {};
+  };
+  f.view.webContents.capturePage = async () => {
+    captures++;
+    return {};
+  };
+  await assert.rejects(
+    f.render(() =>
+      captureWorkspacePage(
+        f.view as never,
+        () => {
+          invalidations++;
+        },
+        5,
+      ),
+    ),
+    /capture timed out/,
+  );
+  redraw.resolve();
+  await tick();
+  assert.equal(invalidations, 1);
+  assert.equal(captures, 0);
+  assert.equal(f.view.parent, f.owner);
+});
+
+test("owner takeover during redraw prevents the later native copy", async () => {
+  const f = fixture(),
+    redraw = deferred(),
+    entered = deferred();
+  let captures = 0;
+  f.view.redraw = async () => {
+    entered.resolve();
+    await redraw.promise;
+    return {};
+  };
+  f.view.webContents.capturePage = async () => {
+    captures++;
+    return {};
+  };
+  const result = f.render(() =>
+    captureWorkspacePage(
+      f.view as never,
+      () => {},
+      undefined,
+      () => {
+        if (!f.current())
+          throw new Error(
+            "Browser view changed during rendering; inspect again",
+          );
+      },
+    ),
+  );
+  await entered.promise;
+  f.owner.emit("show");
+  redraw.resolve();
+  await assert.rejects(result, /view changed/);
+  assert.equal(captures, 0);
+  assert.equal(f.view.parent, f.owner);
 });

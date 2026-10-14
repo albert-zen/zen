@@ -598,17 +598,15 @@ export const en = {
   image: "Image",
   toolResult: "Tool result",
   browserWorkspace: "Browser workspace",
-  browserControlStatus: "Browser control status",
-  browserTakeControl: "Take control",
-  browserReturnControl: "Return to Agent",
-  browserAgentControl: "Agent control enabled",
-  browserHumanControl: "You control this tab",
-  browserAgentControlDetail:
-    "Take control to block new Agent actions on this tab. You can still browse manually.",
-  browserHumanControlDetail:
-    "New Agent actions are blocked on this tab. Returning control does not replay actions or start a Turn.",
+  browserAgentPermission: "Allow Agent to operate this tab",
+  browserPermissionEnabled:
+    "Allowed. Agent may operate this tab; this does not mean it is currently running.",
+  browserPermissionDisabled:
+    "Not allowed. New Agent actions on this tab are blocked.",
+  browserPermissionDetail:
+    "You can always browse and sign in manually. Turn this permission off to block new Agent actions, or back on to allow them. Enabling it does not start a task, continue a conversation, or replay earlier actions. Actions already dispatched may still finish.",
   browserActionsInFlight:
-    "{{count}} Agent action(s) already dispatched may still finish. Taking control does not cancel them.",
+    "{{count}} Agent action(s) already dispatched may still finish. Changing this permission does not cancel them.",
   browserActionOutcomeUnknown:
     "An earlier Agent action’s outcome is uncertain. Inspect the page before repeating it.",
   browserFreshObservationRequired:
@@ -1437,17 +1435,14 @@ export const zhCN = {
   image: "图片",
   toolResult: "工具结果",
   browserWorkspace: "浏览器工作区",
-  browserControlStatus: "浏览器控制状态",
-  browserTakeControl: "接管控制",
-  browserReturnControl: "交还 Agent",
-  browserAgentControl: "Agent 控制已启用",
-  browserHumanControl: "你正在控制此标签页",
-  browserAgentControlDetail:
-    "接管后会阻止 Agent 对此标签页发起新操作。你仍可手动浏览。",
-  browserHumanControlDetail:
-    "已阻止 Agent 对此标签页发起新操作。交还控制不会重放操作或启动 Turn。",
+  browserAgentPermission: "允许 Agent 操作此标签页",
+  browserPermissionEnabled:
+    "已允许。Agent 可以操作此标签页，不代表它正在运行。",
+  browserPermissionDisabled: "未允许。已阻止 Agent 对此标签页发起新操作。",
+  browserPermissionDetail:
+    "你始终可以手动浏览和登录。关闭后阻止 Agent 发起新操作，重新开启即可允许。开启不会启动任务、继续会话或重放之前的操作。已经发出的操作仍可能完成。",
   browserActionsInFlight:
-    "{{count}} 个已发出的 Agent 操作仍可能完成；接管控制不会取消它们。",
+    "{{count}} 个已发出的 Agent 操作仍可能完成；切换此权限不会取消它们。",
   browserActionOutcomeUnknown:
     "先前 Agent 操作的结果尚不确定。请先检查页面，再决定是否重复操作。",
   browserFreshObservationRequired:
