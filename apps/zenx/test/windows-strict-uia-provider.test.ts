@@ -4,6 +4,7 @@ import { ComputerZenXCapabilityPackage } from "../src/main/capabilities/computer
 import {
   WinAppStrictUiaComputerBackend,
   windowsStrictUiaCapabilityManifest,
+  StrictUiaOperationError,
 } from "../src/main/capabilities/windows-strict-uia-provider.js";
 import type { WinAppCliRunOptions } from "../src/main/capabilities/windows-computer-provider.js";
 import { OBSERVATION_CAPTURE } from "../src/main/capabilities/observation-capture.js";
@@ -65,6 +66,7 @@ function fixture(
     request: Record<string, unknown>,
     options: WinAppCliRunOptions,
   ) => unknown,
+  inspectionReply?: () => unknown,
 ) {
   let controls = [control];
   const requests: Record<string, unknown>[] = [];
@@ -101,7 +103,7 @@ function fixture(
         options.onSpawn?.(123);
         const reply =
           request.operation === "inspect"
-            ? { root, controls }
+            ? (inspectionReply?.() ?? { root, controls })
             : (action?.(request, options) ??
               (request.operation === "set_value"
                 ? { value: request.value }
@@ -280,4 +282,44 @@ test("aborted before spawn remains not dispatched and closing revokes later acti
   assert.equal(f.requests.length, 1);
   await f.backend.close();
   await assert.rejects(f.backend.inspect(target), /closed|revoked/iu);
+});
+
+test("bounded native diagnostics preserve inspect refusal and uncertain action outcomes without retry", async () => {
+  const reason = "provider_error_control_invoke_pattern_com_h80040201";
+  const inspect = fixture(undefined, () => ({
+    outcome: "not_dispatched",
+    error: reason,
+  }));
+  try {
+    await assert.rejects(
+      inspect.backend.inspect(target),
+      (error: unknown) =>
+        error instanceof StrictUiaOperationError &&
+        error.outcome === "not_dispatched" &&
+        error.message.endsWith(reason),
+    );
+    assert.equal(inspect.requests.length, 1);
+  } finally {
+    await inspect.backend.close();
+  }
+  for (const outcome of ["not_dispatched", "unknown"] as const) {
+    const action = fixture(() => ({ outcome, error: reason }));
+    try {
+      const observed = await action.backend.inspect(target);
+      await assert.rejects(
+        action.backend.press(target, observed.controls[0]!.selector),
+        (error: unknown) =>
+          error instanceof StrictUiaOperationError &&
+          error.outcome === outcome &&
+          error.message.endsWith(reason),
+      );
+      assert.equal(
+        action.requests.filter((request) => request.operation === "invoke")
+          .length,
+        1,
+      );
+    } finally {
+      await action.backend.close();
+    }
+  }
 });
