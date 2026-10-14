@@ -3032,6 +3032,51 @@ test("conversation header omits usage while Composer owns context indicator and 
       document.querySelector(".workspace-header")?.textContent ?? "",
       /Context|Thread cache|50%/u,
     );
+    for (const language of ["en", "zh-CN"]) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      const rename = titlebarSession.querySelector<HTMLButtonElement>(
+        ".thread-title-line button",
+      )!;
+      assert.equal(rename.type, "button");
+      assert.equal(rename.textContent, "");
+      assert.equal(rename.title, i18n.t("shell:renameThreadTitle"));
+      assert.equal(rename.getAttribute("aria-label"), rename.title);
+      assert.equal(
+        rename.querySelector("svg")?.getAttribute("data-icon"),
+        "compose",
+      );
+      assert.equal(rename.querySelector("svg")?.getAttribute("width"), "16");
+      assert.equal(
+        rename.querySelector("svg")?.getAttribute("aria-hidden"),
+        "true",
+      );
+      await act(async () => rename.focus());
+      assert.equal(document.activeElement, rename);
+      await act(async () => rename.click());
+      const input = titlebarSession.querySelector<HTMLInputElement>(
+        ".thread-title-form input",
+      )!;
+      assert.equal(input.value, longTitle);
+      assert.equal(document.activeElement, input);
+      await act(async () =>
+        titlebarSession
+          .querySelector<HTMLButtonElement>(
+            '.thread-title-form button[type="button"]',
+          )!
+          .click(),
+      );
+      assert.equal(titlebarSession.querySelector(".thread-title-form"), null);
+      assert.equal(
+        titlebarSession.querySelector(".thread-title-line > strong")
+          ?.textContent,
+        longTitle,
+      );
+    }
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
     const contextIndicator = document.querySelector<HTMLButtonElement>(
       ".composer .context-usage-trigger",
     );
