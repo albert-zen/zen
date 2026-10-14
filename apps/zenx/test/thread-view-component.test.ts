@@ -3853,7 +3853,7 @@ test("native Agent input displays its sender separately from human input, includ
     assert.doesNotMatch(row.textContent ?? "", /worker-thread/);
     assert.match(
       row.querySelector(".thread-message-sender")?.getAttribute("title") ?? "",
-      /worker-thread/,
+      /Research worker/,
     );
     assert.equal(dom.window.document.querySelector(".queue-row-edit"), null);
     assert.ok(
@@ -3926,10 +3926,11 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
     assert.ok(
       labels
         .filter((label) => label.textContent?.includes("Remote:"))
-        .every(
-          (label) =>
-            label.getAttribute("title")?.includes("peer-reported") &&
-            label.getAttribute("title")?.includes("uuid-peer"),
+        .every((label) =>
+          label.classList.contains("message-source-link")
+            ? label.getAttribute("title")?.includes("verified return route")
+            : label.getAttribute("title")?.includes("peer-reported") &&
+              label.getAttribute("title")?.includes("uuid-peer"),
         ),
     );
   } finally {
@@ -3991,5 +3992,108 @@ test("singleton activity highlight follows actual receipt and turn lifetime", ()
       );
       dom.window.close();
     }
+  }
+});
+
+test("shell nonzero stays a visible warning separate from other tool failures", () => {
+  const base = commandItem("shell-nonzero", "grep absent file");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  const shell = {
+    ...base,
+    toolName: "shell",
+    status: "failed" as const,
+    exitCode: 1,
+    aggregatedOutput: "",
+  };
+  const other = {
+    ...base,
+    id: "other-failure",
+    toolName: "other_tool",
+    status: "failed" as const,
+    exitCode: 1,
+  };
+  const dom = new JSDOM(
+    renderTurns([turnWithItems("completed", [shell, other])]),
+  );
+  try {
+    const doc = dom.window.document;
+    assert.match(
+      doc.querySelector(".trace-counts .trace-nonzero")?.textContent ?? "",
+      /1 nonzero Shell result/,
+    );
+    assert.match(
+      doc.querySelector(".trace-counts .trace-failed")?.textContent ?? "",
+      /1 tool failed/,
+    );
+    const singleton = new JSDOM(
+      renderTurns([turnWithItems("inProgress", [shell])]),
+    );
+    try {
+      assert.match(
+        singleton.window.document.querySelector(".tool-status.shell-nonzero")
+          ?.textContent ?? "",
+        /Shell returned a nonzero status/,
+      );
+      assert.equal(
+        singleton.window.document.querySelector(
+          ".tool-status.shell-nonzero.completed",
+        ),
+        null,
+      );
+    } finally {
+      singleton.window.close();
+    }
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("earlier shell rows inherit the terminal nonzero warning across separated trace groups", () => {
+  const base = commandItem("early-shell", "grep absent file");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  const early = {
+    ...base,
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "shared",
+      tool_name: "shell",
+      status: "running",
+      exit_code: null,
+    },
+  };
+  const final = {
+    ...early,
+    id: "final-wait",
+    toolName: "wait",
+    status: "failed" as const,
+    exitCode: 1,
+    structuredContent: {
+      ...early.structuredContent,
+      status: "failed",
+      exit_code: 1,
+    },
+  };
+  const separator: ThreadItem = {
+    type: "agentMessage",
+    id: "separator",
+    text: "Waiting for search.",
+    phase: "final_answer",
+    memoryCitation: null,
+  };
+  const dom = new JSDOM(
+    renderTurns([turnWithItems("inProgress", [early, separator, final])]),
+  );
+  try {
+    const marks = [...dom.window.document.querySelectorAll(".tool-status")];
+    assert.equal(marks.length, 2);
+    for (const mark of marks) {
+      assert.equal(mark.textContent, "Shell returned a nonzero status");
+      assert.equal(mark.className, "tool-status shell-nonzero");
+    }
+  } finally {
+    dom.window.close();
   }
 });

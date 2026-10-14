@@ -5228,9 +5228,40 @@ test("import saved but native open failed retains App-level retry without reimpo
     },
   });
   try {
+    assert.equal(
+      document.querySelector(
+        '.sidebar [aria-label="Import Codex conversation"]',
+      ),
+      null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")?.click(),
+    );
+    const general = await waitFor(() =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(".settings-nav button"),
+      ].find((button) => button.textContent?.trim() === "General"),
+    );
+    await act(async () => general.click());
     const open = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
-        '[aria-label="Import Codex conversation"]',
+        '.settings-view [aria-label="Import Codex conversation"]',
+      ),
+    );
+    await act(async () => open.click());
+    const cancel = await waitFor(() =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".session-import-dialog button",
+        ),
+      ].find((button) => button.textContent === "Cancel"),
+    );
+    await act(async () => cancel.click());
+    await waitFor(() => !document.querySelector(".session-import-dialog"));
+    assert.equal(importCalls, 0);
+    assert(
+      document.querySelector(
+        '.settings-view [aria-label="Import Codex conversation"]',
       ),
     );
     await act(async () => open.click());
@@ -5284,3 +5315,529 @@ test("import saved but native open failed retains App-level retry without reimpo
     await unmountApp(harness);
   }
 });
+
+function sourceNavigationThread(deviceId?: string): Thread {
+  return {
+    ...liveThread(),
+    turns: [
+      {
+        id: "source-navigation-turn",
+        status: "completed",
+        itemsView: "full",
+        error: null,
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+        items: [
+          {
+            type: "threadMessage",
+            id: "incoming-source",
+            clientId: "incoming-source-client",
+            sender: {
+              threadId: "exact/source",
+              threadName: "Renamed sender",
+              toolCallId: "send-call",
+              callId: "send",
+              ...(deviceId === undefined ? {} : { deviceId }),
+            },
+            content: [
+              {
+                type: "text",
+                text: "Do not follow /threads/forged in this body.",
+                text_elements: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test("message source reads and opens its exact canonical thread without sending, forking or following body URLs", async () => {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      calls.push({ method, params });
+      if (method === "zen/thread/read")
+        return { thread: { id: "exact/source", archived: false } };
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "thread-1"
+            ? sourceNavigationThread()
+            : { ...liveThread(), id: "exact/source", name: "Exact source" },
+        );
+      throw new Error(method);
+    },
+  });
+  try {
+    await selectedComposer();
+    const link = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-source-link"),
+    );
+    assert.match(link.textContent!, /Renamed sender/);
+    assert.doesNotMatch(link.title, /send-call|exact\/source/);
+    await act(async () => link.click());
+    await waitFor(() =>
+      calls.find(
+        (call) =>
+          call.method === "zen/thread/resume" &&
+          (call.params as { threadId: string }).threadId === "exact/source",
+      ),
+    );
+    assert.deepEqual(
+      calls
+        .filter((call) => call.method === "zen/thread/read")
+        .map((call) => call.params),
+      [{ threadId: "exact/source" }],
+    );
+    assert.ok(
+      calls.every((call) =>
+        ["zen/thread/read", "zen/thread/resume"].includes(call.method),
+      ),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const failure of [
+  "archived",
+  "deleted",
+  "mismatched",
+  "denied",
+  "remote",
+] as const) {
+  test(`message source ${failure} gives visible feedback and never opens a fallback thread`, async () => {
+    const resumes: string[] = [];
+    let reads = 0;
+    const harness = await mountThreadApp({
+      request: async (method, params) => {
+        if (method === "zen/thread/read") {
+          reads++;
+          if (failure === "deleted" || failure === "denied")
+            throw new Error(failure);
+          return {
+            thread: {
+              id: failure === "mismatched" ? "wrong-thread" : "exact/source",
+              archived: failure === "archived",
+            },
+          };
+        }
+        if (method === "zen/thread/resume") {
+          resumes.push((params as { threadId: string }).threadId);
+          return resumed(
+            sourceNavigationThread(
+              failure === "remote" ? "authenticated-peer" : undefined,
+            ),
+          );
+        }
+        throw new Error(method);
+      },
+    });
+    try {
+      await selectedComposer();
+      const link = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(".message-source-link"),
+      );
+      await act(async () => link.click());
+      await waitFor(() => document.querySelector(".message-source-status"));
+      assert.deepEqual(resumes, ["thread-1"]);
+      assert.equal(reads, failure === "remote" ? 0 : 1);
+      assert.match(
+        document.querySelector(".message-source-status")!.textContent!,
+        failure === "archived"
+          ? /archived/
+          : failure === "remote"
+            ? /verified return route/
+            : /unavailable|access/,
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("repeated source clicks share one read and a newer Settings navigation wins over its late reply", async () => {
+  const pending = deferred<{ thread: { id: string; archived: boolean } }>();
+  const resumes: string[] = [];
+  let reads = 0;
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      if (method === "zen/thread/read") {
+        reads++;
+        return pending.promise;
+      }
+      if (method === "zen/thread/resume") {
+        resumes.push((params as { threadId: string }).threadId);
+        return resumed(sourceNavigationThread());
+      }
+      throw new Error(method);
+    },
+  });
+  try {
+    await selectedComposer();
+    const link = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-source-link"),
+    );
+    await act(async () => {
+      link.click();
+      link.click();
+    });
+    assert.equal(reads, 1);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
+    );
+    await act(async () =>
+      pending.resolve({ thread: { id: "exact/source", archived: false } }),
+    );
+    assert.deepEqual(resumes, ["thread-1"]);
+    assert.equal(document.querySelector(".message-source-link"), null);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function messageSourcePlugins() {
+  return {
+    plugins: ["zenx-subagents", "zenx-triggers"].map((id) => ({
+      id,
+      name: id,
+      enabled: true,
+      available: true,
+      commands: [],
+    })),
+    sidebar: [],
+    settings: [],
+    commands: [],
+    menus: [],
+    threadHeaders: [],
+    resultRenderers: [],
+    subroutes: [],
+    pages: [
+      {
+        key: "zenx-triggers:triggers",
+        id: "triggers",
+        pluginId: "zenx-triggers",
+        route: "/plugins/zenx-triggers/triggers",
+        title: "Triggers",
+        surfaceId: "triggers-page",
+      },
+    ],
+    panels: [
+      {
+        key: "zenx-subagents:subagents",
+        id: "subagents",
+        pluginId: "zenx-subagents",
+        title: "Subagents",
+        surfaceId: "subagents-panel",
+      },
+    ],
+    surfaces: [
+      {
+        pluginId: "zenx-subagents",
+        id: "subagents-panel",
+        bundleId: "main",
+        exportName: "subagents-panel",
+      },
+      {
+        pluginId: "zenx-triggers",
+        id: "triggers-page",
+        bundleId: "main",
+        exportName: "triggers-page",
+      },
+    ],
+    bundles: [
+      {
+        pluginId: "zenx-subagents",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "zenx/bundled/subagents-ui",
+      },
+      {
+        pluginId: "zenx-triggers",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "zenx/bundled/triggers-ui",
+      },
+    ],
+  } as any;
+}
+
+test("App trigger source opens the exact plugin settings definition without writing or executing", async () => {
+  const thread = sourceNavigationThread();
+  thread.turns[0]!.items.push({
+    type: "hostMessage",
+    id: "host-source",
+    clientId: "host-source-client",
+    source: "trigger",
+    sourceId: "exact/trigger",
+    mode: "start",
+    text: "A message body naming a different trigger is not a route.",
+  });
+  const calls: string[] = [];
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(thread);
+      throw new Error(method);
+    },
+    plugins: {
+      get: async () => messageSourcePlugins(),
+      executeCommand: async (pluginId, command) => {
+        calls.push(`${pluginId}/${command}`);
+        if (command === "list")
+          return {
+            triggers: ["other", "exact/trigger"].map((id) => ({
+              id,
+              label: "Same name",
+              threadId: "thread-1",
+              kind: "signal",
+              signal: { name: id },
+              prompt: id,
+              active: false,
+              createdAt: 1,
+            })),
+            history: [],
+          };
+        if (command === "threads") return { threads: [] };
+        if (command === "workspaces") return { workspaces: [] };
+        throw new Error(command);
+      },
+    },
+  });
+  try {
+    await selectedComposer();
+    const link = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".host-message-source.message-source-link",
+      ),
+    );
+    await act(async () => link.click());
+    await waitFor(
+      () =>
+        document.querySelector<HTMLTextAreaElement>(
+          ".trigger-editor textarea",
+        ) ?? document.querySelector<HTMLTextAreaElement>("form textarea"),
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("form textarea")!.value,
+      "exact/trigger",
+    );
+    assert.ok(calls.every((call) => /\/(list|threads|workspaces)$/.test(call)));
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("side conversation message source stays in the side panel and preserves the main composer", async () => {
+  const resumes: string[] = [];
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      const id = (params as { threadId: string }).threadId;
+      if (method === "zen/thread/read")
+        return { thread: { id, archived: false } };
+      if (method === "zen/thread/resume") {
+        resumes.push(id);
+        const value =
+          id === "side-thread"
+            ? { ...sourceNavigationThread(), id }
+            : { ...liveThread(), id };
+        return resumed(value);
+      }
+      throw new Error(method);
+    },
+    plugins: {
+      get: async () => messageSourcePlugins(),
+      executeCommand: async (_plugin, command) => {
+        if (command === "list")
+          return {
+            threads: [
+              {
+                ...summary(false, "side-thread", "Side conversation"),
+                parentThreadId: "thread-1",
+              },
+            ],
+          };
+        throw new Error(command);
+      },
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Keep main draft");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open side panel"]')!
+        .click(),
+    );
+    const subagents = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (node) => node.textContent?.trim() === "Subagents",
+      ),
+    );
+    await act(async () => subagents.click());
+    const side = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".subagent-tree-row"),
+    );
+    await act(async () => side.click());
+    const link = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".auxiliary-conversation .message-source-link",
+      ),
+    );
+    await act(async () => link.click());
+    await waitFor(() =>
+      document.querySelector("#side-composer-exact\\/source"),
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Keep main draft",
+    );
+    assert.deepEqual(resumes, ["thread-1", "side-thread", "exact/source"]);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+for (const olderFirst of [true, false]) {
+  test(`newer message source intent wins when older request finishes ${olderFirst ? "first" : "last"}`, async () => {
+    const first = deferred<{ thread: { id: string; archived: boolean } }>();
+    const second = deferred<{ thread: { id: string; archived: boolean } }>();
+    const resumes: string[] = [];
+    const thread = sourceNavigationThread();
+    const original = thread.turns[0]!.items[0]! as any;
+    thread.turns[0]!.items.push({
+      ...original,
+      id: "second-source-message",
+      clientId: "second-source-client",
+      sender: {
+        ...original.sender,
+        threadId: "second/source",
+        threadName: "Second sender",
+      },
+    });
+    const harness = await mountThreadApp({
+      request: async (method, params) => {
+        const id = (params as { threadId: string }).threadId;
+        if (method === "zen/thread/read")
+          return id === "exact/source" ? first.promise : second.promise;
+        if (method === "zen/thread/resume") {
+          resumes.push(id);
+          return resumed(id === "thread-1" ? thread : { ...liveThread(), id });
+        }
+        throw new Error(method);
+      },
+    });
+    try {
+      await selectedComposer();
+      const links = await waitFor(() => {
+        const values = document.querySelectorAll<HTMLButtonElement>(
+          ".message-source-link",
+        );
+        return values.length === 2 ? values : null;
+      });
+      await act(async () => links[0]!.click());
+      await act(async () => links[1]!.click());
+      const finishFirst = () =>
+        first.resolve({ thread: { id: "exact/source", archived: false } });
+      const finishSecond = () =>
+        second.resolve({ thread: { id: "second/source", archived: false } });
+      await act(async () => (olderFirst ? finishFirst() : finishSecond()));
+      await act(async () => (olderFirst ? finishSecond() : finishFirst()));
+      assert.equal(
+        resumes.at(-1),
+        "second/source",
+        "the second source click must own navigation",
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+for (const visibility of ["keep", "hide", "reopen"] as const) {
+  test(`queued message source preserves ownership across ${visibility}`, async () => {
+    const hide = visibility !== "keep";
+    const base = nativeRecoveryForThread(runningThread());
+    const queue = {
+      type: "thread_message_queued" as const,
+      id: "queued-source",
+      clientId: "queued-source-client",
+      threadId: "thread-1",
+      createdAt: new Date(20000).toISOString(),
+      sender: {
+        threadId: "exact/source",
+        threadName: "Queued sender",
+        toolCallId: "queued-call",
+        callId: "send",
+      },
+      input: [{ type: "text" as const, text: "Queued instructions" }],
+      deliveryMode: "batch-next" as const,
+      messageType: "follow_up" as const,
+    };
+    const pending = deferred<{ thread: { id: string; archived: boolean } }>();
+    const calls: string[] = [];
+    const resumes: string[] = [];
+    const harness = await mountThreadApp({
+      request: async (method, params) => {
+        calls.push(method);
+        if (method === "zen/thread/read") return pending.promise;
+        if (method === "zen/thread/resume") {
+          const id = (params as { threadId: string }).threadId;
+          resumes.push(id);
+          return id === "thread-1"
+            ? {
+                ...base,
+                thread: {
+                  ...base.thread,
+                  items: [...base.thread.items, queue],
+                },
+              }
+            : resumed({ ...liveThread(), id });
+        }
+        throw new Error(method);
+      },
+    });
+    try {
+      await selectedComposer();
+      const toggle = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(".queue-shelf-toggle"),
+      );
+      if (toggle.getAttribute("aria-expanded") === "false")
+        await act(async () => toggle.click());
+      const link = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".queue-row .message-source-link",
+        ),
+      );
+      assert.equal(link.closest('[role="button"]'), null);
+      await act(async () => {
+        link.focus();
+        link.click();
+      });
+      if (hide) await act(async () => toggle.click());
+      if (visibility === "reopen") await act(async () => toggle.click());
+      await act(async () =>
+        pending.resolve({ thread: { id: "exact/source", archived: false } }),
+      );
+      assert.deepEqual(
+        resumes,
+        hide ? ["thread-1"] : ["thread-1", "exact/source"],
+      );
+      if (hide) {
+        if (visibility === "hide") await act(async () => toggle.click());
+        assert.equal(link.getAttribute("aria-busy"), "false");
+        await act(async () => link.click());
+        assert.deepEqual(resumes, ["thread-1", "exact/source"]);
+      }
+      assert.ok(
+        calls.every((method) =>
+          ["zen/thread/read", "zen/thread/resume"].includes(method),
+        ),
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}

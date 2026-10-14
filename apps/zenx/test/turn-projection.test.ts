@@ -8,6 +8,9 @@ import {
   traceDisplayRows,
   traceSummary,
   summarizeTraceActivity,
+  createTraceObservationIndex,
+  observedCommandStatus,
+  observedShellNonzeroResult,
 } from "../src/renderer/src/turn-projection.js";
 
 test("adjacent reasoning without public details has one honest row, not one per item", () => {
@@ -346,4 +349,121 @@ test("collapsed trace counts all calls without hiding earlier failures", () => {
   ]);
   assert.equal(activity.total, 4);
   assert.equal(activity.failed, 1);
+});
+
+test("shell nonzero warnings are counted separately while actual failure phases stay intact", () => {
+  const shell = {
+    ...command("nonzero", "grep absent file"),
+    toolName: "shell",
+    status: "failed" as const,
+    exitCode: 1,
+  };
+  const task = {
+    ...shell,
+    id: "timeout",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "timeout",
+      tool_name: "shell",
+      status: "timed_out",
+      exit_code: 124,
+    },
+    exitCode: 124,
+  };
+  const other = { ...shell, id: "other", toolName: "other_tool" };
+  const cancelled = {
+    ...task,
+    id: "cancel",
+    structuredContent: {
+      ...task.structuredContent,
+      task_id: "cancel",
+      status: "cancelled",
+      exit_code: 130,
+    },
+    exitCode: 130,
+  };
+  const activity = summarizeTraceActivity([shell, task, other, cancelled]);
+  assert.equal(activity.total, 4);
+  assert.equal(activity.shellNonzero, 1);
+  assert.equal(activity.failed, 2);
+  assert.equal(activity.cancelled, 1);
+  assert.equal(activity.active, 0);
+  assert.match(traceSummary([shell]), /shell returned a nonzero status/);
+});
+
+test("later nonzero observation updates earlier shell summaries without changing items or double-counting", () => {
+  const early = {
+    ...command("early", "grep absent file"),
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "shared",
+      tool_name: "shell",
+      status: "running",
+      exit_code: null,
+    },
+  };
+  const final = {
+    ...early,
+    id: "final",
+    toolName: "wait",
+    status: "failed" as const,
+    exitCode: 1,
+    structuredContent: {
+      ...early.structuredContent,
+      status: "failed",
+      exit_code: 1,
+    },
+  };
+  const items = [early, final];
+  const before = structuredClone(items);
+  assert.match(traceSummary([early], items), /shell returned a nonzero status/);
+  assert.doesNotMatch(traceSummary(items), /failed/i);
+  assert.equal(summarizeTraceActivity(items).shellNonzero, 1);
+  assert.equal(summarizeTraceActivity(items).failed, 0);
+  assert.equal(summarizeTraceActivity([early], items).shellNonzero, 0);
+  assert.deepEqual(items, before);
+});
+
+test("observed nonzero facts cannot override signals, cancellation, other tools or a newer terminal outcome", () => {
+  const early = {
+    ...command("early", "grep absent file"),
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "shared",
+      tool_name: "shell",
+      status: "running",
+      exit_code: null,
+    },
+  };
+  const final = {
+    ...early,
+    id: "final",
+    toolName: "wait",
+    status: "failed" as const,
+    exitCode: 1,
+    structuredContent: {
+      ...early.structuredContent,
+      status: "failed",
+      exit_code: 1,
+    },
+  };
+  for (const [patch, label] of [
+    [{ status: "timed_out" }, "Timed out"],
+    [{ status: "cancelled" }, "Cancelled"],
+    [{ foreground_signal: "SIGTERM" }, "Failed"],
+    [{ tool_name: "other_tool" }, "Failed"],
+  ] as const) {
+    const index = createTraceObservationIndex([
+      early,
+      { ...final, structuredContent: { ...final.structuredContent, ...patch } },
+    ]);
+    assert.equal(observedShellNonzeroResult(early, index), false);
+    assert.equal(observedCommandStatus(early, index), label);
+  }
+  const lateRunning = { ...early, id: "late-running" };
+  const index = createTraceObservationIndex([early, final, lateRunning]);
+  assert.equal(observedShellNonzeroResult(early, index), true);
+  assert.equal(observedShellNonzeroResult(lateRunning, index), true);
 });

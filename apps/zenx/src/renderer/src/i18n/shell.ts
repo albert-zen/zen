@@ -1,4 +1,14 @@
 export const en = {
+  sourceRemoteUnavailable: "This remote source has no verified return route.",
+  sourceTargetMissing: "Source identity is missing.",
+  sourceNavigationUnavailable: "Source navigation is unavailable here.",
+  sourceThreadArchived:
+    "This source thread is archived. Restore it in Settings to open it.",
+  sourceThreadUnavailable:
+    "The source thread is unavailable or access was denied.",
+  sourceTriggerUnavailable: "This trigger is unavailable or has been deleted.",
+  sourcePluginUnavailable: "The Triggers plugin is unavailable.",
+
   threadDetails: "Thread details",
   threadProjectLabel: "Project",
   threadMachineLabel: "Machine",
@@ -139,6 +149,11 @@ export const en = {
   awaitingToolResult: "Awaiting tool result",
   toolCalls: "{{count}} tool calls",
   toolFailures: "{{count}} tool failed",
+  shellNonzeroStatus: "Shell returned a nonzero status",
+  shellNonzeroResults_one: "{{count}} nonzero Shell result",
+  shellNonzeroResults_other: "{{count}} nonzero Shell results",
+  shellNonzeroHint:
+    "A nonzero status does not by itself mean an execution failure or an empty search. Check the command, exit code and output.",
   toolCancelled: "{{count}} cancelled or declined",
   lastKnownPending: "{{count}} task results still pending",
   stopUnconfirmed: "Background action may still be running",
@@ -715,6 +730,13 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  sourceRemoteUnavailable: "此远端来源没有经过验证的返回路径。",
+  sourceTargetMissing: "缺少来源身份。",
+  sourceNavigationUnavailable: "此处无法打开来源。",
+  sourceThreadArchived: "来源线程已归档，请先在设置中恢复。",
+  sourceThreadUnavailable: "来源线程不可用或没有访问权限。",
+  sourceTriggerUnavailable: "此触发器不可用或已删除。",
+  sourcePluginUnavailable: "触发器插件不可用。",
   threadDetails: "线程详情",
   threadProjectLabel: "项目",
   threadMachineLabel: "机器",
@@ -845,6 +867,11 @@ export const zhCN = {
   awaitingToolResult: "等待工具结果",
   toolCalls: "{{count}} 次工具调用",
   toolFailures: "{{count}} 次工具失败",
+  shellNonzeroStatus: "Shell返回非零状态",
+  shellNonzeroResults_one: "{{count}} 次Shell非零结果",
+  shellNonzeroResults_other: "{{count}} 次Shell非零结果",
+  shellNonzeroHint:
+    "非零状态本身不能证明执行故障或搜索无匹配，请查看命令、退出码与输出。",
   toolCancelled: "{{count}} 次已取消或拒绝",
   lastKnownPending: "{{count}} 个任务结果仍待确认",
   stopUnconfirmed: "后台操作可能仍在运行",

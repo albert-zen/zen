@@ -337,6 +337,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Sidebar 的 Plugin spaces 位于**整个 Projects group 之前**。Plugin contribution 不能插入 Projects header 与 Project/Thread list 之间，也不能把这个 group 拆成两段。
 - 人类使用插件页面、settings、panel、command/menu 或普通领域 action 不创建 Turn；只有标为 **Run Agent** 的显式动作才调用 AppServer 并产生普通 canonical Turn。
 - Plugin 生命周期只有 `installed`、`enabled`、`uninstalled`。Disable 撤销 active UI/tools 但保留安装；Uninstall 撤销 runtime/UI/tool 注册并默认保留 data。Bundled plugin 也可卸载和重装；删除 data 必须是独立动作。
+- Shell 非零结果单独以警示呈现为“Shell返回非零状态”，保留原退出码、输出和失败生命周期；不能凭命令文本、退出码 1 或空输出推断无匹配或成功。已有 signal、timeout、cancel 状态继续按原专门状态呈现。此为展示层缓解，不改变模型或 canonical 语义。
 - Result renderer 只读取既有 `ToolResultItem` 上的可选 structured content；它缺失、disabled 或 uninstalled 时使用 text/JSON fallback。历史模型文本、reasoning、tool call/result 与 title trace 保持原样，不能为 renderer 或能力变化扫描、脱敏或重写。
 
 ### 6.2 Experiment / guidance / TBD
@@ -577,3 +578,11 @@ Only the terminal Agent response exposes Copy and Fork in its hover/focus action
 ### 2026-10-14: Compact activity context
 
 Settled multi-tool disclosures retain the call count and the latest three action summaries, newest first, rather than reducing their title to the count alone. Failure and cancellation counts remain explicit, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
+
+### 2026-10-14: Codex conversation import in Settings
+
+Codex conversation import is available in Settings → General under Import conversations. The active-thread Sidebar has no import action. The existing preview, validation, import and open-retry dialog remains unchanged; cancelling returns to Settings and a successful import opens the imported Thread.
+
+### 2026-10-14: Message source navigation
+
+Delivered and queued Thread messages expose a compact source action using the canonical sender identity; local Trigger messages open the exact current Trigger definition. Names and message-body text never select a target. Source actions only read and navigate: they do not send, fork, execute a Trigger or change queued input. Local Thread opening validates its exact identity and availability first; archived, missing or denied targets have visible feedback. Remote sources without a verified return route remain visibly unavailable and never fall back to a same-ID local Thread. Main and side conversations retain their existing navigation roles, and a side-source action preserves the main Composer draft. Newer source clicks, navigation, hidden queue rows and explicit Trigger editor actions retire older pending selection intents. Source controls retain full-name tooltips, keyboard activation and visible focus; model provenance and tool-addressable IDs remain unchanged.

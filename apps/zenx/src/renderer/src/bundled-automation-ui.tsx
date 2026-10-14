@@ -455,8 +455,10 @@ function TriggerManager({
   sdk,
   scopedThreadId,
   setupIntent,
+  sourceTriggerId,
 }: {
   sdk: PluginUiSdkV1;
+  sourceTriggerId?: string;
   scopedThreadId?: string;
   setupIntent?: RoomReplySetupIntent;
 }) {
@@ -469,6 +471,23 @@ function TriggerManager({
   const [editing, setEditing] = useState(false);
   const [setupNotice, setSetupNotice] = useState("");
   const setupHandled = useRef(false);
+  const sourceHandled = useRef(false);
+  const selectedSourceCard = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (sourceTriggerId === undefined || !loaded || sourceHandled.current)
+      return;
+    sourceHandled.current = true;
+    const trigger = data.triggers.find((entry) => entry.id === sourceTriggerId);
+    if (!trigger) {
+      setError(i18n.t("shell:sourceTriggerUnavailable"));
+      return;
+    }
+    if (!trigger.program) {
+      setEditor(editorFromTrigger(trigger));
+      setEditing(true);
+    } else selectedSourceCard.current?.focus();
+  }, [sourceTriggerId, loaded, data, setError]);
+
   const [busy, setBusy] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [targetPreview, setTargetPreview] =
@@ -507,10 +526,15 @@ function TriggerManager({
     }
   }, [setupIntent, loaded, data, threads]);
   useEffect(() => {
-    if (editing && setupIntent && setupHandled.current)
+    if (
+      editing &&
+      ((setupIntent && setupHandled.current) ||
+        (sourceTriggerId && sourceHandled.current))
+    )
       createForm.current?.querySelector<HTMLInputElement>("input")?.focus();
   }, [
     editing,
+    sourceTriggerId,
     setupIntent?.roomId,
     setupIntent?.member,
     setupIntent?.threadId,
@@ -561,6 +585,8 @@ function TriggerManager({
     );
   }, [threads]);
   const invalidateDraft = () => {
+    // An explicit editor action retires a source route that is still loading.
+    sourceHandled.current = true;
     generation.current++;
     flight.current = null; // This retires UI writes, not a Host request already admitted.
     pendingTarget.current = null;
@@ -1225,7 +1251,17 @@ function TriggerManager({
         {visible.map((trigger) => {
           const last = history.find((entry) => entry.triggerId === trigger.id);
           return (
-            <article className="page-card trigger-card" key={trigger.id}>
+            <article
+              className="page-card trigger-card"
+              key={trigger.id}
+              tabIndex={sourceTriggerId === trigger.id ? -1 : undefined}
+              data-source-trigger={
+                sourceTriggerId === trigger.id ? "selected" : undefined
+              }
+              ref={
+                sourceTriggerId === trigger.id ? selectedSourceCard : undefined
+              }
+            >
               <div className="trigger-card-heading">
                 <h3>{trigger.label}</h3>
                 <span>
@@ -1450,7 +1486,14 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
           threadId: query.get("threadId") ?? "",
         }
       : undefined;
-  return <TriggerManager key={route} sdk={sdk} setupIntent={setupIntent} />;
+  return (
+    <TriggerManager
+      key={route}
+      sdk={sdk}
+      setupIntent={setupIntent}
+      sourceTriggerId={query.get("triggerId") ?? undefined}
+    />
+  );
 }
 
 function threadLabel(threads: readonly ThreadCandidate[], id: string): string {

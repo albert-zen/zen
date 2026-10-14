@@ -101,7 +101,6 @@ interface SidebarProps {
   onNewThread(workspace?: string): void;
   newThreadDisabled?: boolean;
   onAddProject(): void;
-  onImportSession?(): void;
   onRemoveProject(workspace: string): void;
   onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
@@ -143,7 +142,6 @@ export function Sidebar({
   onNewThread,
   newThreadDisabled = false,
   onAddProject,
-  onImportSession,
   onRemoveProject,
   onEditProject,
   onSetDefaultProject,
@@ -655,17 +653,6 @@ export function Sidebar({
                     : i18n.t("shell:compact")}
                 </span>
               </button>
-              {onImportSession && (
-                <button
-                  className="sidebar-inline-action"
-                  type="button"
-                  aria-label={i18n.t("shell:importSession")}
-                  title={i18n.t("shell:importSession")}
-                  onClick={onImportSession}
-                >
-                  <Icon name="arrow-down" size={14} />
-                </button>
-              )}
               {mode === "projects" ? (
                 <button
                   className="sidebar-inline-action"
