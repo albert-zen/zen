@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
+import { RoomHeaderContext } from "./room-header.js";
 import {
   ROOM_ROUTE,
   useRoomConversations,
@@ -1489,6 +1490,8 @@ function AppContent() {
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
   );
+  const [roomHeaderTarget, setRoomHeaderTarget] =
+    useState<HTMLDivElement | null>(null);
   const roomPanel = roomQuery.get("panel");
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
@@ -2635,6 +2638,16 @@ function AppContent() {
                   })
             }
             title={selectedRoom?.name ?? genericPluginTarget.title}
+            actions={
+              genericPluginTarget.pluginId === "zenx-rooms" &&
+              genericPluginTarget.route === ROOM_ROUTE &&
+              selectedRoomId !== null ? (
+                <div
+                  className="room-title-actions-host"
+                  ref={setRoomHeaderTarget}
+                />
+              ) : undefined
+            }
           />
         ) : null}
       </WindowTitleBar>
@@ -2869,16 +2882,20 @@ function AppContent() {
           {page === "settings" ? null : genericPluginTarget !== undefined &&
             pluginSnapshot !== null ? (
             <ImZenXDraftContext.Provider value={imzenxDrafts}>
-              <PluginProductPage
-                context={
-                  genericPluginTarget.pluginId === "zenx-rooms"
-                    ? { primaryNavigation: true }
-                    : undefined
-                }
-                snapshot={pluginSnapshot}
-                route={page}
-                navigate={openPage}
-              />
+              <RoomHeaderContext.Provider
+                value={{ roomId: selectedRoomId, element: roomHeaderTarget }}
+              >
+                <PluginProductPage
+                  context={
+                    genericPluginTarget.pluginId === "zenx-rooms"
+                      ? { primaryNavigation: true }
+                      : undefined
+                  }
+                  snapshot={pluginSnapshot}
+                  route={page}
+                  navigate={openPage}
+                />
+              </RoomHeaderContext.Provider>
             </ImZenXDraftContext.Provider>
           ) : (
             <AgentSurface
@@ -3408,10 +3425,12 @@ function PageTitleBar({
   onOpenSidebar,
   subtitle,
   title,
+  actions,
 }: {
   onOpenSidebar(): void;
   subtitle: string;
   title: string;
+  actions?: ReactNode;
 }) {
   return (
     <div className="workspace-header">
@@ -3429,6 +3448,7 @@ function PageTitleBar({
           {subtitle !== title ? <p>{subtitle}</p> : null}
         </div>
       </div>
+      {actions}
     </div>
   );
 }
