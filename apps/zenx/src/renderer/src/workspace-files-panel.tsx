@@ -45,6 +45,7 @@ export function WorkspaceFilesPanel({
     ([key]) => JSON.parse(key)[0] === threadId,
   );
   useEffect(() => {
+    setLoading(false);
     setFilePath(undefined);
     setError("");
     setClosePending(undefined);

@@ -201,3 +201,84 @@ test("inline editors autosave real files, preserve in-flight input, and expose c
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("switching from a pending file read to another Thread's browser clears loading and rejects the stale file", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    Window: dom.window.Window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { WorkspaceFilesPanel } =
+    await import("../src/renderer/src/workspace-files-panel.js");
+  const { WorkspaceFileDrafts } =
+    await import("../src/renderer/src/workspace-file-drafts.js");
+  const drafts = new WorkspaceFileDrafts(10);
+  const root = createRoot(document.getElementById("root")!);
+  let release!: (value: any) => void;
+  (window as any).zenx = {
+    workspaceFiles: {
+      read: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      list: async (threadId: string) => ({
+        path: ".",
+        entries: [
+          { name: threadId + ".ts", path: threadId + ".ts", kind: "file" },
+        ],
+        truncated: false,
+      }),
+    },
+  };
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(WorkspaceFilesPanel, {
+          threadId: "thread-a",
+          drafts,
+          initialPath: "slow.ts",
+        }),
+      ),
+    );
+    assert.match(document.body.textContent!, /Loading/);
+    await act(async () =>
+      root.render(
+        React.createElement(WorkspaceFilesPanel, {
+          threadId: "thread-b",
+          drafts,
+        }),
+      ),
+    );
+    assert.ok(
+      document.querySelector('[data-file-path="thread-b.ts"]'),
+      "new workspace must mount its file tree",
+    );
+    assert.equal(
+      document.querySelector('.file-content[aria-busy="true"]'),
+      null,
+    );
+    await act(async () =>
+      release({
+        path: "slow.ts",
+        text: "previous workspace source",
+        revision: "old",
+      }),
+    );
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /previous workspace source/,
+    );
+    assert.equal(drafts.snapshot().size, 0);
+    assert.ok(document.querySelector('[data-file-path="thread-b.ts"]'));
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
