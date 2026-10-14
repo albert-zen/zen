@@ -11,7 +11,7 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   browser: {
     pluginId: "browser",
     packageName: "@zenx/browser-plugin",
-    tarball: "zenx-browser-plugin-electron-1.0.5.tgz",
+    tarball: "zenx-browser-plugin-electron-1.0.6.tgz",
   },
   computer: {
     pluginId: "computer",
@@ -113,15 +113,15 @@ export function firstPartyProviderTarball(
 ): string {
   if (pluginId === "browser") {
     if (providerId === "multi-browser")
-      return "zenx-browser-plugin-multi-1.0.7.tgz";
+      return "zenx-browser-plugin-multi-1.0.8.tgz";
     if (providerId === "concurrent-browser")
-      return "zenx-browser-plugin-concurrent-1.0.6.tgz";
+      return "zenx-browser-plugin-concurrent-1.0.7.tgz";
     if (providerId === "electron-dedicated-browser")
-      return "zenx-browser-plugin-electron-1.0.5.tgz";
+      return "zenx-browser-plugin-electron-1.0.6.tgz";
     if (providerId === "playwright-cli")
       return "zenx-browser-plugin-playwright-1.0.5.tgz";
     if (providerId === "user-browser-cdp")
-      return "zenx-browser-plugin-user-session-1.0.5.tgz";
+      return "zenx-browser-plugin-user-session-1.0.6.tgz";
   }
   if (pluginId === "computer") {
     if (providerId === "macos-desktop")

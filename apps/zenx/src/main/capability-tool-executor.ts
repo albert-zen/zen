@@ -265,6 +265,8 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
     "browser_navigate",
     "browser_inspect",
     "browser_click",
+    "browser_pointer_click",
+    "browser_key_press",
     "browser_type",
     "browser_scroll",
     "browser_select",
