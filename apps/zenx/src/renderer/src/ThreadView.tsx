@@ -3425,15 +3425,14 @@ function AgentMessage({
     <article className="agent-copy" data-read-message-id={item.id}>
       <Markdown text={item.text} />
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
-      {showActions || forkTarget !== undefined ? (
+      {showActions ? (
         <MessageActions
           className="assistant-message-actions"
           copyLabel={i18n.t("shell:copyAssistantMessage")}
           copiedLabel={i18n.t("shell:copiedAssistantMessage")}
           text={item.text}
           turn={turn}
-          usage={showActions ? usage : undefined}
-          showMetadata={showActions}
+          usage={usage}
           forkTarget={forkTarget}
         />
       ) : null}
@@ -3448,7 +3447,6 @@ function MessageActions({
   text,
   turn,
   usage,
-  showMetadata = true,
   forkTarget,
 }: {
   className: string;
@@ -3457,7 +3455,6 @@ function MessageActions({
   text: string;
   turn: Turn;
   usage?: ModelUsageAggregate;
-  showMetadata?: boolean;
   forkTarget?: MessageForkTarget;
 }) {
   const [copied, setCopied] = useState(false);
@@ -3472,7 +3469,7 @@ function MessageActions({
   };
   return (
     <div className={`message-actions ${className}`}>
-      {!showMetadata || turn.completedAt === null ? null : (
+      {turn.completedAt === null ? null : (
         <time
           className="message-time"
           dateTime={new Date(turn.completedAt * 1_000).toISOString()}

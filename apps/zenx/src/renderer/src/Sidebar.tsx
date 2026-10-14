@@ -1941,7 +1941,7 @@ function ThreadRow({
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
   const [busyAction, setBusyAction] = useState<
-    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null
+    "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
   const busyActionRef = useRef(false);
   const actionFocusRef = useRef<Element | null>(null);
@@ -2142,7 +2142,7 @@ function ThreadRow({
     </>
   );
   const runAction = async (
-    action: "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive",
+    action: "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive",
     operation: () => Promise<void>,
   ) => {
     if (busyActionRef.current) return;
@@ -2155,7 +2155,7 @@ function ThreadRow({
       if (action !== "rename" && action !== "archive" && action !== "unarchive")
         focusThreadListHeading();
       await operation();
-      if (action === "copy") focusThreadListHeading(false);
+      if (action === "fork") focusThreadListHeading(false);
       if (epoch === menuEpoch.current) closeMenu(action === "rename");
     } catch (error) {
       if (epoch !== menuEpoch.current) return;
@@ -2412,8 +2412,8 @@ function ThreadRow({
           void runAction("archive", () => onChangeThreadLifecycle(thread))
         }
         onBeginRename={beginRename}
-        onCopy={() =>
-          void runAction("copy", () => onForkThread(thread.threadId))
+        onFork={() =>
+          void runAction("fork", () => onForkThread(thread.threadId))
         }
         onCancelRename={() => setRenaming(false)}
         onRequestClose={() => closeMenu()}
@@ -2574,7 +2574,7 @@ export function ThreadItemMenu({
   renameDraft,
   onArchive,
   onBeginRename,
-  onCopy = () => undefined,
+  onFork = () => undefined,
   onCancelRename,
   onRequestClose,
   onDraftChange,
@@ -2585,7 +2585,7 @@ export function ThreadItemMenu({
   details?: ReactNode;
   archived: boolean;
   busyAction:
-    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null;
+    "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null;
   error: string | null;
   hasActiveTurn: boolean;
   labelledBy?: string;
@@ -2598,7 +2598,7 @@ export function ThreadItemMenu({
   renameDraft: string;
   onArchive(): void;
   onBeginRename(): void;
-  onCopy?(): void;
+  onFork?(): void;
   onCancelRename(): void;
   onRequestClose?(): void;
   onDraftChange(value: string): void;
@@ -2755,17 +2755,17 @@ export function ThreadItemMenu({
             type="button"
             role="menuitem"
             tabIndex={-1}
-            data-thread-action="copy"
+            data-thread-action="fork"
             disabled={busy}
             title={i18n.t(
-              "shell:copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
+              "shell:forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
             )}
-            onClick={onCopy}
+            onClick={onFork}
           >
-            <Icon name="copy" />
-            {busyAction === "copy"
-              ? i18n.t("shell:copying")
-              : i18n.t("shell:copyThread")}
+            <Icon name="fork" />
+            {busyAction === "fork"
+              ? i18n.t("shell:forkingMessage")
+              : i18n.t("shell:forkThread")}
           </button>
           <button
             type="button"

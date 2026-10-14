@@ -69,10 +69,10 @@ type IconProps = SVGProps<SVGSVGElement> & {
 const paths: Record<IconName, ReactNode> = {
   fork: (
     <>
-      <circle cx="6" cy="5" r="2" />
-      <circle cx="18" cy="5" r="2" />
-      <circle cx="6" cy="19" r="2" />
-      <path d="M6 7v10M18 7v2a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4" />
+      <circle cx="4" cy="3.5" r="1.5" />
+      <circle cx="12" cy="3.5" r="1.5" />
+      <circle cx="4" cy="12.5" r="1.5" />
+      <path d="M4 5v6M12 5v1a2 2 0 0 1-2 2H7a3 3 0 0 0-3 3" />
     </>
   ),
   book: (
