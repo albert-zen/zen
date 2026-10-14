@@ -52,6 +52,14 @@ public static class ZenXCaptureSampler {
   [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
   public static bool IsForeground(IntPtr hwnd) { return GetForegroundWindow()==hwnd; }
+  // Completed generations have immutable names. A reader may retain an old
+  // snapshot without blocking the next publication; temporary files are ignored.
+  public static FileStream OpenPhase(string directory) {
+    var snapshots = Directory.GetFiles(directory, "phase-*.snapshot");
+    if (snapshots.Length == 0) throw new FileNotFoundException("No published phase");
+    Array.Sort(snapshots, StringComparer.Ordinal);
+    return File.OpenRead(snapshots[snapshots.Length - 1]);
+  }
   public static void Start(IntPtr guard, IntPtr target, string directory, string epoch) {
     Point initial; GetCursorPos(out initial);
     var thread = new Thread(() => {
@@ -67,7 +75,11 @@ public static class ZenXCaptureSampler {
         var foreground=GetForegroundWindow();
         if (foreground != guard) focusChanges++;
         if (foreground != lastForeground) {
-          try { phase=System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(Path.Combine(directory,"phase")), "[^a-z-]", ""); } catch (IOException) { }
+          try {
+            using (var stream = OpenPhase(directory))
+            using (var reader = new StreamReader(stream))
+              phase=System.Text.RegularExpressions.Regex.Replace(reader.ReadToEnd(), "[^a-z-]", "");
+          } catch (IOException) { }
           uint pid; GetWindowThreadProcessId(foreground, out pid);
           string kind=foreground==guard ? "guard" : foreground==target ? "target" : foreground==IntPtr.Zero ? "none" : "other";
           if (transitions.Count<32) transitions.Add("{\"elapsedMs\":" + elapsed.ElapsedMilliseconds + ",\"phase\":\"" + phase + "\",\"foreground\":\"" + kind + "\",\"pid\":" + pid + "}");

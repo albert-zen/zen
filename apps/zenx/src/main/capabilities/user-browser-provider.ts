@@ -53,6 +53,8 @@ import {
 } from "./observation-capture.js";
 
 const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
+// One bounded attachment setup, not a per-command mutation timeout or a retry.
+const USER_BROWSER_ATTACHMENT_SETUP_TIMEOUT_MS = 10_000;
 const USER_BROWSER_SCREENSHOT_TIMEOUT_MS = 10_000;
 const USER_BROWSER_INPUT_OBJECT_CLEANUP_TIMEOUT_MS = 500;
 const USER_BROWSER_MAX_TARGET_EVIDENCE = 128;
@@ -103,6 +105,8 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   unsettledMutation?: string;
   /** Exact attachment-session dialog state; never persisted or auto-dismissed. */
   nativeDialogOpen?: boolean;
+  /** Closing this exact route stops disposable observation traffic before detach. */
+  observationClosing?: boolean;
 }
 
 interface ZenXUserBrowserDocumentExecutionFence extends UserBrowserAttachmentOwner {
@@ -2156,6 +2160,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     number,
     {
       method: string;
+      sessionId?: string;
       dispatched: boolean;
       resolve(value: unknown): void;
       reject(error: Error): void;
@@ -2178,6 +2183,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   readonly #lateResponses = new Map<
     number,
     {
+      sessionId?: string;
       receive(message: Record<string, unknown>): Promise<void>;
       expire(): void;
       expires: NodeJS.Timeout;
@@ -2878,7 +2884,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#scheduleLiveCapture(state);
     } catch (error) {
       if (this.#screencast === state) this.#clearScreencast(state);
-      if (started && !this.#closed) {
+      if (started && this.#canSendObservation(state.sessionId)) {
         await this.#send("Page.stopScreencast", {}, state.sessionId).catch(
           () => undefined,
         );
@@ -2897,7 +2903,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const state = this.#screencast;
     if (state === undefined) return;
     this.#clearScreencast(state);
-    if (this.#closed) return;
+    if (!this.#canSendObservation(state.sessionId)) return;
     await this.#send("Page.stopScreencast", {}, state.sessionId);
   }
 
@@ -2922,7 +2928,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     queueMicrotask(() => {
       void (async () => {
         try {
-          if (!this.#closed)
+          if (this.#canSendObservation(state.sessionId))
             await this.#send("Page.stopScreencast", {}, state.sessionId);
           if (
             !subscription.active ||
@@ -2959,6 +2965,17 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (this.#screencast === state) this.#screencast = undefined;
   }
 
+  #canSendObservation(sessionId: string): boolean {
+    const epoch = this.#sessionEpochs.get(sessionId);
+    return (
+      !this.#closed &&
+      epoch !== undefined &&
+      !epoch.observationClosing &&
+      this.#targetSessions.get(epoch.targetId) === sessionId &&
+      this.#attachmentClosures.get(epoch.targetId) === epoch
+    );
+  }
+
   #receiveScreencastFrame(
     message: Record<string, unknown>,
     params: Record<string, unknown>,
@@ -2968,7 +2985,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (
       typeof cdpSessionId !== "string" ||
       typeof frameSessionId !== "number" ||
-      !Number.isSafeInteger(frameSessionId)
+      !Number.isSafeInteger(frameSessionId) ||
+      !this.#canSendObservation(cdpSessionId)
     )
       return;
     const state = this.#screencast;
@@ -3128,7 +3146,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #failScreencast(state: UserBrowserScreencastState, _error: unknown): void {
     if (this.#screencast !== state) return;
     this.#clearScreencast(state);
-    if (!this.#closed) {
+    if (this.#canSendObservation(state.sessionId)) {
       void this.#send("Page.stopScreencast", {}, state.sessionId).catch(() => {
         // The observation is already failed and detached from renderer delivery.
       });
@@ -3495,6 +3513,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#reapTarget(targetId, true);
       return;
     }
+    if (closure !== undefined) closure.observationClosing = true;
+    if (this.#screencastSubscription?.targetId === targetId) {
+      this.#endScreencast(
+        "unavailable",
+        "The observed browser tab is no longer attached.",
+      );
+    }
     try {
       await this.#send(
         "Target.detachFromTarget",
@@ -3554,19 +3579,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         problem,
       );
     }
-    const existing = this.#targetSessions.get(targetId);
-    if (existing !== undefined) {
-      if (closure === undefined || !sameAttachmentOwner(closure, owner)) {
-        throw new Error("User browser attachment ownership changed");
-      }
-      return existing;
-    }
+    // Routing exists before domain setup so lifecycle events can be tracked.
+    // It is not readiness: every caller must join the same setup barrier first.
     const pending = this.#targetAttachments.get(targetId);
     if (pending !== undefined) {
       if (!sameAttachmentOwner(pending.epoch, owner)) {
         throw new Error("User browser attachment ownership changed");
       }
       return await pending.promise;
+    }
+    const existing = this.#targetSessions.get(targetId);
+    if (existing !== undefined) {
+      if (closure === undefined || !sameAttachmentOwner(closure, owner)) {
+        throw new Error("User browser attachment ownership changed");
+      }
+      return existing;
     }
     const attachmentClosure = this.#attachmentEpoch(targetId, owner);
     const attachment = {
@@ -3576,6 +3603,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       pendingDetachSessionIds: new Set<string>(),
     };
     const attaching = (async () => {
+      const setupDeadline =
+        performance.now() + USER_BROWSER_ATTACHMENT_SETUP_TIMEOUT_MS;
       let response: Record<string, unknown> | undefined;
       try {
         response = asRecord(
@@ -3653,12 +3682,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         attachmentClosure,
         response.sessionId,
         "Page.enable",
+        setupDeadline,
         signal,
       );
       await this.#enableAttachmentDomain(
         attachmentClosure,
         response.sessionId,
         "Runtime.enable",
+        setupDeadline,
         signal,
       );
       return response.sessionId;
@@ -3670,6 +3701,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     } finally {
       if (this.#targetAttachments.get(targetId) === attachment) {
         this.#targetAttachments.delete(targetId);
+        if (
+          attachmentClosure.attach === "known-failure" ||
+          attachmentClosure.detach === "known-success"
+        ) {
+          this.#reapEpoch(attachmentClosure, true);
+        }
       }
     }
   }
@@ -3678,11 +3715,19 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     epoch: UserBrowserAttachmentEpoch,
     sessionId: string,
     method: "Page.enable" | "Runtime.enable",
+    setupDeadline: number,
     signal?: AbortSignal,
   ): Promise<void> {
     const outcome = method === "Page.enable" ? "enable" : "runtimeEnable";
     try {
-      await this.#send(method, {}, sessionId, signal);
+      this.#assertAttachmentSetupCurrent(epoch, sessionId, method);
+      const remaining = setupDeadline - performance.now();
+      if (remaining <= 0) {
+        throw new Error(
+          `User browser attachment setup timed out before ${method}`,
+        );
+      }
+      await this.#send(method, {}, sessionId, signal, remaining);
       epoch[outcome] = "known-success";
       this.#assertAttachmentSetupCurrent(epoch, sessionId, method);
     } catch (error) {
@@ -3760,6 +3805,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   ): Promise<void> {
     epoch.cdpSessionId = sessionId;
     this.#sessionEpochs.set(sessionId, epoch);
+    epoch.observationClosing = true;
     try {
       await this.#send(
         "Target.detachFromTarget",
@@ -3860,7 +3906,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         this.#pending.delete(id);
         finish();
         if (dispatched && onLateResponse !== undefined) {
-          this.#retainLateResponse(id, onLateResponse, onLateExpiration);
+          this.#retainLateResponse(
+            id,
+            sessionId,
+            onLateResponse,
+            onLateExpiration,
+          );
         }
         const reason =
           signal?.reason instanceof Error
@@ -3874,11 +3925,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       };
       const pending: {
         method: string;
+        sessionId?: string;
         dispatched: boolean;
         resolve(value: unknown): void;
         reject(error: Error): void;
       } = {
         method,
+        sessionId,
         dispatched: false,
         resolve: (value) => {
           finish();
@@ -3890,7 +3943,16 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             dispatched &&
             error instanceof UserBrowserCdpOutcomeUnknownError
           ) {
-            onLateExpiration?.();
+            if (!this.#closed && onLateResponse !== undefined) {
+              this.#retainLateResponse(
+                id,
+                sessionId,
+                onLateResponse,
+                onLateExpiration,
+              );
+            } else {
+              onLateExpiration?.();
+            }
           }
           reject(error);
         },
@@ -3906,7 +3968,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           ),
         );
         if (onLateResponse !== undefined) {
-          this.#retainLateResponse(id, onLateResponse, onLateExpiration);
+          this.#retainLateResponse(
+            id,
+            sessionId,
+            onLateResponse,
+            onLateExpiration,
+          );
         }
       }, outcomeTimeoutMs);
       signal?.addEventListener("abort", abort, { once: true });
@@ -3937,6 +4004,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
 
   #retainLateResponse(
     id: number,
+    sessionId: string | undefined,
     receive: (message: Record<string, unknown>) => Promise<void>,
     expire: () => void = () => undefined,
   ): void {
@@ -3957,7 +4025,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#lateResponses.delete(id);
       expire();
     }, USER_BROWSER_LATE_RESPONSE_RETENTION_MS);
-    this.#lateResponses.set(id, { receive, expire, expires });
+    this.#lateResponses.set(id, { sessionId, receive, expire, expires });
   }
 
   #receive(raw: string): void {
@@ -3977,6 +4045,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (pending === undefined) {
       const late = this.#lateResponses.get(message.id);
       if (late === undefined) return;
+      if (message.sessionId !== late.sessionId) {
+        this.#recordConnectionTaint(
+          "late CDP response session did not match request",
+        );
+        return;
+      }
       clearTimeout(late.expires);
       this.#lateResponses.delete(message.id);
       void late
@@ -3989,6 +4063,18 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       return;
     }
     this.#pending.delete(message.id);
+    if (message.sessionId !== pending.sessionId) {
+      this.#recordConnectionTaint(
+        `CDP response session did not match request (${pending.method})`,
+      );
+      pending.reject(
+        new UserBrowserCdpOutcomeUnknownError(
+          pending.method,
+          "response session did not match request",
+        ),
+      );
+      return;
+    }
     const error = asRecord(message.error);
     if (error !== undefined) {
       pending.reject(
@@ -4235,7 +4321,24 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   ): void {
     if (epoch === undefined) return;
     const sessionId = epoch.cdpSessionId;
+    const attaching = this.#targetAttachments.get(epoch.targetId);
+    if (attaching?.epoch === epoch) attaching.invalidated = true;
     if (sessionId !== undefined) {
+      for (const [id, pending] of this.#pending) {
+        if (
+          pending.sessionId === sessionId &&
+          (pending.method === "Page.enable" ||
+            pending.method === "Runtime.enable")
+        ) {
+          this.#pending.delete(id);
+          pending.reject(
+            new UserBrowserCdpOutcomeUnknownError(
+              pending.method,
+              "attachment ended during setup",
+            ),
+          );
+        }
+      }
       if (this.#screencast?.sessionId === sessionId) {
         this.#endScreencast(
           "unavailable",
@@ -4255,6 +4358,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
     if (
       ownershipClosed &&
+      attaching?.epoch !== epoch &&
       this.#attachmentClosures.get(epoch.targetId) === epoch &&
       this.#attachmentProblem(epoch) === undefined
     ) {
