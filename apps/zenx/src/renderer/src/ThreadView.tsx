@@ -1,4 +1,10 @@
 import { ThreadDebugger } from "./ThreadDebugger.js";
+import {
+  MessageSourceLink,
+  MessageSourceViewportContext,
+  MessageSourceNavigationContext,
+  type MessageSourceNavigator,
+} from "./message-source-navigation.js";
 import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
@@ -139,6 +145,25 @@ export type MessageForkHandler = (
 export const MessageForkContext = createContext<MessageForkHandler | null>(
   null,
 );
+/** Shared App-owned actions for main and side conversation viewports. */
+export function ThreadViewActionsProvider({
+  fork,
+  source,
+  children,
+}: {
+  fork: MessageForkHandler;
+  source: MessageSourceNavigator;
+  children: ReactNode;
+}) {
+  return (
+    <MessageForkContext.Provider value={fork}>
+      <MessageSourceNavigationContext.Provider value={source}>
+        {children}
+      </MessageSourceNavigationContext.Provider>
+    </MessageForkContext.Provider>
+  );
+}
+
 const CanonicalMessageForkContext = createContext<{
   threadId: string;
   items: Map<string, string | undefined>;
@@ -275,46 +300,48 @@ export function ThreadView(props: ThreadViewProps) {
   return (
     <ThreadReadingContext.Provider value={readingState}>
       <CanonicalMessageForkContext.Provider value={forkContext}>
-        <div className="thread-conversation-surface">
-          {items !== undefined && props.thread ? (
-            <nav
-              className="thread-view-switch"
-              aria-label={t("debugViewLabel")}
-            >
-              <button
-                type="button"
-                aria-pressed={!debugging}
-                onClick={() => setDebugThread(null)}
+        <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
+          <div className="thread-conversation-surface">
+            {items !== undefined && props.thread ? (
+              <nav
+                className="thread-view-switch"
+                aria-label={t("debugViewLabel")}
               >
-                {t("debugConversation")}
-              </button>
-              <button
-                type="button"
-                aria-pressed={debugging}
-                onClick={() => setDebugThread(props.thread!.id)}
-              >
-                {t("debugView")}
-              </button>
-            </nav>
-          ) : null}
-          {debugging && props.thread && items !== undefined ? (
-            <ThreadDebugger
-              key={props.thread.id}
-              thread={props.thread}
-              items={items}
-              localModelDebug={props.localModelDebug}
-              onOpenMessageLink={props.onOpenMessageLink}
-              onReadAttachment={props.onReadAttachment}
-            />
-          ) : (
-            <ThreadViewContent
-              {...props}
-              threadAttachments={
-                canonicalAttachments ?? props.threadAttachments
-              }
-            />
-          )}
-        </div>
+                <button
+                  type="button"
+                  aria-pressed={!debugging}
+                  onClick={() => setDebugThread(null)}
+                >
+                  {t("debugConversation")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={debugging}
+                  onClick={() => setDebugThread(props.thread!.id)}
+                >
+                  {t("debugView")}
+                </button>
+              </nav>
+            ) : null}
+            {debugging && props.thread && items !== undefined ? (
+              <ThreadDebugger
+                key={props.thread.id}
+                thread={props.thread}
+                items={items}
+                localModelDebug={props.localModelDebug}
+                onOpenMessageLink={props.onOpenMessageLink}
+                onReadAttachment={props.onReadAttachment}
+              />
+            ) : (
+              <ThreadViewContent
+                {...props}
+                threadAttachments={
+                  canonicalAttachments ?? props.threadAttachments
+                }
+              />
+            )}
+          </div>
+        </MessageSourceViewportContext.Provider>
       </CanonicalMessageForkContext.Provider>
     </ThreadReadingContext.Provider>
   );
@@ -3374,11 +3401,15 @@ function InputMessage({
       }
     >
       {item.type === "threadMessage" ? (
-        <small
-          className="thread-message-sender"
-          title={`${item.sender.deviceId === undefined ? "" : `${i18n.t("shell:threadMessageRemoteDetails")}\n`}${JSON.stringify(item.sender)}`}
-        >
-          {i18n.t(
+        <MessageSourceLink
+          target={{
+            kind: "thread",
+            id: item.sender.threadId,
+            ...(item.sender.deviceId === undefined
+              ? {}
+              : { deviceId: item.sender.deviceId }),
+          }}
+          label={i18n.t(
             item.sender.deviceId === undefined
               ? "shell:threadMessageFrom"
               : "shell:remoteThreadMessageFrom",
@@ -3387,7 +3418,7 @@ function InputMessage({
                 item.sender.threadName ?? i18n.t("shell:threadMessageUnnamed"),
             },
           )}
-        </small>
+        />
       ) : null}
       {attachments.length === 0 ? null : (
         <div
@@ -3638,6 +3669,7 @@ function WakeupCard(
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent
+          sourceNavigation
           source={item.source}
           sourceId={item.sourceId}
           text={item.text}

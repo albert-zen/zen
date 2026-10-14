@@ -85,6 +85,15 @@ export const en = {
   modelDebugPage: "Characters {{start}}–{{end}} of {{total}}",
   modelDebugSelect:
     "Select a request to inspect its exact retained body and derived sections.",
+  sourceRemoteUnavailable: "This remote source has no verified return route.",
+  sourceTargetMissing: "Source identity is missing.",
+  sourceNavigationUnavailable: "Source navigation is unavailable here.",
+  sourceThreadArchived:
+    "This source thread is archived. Restore it in Settings to open it.",
+  sourceThreadUnavailable:
+    "The source thread is unavailable or access was denied.",
+  sourceTriggerUnavailable: "This trigger is unavailable or has been deleted.",
+  sourcePluginUnavailable: "The Triggers plugin is unavailable.",
 
   threadDetails: "Thread details",
   threadProjectLabel: "Project",
@@ -889,6 +898,13 @@ export const zhCN = {
   modelDebugPage: "字符 {{start}}–{{end}} / {{total}}",
   modelDebugSelect: "选择一次请求，查看实际保留的正文及从正文提取的分区。",
 
+  sourceRemoteUnavailable: "此远端来源没有经过验证的返回路径。",
+  sourceTargetMissing: "缺少来源身份。",
+  sourceNavigationUnavailable: "此处无法打开来源。",
+  sourceThreadArchived: "来源线程已归档，请先在设置中恢复。",
+  sourceThreadUnavailable: "来源线程不可用或没有访问权限。",
+  sourceTriggerUnavailable: "此触发器不可用或已删除。",
+  sourcePluginUnavailable: "触发器插件不可用。",
   threadDetails: "线程详情",
   threadProjectLabel: "项目",
   threadMachineLabel: "机器",

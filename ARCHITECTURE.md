@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **Message source navigation** — Renderer-only source intents use canonical Thread sender / Host Trigger IDs and existing App routes; local Thread reads validate exact identity and availability before navigation, while unverified Fleet return routes fail closed and Trigger routes select only the exact current Host definition. No message text, display name, new execution or model-provenance rewrite participates.
+
 - **Imported tool replay** — Canonical calls preserve inert source namespace/input-format provenance; model adapters create deterministic, past-only wire aliases and matched call/result IDs without registering tool definitions or granting execution authority.
 
 - **Selected-file conversation import** — Version-pinned external parsers live under their protocol adapter and produce bounded provider-neutral historical Items; AppServer atomically creates an idle continuable Thread with canonical source/checkpoint provenance, explicit local cwd/model/permissions, inert tool observations and no inherited execution or source authority. Imported tool outcomes may have a null exitCode only with the historical-result content type; native presentation calls them unknown. The import prefix length lets the first new local Turn load current workspace instructions. Compacted exports use their latest explicit continuation checkpoint and visibly disclose omitted earlier records.
