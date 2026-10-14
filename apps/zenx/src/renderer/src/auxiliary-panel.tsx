@@ -183,6 +183,7 @@ export function AuxiliaryPanel({
   }, [open]);
   const [choosing, setChoosing] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
+  const [fileNavigationOpen, setFileNavigationOpen] = useState(true);
   const [browserTabs, setBrowserTabs] = useState<WorkspaceBrowserTab[]>([]);
   const [browserListThread, setBrowserListThread] = useState<string>();
   const [error, setError] = useState("");
@@ -335,6 +336,11 @@ export function AuxiliaryPanel({
     threadIdRef.current === owner &&
     resourceEpoch.current === epoch;
   const showChooser = choosing || tabs.length === 0;
+  const fileSurface =
+    (!showChooser && active?.startsWith("file:")) ||
+    (showChooser && pickingFile);
+  const fileNavigationVisible =
+    fileSurface && (fileNavigationOpen || pickingFile);
   const select = (id: string, focusTab = false) => {
     selectionEpoch.current += 1;
     pendingTabFocus.current = focusTab ? id : null;
@@ -435,6 +441,7 @@ export function AuxiliaryPanel({
     setError("");
     if (id === "file") {
       setPickingFile(true);
+      setFileNavigationOpen(true);
       setChoosing(true);
       return;
     }
@@ -595,6 +602,25 @@ export function AuxiliaryPanel({
       aria-label={i18n.t("panels:sidePanelFor", { title })}
       style={{ "--auxiliary-width": `${width}px` } as React.CSSProperties}
       onKeyDown={(event) => {
+        if (
+          fileSurface &&
+          (event.ctrlKey || event.metaKey) &&
+          !event.altKey &&
+          !event.shiftKey &&
+          event.key.toLowerCase() === "p" &&
+          !event.nativeEvent.isComposing &&
+          event.nativeEvent.keyCode !== 229
+        ) {
+          event.preventDefault();
+          setFileNavigationOpen(true);
+          requestAnimationFrame(() => {
+            const input = panel.current?.querySelector<HTMLInputElement>(
+              '.workspace-file-navigation input[type="search"]',
+            );
+            input?.focus();
+            input?.select();
+          });
+        }
         if (event.key === "Escape" && !event.defaultPrevented) {
           event.preventDefault();
           if (choosing) {
@@ -647,6 +673,28 @@ export function AuxiliaryPanel({
         }}
       />
       <header className="auxiliary-heading">
+        {fileSurface ? (
+          <button
+            type="button"
+            className="icon-button workspace-navigation-toggle"
+            aria-label={i18n.t(
+              fileNavigationVisible
+                ? "panels:hideFileNavigation"
+                : "panels:showFileNavigation",
+            )}
+            title={i18n.t(
+              fileNavigationVisible
+                ? "panels:hideFileNavigation"
+                : "panels:showFileNavigation",
+            )}
+            aria-pressed={Boolean(fileNavigationVisible)}
+            aria-controls="workspace-file-navigation"
+            disabled={pickingFile}
+            onClick={() => setFileNavigationOpen((value) => !value)}
+          >
+            <Icon name="folder" />
+          </button>
+        ) : null}
         <div className="workspace-tab-rail">
           <div
             ref={tabRail}
@@ -779,224 +827,258 @@ export function AuxiliaryPanel({
               : error}
         </p>
       ) : null}
-      {showChooser ? (
-        <div className="auxiliary-content workspace-new-tab">
-          {pickingFile ? (
-            threadId !== undefined ? (
-              <WorkspaceFilePicker
-                threadId={threadId}
-                onOpen={openFile}
-                onBack={() => {
-                  selectionEpoch.current += 1;
-                  setPickingFile(false);
-                }}
-              />
-            ) : null
-          ) : (
-            <div
-              className="workspace-tab-types"
-              aria-label={i18n.t("panels:newTabType")}
-            >
-              <header>
-                <h3>
-                  {roomContext
-                    ? i18n.t("panels:openBesideThisRoom")
-                    : i18n.t("panels:openBesideThisConversation")}
-                </h3>
-                <p>
-                  {roomContext
-                    ? roomContext.resourceThread
-                      ? i18n.t("panels:conversationResourcesUse", {
-                          name: roomContext.resourceThread.title,
-                        })
-                      : i18n.t("panels:chooseARoomMemberToEnableConversation")
-                    : i18n.t(
-                        "panels:filesPagesAndObservationsShareThisWorkspace",
-                      )}
-                </p>
-              </header>
-              {customTabs.map((tab) => (
-                <button
-                  type="button"
-                  key={`custom:${tab.id}`}
-                  onClick={() => void add(`custom:${tab.id}`)}
+      <div
+        className="auxiliary-body"
+        data-files={Boolean(fileSurface)}
+        data-picking={showChooser && pickingFile}
+      >
+        {threadId !== undefined && (files.length > 0 || pickingFile) ? (
+          <nav
+            id="workspace-file-navigation"
+            className="workspace-file-navigation"
+            aria-label={i18n.t("panels:workspaceFiles")}
+            hidden={!fileNavigationVisible}
+          >
+            <WorkspaceFilePicker
+              threadId={threadId}
+              workspacePath={workspacePath}
+              selectedPath={
+                active?.startsWith("file:") ? active.slice(5) : undefined
+              }
+              navigation={!pickingFile}
+              onOpen={openFile}
+              onBack={() => {
+                selectionEpoch.current += 1;
+                setPickingFile(false);
+              }}
+            />
+          </nav>
+        ) : null}
+        <div className="auxiliary-views" hidden={showChooser && pickingFile}>
+          {showChooser ? (
+            <div className="auxiliary-content workspace-new-tab">
+              {pickingFile ? null : (
+                <div
+                  className="workspace-tab-types"
+                  aria-label={i18n.t("panels:newTabType")}
                 >
-                  <Icon name={tab.icon} />
-                  <span>
-                    <strong>{tab.title}</strong>
-                  </span>
-                </button>
-              ))}
-              {threadId !== undefined ? (
-                <>
-                  <button type="button" onClick={() => void add("terminal")}>
-                    <Icon name="terminal" />
-                    <span>
-                      <strong>{i18n.t("panels:shellTitle")}</strong>
-                      <small>{i18n.t("panels:shellChooser")}</small>
-                    </span>
-                  </button>
-                  <button type="button" onClick={() => void add("file")}>
-                    <Icon name="file" />
-                    <span>
-                      <strong>{i18n.t("panels:file")}</strong>
-                      <small>{i18n.t("panels:readOrEditAFileInThis")}</small>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void add("browser")}
-                  >
-                    <Icon name="browser" />
-                    <span>
-                      <strong>{i18n.t("panels:browser")}</strong>
-                      <small>
-                        {i18n.t("panels:browseASharedPageWithTheAgent")}
-                      </small>
-                    </span>
-                  </button>
-                  {computer ? (
-                    <button type="button" onClick={() => void add("computer")}>
-                      <Icon name="computer" />
-                      <span>
-                        <strong>{i18n.t("panels:computer")}</strong>
-                        <small>
-                          {i18n.t("panels:observeTheAgentSDesktopActivity")}
-                        </small>
-                      </span>
-                    </button>
-                  ) : null}
-                  {browser ? (
-                    <button type="button" onClick={() => void add("attached")}>
-                      <Icon name="browser" />
-                      <span>
-                        <strong>{i18n.t("panels:attachedBrowser")}</strong>
-                        <small>
-                          {i18n.t("panels:inspectConnectedBrowserActivity")}
-                        </small>
-                      </span>
-                    </button>
-                  ) : null}
-                  {panels.map((panel) => (
+                  <header>
+                    <h3>
+                      {roomContext
+                        ? i18n.t("panels:openBesideThisRoom")
+                        : i18n.t("panels:openBesideThisConversation")}
+                    </h3>
+                    <p>
+                      {roomContext
+                        ? roomContext.resourceThread
+                          ? i18n.t("panels:conversationResourcesUse", {
+                              name: roomContext.resourceThread.title,
+                            })
+                          : i18n.t(
+                              "panels:chooseARoomMemberToEnableConversation",
+                            )
+                        : i18n.t(
+                            "panels:filesPagesAndObservationsShareThisWorkspace",
+                          )}
+                    </p>
+                  </header>
+                  {customTabs.map((tab) => (
                     <button
                       type="button"
-                      key={panel.key}
-                      onClick={() => void add(`plugin:${panel.key}`)}
+                      key={`custom:${tab.id}`}
+                      onClick={() => void add(`custom:${tab.id}`)}
                     >
-                      <Icon name="layers" />
+                      <Icon name={tab.icon} />
                       <span>
-                        <strong>{panel.title}</strong>
+                        <strong>{tab.title}</strong>
                       </span>
                     </button>
                   ))}
-                </>
-              ) : null}
+                  {threadId !== undefined ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void add("terminal")}
+                      >
+                        <Icon name="terminal" />
+                        <span>
+                          <strong>{i18n.t("panels:shellTitle")}</strong>
+                          <small>{i18n.t("panels:shellChooser")}</small>
+                        </span>
+                      </button>
+                      <button type="button" onClick={() => void add("file")}>
+                        <Icon name="file" />
+                        <span>
+                          <strong>{i18n.t("panels:file")}</strong>
+                          <small>
+                            {i18n.t("panels:readOrEditAFileInThis")}
+                          </small>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void add("browser")}
+                      >
+                        <Icon name="browser" />
+                        <span>
+                          <strong>{i18n.t("panels:browser")}</strong>
+                          <small>
+                            {i18n.t("panels:browseASharedPageWithTheAgent")}
+                          </small>
+                        </span>
+                      </button>
+                      {computer ? (
+                        <button
+                          type="button"
+                          onClick={() => void add("computer")}
+                        >
+                          <Icon name="computer" />
+                          <span>
+                            <strong>{i18n.t("panels:computer")}</strong>
+                            <small>
+                              {i18n.t("panels:observeTheAgentSDesktopActivity")}
+                            </small>
+                          </span>
+                        </button>
+                      ) : null}
+                      {browser ? (
+                        <button
+                          type="button"
+                          onClick={() => void add("attached")}
+                        >
+                          <Icon name="browser" />
+                          <span>
+                            <strong>{i18n.t("panels:attachedBrowser")}</strong>
+                            <small>
+                              {i18n.t("panels:inspectConnectedBrowserActivity")}
+                            </small>
+                          </span>
+                        </button>
+                      ) : null}
+                      {panels.map((panel) => (
+                        <button
+                          type="button"
+                          key={panel.key}
+                          onClick={() => void add(`plugin:${panel.key}`)}
+                        >
+                          <Icon name="layers" />
+                          <span>
+                            <strong>{panel.title}</strong>
+                          </span>
+                        </button>
+                      ))}
+                    </>
+                  ) : null}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      ) : null}
-      {tabs.map((tab) => {
-        const visible = !showChooser && active === tab.id;
-        const panel = panels.find((value) => `plugin:${value.key}` === tab.id);
-        return (
-          <div
-            className="auxiliary-content"
-            key={tab.id}
-            role="tabpanel"
-            id={`aux-content-${tab.id}`}
-            aria-labelledby={`aux-tab-${tab.id}`}
-            hidden={!visible}
-          >
-            {conversation &&
-            threadId !== undefined &&
-            tab.id === `thread:${conversation.threadId}` &&
-            open &&
-            visible ? (
-              <div className="auxiliary-conversation">
-                <header className="auxiliary-conversation-heading">
-                  <span>{conversation.title}</span>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={i18n.t("panels:openConversationFullScreen")}
-                    title={i18n.t("panels:openConversationFullScreen")}
-                    onClick={() =>
-                      navigate?.(
-                        `/threads/${encodeURIComponent(conversation.threadId)}`,
-                      )
-                    }
-                  >
-                    <Icon name="expand" />
-                  </button>
-                </header>
-                {conversation.render(conversation.threadId)}
+          ) : null}
+          {tabs.map((tab) => {
+            const visible = !showChooser && active === tab.id;
+            const panel = panels.find(
+              (value) => `plugin:${value.key}` === tab.id,
+            );
+            return (
+              <div
+                className="auxiliary-content"
+                key={tab.id}
+                role="tabpanel"
+                id={`aux-content-${tab.id}`}
+                aria-labelledby={`aux-tab-${tab.id}`}
+                hidden={!visible}
+              >
+                {conversation &&
+                threadId !== undefined &&
+                tab.id === `thread:${conversation.threadId}` &&
+                open &&
+                visible ? (
+                  <div className="auxiliary-conversation">
+                    <header className="auxiliary-conversation-heading">
+                      <span>{conversation.title}</span>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={i18n.t("panels:openConversationFullScreen")}
+                        title={i18n.t("panels:openConversationFullScreen")}
+                        onClick={() =>
+                          navigate?.(
+                            `/threads/${encodeURIComponent(conversation.threadId)}`,
+                          )
+                        }
+                      >
+                        <Icon name="expand" />
+                      </button>
+                    </header>
+                    {conversation.render(conversation.threadId)}
+                  </div>
+                ) : null}
+                {tab.render ? tab.render() : null}
+                {tab.path && threadId !== undefined ? (
+                  <WorkspaceFilesPanel
+                    threadId={threadId}
+                    drafts={drafts}
+                    workspacePath={workspacePath}
+                    initialPath={tab.path}
+                    standalone
+                  />
+                ) : null}
+                {tab.browser && threadId !== undefined && visible ? (
+                  <WorkspaceBrowserPanel
+                    threadId={threadId}
+                    tab={tab.browser}
+                    open={open === true}
+                  />
+                ) : null}
+                {tab.id === "terminal" && threadId !== undefined ? (
+                  <ShellThreadPanel
+                    key={threadId}
+                    threadId={threadId}
+                    active={open === true && visible}
+                  />
+                ) : null}
+                {tab.id === "computer" && threadId !== undefined ? (
+                  <ComputerThreadPanel
+                    threadId={threadId}
+                    active={open === true && visible}
+                  />
+                ) : null}
+                {tab.id === "attached" && threadId !== undefined ? (
+                  <BrowserThreadPanel
+                    threadId={threadId}
+                    title={title}
+                    embedded
+                    open={open === true && visible}
+                    onOpenChange={onOpenChange}
+                    providerRevision={snapshot}
+                  />
+                ) : null}
+                {panel && snapshot && threadId !== undefined ? (
+                  <GenericPluginUiHost
+                    key={panel.key}
+                    className="auxiliary-plugin"
+                    registry={pluginUiRegistry}
+                    snapshot={snapshot}
+                    pluginId={panel.pluginId}
+                    surfaceId={panel.surfaceId}
+                    context={{
+                      ...threadContext,
+                      active: open === true && visible,
+                      route: roomContext ? "room" : "agent",
+                      threadId,
+                      ...(roomContext ? { roomId: roomContext.roomId } : {}),
+                    }}
+                    theme={theme}
+                    executeCommand={window.zenx.plugins.executeCommand}
+                    readHandle={window.zenx.plugins.readHandle}
+                    navigate={navigate}
+                  />
+                ) : null}
               </div>
-            ) : null}
-            {tab.render ? tab.render() : null}
-            {tab.path && threadId !== undefined ? (
-              <WorkspaceFilesPanel
-                threadId={threadId}
-                drafts={drafts}
-                workspacePath={workspacePath}
-                initialPath={tab.path}
-                standalone
-              />
-            ) : null}
-            {tab.browser && threadId !== undefined && visible ? (
-              <WorkspaceBrowserPanel
-                threadId={threadId}
-                tab={tab.browser}
-                open={open === true}
-              />
-            ) : null}
-            {tab.id === "terminal" && threadId !== undefined ? (
-              <ShellThreadPanel
-                key={threadId}
-                threadId={threadId}
-                active={open === true && visible}
-              />
-            ) : null}
-            {tab.id === "computer" && threadId !== undefined ? (
-              <ComputerThreadPanel
-                threadId={threadId}
-                active={open === true && visible}
-              />
-            ) : null}
-            {tab.id === "attached" && threadId !== undefined ? (
-              <BrowserThreadPanel
-                threadId={threadId}
-                title={title}
-                embedded
-                open={open === true && visible}
-                onOpenChange={onOpenChange}
-                providerRevision={snapshot}
-              />
-            ) : null}
-            {panel && snapshot && threadId !== undefined ? (
-              <GenericPluginUiHost
-                key={panel.key}
-                className="auxiliary-plugin"
-                registry={pluginUiRegistry}
-                snapshot={snapshot}
-                pluginId={panel.pluginId}
-                surfaceId={panel.surfaceId}
-                context={{
-                  ...threadContext,
-                  active: open === true && visible,
-                  route: roomContext ? "room" : "agent",
-                  threadId,
-                  ...(roomContext ? { roomId: roomContext.roomId } : {}),
-                }}
-                theme={theme}
-                executeCommand={window.zenx.plugins.executeCommand}
-                readHandle={window.zenx.plugins.readHandle}
-                navigate={navigate}
-              />
-            ) : null}
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      </div>
     </aside>
   );
 }

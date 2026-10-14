@@ -14,6 +14,7 @@ import {
 import { InlineMarkdownEditor } from "./InlineMarkdownEditor.js";
 import { WorkspaceFileExplorer } from "./workspace-file-explorer.js";
 import { SourceEditor } from "./SourceEditor.js";
+import { Icon } from "./icons.js";
 
 export function WorkspaceFilesPanel({
   threadId,
@@ -36,6 +37,7 @@ export function WorkspaceFilesPanel({
   const [closePending, setClosePending] = useState<string>();
   const [discardPending, setDiscardPending] = useState(false);
   const [editorEpoch, setEditorEpoch] = useState(0);
+  const [findRequest, setFindRequest] = useState(0);
   const sequence = useRef(0);
   const key =
     filePath === undefined ? undefined : fileDraftKey(threadId, filePath);
@@ -207,8 +209,41 @@ export function WorkspaceFilesPanel({
         </button>
       </header>
       {standalone && file ? (
-        <div className="file-location" title={file.base.path}>
-          {file.base.path}
+        <div className="file-location">
+          <div
+            className="file-location-path"
+            title={file.base.path}
+            aria-label={file.base.path}
+          >
+            {file.base.path.split("/").map((part, index) => (
+              <React.Fragment key={index}>
+                {index > 0 ? (
+                  <Icon name="chevron-right" aria-hidden="true" />
+                ) : null}
+                <span>{part}</span>
+              </React.Fragment>
+            ))}
+          </div>
+          <span className="file-location-status">
+            {file.saving
+              ? i18n.t("panels:saving")
+              : file.conflict
+                ? i18n.t("panels:saveConflict")
+                : file.error
+                  ? i18n.t("panels:saveFailed")
+                  : dirty
+                    ? i18n.t("panels:waitingToSave")
+                    : i18n.t("panels:saved")}
+          </span>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={i18n.t("panels:findInFile")}
+            title={i18n.t("panels:findInFile") + " (⌘ / Ctrl F)"}
+            onClick={() => setFindRequest((value) => value + 1)}
+          >
+            <Icon name="search" />
+          </button>
         </div>
       ) : null}
       {closePending ? (
@@ -292,6 +327,7 @@ export function WorkspaceFilesPanel({
             ) : null}
             {markdown ? (
               <InlineMarkdownEditor
+                findRequest={findRequest}
                 key={`${file.base.path}:${editorEpoch}`}
                 path={file.base.path}
                 text={file.text}
@@ -301,6 +337,7 @@ export function WorkspaceFilesPanel({
               />
             ) : (
               <SourceEditor
+                findRequest={findRequest}
                 key={`${file.base.path}:${editorEpoch}`}
                 path={file.base.path}
                 text={file.text}

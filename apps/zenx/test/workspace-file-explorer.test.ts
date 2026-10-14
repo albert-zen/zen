@@ -293,10 +293,33 @@ test("file tree supports folder keyboard navigation, prototype-like names, refre
         }),
       ),
     );
+    const actions = document.querySelector(".workspace-file-actions")!;
+    assert.ok(actions.querySelector('input[type="search"]'));
+    assert.ok(
+      actions.querySelector(
+        '[aria-label="Refresh file list"][title="Refresh file list"]',
+      ),
+    );
+    const collapse = actions.querySelector<HTMLButtonElement>(
+      '[aria-label="Collapse folders"][title="Collapse folders"]',
+    )!;
+    assert.equal(collapse.disabled, true);
+    assert.ok(collapse.querySelector('[data-icon="collapse-folders"]'));
+    assert.equal(actions.querySelector('[data-icon="compress"]'), null);
+    assert.equal(document.querySelector(".workspace-file-tree-heading"), null);
     assert.equal(document.querySelectorAll('[role="treeitem"]').length, 2000);
     assert.match(document.body.textContent!, /display limit/);
     await press(folder(), "ArrowRight");
     assert.ok(document.querySelector('[data-file-path="toString/nested.ts"]'));
+    assert.equal(collapse.disabled, false);
+    await act(async () => collapse.click());
+    assert.equal(folder().getAttribute("aria-expanded"), "false");
+    assert.equal(
+      rootReads,
+      1,
+      "collapse only changes local directory visibility",
+    );
+    await press(folder(), "ArrowRight");
     await press(folder(), "ArrowRight");
     assert.equal(
       (document.activeElement as HTMLElement).dataset.filePath,
@@ -315,7 +338,7 @@ test("file tree supports folder keyboard navigation, prototype-like names, refre
     assert.equal(document.activeElement, folder());
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>('[aria-label="Refresh"]')!
+        .querySelector<HTMLButtonElement>('[aria-label="Refresh file list"]')!
         .click(),
     );
     assert.equal(rootReads, 2);

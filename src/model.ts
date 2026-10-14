@@ -75,6 +75,8 @@ export interface ModelRequest {
    * but providers must not treat it as a second persisted conversation.
    */
   sessionId?: string;
+  /** A sample replay must not restart HTTP admission retries. */
+  isSamplingRetry?: true;
 }
 
 export interface ModelTool {
@@ -125,6 +127,23 @@ export type ModelEvent =
 export interface ModelAdapter {
   readonly provider: string;
   stream(request: ModelRequest): AsyncIterable<ModelEvent>;
+}
+
+/**
+ * True when a model sample failed in a way the Runtime may replay before any
+ * tool side effect exists: the adapter marked the failure `retryable`, and no
+ * HTTP status is attached — HTTP admission failures already exhausted their
+ * own retry layer and must not be multiplied by sample replay.
+ */
+export function isRetryableModelSampleError(error: unknown): boolean {
+  if (
+    !(error instanceof Error) ||
+    error.name === "AbortError" ||
+    error.name === "TimeoutError"
+  )
+    return false;
+  const candidate = error as { retryable?: unknown; status?: unknown };
+  return candidate.retryable === true && candidate.status === undefined;
 }
 
 export function compileModelMessages(
@@ -288,6 +307,9 @@ function compileCanonicalModelMessages(
         }
         break;
       case "agent_message":
+        // Partial text from a superseded or failed sample is retained in the
+        // journal for the user but never replayed to the model.
+        if (item.incomplete === true) break;
         if (items[index + 1]?.type === "tool_call") {
           const toolCalls: ToolCallModelMessage["toolCalls"] = [];
           let cursor = index + 1;
@@ -375,10 +397,21 @@ function compileCanonicalModelMessages(
         break;
       }
       case "failure":
-        messages.push({
-          role: "assistant",
-          text: `[failure: ${item.message}]`,
-        });
+        {
+          // The journal keeps the full provider message; the model only needs
+          // the actionable head — long bodies would tax every later sample.
+          const firstLine = item.message.split("\n", 1)[0] ?? "";
+          const summary =
+            firstLine.length > 240 ? `${firstLine.slice(0, 240)}…` : firstLine;
+          const pointer =
+            item.diagnosticId === undefined
+              ? ""
+              : ` (diagnostic ${item.diagnosticId})`;
+          messages.push({
+            role: "assistant",
+            text: `[failure: ${summary}${item.message.includes("\n") ? " …" : ""}${pointer}]`,
+          });
+        }
         break;
       case "thread_metadata":
         if (item.sandbox !== "danger-full-access")

@@ -10,6 +10,8 @@ import {
   keymap,
   lineNumbers,
 } from "@codemirror/view";
+import { openSearchPanel } from "@codemirror/search";
+import { fileContentSearch } from "./file-content-search.js";
 import { tags } from "@lezer/highlight";
 import React, { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -64,16 +66,19 @@ export function SourceEditor({
   text,
   onChange,
   readOnly = false,
+  findRequest = 0,
 }: {
   path: string;
   text: string;
   onChange?(text: string): void;
   readOnly?: boolean;
+  findRequest?: number;
 }) {
   useTranslation("panels");
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const changed = useRef(onChange);
+  const previousFindRequest = useRef(findRequest);
   const applyingExternal = useRef(false);
   const languageScope = useRef(new Compartment());
   const historyScope = useRef(new Compartment());
@@ -91,6 +96,7 @@ export function SourceEditor({
         extensions: [
           rawSource.init(() => text),
           preserveRawSource,
+          fileContentSearch,
           languageScope.current.of(large ? [] : sourceLanguage(path)),
           syntaxHighlighting(highlight),
           lineNumbers(),
@@ -107,6 +113,7 @@ export function SourceEditor({
             "aria-label": label,
             spellcheck: "false",
             "aria-readonly": String(readOnly),
+            tabindex: "0",
           }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !applyingExternal.current && !readOnly)
@@ -121,6 +128,11 @@ export function SourceEditor({
       view.destroy();
     };
   }, [path, readOnly]);
+  useEffect(() => {
+    if (findRequest !== previousFindRequest.current && viewRef.current)
+      openSearchPanel(viewRef.current);
+    previousFindRequest.current = findRequest;
+  }, [findRequest]);
   useEffect(() => {
     viewRef.current?.dispatch({
       effects: languageScope.current.reconfigure(

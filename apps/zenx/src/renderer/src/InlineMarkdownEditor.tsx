@@ -16,6 +16,8 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
+import { openSearchPanel, searchPanelOpen } from "@codemirror/search";
+import { fileContentSearch } from "./file-content-search.js";
 import { GFM } from "@lezer/markdown";
 import { useEffect, useRef } from "react";
 import { classifyZenXLink } from "../../external-link-policy.js";
@@ -57,6 +59,9 @@ function livePreviewDecorations(
   state: EditorState,
   editorFocused: boolean,
 ): DecorationSet {
+  // Find temporarily exposes the source so hidden URLs and formatting marks
+  // are searchable and visible. Closing Find restores the same live preview.
+  if (searchPanelOpen(state)) return Decoration.none;
   const ranges: ReturnType<Decoration["range"]>[] = [];
   const selection = state.selection.ranges;
   const hide = (from: number, to: number) => {
@@ -188,6 +193,7 @@ const livePreview = ViewPlugin.fromClass(
     }
     update(update: ViewUpdate) {
       if (
+        searchPanelOpen(update.startState) !== searchPanelOpen(update.state) ||
         update.docChanged ||
         update.selectionSet ||
         update.focusChanged ||
@@ -207,14 +213,17 @@ export function InlineMarkdownEditor({
   path,
   text,
   onChange,
+  findRequest = 0,
 }: {
   path: string;
   text: string;
   onChange(text: string): void;
+  findRequest?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const onChangeRef = useRef(onChange);
+  const previousFindRequest = useRef(findRequest);
   const applyingExternal = useRef(false);
   const historyCompartment = useRef(new Compartment());
   onChangeRef.current = onChange;
@@ -229,6 +238,7 @@ export function InlineMarkdownEditor({
         extensions: [
           rawSource.init(() => text),
           preserveRawSource,
+          fileContentSearch,
           markdown({ extensions: [GFM] }),
           historyCompartment.current.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -272,6 +282,12 @@ export function InlineMarkdownEditor({
       view.destroy();
     };
   }, [path]);
+
+  useEffect(() => {
+    if (findRequest !== previousFindRequest.current && viewRef.current)
+      openSearchPanel(viewRef.current);
+    previousFindRequest.current = findRequest;
+  }, [findRequest]);
 
   useEffect(() => {
     const view = viewRef.current;

@@ -1,17 +1,23 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { WorkspaceFilePicker } from "../../src/renderer/src/workspace-file-picker.js";
-import { WorkspaceFilesPanel } from "../../src/renderer/src/workspace-files-panel.js";
+import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
+import { Sidebar } from "../../src/renderer/src/Sidebar.js";
+import { ThreadView } from "../../src/renderer/src/ThreadView.js";
+import { Icon } from "../../src/renderer/src/icons.js";
+import { emptyComposerState } from "../../src/renderer/src/composer-state.js";
+import { runtimeThread, runtimeMessage } from "./agent-runtime-data.js";
+import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
 import { WorkspaceFileDrafts } from "../../src/renderer/src/workspace-file-drafts.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 void i18n.changeLanguage(params.get("lang") ?? "en");
-document.documentElement.dataset.appearance = params.get("theme") ?? "light";
+document.documentElement.dataset.appearance = params.get("theme") ?? "dark";
 const files: Record<string, string> = {
   "README.md":
-    "# Workspace preview\n\nSynthetic files exercise the real ZenX components.\n",
+    "# File search\n\nFind files across the workspace without leaving your conversation.\n\n## Keyboard shortcuts\n\n- **Ctrl / Cmd P**: find a file by name or path\n- **Ctrl / Cmd F**: find text in the current file\n\nSearch keeps your draft safe while you move between files.\n",
   "package.json": '{\n  "name": "workspace-demo",\n  "private": true\n}\n',
   "src/components/FileSearch.tsx":
     'import { useState } from "react";\n\n// Search files in the current workspace.\nexport function FileSearch() {\n  const [query, setQuery] = useState("");\n  const limit = 80;\n\n  return (\n    <input\n      aria-label="Find a file"\n      value={query}\n      onChange={(event) => setQuery(event.target.value)}\n    />\n  );\n}\n',
@@ -24,6 +30,7 @@ const files: Record<string, string> = {
 };
 const drafts = new WorkspaceFileDrafts(100);
 (window as any).zenx = {
+  plugins: { executeCommand: async () => null, readHandle: async () => null },
   workspaceFiles: {
     list: async (_thread: string, relative: string) => {
       const prefix = relative === "." ? "" : relative + "/";
@@ -73,62 +80,161 @@ const drafts = new WorkspaceFileDrafts(100);
     },
   },
 };
+// Production navigation, conversation and AuxiliaryPanel; data below is synthetic.
+const thread = {
+  ...runtimeThread(
+    [
+      {
+        type: "userMessage" as const,
+        id: "user",
+        clientId: null,
+        content: [
+          {
+            type: "text" as const,
+            text: "Help me understand how file search works in this project.",
+            text_elements: [],
+          },
+        ],
+      },
+      runtimeMessage(
+        "answer",
+        "The file search lives in `src/components/FileSearch.tsx`.\n\nIt keeps the query local, searches across the workspace, and ignores older results when the query changes.\n\nOpen the file on the right to explore the implementation. Your conversation stays here while you browse and edit.",
+      ),
+    ],
+    "completed",
+    "fixture",
+  ),
+  name: "Explore file search",
+  cwd: "/synthetic/workspace-demo",
+};
+const summaries: NativeThreadSummary[] = [
+  "Explore file search",
+  "Review workspace navigation",
+  "Project notes",
+].map((name, index) => ({
+  threadId: index ? `fixture-${index}` : "fixture",
+  name,
+  archived: false,
+  createdAt: "2026-10-14T05:00:00Z",
+  updatedAt: "2026-10-14T05:00:00Z",
+  preview: name,
+  status: "idle",
+  currentMetadata: {
+    model: "gpt-5.4",
+    provider: "openai",
+    cwd: "/synthetic/workspace-demo",
+    sandbox: "workspace-write",
+    approvalPolicy: "on-request",
+  },
+}));
+const firstPath = params.get("file") ?? "src/components/FileSearch.tsx";
+drafts.set(JSON.stringify(["fixture", firstPath]), {
+  base: { path: firstPath, text: files[firstPath]!, revision: "a".repeat(64) },
+  text: files[firstPath]!,
+});
 function Fixture() {
-  const [selected, setSelected] = useState<string>();
+  const [selected, setSelected] = useState(`file:${firstPath}`);
+  const [opened, setOpened] = useState(true);
+  const [width, setWidth] = useState(520);
+  const [composer, setComposer] = useState(emptyComposerState());
+  const narrow = params.has("narrow");
   return (
-    <main
-      style={{
-        width: params.has("narrow") ? 360 : 660,
-        maxWidth: "100vw",
-        height: 640,
-        margin: "24px auto",
-        border: "1px solid var(--color-border-subtle)",
-        borderRadius: 10,
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--color-surface-main)",
-      }}
+    <div
+      className={"app-shell" + (narrow ? " sidebar-collapsed" : "")}
+      style={
+        {
+          "--workspace-panel-width": `${width}px`,
+          ...(narrow ? { width: 390, maxWidth: "100vw" } : {}),
+        } as React.CSSProperties
+      }
     >
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "12px 14px",
-          borderBottom: "1px solid var(--color-border-subtle)",
-          fontSize: 13,
-        }}
-      >
-        <span>{selected?.split("/").at(-1) ?? "Workspace files"}</span>
-        {selected ? (
-          <button onClick={() => setSelected(undefined)}>Browse files</button>
-        ) : (
-          <span style={{ color: "var(--color-text-secondary)", fontSize: 11 }}>
-            Synthetic workspace · actual components
-          </span>
-        )}
-      </header>
-      {selected ? (
-        <WorkspaceFilesPanel
-          key={selected}
-          threadId="fixture"
-          drafts={drafts}
-          workspacePath="/synthetic/workspace-demo"
-          initialPath={selected}
-          standalone
-        />
-      ) : (
-        <WorkspaceFilePicker
-          threadId="fixture"
-          onOpen={async (path) => {
-            await window.zenx.workspaceFiles.read("fixture", path);
-            setSelected(path);
+      <header className="window-titlebar">
+        <div className="window-titlebar-product">
+          <span style={{ paddingLeft: 18, fontWeight: 650 }}>ZenX</span>
+        </div>
+        <div
+          className="workspace-heading-row"
+          style={{
+            paddingInline: 16,
+            color: "var(--color-text-secondary)",
+            fontSize: 12,
           }}
-          onBack={() => {}}
+        >
+          workspace-demo <Icon name="chevron-right" /> Explore file search
+        </div>
+      </header>
+      <Sidebar
+        mode="projects"
+        open={false}
+        collapsed={narrow}
+        onClose={() => {}}
+        onChangeThreadLifecycle={async () => {}}
+        onChangeThreadPinned={async () => {}}
+        onNewThread={() => {}}
+        onAddProject={() => {}}
+        onRemoveProject={() => {}}
+        onSetDefaultProject={() => {}}
+        onOpenContribution={() => {}}
+        onOpenSettings={() => {}}
+        onRetryThreads={() => {}}
+        onRenameThread={async () => {}}
+        onSelectThread={() => {}}
+        pendingApprovalThreadIds={new Set()}
+        pluginContributions={[]}
+        selectedPage="agent"
+        selectedThreadId="fixture"
+        serverStatus={{ type: "ready", reconnected: false }}
+        liveThread={thread}
+        threadError={null}
+        threadLoading={false}
+        projects={{
+          projects: [
+            {
+              key: "/synthetic/workspace-demo",
+              workspace: "/synthetic/workspace-demo",
+              name: "workspace-demo",
+              configured: true,
+              isDefault: true,
+              threadIds: summaries.map((value) => value.threadId),
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: "/synthetic/workspace-demo",
+        }}
+        pinnedThreads={[]}
+        threads={summaries}
+      />
+      <main className="workspace">
+        <section className="agent-surface">
+          <ThreadView
+            thread={thread}
+            composer={composer}
+            approvals={[]}
+            onDraftChange={(text) =>
+              setComposer((value) => ({
+                ...value,
+                draft: { ...value.draft, text },
+              }))
+            }
+            onInterrupt={async () => {}}
+            onRespondToApproval={async () => {}}
+            onSubmit={async () => {}}
+          />
+        </section>
+        <AuxiliaryPanel
+          threadId="fixture"
+          title="Explore file search"
+          workspacePath="/synthetic/workspace-demo"
+          open={opened}
+          onOpenChange={setOpened}
+          selectedTab={selected}
+          onSelectTab={setSelected}
+          fileDrafts={drafts}
+          snapshot={null}
+          onWidthChange={setWidth}
         />
-      )}
-    </main>
+      </main>
+    </div>
   );
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

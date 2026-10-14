@@ -20,6 +20,7 @@ const MAX_VISIBLE_FILES = 2000;
 export function WorkspaceFileExplorer(props: {
   threadId: string;
   workspacePath?: string;
+  selectedPath?: string;
   busy?: boolean;
   onOpen(path: string): void;
 }) {
@@ -30,11 +31,13 @@ export function WorkspaceFileExplorer(props: {
 function FileExplorer({
   threadId,
   workspacePath,
+  selectedPath,
   busy = false,
   onOpen,
 }: {
   threadId: string;
   workspacePath?: string;
+  selectedPath?: string;
   busy?: boolean;
   onOpen(path: string): void;
 }) {
@@ -130,6 +133,18 @@ function FileExplorer({
     };
   }, [threadId, needle, revision]);
 
+  useEffect(() => {
+    if (!selectedPath) return;
+    const segments = selectedPath.split("/");
+    const parents = segments
+      .slice(0, -1)
+      .map((_, index) => segments.slice(0, index + 1).join("/"));
+    setExpanded((current) => new Set([...current, ...parents]));
+    for (const parent of parents) void load(parent);
+    // Opening a file reveals its ancestors, but later manual collapse stays respected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPath, revision]);
+
   const rows: Row[] = [];
   let treeTruncated = false;
   const append = (directory: string, level: number) => {
@@ -164,7 +179,7 @@ function FileExplorer({
   } else append(".", 1);
   const currentPath = rows.some((row) => row.path === cursor)
     ? cursor
-    : rows[0]?.path;
+    : (rows.find((row) => row.path === selectedPath)?.path ?? rows[0]?.path);
   const focus = (value: string | undefined) => {
     if (!value) return;
     setCursor(value);
@@ -206,6 +221,10 @@ function FileExplorer({
       onKeyDown={(event) => {
         if (
           (event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          !event.shiftKey &&
+          !event.nativeEvent.isComposing &&
+          event.nativeEvent.keyCode !== 229 &&
           event.key.toLowerCase() === "p"
         ) {
           event.preventDefault();
@@ -214,76 +233,78 @@ function FileExplorer({
         }
       }}
     >
-      <div className="workspace-file-search">
-        <Icon name="search" />
-        <input
-          ref={searchInput}
-          type="search"
-          value={query}
-          maxLength={512}
-          aria-label={i18n.t("panels:searchWorkspaceFiles")}
-          aria-controls={treeId}
-          placeholder={i18n.t("panels:searchFilesByNameOrPath")}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setCursor(undefined);
-          }}
-          onKeyDown={(event) => {
-            if (event.nativeEvent.isComposing) return;
-            if (event.key === "Escape" && query) {
-              event.preventDefault();
-              event.stopPropagation();
-              clearSearch();
-            } else if (event.key === "ArrowDown" && rows.length) {
-              event.preventDefault();
-              focus(rows[0]?.path);
-            } else if (event.key === "Enter" && needle && rows[0]) {
-              event.preventDefault();
-              activate(rows[0]);
-            }
-          }}
-        />
-        {query ? (
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={i18n.t("panels:clearFileSearch")}
-            title={i18n.t("panels:clearFileSearch")}
-            onClick={clearSearch}
-          >
-            ×
-          </button>
-        ) : null}
-      </div>
-      <div className="workspace-file-tree-heading">
-        <span title={workspacePath}>
-          {needle
-            ? i18n.t("panels:workspaceSearchResults")
-            : (workspacePath?.split(/[\\/]/).filter(Boolean).at(-1) ??
-              i18n.t("panels:workspace"))}
-        </span>
-        {!needle && expanded.size ? (
-          <button
-            type="button"
-            className="icon-button"
-            title={i18n.t("panels:collapseFileFolders")}
-            aria-label={i18n.t("panels:collapseFileFolders")}
-            onClick={() => {
-              setExpanded(new Set());
-              setCursor(undefined);
-            }}
-          >
-            <Icon name="compress" />
-          </button>
-        ) : null}
+      <div
+        className="workspace-file-actions"
+        role="group"
+        aria-label={i18n.t("panels:workspaceFiles")}
+        title={workspacePath}
+      >
         <button
           type="button"
           className="icon-button"
-          title={i18n.t("panels:refresh")}
-          aria-label={i18n.t("panels:refresh")}
+          aria-label={i18n.t("panels:refreshFileList")}
+          title={i18n.t("panels:refreshFileList")}
+          disabled={pending.has(".") || searching}
+          aria-busy={pending.has(".") || searching}
+          data-refreshing={pending.has(".") || searching}
           onClick={() => setRevision((value) => value + 1)}
         >
           <Icon name="reload" />
+        </button>
+        <div className="workspace-file-search">
+          <Icon name="search" />
+          <input
+            ref={searchInput}
+            type="search"
+            value={query}
+            maxLength={512}
+            aria-label={i18n.t("panels:searchWorkspaceFiles")}
+            aria-controls={treeId}
+            placeholder={i18n.t("panels:searchFilesByNameOrPath")}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setCursor(undefined);
+            }}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Escape" && query) {
+                event.preventDefault();
+                event.stopPropagation();
+                clearSearch();
+              } else if (event.key === "ArrowDown" && rows.length) {
+                event.preventDefault();
+                focus(rows[0]?.path);
+              } else if (event.key === "Enter" && needle && rows[0]) {
+                event.preventDefault();
+                activate(rows[0]);
+              }
+            }}
+          />
+          {query ? (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={i18n.t("panels:clearFileSearch")}
+              title={i18n.t("panels:clearFileSearch")}
+              onClick={clearSearch}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+
+        <button
+          type="button"
+          className="icon-button"
+          title={i18n.t("panels:collapseFileFolders")}
+          aria-label={i18n.t("panels:collapseFileFolders")}
+          disabled={!!needle || expanded.size === 0}
+          onClick={() => {
+            setExpanded(new Set());
+            setCursor(undefined);
+          }}
+        >
+          <Icon name="collapse-folders" />
         </button>
       </div>
       <div className="workspace-file-tree-scroll">
@@ -304,7 +325,10 @@ function FileExplorer({
               className="workspace-file-row"
               data-file-path={entry.path}
               data-kind={entry.kind}
-              style={{ paddingInlineStart: `${8 + (entry.level - 1) * 16}px` }}
+              data-current={entry.path === selectedPath}
+              data-extension={entry.name.split(".").at(-1)?.toLowerCase()}
+              style={{ paddingInlineStart: `${8 + (entry.level - 1) * 14}px` }}
+              aria-label={needle ? `${entry.name}, ${entry.path}` : entry.name}
               aria-level={entry.level}
               aria-posinset={entry.position}
               aria-setsize={entry.siblings}
@@ -363,7 +387,20 @@ function FileExplorer({
               </span>
               <Icon name={entry.kind === "directory" ? "folder" : "file"} />
               <span className="workspace-file-label">
-                <span>{entry.name}</span>
+                <span className="workspace-file-name">
+                  {entry.kind === "file" && entry.name.lastIndexOf(".") > 0 ? (
+                    <>
+                      <span className="workspace-file-name-prefix">
+                        {entry.name.slice(0, entry.name.lastIndexOf("."))}
+                      </span>
+                      <span className="workspace-file-name-suffix">
+                        {entry.name.slice(entry.name.lastIndexOf("."))}
+                      </span>
+                    </>
+                  ) : (
+                    entry.name
+                  )}
+                </span>
                 {needle ? (
                   <small>
                     {entry.path.includes("/")
@@ -449,8 +486,11 @@ function FileExplorer({
           {i18n.t("panels:openEnteredFilePath")}
         </button>
       ) : null}
-      <p className="workspace-file-search-hint">
-        {i18n.t("panels:workspaceFileSearchHint")}
+      <p
+        className="workspace-file-search-hint"
+        title={i18n.t("panels:workspaceFileSearchHint")}
+      >
+        {i18n.t("panels:workspaceFileSearchScope")}
       </p>
     </div>
   );

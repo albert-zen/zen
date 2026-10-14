@@ -8,8 +8,14 @@ export function WorkspaceFilePicker({
   threadId,
   onOpen,
   onBack,
+  workspacePath,
+  selectedPath,
+  navigation = false,
 }: {
   threadId: string;
+  workspacePath?: string;
+  selectedPath?: string;
+  navigation?: boolean;
   onOpen(path: string): Promise<void>;
   onBack(): void;
 }) {
@@ -44,13 +50,15 @@ export function WorkspaceFilePicker({
       className="workspace-file-picker"
       aria-label={i18n.t("panels:chooseAFile")}
     >
-      <div className="workspace-picker-heading">
+      <div className="workspace-picker-heading" hidden={navigation}>
         <button
           type="button"
           className="icon-button"
           aria-label={i18n.t("panels:backToTabTypes")}
           onClick={() => {
             epoch.current++;
+            setBusy(false);
+            setError("");
             onBack();
           }}
         >
@@ -71,6 +79,8 @@ export function WorkspaceFilePicker({
       <WorkspaceFileExplorer
         threadId={threadId}
         busy={busy}
+        workspacePath={workspacePath}
+        selectedPath={selectedPath}
         onOpen={(path) => void open(path)}
       />
     </section>
