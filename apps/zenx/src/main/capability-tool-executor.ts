@@ -1,3 +1,8 @@
+import { desktopShellPty } from "./shell-pty.js";
+import {
+  trackWindowsShellProcess,
+  WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
+} from "./shell-process-termination.js";
 import { randomUUID } from "node:crypto";
 import { FleetToolTargetRouter } from "./fleet-tool-router.js";
 import { RtkShellOutputFilter } from "../../../../src/shell-output-filter.js";
@@ -16,6 +21,8 @@ import {
   PluginDiscoveryProjection,
   PluginDiscoveryToolRuntime,
 } from "./plugin-discovery.js";
+
+import { browserConnectionScopeKey } from "./capabilities/browser-connections.js";
 
 interface PendingInvocation {
   resolve(result: ToolExecutionResult): void;
@@ -47,10 +54,43 @@ export class ZenXHostToolBundle implements ToolBundle {
     send: (event: HostEvent) => void;
     state?: CapabilityInvocationState;
   }) {
+    const browserConnections =
+      options.capabilities.browserConnections === undefined
+        ? undefined
+        : new Map(
+            options.capabilities.browserConnections.map((value) => [
+              value.connectionId,
+              Object.freeze(structuredClone(value)),
+            ]),
+          );
     this.tools = options.capabilities.definitions.map((definition) => ({
       name: definition.name,
       specification: structuredClone(definition),
-      ...(options.capabilities.remoteToolNames?.includes(definition.name)
+      ...(browserConnections !== undefined &&
+      definition.name.startsWith("browser_connected_")
+        ? {
+            approvalScope: (invocation: ToolInvocation) => {
+              const id = invocation.arguments.connectionId;
+              if (typeof id !== "string")
+                throw new Error("An explicit browser connectionId is required");
+              const connection = browserConnections.get(id);
+              if (connection?.state !== "connected")
+                throw new Error(
+                  "Browser connection is unavailable in this tool catalog; refresh the catalog",
+                );
+              return {
+                key: browserConnectionScopeKey(id),
+                label: connection.label,
+                generation: connection.generation,
+              };
+            },
+          }
+        : {}),
+      ...(options.capabilities.remoteToolNames?.includes(definition.name) &&
+      !(
+        browserConnections !== undefined &&
+        definition.name.startsWith("browser_connected_")
+      )
         ? { remoteExecution: "text-json" as const }
         : {}),
       ...hostedResourcePolicy(
@@ -131,6 +171,9 @@ export class ZenXHostToolBundle implements ToolBundle {
             : { canonicalToolCallId: invocation.canonicalToolCallId }),
           name: invocation.name,
           arguments: invocation.arguments,
+          ...(invocation.approvalScope === undefined
+            ? {}
+            : { approvalScope: invocation.approvalScope }),
           ...(targetRoute && invocation.task !== undefined
             ? {
                 task: {
@@ -213,10 +256,17 @@ export class ZenXHostToolBundle implements ToolBundle {
 // identify one page within that session. Keep keys stable across generations so
 // retiring calls remain fenced while a new snapshot is published.
 function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
+  const namespace = /^browser_(workspace|connected)_/u.exec(toolName)?.[1];
+  const browserToolName = toolName.replace(
+    /^browser_(?:workspace|connected)_/u,
+    "browser_",
+  );
   const browserPageTools = new Set([
     "browser_navigate",
     "browser_inspect",
     "browser_click",
+    "browser_pointer_click",
+    "browser_key_press",
     "browser_type",
     "browser_scroll",
     "browser_select",
@@ -225,9 +275,9 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
   ]);
   if (
     pluginId === "browser" &&
-    (browserPageTools.has(toolName) ||
+    (browserPageTools.has(browserToolName) ||
       ["browser_open", "browser_list_tabs", "browser_close_session"].includes(
-        toolName,
+        browserToolName,
       ))
   ) {
     return {
@@ -240,17 +290,25 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
         // an exclusive fallback; malformed calls must not bypass a live fence.
         if (
           typeof sessionId !== "string" ||
-          (browserPageTools.has(toolName) && typeof tabId !== "string")
+          (browserPageTools.has(browserToolName) && typeof tabId !== "string")
         )
           return [
             { key: "zenx:browser:invalid", access: "exclusive" as const },
           ];
         const session = [
           "zenx-browser",
+          ...(namespace === undefined ? [] : [namespace]),
+          ...(namespace === "connected" &&
+          invocation.approvalScope !== undefined
+            ? [
+                invocation.approvalScope.key,
+                invocation.approvalScope.generation,
+              ]
+            : []),
           invocation.threadId ?? null,
           sessionId,
         ];
-        return browserPageTools.has(toolName)
+        return browserPageTools.has(browserToolName)
           ? [
               { key: JSON.stringify(session), access: "shared" as const },
               {
@@ -262,7 +320,7 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
               {
                 key: JSON.stringify(session),
                 access:
-                  toolName === "browser_list_tabs"
+                  browserToolName === "browser_list_tabs"
                     ? ("shared" as const)
                     : ("exclusive" as const),
               },
@@ -316,6 +374,13 @@ export function createZenXHostToolEnvironment(options: {
     state: invocationState,
   });
   const shellRuntime = new ShellToolRuntime({
+    pty: desktopShellPty,
+    ...(process.platform === "win32"
+      ? {
+          trackProcess: trackWindowsShellProcess,
+          ownedCleanupWaitMs: WINDOWS_SHELL_SHUTDOWN_WAIT_MS,
+        }
+      : {}),
     blockedEnvironmentVariables: options.blockedEnvironmentVariables,
     toolOutputSpool: options.toolOutputSpool,
     experimentalOutputFilter:
@@ -324,6 +389,7 @@ export function createZenXHostToolEnvironment(options: {
         : new RtkShellOutputFilter(options.experimentalRtk),
   });
   const toolEnvironment = new ToolEnvironment({
+    shellSessions: true,
     runtimes: [shellRuntime],
     toolOutputSpool: options.toolOutputSpool,
     bundles: [capabilityBundle],

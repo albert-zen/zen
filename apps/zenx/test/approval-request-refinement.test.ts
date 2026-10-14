@@ -48,6 +48,31 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("scoped browser approval describes only its trusted instance", async () => {
+  await withRuntimeDom(async (h) => {
+    const scoped: ApprovalCardState = {
+      ...request("browser-instance"),
+      params: {
+        ...runtimeApproval.params,
+        toolName: "browser_connected_navigate",
+        command: "[Target: Edge abcd1234] navigate",
+        approvalTarget: { key: "browser-instance:a", label: "Edge abcd1234" },
+      },
+    };
+    await h.render(runtimeThread(), { approvals: [scoped] });
+    const scope = document.querySelector(
+      ".approval-request-scope",
+    )!.textContent!;
+    assert.match(scope, /Edge abcd1234/u);
+    assert.match(scope, /Other browser instances/u);
+    assert.match(scope, /browser_connected_navigate/u);
+    assert.equal(
+      button(".approval-request-allow").textContent?.trim(),
+      "Allow access",
+    );
+  });
+});
+
 test("native once and remembered scopes retain full code, cwd and exact request details", async () => {
   await withRuntimeDom(async (h) => {
     const thread = runtimeThread();

@@ -26,6 +26,7 @@
 - risk scoring、参数级 scope graph、permission rules engine 或复杂 sandbox 产品矩阵；
   用户已要求 Read Only / Workspace Write / Full Access 三档文件权限及切换，默认 Full Access。
   原有只做两档工具审批的阶段限制不再覆盖文件权限，兼容 `ask_unknown` 仍保留。
+  2026-10-13 用户要求多个浏览器同时连接，因此可信 Host 可为同一工具绑定一个明确连接实例的稳定审批键与 dispatch generation；这是资源身份隔离，不是参数规则引擎。
 - 把 `run_code` 的受限语言能力宣传成可运行 hostile code 的完整安全沙箱；Worker/context
   与资源限制负责工具编排边界和运行 containment
 - 按配置的秘密值替换或脱敏工具实际输出；head/tail 与临时文件是上下文节约策略，

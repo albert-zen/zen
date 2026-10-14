@@ -1,8 +1,10 @@
-/** Keep the shared Workspace Browser unless an env override or saved Chrome opt-in selects a provider. */
+/** An external-browser opt-in adds a backend; it never replaces Workspace tabs. */
 export function useWorkspaceBrowserProvider(
   environment: NodeJS.ProcessEnv,
-  configuredMode?: "isolated" | "user-session",
+  _configuredMode?: "isolated" | "user-session",
 ): boolean {
-  if (environment.ZENX_BROWSER_MODE !== undefined) return false;
-  return configuredMode !== "user-session";
+  return (
+    environment.ZENX_BROWSER_MODE === undefined ||
+    environment.ZENX_BROWSER_MODE === "user-session"
+  );
 }

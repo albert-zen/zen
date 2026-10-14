@@ -9,6 +9,7 @@ import {
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Parent, Root } from "mdast";
 import { MarkdownImage } from "./MarkdownImage.js";
 import { classifyImageSource } from "../../image-source.js";
 import { classifyMessageLink } from "../../external-link-policy.js";
@@ -40,7 +41,7 @@ export function Markdown({ text }: { text: string }) {
     return (
       <div className="markdown-body">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, remarkBareAutolinkResidue]}
           components={components}
           urlTransform={safeUrlTransform}
         >
@@ -54,7 +55,7 @@ export function Markdown({ text }: { text: string }) {
   return (
     <div className="markdown-body">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBareAutolinkResidue]}
         components={components}
         urlTransform={safeUrlTransform}
       >
@@ -298,6 +299,62 @@ function findUnclosedFence(source: string): {
   return opening === null
     ? null
     : { prefix: normalized.slice(0, opening.index) };
+}
+
+// Only GFM's bare web links have a source span beginning with the URL itself.
+// Explicit links, references and <autolinks> keep their authored destinations.
+function remarkBareAutolinkResidue() {
+  return (tree: Root, file: { toString(): string }) => {
+    const source = file.toString();
+    function visit(parent: Parent) {
+      for (let index = 0; index < parent.children.length; index += 1) {
+        const child = parent.children[index]!;
+        if (child.type !== "link") {
+          if ("children" in child) visit(child);
+          continue;
+        }
+        const start = child.position?.start.offset;
+        const end = child.position?.end.offset;
+        if (start === undefined || end === undefined) continue;
+        const raw = source.slice(start, end);
+        if (
+          !/^(?:https?:\/\/|www\.)/iu.test(raw) ||
+          child.children.length !== 1 ||
+          child.children[0]?.type !== "text" ||
+          child.children[0].value !== raw
+        )
+          continue;
+        const prefix = trimBareAutolinkResidue(raw);
+        if (prefix.length === raw.length) continue;
+        child.url = /^www\./iu.test(raw) ? `http://${prefix}` : prefix;
+        child.children = [{ type: "text", value: prefix }];
+        parent.children.splice(index + 1, 0, {
+          type: "text",
+          value: raw.slice(prefix.length),
+        });
+        index += 1;
+      }
+    }
+    visit(tree);
+  };
+}
+
+function trimBareAutolinkResidue(raw: string): string {
+  const punctuation =
+    /[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]/u;
+  // Locate literal punctuation or individual escaped UTF-8 characters in the
+  // original source. Never decode/re-encode a target or map decoded offsets:
+  // adjacent escaped CJK, %2F and surrogate pairs must retain their exact bytes.
+  const candidates =
+    /[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]|%(?:e3|ef)(?:%[89ab][0-9a-f]){2}/giu;
+  let end = raw.length;
+  for (const match of raw.matchAll(candidates)) {
+    if (punctuation.test(decodeURIComponent(match[0]))) {
+      end = match.index;
+      break;
+    }
+  }
+  return raw.slice(0, end).replace(/[*~`_'",.;:!?]+$/u, "");
 }
 
 function safeUrlTransform(url: string, key: string): string {

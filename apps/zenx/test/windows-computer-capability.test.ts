@@ -19,6 +19,11 @@ import {
   type WinAppCliRunResult,
 } from "../src/main/capabilities/windows-computer-provider.js";
 
+import {
+  WINDOWS_BACKGROUND_CAPTURE_SCRIPT,
+  windowsBackgroundCaptureCommand,
+} from "../src/main/capabilities/windows-background-capture.js";
+
 const target = {
   pid: 4242,
   applicationId: "FixtureApp",
@@ -199,7 +204,7 @@ test("discovery reports invalid native results and respects cancellation before 
   assert.equal(runner.commands.length, calls);
 });
 
-test("Windows provider captures only the exact HWND through WGC-default screenshot", async () => {
+test("Windows screenshot uses a strict background helper instead of WinApp activation fallback", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-test-"));
   try {
     const runner = new FixtureWinAppRunner();
@@ -207,25 +212,144 @@ test("Windows provider captures only the exact HWND through WGC-default screensh
       artifactDirectory: directory,
       platform: "win32",
       runner,
+      captureRunner: runner,
     });
     const result = await backend.screenshot(target);
     assert.equal(result.target.windowTitle, "Fixture Window");
     assert.equal(result.width, 1280);
     assert.equal(result.height, 720);
-    assert.equal(result.bytes, 7);
-    const screenshotCommand = runner.commands.at(-1)!;
-    assert.deepEqual(screenshotCommand.slice(0, 5), [
-      "ui",
-      "screenshot",
-      "--window",
-      "9001",
-      "--output",
-    ]);
-    assert.equal(screenshotCommand.includes("--capture-screen"), false);
-    assert.equal(screenshotCommand.includes("--focus"), false);
+    assert.equal(result.bytes, 33);
+    assert.equal(
+      runner.commands.some((args) => args[1] === "screenshot"),
+      false,
+    );
+    assert.equal(
+      runner.commands.some((args) => args.includes("-EncodedCommand")),
+      true,
+    );
+    assert.deepEqual(runner.captureRequest, {
+      hwnd: "9001",
+      pid: 4242,
+      title: "Fixture Window",
+    });
     await backend.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Windows background capture transports Unicode and source-like titles as stdin data", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-background-unicode-"),
+  );
+  const runner = new FixtureWinAppRunner();
+  const title = '中文 😀 "quoted" \\ $literal';
+  runner.windows = [{ ...fixtureWindow(), title }];
+  const backend = new WinAppCliComputerBackend({
+    platform: "win32",
+    runner,
+    captureRunner: runner,
+    artifactDirectory: directory,
+  });
+  try {
+    await backend.screenshot({ ...target, windowTitle: title });
+    assert.equal(runner.captureRequest?.title, title);
+    const script = Buffer.from(
+      runner.commands.find((args) => args.includes("-EncodedCommand"))!.at(-1)!,
+      "base64",
+    ).toString("utf16le");
+    assert.equal(script.includes(title), false);
+    assert.match(script, /Console\]::InputEncoding/u);
+    assert.match(script, /Console\]::OutputEncoding/u);
+  } finally {
+    await backend.close();
+  }
+});
+
+test("strict Windows capture has no activation/input API and bounded stdin transport", () => {
+  assert.doesNotMatch(
+    WINDOWS_BACKGROUND_CAPTURE_SCRIPT,
+    /ShowWindow|SetForegroundWindow|SendInput|SetCursorPos|SwitchDesktop/u,
+  );
+  assert.match(WINDOWS_BACKGROUND_CAPTURE_SCRIPT, /IsIconic/u);
+  assert.match(WINDOWS_BACKGROUND_CAPTURE_SCRIPT, /PrintWindow/u);
+  assert.match(
+    WINDOWS_BACKGROUND_CAPTURE_SCRIPT,
+    /finally \{ graphics.ReleaseHdc/u,
+  );
+  const command = windowsBackgroundCaptureCommand();
+  assert.equal(path.win32.isAbsolute(command.executable), true);
+  assert.equal(command.args.includes("-ExecutionPolicy"), false);
+  assert.ok(command.args.join(" ").length < 30_000);
+});
+
+test("unavailable Windows background frames fail without WinApp or foreground fallback", async () => {
+  for (const failure of [
+    "capture_minimized",
+    "capture_blank",
+    "capture_unrendered",
+    "capture_protected",
+    "capture_target_changed",
+  ]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-background-fail-"),
+    );
+    const runner = new FixtureWinAppRunner();
+    runner.captureError = new Error(failure);
+    const backend = new WinAppCliComputerBackend({
+      platform: "win32",
+      runner,
+      captureRunner: runner,
+      artifactDirectory: directory,
+    });
+    try {
+      await assert.rejects(backend.screenshot(target), new RegExp(failure));
+      assert.equal(
+        runner.commands.some(
+          (args) =>
+            args[1] === "screenshot" || args.includes("--capture-screen"),
+        ),
+        false,
+      );
+      assert.deepEqual(
+        await (await import("node:fs/promises")).readdir(directory),
+        [],
+      );
+    } finally {
+      await backend.close();
+    }
+  }
+});
+
+test("Windows capture rejects unconfirmed target identity and invalid PNG before publishing", async () => {
+  for (const override of [
+    { processId: 12 },
+    { hwnd: "99" },
+    { method: "foreground" },
+    { pngBase64: "invalid!" },
+    { pngBase64: "A".repeat(5_592_408) },
+    { width: 3 },
+  ]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-background-invalid-"),
+    );
+    const runner = new FixtureWinAppRunner();
+    runner.captureOverride = override;
+    const backend = new WinAppCliComputerBackend({
+      platform: "win32",
+      runner,
+      captureRunner: runner,
+      artifactDirectory: directory,
+    });
+    try {
+      await assert.rejects(backend.screenshot(target), /Background capture/u);
+      assert.deepEqual(
+        await (await import("node:fs/promises")).readdir(directory),
+        [],
+      );
+    } finally {
+      await backend.close();
+    }
   }
 });
 
@@ -245,6 +369,7 @@ test("Windows provider trims only trailing transparent screenshot padding", asyn
       artifactDirectory: directory,
       platform: "win32",
       runner,
+      captureRunner: runner,
       loadScreenshotImage: () => ({
         getSize: () => ({ width: 1280, height: 720 }),
         toBitmap: () => bitmap,
@@ -275,7 +400,7 @@ test("Windows provider trims only trailing transparent screenshot padding", asyn
   }
 });
 
-test("Windows provider confirms a screenshot through its real file identity", async () => {
+test("Windows screenshot artifact is host-owned and does not trust a helper output path", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-winapp-test-"));
   const artifactDirectory = path.join(directory, "artifacts");
   const aliasDirectory = path.join(directory, "artifact-alias");
@@ -287,12 +412,14 @@ test("Windows provider confirms a screenshot through its real file identity", as
       process.platform === "win32" ? "junction" : "dir",
     );
     const runner = new FixtureWinAppRunner();
-    runner.screenshotPath = (artifactPath) =>
-      path.join(aliasDirectory, path.basename(artifactPath));
+    runner.captureOverride = {
+      filePath: path.join(aliasDirectory, "untrusted.png"),
+    };
     const backend = new WinAppCliComputerBackend({
       artifactDirectory,
       platform: "win32",
       runner,
+      captureRunner: runner,
     });
 
     const result = await backend.screenshot(target);
@@ -470,6 +597,7 @@ test("ZenX startup does not expose an incompatible WinApp provider", async () =>
     computerBackend: new WinAppCliComputerBackend({
       platform: "win32",
       runner,
+      captureRunner: runner,
     }),
     computerManifest: windowsComputerCapabilityManifest,
   });
@@ -497,6 +625,14 @@ test("ZenX startup does not expose an incompatible WinApp provider", async () =>
 });
 
 test("WinApp process runner enforces cancellation, timeout, and output bounds", async () => {
+  const input = '中文 😀 "quoted" \\';
+  const echoed = await runBoundedProcess(
+    process.execPath,
+    ["-e", "process.stdin.pipe(process.stdout)"],
+    { timeoutMs: 1000, stdin: input },
+  );
+  assert.equal(echoed.stdout, input);
+
   const controller = new AbortController();
   const cancelled = runBoundedProcess(
     process.execPath,
@@ -561,6 +697,9 @@ class FixtureWinAppRunner implements WinAppCliRunner {
   versionOutput = "winapp 1.2.3-preview\n";
   writtenValue = "";
   screenshotPath: ((artifactPath: string) => string) | undefined;
+  captureRequest: Record<string, unknown> | undefined;
+  captureError: Error | undefined;
+  captureOverride: Record<string, unknown> | undefined;
 
   async run(
     _executable: string,
@@ -568,6 +707,27 @@ class FixtureWinAppRunner implements WinAppCliRunner {
     _options: WinAppCliRunOptions,
   ): Promise<WinAppCliRunResult> {
     this.commands.push([...args]);
+    if (args.includes("-EncodedCommand")) {
+      this.captureRequest = JSON.parse(_options.stdin!);
+      if (this.captureError) throw this.captureError;
+      const png = Buffer.alloc(33);
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
+      png.write("IHDR", 12, "ascii");
+      png.writeUInt32BE(1280, 16);
+      png.writeUInt32BE(720, 20);
+      return output(
+        JSON.stringify({
+          method: "strict-background-printwindow",
+          hwnd: "9001",
+          processId: 4242,
+          windowTitle: this.captureRequest!.title,
+          width: 1280,
+          height: 720,
+          pngBase64: png.toString("base64"),
+          ...this.captureOverride,
+        }),
+      );
+    }
     if (args[0] === "--version") {
       return output(this.versionOutput);
     }

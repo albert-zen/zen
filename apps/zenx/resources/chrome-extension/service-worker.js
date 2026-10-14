@@ -1,6 +1,7 @@
 const NATIVE_HOST = "com.zenx.chrome_bridge";
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const READY_TIMEOUT_MS = 5000;
+const GROUPING_RESPONSE_BUDGET_MS = 500;
 let connection;
 let actionChain = Promise.resolve();
 
@@ -13,6 +14,17 @@ async function handleAction() {
     await disconnect(connection);
     return;
   }
+  let identity;
+  try {
+    identity = await browserIdentity();
+  } catch (error) {
+    await chrome.action.setBadgeBackgroundColor({ color: "#a33a3a" });
+    await chrome.action.setBadgeText({ text: "!" });
+    await chrome.action.setTitle({
+      title: `ZenX connection failed: ${describeError(error)}`,
+    });
+    return;
+  }
   const session = {
     port: chrome.runtime.connectNative(NATIVE_HOST),
     tabs: new Map(),
@@ -20,6 +32,8 @@ async function handleAction() {
     removed: new Set(),
     changed: new Set(),
     owned: new Set(),
+    groups: new Map(),
+    groupingChain: Promise.resolve(),
     attachments: new Map(),
     detaching: new Map(),
     published: false,
@@ -41,6 +55,15 @@ async function handleAction() {
         ) {
           clearTimeout(timer);
           resolve();
+        } else if (message?.type === "connection-rejected") {
+          clearTimeout(timer);
+          reject(
+            new Error(
+              typeof message.message === "string"
+                ? message.message
+                : "Another browser is connected",
+            ),
+          );
         } else if (message?.type === "cdp-command" && session.published) {
           void runCommand(session, message);
         }
@@ -62,6 +85,7 @@ async function handleAction() {
         protocolVersion: PROTOCOL_VERSION,
         scope: "browser",
         extensionVersion: chrome.runtime.getManifest().version,
+        ...identity,
       });
     });
     const tabs = await chrome.tabs.query({});
@@ -79,7 +103,9 @@ async function handleAction() {
     });
     await chrome.action.setBadgeBackgroundColor({ color: "#16784a" });
     await chrome.action.setBadgeText({ text: "ON" });
-    await chrome.action.setTitle({ title: "Disconnect Chrome from ZenX" });
+    await chrome.action.setTitle({
+      title: "Disconnect this browser from ZenX",
+    });
   } catch (error) {
     await disconnect(session);
     if (connection !== undefined) return;
@@ -109,6 +135,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   session.recentUrls.delete(tabId);
   session.owned.delete(tabId);
   removeTab(session, tabId);
+});
+chrome.tabGroups?.onRemoved.addListener((group) => {
+  const session = connection;
+  if (session === undefined) return;
+  for (const [windowId, groupId] of session.groups) {
+    if (groupId === group.id) session.groups.delete(windowId);
+  }
 });
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const session = connection;
@@ -246,7 +279,12 @@ async function runCommand(session, message) {
       if (connection !== session) return; // Never remove a tab on disconnect, including a late create.
       session.owned.add(tab.id);
       updateTab(tab);
-      result = { targetId: `chrome-tab-${tab.id}` };
+      // Creation already succeeded. Grouping is display metadata, never a reason
+      // to report creation failure or to create another tab on retry.
+      result = {
+        targetId: `chrome-tab-${tab.id}`,
+        grouping: await boundedGrouping(session, tab),
+      };
     } else {
       const tabId = message.tabId;
       if (!session.tabs.has(tabId))
@@ -276,6 +314,132 @@ async function runCommand(session, message) {
         requestId: message.requestId,
         error: { code: -32000, message: describeError(error) },
       });
+  }
+}
+
+async function boundedGrouping(session, tab) {
+  if (session.groupingStalled)
+    return {
+      status: "unavailable",
+      reason:
+        "A prior grouping command is unresolved; this created tab remains usable",
+    };
+  const ticket = { active: true };
+  const grouping = session.groupingChain.then(() =>
+    groupCreatedTab(session, tab, ticket),
+  );
+  session.groupingChain = grouping.then(() => {});
+  let timer;
+  try {
+    return await Promise.race([
+      grouping,
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          ticket.active = false;
+          session.groupingStalled ??= ticket;
+          resolve({
+            status: "unknown",
+            reason:
+              "Grouping response timed out; a sent command may still finish. Tab creation succeeded; do not recreate it.",
+          });
+        }, GROUPING_RESPONSE_BUDGET_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    // The native group command cannot be cancelled. Observe settlement but do
+    // not follow a timeout with naming, regrouping, rollback, or another create.
+    void grouping.finally(() => {
+      if (session.groupingStalled === ticket)
+        session.groupingStalled = undefined;
+    });
+  }
+}
+
+async function groupCreatedTab(session, tab, ticket) {
+  let groupId;
+  const abandoned = () => !ticket.active || connection !== session;
+  try {
+    if (abandoned())
+      return {
+        status: "unavailable",
+        reason: "Grouping was abandoned; created tab left unchanged",
+      };
+    if (
+      typeof chrome.tabs.group !== "function" ||
+      typeof chrome.tabGroups?.get !== "function" ||
+      typeof chrome.tabGroups?.update !== "function"
+    )
+      return { status: "unavailable", reason: "Tab grouping is unavailable" };
+    const current = await chrome.tabs.get(tab.id);
+    if (
+      abandoned() ||
+      !session.owned.has(tab.id) ||
+      session.removed.has(tab.id) ||
+      !Number.isInteger(tab.windowId) ||
+      current.windowId !== tab.windowId ||
+      current.groupId !== -1
+    )
+      return {
+        status: "unavailable",
+        reason: "Tab or connection changed; grouping left unchanged",
+      };
+    let existingId = session.groups.get(tab.windowId);
+    if (existingId !== undefined) {
+      try {
+        const existing = await chrome.tabGroups.get(existingId);
+        const members = await chrome.tabs.query({ groupId: existingId });
+        if (
+          existing.windowId !== tab.windowId ||
+          !members.some((member) => session.owned.has(member.id))
+        )
+          existingId = undefined;
+      } catch {
+        existingId = undefined;
+      }
+      if (existingId === undefined) session.groups.delete(tab.windowId);
+    }
+    // Recheck after asynchronous group lookup. Never reclaim a tab the user
+    // moved or grouped, and never restore an older connection's visual group.
+    const latest = await chrome.tabs.get(tab.id);
+    if (
+      abandoned() ||
+      session.removed.has(tab.id) ||
+      latest.windowId !== tab.windowId ||
+      latest.groupId !== -1
+    )
+      return {
+        status: "unavailable",
+        reason: "Tab or connection changed; grouping left unchanged",
+      };
+    groupId = await chrome.tabs.group({
+      tabIds: [tab.id],
+      ...(existingId === undefined
+        ? { createProperties: { windowId: tab.windowId } }
+        : { groupId: existingId }),
+    });
+    if (!Number.isSafeInteger(groupId) || groupId < 0)
+      throw new Error("Browser returned an invalid tab group");
+    if (abandoned()) return { status: "grouped", groupId };
+    session.groups.set(tab.windowId, groupId);
+    if (existingId === undefined) {
+      const created = await chrome.tabGroups.get(groupId);
+      // Name only the fresh unnamed group. Reused/user-renamed groups are not
+      // rewritten, nor do later tab updates trigger regrouping.
+      if (!abandoned() && created.windowId === tab.windowId && !created.title)
+        await chrome.tabGroups.update(groupId, {
+          title: "ZenX",
+          color: "blue",
+        });
+    }
+    return { status: "grouped", groupId };
+  } catch (error) {
+    return {
+      status:
+        Number.isSafeInteger(groupId) && groupId >= 0 ? "grouped" : "failed",
+      ...(Number.isSafeInteger(groupId) && groupId >= 0 ? { groupId } : {}),
+      reason: describeError(error).slice(0, 160),
+    };
   }
 }
 
@@ -324,4 +488,25 @@ function publicTab(tab) {
 }
 function describeError(error) {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300);
+}
+
+// Random per-install identity only. No account or profile information is read.
+async function browserIdentity() {
+  const key = "zenxBrowserInstanceId";
+  await chrome.storage.local.setAccessLevel({
+    accessLevel: "TRUSTED_CONTEXTS",
+  });
+  const stored = await chrome.storage.local.get(key);
+  let instanceId = stored[key];
+  if (
+    typeof instanceId !== "string" ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(instanceId)
+  ) {
+    instanceId = crypto.randomUUID();
+    await chrome.storage.local.set({ [key]: instanceId });
+  }
+  return {
+    instanceId,
+    browser: /\bEdg\//.test(navigator.userAgent) ? "edge" : "chrome",
+  };
 }
