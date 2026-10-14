@@ -69,6 +69,7 @@ test("rebuilds native summaries and follows canonical and product metadata chang
     assert.equal(archived.length, 1);
     assert.deepEqual(archived[0], {
       threadId: started.id,
+      lastItemId: (await server.readThread(started.id)).items.at(-1)?.id,
       currentMetadata: {
         providerProfileId: "fake",
         modelId: "other",

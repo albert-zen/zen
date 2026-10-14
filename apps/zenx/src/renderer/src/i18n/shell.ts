@@ -38,6 +38,12 @@ export const en = {
   importConfirm: "Import and open",
   importedHistory: "Historical result · outcome unknown",
 
+  sidebarWidth: "Sidebar width",
+  sidebarWidthPixels: "{{width}} pixels",
+  sidebarResizeHelp:
+    "Drag to resize · Arrow keys to adjust · Enter to collapse",
+  sidebarWidthSaveFailed:
+    "Sidebar width could not be saved. Resize again to retry.",
   approvalQuestionOnce: "Allow this action?",
   approvalQuestionCapability: "Allow tool access?",
   approvalAllowAccess: "Allow access",
@@ -99,6 +105,8 @@ export const en = {
   approvalScopeLabel: "Permission scope",
   approvalOnceScope: "This call and its nested operations only",
   approvalCapabilityScope: "Remember this tool capability",
+  approvalTargetRemembered:
+    "Remember permission for {{tool}} on {{target}} only. Other browser instances need separate approval.",
   approvalRequestDetails: "Full request",
   approvalCommandLabel: "Command",
   approvalCodeLabel: "Code",
@@ -150,6 +158,8 @@ export const en = {
   assistant: "Assistant",
   attachedImages: "Attached images",
   browser: "Browser",
+  workspaceBrowser: "ZenX browser",
+  externalBrowser: "External browser",
   builtIn: "Built in",
   cancelThisPendingMessageOnly: "Cancel this pending message only",
   cancellationUnconfirmed: "Cancellation unconfirmed",
@@ -695,6 +705,10 @@ export const zhCN = {
   importConfirm: "导入并打开",
   importedHistory: "历史结果 · 执行状态未知",
 
+  sidebarWidth: "侧边栏宽度",
+  sidebarWidthPixels: "{{width}} 像素",
+  sidebarResizeHelp: "拖动调整宽度 · 方向键微调 · 回车收起",
+  sidebarWidthSaveFailed: "侧边栏宽度未能保存，请再次调整以重试。",
   approvalQuestionOnce: "允许这次操作？",
   approvalQuestionCapability: "允许工具访问？",
   approvalAllowAccess: "允许访问",
@@ -749,6 +763,8 @@ export const zhCN = {
   approvalScopeLabel: "权限范围",
   approvalOnceScope: "仅本次调用及其嵌套操作",
   approvalCapabilityScope: "记住此工具能力",
+  approvalTargetRemembered:
+    "仅记住 {{tool}} 在 {{target}} 上的权限。其他浏览器实例需要单独批准。",
   approvalRequestDetails: "完整请求",
   approvalCommandLabel: "命令",
   approvalCodeLabel: "代码",
@@ -798,6 +814,8 @@ export const zhCN = {
   assistant: "助手",
   attachedImages: "附加图片",
   browser: "浏览器",
+  workspaceBrowser: "内置浏览器",
+  externalBrowser: "外部浏览器",
   builtIn: "内置",
   cancelThisPendingMessageOnly: "仅取消这条待发送消息",
   cancellationUnconfirmed: "取消尚未确认",

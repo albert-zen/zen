@@ -70,3 +70,24 @@ plugin manager (or uninstalls and reinstalls it). A bundled update selects the
 current App Resources package for the selected provider, even when the previous
 version's tarball is no longer present; the ordinary profile transaction owns
 the replacement and preserves plugin data.
+
+## Windows background capture boundary (1.1.3)
+
+Windows UIA discovery, inspection and semantic actions still use the pinned
+WinApp CLI. Screenshots use a fixed app-bundled PrintWindow helper launched via
+the system Windows PowerShell. WinApp 0.3.1's screenshot command can restore or
+activate windows on fallback, so it is not used by the background capture tool.
+
+The helper contains no window activation, restore or global input calls. It
+accepts an exact HWND/PID/title, rechecks identity and physical-pixel geometry,
+and returns a bounded PNG to the Host; only the Host writes the expiring artifact.
+Minimized, hidden, cloaked, protected, blank or unrendered client regions fail
+without takeover. A genuinely black client can be rejected as unverified.
+Potential sentinel-colored pixels are checked against a differently initialized
+second capture under the same timeout. Only those ambiguous positions must keep
+their color; unrelated animation is allowed. If they change, capture fails as
+unverified. The first frame is returned intact, with no cross-frame compositing. This
+supports PrintWindow-renderable windows, not arbitrary GPU surfaces or a
+separate desktop session. If system policy blocks PowerShell/Add-Type, capture
+reports the failure; UIA operations remain available. Update Computer in Plugin
+settings to receive the revised capture description and capability declaration.

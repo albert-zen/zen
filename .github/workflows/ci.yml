@@ -73,6 +73,13 @@ jobs:
           path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
           key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
       - run: npm ci
+      - name: Exercise shared Shell PTY on macOS
+        timeout-minutes: 1
+        env:
+          ZENX_SHELL_TEST_DIAGNOSTICS: "1"
+        run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
+      - name: Exercise shell lifecycle observations on macOS
+        run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - run: npm --workspace apps/zenx run smoke:capabilities
 
   zenx-windows-computer-smoke:
@@ -95,6 +102,17 @@ jobs:
       - name: Report WinApp CLI version
         run: winapp --version
       - run: npm ci
+      - name: Exercise shared Shell ConPTY on Windows
+        timeout-minutes: 1
+        env:
+          ZENX_SHELL_TEST_DIAGNOSTICS: "1"
+        run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
+      - name: Verify owned ConPTY cleanup and native subprocess settlement
+        if: ${{ !cancelled() }}
+        timeout-minutes: 1
+        run: node --import tsx --test --test-timeout=40000 apps/zenx/test/shell-pty-native-cleanup.test.ts
+      - name: Exercise shell lifecycle observations on Windows
+        run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - name: Exercise trigger process containment on Windows
         run: npm --workspace apps/zenx exec -- tsx --test test/trigger-program-runner.test.ts
       - run: npm --workspace apps/zenx run smoke:windows-computer
@@ -216,6 +234,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Could not grant Chromium sandbox read-execute access" }
           "ZENX_USER_BROWSER_EXECUTABLE=$browserExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: npm --workspace apps/zenx run smoke:windows-user-browser
+      - name: Exercise parallel native user typing and inactive Agent tab input
+        env:
+          ZENX_REQUIRE_OS_INPUT: "1"
+          ZENX_PARALLEL_INPUT_ARTIFACT_DIR: ${{ runner.temp }}/zenx-parallel-input-evidence
+        run: npm --workspace apps/zenx run smoke:browser-parallel-input
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-browser-parallel-input
+          path: ${{ runner.temp }}/zenx-parallel-input-evidence
+          if-no-files-found: ignore
 
   zenx-playwright-provider-smoke:
     name: ZenX real Playwright provider smoke
@@ -237,6 +266,29 @@ jobs:
           CI: "1"
           ZENX_REQUIRE_PLAYWRIGHT: "1"
         run: npm --workspace apps/zenx run smoke:providers
+      - name: Exercise Workspace background capture and targeted input
+        timeout-minutes: 3
+        working-directory: apps/zenx
+        run: npx --no-install electron ./out/main/workspace-browser-smoke.js
+      - name: Prepare a pinned headed Chromium for parallel input
+        run: |
+          fixture="$RUNNER_TEMP/zenx-browser-fixture"
+          npm install --prefix "$fixture" --no-package-lock --no-audit --no-fund playwright@1.63.0
+          node "$fixture/node_modules/playwright/cli.js" install chromium
+          browser=$(node -e "process.stdout.write(require(process.argv[1]).chromium.executablePath())" "$fixture/node_modules/playwright")
+          echo "ZENX_USER_BROWSER_EXECUTABLE=$browser" >> "$GITHUB_ENV"
+      - name: Exercise Chrome foreground and background parallel input on macOS
+        env:
+          ZENX_PARALLEL_INPUT_ARTIFACT_DIR: ${{ runner.temp }}/zenx-parallel-input-evidence
+        # The report explicitly marks OS typing unverified when AX is unavailable.
+        # It does not request permission and a CDP-only pass is not native OS acceptance.
+        run: npm --workspace apps/zenx run smoke:browser-parallel-input
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-browser-parallel-input
+          path: ${{ runner.temp }}/zenx-parallel-input-evidence
+          if-no-files-found: ignore
 
   android-mobile:
     name: Android TLS Host integration and debug APK

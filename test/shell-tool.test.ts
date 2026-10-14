@@ -352,6 +352,14 @@ test("completion during a delayed running capture keeps the session waitable", a
     releaseCaptureFinish();
     const yielded = await operation;
     assert.equal(status(yielded), "running");
+    assert.equal(
+      (yielded.structuredContent as Record<string, unknown>).foreground,
+      "running",
+    );
+    assert.equal(
+      (yielded.structuredContent as Record<string, unknown>).stdio,
+      "open",
+    );
     const id = structuredSessionId(yielded.structuredContent);
     assert(id !== undefined);
 
@@ -363,6 +371,14 @@ test("completion during a delayed running capture keeps the session waitable", a
     );
     assert.equal(status(completed), "completed");
     assert.match(completed.output, /tail/u);
+    assert.equal(
+      (completed.structuredContent as Record<string, unknown>).foreground,
+      "exited",
+    );
+    assert.equal(
+      (completed.structuredContent as Record<string, unknown>).stdio,
+      "eof",
+    );
   } finally {
     await shell.close();
     await spool.close();

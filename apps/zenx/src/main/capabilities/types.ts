@@ -316,6 +316,8 @@ export type ZenXPluginTarballSelectionResult =
     };
 
 export interface ZenXCapabilityHostSnapshot {
+  /** Trusted main-process connection catalog; presence enables exact instance admission. */
+  browserConnections?: import("../chrome-extension-bridge.js").BrowserConnectionSnapshot[];
   definitions: ModelTool[];
   /** Exposed exact-name runtimes whose authors declared text/JSON eligibility. */
   remoteToolNames?: string[];
