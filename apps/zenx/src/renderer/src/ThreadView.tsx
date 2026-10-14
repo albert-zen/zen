@@ -1,3 +1,4 @@
+import { ThreadDebugger } from "./ThreadDebugger.js";
 import {
   MessageSourceLink,
   MessageSourceViewportContext,
@@ -170,6 +171,7 @@ const CanonicalMessageForkContext = createContext<{
 } | null>(null);
 
 interface ThreadViewProps {
+  localModelDebug?: boolean;
   composerId?: string;
   composerSendMode?: ComposerSendMode;
   onComposerSendModeChange?(mode: ComposerSendMode): Promise<void>;
@@ -239,6 +241,11 @@ interface ThreadViewProps {
 }
 
 export function ThreadView(props: ThreadViewProps) {
+  const { t } = useTranslation("shell");
+  const [debugThread, setDebugThread] = useState<string | null>(null);
+  const debugging = props.thread !== null && debugThread === props.thread.id;
+  const debuggingRef = useRef(debugging);
+  debuggingRef.current = debugging;
   const readingState = useThreadReadingState(props.thread?.id);
   const items = props.thread?.canonicalItems;
   const canonicalAttachments = useMemo(
@@ -282,6 +289,7 @@ export function ThreadView(props: ThreadViewProps) {
           // the source viewport or losing the canonical Item invalidates ownership.
           isCurrent: (itemId: string) =>
             mounted.current &&
+            !debuggingRef.current &&
             forkSourceRef.current?.threadId === forkSource.threadId &&
             forkSourceRef.current.items.has(itemId),
         };
@@ -293,10 +301,46 @@ export function ThreadView(props: ThreadViewProps) {
     <ThreadReadingContext.Provider value={readingState}>
       <CanonicalMessageForkContext.Provider value={forkContext}>
         <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
-          <ThreadViewContent
-            {...props}
-            threadAttachments={canonicalAttachments ?? props.threadAttachments}
-          />
+          <div className="thread-conversation-surface">
+            {items !== undefined && props.thread ? (
+              <nav
+                className="thread-view-switch"
+                aria-label={t("debugViewLabel")}
+              >
+                <button
+                  type="button"
+                  aria-pressed={!debugging}
+                  onClick={() => setDebugThread(null)}
+                >
+                  {t("debugConversation")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={debugging}
+                  onClick={() => setDebugThread(props.thread!.id)}
+                >
+                  {t("debugView")}
+                </button>
+              </nav>
+            ) : null}
+            {debugging && props.thread && items !== undefined ? (
+              <ThreadDebugger
+                key={props.thread.id}
+                thread={props.thread}
+                items={items}
+                localModelDebug={props.localModelDebug}
+                onOpenMessageLink={props.onOpenMessageLink}
+                onReadAttachment={props.onReadAttachment}
+              />
+            ) : (
+              <ThreadViewContent
+                {...props}
+                threadAttachments={
+                  canonicalAttachments ?? props.threadAttachments
+                }
+              />
+            )}
+          </div>
         </MessageSourceViewportContext.Provider>
       </CanonicalMessageForkContext.Provider>
     </ThreadReadingContext.Provider>
@@ -1600,6 +1644,7 @@ function ThreadViewContent({
                   switching={switchingModel}
                 />
               )}
+
               <ContextUsageIndicator
                 context={threadUsage?.context}
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}

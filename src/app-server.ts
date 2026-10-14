@@ -4145,6 +4145,8 @@ export class ZenAppServer {
       options.selection.selection,
     );
     const summary = await generateContextCompactionSummary({
+      debugThreadId: options.thread.id,
+      debugBoundaryItemId: options.boundary.item.id,
       adapter: options.selection.adapter,
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
@@ -5206,6 +5208,8 @@ function automaticCompactionThreshold(
 }
 
 async function generateContextCompactionSummary(options: {
+  debugThreadId: string;
+  debugBoundaryItemId: string;
   adapter: ModelAdapter;
   model: string;
   reasoningEffort: string | null;
@@ -5239,6 +5243,14 @@ async function generateContextCompactionSummary(options: {
         { role: "user", text: options.summaryInstruction },
       ];
       for await (const event of options.adapter.stream({
+        debugContext: {
+          threadId: options.debugThreadId,
+          purpose: "compaction",
+          turnId: null,
+          sampleId: randomUUID(),
+          contextBoundaryItemId: options.debugBoundaryItemId,
+          sampleAttempt: 1,
+        },
         model: options.model,
         reasoningEffort: options.reasoningEffort,
         messages,

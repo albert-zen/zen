@@ -79,6 +79,23 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "model-debug/request") {
+    try {
+      if (!appServer) throw new Error("Local Host unavailable");
+      send({
+        type: "model-debug/result",
+        requestId: command.requestId,
+        result: appServer.modelRequestDebug.control(command.input),
+      });
+    } catch {
+      send({
+        type: "model-debug/result",
+        requestId: command.requestId,
+        error: "Model debug request failed or capture expired",
+      });
+    }
+    return;
+  }
   if (command.type === "shell-panel/request") {
     try {
       if (!appServer || !targetToolEnvironment)

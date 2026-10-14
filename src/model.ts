@@ -86,6 +86,27 @@ export type ModelMessage =
 
 export type ReasoningEffort = string;
 
+/** Passive identity for a single Runtime sample, never replay state. */
+export interface ModelRequestDebugContext {
+  threadId: string;
+  purpose: "turn" | "compaction";
+  turnId: string | null;
+  sampleId: string;
+  contextBoundaryItemId: string;
+  sampleAttempt: number;
+}
+
+/** Only the serialized body, never URL, transport headers or credentials. */
+export interface ModelRequestObservation {
+  format: "chat-completions" | "responses" | "model-input";
+  body: string;
+  originalBytes: number;
+  redacted: boolean;
+  transportAttempt: number;
+  provider: string;
+  model: string;
+}
+
 export interface ModelRequest {
   model: string;
   /** null leaves Provider-specific reasoning controls out of the request. */
@@ -100,6 +121,9 @@ export interface ModelRequest {
   sessionId?: string;
   /** A sample replay must not restart HTTP admission retries. */
   isSamplingRetry?: true;
+  debugContext?: ModelRequestDebugContext;
+  /** Opt-in Host observation; adapters must ignore observer failures. */
+  onRequest?: (observation: ModelRequestObservation) => void;
 }
 
 export interface ModelTool {
@@ -149,6 +173,7 @@ export type ModelEvent =
 
 export interface ModelAdapter {
   readonly provider: string;
+  readonly requestPayloadFormat?: "chat-completions" | "responses";
   stream(request: ModelRequest): AsyncIterable<ModelEvent>;
 }
 

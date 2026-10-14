@@ -1,3 +1,4 @@
+import { observeRequestBody } from "./request-observation.js";
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import {
   fetchModelResponse,
@@ -49,6 +50,7 @@ export interface OpenAiSubscriptionModelOptions {
  */
 export class OpenAiSubscriptionModel implements ModelAdapter {
   readonly provider = "openai-codex";
+  readonly requestPayloadFormat = "responses" as const;
 
   readonly #acquireAccessLease: OpenAiSubscriptionModelOptions["acquireAccessLease"];
   readonly #renewAccessLease:
@@ -125,6 +127,19 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       ...(sessionHint === undefined ? {} : { prompt_cache_key: sessionHint }),
     });
 
+    let transportAttempt = 0;
+    const observedTokens = new Set<string>();
+    const observe = (accessToken: string) => {
+      observedTokens.add(accessToken);
+      observeRequestBody(
+        request,
+        body,
+        this.requestPayloadFormat,
+        this.provider,
+        ++transportAttempt,
+        [...observedTokens],
+      );
+    };
     let lease = await this.#acquireAccessLease(request.signal);
     let accessToken = requiredSecret(lease.accessToken);
     let signal = accessLeaseSignal(request.signal, lease.signal);
@@ -134,6 +149,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       accessToken,
       signal,
       request.isSamplingRetry !== true,
+      observe,
     );
 
     if (response.status === 401 && this.#renewAccessLease !== undefined) {
@@ -148,6 +164,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
         accessToken,
         signal,
         request.isSamplingRetry !== true,
+        observe,
       );
     }
 
@@ -178,6 +195,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     accessToken: string,
     signal: AbortSignal,
     allowRetries: boolean,
+    observe: (accessToken: string) => void,
   ): Promise<Response> {
     signal.throwIfAborted();
     const headers = new Headers({
@@ -195,13 +213,15 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     }
     try {
       return await fetchModelResponse(
-        () =>
-          this.#fetch(this.#endpoint, {
+        () => {
+          observe(accessToken);
+          return this.#fetch(this.#endpoint, {
             method: "POST",
             body,
             headers,
             signal,
-          }),
+          });
+        },
         signal,
         { allowRetries },
       );
