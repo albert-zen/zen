@@ -18,12 +18,10 @@
   margin-top: 4px;
   padding: 0 8px;
 }
-.new-thread-composer-context .new-thread-project-context {
-  width: auto;
-  flex: 1;
-  min-width: 100px;
-  margin: 0;
-  padding: 0;
+.new-thread-composer-context .new-thread-project-switcher {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 .fleet-machine-context {
   display: inline-flex;

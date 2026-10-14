@@ -110,6 +110,7 @@ function fixture(
   failLoad = false,
   onUnavailable?: (error: unknown) => void,
   acknowledge = true,
+  shortcutMode: "ok" | "busy" | "false" | "throw" = "ok",
 ) {
   const windows: FakeWindow[] = [];
   const ipc = new EventEmitter();
@@ -119,6 +120,24 @@ function fixture(
   let displays = [display(1), display(2, -1440)];
   const stops: (readonly string[])[] = [];
   const errors: unknown[] = [];
+  let escape: (() => void) | undefined;
+  let registrations = 0;
+  let unregisters = 0;
+  const shortcuts = {
+    isRegistered: (_key: string) =>
+      shortcutMode === "busy" || escape !== undefined,
+    register: (_key: string, callback: () => void) => {
+      registrations += 1;
+      if (shortcutMode === "throw") throw new Error("unavailable");
+      if (shortcutMode === "false") return false;
+      escape = callback;
+      return true;
+    },
+    unregister: (_key: string) => {
+      unregisters += 1;
+      escape = undefined;
+    },
+  };
   const presenter = new ElectronForegroundActivityPresenter({
     createWindow: (options) => {
       const window = new FakeWindow(options, ipc);
@@ -129,6 +148,7 @@ function fixture(
     },
     screen: screen as unknown as Screen,
     ipcMain: ipc as unknown as IpcMain,
+    globalShortcut: shortcuts,
     preloadPath: "/owned/foreground-activity.cjs",
     language: () => "en",
     platform: "win32",
@@ -145,6 +165,9 @@ function fixture(
     screen,
     stops,
     errors,
+    pressEscape: () => escape?.(),
+    capturedEscape: () => escape,
+    shortcuts: () => ({ registrations, unregisters, registered: !!escape }),
     replaceDisplays(value: Display[]) {
       displays = value;
     },
@@ -462,3 +485,85 @@ for (const event of [
     activity.close();
   });
 }
+
+test("global Escape exists only for live foreground owners and never captures idle keys", async () => {
+  const f = fixture();
+  assert.deepEqual(f.shortcuts(), {
+    registrations: 0,
+    unregisters: 0,
+    registered: false,
+  });
+  await f.presenter.update(state([]));
+  f.pressEscape();
+  assert.deepEqual(f.stops, []);
+  await f.presenter.update(state(["a"]));
+  await f.presenter.update(state(["a", "b"]));
+  assert.equal(f.shortcuts().registrations, 1);
+  f.pressEscape();
+  assert.deepEqual(f.stops, [["a", "b"]]);
+  await f.presenter.update(state(["b"], true));
+  f.pressEscape();
+  assert.deepEqual(
+    f.stops,
+    [["a", "b"]],
+    "already stopping owners are not replayed",
+  );
+  assert.equal(
+    f.shortcuts().registered,
+    true,
+    "keep escape until real settlement",
+  );
+  const emptied = f.presenter.update(state([]));
+  assert.equal(
+    f.shortcuts().registered,
+    false,
+    "release synchronously when no owner remains",
+  );
+  await emptied;
+  await f.presenter.update(state(["new"]));
+  assert.equal(f.shortcuts().registrations, 2);
+  f.pressEscape();
+  assert.deepEqual(f.stops.at(-1), ["new"]);
+  f.presenter.close();
+  assert.equal(f.shortcuts().registered, false);
+  assert.equal(f.shortcuts().unregisters, 2);
+});
+
+test("Escape registration failures leave trusted Stop available without claiming a shortcut", async () => {
+  for (const mode of ["busy", "false", "throw"] as const) {
+    const f = fixture(false, undefined, true, mode);
+    await f.presenter.update(state(["a"]));
+    const status = f.windows[1]!.webContents;
+    assert.match(decodeURIComponent(status.url), /Esc unavailable/);
+    assert.doesNotMatch(decodeURIComponent(status.url), /Press Esc to stop/);
+    f.pressEscape();
+    assert.deepEqual(f.stops, []);
+    f.ipc.emit(
+      foregroundActivityChannels.stop,
+      { sender: status, senderFrame: status.mainFrame },
+      status.states.at(-1)!.version,
+    );
+    assert.deepEqual(f.stops, [["a"]]);
+    f.presenter.close();
+    assert.equal(
+      f.shortcuts().unregisters,
+      0,
+      "never unregister another owner's shortcut",
+    );
+  }
+});
+
+test("retired Escape registrations cannot stop a newly admitted owner", async () => {
+  const f = fixture();
+  await f.presenter.update(state(["old"]));
+  const oldCallback = f.capturedEscape()!;
+  await f.presenter.update(state([]));
+  await f.presenter.update(state(["new"]));
+  oldCallback();
+  assert.deepEqual(f.stops, []);
+  f.pressEscape();
+  assert.deepEqual(f.stops, [["new"]]);
+  f.presenter.close();
+  f.capturedEscape()?.();
+  assert.deepEqual(f.stops, [["new"]]);
+});

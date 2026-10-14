@@ -24,7 +24,7 @@ const pluginSdkCli = path.join(
   "dist",
   "cli.js",
 );
-export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.6.tgz";
+export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.7.tgz";
 export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/fleet-plugin",
@@ -102,7 +102,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/triggers-plugin",
     "zenx-triggers-plugin",
-    "zenx-triggers-plugin-1.0.0.tgz",
+    "zenx-triggers-plugin-1.0.1.tgz",
   ),
 ]);
 

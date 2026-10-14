@@ -437,7 +437,7 @@
           "messageType": {
             "type": "string",
             "enum": ["follow_up", "guidance", "replacement"],
-            "description": "follow_up: do this after current work; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to use the saved ZenX send preference."
+            "description": "follow_up: batch this with next work after the current Turn; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to deliver agent guidance promptly to active work, independent of the manual Composer preference."
           },
           "text": {
             "type": "string"

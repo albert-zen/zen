@@ -7,7 +7,9 @@ Enable Rooms, Triggers and self-control. In Rooms choose **+ Always On Assistant
 and bind an existing Thread with the desired model and permissions. Human Room
 messages need no mention. While the Thread works, new input is steered into the
 same Turn for the next model cycle; idle Threads start work normally. Explicit
-follow-up queueing remains available in thread tools when requested.
+follow-up queueing remains available in thread tools when requested. Each assistant
+Room also owns its own delivery choice in Room management; explicit next-Turn
+queueing affects that Room alone. It never inherits the Composer setting.
 
 The preset instructs the assistant to post useful progress, questions and results
 using `zenx_rooms_post_message`. Final Thread output is not copied to the Room.
@@ -20,7 +22,10 @@ The assistant uses existing Thread watches, timer and signal Triggers to continu
 work after waits. Remote watches carry exact sourceDevice/sourceWorkspace/Thread
 identity and subscribe to native events, recovering observed canonical Turns after
 reconnection. Watches and timers targeting an assistant Thread use the same
-next-cycle delivery while preserving the explicit event prompt and Room destination.
+next-cycle delivery by default while preserving the explicit event prompt and Room destination.
+Each Trigger independently supports `deliveryMode: "steer" | "queue"`; its choice
+does not inherit or change the Room preference. Trigger/Room wakeups are canonical
+Host input with real source identity, never fabricated human messages.
 Fleet also offers bounded immediate waits. There is no unsolicited periodic model loop.
 Thread/Trigger facts persist normally; interrupted or unknown work must be
 inspected before resuming. The preset does not automatically replay uncertain

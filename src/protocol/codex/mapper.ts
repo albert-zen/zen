@@ -156,13 +156,15 @@ export function projectThread(
     agentRole: null,
     gitInfo: null,
     name: snapshot.name ?? null,
-    queuedMessages: pendingQueuedMessages(snapshot.items).map((item) => ({
-      id: item.id,
-      clientId: item.clientId,
-      revision: item.revision,
-      text: textFromUserInput(item.input),
-      imageCount: item.input.filter((part) => part.type === "image").length,
-    })),
+    queuedMessages: pendingQueuedMessages(snapshot.items)
+      .filter((item) => item.type === "user_message_queued")
+      .map((item) => ({
+        id: item.id,
+        clientId: item.clientId,
+        revision: item.revision,
+        text: textFromUserInput(item.input),
+        imageCount: item.input.filter((part) => part.type === "image").length,
+      })),
     turns: options.includeTurns
       ? snapshot.turns.map((turn) => projectTurn(turn, true, snapshot.cwd))
       : [],
@@ -321,6 +323,12 @@ export function projectCompletedItem(
       };
     case "tool_call":
       return projectCommandStarted(item, "");
+    case "host_message":
+    case "host_message_queued":
+    case "host_message_cancelled":
+    case "thread_message":
+    case "thread_message_queued":
+    case "thread_message_cancelled":
     case "failure":
     case "code_state":
     case "context_compaction":

@@ -21,13 +21,86 @@ import type {
   ServerNotificationParams,
   Thread,
 } from "../src/protocol-client/index.js";
+import {
+  runtimeCommand,
+  runtimeThread,
+} from "./fixtures/agent-runtime-data.js";
 import { App } from "../src/renderer/src/App.js";
+import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
 import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
+
+test("actual App navigation restores exact thread disclosures after loading remounts", async () => {
+  const a = {
+    ...thread(),
+    turns: runtimeThread(
+      [runtimeCommand("one"), runtimeCommand("two")],
+      "completed",
+    ).turns,
+  };
+  const b = { ...a, id: "thread-2" };
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === a.id ? a : b,
+        );
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  const click = async (selector: string) => {
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(selector),
+    );
+    await act(async () => button.click());
+  };
+  try {
+    await click(".thread-row");
+    await click(".turn-toggle");
+    await click(".trace-toggle");
+    await click(".trace-item-toggle");
+    const selected = document.querySelector(".trace-detail");
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ];
+    assert.equal(rows.length, 2);
+    await act(async () => rows[1]!.click());
+    await waitFor(() => document.querySelector(".turn-toggle"));
+    assert.equal(
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+      "false",
+    );
+    assert.equal(
+      selected?.isConnected,
+      false,
+      "old transcript DOM is not cached",
+    );
+    await act(async () => rows[0]!.click());
+    await waitFor(() => document.querySelector(".trace-item-toggle"));
+    assert.equal(
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(
+      document.querySelector(".trace-toggle")?.getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(
+      document
+        .querySelector(".trace-item-toggle")
+        ?.getAttribute("aria-expanded"),
+      "true",
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
 
 test("canonical image tool completion refreshes the visible attachment projection", async () => {
   let notify: NotificationListener | undefined;
@@ -766,6 +839,180 @@ test("plugin query intent stays on its owned page and preserves the sidebar sele
   }
 });
 
+test("Room title and real actions share App's header only on the exact Room route", async () => {
+  const roomRoute = "/plugins/zenx-rooms/rooms";
+  const otherRoute = "/plugins/zenx-rooms/rooms-preview";
+  const rooms = ["a /?中", "b"].map((id, index) => ({
+    id,
+    name: `Team ${index + 1}`,
+    members: [],
+    messages: [],
+    createdAt: 0,
+  }));
+  const calls: Array<{ pluginId: string; commandId: string }> = [];
+  let navigate: ((route: string) => void) | undefined;
+  const dispose = pluginUiRegistry.registerTrusted("room-header-test-ui", {
+    overview: ({ sdk }) => {
+      navigate = sdk.navigation.navigate;
+      return createElement(RoomsPage, { sdk });
+    },
+  });
+  const pluginSnapshot = {
+    plugins: [
+      {
+        id: "zenx-rooms",
+        displayName: "Rooms",
+        enabled: true,
+        available: true,
+        lifecycle: "enabled",
+        contributionCount: 1,
+        version: "1",
+        source: "bundled",
+      },
+    ],
+    pages: [
+      {
+        key: "zenx-rooms:rooms",
+        pluginId: "zenx-rooms",
+        id: "rooms",
+        title: "Rooms",
+        route: roomRoute,
+        surfaceId: "overview",
+      },
+    ],
+    subroutes: [
+      {
+        key: "zenx-rooms:preview",
+        pluginId: "zenx-rooms",
+        id: "preview",
+        title: "Preview",
+        pageId: "rooms",
+        route: otherRoute,
+        surfaceId: "overview",
+      },
+    ],
+    sidebar: [],
+    bundles: [
+      {
+        key: "zenx-rooms:main",
+        pluginId: "zenx-rooms",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "room-header-test-ui",
+      },
+    ],
+    surfaces: [
+      {
+        key: "zenx-rooms:overview",
+        pluginId: "zenx-rooms",
+        id: "overview",
+        bundleId: "main",
+        exportName: "overview",
+      },
+    ],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
+  } as ZenXPluginSnapshot;
+  const harness = await mountApp({
+    pluginSnapshot,
+    request: async () => {
+      throw Error("No Thread request expected");
+    },
+    executeCommand: async (pluginId, commandId) => {
+      calls.push({ pluginId, commandId });
+      if (pluginId === "zenx-rooms" && commandId === "list") return { rooms };
+      throw Error(`Unexpected ${pluginId}/${commandId}`);
+    },
+  });
+  let lastHost: HTMLElement | null = null;
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Open room Team 1"]',
+      ),
+    );
+    await act(async () => row.click());
+    const host = await waitFor(() =>
+      document.querySelector<HTMLElement>(".room-title-actions-host"),
+    );
+    await waitFor(() => host.querySelectorAll("button").length === 3);
+    const header = host.closest(".workspace-header")!;
+    assert.equal(header.querySelector("h1")!.textContent, "Team 1");
+    assert.equal(document.querySelectorAll(".workspace-header").length, 1);
+    assert.equal(document.querySelector(".rooms-chat-header"), null);
+    assert.equal(document.querySelector(".rooms-chat-status"), null);
+    assert.equal(document.querySelector(".rooms-chat-list"), null);
+    assert.equal(
+      host.querySelector<HTMLElement>("#thread-browser-toggle")!.dataset.roomId,
+      rooms[0]!.id,
+    );
+    assert.deepEqual(
+      [...host.querySelectorAll("button")].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+      [
+        "Rename conversation",
+        "Open conversation workspace",
+        "Conversation settings",
+      ],
+    );
+
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open room Team 2"]')!
+        .click(),
+    );
+    assert.equal(
+      document.querySelector(".workspace-header h1")!.textContent,
+      "Team 2",
+    );
+    assert.equal(
+      document.querySelector<HTMLElement>(
+        ".room-title-actions-host #thread-browser-toggle",
+      )!.dataset.roomId,
+      "b",
+    );
+    assert.equal(document.querySelectorAll(".room-title-actions").length, 1);
+
+    for (const route of [
+      `${otherRoute}?roomId=b`,
+      roomRoute,
+      `${roomRoute}?create=room`,
+    ]) {
+      await act(async () => navigate!(route));
+      assert.equal(
+        document.querySelector(".room-title-actions-host"),
+        null,
+        route,
+      );
+      assert.equal(document.querySelector(".room-title-actions"), null, route);
+      assert.equal(host.childElementCount, 0, "retired host is empty");
+    }
+    await act(async () => navigate!(`${roomRoute}?roomId=b`));
+    lastHost = await waitFor(() =>
+      document.querySelector<HTMLElement>(".room-title-actions-host"),
+    );
+    await waitFor(() => lastHost!.querySelectorAll("button").length === 3);
+    assert.equal(
+      document.querySelector(".workspace-header h1")!.textContent,
+      "Team 2",
+    );
+    assert.ok(
+      calls.length > 0 &&
+        calls.every(
+          (call) => call.pluginId === "zenx-rooms" && call.commandId === "list",
+        ),
+    );
+  } finally {
+    await harness.unmount();
+    assert.equal(lastHost?.childElementCount ?? 0, 0);
+    dispose();
+  }
+});
+
 test("deletion invalidates a selected Thread's pending resume and does not reopen late history", async () => {
   let notify: NotificationListener | undefined;
   const pending = deferred<ReturnType<typeof resumed>>();
@@ -869,6 +1116,11 @@ test("App message requests survive acknowledgements, repeated clicks, and Thread
 interface MountOptions {
   readFile?(threadId: string, path: string): Promise<never>;
   pluginSnapshot?: ZenXPluginSnapshot;
+  executeCommand?(
+    pluginId: string,
+    commandId: string,
+    input?: unknown,
+  ): Promise<unknown>;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
   usage?(threadId: string): Promise<ModelUsageProjection>;
@@ -937,7 +1189,7 @@ async function mountApp(options: MountOptions) {
         options.onNotification?.(listener) ?? (() => undefined),
     },
     threads: {
-      list: async ({ archived }: { archived: boolean }) =>
+      list: async ({ archived = false }: { archived?: boolean } = {}) =>
         options.threads === undefined
           ? archived
             ? []
@@ -1021,6 +1273,15 @@ async function mountApp(options: MountOptions) {
       onChange: () => () => undefined,
     },
     plugins: {
+      executeCommand: async (
+        pluginId: string,
+        commandId: string,
+        input?: unknown,
+      ) => {
+        if (options.executeCommand)
+          return options.executeCommand(pluginId, commandId, input);
+        throw Error(`Unexpected plugin command: ${pluginId}/${commandId}`);
+      },
       get: async () =>
         options.pluginSnapshot ?? {
           plugins: [],
@@ -1265,4 +1526,355 @@ async function waitFor<T>(read: () => T | null | undefined | false) {
     });
   }
   throw new Error("Timed out waiting for renderer projection");
+}
+
+test("actual App cached navigation restores tall-Composer position", async () => {
+  const a = {
+    ...thread(),
+    turns: runtimeThread([runtimeCommand("done")], "completed").turns,
+  };
+  const b = { ...a, id: "thread-2" };
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === a.id ? a : b,
+        );
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  const previous = globalThis.ResizeObserver;
+  const callbacks = new Set<() => void>();
+  globalThis.ResizeObserver = class {
+    constructor(private callback: () => void) {}
+    observe() {
+      callbacks.add(this.callback);
+    }
+    disconnect() {
+      callbacks.delete(this.callback);
+    }
+  } as unknown as typeof ResizeObserver;
+  const resize = () => {
+    for (const callback of callbacks) callback();
+  };
+  try {
+    const tops = new WeakMap<HTMLElement, number>();
+    const proto = window.HTMLElement.prototype;
+    const originalRect = proto.getBoundingClientRect;
+    proto.getBoundingClientRect = function () {
+      return this.classList.contains("bottom-zone")
+        ? {
+            ...originalRect.call(this),
+            height: this.querySelector("textarea")?.value.includes("\n")
+              ? 226
+              : 126,
+          }
+        : originalRect.call(this);
+    };
+    Object.defineProperties(proto, {
+      clientHeight: {
+        configurable: true,
+        get() {
+          return 400;
+        },
+      },
+      scrollHeight: {
+        configurable: true,
+        get() {
+          const inset =
+            Number.parseFloat(
+              this.closest(".thread-view")?.style.getPropertyValue(
+                "--bottom-zone-height",
+              ) ?? "0",
+            ) || 0;
+          return 1287 + Math.max(0, inset + 24 - 38);
+        },
+      },
+      scrollTop: {
+        configurable: true,
+        get() {
+          return Math.min(tops.get(this) ?? 0, this.scrollHeight - 400);
+        },
+        set(value: number) {
+          tops.set(this, Math.max(0, Math.min(this.scrollHeight - 400, value)));
+        },
+      },
+    });
+
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ];
+    assert.equal(rows.length, 2);
+    const choose = async (index: number) => {
+      await act(async () => rows[index]!.click());
+      await waitFor(() => document.querySelector(".messages"));
+      await act(async () => resize());
+    };
+    const scroll = () => document.querySelector<HTMLElement>(".messages")!;
+    // Warm both exact native projection caches before testing same-view switching.
+    await choose(0);
+    await choose(1);
+    const reused = scroll();
+    await choose(0);
+    assert.equal(
+      scroll(),
+      reused,
+      "actual cached App navigation reuses ThreadView",
+    );
+    const textarea =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    const key = Object.getOwnPropertyNames(textarea).find((key) =>
+      key.startsWith("__reactProps$"),
+    )!;
+    await act(async () => {
+      (
+        textarea as unknown as Record<
+          string,
+          { onChange(event: { target: { value: string } }): void }
+        >
+      )[key]!.onChange({
+        target: {
+          value: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine",
+        },
+      });
+    });
+    await act(async () => {
+      resize();
+      scroll().dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -75, bubbles: true }),
+      );
+      scroll().scrollTop = 1024;
+      scroll().dispatchEvent(new window.Event("scroll"));
+    });
+    assert.equal(scroll().scrollTop, 1024);
+    await choose(1);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "",
+    );
+    await choose(0);
+    assert.equal(
+      scroll(),
+      reused,
+      "test exercised cached navigation, not a loader remount",
+    );
+    assert.equal(scroll().scrollHeight - scroll().clientHeight, 1099);
+    assert.equal(
+      scroll().scrollTop,
+      1024,
+      "actual App cached A must restore after its own Composer inset",
+    );
+    // New manual input replaces the restored target, including subsequent
+    // observer delivery and further cached A/B/A navigation.
+    await act(async () => {
+      scroll().dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -75, bubbles: true }),
+      );
+      scroll().scrollTop = 947;
+      scroll().dispatchEvent(new window.Event("scroll"));
+      resize();
+    });
+    assert.equal(scroll().scrollTop, 947);
+    await choose(1);
+    await choose(0);
+    assert.equal(scroll(), reused);
+    assert.equal(scroll().scrollTop, 947);
+    assert.ok(document.querySelector(".back-live"));
+  } finally {
+    globalThis.ResizeObserver = previous;
+    await harness.unmount();
+  }
+});
+
+for (const interaction of ["none", "manual", "navigate"] as const) {
+  test(`actual App retains canonical image geometry through late media refresh and ${interaction} intent`, async () => {
+    const user = {
+      type: "userMessage" as const,
+      id: "image-user",
+      clientId: null,
+      content: [
+        {
+          type: "text" as const,
+          text: "Inspect this screenshot.",
+          text_elements: [] as [],
+        },
+      ],
+    };
+    const a = {
+      ...thread(),
+      turns: runtimeThread([user, runtimeCommand("done")], "completed").turns,
+    };
+    const b = { ...a, id: "thread-2" };
+    const image = {
+      type: "attachment" as const,
+      sha256: "a".repeat(64),
+      mediaType: "image/png" as const,
+      byteLength: 68,
+      width: 120,
+      height: 90,
+    };
+    const projection = { "image-user": [image] };
+    const late = deferred<ZenXThreadAttachmentProjection>();
+    let attachmentLoads = 0;
+    let imageStillCurrent = true;
+    const harness = await mountApp({
+      threads: async (archived) =>
+        archived ? [] : [summary(), summary("thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const selected =
+            (params as { threadId: string }).threadId === a.id ? a : b;
+          const snapshot = resumed(selected);
+          if (selected.id === a.id && imageStillCurrent) {
+            // Use a real multimodal canonical user message, matching the separate
+            // read-only attachment projection returned by the Host service.
+            for (const item of snapshot.thread.items) {
+              if (item.type === "user_message" && item.id === user.id) {
+                delete item.text;
+                Object.assign(item, {
+                  content: [
+                    { type: "text", text: "Inspect this screenshot." },
+                    { type: "image", attachment: image },
+                  ],
+                });
+              }
+            }
+          }
+          return snapshot;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      },
+      attachments: async (id) =>
+        id !== a.id
+          ? {}
+          : ++attachmentLoads < 3
+            ? projection
+            : await late.promise,
+    });
+    const previous = globalThis.ResizeObserver;
+    const callbacks = new Set<() => void>();
+    globalThis.ResizeObserver = class {
+      constructor(private callback: () => void) {}
+      observe() {
+        callbacks.add(this.callback);
+      }
+      disconnect() {
+        callbacks.delete(this.callback);
+      }
+    } as unknown as typeof ResizeObserver;
+    const resize = () => {
+      for (const callback of callbacks) callback();
+    };
+    try {
+      const tops = new WeakMap<HTMLElement, number>();
+      const proto = window.HTMLElement.prototype;
+      Object.defineProperties(proto, {
+        clientHeight: {
+          configurable: true,
+          get() {
+            return this.classList.contains("messages") ? 400 : 0;
+          },
+        },
+        scrollHeight: {
+          configurable: true,
+          get() {
+            if (!this.classList.contains("messages")) return 0;
+            // Real image row geometry: 120px thumbnail at 4:3 plus 6px margin.
+            return 1000 + (this.querySelector(".message-images") ? 96 : 0);
+          },
+        },
+        scrollTop: {
+          configurable: true,
+          get() {
+            return this.classList.contains("messages")
+              ? Math.min(tops.get(this) ?? 0, this.scrollHeight - 400)
+              : 0;
+          },
+          set(value: number) {
+            if (this.classList.contains("messages"))
+              tops.set(
+                this,
+                Math.max(0, Math.min(this.scrollHeight - 400, value)),
+              );
+          },
+        },
+      });
+      const rows = [
+        ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+      ];
+      const choose = async (i: number) => {
+        await act(async () => rows[i]!.click());
+        await waitFor(() => document.querySelector(".messages"));
+        await act(async () => resize());
+      };
+      const scroll = () => document.querySelector<HTMLElement>(".messages")!;
+      await choose(0);
+      await waitFor(() => document.querySelector(".message-images"));
+      await choose(1);
+      const reused = scroll();
+      await choose(0);
+      assert.equal(scroll(), reused);
+      await waitFor(() => document.querySelector(".message-images"));
+      assert.equal(attachmentLoads, 2);
+      await act(async () => {
+        scroll().dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: -46, bubbles: true }),
+        );
+        scroll().scrollTop = 650;
+        scroll().dispatchEvent(new window.Event("scroll"));
+      });
+      assert.equal(scroll().scrollTop, 650);
+      assert.equal(scroll().scrollHeight - scroll().clientHeight, 696);
+      await choose(1);
+      await choose(0);
+      assert.equal(
+        scroll(),
+        reused,
+        "actual cached App navigation stays unkeyed",
+      );
+      assert.equal(attachmentLoads, 3);
+      assert.ok(
+        document.querySelector(".message-images"),
+        "canonical image geometry must remain present while Host media refresh is pending",
+      );
+      assert.equal(scroll().scrollTop, 650);
+      if (interaction === "manual") {
+        await act(async () => {
+          scroll().dispatchEvent(
+            new window.WheelEvent("wheel", { deltaY: -100, bubbles: true }),
+          );
+          scroll().scrollTop = 550;
+          scroll().dispatchEvent(new window.Event("scroll"));
+        });
+      }
+      if (interaction === "navigate") await choose(1);
+      await act(async () => {
+        late.resolve(projection);
+      });
+      if (interaction === "navigate") {
+        assert.equal(
+          document.querySelector(".message-images"),
+          null,
+          "late A media must not enter B, even with reused Item IDs",
+        );
+        assert.equal(scroll().scrollTop, 600);
+        await choose(0);
+      }
+      await waitFor(() => document.querySelector(".message-images"));
+      await act(async () => resize());
+      assert.ok(document.querySelector(".back-live"));
+      assert.equal(scroll().scrollTop, interaction === "manual" ? 550 : 650);
+      // A newer authoritative snapshot without the image invalidates it, even if
+      // an asynchronous Host projection still contains the old reference.
+      imageStillCurrent = false;
+      await choose(1);
+      await choose(0);
+      assert.equal(document.querySelector(".message-images"), null);
+    } finally {
+      globalThis.ResizeObserver = previous;
+      await harness.unmount();
+    }
+  });
 }

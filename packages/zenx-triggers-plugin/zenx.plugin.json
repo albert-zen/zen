@@ -1,6 +1,6 @@
 {
   "id": "zenx-triggers",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Schedule and inspect ZenX Trigger wakeups.",
   "provider": {
     "id": "zenx-automation-service",
@@ -179,6 +179,20 @@
       "maxOutputBytes": 65536
     },
     {
+      "name": "zenx_triggers_sidebar_facts",
+      "description": "Read only Trigger identity, Thread binding, status, and next scheduled time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-triggers.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.triggers.manage"],
+      "maxOutputBytes": 524288
+    },
+    {
       "name": "zenx_triggers_create",
       "description": "Create a timer, Thread watcher, Room mention, or signal Trigger, optionally with a local predicate/action.",
       "inputSchema": {
@@ -346,6 +360,11 @@
               }
             },
             "additionalProperties": false
+          },
+          "deliveryMode": {
+            "type": "string",
+            "enum": ["steer", "queue"],
+            "description": "This Trigger only. Omit for soft steer during active work; queue explicitly waits for the next Turn. Independent of Composer and Room preferences."
           }
         },
         "required": ["kind", "label", "prompt"],
@@ -528,6 +547,11 @@
               }
             },
             "additionalProperties": false
+          },
+          "deliveryMode": {
+            "type": "string",
+            "enum": ["steer", "queue"],
+            "description": "This Trigger only. Omit for soft steer during active work; queue explicitly waits for the next Turn. Independent of Composer and Room preferences."
           }
         },
         "required": ["id", "threadId", "kind", "label", "prompt"],
@@ -700,6 +724,11 @@
         "id": "list",
         "title": "List Trigger definitions and bounded wakeup history.",
         "tool": "zenx_triggers_list"
+      },
+      {
+        "id": "sidebar-facts",
+        "title": "Read only Trigger identity, Thread binding, status, and next scheduled time.",
+        "tool": "zenx_triggers_sidebar_facts"
       },
       {
         "id": "create",

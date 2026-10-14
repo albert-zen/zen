@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import os from "node:os";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { get } from "node:http";
@@ -26,25 +25,8 @@ import {
 import { ShellPanelService } from "../src/main/shell-panel-service.js";
 import { validateShellPanelRequest } from "../src/shell-panel.js";
 
-import { createFailedStartupObserver } from "./fixtures/failed-startup-observation.js";
 import { waitForWindowsShellReadiness } from "./fixtures/windows-shell-readiness.js";
 import { createShellStartupTrace } from "./fixtures/shell-startup-trace.js";
-
-const observeFailedStartup = createFailedStartupObserver({
-  enabled:
-    process.platform === "win32" &&
-    process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1",
-});
-
-function startupSnapshot(tools: ToolEnvironment, taskId: string) {
-  const read = tools.taskManager.readShellSession("human", taskId);
-  return {
-    status: read.session.status,
-    inputAvailable: read.session.inputAvailable,
-    output: read.output.slice(-4096),
-    prompt: /PS [^\r\n]*> /u.test(stripVTControlCharacters(read.output)),
-  };
-}
 
 function fixture(
   cwd: string,
@@ -144,38 +126,42 @@ function fixture(
   );
   return { service, tools, snapshot, operations: () => operations };
 }
-async function waitForFixtureInput(
+async function createFixtureTerminal(
   f: ReturnType<typeof fixture>,
-  taskId: string,
-  createdAt: number,
   stage: string,
-) {
+): Promise<ShellSessionSummary> {
+  const create = async () =>
+    (await f.service.request({
+      operation: "create",
+      threadId: "human",
+      cols: 80,
+      rows: 24,
+    })) as ShellSessionSummary;
   if (process.platform !== "win32") {
-    await until(f.service, taskId, (r) => r.session.inputAvailable);
-    return;
+    const created = await create();
+    await until(f.service, created.taskId, (r) => r.session.inputAvailable);
+    return created;
   }
-  const elapsedMs = await observeFailedStartup(
-    stage,
-    () =>
-      waitForWindowsShellReadiness(async () => {
-        const read = (await f.service.request({
-          operation: "read",
-          threadId: "human",
-          taskId,
-        })) as ShellSessionRead;
-        return {
-          inputAvailable: read.session.inputAvailable,
-          status: read.session.status,
-          output: read.output,
-        };
-      }, createdAt),
-    () => {
-      const snapshot = startupSnapshot(f.tools, taskId);
-      return { ...snapshot, ready: snapshot.inputAvailable && snapshot.prompt };
+  // One owned launch. Failure returns directly to the caller's finally cleanup;
+  // do not spend another observation budget after this absolute startup bound.
+  const { session, elapsedMs } = await waitForWindowsShellReadiness(
+    create,
+    async (created) => {
+      const read = (await f.service.request({
+        operation: "read",
+        threadId: "human",
+        taskId: created.taskId,
+      })) as ShellSessionRead;
+      return {
+        inputAvailable: read.session.inputAvailable,
+        status: read.session.status,
+        output: read.output,
+      };
     },
   );
   if (process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1")
     console.info(`[Shell readiness] ${JSON.stringify({ stage, elapsedMs })}`);
+  return session;
 }
 
 async function until(
@@ -204,25 +190,72 @@ async function until(
   );
 }
 
+test("readiness failure leaves the original terminal owned for finally cleanup", async () => {
+  let kills = 0;
+  let exit: ((event: { exitCode: number }) => void) | undefined;
+  const f = fixture(os.tmpdir(), undefined, undefined, {
+    async spawn() {
+      return {
+        write: () => assert.fail("readiness must not write"),
+        resize: () => assert.fail("readiness must not resize"),
+        onData: () => ({ dispose() {} }),
+        onExit: (listener) => {
+          exit = listener;
+          return { dispose() {} };
+        },
+        kill: () => {
+          kills++;
+          queueMicrotask(() => exit?.({ exitCode: 1 }));
+        },
+      };
+    },
+  });
+  let now = 0;
+  try {
+    await assert.rejects(
+      waitForWindowsShellReadiness(
+        async () =>
+          (await f.service.request({
+            operation: "create",
+            threadId: "human",
+            cols: 80,
+            rows: 24,
+          })) as ShellSessionSummary,
+        async (created) => {
+          const read = (await f.service.request({
+            operation: "read",
+            threadId: "human",
+            taskId: created.taskId,
+          })) as ShellSessionRead;
+          return { ...read.session, output: read.output };
+        },
+        {
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
+        },
+      ),
+      /Timed out waiting for Windows Shell readiness/,
+    );
+    assert.equal(now, 20000);
+    assert.equal(kills, 0, "readiness does not take process ownership");
+    assert.equal(f.tools.taskManager.activeTaskCount, 1);
+  } finally {
+    await f.tools.close();
+  }
+  assert.equal(kills, 1);
+  assert.equal(f.operations(), 0);
+  assert.equal(f.tools.taskManager.activeTaskCount, 0);
+});
+
 test("real PTY shares human input/output and task identity with Agent read/wait", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-shared-pty-"));
   const f = fixture(directory);
   try {
-    const createdAt = Date.now();
-    const created = (await f.service.request({
-      operation: "create",
-      threadId: "human",
-      cols: 80,
-      rows: 24,
-    })) as ShellSessionSummary;
+    const created = await createFixtureTerminal(f, "first PowerShell prompt");
     assert.equal(created.origin, "user");
     assert.equal(created.cwd, directory);
-    await waitForFixtureInput(
-      f,
-      created.taskId,
-      createdAt,
-      "first PowerShell prompt",
-    );
     if (process.platform === "win32") {
       // Establish evaluation before resizing, not merely echoed input. Keep the
       // wrapped post-resize command below as a separate regression assertion.
@@ -457,17 +490,8 @@ test("stopping a terminal closes its foreground fixture process", async () => {
   const f = fixture(directory);
   let pid: number | undefined;
   try {
-    const createdAt = Date.now();
-    const created = (await f.service.request({
-      operation: "create",
-      threadId: "human",
-      cols: 80,
-      rows: 24,
-    })) as ShellSessionSummary;
-    await waitForFixtureInput(
+    const created = await createFixtureTerminal(
       f,
-      created.taskId,
-      createdAt,
       "foreground fixture PowerShell prompt",
     );
     const command =
@@ -480,35 +504,14 @@ test("stopping a terminal closes its foreground fixture process", async () => {
       taskId: created.taskId,
       data: command,
     });
-    await observeFailedStartup(
-      "foreground fixture start",
-      async () => {
-        const deadline = Date.now() + 5000;
-        while (!pid && Date.now() < deadline) {
-          try {
-            pid = Number(await readFile(marker, "utf8"));
-          } catch {
-            await new Promise((r) => setTimeout(r, 10));
-          }
-        }
-        assert(pid, "foreground fixture started");
-      },
-      () => {
-        let markerObserved = false;
-        try {
-          // Read-only diagnostic; do not adopt a late PID for cleanup. The
-          // existing terminal owner remains responsible for stopping its PTY.
-          markerObserved = Number(readFileSync(marker, "utf8")) > 0;
-        } catch {
-          /* Marker does not exist yet. */
-        }
-        return {
-          ...startupSnapshot(f.tools, created.taskId),
-          markerObserved,
-          ready: markerObserved,
-        };
-      },
-    );
+    const deadline = Date.now() + 5000;
+    while (!pid && Date.now() < deadline) {
+      try {
+        pid = Number(await readFile(marker, "utf8"));
+      } catch {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
     assert(pid, "foreground fixture started");
     await f.service.request({
       operation: "stop",

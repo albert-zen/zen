@@ -14,6 +14,7 @@ test("published Triggers manifest matches Host tools, commands and navigation co
     ),
   );
   const runtime = new ZenXTriggersCapabilityPackage({} as never).manifest;
+  assert.equal(packaged.version, runtime.version);
   assert.deepEqual(packaged.tools, runtime.tools);
   for (const name of ["commands", "pages", "sidebar"] as const)
     assert.deepEqual(

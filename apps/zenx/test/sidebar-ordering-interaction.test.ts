@@ -10,6 +10,7 @@ import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projecti
 import {
   moveSidebarProject,
   moveSidebarThread,
+  movePinnedThreadIds,
   type SidebarOrderPlacement,
 } from "../src/renderer/src/thread-list.js";
 
@@ -46,7 +47,7 @@ const threads = [
   summary("other", "idle", 10, "/work/b"),
 ];
 
-test("detailed active row keeps its Working indicator beside the model", async () => {
+test("detailed active row keeps Working text and a distinct trailing spinner", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(StaticSidebar)));
     const row = requiredElement<HTMLElement>(
@@ -65,7 +66,9 @@ test("detailed active row keeps its Working indicator beside the model", async (
       "Working",
     );
     assert.ok(
-      row.querySelector(".thread-model > .thread-state-inline .live-dot"),
+      row.parentElement?.querySelector(
+        ".thread-status-rail .thread-running-spinner",
+      ),
     );
   });
 });
@@ -151,6 +154,67 @@ test("keyboard reorder restores focus while preserving selection, Pin, and activ
       ].map((row) => row.dataset.threadId),
       ["pinned"],
     );
+  });
+});
+
+test("Pinned rows reorder inside the Pinned section with Alt+Arrow keys", async () => {
+  const calls: Array<[string, string, SidebarOrderPlacement]> = [];
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(PinnedReorderSidebar, {
+          onCall: (call: [string, string, SidebarOrderPlacement]) =>
+            calls.push(call),
+        }),
+      ),
+    );
+    const pinnedIds = () =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          ".pinned-thread-group .thread-row-shell",
+        ),
+      ].map((row) => row.dataset.threadId);
+    assert.deepEqual(pinnedIds(), ["pin-1", "pin-2", "pin-3"]);
+    const thirdRow = requiredElement<HTMLElement>(
+      '.pinned-thread-group [data-thread-id="pin-3"] .thread-row',
+    );
+    thirdRow.focus();
+    await act(async () => {
+      thirdRow.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowUp",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.deepEqual(calls, [["pin-3", "pin-2", "before"]]);
+    assert.deepEqual(pinnedIds(), ["pin-1", "pin-3", "pin-2"]);
+    // Focus follows the moved row so keyboard users keep their place.
+    assert.equal(
+      document.activeElement?.parentElement?.dataset.threadId,
+      "pin-3",
+    );
+    const firstRow = requiredElement<HTMLElement>(
+      '.pinned-thread-group [data-thread-id="pin-1"] .thread-row',
+    );
+    firstRow.focus();
+    await act(async () => {
+      firstRow.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.deepEqual(pinnedIds(), ["pin-3", "pin-1", "pin-2"]);
   });
 });
 
@@ -614,10 +678,20 @@ function FailingSidebar() {
 
 function StaticSidebar({
   sidebarOrder = { projectKeys: [], threadIdsByProject: {} },
+  pinnedThreads = [threads[0]!],
+  threadRows = threads,
+  onReorderPinnedThread,
   onReorderProject = async () => undefined,
   onReorderThread = async () => undefined,
 }: {
   sidebarOrder?: ZenXSidebarOrder;
+  pinnedThreads?: NativeThreadSummary[];
+  threadRows?: NativeThreadSummary[];
+  onReorderPinnedThread?: (
+    sourceThreadId: string,
+    targetThreadId: string,
+    placement: SidebarOrderPlacement,
+  ) => Promise<void>;
   onReorderProject?: (
     sourceKey: string,
     targetKey: string,
@@ -646,11 +720,12 @@ function StaticSidebar({
     onChangeThreadPinned: async () => undefined,
     onReorderProject,
     onReorderThread,
+    onReorderPinnedThread,
     onRenameThread: async () => undefined,
     onRetryThreads: noop,
     onSelectThread: noop,
     pendingApprovalThreadIds: new Set<string>(),
-    pinnedThreads: [threads[0]!],
+    pinnedThreads,
     pluginContributions: [],
     projects: projection,
     sidebarOrder,
@@ -659,7 +734,41 @@ function StaticSidebar({
     serverStatus: { type: "ready", reconnected: false },
     threadError: null,
     threadLoading: false,
-    threads,
+    threads: threadRows,
+  });
+}
+
+function PinnedReorderSidebar({
+  onCall,
+}: {
+  onCall(call: [string, string, SidebarOrderPlacement]): void;
+}) {
+  const [pinnedIds, setPinnedIds] = useState(["pin-1", "pin-2", "pin-3"]);
+  const all = [
+    summary("pin-1", "idle", 30, "/work/a"),
+    summary("pin-2", "idle", 20, "/work/a"),
+    summary("pin-3", "idle", 10, "/work/a"),
+  ];
+  return createElement(StaticSidebar, {
+    pinnedThreads: pinnedIds.map((threadId) =>
+      all.find((thread) => thread.threadId === threadId)!,
+    ),
+    threadRows: all,
+    onReorderPinnedThread: async (
+      sourceThreadId,
+      targetThreadId,
+      placement,
+    ) => {
+      onCall([sourceThreadId, targetThreadId, placement]);
+      setPinnedIds((current) => [
+        ...movePinnedThreadIds(
+          current,
+          sourceThreadId,
+          targetThreadId,
+          placement,
+        ),
+      ]);
+    },
   });
 }
 
@@ -761,4 +870,72 @@ function summary(
     preview: "",
     status,
   };
+}
+
+for (const kind of ["pinned", "project", "thread"] as const) {
+  test(`failed ${kind} drag reorder retries its captured placement after dispatch`, async () => {
+    const argumentsSeen: unknown[][] = [];
+    await withDom(async (root) => {
+      const reorder = async (...args: unknown[]) => {
+        argumentsSeen.push(args);
+        if (argumentsSeen.length === 1)
+          throw new Error("Temporary disk failure");
+      };
+      await act(async () =>
+        root.render(
+          createElement(StaticSidebar, {
+            pinnedThreads: kind === "pinned" ? threads.slice(0, 2) : [],
+            onReorderPinnedThread: reorder,
+            onReorderProject: reorder,
+            onReorderThread: reorder,
+          }),
+        ),
+      );
+      const [sourceSelector, targetSelector] =
+        kind === "pinned"
+          ? [
+              '.pinned-thread-group [data-thread-id="active"].thread-row-shell',
+              '.pinned-thread-group [data-thread-id="pinned"].thread-row-shell',
+            ]
+          : kind === "project"
+            ? [
+                '[data-project-key="/work/a"] .project-toggle',
+                '[data-project-key="/work/b"] .project-header',
+              ]
+            : [
+                '[data-thread-id="active"].thread-row-shell',
+                '[data-thread-id="idle"].thread-row-shell',
+              ];
+      const source = requiredElement<HTMLElement>(sourceSelector);
+      const target = requiredElement<HTMLElement>(targetSelector);
+      target.getBoundingClientRect = () =>
+        ({ top: 100, height: 40 }) as DOMRect;
+      const transfer = dragData();
+      await act(async () =>
+        source.dispatchEvent(dragEvent("dragstart", transfer)),
+      );
+      await act(async () =>
+        target.dispatchEvent(dragEvent("dragover", transfer, 135)),
+      );
+      await act(async () =>
+        target.dispatchEvent(dragEvent("drop", transfer, 135)),
+      );
+      assert.equal(argumentsSeen.length, 1);
+      assert.equal(argumentsSeen[0]?.at(-1), "after");
+      assert.match(document.body.textContent ?? "", /Temporary disk failure/);
+      // Geometry may change before Retry; the original user's placement still wins.
+      target.getBoundingClientRect = () =>
+        ({ top: 200, height: 40 }) as DOMRect;
+      await act(async () => {
+        requiredButton(".sidebar-error button").click();
+        await Promise.resolve();
+      });
+      assert.equal(argumentsSeen.length, 2);
+      assert.deepEqual(argumentsSeen[1], argumentsSeen[0]);
+      assert.doesNotMatch(
+        document.body.textContent ?? "",
+        /Could not save Sidebar order/,
+      );
+    });
+  });
 }

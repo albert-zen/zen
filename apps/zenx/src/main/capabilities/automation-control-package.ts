@@ -1,3 +1,4 @@
+import { assertPawRenameScope } from "../room-identity.js";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import type { ThreadCandidate } from "../thread-target.js";
 import type {
@@ -8,6 +9,7 @@ import type {
   TriggerProgramConfig,
   TriggerProgramSpec,
   TriggerSnapshot,
+  TriggerSidebarSnapshot,
   UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
@@ -72,6 +74,7 @@ export interface ZenXAutomationControlPort {
     preview: string;
   }>;
   snapshot(): TriggerSnapshot;
+  sidebarFacts?(): TriggerSidebarSnapshot;
   assistantWorkspace?(roomId: string): AssistantWorkspace;
   updateAssistantWorkspace?(
     input: UpdateAssistantWorkspaceInput,
@@ -147,6 +150,12 @@ const triggerProperties = {
     maxLength: MAX_ID_BYTES,
     description:
       "Notification target: full ID, unique short ID, or exact title. On creation defaults to the calling Thread.",
+  },
+  deliveryMode: {
+    type: "string",
+    enum: ["steer", "queue"],
+    description:
+      "This Trigger only. Omit for soft steer during active work; queue explicitly waits for the next Turn. Independent of Composer and Room preferences.",
   },
   kind: { type: "string", enum: ["timer", "thread", "roomMention", "signal"] },
   label: { type: "string", maxLength: MAX_TRIGGER_LABEL_BYTES },
@@ -296,6 +305,17 @@ const manifest: ZenXPluginManifestV2 = {
       [],
       false,
     ),
+    {
+      ...tool(
+        "zenx_triggers_sidebar_facts",
+        "Read only Trigger identity, Thread binding, status, and next scheduled time.",
+        {},
+        [],
+        false,
+      ),
+      // The registry bounds 256 definitions and each identity to 512 UTF-8 bytes.
+      maxOutputBytes: 524288,
+    },
     tool(
       "zenx_triggers_create",
       "Create a timer, Thread watcher, Room mention, or signal Trigger, optionally with a local predicate/action.",
@@ -451,6 +471,10 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
           rooms: snapshot.rooms.map(readSafeRoom),
         };
       }
+      case "zenx_triggers_sidebar_facts":
+        if (this.#port.sidebarFacts === undefined)
+          throw new Error("Trigger sidebar facts are unavailable");
+        return this.#port.sidebarFacts();
       case "zenx_triggers_create":
         return await this.#port.create(
           triggerInput({
@@ -501,6 +525,12 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
           members: members(args.members),
         });
       case "zenx_rooms_rename":
+        if (uiInput === null)
+          assertPawRenameScope(
+            this.#port.snapshot(),
+            string(args, "roomId", MAX_ID_BYTES),
+            invocation.threadId,
+          );
         await this.#port.renameRoom(
           string(args, "roomId", MAX_ID_BYTES),
           string(args, "name", MAX_ROOM_NAME_BYTES),
@@ -555,6 +585,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
     this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
     this.manifest = automationPluginManifest(this.#delegate.manifest, {
       id: ZENX_TRIGGERS_CAPABILITY_ID,
+      version: "1.0.1",
       displayName: "Triggers",
       description: "Schedule and inspect ZenX Trigger wakeups.",
       toolPrefix: "zenx_triggers_",
@@ -664,6 +695,7 @@ function automationPluginManifest(
   source: ZenXPluginManifestV2,
   plugin: {
     id: string;
+    version?: string;
     displayName: string;
     description: string;
     toolPrefix: string;
@@ -694,6 +726,7 @@ function automationPluginManifest(
     ...structuredClone(capability),
     schemaVersion: 2,
     id: plugin.id,
+    version: plugin.version ?? source.version,
     name: plugin.displayName,
     compatibility: { zenx: ">=0.1.0 <0.2.0" },
     runtime: {
@@ -779,6 +812,9 @@ function readSafeTrigger(trigger: ZenXTrigger): unknown {
   const common = {
     id: trigger.id,
     definitionRevision: trigger.definitionRevision ?? 0,
+    ...(trigger.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: trigger.deliveryMode }),
     threadId: trigger.threadId,
     label: trigger.label,
     prompt: trigger.prompt,
@@ -967,10 +1003,19 @@ function tool(
 }
 
 function triggerInput(args: Record<string, unknown>): CreateTriggerInput {
+  if (
+    args.deliveryMode !== undefined &&
+    args.deliveryMode !== "steer" &&
+    args.deliveryMode !== "queue"
+  )
+    throw new Error("deliveryMode must be steer or queue");
   const common = {
     threadId: string(args, "threadId", MAX_ID_BYTES),
     label: string(args, "label", MAX_TRIGGER_LABEL_BYTES),
     prompt: string(args, "prompt", MAX_TRIGGER_PROMPT_BYTES),
+    ...(args.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: args.deliveryMode as "steer" | "queue" }),
     ...programInput(args),
   };
   const kind = string(args, "kind", MAX_ID_BYTES);

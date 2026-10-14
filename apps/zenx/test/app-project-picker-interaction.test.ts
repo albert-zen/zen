@@ -15,6 +15,7 @@ import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projecti
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -243,7 +244,7 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
       return projects;
     },
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(
           params as {
             clientUserMessageId?: string;
@@ -366,7 +367,7 @@ test("New thread sends its selected model, reasoning and file permissions to Pro
   const harness = await mountApp(oneProject(), {
     models: [wireModel("fake", true, "Local demo"), advanced],
     request: async (method) => {
-      if (method === "turn/start") return {};
+      if (method === "zen/turn/send") return {};
       throw new Error(`Unexpected protocol request: ${method}`);
     },
     startProjectThread: async (workspace, selection) => {
@@ -502,7 +503,7 @@ test("pending draft image pick follows promotion and releases its lease", async 
     pickImages: async () => pick.promise,
     startProjectThread: async () => create.promise,
     request: async (method) => {
-      if (method === "turn/start") return {};
+      if (method === "zen/turn/send") return {};
       throw new Error(`Unexpected protocol request: ${method}`);
     },
   });
@@ -626,7 +627,7 @@ test("thread creation failure preserves the local draft for retry", async () => 
   };
   const harness = await mountApp(projects, {
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(params);
         return {};
       }
@@ -685,7 +686,7 @@ test("turn failure retries on the created Thread with the stable message id", as
   };
   const harness = await mountApp(projects, {
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(params as { clientUserMessageId?: string });
         if (turnStarts.length === 1) throw new Error("turn rejected");
         return {};
@@ -742,7 +743,7 @@ test("late create rejection restores the latest draft and stable submission id",
       return started(liveThread(), workspace);
     },
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         ids.push(
           (params as { clientUserMessageId: string }).clientUserMessageId,
         );
@@ -803,7 +804,7 @@ test("a pending first Send finishes without stealing a newer navigation", async 
   };
   const harness = await mountApp(projects, {
     request: async (method, params) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts.push(params);
         return {};
       }
@@ -860,7 +861,7 @@ test("explicit newer draft discards stale recovery before unrelated errors", asy
       return started(liveThread(), workspace);
     },
     request: async (method) => {
-      if (method === "turn/start") return {};
+      if (method === "zen/turn/send") return {};
       throw new Error(`Unexpected protocol request: ${method}`);
     },
   });
@@ -1225,56 +1226,71 @@ test("draft Project chooser stays within the viewport and only scrolls its resul
   }
 });
 
-test("adding a Project from the central switcher preserves the local draft", async () => {
-  let currentProjects = oneProject();
-  let addWorkspaceCalls = 0;
-  let starts = 0;
-  const harness = await mountApp(currentProjects, {
-    addWorkspace: async (workspace) => {
-      addWorkspaceCalls += 1;
-      currentProjects = {
-        projects: [
-          ...currentProjects.projects,
-          {
-            key: workspace,
-            workspace,
-            configured: true,
-            isDefault: false,
-            threadIds: [],
-          },
-        ],
-        unavailableThreadIds: [],
-        lastUsedWorkspace: workspace,
-      };
-    },
-    projectsGet: async () => currentProjects,
-    startProjectThread: async (workspace) => {
-      starts += 1;
-      return started(liveThread(), workspace);
-    },
+for (const entry of ["heading", "chip"] as const) {
+  test(`adding a new Project from ${entry} preserves the local draft`, async () => {
+    let currentProjects = oneProject();
+    let addWorkspaceCalls = 0;
+    let starts = 0;
+    const harness = await mountApp(currentProjects, {
+      addWorkspace: async (workspace) => {
+        addWorkspaceCalls += 1;
+        currentProjects = {
+          projects: [
+            ...currentProjects.projects,
+            {
+              key: workspace,
+              workspace,
+              configured: true,
+              isDefault: false,
+              threadIds: [],
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: workspace,
+        };
+      },
+      projectsGet: async () => currentProjects,
+      startProjectThread: async (workspace) => {
+        starts += 1;
+        return started(liveThread(), workspace);
+      },
+    });
+    try {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".new-thread-action")
+          ?.click(),
+      );
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      );
+      await setTextareaValue(composer, "Keep this draft");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            entry === "chip"
+              ? ".new-thread-project-trigger-chip"
+              : ".new-thread-project-trigger:not(.new-thread-project-trigger-chip)",
+          )!
+          .click(),
+      );
+      const addProject = await waitFor(() => exactButton("Add project"));
+      await act(async () => addProject.click());
+      const addFolder = await waitFor(() => exactButton("Add folder"));
+      await waitFor(() => addFolder.disabled === false);
+      await act(async () => addFolder.click());
+      await waitFor(() => projectSwitcher()?.textContent?.trim() === "/");
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+        "Keep this draft",
+      );
+      assert.equal(addWorkspaceCalls, 1);
+      assert.equal(starts, 0);
+    } finally {
+      await unmountApp(harness);
+    }
   });
-  try {
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
-    );
-    const composer = await waitFor(() =>
-      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
-    );
-    await setTextareaValue(composer, "Keep this draft");
-    await act(async () => projectSwitcher()?.click());
-    const addProject = await waitFor(() => exactButton("Add project"));
-    await act(async () => addProject.click());
-    const addFolder = await waitFor(() => exactButton("Add folder"));
-    await waitFor(() => addFolder.disabled === false);
-    await act(async () => addFolder.click());
-    await waitFor(() => projectSwitcher()?.textContent?.trim() === "/");
-    assert.equal(composer.value, "Keep this draft");
-    assert.equal(addWorkspaceCalls, 1);
-    assert.equal(starts, 0);
-  } finally {
-    await unmountApp(harness);
-  }
-});
+}
 
 test("first Turn starts before ancillary Project refresh completes", async () => {
   const marked = deferred<ReturnType<typeof publicSettings>>();
@@ -1297,7 +1313,7 @@ test("first Turn starts before ancillary Project refresh completes", async () =>
       markWorkspaceUsed: async () => marked.promise,
       startProjectThread: async (workspace) => started(liveThread(), workspace),
       request: async (method) => {
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStarts += 1;
           return {};
         }
@@ -1350,7 +1366,7 @@ test("summary failure stays non-covering after real Thread promotion", async () 
         return [];
       },
       request: async (method) => {
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStarts += 1;
           return {};
         }
@@ -1392,7 +1408,7 @@ test("title and mark-used failures are dismissible without covering the conversa
     },
     startProjectThread: async (workspace) => started(liveThread(), workspace),
     request: async (method) => {
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStarts += 1;
         return {};
       }
@@ -1717,7 +1733,7 @@ test("same-event-loop duplicate Send owns one title stage and turn request", asy
     },
     request: async (method, params) => {
       if (method === "zen/thread/resume") return resumed(liveThread());
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStartRequests.push(params);
         return {};
       }
@@ -1757,7 +1773,7 @@ test("deleted Provider history stays readable and requires an explicit model swi
           modelProvider: "deleted-provider",
           reasoningEffort: "medium",
         });
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnRequests.push(params);
         return {};
       }
@@ -1809,7 +1825,7 @@ test("Composer keyboard and form routes do not duplicate one submit event", asyn
   const harness = await mountThreadApp({
     request: async (method, params) => {
       if (method === "zen/thread/resume") return resumed(liveThread());
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStartRequests.push(params);
         return {};
       }
@@ -2445,17 +2461,24 @@ test("running queue, soft steer and hard steer each own one pending admission", 
   for (const [mode, method, label] of [
     ["batch", "zen/turn/send", "Next turn"],
     ["queue", "turn/queue", "Each turn"],
-    ["soft", "turn/steer", "Steer now"],
+    ["soft", "zen/turn/send", "Steer now"],
     ["hard", "turn/replace", "Interrupt and send"],
   ] as const) {
     const response = deferred<unknown>();
     let calls = 0;
     const harness = await mountThreadApp({
       composerSendMode: mode,
-      request: async (requestedMethod) => {
+      request: async (requestedMethod, params) => {
         if (requestedMethod === "zen/thread/resume")
           return resumed(runningThread());
         if (requestedMethod === method) {
+          if (mode === "soft") {
+            assert.equal((params as { mode?: string }).mode, undefined);
+            assert.equal(
+              (params as { expectedTurnId?: string }).expectedTurnId,
+              undefined,
+            );
+          }
           calls += 1;
           return await response.promise;
         }
@@ -2642,7 +2665,7 @@ test("late canonical queue ID settles only the original unknown submission, not 
             sessionId: threadId,
           });
         }
-        if (method === "turn/queue" || method === "turn/start") {
+        if (method === "turn/queue" || method === "zen/turn/send") {
           sends.push(params as { clientUserMessageId: string });
           throw new Error(
             "Input admission reply timed out; request outcome unknown. No request was resent.",
@@ -2801,7 +2824,7 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
   const harness = await mountThreadApp({
     request: async (method, params) => {
       if (method === "zen/thread/resume") return resumed(liveThread());
-      if (method === "turn/start") {
+      if (method === "zen/turn/send") {
         turnStartRequests.push(
           (params ?? {}) as { clientUserMessageId?: string },
         );
@@ -3145,7 +3168,7 @@ test("selected Sidebar archive fences Send until a failed response restores Chat
             modelProvider: "fake",
           };
         if (method === "thread/archive") return await archiveResponse.promise;
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStartCalls += 1;
           return {};
         }
@@ -3236,7 +3259,7 @@ test("selected archive fences a submission already staging its title", async () 
             modelProvider: "fake",
           };
         if (method === "thread/archive") return await archiveResponse.promise;
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStartCalls += 1;
           return {};
         }
@@ -3333,7 +3356,7 @@ test("duplicate selected archive shares one pending fence owner", async () => {
           archiveCalls += 1;
           return await archiveResponse.promise;
         }
-        if (method === "turn/start") {
+        if (method === "zen/turn/send") {
           turnStartCalls += 1;
           return {};
         }
@@ -3621,6 +3644,243 @@ test("current permissions follow notifications even when the Thread list fails",
     await waitFor(() => select.textContent === "Full access");
     assert.equal(select.disabled, false);
     assert.match(document.body.textContent ?? "", /list unavailable/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+function twoProjectSnapshot(): ZenXProjectProjectionSnapshot {
+  return {
+    projects: [
+      {
+        key: "/work/documents",
+        workspace: "/work/documents",
+        configured: true,
+        isDefault: false,
+        threadIds: ["existing-thread"],
+      },
+      {
+        key: "/work/zen",
+        workspace: "/work/zen",
+        configured: true,
+        isDefault: true,
+        threadIds: [],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: "/work/zen",
+  };
+}
+
+async function chooseDraftProject(name: string): Promise<void> {
+  await act(async () => projectSwitcher()?.click());
+  const option = await waitFor(() =>
+    Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '.new-thread-project-popover [role="menuitemradio"]',
+      ),
+    ).find((button) => button.textContent?.includes(name)),
+  );
+  await act(async () => option.click());
+}
+
+test("the Composer-context Project chip opens the searchable switcher", async () => {
+  const projects = twoProjectSnapshot();
+  let projectReads = 0;
+  const harness = await mountApp(projects, {
+    projectsGet: async () => {
+      projectReads += 1;
+      return projects;
+    },
+  });
+  try {
+    await waitFor(() => projectReads > 0);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const chip = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".new-thread-composer-context .new-thread-project-trigger-chip",
+      ),
+    );
+    assert.match(chip.textContent ?? "", /zen/u);
+    assert.equal(chip.getAttribute("aria-haspopup"), "dialog");
+    assert.equal(chip.getAttribute("aria-expanded"), "false");
+
+    await act(async () => chip.click());
+    const portal = await waitFor(() =>
+      document.querySelector<HTMLElement>(".new-thread-project-popover-portal"),
+    );
+    assert.equal(chip.getAttribute("aria-expanded"), "true");
+    // The central heading keeps its own popover closed while the chip is open.
+    assert.equal(
+      document.querySelectorAll(".new-thread-project-popover").length,
+      0,
+    );
+    const search = portal.querySelector<HTMLInputElement>(
+      'input[type="search"]',
+    );
+    assert.ok(search);
+    assert.equal(search.getAttribute("aria-label"), "Search projects");
+    await act(async () => setInputValue(search, "documents"));
+    const options = await waitFor(() =>
+      Array.from(
+        portal.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ),
+    );
+    assert.equal(options.length, 1);
+    assert.match(options[0]?.textContent ?? "", /documents/u);
+    assert.ok(portal.querySelector(".new-thread-project-add"));
+
+    await act(async () => options[0]?.click());
+    assert.equal(
+      document.querySelector(".new-thread-project-popover-portal"),
+      null,
+    );
+    assert.match(
+      document.querySelector(".new-thread-draft-heading")?.textContent ?? "",
+      /What should we build in documents\?/u,
+    );
+    assert.match(chip.textContent ?? "", /documents/u);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("the Chinese welcome sentence embeds the Project name in the middle", async () => {
+  await i18n.changeLanguage("zh-CN");
+  try {
+    const harness = await mountApp(oneProject(), {});
+    try {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".new-thread-action")
+          ?.click(),
+      );
+      const heading = await waitFor(() =>
+        document.querySelector<HTMLElement>(".new-thread-draft-heading"),
+      );
+      assert.match(heading.textContent ?? "", /我们要在 zen 中构建什么？/u);
+    } finally {
+      await unmountApp(harness);
+    }
+  } finally {
+    await i18n.changeLanguage("en");
+  }
+});
+
+test("welcome drafts retain unsent input per Project, restore across navigation, and are consumed by the first Send", async () => {
+  const selectedStart = deferred<ReturnType<typeof started>>();
+  const startedWorkspaces: string[] = [];
+  let created = false;
+  const existing = summary(
+    false,
+    "existing-thread",
+    "Existing thread",
+    "/work/documents",
+  );
+  const projects = twoProjectSnapshot();
+  const harness = await mountApp(projects, {
+    addWorkspace: async () => undefined,
+    markWorkspaceUsed: async () => publicSettings([]),
+    projectsGet: async () => projects,
+    threads: async (archived) =>
+      archived
+        ? []
+        : created
+          ? [existing, summary(false, "thread-1", "Thread one", "/work/zen")]
+          : [existing],
+    startProjectThread: async (workspace) => {
+      startedWorkspaces.push(workspace);
+      const value = await selectedStart.promise;
+      created = true;
+      return value;
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "turn/start") return {};
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  const draftText = () =>
+    document.querySelector<HTMLTextAreaElement>(
+      ".new-thread-draft-surface #thread-composer",
+    )?.value;
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".new-thread-draft-surface #thread-composer",
+      ),
+    );
+    await setTextareaValue(composer, "Plan the zen refactor");
+
+    // Switching Project keeps each Project's unsent input independent, like
+    // two separate drafts.
+    await chooseDraftProject("documents");
+    assert.equal(draftText(), "");
+    const documentsComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".new-thread-draft-surface #thread-composer",
+      ),
+    );
+    await setTextareaValue(documentsComposer, "Draft the documents flow");
+    await chooseDraftProject("zen");
+    assert.equal(draftText(), "Plan the zen refactor");
+    await chooseDraftProject("documents");
+    assert.equal(draftText(), "Draft the documents flow");
+    await chooseDraftProject("zen");
+    assert.equal(draftText(), "Plan the zen refactor");
+
+    // Opening a Thread keeps the draft; returning restores it.
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-thread-id="existing-thread"] .thread-row',
+        )
+        ?.click(),
+    );
+    await waitFor(
+      () => document.querySelector(".new-thread-draft-surface") === null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(() =>
+      document.querySelector(".new-thread-draft-surface #thread-composer"),
+    );
+    assert.equal(draftText(), "Plan the zen refactor");
+
+    // The first Send creates the Thread and consumes the retained input.
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await invokeButtonClick(send, 2);
+    await waitFor(() => startedWorkspaces.length === 1);
+    assert.deepEqual(startedWorkspaces, ["/work/zen"]);
+    await act(async () => {
+      selectedStart.resolve(started(liveThread(), "/work/zen"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(
+      () => document.querySelector(".new-thread-draft-surface") === null,
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    await waitFor(
+      () =>
+        document.querySelector<HTMLTextAreaElement>(
+          ".new-thread-draft-surface #thread-composer",
+        ) !== null,
+    );
+    assert.equal(draftText(), "");
+    // Project B's untouched input is still retained after Project A sent.
+    await chooseDraftProject("documents");
+    assert.equal(draftText(), "Draft the documents flow");
   } finally {
     await unmountApp(harness);
   }
@@ -4647,7 +4907,7 @@ test("reference selector sends exact locators through App with and without nativ
     const harness = await mountThreadApp({
       request: async (method, params) => {
         if (method === "zen/thread/resume") return resumed(liveThread());
-        if (method === "turn/start" || method === "zen/turn/send") {
+        if (method === "zen/turn/send") {
           sends.push({ method, params });
           return {};
         }
@@ -4691,7 +4951,7 @@ test("reference selector sends exact locators through App with and without nativ
       await dispatchComposerKey(textarea, { key: "Enter" });
       await waitFor(() => sends.length === 1);
       const send = sends[0]!;
-      assert.equal(send.method, includeSkill ? "zen/turn/send" : "turn/start");
+      assert.equal(send.method, "zen/turn/send");
       const text = send.params.input.find(
         (part: any) => part.type === "text",
       ).text;
@@ -4774,6 +5034,205 @@ test("composer default save cannot roll back a newer settings notification", asy
       document.querySelector<HTMLTextAreaElement>("textarea")?.value,
       "",
     );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const text of ["Original Project draft", ""]) {
+  test(`late image pick returns to owning Project draft with ${text ? "text" : "only a pending image"}`, async () => {
+    const pick = deferred<ZenXImageDraft[]>();
+    const harness = await mountApp(twoProjectSnapshot(), {
+      pickImages: async () => pick.promise,
+    });
+    try {
+      const composer = await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      );
+      if (text) await setTextareaValue(composer, text);
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>('[aria-label="Add images"]')
+          ?.click(),
+      );
+      await chooseDraftProject("documents");
+      await act(async () =>
+        pick.resolve([
+          {
+            id: "late-image",
+            name: "late.png",
+            attachment: {
+              type: "attachment",
+              sha256: "a".repeat(64),
+              mediaType: "image/png",
+              byteLength: 4,
+              width: 1,
+              height: 1,
+            },
+          },
+        ]),
+      );
+      assert.equal(
+        document.querySelector('[aria-label="Remove late.png"]'),
+        null,
+      );
+      await chooseDraftProject("zen");
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+        text,
+      );
+      assert.ok(
+        document.querySelector('[aria-label="Remove late.png"]'),
+        "late image must be retained by the original draft",
+      );
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+for (const entry of ["heading", "chip"] as const) {
+  for (const retainedText of ["Zen draft must survive", ""]) {
+    test(`Add project from ${entry} restores an existing Project with ${retainedText ? "a retained draft" : "no draft"}`, async () => {
+      const projects = twoProjectSnapshot();
+      const harness = await mountApp(projects);
+      try {
+        const text = () =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+        await waitFor(text);
+        if (retainedText) await setTextareaValue(text(), retainedText);
+        await chooseDraftProject("documents");
+        await setTextareaValue(text(), "Documents draft must survive");
+        // The directory picker can choose a folder that is already configured.
+        window.zenx.settings.getDirectoryBrowser = async () => ({
+          locations: [{ label: "Zen", path: "/work/zen" }],
+          initialPath: "/work/zen",
+        });
+        window.zenx.settings.listDirectory = async () => ({
+          path: "/work/zen",
+          parent: "/work",
+          breadcrumbs: [{ label: "zen", path: "/work/zen" }],
+          directories: [],
+        });
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(
+              entry === "chip"
+                ? ".new-thread-project-trigger-chip"
+                : ".new-thread-project-trigger:not(.new-thread-project-trigger-chip)",
+            )!
+            .click(),
+        );
+        await act(async () => exactButton("Add project")!.click());
+        const addFolder = await waitFor(() => exactButton("Add folder"));
+        await waitFor(() => !addFolder.disabled);
+        await act(async () => addFolder.click());
+        await waitFor(() => projectSwitcher()?.textContent?.trim() === "zen");
+        assert.equal(text().value, retainedText);
+        await chooseDraftProject("documents");
+        assert.equal(text().value, "Documents draft must survive");
+        await chooseDraftProject("zen");
+        assert.equal(text().value, retainedText);
+      } finally {
+        await unmountApp(harness);
+      }
+    });
+  }
+}
+test("import saved but native open failed retains App-level retry without reimport", async () => {
+  let importCalls = 0;
+  let resumeCalls = 0;
+  const { parseSessionImport, previewSessionImport } =
+    await import("../../../src/protocol/session-import.js");
+  const contents = [
+    {
+      type: "session_meta",
+      payload: { id: "app-import", cli_version: "0.146.0", cwd: "/source" },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "app integration fixture" }],
+      },
+    },
+  ]
+    .map((entry) =>
+      JSON.stringify({ timestamp: "2026-10-12T00:00:00Z", ...entry }),
+    )
+    .join("\n");
+  const harness = await mountApp(oneProject(), {
+    request: async (method) => {
+      if (method === "zen/thread/import/preview")
+        return previewSessionImport(
+          parseSessionImport({ format: "codex-rollout-0.146.0", contents }),
+        );
+      if (method === "zen/thread/import") {
+        importCalls++;
+        return { thread: { id: "thread-1" }, status: "imported" };
+      }
+      if (method === "zen/thread/resume") {
+        resumeCalls++;
+        if (resumeCalls === 1) throw new Error("Synthetic import open failure");
+        return resumed(liveThread());
+      }
+      return {};
+    },
+  });
+  try {
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Import Codex conversation"]',
+      ),
+    );
+    await act(async () => open.click());
+    const input = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        '.session-import-dialog input[type="file"]',
+      ),
+    );
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [
+        {
+          name: "selected.jsonl",
+          size: Buffer.byteLength(contents),
+          arrayBuffer: async () => new TextEncoder().encode(contents).buffer,
+        },
+      ],
+    });
+    await act(async () =>
+      input.dispatchEvent(
+        new harness.dom.window.Event("change", { bubbles: true }),
+      ),
+    );
+    const confirm = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) =>
+          button.textContent === "Import and open" && !button.disabled,
+      ),
+    );
+    await act(async () => confirm.click());
+    const retry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) =>
+          button.textContent === "Open imported conversation" &&
+          !button.disabled,
+      ),
+    );
+    assert(document.querySelector(".session-import-dialog"));
+    assert(
+      document
+        .querySelector(".session-import-dialog [role=alert]")
+        ?.textContent?.includes("Synthetic import open failure"),
+    );
+    assert.equal(importCalls, 1);
+    assert.equal(resumeCalls, 1);
+    await act(async () => retry.click());
+    await waitFor(() => !document.querySelector(".session-import-dialog"));
+    assert.equal(importCalls, 1);
+    assert.equal(resumeCalls, 2);
   } finally {
     await unmountApp(harness);
   }

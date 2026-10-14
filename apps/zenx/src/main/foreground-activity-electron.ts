@@ -2,6 +2,7 @@ import type {
   BrowserWindow,
   BrowserWindowConstructorOptions,
   Display,
+  GlobalShortcut,
   IpcMain,
   IpcMainEvent,
   Screen,
@@ -70,6 +71,10 @@ interface ElectronForegroundActivityOptions {
   createWindow(options: BrowserWindowConstructorOptions): BrowserWindow;
   screen: Pick<Screen, "getAllDisplays" | "on" | "removeListener">;
   ipcMain: Pick<IpcMain, "on" | "removeListener">;
+  globalShortcut?: Pick<
+    GlobalShortcut,
+    "register" | "unregister" | "isRegistered"
+  >;
   preloadPath: string;
   language(): SupportedLanguage;
   onStop(ids: readonly string[]): void;
@@ -85,6 +90,9 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
   #version = 0;
   #closed = false;
   #failure: Error | undefined;
+  #escapeAttempted = false;
+  #escapeOwned = false;
+  #escapeGeneration = 0;
 
   constructor(options: ElectronForegroundActivityOptions) {
     this.#options = options;
@@ -97,6 +105,7 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
 
   update(snapshot: ForegroundActivitySnapshot): Promise<void> {
     this.#snapshot = snapshot;
+    if (!this.#closed) this.#syncEscape();
     const work = this.#tail.then(() => this.#render());
     this.#tail = work.catch(() => undefined);
     return work;
@@ -105,6 +114,7 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#releaseEscape();
     this.#options.ipcMain.removeListener(
       foregroundActivityChannels.painted,
       this.#painted,
@@ -124,6 +134,54 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
     );
     this.#dispose();
   }
+
+  #syncEscape(): void {
+    if (this.#snapshot.activities.length === 0) {
+      this.#releaseEscape();
+      this.#escapeAttempted = false;
+      return;
+    }
+    if (this.#escapeAttempted) return;
+    this.#escapeAttempted = true;
+    const shortcut = this.#options.globalShortcut;
+    // This platform already fails foreground-overlay admission; do not request
+    // a portal shortcut (or its consent UI) for an unsupported operation.
+    if (
+      (this.#options.platform ?? process.platform) === "linux" &&
+      process.env.XDG_SESSION_TYPE === "wayland"
+    )
+      return;
+    if (!shortcut) return;
+    try {
+      // Never replace or later unregister another feature's accelerator.
+      if (shortcut.isRegistered("Escape")) return;
+      const generation = ++this.#escapeGeneration;
+      this.#escapeOwned = shortcut.register("Escape", () => {
+        if (generation !== this.#escapeGeneration) return;
+        this.#escape();
+      });
+    } catch {
+      // The trusted button remains usable; rendered copy states the fallback.
+      this.#escapeOwned = false;
+    }
+  }
+
+  #releaseEscape(): void {
+    this.#escapeGeneration += 1;
+    if (!this.#escapeOwned) return;
+    this.#escapeOwned = false;
+    this.#options.globalShortcut?.unregister("Escape");
+  }
+
+  #escape = (): void => {
+    if (this.#closed || !this.#escapeOwned) return;
+    // Read the current live projection, never the owners captured at registration.
+    // Pending admission is also cancellable before its first native input.
+    const ids = this.#snapshot.activities
+      .filter((activity) => !activity.stopping)
+      .map((activity) => activity.id);
+    if (ids.length > 0) this.#options.onStop(ids);
+  };
 
   #displaysChanged = (): void => {
     if (this.#snapshot.activities.length === 0 || this.#closed) return;
@@ -274,6 +332,7 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
         agentNames: snapshot.activities.map((activity) => activity.agentName),
         stopping: snapshot.activities.every((activity) => activity.stopping),
         language: this.#options.language(),
+        escapeAvailable: this.#escapeOwned,
       });
       const overlay: Overlay = {
         window,
@@ -357,6 +416,7 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
                 (activity) => activity.stopping,
               ),
               language: this.#options.language(),
+              escapeAvailable: this.#escapeOwned,
             }),
             stopping: snapshot.activities.every(
               (activity) => activity.stopping,

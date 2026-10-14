@@ -34,6 +34,7 @@
   flex: 0 0 auto;
 }
 .room-conversation-label {
+  flex: 1;
   display: grid;
   gap: 2px;
   min-width: 0;
@@ -88,4 +89,178 @@
   background: transparent;
   color: var(--text-1);
   cursor: pointer;
+}
+
+.room-unread-count {
+  flex: 0 0 auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  text-align: center;
+  text-indent: 0;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-surface-main);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+@media (forced-colors: active) {
+  .room-unread-count {
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+.room-conversation-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 6px;
+}
+.room-conversation-item > .room-conversation-row {
+  flex: 1;
+  width: 0;
+}
+.room-conversation-item > .quiet-button {
+  flex: 0 0 auto;
+  padding: 6px;
+  margin-right: 3px;
+  color: var(--text-3);
+}
+.room-conversation-item:has([aria-current="page"]) {
+  background: var(--surface-hover);
+}
+.paw-welcome {
+  margin: 6px 8px 10px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.paw-welcome strong {
+  font-size: 12px;
+  color: var(--text-1);
+}
+.paw-welcome p {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-3);
+  margin: 6px 0 12px;
+}
+.paw-welcome button {
+  font-size: 11px;
+}
+.paw-setup-link {
+  margin: 4px 9px 8px;
+  border: 0;
+  padding: 3px 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+.paw-setup-link:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.paw-setup-description {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+/* Creation stays in the conversation surface, never a modal or focus trap. */
+.rooms-chat-main[hidden] {
+  display: none;
+}
+.paw-start-page {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  padding: 48px 24px;
+}
+.paw-start-content {
+  width: min(100%, 480px);
+  display: flex;
+  flex-direction: column;
+  align-self: flex-start;
+  gap: 18px;
+}
+.paw-start-content > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.paw-start-content h2 {
+  font-size: 24px;
+  font-weight: 550;
+  margin: 0;
+}
+.paw-start-content .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.paw-start-request {
+  margin: 0;
+  padding: 12px 16px;
+  border-left: 2px solid var(--border-soft);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.paw-chat-introduction {
+  padding: 12px 20px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.paw-work-settings p {
+  color: var(--text-3);
+  line-height: 1.6;
+}
+@media (max-width: 600px) {
+  .paw-start-page {
+    padding: 28px 16px;
+  }
+}
+
+.paw-setup-capabilities {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.paw-setup-capabilities summary {
+  cursor: pointer;
+}
+.paw-setup-dialog > .quiet-button {
+  justify-self: start;
+}
+
+.paw-work-directory {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.paw-advanced {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.paw-advanced > summary {
+  cursor: pointer;
+}
+.paw-advanced[open] > :not(summary) {
+  margin-top: 16px;
+}
+.paw-start-content .room-assistant-disclosure {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+}
+.paw-start-content > .quiet-button {
+  align-self: flex-start;
 }

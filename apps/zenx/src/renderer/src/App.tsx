@@ -1,8 +1,18 @@
+import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
+import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
+import {
+  useConversationReadPreference,
+  unreadThreadIds,
+} from "./conversation-read-state.js";
+import { SessionImportDialog } from "./SessionImportDialog.js";
 import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
+import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
+import { RoomHeaderContext } from "./room-header.js";
 import {
   ROOM_ROUTE,
   useRoomConversations,
@@ -132,6 +142,7 @@ import {
   lastUsedProjectWorkspace,
   moveSidebarProject,
   moveSidebarThread,
+  movePinnedThreadIds,
   threadTitle,
   writeSidebarMode,
   type SidebarMode,
@@ -396,6 +407,15 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  return (
+    <ThreadReadingStateProvider>
+      <AppContent />
+    </ThreadReadingStateProvider>
+  );
+}
+
+function AppContent() {
+  const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
@@ -421,6 +441,9 @@ export function App() {
   const newThreadPendingDraftRef = useRef<NewThreadDraft | null>(null);
   const newThreadPromotionsRef = useRef(new Map<string, string>());
   const newThreadImageLeasesRef = useRef(new Map<string, number>());
+  /** Per-Project unsent welcome input, kept while the app window lives like
+   * Thread composer drafts: renderer-local, never journal or profile state. */
+  const retainedNewThreadDraftsRef = useRef(new Map<string, NewThreadDraft>());
   const projectPickerOperationEpoch = useRef(0);
   const projectPickerPendingRef = useRef(false);
   const projectPickerIntentRef = useRef<"add-project" | "new-thread" | null>(
@@ -720,6 +743,100 @@ export function App() {
     setNewThreadDraft(draft);
   };
 
+  const newThreadDraftRetentionKey = (workspace: string | null) =>
+    workspace ?? "";
+
+  const newThreadDraftHasUnsentInput = (draft: NewThreadDraft) =>
+    draft.composer.draft.text.trim().length > 0 ||
+    draft.composer.draft.images.length > 0 ||
+    newThreadImageLeasesRef.current.has(draft.id);
+
+  /** Leaving the welcome page keeps unsent input per Project, the way
+   * Thread Composer drafts survive navigation. In-flight submissions stay
+   * with the promotion/recovery-notice path instead. */
+  const retainNewThreadDraftUnsentInput = () => {
+    const current = newThreadDraftRef.current;
+    if (
+      current !== null &&
+      newThreadDraftHasUnsentInput(current) &&
+      current.composer.submission?.status !== "pending"
+    )
+      retainedNewThreadDraftsRef.current.set(
+        newThreadDraftRetentionKey(current.workspace),
+        current,
+      );
+  };
+
+  const takeRetainedNewThreadDraft = (
+    workspace: string | null,
+  ): NewThreadDraft | null => {
+    const key = newThreadDraftRetentionKey(workspace);
+    const retained = retainedNewThreadDraftsRef.current.get(key);
+    if (retained === undefined) return null;
+    retainedNewThreadDraftsRef.current.delete(key);
+    return retained;
+  };
+
+  const changeNewThreadProject = (
+    workspace: string,
+    carryDraftToNewProject = false,
+  ) => {
+    setModelUpdateError(null);
+    const current = newThreadDraftRef.current;
+    if (current === null || current.workspace === workspace) return;
+    if (
+      (!newThreadDraftHasUnsentInput(current) &&
+        current.composer.submission === null) ||
+      (carryDraftToNewProject &&
+        !retainedNewThreadDraftsRef.current.has(
+          newThreadDraftRetentionKey(workspace),
+        ))
+    ) {
+      // Only a genuinely new folder can carry the current input. Existing
+      // Projects restore their own draft through the same selection path.
+      const retained = takeRetainedNewThreadDraft(workspace);
+      if (retained !== null) {
+        confirmNewThreadDraft(retained);
+        return;
+      }
+      updateNewThreadDraft((draft) => ({
+        ...draft,
+        workspace,
+        composer: {
+          ...draft.composer,
+          submission:
+            draft.composer.submission?.status === "failed"
+              ? null
+              : draft.composer.submission,
+        },
+      }));
+      return;
+    }
+    if (current.composer.submission?.status === "pending") {
+      // An in-flight first Send keeps its draft identity so the
+      // promotion path can finish even while the Project moves.
+      updateNewThreadDraft((draft) => ({ ...draft, workspace }));
+      return;
+    }
+    // Each Project keeps its own unsent welcome input like an
+    // independent Thread: stash the current text under the old
+    // Project and swap in the target Project's retained draft.
+    if (newThreadDraftHasUnsentInput(current))
+      retainedNewThreadDraftsRef.current.set(
+        newThreadDraftRetentionKey(current.workspace),
+        current,
+      );
+    confirmNewThreadDraft(
+      takeRetainedNewThreadDraft(workspace) ?? {
+        id: crypto.randomUUID(),
+        workspace,
+        composer: emptyComposerState(),
+        settings: current.settings,
+        permissionMode: current.permissionMode,
+      },
+    );
+  };
+
   const openProjectPicker = (intent: "add-project" | "new-thread") => {
     projectPickerOperationEpoch.current += 1;
     projectPickerPendingRef.current = false;
@@ -737,6 +854,7 @@ export function App() {
   const abandonNewThreadDraft = () => {
     if (newThreadDraftRef.current === null) return;
     invalidateThreadSelection();
+    retainNewThreadDraftUnsentInput();
     confirmNewThreadDraft(null);
   };
 
@@ -846,6 +964,9 @@ export function App() {
     if (intent === null || projectPickerPendingRef.current) return;
     projectPickerPendingRef.current = true;
     const epoch = projectPickerOperationEpoch.current;
+    const existingProject = projectsRef.current.projects.some(
+      (project) => project.workspace === workspace,
+    );
     try {
       await window.zenx.settings.addWorkspace(workspace);
       if (projectPickerOperationEpoch.current !== epoch) return;
@@ -855,20 +976,7 @@ export function App() {
       if (intent === "new-thread") {
         const draft = newThreadDraftRef.current;
         if (draft === null) openNewThreadDraft(workspace);
-        else {
-          setModelUpdateError(null);
-          confirmNewThreadDraft({
-            ...draft,
-            workspace,
-            composer: {
-              ...draft.composer,
-              submission:
-                draft.composer.submission?.status === "failed"
-                  ? null
-                  : draft.composer.submission,
-            },
-          });
-        }
+        else changeNewThreadProject(workspace, !existingProject);
       }
     } catch (error) {
       if (projectPickerOperationEpoch.current === epoch)
@@ -903,11 +1011,16 @@ export function App() {
       });
   };
 
-  const resumeThread = async (threadId: string, preserveNavigation = false) => {
+  const resumeThread = async (
+    threadId: string,
+    preserveNavigation = false,
+    propagateFailure = false,
+  ) => {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
     pendingResumeProjectionRef.current = { epoch, threadId, notifications: [] };
+    retainNewThreadDraftUnsentInput();
     confirmNewThreadDraft(null);
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
@@ -928,7 +1041,11 @@ export function App() {
       const result = await window.zenx.protocol.request("zen/thread/resume", {
         threadId,
       });
-      if (selectionEpoch.current !== epoch) return;
+      if (selectionEpoch.current !== epoch) {
+        if (propagateFailure)
+          throw new Error(i18n.t("shell:importOpenSuperseded"));
+        return;
+      }
       const pending = pendingResumeProjectionRef.current;
       const notifications =
         pending?.epoch === epoch && pending.threadId === threadId
@@ -1001,6 +1118,7 @@ export function App() {
           pendingResumeProjectionRef.current = null;
         setThreadError(describeError(error));
       }
+      if (propagateFailure) throw error;
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -1395,16 +1513,29 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const dispose = window.zenx.titles.onChange(setTitleSnapshot);
-    void window.zenx.titles
-      .get()
-      .then(setTitleSnapshot)
-      .catch((error: unknown) =>
-        setRequestError(
-          i18n.t("shell:titleMetadataFailed", { error: describeError(error) }),
-        ),
-      );
-    return dispose;
+    let active = true;
+    let notified = false;
+    const dispose = window.zenx.titles.onChange((snapshot) => {
+      notified = true;
+      if (active) setTitleSnapshot(snapshot);
+    });
+    void window.zenx.titles.get().then(
+      (snapshot) => {
+        if (active && !notified) setTitleSnapshot(snapshot);
+      },
+      (error: unknown) => {
+        if (active && !notified)
+          setRequestError(
+            i18n.t("shell:titleMetadataFailed", {
+              error: describeError(error),
+            }),
+          );
+      },
+    );
+    return () => {
+      active = false;
+      dispose();
+    };
   }, []);
 
   useEffect(() => {
@@ -1417,6 +1548,8 @@ export function App() {
     return () => window.removeEventListener("keydown", close);
   }, [projectPickerIntent, sidebarOpen]);
 
+  const readPreference = useConversationReadPreference();
+  const unreadThreads = unreadThreadIds(threadSummaries, readPreference);
   const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
       ? summary
@@ -1469,6 +1602,8 @@ export function App() {
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
   );
+  const [roomHeaderTarget, setRoomHeaderTarget] =
+    useState<HTMLDivElement | null>(null);
   const roomPanel = roomQuery.get("panel");
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
@@ -1491,12 +1626,16 @@ export function App() {
     setSelectedSettings(null);
     setThreadError(null);
     setModelUpdateError(null);
-    confirmNewThreadDraft({
-      id: crypto.randomUUID(),
-      workspace,
-      composer: emptyComposerState(),
-      settings: defaultDraftSettings(models),
-    });
+    retainNewThreadDraftUnsentInput();
+    const retained = takeRetainedNewThreadDraft(workspace);
+    confirmNewThreadDraft(
+      retained ?? {
+        id: crypto.randomUUID(),
+        workspace,
+        composer: emptyComposerState(),
+        settings: defaultDraftSettings(models),
+      },
+    );
     void loadComposerCatalog();
   };
 
@@ -1573,6 +1712,14 @@ export function App() {
       }));
       return;
     }
+    for (const [key, retained] of retainedNewThreadDraftsRef.current) {
+      if (retained.id !== draftId) continue;
+      retainedNewThreadDraftsRef.current.set(key, {
+        ...retained,
+        composer: update(retained.composer),
+      });
+      return;
+    }
     const threadId = newThreadPromotionsRef.current.get(draftId);
     if (threadId !== undefined) updateComposer(threadId, update);
   };
@@ -1606,10 +1753,9 @@ export function App() {
         )
         .then((projection) => {
           if (projection !== undefined)
-            setTitleSnapshot((current) => ({
-              ...current,
-              [threadId]: projection,
-            }));
+            setTitleSnapshot((current) =>
+              applyThreadTitleReceipt(current, projection),
+            );
         })
         .catch((error: unknown) =>
           setRequestError(
@@ -1621,10 +1767,7 @@ export function App() {
     if (skillDraft.skills.length > 0) {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
-      if (
-        (submission.intent === "steer" || submission.intent === "replace") &&
-        submission.expectedTurnId === null
-      )
+      if (submission.intent === "replace" && submission.expectedTurnId === null)
         throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSending"));
       const input: (
         | import("../../../../../src/item.js").UserInputPart
@@ -1639,9 +1782,12 @@ export function App() {
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         input,
-        mode: submission.intent,
+        ...(submission.intent === "start" || submission.intent === "steer"
+          ? {}
+          : { mode: submission.intent }),
         clientUserMessageId: submission.clientUserMessageId,
-        ...(submission.expectedTurnId === null
+        ...(submission.intent !== "replace" ||
+        submission.expectedTurnId === null
           ? {}
           : { expectedTurnId: submission.expectedTurnId }),
       });
@@ -1651,14 +1797,22 @@ export function App() {
       ...submission,
       text: messageText,
     });
-    if (submission.intent === "start") {
+    if (submission.intent === "start" || submission.intent === "steer") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
           i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
-      await window.zenx.protocol.request("turn/start", {
+      await window.zenx.protocol.request("zen/turn/send", {
         threadId,
-        input,
+        input: input.map((part) =>
+          part.type === "attachment"
+            ? { type: "image" as const, attachment: part.attachment }
+            : part.type === "text"
+              ? part
+              : (() => {
+                  throw new Error(i18n.t("shell:unsupportedBatchInputPart"));
+                })(),
+        ),
         clientUserMessageId: submission.clientUserMessageId,
       });
     } else if (submission.intent === "batch-next") {
@@ -1683,19 +1837,6 @@ export function App() {
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       await window.zenx.protocol.request("turn/queue", {
         threadId,
-        input,
-        clientUserMessageId: submission.clientUserMessageId,
-      });
-    } else if (submission.intent === "steer") {
-      if (submission.expectedTurnId === null)
-        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSteering"));
-      if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error(
-          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
-        );
-      await window.zenx.protocol.request("turn/steer", {
-        threadId,
-        expectedTurnId: submission.expectedTurnId,
         input,
         clientUserMessageId: submission.clientUserMessageId,
       });
@@ -1842,6 +1983,7 @@ export function App() {
         setThreadAttachments({});
         setThreadUsage(undefined);
         setSelectedSettings(createdProjection.settings);
+        retainedNewThreadDraftsRef.current.delete(workspace);
         confirmNewThreadDraft(null);
       }
       void window.zenx.settings
@@ -2269,10 +2411,7 @@ export function App() {
 
   const renameThread = async (threadId: string, title: string) => {
     const projection = await window.zenx.titles.rename(threadId, title);
-    setTitleSnapshot((current) => ({
-      ...current,
-      [threadId]: projection,
-    }));
+    setTitleSnapshot((current) => applyThreadTitleReceipt(current, projection));
   };
 
   const changeThreadPinned = async (summary: NativeThreadSummary) => {
@@ -2442,10 +2581,7 @@ export function App() {
   const retrySelectedTitle = async () => {
     if (selectedSummary === null) return;
     const projection = await window.zenx.titles.retry(selectedSummary.threadId);
-    setTitleSnapshot((current) => ({
-      ...current,
-      [selectedSummary.threadId]: projection,
-    }));
+    setTitleSnapshot((current) => applyThreadTitleReceipt(current, projection));
   };
 
   const changeComposerSendMode = async (
@@ -2615,6 +2751,16 @@ export function App() {
                   })
             }
             title={selectedRoom?.name ?? genericPluginTarget.title}
+            actions={
+              genericPluginTarget.pluginId === "zenx-rooms" &&
+              genericPluginTarget.route === ROOM_ROUTE &&
+              selectedRoomId !== null ? (
+                <div
+                  className="room-title-actions-host"
+                  ref={setRoomHeaderTarget}
+                />
+              ) : undefined
+            }
           />
         ) : null}
       </WindowTitleBar>
@@ -2657,6 +2803,8 @@ export function App() {
         </button>
       ) : null}
       <Sidebar
+        triggerAdmissionId={sidebarTriggerAdmissionId(pluginSnapshot)}
+        unreadThreadIds={unreadThreads}
         roomConversations={roomsAdmitted ? roomConversations : undefined}
         selectedRoomId={selectedRoomId}
         collapsed={sidebarCollapsed}
@@ -2699,8 +2847,22 @@ export function App() {
             ),
           )
         }
+        onReorderPinnedThread={(sourceThreadId, targetThreadId, placement) =>
+          queuePinMutation((current) =>
+            movePinnedThreadIds(
+              current,
+              sourceThreadId,
+              targetThreadId,
+              placement,
+            ),
+          )
+        }
         onNewThread={(workspace) => {
           openNewThreadDraft(workspace);
+        }}
+        onImportSession={() => {
+          setImportSessionOpen(true);
+          void loadComposerCatalog();
         }}
         onAddProject={() => openProjectPicker("add-project")}
         newThreadDisabled={newThreadPending}
@@ -2786,6 +2948,9 @@ export function App() {
                 setThreadUsage(undefined);
                 setSelectedSettings(null);
                 setThreadError(null);
+                // Restoring over a visible welcome page keeps whatever the
+                // user already typed there under its own Project.
+                retainNewThreadDraftUnsentInput();
                 confirmNewThreadDraft(draftRecoveryNotice.draft);
                 discardRecoverableDraft();
               }}
@@ -2845,16 +3010,20 @@ export function App() {
           {page === "settings" ? null : genericPluginTarget !== undefined &&
             pluginSnapshot !== null ? (
             <ImZenXDraftContext.Provider value={imzenxDrafts}>
-              <PluginProductPage
-                context={
-                  genericPluginTarget.pluginId === "zenx-rooms"
-                    ? { primaryNavigation: true }
-                    : undefined
-                }
-                snapshot={pluginSnapshot}
-                route={page}
-                navigate={openPage}
-              />
+              <RoomHeaderContext.Provider
+                value={{ roomId: selectedRoomId, element: roomHeaderTarget }}
+              >
+                <PluginProductPage
+                  context={
+                    genericPluginTarget.pluginId === "zenx-rooms"
+                      ? { primaryNavigation: true }
+                      : undefined
+                  }
+                  snapshot={pluginSnapshot}
+                  route={page}
+                  navigate={openPage}
+                />
+              </RoomHeaderContext.Provider>
             </ImZenXDraftContext.Provider>
           ) : (
             <AgentSurface
@@ -2927,20 +3096,7 @@ export function App() {
               }
               onNewThreadModelChange={changeNewThreadModel}
               onNewThreadReasoningChange={changeNewThreadReasoning}
-              onNewThreadProjectChange={(workspace) => {
-                setModelUpdateError(null);
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  workspace,
-                  composer: {
-                    ...current.composer,
-                    submission:
-                      current.composer.submission?.status === "failed"
-                        ? null
-                        : current.composer.submission,
-                  },
-                }));
-              }}
+              onNewThreadProjectChange={changeNewThreadProject}
               onAddNewThreadProject={() => openProjectPicker("new-thread")}
               onImportImages={async (threadId, files) => {
                 const imports = await Promise.all(
@@ -3076,6 +3232,7 @@ export function App() {
               threads={[...activeSummaries, ...archivedSummaries]}
               snapshot={pluginSnapshot}
               section={roomPanel === "open" ? "" : roomPanel}
+              sectionRequest={roomQuery.get("request") ?? undefined}
               navigate={openPage}
               onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
             />
@@ -3157,6 +3314,17 @@ export function App() {
         </main>
       </RoomDraftContext.Provider>
 
+      {importSessionOpen && (
+        <SessionImportDialog
+          models={models}
+          initialCwd={lastUsedWorkspace ?? ""}
+          onClose={() => setImportSessionOpen(false)}
+          onImported={async (id) => {
+            await Promise.all([loadThreadSummaries(), loadProjects()]);
+            await resumeThread(id, false, true);
+          }}
+        />
+      )}
       {editingProject !== null ? (
         <ProjectEditor
           workspace={editingProject.workspace}
@@ -3329,6 +3497,7 @@ function ConversationTitleBar({
               navigate={onNavigate}
             />
             <ThreadTitleEditor
+              key={selectedSummary.threadId}
               editable={!selectedSummary.archived}
               onRename={onRename}
               onRetry={onRetryTitle}
@@ -3372,10 +3541,12 @@ function PageTitleBar({
   onOpenSidebar,
   subtitle,
   title,
+  actions,
 }: {
   onOpenSidebar(): void;
   subtitle: string;
   title: string;
+  actions?: ReactNode;
 }) {
   return (
     <div className="workspace-header">
@@ -3390,9 +3561,10 @@ function PageTitleBar({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{subtitle}</p>
+          {subtitle !== title ? <p>{subtitle}</p> : null}
         </div>
       </div>
+      {actions}
     </div>
   );
 }
@@ -3623,7 +3795,13 @@ function AgentSurface({
               composerContext={
                 <div className="new-thread-composer-context">
                   {machineControl}
-                  <NewThreadProjectContext
+                  <NewThreadProjectSelector
+                    variant="chip"
+                    disabled={
+                      newThreadDraft.composer.submission?.status === "pending"
+                    }
+                    onAddProject={onAddNewThreadProject}
+                    onChange={onNewThreadProjectChange}
                     projects={configuredProjects}
                     selectedWorkspace={newThreadDraft.workspace}
                   />
@@ -3636,7 +3814,7 @@ function AgentSurface({
                     role="heading"
                     aria-level={2}
                   >
-                    {i18n.t("shell:whatShouldWeBuildIn")}{" "}
+                    {i18n.t("shell:whatShouldWeBuildInStart")}{" "}
                     <NewThreadProjectSelector
                       disabled={
                         newThreadDraft.composer.submission?.status === "pending"
@@ -3646,7 +3824,7 @@ function AgentSurface({
                       projects={configuredProjects}
                       selectedWorkspace={newThreadDraft.workspace}
                     />
-                    ?
+                    {i18n.t("shell:whatShouldWeBuildInEnd")}
                   </div>
                 </div>
               }
@@ -3829,14 +4007,21 @@ function NewThreadProjectSelector({
   onChange,
   projects,
   selectedWorkspace,
+  variant = "heading",
 }: {
   disabled: boolean;
   onAddProject(): void;
   onChange(workspace: string): void;
   projects: readonly ZenXProjectProjectionEntry[];
   selectedWorkspace: string | null;
+  /** "heading" is the inline underlined name in the welcome sentence;
+   * "chip" is the Composer-context trigger that matches the machine
+   * switcher. Both open the same searchable Project popover. */
+  variant?: "heading" | "chip";
 }) {
-  const [open, setOpen] = useState(selectedWorkspace === null);
+  const [open, setOpen] = useState(
+    variant !== "chip" && selectedWorkspace === null,
+  );
   const [query, setQuery] = useState("");
   const [popoverLayout, setPopoverLayout] = useState<{
     placement: "above" | "below";
@@ -3881,7 +4066,7 @@ function NewThreadProjectSelector({
   }, [open]);
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || variant === "chip") return;
     const updatePopoverLayout = () => {
       const trigger = triggerRef.current;
       if (trigger === null) return;
@@ -3950,12 +4135,17 @@ function NewThreadProjectSelector({
   }, [disabled, open]);
 
   useEffect(() => {
+    if (variant !== "heading") return;
     if (selectedWorkspace === null && !disabled) setOpen(true);
-  }, [disabled, selectedWorkspace]);
+  }, [disabled, selectedWorkspace, variant]);
 
   useEffect(() => {
     if (!open) return;
     queueMicrotask(() => searchRef.current?.focus());
+    // The Composer-context chip is a portaled Radix Popover: Radix already
+    // owns outside interaction and Escape; manual listeners would close it
+    // before a portal click reaches its target.
+    if (variant === "chip") return;
     const onPointerDown = (event: PointerEvent) => {
       if (rootRef.current?.contains(event.target as Node)) return;
       const focusWasInPopover = rootRef.current?.contains(
@@ -3986,27 +4176,169 @@ function NewThreadProjectSelector({
     (direction === "selected" ? (selected ?? first) : first)?.focus();
   };
 
+  const trigger = (
+    <button
+      ref={triggerRef}
+      className={`new-thread-project-trigger${
+        variant === "chip" ? " new-thread-project-trigger-chip" : ""
+      }`}
+      type="button"
+      aria-controls={open ? popoverId : undefined}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-label={
+        selectedWorkspace === null
+          ? i18n.t("shell:chooseAProject")
+          : i18n.t("shell:changeCurrentProject", {
+              project: selectedWorkspace,
+            })
+      }
+      disabled={disabled}
+      title={
+        variant === "chip" && selectedWorkspace !== null
+          ? selectedWorkspace
+          : undefined
+      }
+      onClick={() => {
+        if (variant === "chip") return;
+        if (open) closeMenu(false);
+        else setOpen(true);
+      }}
+    >
+      {variant === "chip" ? (
+        <>
+          <Icon name="folder" size={13} />
+          <span>{selectedLabel}</span>
+        </>
+      ) : (
+        selectedLabel
+      )}
+    </button>
+  );
+
+  const popoverContent = (
+    <>
+      <label className="new-thread-project-search">
+        <Icon name="search" size={13} />
+        <span className="sr-only">{i18n.t("shell:searchProjects")}</span>
+        <input
+          ref={searchRef}
+          type="search"
+          value={query}
+          placeholder={i18n.t("shell:searchProjects")}
+          aria-label={i18n.t("shell:searchProjects")}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            event.preventDefault();
+            focusProject(event.key === "ArrowUp" ? "selected" : "first");
+          }}
+        />
+      </label>
+      <div
+        ref={menuRef}
+        className="new-thread-project-menu"
+        role="menu"
+        aria-label={i18n.t("shell:chooseAProject")}
+        onKeyDown={(event) => {
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
+            return;
+          const options = Array.from(
+            event.currentTarget.querySelectorAll<HTMLButtonElement>(
+              '[role="menuitemradio"]',
+            ),
+          );
+          if (options.length === 0) return;
+          event.preventDefault();
+          const currentIndex = options.indexOf(
+            document.activeElement as HTMLButtonElement,
+          );
+          const nextIndex =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? options.length - 1
+                : currentIndex === -1
+                  ? event.key === "ArrowUp"
+                    ? options.length - 1
+                    : 0
+                  : event.key === "ArrowUp"
+                    ? (currentIndex - 1 + options.length) % options.length
+                    : (currentIndex + 1) % options.length;
+          options[nextIndex]?.focus();
+        }}
+      >
+        {filteredProjects.map((project) => {
+          const selected = project.workspace === selectedWorkspace;
+          return (
+            <button
+              key={project.key}
+              type="button"
+              role="menuitemradio"
+              aria-checked={selected}
+              aria-label={`${selected ? i18n.t("shell:selectedProject") : i18n.t("shell:selectProject")}: ${project.workspace}`}
+              title={project.workspace}
+              onClick={() => {
+                onChange(project.workspace);
+                closeMenu(true);
+              }}
+            >
+              <Icon name="folder" size={13} />
+              <span>{projectDisplayLabel(project.workspace, projects)}</span>
+              {selected ? <Icon name="check" size={13} /> : null}
+            </button>
+          );
+        })}
+        {filteredProjects.length === 0 ? (
+          <p className="new-thread-project-empty">
+            {i18n.t("shell:noProjectsFound")}
+          </p>
+        ) : null}
+      </div>
+      <div className="new-thread-project-actions">
+        <div className="new-thread-project-separator" role="separator" />
+        <button
+          className="new-thread-project-add"
+          type="button"
+          onClick={() => {
+            closeMenu(false);
+            onAddProject();
+          }}
+        >
+          <Icon name="folder-plus" size={13} />
+          <span>{i18n.t("shell:addProject")}</span>
+        </button>
+      </div>
+    </>
+  );
+
+  if (variant === "chip")
+    return (
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          if (next) setOpen(true);
+          else closeMenu(true);
+        }}
+      >
+        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+        <PopoverContent
+          className="new-thread-project-popover-portal"
+          align="center"
+          side="top"
+          sideOffset={8}
+          id={popoverId}
+          role="dialog"
+          aria-label={i18n.t("shell:switchProject")}
+        >
+          {popoverContent}
+        </PopoverContent>
+      </Popover>
+    );
+
   return (
     <div className="new-thread-project-switcher" ref={rootRef}>
-      <button
-        ref={triggerRef}
-        className="new-thread-project-trigger"
-        type="button"
-        aria-controls={open ? popoverId : undefined}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={
-          selectedWorkspace === null
-            ? i18n.t("shell:chooseAProject")
-            : i18n.t("shell:changeCurrentProject", {
-                project: selectedWorkspace,
-              })
-        }
-        disabled={disabled}
-        onClick={() => (open ? closeMenu(false) : setOpen(true))}
-      >
-        {selectedLabel}
-      </button>
+      {trigger}
       {open ? (
         <div
           className="new-thread-project-popover"
@@ -4028,136 +4360,9 @@ function NewThreadProjectSelector({
             }
           }}
         >
-          <label className="new-thread-project-search">
-            <Icon name="search" size={13} />
-            <span className="sr-only">{i18n.t("shell:searchProjects")}</span>
-            <input
-              ref={searchRef}
-              type="search"
-              value={query}
-              placeholder={i18n.t("shell:searchProjects")}
-              aria-label={i18n.t("shell:searchProjects")}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
-                  return;
-                event.preventDefault();
-                focusProject(event.key === "ArrowUp" ? "selected" : "first");
-              }}
-            />
-          </label>
-          <div
-            ref={menuRef}
-            className="new-thread-project-menu"
-            role="menu"
-            aria-label={i18n.t("shell:chooseAProject")}
-            onKeyDown={(event) => {
-              if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
-                return;
-              const options = Array.from(
-                event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                  '[role="menuitemradio"]',
-                ),
-              );
-              if (options.length === 0) return;
-              event.preventDefault();
-              const currentIndex = options.indexOf(
-                document.activeElement as HTMLButtonElement,
-              );
-              const nextIndex =
-                event.key === "Home"
-                  ? 0
-                  : event.key === "End"
-                    ? options.length - 1
-                    : currentIndex === -1
-                      ? event.key === "ArrowUp"
-                        ? options.length - 1
-                        : 0
-                      : event.key === "ArrowUp"
-                        ? (currentIndex - 1 + options.length) % options.length
-                        : (currentIndex + 1) % options.length;
-              options[nextIndex]?.focus();
-            }}
-          >
-            {filteredProjects.map((project) => {
-              const selected = project.workspace === selectedWorkspace;
-              return (
-                <button
-                  key={project.key}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={selected}
-                  aria-label={`${selected ? i18n.t("shell:selectedProject") : i18n.t("shell:selectProject")}: ${project.workspace}`}
-                  title={project.workspace}
-                  onClick={() => {
-                    onChange(project.workspace);
-                    closeMenu(true);
-                  }}
-                >
-                  <Icon name="folder" size={13} />
-                  <span>
-                    {projectDisplayLabel(project.workspace, projects)}
-                  </span>
-                  {selected ? <Icon name="check" size={13} /> : null}
-                </button>
-              );
-            })}
-            {filteredProjects.length === 0 ? (
-              <p className="new-thread-project-empty">
-                {i18n.t("shell:noProjectsFound")}
-              </p>
-            ) : null}
-          </div>
-          <div className="new-thread-project-actions">
-            <div className="new-thread-project-separator" role="separator" />
-            <button
-              className="new-thread-project-add"
-              type="button"
-              onClick={() => {
-                closeMenu(false);
-                onAddProject();
-              }}
-            >
-              <Icon name="folder-plus" size={13} />
-              <span>{i18n.t("shell:addProject")}</span>
-            </button>
-          </div>
+          {popoverContent}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function NewThreadProjectContext({
-  projects,
-  selectedWorkspace,
-}: {
-  projects: readonly ZenXProjectProjectionEntry[];
-  selectedWorkspace: string | null;
-}) {
-  const selectedProject = projects.find(
-    (project) => project.workspace === selectedWorkspace,
-  );
-  const selectedLabel =
-    selectedWorkspace === null
-      ? i18n.t("shell:chooseAProject")
-      : selectedProject === undefined
-        ? i18n.t("shell:projectUnavailable", {
-            project: projectLabel(selectedWorkspace),
-          })
-        : projectDisplayLabel(selectedProject.workspace, projects);
-  return (
-    <div
-      className="new-thread-project-context"
-      aria-label={
-        selectedWorkspace === null
-          ? i18n.t("shell:noProjectSelected")
-          : i18n.t("shell:selectedProjectPath", { project: selectedWorkspace })
-      }
-      title={selectedWorkspace ?? undefined}
-    >
-      <Icon name="folder" size={13} />
-      <span>{selectedLabel}</span>
     </div>
   );
 }
