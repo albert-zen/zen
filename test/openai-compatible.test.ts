@@ -1258,6 +1258,34 @@ test("normalizes HTTP and streaming provider errors without leaking secrets", as
   });
 });
 
+test("HTTP failures surface the provider message with credentials redacted", async () => {
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "invalid_request_error",
+            message: `rejected: suspicious key ${fakeKey} in payload`,
+          },
+        }),
+        { status: 400, headers: { "x-request-id": "req-400" } },
+      )) as typeof fetch,
+  });
+
+  await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
+    assert.ok(error instanceof OpenAiCompatibleModelError);
+    assert.equal(error.kind, "http");
+    assert.equal(error.status, 400);
+    assert.equal(error.retryable, false);
+    assert.match(error.message, /HTTP 400: rejected: suspicious key/u);
+    assert.equal(error.message.includes(fakeKey), false);
+    assert.match(error.message, /req-400/u);
+    return true;
+  });
+});
+
 test("propagates aborts during stream consumption", async () => {
   const controller = new AbortController();
   const response = new Response(

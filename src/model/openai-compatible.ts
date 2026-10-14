@@ -202,11 +202,22 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     if (!response.ok) {
       const providerError = await readProviderError(response);
       const requestId = safeRequestId(response.headers, this.#apiKey);
+      // Surface the provider's own reason (bounded, credential-redacted);
+      // without it a bare status like 400 is indistinguishable from a dozen
+      // different causes.
+      const providerMessage =
+        providerError.message === undefined
+          ? undefined
+          : providerError.message
+              .split(this.#apiKey)
+              .join("[redacted]")
+              .split(JSON.stringify(this.#apiKey).slice(1, -1))
+              .join("[redacted]");
       throw new OpenAiCompatibleModelError(
         "http",
         `OpenAI-compatible model request failed with HTTP ${response.status}${
-          requestId === undefined ? "" : ` (request ${requestId})`
-        }`,
+          providerMessage === undefined ? "" : `: ${providerMessage}`
+        }${requestId === undefined ? "" : ` (request ${requestId})`}`,
         {
           status: response.status,
           ...(requestId === undefined ? {} : { requestId }),
@@ -440,7 +451,7 @@ function shouldReplayReasoning(
 
 async function readProviderError(
   response: Response,
-): Promise<{ explicitlyRejectsImageInput: boolean }> {
+): Promise<{ explicitlyRejectsImageInput: boolean; message?: string }> {
   let text: string;
   try {
     text = (await response.text()).slice(0, 16_384);
@@ -476,6 +487,7 @@ async function readProviderError(
         /not supported|unsupported|does not accept|invalid.*(?:image|content[_ -]?type)/u.test(
           detail,
         ),
+      ...(message === undefined ? {} : { message }),
     };
   } catch {
     return { explicitlyRejectsImageInput: false };
