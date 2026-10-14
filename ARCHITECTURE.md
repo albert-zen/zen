@@ -384,6 +384,9 @@
   瞬时且 fail-closed 的 acquire→dispatch fence，先把 Page/Runtime domain enable 作为精确 attachment setup barrier，
   再在每个 awaited setup 步骤后及发送 page code 前按有序 CDP 事件流原子重验；它不进入 Zen Core 或 durable journal，
   且 mutation 已发送后的失效继续使用 outcome-unknown/taint 与 lease 语义。
+  Attachment setup 从 attach 开始共享一个 10 秒总预算；Page/Runtime enable 各只发送一次，所有调用者等待同一
+  setup barrier，且每个 CDP 响应必须匹配请求的精确 session route。该预算是有限启动等待契约，不承诺冻结 renderer
+  会恢复；setup 过期/取消仍保留 unknown 并补偿 detach，导航/页代码/Input 的既有 2 秒 outcome deadline 不变。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA JSON
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。

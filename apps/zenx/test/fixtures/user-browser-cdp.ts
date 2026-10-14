@@ -284,14 +284,17 @@ export async function createFakeCdpServer(
     | {
         socket: WebSocket;
         id: number;
+        sessionId?: string;
         response:
           { result: { sessionId: string } } | { error: { message: string } };
       }
     | undefined;
   let lateActionReply:
-    { socket: WebSocket; id: number; result: unknown } | undefined;
+    | { socket: WebSocket; id: number; sessionId?: string; result: unknown }
+    | undefined;
   let lateConfirmationReply:
-    { socket: WebSocket; id: number; result: unknown } | undefined;
+    | { socket: WebSocket; id: number; sessionId?: string; result: unknown }
+    | undefined;
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/json/list") {
@@ -335,7 +338,13 @@ export async function createFakeCdpServer(
       requests.push({ method: request.method, params: request.params });
       commandRequests.push(request);
       await requestHook?.(request, (event) =>
-        socket.send(JSON.stringify(event)),
+        socket.send(
+          JSON.stringify(
+            typeof event.id === "number"
+              ? { sessionId: request.sessionId, ...event }
+              : event,
+          ),
+        ),
       );
       let result: unknown = {};
       if (request.method === "Target.getTargets") {
@@ -371,6 +380,7 @@ export async function createFakeCdpServer(
           lateAttachReply = {
             socket,
             id: request.id,
+            sessionId: request.sessionId,
             response: { error: { message: "known late attach failure" } },
           };
           return;
@@ -380,6 +390,7 @@ export async function createFakeCdpServer(
           socket.send(
             JSON.stringify({
               id: request.id,
+              sessionId: request.sessionId,
               error: { message: "known attach failure" },
             }),
           );
@@ -409,6 +420,7 @@ export async function createFakeCdpServer(
           lateAttachReply = {
             socket,
             id: request.id,
+            sessionId: request.sessionId,
             response: { result: { sessionId: latestSession } },
           };
           return;
@@ -419,6 +431,7 @@ export async function createFakeCdpServer(
           socket.send(
             JSON.stringify({
               id: request.id,
+              sessionId: request.sessionId,
               error: { message: "known enable failure" },
             }),
           );
@@ -434,6 +447,7 @@ export async function createFakeCdpServer(
           socket.send(
             JSON.stringify({
               id: request.id,
+              sessionId: request.sessionId,
               error: { message: "known Runtime.enable failure" },
             }),
           );
@@ -468,7 +482,13 @@ export async function createFakeCdpServer(
         if (holdLiveCapture) {
           holdLiveCapture = false;
           liveCaptureReply = () =>
-            socket.send(JSON.stringify({ id: request.id, result }));
+            socket.send(
+              JSON.stringify({
+                id: request.id,
+                sessionId: request.sessionId,
+                result,
+              }),
+            );
           return;
         }
       } else if (
@@ -500,7 +520,13 @@ export async function createFakeCdpServer(
             postBarrierInvalidation.event,
             runtimeEnabledSessions,
           );
-          socket.send(JSON.stringify({ id: request.id, result }));
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              sessionId: request.sessionId,
+              result,
+            }),
+          );
           return;
         }
         if (setupInvalidation?.phase === "before-frame-tree-response") {
@@ -516,7 +542,13 @@ export async function createFakeCdpServer(
         if (setupInvalidation?.phase === "after-frame-tree") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
-          socket.send(JSON.stringify({ id: request.id, result }));
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              sessionId: request.sessionId,
+              result,
+            }),
+          );
           emitSetupInvalidation(
             socket,
             request.sessionId,
@@ -547,7 +579,13 @@ export async function createFakeCdpServer(
         if (setupInvalidation?.phase === "after-isolated-world") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
-          socket.send(JSON.stringify({ id: request.id, result }));
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              sessionId: request.sessionId,
+              result,
+            }),
+          );
           emitSetupInvalidation(
             socket,
             request.sessionId,
@@ -638,13 +676,23 @@ export async function createFakeCdpServer(
         }
         if (isAction && holdActionReply) {
           holdActionReply = false;
-          lateActionReply = { socket, id: request.id, result };
+          lateActionReply = {
+            socket,
+            id: request.id,
+            sessionId: request.sessionId,
+            result,
+          };
           heldActionStarted.resolve();
           return;
         }
         if (isConfirmation && holdConfirmationReply) {
           holdConfirmationReply = false;
-          lateConfirmationReply = { socket, id: request.id, result };
+          lateConfirmationReply = {
+            socket,
+            id: request.id,
+            sessionId: request.sessionId,
+            result,
+          };
           heldConfirmationStarted.resolve();
           return;
         }
@@ -663,7 +711,13 @@ export async function createFakeCdpServer(
         detachedSessionIds.push(sessionId);
         sessionTargets.delete(sessionId);
       }
-      socket.send(JSON.stringify({ id: request.id, result }));
+      socket.send(
+        JSON.stringify({
+          id: request.id,
+          sessionId: request.sessionId,
+          result,
+        }),
+      );
     });
   });
   const port = await listen(server);
@@ -759,7 +813,13 @@ export async function createFakeCdpServer(
       lateActionReply = undefined;
       actionResponseSent = true;
       if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
-        late.socket.send(JSON.stringify({ id: late.id, result: late.result }));
+        late.socket.send(
+          JSON.stringify({
+            id: late.id,
+            sessionId: late.sessionId,
+            result: late.result,
+          }),
+        );
       }
     },
     actionResponseSent: () => actionResponseSent,
@@ -772,7 +832,13 @@ export async function createFakeCdpServer(
       lateConfirmationReply = undefined;
       confirmationResponseSent = true;
       if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
-        late.socket.send(JSON.stringify({ id: late.id, result: late.result }));
+        late.socket.send(
+          JSON.stringify({
+            id: late.id,
+            sessionId: late.sessionId,
+            result: late.result,
+          }),
+        );
       }
     },
     confirmationResponseSent: () => confirmationResponseSent,
