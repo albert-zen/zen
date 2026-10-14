@@ -539,7 +539,7 @@ test("browser dispatches credential-looking URLs without provider classifiers", 
   ]);
 });
 
-test("browser advertises a cross-platform dedicated background-safe provider", () => {
+test("browser advertises targeted cross-platform background operations", () => {
   assert.deepEqual(browserCapabilityManifest.provider.platforms, [
     "darwin",
     "win32",
@@ -1000,4 +1000,35 @@ test("pointer cleanup failure cannot turn a completed scroll into an action fail
   } finally {
     dom.window.close();
   }
+});
+
+test("open observe preserves grouping status without replaying a successfully created tab", async () => {
+  const backend = browserBackend([]);
+  let opens = 0;
+  backend.open = async (sessionId, url) => {
+    opens++;
+    return {
+      sessionId,
+      tabId: "tab-1",
+      title: "Fixture",
+      url,
+      loading: false,
+      grouping: {
+        status: "failed",
+        reason: "Group unavailable; created tab remains usable",
+      },
+    };
+  };
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const result = (await capability.invoke(
+    "browser_open",
+    invocation({
+      sessionId: "research",
+      url: "https://example.test",
+      observe: true,
+    }),
+  )) as BrowserInspection;
+  assert.equal(opens, 1);
+  assert.equal(result.grouping?.status, "failed");
+  assert.equal(result.observationId, "observation-1");
 });

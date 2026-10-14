@@ -742,8 +742,18 @@ export async function probePeekabooCli(
 function playwrightBrowserManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(browserCapabilityManifest),
+    version: "1.0.5",
     description:
       "A cross-platform isolated Playwright CLI browser session with bounded ARIA inspection and native auto-waiting actions.",
+    permissions: browserCapabilityManifest.permissions.map((permission) =>
+      permission.id === "browser.interact"
+        ? {
+            ...permission,
+            description:
+              "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
+          }
+        : structuredClone(permission),
+    ),
     provider: {
       id: "playwright-cli",
       platforms: ["darwin", "win32", "linux"],
@@ -757,19 +767,24 @@ function playwrightBrowserManifest(): ZenXPluginManifestV2 {
         "dom.interact",
       ],
     },
-    tools: browserCapabilityManifest.tools.map((tool) => ({
-      ...structuredClone(tool),
-      interactionMode: "isolated",
-      capabilities: [
-        "playwright_cli",
-        "headless",
-        "browser_context",
-        ...tool.capabilities.filter(
-          (capability) =>
-            capability !== "dedicated_profile" && capability !== "cdp",
-        ),
-      ],
-    })),
+    tools: browserCapabilityManifest.tools
+      .filter(
+        (tool) =>
+          !["browser_pointer_click", "browser_key_press"].includes(tool.name),
+      )
+      .map((tool) => ({
+        ...structuredClone(tool),
+        interactionMode: "isolated",
+        capabilities: [
+          "playwright_cli",
+          "headless",
+          "browser_context",
+          ...tool.capabilities.filter(
+            (capability) =>
+              capability !== "dedicated_profile" && capability !== "cdp",
+          ),
+        ],
+      })),
   };
 }
 

@@ -15,6 +15,10 @@ import {
 } from "./capabilities/user-browser-provider.js";
 
 const ALLOWED_TAB_COMMANDS = new Set([
+  "DOM.describeNode",
+  "Runtime.releaseObject",
+  "Input.dispatchMouseEvent",
+  "Input.dispatchKeyEvent",
   "Page.captureScreenshot",
   "Page.createIsolatedWorld",
   "Page.enable",
@@ -34,6 +38,8 @@ const ALLOWED_TAB_EVENTS = new Set([
   "Page.frameStartedLoading",
   "Page.frameStartedNavigating",
   "Page.navigatedWithinDocument",
+  "Page.javascriptDialogOpening",
+  "Page.javascriptDialogClosed",
   "Page.screencastFrame",
   "Runtime.executionContextCreated",
   "Runtime.executionContextDestroyed",
