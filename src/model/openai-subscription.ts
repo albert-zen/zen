@@ -1,5 +1,9 @@
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import { fetchModelResponse } from "./request-retry.js";
+import {
+  isRetryableModelSampleError,
+  retryableModelSampleError,
+} from "../model.js";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -138,7 +142,9 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       );
     }
     if (response.body === null) {
-      throw new Error("OpenAI subscription model response had no stream body");
+      throw retryableModelSampleError(
+        "OpenAI subscription model response had no stream body",
+      );
     }
 
     yield* parseResponsesStream(
@@ -610,7 +616,7 @@ async function* parseResponsesStream(
       state.terminalSeen = true;
       const response = recordField(event, "response");
       if (response === undefined || response.status !== "completed") {
-        throw new Error(
+        throw retryableModelSampleError(
           "OpenAI subscription response ended without completed status",
         );
       }
@@ -638,7 +644,7 @@ async function* parseResponsesStream(
   }
 
   if (!state.terminalSeen) {
-    throw new Error(
+    throw retryableModelSampleError(
       "OpenAI subscription stream ended without a terminal response event",
     );
   }
@@ -746,12 +752,12 @@ async function* finishOutputItem(
     const toolName = name ?? slot.name;
     assertProviderToolName(toolName);
     if (!allowedToolNames.has(toolName)) {
-      throw new Error(
+      throw retryableModelSampleError(
         `OpenAI subscription model requested unavailable tool: ${toolName}`,
       );
     }
     if ((slot.type === "custom_tool_call") !== rawToolNames.has(toolName)) {
-      throw new Error(
+      throw retryableModelSampleError(
         "OpenAI subscription model returned mismatched tool input format",
       );
     }
@@ -793,7 +799,7 @@ function customInputField(
 ): string | undefined {
   const value = item[field];
   if (value !== undefined && typeof value !== "string") {
-    throw new Error(
+    throw retryableModelSampleError(
       "OpenAI subscription model returned invalid custom tool input",
     );
   }
@@ -908,6 +914,22 @@ async function* readSse(
     }
     buffer += decoder.decode();
     yield* consumeLines(true);
+  } catch (error) {
+    // Downstream parse failures arrive here through yield points; they are
+    // already classified. Aborts stay interrupts. Only raw transport failures
+    // need wrapping.
+    if (
+      signal.aborted ||
+      (error instanceof DOMException && error.name === "AbortError") ||
+      isRetryableModelSampleError(error)
+    ) {
+      throw error;
+    }
+    throw retryableModelSampleError(
+      `OpenAI subscription model stream read failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   } finally {
     signal.removeEventListener("abort", abort);
     if (!reachedEof) {
@@ -922,10 +944,14 @@ function parseEvent(payload: string): Record<string, unknown> {
   try {
     value = JSON.parse(payload);
   } catch {
-    throw new Error("OpenAI subscription stream contained invalid JSON");
+    throw retryableModelSampleError(
+      "OpenAI subscription stream contained invalid JSON",
+    );
   }
   if (!isRecord(value)) {
-    throw new Error("OpenAI subscription stream contained an invalid event");
+    throw retryableModelSampleError(
+      "OpenAI subscription stream contained an invalid event",
+    );
   }
   return value;
 }

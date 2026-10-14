@@ -1406,6 +1406,91 @@ test("aborts promptly while another process owns the profile lock", async () => 
   }
 });
 
+test("marks truncated or corrupt subscription streams as retryable sample failures", async (t) => {
+  const makeAdapter = (fetchImpl: typeof fetch): OpenAiSubscriptionModel =>
+    new OpenAiSubscriptionModel({
+      acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+      fetch: fetchImpl,
+    });
+
+  await t.test("stream ends without a terminal event", async () => {
+    const adapter = makeAdapter((async () =>
+      sseResponse([
+        {
+          type: "response.output_text.delta",
+          output_index: 0,
+          delta: "partial",
+        },
+      ])) as unknown as typeof fetch);
+    await assert.rejects(
+      collect(adapter.stream(request())),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /terminal response event/u);
+        assert.equal((error as { retryable?: unknown }).retryable, true);
+        return true;
+      },
+    );
+  });
+
+  await t.test("stream contains invalid JSON", async () => {
+    const adapter = makeAdapter((async () =>
+      rawSseResponse("{not json")) as unknown as typeof fetch);
+    await assert.rejects(
+      collect(adapter.stream(request())),
+      (error: unknown) => {
+        assert.equal((error as { retryable?: unknown }).retryable, true);
+        return true;
+      },
+    );
+  });
+
+  await t.test("mid-stream transport failure", async () => {
+    const adapter = makeAdapter(
+      (async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("data: {}\r\n\r\n"));
+              controller.error(new TypeError("terminated"));
+            },
+          }),
+          { status: 200 },
+        )) as unknown as typeof fetch,
+    );
+    await assert.rejects(
+      collect(adapter.stream(request())),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /stream read failed/u);
+        assert.equal((error as { retryable?: unknown }).retryable, true);
+        return true;
+      },
+    );
+  });
+
+  await t.test("incomplete responses stay non-retryable", async () => {
+    const adapter = makeAdapter((async () =>
+      sseResponse([
+        {
+          type: "response.incomplete",
+          response: {
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          },
+        },
+      ])) as unknown as typeof fetch);
+    await assert.rejects(
+      collect(adapter.stream(request())),
+      (error: unknown) => {
+        assert.match((error as Error).message, /incomplete/u);
+        assert.notEqual((error as { retryable?: unknown }).retryable, true);
+        return true;
+      },
+    );
+  });
+});
+
 function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
   return {
     model: "gpt-5.6-terra",
