@@ -1,6 +1,7 @@
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import { fetchModelResponse } from "./request-retry.js";
 import { randomUUID } from "node:crypto";
+import { modelUserContent } from "../model.js";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -543,8 +544,11 @@ async function toChatMessage(
     };
   }
 
-  if ("content" in message) {
-    return await toChatUserContent(message.content, attachments);
+  if (
+    message.role === "user" &&
+    ("content" in message || message.userTimestamp !== undefined)
+  ) {
+    return await toChatUserContent(modelUserContent(message), attachments);
   }
 
   return { role: message.role, content: message.text };

@@ -579,11 +579,15 @@ test("agentic compaction preserves user steering unseen by its model sample", as
   releaseFirstSample.resolve();
   await handle.done;
 
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requests[1]?.messages, [
     { role: "user", text: "[Zen compacted context]\ncontinuation" },
     {
       role: "user",
       content: [{ type: "text", text: "new instruction" }],
+      userTimestamp: userTimestamps[1],
     },
   ]);
 });
@@ -1435,8 +1439,15 @@ test("manually compacts long history without changing the complete transcript", 
   ).done;
   const postCompactionRequest = requests.at(-1);
   assert(postCompactionRequest !== undefined);
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(postCompactionRequest.messages, [
-    { role: "user", content: [{ type: "text", text: "third" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "third" }],
+      userTimestamp: userTimestamps[2],
+    },
     { role: "assistant", text: "answer-3" },
     {
       role: "user",
@@ -1445,6 +1456,7 @@ test("manually compacts long history without changing the complete transcript", 
     {
       role: "user",
       content: [{ type: "text", text: "after compaction" }],
+      userTimestamp: userTimestamps[3],
     },
   ]);
 
@@ -1980,7 +1992,7 @@ test("does not append when explicit selected Items exceed the target", async () 
 test("bounds an oversized latest completed Turn without splitting its tool lifecycle", async () => {
   const toolOutput = "x".repeat(400);
   let normalSamples = 0;
-  const contextWindow = 256;
+  const contextWindow = 288;
   const summaryRequests: ModelRequest[] = [];
   const model: ModelAdapter = {
     provider: "recording",
@@ -2001,11 +2013,11 @@ test("bounds an oversized latest completed Turn without splitting its tool lifec
           name: "shell",
           arguments: { command: `printf ${toolOutput}` },
         };
-        yield { type: "usage", inputTokens: 205, outputTokens: 1 };
+        yield { type: "usage", inputTokens: 231, outputTokens: 1 };
         return;
       }
       yield { type: "text_delta", delta: "finished" };
-      yield { type: "usage", inputTokens: 205, outputTokens: 1 };
+      yield { type: "usage", inputTokens: 231, outputTokens: 1 };
     },
   };
   const server = createServer({
@@ -2045,7 +2057,7 @@ test("bounds an oversized latest completed Turn without splitting its tool lifec
   assert(excerptSource.includes(toolOutput));
   assert(
     estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <=
-      205,
+      231,
   );
 });
 
@@ -2229,7 +2241,7 @@ test("automatic compaction freezes admitted selection across a concurrent settin
         return;
       }
       if (request.model === "recording-model") {
-        yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+        yield { type: "usage", inputTokens: 160, outputTokens: 1 };
         normalStarted.resolve();
         await releaseNormal.promise;
       }
@@ -2237,7 +2249,7 @@ test("automatic compaction freezes admitted selection across a concurrent settin
     },
   };
   const catalog = new StaticModelCatalog([
-    { id: "recording-model", isDefault: true, contextWindow: 100 },
+    { id: "recording-model", isDefault: true, contextWindow: 200 },
     { id: "other-model", contextWindow: 1_000 },
   ]);
   const server = createServer({
@@ -2294,14 +2306,14 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
       }
       normalCalls += 1;
       yield { type: "text_delta", delta: `answer-${String(normalCalls)}` };
-      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+      yield { type: "usage", inputTokens: 160, outputTokens: 1 };
     },
   };
   const server = createServer({
     journal,
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow: 200 },
     ]),
   });
   const thread = await server.startThread();
@@ -2355,14 +2367,14 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
         return;
       }
       yield { type: "text_delta", delta: "answer" };
-      yield { type: "usage", inputTokens: 80, outputTokens: 1 };
+      yield { type: "usage", inputTokens: 160, outputTokens: 1 };
     },
   };
   const persistence = createServer({
     journal: persistenceJournal,
     model: persistenceModel,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow: 200 },
     ]),
   });
   const persistenceThread = await persistence.startThread();
@@ -2865,8 +2877,15 @@ test("later compaction supersedes projection deterministically and restart is by
   assert.equal(summaryCalls, 2);
   const beforeRestart = await first.readThread(thread.id);
   const projectedBefore = compileModelMessages(beforeRestart.items);
+  const userTimestamps = beforeRestart.items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(projectedBefore, [
-    { role: "user", content: [{ type: "text", text: "third" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "third" }],
+      userTimestamp: userTimestamps[2],
+    },
     { role: "assistant", text: "answer" },
     { role: "user", text: "[Zen compacted context]\nsummary-2" },
   ]);

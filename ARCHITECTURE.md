@@ -103,6 +103,7 @@
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
 - **Code Runtime** — 每次调用在可硬终止的 Worker 内用独立 JavaScript module context 编排同一个 Tool Environment 的工具；guest 无 Node、文件、网络或模块加载能力，执行生命期由统一工具任务管理器持有。
 - **Code State** — 线程内有界 JSON 数据从 append-only `code_state` Items 重建，`store/load` 只提供显式写入和当前程序的快照读取，不保存函数、执行栈或另一份会话权威。
+- **User Message Time Projection** — 模型请求为每条 canonical `user_message` 单独携带明确时区的原始 `createdAt`；队列与替换输入从同一 ItemList 的最早准入 Item 派生，先于压缩过滤，fork/replay 不重取时钟。未知或无时区旧记录标为 null；replacement-history 导入前缀因旧记录无法区分 checkpoint 时间与原消息时间而保守标为未知（含导入尾部），后续本地输入不受影响；Provider 以独立文本 part 标明 Host 元数据，不改写用户正文、媒体或授权。
 - **Model Content Projection** — 根据本次模型的输入能力投影历史与当前媒体内容，只改变 ModelRequest，不改写 canonical Items 或附件。
 - **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。

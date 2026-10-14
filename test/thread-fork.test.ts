@@ -105,6 +105,8 @@ test("forked history keeps image payloads replayable and authorized", async () =
   ).done;
   assert.deepEqual(requests[1]?.[0], {
     role: "user",
+    userTimestamp: fork.items.find((item) => item.type === "user_message")
+      ?.createdAt,
     content: [
       { type: "text", text: "remember this image" },
       { type: "image", attachment: image },
@@ -183,10 +185,21 @@ test("fork copies a replayable prefix and both Threads continue independently", 
   await (
     await server.startTurn(fork.id, "fork path")
   ).done;
+  const userTimestamps = (await server.readThread(fork.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requests[1], [
-    { role: "user", content: [{ type: "text", text: "first question" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "first question" }],
+      userTimestamp: userTimestamps[0],
+    },
     { role: "assistant", text: "answer-1" },
-    { role: "user", content: [{ type: "text", text: "fork path" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "fork path" }],
+      userTimestamp: userTimestamps[1],
+    },
   ]);
   assert.equal((await server.readThread(source.id)).turns.length, 1);
   assert.equal((await server.readThread(fork.id)).turns.length, 2);

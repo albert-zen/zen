@@ -501,10 +501,21 @@ test("derives each turn model from append-only configuration changes", async () 
   ).done;
 
   assert.deepEqual(requestedModels, ["model-one", "model-two"]);
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requestedMessages[1], [
-    { role: "user", content: [{ type: "text", text: "first" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      userTimestamp: userTimestamps[0],
+    },
     { role: "assistant", text: "model-one" },
-    { role: "user", content: [{ type: "text", text: "second" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "second" }],
+      userTimestamp: userTimestamps[1],
+    },
   ]);
   assert.deepEqual(
     changed.items
@@ -2825,19 +2836,25 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   await active.done;
 
   assert.equal(requests.length, 2);
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requests[1], [
     {
       role: "user",
       content: [{ type: "text", text: "initial request" }],
+      userTimestamp: userTimestamps[0],
     },
     { role: "assistant", text: "first answer" },
     {
       role: "user",
       content: [{ type: "text", text: "follow this correction" }],
+      userTimestamp: userTimestamps[1],
     },
     {
       role: "user",
       content: [{ type: "text", text: "then preserve the tests" }],
+      userTimestamp: userTimestamps[2],
     },
   ]);
   const snapshot = await server.readThread(thread.id);
@@ -2924,8 +2941,15 @@ test("soft steer waits behind a tool result and does not cancel approval", async
   await testWithin(active.done, "steered approval turn");
 
   assert.equal(requests.length, 2);
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requests[1], [
-    { role: "user", content: [{ type: "text", text: "use a tool" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "use a tool" }],
+      userTimestamp: userTimestamps[0],
+    },
     {
       role: "assistant",
       toolCalls: [
@@ -2940,6 +2964,7 @@ test("soft steer waits behind a tool result and does not cancel approval", async
     {
       role: "user",
       content: [{ type: "text", text: "change the final response" }],
+      userTimestamp: userTimestamps[1],
     },
   ]);
 });
