@@ -1,3 +1,4 @@
+import type { ShellPanelRequest, ShellPanelResult } from "../shell-panel.js";
 import type { SubscriptionUsage } from "../main/subscription-usage.js";
 import type {
   ImZenXSetupView,
@@ -74,6 +75,10 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  shellPanel: {
+    request: (input: ShellPanelRequest): Promise<ShellPanelResult> =>
+      ipcRenderer.invoke(ipcChannels.shellPanelRequest, input),
+  },
   imzenx: {
     inspect: async (): Promise<ImZenXSetupView> =>
       ipcRenderer.invoke(ipcChannels.imzenxSetupInspect),
@@ -487,10 +492,14 @@ contextBridge.exposeInMainWorld("zenx", {
   chromeBridge: {
     get: async (): Promise<ChromeBridgeSettingsSnapshot> =>
       await ipcRenderer.invoke(ipcChannels.chromeBridgeGet),
-    prepare: async (): Promise<ChromeBridgeSettingsSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.chromeBridgePrepare),
-    remove: async (): Promise<ChromeBridgeSettingsSnapshot> =>
-      await ipcRenderer.invoke(ipcChannels.chromeBridgeRemove),
+    prepare: async (
+      browser?: "chrome" | "edge",
+    ): Promise<ChromeBridgeSettingsSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.chromeBridgePrepare, browser),
+    remove: async (
+      browser?: "chrome" | "edge",
+    ): Promise<ChromeBridgeSettingsSnapshot> =>
+      await ipcRenderer.invoke(ipcChannels.chromeBridgeRemove, browser),
     openExtension: async (): Promise<void> =>
       await ipcRenderer.invoke(ipcChannels.chromeBridgeOpenExtension),
   },

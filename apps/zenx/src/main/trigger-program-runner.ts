@@ -162,7 +162,11 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
           clearTimeout(forceTimer);
           forceTimer = undefined;
         }
-        if (capturedTree === undefined && child.exitCode !== null) {
+        if (
+          process.platform !== "win32" &&
+          capturedTree === undefined &&
+          child.exitCode !== null
+        ) {
           const exited = await verifyExitedChild(
             child,
             this.processOperations.captureProcessTable,
@@ -222,7 +226,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         stopCollection();
         child.stdin.destroy();
         const treeAtTermination = captureProcessTree(
-          child.pid,
+          child,
           this.processOperations.captureProcessTable,
         ).then(
           (tree) => ({ tree, error: null }),
@@ -247,11 +251,15 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
             undefined,
             this.processOperations,
           );
-          const exited = await verifyExitedChild(
-            child,
-            this.processOperations.captureProcessTable,
-          );
-          if (exited.ok) return exited;
+          // A failed Windows ownership capture cannot be repaired by an empty
+          // later PID/PPID snapshot: an ambiguous lineage may already be gone.
+          if (process.platform !== "win32") {
+            const exited = await verifyExitedChild(
+              child,
+              this.processOperations.captureProcessTable,
+            );
+            if (exited.ok) return exited;
+          }
           return {
             ok: false as const,
             error: `process-tree snapshot unavailable: ${snapshot.error ?? "unknown discovery failure"}; containment was not proven`,
@@ -581,7 +589,11 @@ export async function verifyAndTerminateWindowsProcessTree(
     } catch (error) {
       return processTableDiscoveryFailure(error);
     }
-    tracked = addWindowsDescendants(tracked, table.entries);
+    try {
+      tracked = addWindowsDescendants(tracked, table.entries);
+    } catch (error) {
+      return { ok: false, error: describeError(error) };
+    }
     const unknownIdentity = tracked.find(
       (identity) => identity.startTime === null,
     );
@@ -773,6 +785,9 @@ function addDescendants(
   return result;
 }
 
+// Windows retains a numeric PPID after parent exit; it does not prove which
+// generation created a newly observed process. Keep prior identities, but
+// require a live matching parent and ordered creation times for every new edge.
 function addWindowsDescendants(
   tracked: readonly ProcessIdentity[],
   entries: readonly ProcessIdentity[],
@@ -792,31 +807,31 @@ function addWindowsDescendants(
         (candidate) => candidate.pid === parent.pid,
       );
       if (
-        currentParent !== undefined &&
-        !identityMatches(parent, currentParent) &&
-        !windowsIdentityPredates(entry, currentParent)
+        currentParent === undefined ||
+        !identityMatches(parent, currentParent)
       )
-        continue;
+        throw new Error(
+          `PID ${String(entry.pid)} parent PID ${String(parent.pid)} identity was absent or changed; containment was not proven`,
+        );
+      if (
+        entry.startTime === null ||
+        parent.startTime === null ||
+        !/^\d+$/u.test(entry.startTime) ||
+        !/^\d+$/u.test(parent.startTime)
+      )
+        throw new Error(
+          `PID ${String(entry.pid)} parent/child creation identity was unavailable; containment was not proven`,
+        );
+      if (BigInt(entry.startTime) < BigInt(parent.startTime))
+        throw new Error(
+          `PID ${String(entry.pid)} predates parent PID ${String(parent.pid)}; containment was not proven`,
+        );
       result.push(entry);
       known.add(entry.pid);
       changed = true;
     }
   }
   return result;
-}
-
-function windowsIdentityPredates(
-  identity: ProcessIdentity,
-  other: ProcessIdentity,
-): boolean {
-  if (
-    identity.startTime === null ||
-    other.startTime === null ||
-    !/^\d+$/u.test(identity.startTime) ||
-    !/^\d+$/u.test(other.startTime)
-  )
-    return false;
-  return BigInt(identity.startTime) < BigInt(other.startTime);
 }
 
 export async function terminateWindowsProcessIdentity(
@@ -1038,9 +1053,12 @@ if (!$matched) { exit 3 }
 }
 
 function captureProcessTree(
-  pid: number | undefined,
+  child: ChildProcess,
   capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
 ): Promise<ProcessTreeSnapshot> {
+  if (process.platform === "win32")
+    return captureWindowsProcessTree(child, capture);
+  const pid = child.pid;
   if (pid === undefined)
     return Promise.reject(new Error("the child process did not expose a PID"));
   return capture().then((table) => {
@@ -1054,6 +1072,48 @@ function captureProcessTree(
       throw new Error("descendant process identity was unavailable");
     return { root, descendants };
   });
+}
+
+/** Bind the initial Windows snapshot to the still-live child we spawned. */
+async function captureWindowsProcessTree(
+  child: ChildProcess,
+  capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
+): Promise<ProcessTreeSnapshot> {
+  const pid = child.pid;
+  if (pid === undefined)
+    throw new Error("the child process did not expose a PID");
+  let exited = child.exitCode !== null || child.signalCode !== null;
+  const onExit = (): void => {
+    exited = true;
+  };
+  child.once("exit", onExit);
+  const requireLiveChild = (): void => {
+    if (exited || child.exitCode !== null || child.signalCode !== null)
+      throw new Error(
+        "the owned root exited before its process identity was captured; containment was not proven",
+      );
+  };
+  try {
+    requireLiveChild();
+    const table = await capture();
+    requireLiveChild();
+    const root = table.entries.find((entry) => entry.pid === pid);
+    if (
+      root === undefined ||
+      root.startTime === null ||
+      !/^\d+$/u.test(root.startTime) ||
+      root.parentPid !== process.pid
+    )
+      throw new Error(
+        "the live owned root process identity or parent relationship was unavailable; containment was not proven",
+      );
+    const descendants = addWindowsDescendants([root], table.entries).filter(
+      (entry) => entry.pid !== root.pid,
+    );
+    return { root, descendants };
+  } finally {
+    child.removeListener("exit", onExit);
+  }
 }
 
 async function captureProcessTable(): Promise<ProcessTableSnapshot> {

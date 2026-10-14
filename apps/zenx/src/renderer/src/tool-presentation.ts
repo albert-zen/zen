@@ -203,7 +203,9 @@ export function toolPresentation(name: string): {
   icon: IconName;
   action?: string;
 } {
-  const key = name.replace(/^zenx_/u, "");
+  const key = name
+    .replace(/^zenx_/u, "")
+    .replace(/^browser_(?:workspace|connected)_/u, "browser_");
   if (/^view_image(?:\s|$)/u.test(key)) {
     return {
       category: i18n.t("shell:image"),
@@ -236,7 +238,11 @@ export function toolPresentation(name: string): {
   if (action)
     return {
       category: key.startsWith("browser_")
-        ? i18n.t("shell:browser")
+        ? /^((zenx_)?browser_workspace_)/u.test(name)
+          ? i18n.t("shell:workspaceBrowser")
+          : /^((zenx_)?browser_connected_)/u.test(name)
+            ? i18n.t("shell:externalBrowser")
+            : i18n.t("shell:browser")
         : i18n.t("shell:computer"),
       icon: key.startsWith("browser_") ? "browser" : "computer",
       action,
@@ -254,7 +260,9 @@ export function commandTitle(
   const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
   const args = item.toolArguments;
   const completed = commandPhase(item) === "completed";
-  const key = name.replace(/^zenx_/u, "");
+  const key = name
+    .replace(/^zenx_/u, "")
+    .replace(/^browser_(?:workspace|connected)_/u, "browser_");
   const completedAction =
     completed && item.toolName !== undefined
       ? Object.hasOwn(threadActions(), key)

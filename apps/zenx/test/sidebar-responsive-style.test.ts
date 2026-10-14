@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { SIDEBAR_DEFAULT_WIDTH } from "../src/renderer/src/sidebar-width.js";
 import { JSDOM } from "jsdom";
 
 test("narrow desktop Thread rows reserve the overflow menu column", async () => {
@@ -277,6 +278,18 @@ test("Linux workspace heading and narrow toggle stay clear of native window cont
     styles.slice(lastToggle),
     /top:\s*calc\(var\(--native-titlebar-height\) \+ 4px\);\s*right:\s*8px;/u,
   );
+});
+
+test("shell owns the sidebar width default before and after the resizer mounts", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const shell = styles.match(/\.app-shell\s*\{([^}]+)\}/su)?.[1];
+  assert.ok(shell);
+  const defaultWidth = shell.match(/--sidebar-width:\s*(\d+)px;/u)?.[1];
+  assert.equal(Number(defaultWidth), SIDEBAR_DEFAULT_WIDTH);
+  assert.match(shell, /--sidebar-track:\s*var\(--sidebar-width\);/u);
 });
 
 test("coarse-pointer child row and actions keep 44px minimum targets after the base cascade", async () => {

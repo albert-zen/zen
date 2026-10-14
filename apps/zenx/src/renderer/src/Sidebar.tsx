@@ -44,6 +44,11 @@ import { startSidebarDrag } from "./sidebar-drag.js";
 
 import { useSidebarExpansion } from "./sidebar-expansion.js";
 import {
+  captureSidebarRemoval,
+  restoreSidebarRemoval,
+  type SidebarRemovalSnapshot,
+} from "./sidebar-removal.js";
+import {
   ROOM_ROUTE,
   RoomConversationNavigation,
   type RoomConversationState,
@@ -178,6 +183,90 @@ export function Sidebar({
       dispose?.();
     };
   }, []);
+  const removalSnapshots = useRef(new Map<string, SidebarRemovalSnapshot>());
+  const lifecyclePending = useRef(new Set<string>());
+  const removalTracking = useRef(new Map<string, () => void>());
+  useEffect(
+    () => () => {
+      for (const stop of removalTracking.current.values()) stop();
+      removalTracking.current.clear();
+      removalSnapshots.current.clear();
+    },
+    [],
+  );
+  useLayoutEffect(() => {
+    for (const [threadId, snapshot] of removalSnapshots.current) {
+      if (snapshot.row.isConnected) continue;
+      removalSnapshots.current.delete(threadId);
+      removalTracking.current.get(threadId)?.();
+      removalTracking.current.delete(threadId);
+      // A user may collapse or change views while the request is pending.
+      // DOM disappearance alone does not mean the archive has completed.
+      if (
+        threads.some((thread) => thread.threadId === threadId) ||
+        pinnedThreads.some((thread) => thread.threadId === threadId)
+      )
+        continue;
+      restoreSidebarRemoval(snapshot);
+    }
+  });
+  const changeThreadLifecycle = async (thread: NativeThreadSummary) => {
+    if (lifecyclePending.current.has(thread.threadId)) return;
+    lifecyclePending.current.add(thread.threadId);
+    removalTracking.current.get(thread.threadId)?.();
+    removalTracking.current.delete(thread.threadId);
+    const row = [
+      ...document.querySelectorAll<HTMLElement>(".thread-row-shell"),
+    ].find((entry) => entry.dataset.threadId === thread.threadId);
+    if (row !== undefined) {
+      const snapshot = captureSidebarRemoval(row);
+      if (snapshot !== null)
+        removalSnapshots.current.set(thread.threadId, snapshot);
+    }
+    const trackScroll = () => {
+      if (row === undefined || !row.isConnected) return;
+      const snapshot = captureSidebarRemoval(row);
+      if (snapshot !== null) {
+        snapshot.focus =
+          removalSnapshots.current.get(thread.threadId)?.focus ??
+          snapshot.focus;
+        removalSnapshots.current.set(thread.threadId, snapshot);
+      }
+    };
+    const scroller = row?.closest(".sidebar-scroll");
+    scroller?.addEventListener("scroll", trackScroll);
+    const Observer = row?.ownerDocument.defaultView?.MutationObserver;
+    const disclosureObserver =
+      Observer === undefined
+        ? undefined
+        : new Observer(() => {
+            if (!row?.closest("[inert], [hidden]")) return;
+            removalSnapshots.current.delete(thread.threadId);
+            removalTracking.current.get(thread.threadId)?.();
+            removalTracking.current.delete(thread.threadId);
+          });
+    for (const owner of removalSnapshots.current.get(thread.threadId)
+      ?.disclosureOwners ?? []) {
+      disclosureObserver?.observe(owner, {
+        attributes: true,
+        attributeFilter: ["inert", "hidden"],
+      });
+    }
+    removalTracking.current.set(thread.threadId, () => {
+      scroller?.removeEventListener("scroll", trackScroll);
+      disclosureObserver?.disconnect();
+    });
+    try {
+      await onChangeThreadLifecycle(thread);
+    } catch (error) {
+      removalSnapshots.current.delete(thread.threadId);
+      removalTracking.current.get(thread.threadId)?.();
+      removalTracking.current.delete(thread.threadId);
+      throw error;
+    } finally {
+      lifecyclePending.current.delete(thread.threadId);
+    }
+  };
   const lastUsedProject =
     projects.lastUsedWorkspace === null
       ? undefined
@@ -547,7 +636,7 @@ export function Sidebar({
           ) : mode === "inbox" ? (
             <InboxView
               onSelectThread={onSelectThread}
-              onChangeThreadLifecycle={onChangeThreadLifecycle}
+              onChangeThreadLifecycle={changeThreadLifecycle}
               onChangeThreadPinned={changeThreadPinned}
               onRenameThread={onRenameThread}
               onForkThread={onForkThread}
@@ -563,7 +652,7 @@ export function Sidebar({
               {pinnedThreads.length === 0 ? null : (
                 <PinnedThreadsView
                   liveThread={liveThread}
-                  onChangeThreadLifecycle={onChangeThreadLifecycle}
+                  onChangeThreadLifecycle={changeThreadLifecycle}
                   onChangeThreadPinned={changeThreadPinned}
                   onRenameThread={onRenameThread}
                   onForkThread={onForkThread}
@@ -584,7 +673,7 @@ export function Sidebar({
                   onEditProject={onEditProject}
                   onSetDefaultProject={onSetDefaultProject}
                   onSelectThread={onSelectThread}
-                  onChangeThreadLifecycle={onChangeThreadLifecycle}
+                  onChangeThreadLifecycle={changeThreadLifecycle}
                   onChangeThreadPinned={changeThreadPinned}
                   onRenameThread={onRenameThread}
                   onForkThread={onForkThread}
@@ -1622,7 +1711,19 @@ function ThreadRow({
   const [busyAction, setBusyAction] = useState<
     "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
+  const busyActionRef = useRef(false);
+  const retryFocusRef = useRef<string | null>(null);
   const [menuError, setMenuError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (busyAction !== null || retryFocusRef.current === null) return;
+    const action = retryFocusRef.current;
+    retryFocusRef.current = null;
+    menuRef.current
+      ?.querySelector<HTMLButtonElement>(
+        `[data-thread-action="${action}"]:not(:disabled)`,
+      )
+      ?.focus({ preventScroll: true });
+  }, [busyAction, menuError]);
   const closeMenu = (restoreFocus = true) => {
     restoreMenuFocusRef.current = restoreFocus;
     setMenuOpen(false);
@@ -1753,26 +1854,23 @@ function ThreadRow({
     action: "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive",
     operation: () => Promise<void>,
   ) => {
+    if (busyActionRef.current) return;
+    busyActionRef.current = true;
     setBusyAction(action);
     setMenuError(null);
     try {
-      if (action !== "rename") focusThreadListHeading();
+      if (action !== "rename" && action !== "archive" && action !== "unarchive")
+        focusThreadListHeading();
       await operation();
-      if (action !== "rename" && action !== "pin" && action !== "unpin")
-        focusThreadListHeading(false);
+      if (action === "copy") focusThreadListHeading(false);
       closeMenu(action === "rename");
     } catch (error) {
       setMenuError(error instanceof Error ? error.message : String(error));
       if (action !== "rename") {
-        queueMicrotask(() =>
-          menuRef.current
-            ?.querySelector<HTMLButtonElement>(
-              `[data-thread-action="${action}"]:not(:disabled)`,
-            )
-            ?.focus(),
-        );
+        retryFocusRef.current = action;
       }
     } finally {
+      busyActionRef.current = false;
       setBusyAction(null);
     }
   };

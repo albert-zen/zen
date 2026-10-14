@@ -1,4 +1,5 @@
 export const ipcChannels = {
+  shellPanelRequest: "zenx:shell-panel:request",
   imzenxSetupInspect: "zenx:imzenx-setup:inspect",
   imzenxSetupSaveChannel: "zenx:imzenx-setup:save-channel",
   imzenxSetupPrepareRuntime: "zenx:imzenx-setup:prepare-runtime",

@@ -2,22 +2,37 @@ import type { AppServerEvent } from "../../app-server.js";
 import type {
   CreateChildThreadInput,
   ThreadSnapshot,
+  QueuedInputAdmission,
 } from "../../app-server.js";
 import type { UserInput, UserInputPart } from "../../item.js";
+import type { ImageMediaType } from "../../attachment-ref.js";
 import type { SkillReference } from "../../skill-input.js";
+
+/** Wire-only bytes are imported into a canonical AttachmentRef by the Host. */
+export interface NativeImageBytesInput {
+  type: "image_bytes";
+  mediaType: ImageMediaType;
+  dataBase64: string;
+}
+export type NativeUserInputPart =
+  UserInputPart | SkillReference | NativeImageBytesInput;
+export const NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY =
+  "queued-input-admission-v1";
+export const NATIVE_INLINE_IMAGE_INPUT_CAPABILITY = "inline-image-input-v1";
 
 export interface NativeTurnSendParams {
   threadId: string;
   mode: "start" | "queue" | "batch-next" | "steer" | "replace";
   expectedTurnId?: string;
   clientUserMessageId: string;
-  input: readonly (UserInputPart | SkillReference)[];
+  input: readonly NativeUserInputPart[];
   /** Native-only canonical admission requirement; omitted preserves defaults. */
   requireUnarchived?: boolean;
 }
 export interface NativeTurnSendResult {
   turnId?: string;
   interruptedTurnId?: string;
+  admission?: QueuedInputAdmission;
 }
 /** Older Hosts reject this method instead of ignoring a new admission field. */
 export const NATIVE_TURN_SEND_UNARCHIVED_METHOD = "zen/turn/send-unarchived";
@@ -56,4 +71,26 @@ export interface NativeThreadEventParams {
 export function nativeEventThreadId(event: AppServerEvent): string | null {
   if (event.type === "model_catalog_updated") return null;
   return event.type === "item_completed" ? event.item.threadId : event.threadId;
+}
+
+export const NATIVE_THREAD_DELETE_METHOD = "zen/thread/delete";
+export const NATIVE_THREAD_DELETED_LIST_METHOD = "zen/thread/deleted/list";
+export const NATIVE_THREAD_RESTORE_METHOD = "zen/thread/restore";
+export interface NativeThreadDeleteParams {
+  threadId: string;
+  expectedLastItemId: string;
+}
+export interface NativeThreadRestoreParams {
+  threadId: string;
+  deletionItemId: string;
+}
+export type NativeThreadDeleteResult =
+  import("../../app-server.js").DeleteThreadResult;
+export type DeletedThreadSummary =
+  import("../../app-server.js").DeletedThreadSummary;
+export interface NativeThreadDeletedListResult {
+  data: DeletedThreadSummary[];
+}
+export interface NativeThreadRestoreResult {
+  thread: ThreadSnapshot;
 }

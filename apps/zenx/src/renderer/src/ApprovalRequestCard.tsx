@@ -43,6 +43,7 @@ export function ApprovalRequestCard({
   }, [currentOwner]);
 
   const once = approval.params.approvalScope === "once";
+  const target = approval.params.approvalTarget?.label;
   const toolName = approval.params.toolName ?? "tool";
   const runCode = toolName === "run_code";
   const code =
@@ -61,10 +62,14 @@ export function ApprovalRequestCard({
     ? i18n.t(
         "shell:thisCallRunsOutsideTheFileSandboxApprovalAppliesOnlyToThisCallAndItsNestedOperations",
       )
-    : i18n.t("shell:approvalRemembered", { tool: toolName });
+    : target !== undefined
+      ? i18n.t("shell:approvalTargetRemembered", { tool: toolName, target })
+      : i18n.t("shell:approvalRemembered", { tool: toolName });
   const scopeLabel = once
     ? i18n.t("shell:approvalOnceScope")
-    : i18n.t("shell:approvalCapabilityScope");
+    : target !== undefined
+      ? target
+      : i18n.t("shell:approvalCapabilityScope");
   const pending = submission === identity || approval.status === "responding";
   const errorMessage = error?.identity === identity ? error.message : null;
   const current = () =>
@@ -131,11 +136,16 @@ export function ApprovalRequestCard({
         <p>
           {once
             ? i18n.t("shell:approvalInlineOnceScope")
-            : runCode
-              ? i18n.t("shell:approvalInlineRunCodeScope")
-              : i18n.t("shell:approvalInlineCapabilityScope", {
+            : target !== undefined
+              ? i18n.t("shell:approvalTargetRemembered", {
                   tool: toolName,
-                })}
+                  target,
+                })
+              : runCode
+                ? i18n.t("shell:approvalInlineRunCodeScope")
+                : i18n.t("shell:approvalInlineCapabilityScope", {
+                    tool: toolName,
+                  })}
         </p>
       </div>
     ) : (

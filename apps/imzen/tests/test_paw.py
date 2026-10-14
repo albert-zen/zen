@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from imagent.contracts import AttachmentContent, LocalPath
+from imagent.interaction.media import AttachmentContent, LocalPath
 from imagent.testing import FakeChannelAdapter
 from test_gateway import FakeAppServer, inbound, sent_texts
 
@@ -55,11 +55,11 @@ class FakeRooms:
         )
 
 
-def compose(root, rooms):
+def compose(root, rooms, channel_id="test"):
     client = FakeAppServer()
-    channel = FakeChannelAdapter("test")
+    channel = FakeChannelAdapter(channel_id)
     room_state = PawState(root / "paw.sqlite3")
-    paw = PawController(rooms, room_state)
+    paw = PawController(rooms, room_state, channel_instance_ids=frozenset({channel_id}))
     gateway, gateway_state = create_gateway(
         Settings(
             app_server_url="ws://127.0.0.1:4500",
@@ -72,6 +72,7 @@ def compose(root, rooms):
         controller_factory=paw.wrap,
         delivery_authorizer=paw,
         outbound_presentation=paw,
+        startup_preparations=paw.startup_preparations(),
     )
     paw.attach(gateway)
     return gateway, gateway_state, room_state, paw, channel, client
@@ -119,7 +120,9 @@ async def test_switch_from_thread_blocks_private_projections_and_new_restores_le
         await asyncio.sleep(0.03)
         assert not any("PRIVATE" in text for text in sent_texts(channel))
         assert (
-            await gateway.get_binding(inbound("unused", "").conversation_ref)
+            await gateway.actions(
+                inbound("unused", "").conversation_ref, actor="owner"
+            ).get_binding()
         ).thread_ref is None
         await channel.emit_message(
             inbound(
@@ -161,7 +164,6 @@ async def test_restart_restores_room_and_outbound_checkpoint_without_echo(tmp_pa
         state.close()
     rooms.append("room-1", "new", "agent", "After restart")
     gateway, sdk_state, state, paw, channel, client = compose(tmp_path, rooms)
-    await paw.restore()
     await gateway.start()
     try:
         await paw.poll_once()
@@ -242,7 +244,7 @@ async def test_unknown_admission_is_visible_and_never_automatically_reposted(tmp
 
 @pytest.mark.asyncio
 async def test_unknown_outbound_is_durable_and_not_retried_after_restart(tmp_path):
-    from imagent.contracts import DeliveryReceipt, DeliveryReceiptStatus
+    from imagent.interaction.channels import DeliveryReceipt, DeliveryReceiptStatus
 
     rooms = FakeRooms()
     gateway, sdk_state, state, paw, channel, _ = compose(tmp_path, rooms)
@@ -382,9 +384,8 @@ async def test_bad_room_pauses_only_its_route_and_reselection_recovers(tmp_path)
 
 @pytest.mark.asyncio
 async def test_stale_thread_binding_is_suppressed_then_cleared_before_restart(tmp_path):
-    from datetime import UTC, datetime
-
-    from imagent.contracts import BindConversationToThread, ThreadRef
+    from imagent import Succeeded
+    from imagent.applications import ProjectRef, ThreadRef
 
     rooms = FakeRooms()
     gateway, sdk_state, state, paw, channel, client = compose(tmp_path, rooms)
@@ -394,18 +395,15 @@ async def test_stale_thread_binding_is_suppressed_then_cleared_before_restart(tm
     try:
         await channel.emit_message(inbound("thread", "/pick thread-1"))
         await channel.emit_message(inbound("room", "/paw room-1"))
-        binding = await gateway.get_binding(conversation)
+        actions = gateway.actions(conversation, actor="test")
+        binding = await actions.get_binding()
         # Simulate an obsolete persisted legacy route alongside a Room address.
-        await gateway.execute_gateway(
-            BindConversationToThread(
-                operation_id="stale-thread-route",
-                conversation_ref=conversation,
-                actor="test",
-                expected_revision=binding.revision,
-                created_at=datetime.now(UTC),
-                thread_ref=ThreadRef("zen-main", "thread-1"),
-            )
+        restored = await actions.bind_thread(
+            ThreadRef(ProjectRef("zen-main", "imzen-workspace"), "thread-1"),
+            action_id="stale-thread-route",
+            expected_generation=binding.generation,
         )
+        assert isinstance(restored, Succeeded)
         await client.emit_agent_message("thread-1", "private", "PRIVATE stale Thread trace")
         await asyncio.sleep(0.03)
         assert not any("PRIVATE" in text for text in sent_texts(channel))
@@ -413,11 +411,72 @@ async def test_stale_thread_binding_is_suppressed_then_cleared_before_restart(tm
         await gateway.stop()
         await sdk_state.close()
         state.close()
+    for restart in range(2):
+        gateway, sdk_state, state, paw, channel, client = compose(tmp_path, rooms)
+        try:
+            await gateway.start()
+            actions = gateway.actions(conversation, actor="test")
+            binding = await actions.get_binding()
+            assert binding.thread_ref is None
+            if restart == 0:
+                # A later interrupted /pick can leave a new SDK generation next
+                # to the same durable Room generation. Preparation must fence
+                # this distinct route, not replay a previous clear receipt.
+                await client.start_thread(cwd=str(tmp_path))
+                result = await actions.bind_thread(
+                    ThreadRef(ProjectRef("zen-main", "imzen-workspace"), "thread-1"),
+                    action_id="second-stale-route",
+                    expected_generation=binding.generation,
+                )
+                assert isinstance(result, Succeeded)
+        finally:
+            await gateway.stop()
+            await sdk_state.close()
+            state.close()
+
+
+@pytest.mark.asyncio
+async def test_paw_prefix_ambiguity_uses_one_product_command_namespace(tmp_path):
+    gateway, sdk_state, state, paw, channel, _ = compose(tmp_path, FakeRooms())
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("ambiguous", "/pa"))
+        response = sent_texts(channel)[-1]
+        assert "Ambiguous command" in response
+        assert "/paw" in response and "/paws" in response
+        assert state.bindings() == ()
+    finally:
+        await gateway.stop()
+        state.close()
+
+
+async def test_disabled_channel_keeps_paw_history_without_blocking_other_channels(tmp_path):
+    rooms = FakeRooms()
+    gateway, sdk_state, state, paw, channel, _ = compose(tmp_path, rooms)
+    await gateway.start()
+    try:
+        await channel.emit_message(inbound("select-before-disable", "/paw room-1"))
+    finally:
+        await gateway.stop()
+        await sdk_state.close()
+        state.close()
+    rooms.append("room-1", "offline-formal", "agent", "Waiting for re-enable")
+    gateway, sdk_state, state, paw, channel, _ = compose(tmp_path, rooms, channel_id="other")
+    try:
+        await gateway.start()
+        await paw.poll_once()
+        assert state.bindings()[0].conversation.channel_instance_id == "test"
+        assert state.bindings()[0].checkpoint is None
+        assert not channel.sent
+    finally:
+        await gateway.stop()
+        await sdk_state.close()
+        state.close()
     gateway, sdk_state, state, paw, channel, _ = compose(tmp_path, rooms)
     try:
-        await paw.restore()
-        assert (await gateway.get_binding(conversation)).thread_ref is None
         await gateway.start()
+        await paw.poll_once()
+        assert sum("Waiting for re-enable" in text for text in sent_texts(channel)) == 1
     finally:
         await gateway.stop()
         await sdk_state.close()

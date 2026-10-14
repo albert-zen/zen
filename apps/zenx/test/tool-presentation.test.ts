@@ -158,3 +158,21 @@ function command(
     durationMs: null,
   };
 }
+
+test("concurrent browser tools use readable backend labels without execution aliases", () => {
+  assert.deepEqual(toolPresentation("browser_workspace_inspect"), {
+    category: "ZenX browser",
+    icon: "browser",
+    action: "Inspect page",
+  });
+  assert.deepEqual(toolPresentation("browser_connected_inspect"), {
+    category: "External browser",
+    icon: "browser",
+    action: "Inspect page",
+  });
+  assert.equal(
+    commandTitle(command("browser_connected_inspect")),
+    "Inspected page",
+  );
+  assert.equal(toolPresentation("browser_connected_unknown").category, "Tool");
+});

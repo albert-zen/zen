@@ -323,7 +323,8 @@ button:disabled {
 
 .app-shell {
   --workspace-panel-width: 0px;
-  --sidebar-track: 264px;
+  --sidebar-width: 264px;
+  --sidebar-track: var(--sidebar-width);
   --sidebar-divider-x: var(--sidebar-track);
   --titlebar-brand-track: var(--sidebar-track);
   --native-titlebar-height: 44px;
@@ -483,6 +484,68 @@ button:disabled {
   pointer-events: none;
   opacity: 0;
   transform: translateX(-12px);
+}
+/* A generous invisible hit area with a quiet, single-line visual affordance. */
+.sidebar-resizer {
+  position: absolute;
+  z-index: 61;
+  top: var(--titlebar-height);
+  bottom: 0;
+  left: calc(var(--sidebar-track) - 4px);
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-app-region: no-drag;
+  outline: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 4px;
+  background: transparent;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.sidebar-resizer[data-resizing="true"]::after {
+  background: var(--color-text-accent);
+}
+.sidebar-resizer:focus-visible {
+  outline: 2px solid var(--color-text-accent);
+  outline-offset: -2px;
+}
+.app-shell:has(> .sidebar-resizer[data-resizing="true"]) {
+  transition: none;
+  cursor: col-resize;
+  user-select: none;
+}
+.app-shell:has(> .sidebar-resizer[data-resizing="true"]) iframe {
+  pointer-events: none;
+}
+.app-shell.sidebar-collapsed > .sidebar-resizer {
+  display: none;
+}
+.sidebar-resize-notice {
+  position: absolute;
+  z-index: 62;
+  bottom: 58px;
+  left: 10px;
+  width: calc(var(--sidebar-track) - 20px);
+  padding: 8px;
+  border: 1px solid var(--color-border-control);
+  border-radius: 6px;
+  background: var(--color-surface-sidebar);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-label);
+}
+@media (forced-colors: active) {
+  .sidebar-resizer:focus-visible {
+    outline-color: Highlight;
+  }
+  .sidebar-resizer:is(:hover, :focus-visible, [data-resizing="true"])::after {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
 }
 .sidebar-header {
   flex: 0 0 auto;
@@ -3356,6 +3419,24 @@ button:disabled {
 .settings-card-head {
   margin-bottom: 20px;
 }
+.settings-view .settings-row.browser-connection-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+.browser-connection-toggle > span {
+  min-width: 0;
+  color: var(--text-1);
+  font-weight: 500;
+}
+.browser-connection-toggle > input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
 .settings-card-head > div,
 .settings-row > div {
   min-width: 0;
@@ -4203,6 +4284,18 @@ button:disabled {
 }
 .archived-thread-row + .archived-thread-row {
   border-top: 1px solid var(--border-soft);
+}
+.archived-thread-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.deleted-threads-section {
+  margin-top: 28px;
+}
+.deleted-threads-section h3 {
+  font-size: var(--font-size-body);
 }
 .archived-thread-copy {
   min-width: 0;
@@ -5122,9 +5215,6 @@ button:disabled {
 }
 
 @media (max-width: 820px) {
-  .app-shell {
-    --sidebar-track: 230px;
-  }
   .app-shell.sidebar-collapsed {
     --titlebar-brand-track: min(232px, calc(100% - 138px));
   }
@@ -5196,6 +5286,10 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
+  .sidebar-resizer,
+  .sidebar-resize-notice {
+    display: none;
+  }
   .app-shell {
     --sidebar-track: 0px;
     --titlebar-brand-track: min(264px, calc(100% - 138px));
@@ -7318,6 +7412,53 @@ button:disabled {
   flex: 1;
   min-height: 0;
   height: 100%;
+}
+.workspace-browser-control {
+  /* Status updates must not resize the native WebContents viewport: doing so
+     would correctly expire the very observation/action reporting this status. */
+  box-sizing: border-box;
+  flex: 0 0 128px;
+  height: 128px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 8px 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: 12px;
+}
+.workspace-browser-control > div {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+}
+.workspace-browser-control strong {
+  color: var(--color-text-primary);
+}
+.workspace-browser-control p {
+  margin: 4px 0 0;
+  color: var(--color-text-secondary);
+}
+.workspace-browser-control > button {
+  align-self: start;
+  max-width: 128px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-browser-control > button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.workspace-browser-control > button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .workspace-browser-tabs,
 .workspace-browser-address {

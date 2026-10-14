@@ -1,0 +1,2 @@
+# Preserve the reviewed patch bytes for exact SHA-256 verification on Windows.
+vendor/winapp-0.3.1/disable-auto-set-focus.patch text eol=lf
