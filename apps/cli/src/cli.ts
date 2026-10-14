@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+import { importModelSelection } from "./import-model-selection.js";
+import { readSelectedImportFile } from "../../../src/protocol/import-file.js";
+import { CODEX_ROLLOUT_FORMAT } from "../../../src/protocol/codex/rollout-import.js";
+import {
+  parseSessionImport,
+  previewSessionImport,
+} from "../../../src/protocol/session-import.js";
 import { spawn } from "node:child_process";
 import { open, readFile, unlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
@@ -58,6 +65,10 @@ async function main(): Promise<void> {
     await runCommand(parseArguments(args));
   } else if (command === "chat") {
     await chatCommand(parseArguments(args));
+  } else if (command === "import-session") {
+    await importSessionCommand(
+      parseArguments(args, ["commit", "sandbox"], ["commit"]),
+    );
   } else if (command === "threads") {
     await threadsCommand(parseArguments(args));
   } else if (command === "auth") {
@@ -422,6 +433,52 @@ async function printModels(client: CodexClient): Promise<void> {
     if (isRecord(value) && typeof value.id === "string") {
       process.stdout.write(`  ${value.id}\n`);
     }
+  }
+}
+
+async function importSessionCommand(args: ParsedArguments): Promise<void> {
+  const [file, ...extra] = args.positionals;
+  if (!file || extra.length)
+    throw new Error(
+      "Usage: zen import-session <selected-rollout.jsonl> [--commit --cwd <local-directory>]",
+    );
+  const contents = await readSelectedImportFile(file);
+  const preview = previewSessionImport(
+    parseSessionImport({ format: CODEX_ROLLOUT_FORMAT, contents }),
+  );
+  process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`);
+  if (!flag(args, "commit")) return;
+  const cwd = option(args, "cwd");
+  if (!cwd)
+    throw new Error(
+      "--commit requires an explicit --cwd; source paths and permissions are never restored",
+    );
+  const sandbox = option(args, "sandbox") ?? "read-only";
+  const session = await connectClient(args);
+  try {
+    const requestedModel = option(args, "model");
+    const selection =
+      requestedModel === undefined
+        ? undefined
+        : importModelSelection(
+            await session.client.request("model/list", {}),
+            requestedModel,
+          );
+    const result = await session.client.request("zen/thread/import", {
+      format: CODEX_ROLLOUT_FORMAT,
+      contents,
+      expectedSha256: preview.source.sha256,
+      configuration: {
+        cwd: path.resolve(cwd),
+        sandbox,
+        ...(selection === undefined ? {} : { selection }),
+      },
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } finally {
+    session.client.close();
+    await session.localServer?.close();
+    await session.localHost?.closeHostResources();
   }
 }
 
@@ -1081,6 +1138,9 @@ Usage:
   zen run [options] <prompt>
   zen chat [options]
   zen threads [options]
+  zen import-session <selected-rollout.jsonl> [--commit --cwd <directory>] [options]
+    Preview first; --commit creates an idle continuable Thread. Permissions default to read-only with approval.
+    --sandbox read-only|workspace-write|danger-full-access selects fresh local file permissions.
   zen auth login
   zen auth status
   zen auth logout

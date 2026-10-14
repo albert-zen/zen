@@ -132,6 +132,8 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportParams;
+  "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
@@ -225,6 +227,11 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportPreview;
+  "zen/thread/import": {
+    thread: ThreadSnapshot;
+    status: "imported" | "already_imported";
+  };
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;

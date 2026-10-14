@@ -1,3 +1,4 @@
+import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
 import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
 import {
   ThreadReadingContext,
@@ -1011,6 +1012,7 @@ function ThreadViewContent({
             }}
           >
             <div className="messages-inner">
+              <ImportedThreadNotice items={thread?.canonicalItems ?? []} />
               {transcriptRows.length === 0
                 ? (emptyContent ?? (
                     <div className="thread-empty">
@@ -2941,7 +2943,13 @@ function StatusMark({
       ? commandStatus(item)
       : commandPhaseLabel(phase);
   if (status === i18n.t("shell:completed")) return null;
-  return <small className={`tool-status ${item.status}`}>{status}</small>;
+  return (
+    <small
+      className={`tool-status ${phase === "imported" ? "imported" : item.status}`}
+    >
+      {status}
+    </small>
+  );
 }
 
 function TraceDetail({

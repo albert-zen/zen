@@ -1,3 +1,4 @@
+import { SessionImportDialog } from "./SessionImportDialog.js";
 import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
 import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
@@ -405,6 +406,7 @@ export function App() {
 }
 
 function AppContent() {
+  const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
@@ -912,7 +914,11 @@ function AppContent() {
       });
   };
 
-  const resumeThread = async (threadId: string, preserveNavigation = false) => {
+  const resumeThread = async (
+    threadId: string,
+    preserveNavigation = false,
+    propagateFailure = false,
+  ) => {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
@@ -937,7 +943,11 @@ function AppContent() {
       const result = await window.zenx.protocol.request("zen/thread/resume", {
         threadId,
       });
-      if (selectionEpoch.current !== epoch) return;
+      if (selectionEpoch.current !== epoch) {
+        if (propagateFailure)
+          throw new Error(i18n.t("shell:importOpenSuperseded"));
+        return;
+      }
       const pending = pendingResumeProjectionRef.current;
       const notifications =
         pending?.epoch === epoch && pending.threadId === threadId
@@ -1010,6 +1020,7 @@ function AppContent() {
           pendingResumeProjectionRef.current = null;
         setThreadError(describeError(error));
       }
+      if (propagateFailure) throw error;
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -2711,6 +2722,10 @@ function AppContent() {
         onNewThread={(workspace) => {
           openNewThreadDraft(workspace);
         }}
+        onImportSession={() => {
+          setImportSessionOpen(true);
+          void loadComposerCatalog();
+        }}
         onAddProject={() => openProjectPicker("add-project")}
         newThreadDisabled={newThreadPending}
         onRemoveProject={(workspace) => {
@@ -3167,6 +3182,17 @@ function AppContent() {
         </main>
       </RoomDraftContext.Provider>
 
+      {importSessionOpen && (
+        <SessionImportDialog
+          models={models}
+          initialCwd={lastUsedWorkspace ?? ""}
+          onClose={() => setImportSessionOpen(false)}
+          onImported={async (id) => {
+            await Promise.all([loadThreadSummaries(), loadProjects()]);
+            await resumeThread(id, false, true);
+          }}
+        />
+      )}
       {editingProject !== null ? (
         <ProjectEditor
           workspace={editingProject.workspace}

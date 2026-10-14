@@ -247,3 +247,7 @@ one notification through the same event projection, alongside its request result
 endpoint 上，从存储的开启引用的压缩边界分页回读公开 Thread 投影，最多 50 项，
 不返回 reasoning、排队输入或边界后内容；它不属于 remote-host workspace-scoped
 接口，也不因此赋予远端工作区读取权。原始 ItemList 本身不变。
+
+## Selected rollout imports
+
+`rollout-import.ts` is the version-pinned Codex rollout adapter for [selected-file import](../../../docs/session-import.md). It maps only supported source records to provider-neutral import history. The native `zen/thread/import/preview` and `zen/thread/import` methods do not add CAS import/resume claims. Historical tool results project a null exit code and an imported-result content type; CAS cannot express an unknown execution-status enum and gets a conservative terminal status, while ZenX presents the explicit historical/unknown label.

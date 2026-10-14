@@ -13,6 +13,8 @@ export const clientRequestMethods = [
   "thread/resume",
   "zen/thread/resume",
   "zen/thread/read",
+  "zen/thread/import/preview",
+  "zen/thread/import",
   "zen/thread/delete",
   "zen/thread/deleted/list",
   "zen/thread/restore",
