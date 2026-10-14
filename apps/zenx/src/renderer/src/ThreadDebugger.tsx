@@ -24,6 +24,7 @@ type Props = {
   thread: Thread;
   items: readonly CanonicalItem[];
   localModelDebug?: boolean;
+  onExit?(): void;
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
 };
@@ -83,6 +84,15 @@ export function ThreadDebugger(props: Props) {
                 onClick={() => setTab("requests")}
               >
                 {t("debugRequests")}
+              </button>
+            ) : null}
+            {props.onExit ? (
+              <button
+                type="button"
+                className="thread-debug-exit"
+                onClick={props.onExit}
+              >
+                {t("debugExit")}
               </button>
             ) : null}
           </nav>
