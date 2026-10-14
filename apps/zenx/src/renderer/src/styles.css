@@ -7922,15 +7922,6 @@ button:disabled {
   }
 }
 
-/* Keep the pointer path from the context ring into its hover card continuous. */
-.context-usage-popover::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -9px;
-  height: 9px;
-}
 .computer-thread-panel {
   height: 100%;
   min-height: 0;
