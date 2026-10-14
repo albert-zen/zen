@@ -1,5 +1,6 @@
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import { fetchModelResponse } from "./request-retry.js";
+import { modelUserContent } from "../model.js";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -268,40 +269,32 @@ async function toResponsesInput(
     ];
   }
   if (message.role === "user") {
-    if ("content" in message) {
-      const content: Array<Record<string, unknown>> = [];
-      for (const part of message.content) {
-        if (part.type === "text") {
-          content.push({ type: "input_text", text: part.text });
-        } else {
-          const attachment = part.attachment;
-          if (part.type !== "image") {
-            content.push({
-              type: "input_text",
-              text: `Audio input is not supported by this Responses transport. Attachment: ${attachment.sha256} (${attachment.mediaType}, ${attachment.byteLength} bytes).`,
-            });
-            continue;
-          }
-          if (attachments === undefined) {
-            throw new Error(
-              "OpenAI subscription attachment reader is required for image input",
-            );
-          }
-          const bytes = await attachments.read(part.attachment);
+    const content: Array<Record<string, unknown>> = [];
+    for (const part of modelUserContent(message)) {
+      if (part.type === "text") {
+        content.push({ type: "input_text", text: part.text });
+      } else {
+        const attachment = part.attachment;
+        if (part.type !== "image") {
           content.push({
-            type: "input_image",
-            image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+            type: "input_text",
+            text: `Audio input is not supported by this Responses transport. Attachment: ${attachment.sha256} (${attachment.mediaType}, ${attachment.byteLength} bytes).`,
           });
+          continue;
         }
+        if (attachments === undefined) {
+          throw new Error(
+            "OpenAI subscription attachment reader is required for image input",
+          );
+        }
+        const bytes = await attachments.read(part.attachment);
+        content.push({
+          type: "input_image",
+          image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+        });
       }
-      return [{ role: "user", content }];
     }
-    return [
-      {
-        role: "user",
-        content: [{ type: "input_text", text: message.text }],
-      },
-    ];
+    return [{ role: "user", content }];
   }
 
   if (message.role === "tool") {
