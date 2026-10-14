@@ -1,0 +1,58 @@
+name: Browser startup diagnostic (single experiment)
+
+on:
+  pull_request:
+    types: [opened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  owned-startup-replica:
+    name: Owned Chrome startup replica (diagnostic only)
+    if: >-
+      github.repository == 'albert-zen/zen' &&
+      github.event.pull_request.head.repo.full_name == 'albert-zen/zen' &&
+      github.event.pull_request.head.ref == 'diagnostic/browser-startup-once-20261014' &&
+      github.event.pull_request.draft == true &&
+      github.run_attempt == 1
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Record the exact experimental candidate
+        run: git rev-parse HEAD 'HEAD^{tree}'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check the bounded diagnostic transport
+        timeout-minutes: 1
+        run: node --import tsx --test apps/zenx/test/browser-startup-diagnostic.test.ts
+      - name: Prepare the same pinned headed Chrome fixture
+        run: |
+          fixture="$RUNNER_TEMP/zenx-startup-diagnostic-browser"
+          npm install --prefix "$fixture" --no-package-lock --no-audit --no-fund playwright@1.63.0
+          node "$fixture/node_modules/playwright/cli.js" install chromium
+          browser=$(node -e "process.stdout.write(require(process.argv[1]).chromium.executablePath())" "$fixture/node_modules/playwright")
+          test -f "$browser"
+          echo "ZENX_USER_BROWSER_EXECUTABLE=$browser" >> "$GITHUB_ENV"
+      - name: Observe one initialization, then stop regardless of reproduction
+        timeout-minutes: 3
+        env:
+          CI: "1"
+          ZENX_PARALLEL_INPUT_ARTIFACT_DIR: ${{ runner.temp }}/zenx-startup-diagnostic-evidence
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          npm --workspace apps/zenx run diagnose:browser-startup
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-browser-startup-diagnostic
+          path: ${{ runner.temp }}/zenx-startup-diagnostic-evidence
+          if-no-files-found: warn

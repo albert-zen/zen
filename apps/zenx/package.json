@@ -38,7 +38,8 @@
     "prepare:rtk": "node ./scripts/prepare-rtk.mjs",
     "typecheck:prepared": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
     "postinstall": "node ./scripts/prepare-shell-pty.mjs",
-    "smoke:browser-parallel-input": "tsx src/main/browser-parallel-input-smoke.ts"
+    "smoke:browser-parallel-input": "tsx src/main/browser-parallel-input-smoke.ts",
+    "diagnose:browser-startup": "tsx src/main/browser-parallel-input-smoke.ts --diagnose-startup"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
