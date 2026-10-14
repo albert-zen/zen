@@ -65,6 +65,7 @@ import type {
 } from "./trigger-types.js";
 
 export interface ZenXTriggerAppServerPort {
+  onReconnect?(listener: () => void): () => void;
   readThread?(threadId: string): Promise<ClientRequestResults["thread/read"]>;
   resolveRemoteThread?(
     device: string,
@@ -134,6 +135,7 @@ const MAX_PROGRAM_OUTCOMES = 4;
 interface WakeupEvent {
   /** Room-owned choice captured when its message and wakeup commit together. */
   roomDeliveryMode?: WakeupDeliveryMode;
+  bootstrapText?: string;
   reason: string;
   occurrenceKey: string;
   projection?: string;
@@ -151,6 +153,7 @@ interface WakeupEvent {
 }
 
 interface ActiveWakeup {
+  bootstrap?: true;
   historyId: string;
   threadId: string;
   clientUserMessageId: string;
@@ -350,7 +353,7 @@ export class ZenXTriggerService {
     const current = () =>
       this.#isWakeupOperational(generation) &&
       generation.observationEpoch === epoch;
-    generation.disposeNotifications = this.#manager.onNotification(
+    const disposeNotifications = this.#manager.onNotification(
       (method, params) => {
         if (
           !this.#isWakeupOperational(generation) ||
@@ -617,6 +620,18 @@ export class ZenXTriggerService {
         }
       },
     );
+    const disposeReconnect = this.#manager.onReconnect?.(() => {
+      void this.#recoverWakeups(generation).catch((error: unknown) => {
+        if (this.#isOperational(generation))
+          console.warn(
+            `Could not reconcile Trigger completion: ${describeError(error)}`,
+          );
+      });
+    });
+    generation.disposeNotifications = () => {
+      disposeNotifications();
+      disposeReconnect?.();
+    };
   }
 
   async #recoverWakeups(generation: TriggerGeneration): Promise<void> {
@@ -701,9 +716,8 @@ export class ZenXTriggerService {
         const receiptFor = (entry: TriggerHistoryEntry) => {
           const owns = (item: HostItem) =>
             item.clientId === entry.clientUserMessageId &&
-            item.source ===
-              (entry.sourceRoomId === null ? "trigger" : "room") &&
-            item.sourceId === (entry.sourceRoomId ?? entry.triggerId);
+            item.source === this.#hostSource(entry).source &&
+            item.sourceId === this.#hostSource(entry).sourceId;
           const queued = items.find(
             (
               item,
@@ -1246,7 +1260,24 @@ export class ZenXTriggerService {
         (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
       );
       if (room === undefined) throw new Error("Room was not found");
-      room.name = required(name, "room name", MAX_ROOM_NAME_BYTES);
+      const nextName = required(
+        name,
+        room.assistant ? "PAW name" : "room name",
+        room.assistant ? MAX_MEMBER_NAME_BYTES : MAX_ROOM_NAME_BYTES,
+      );
+      if (room.assistant) {
+        const member = room.members.find(
+          (value) => value.threadId === room.assistant!.threadId,
+        );
+        const trigger = snapshot.triggers.find(
+          (value) => value.id === room.assistant!.triggerId,
+        );
+        if (!member || !trigger?.room)
+          throw new Error("PAW identity is unavailable");
+        member.name = nextName;
+        trigger.room.mention = nextName;
+      }
+      room.name = nextName;
     });
   }
   async setAssistantDeliveryMode(
@@ -1392,19 +1423,61 @@ export class ZenXTriggerService {
     text: string,
     replyToMessageId?: string,
   ): Promise<RoomSendOperation> {
+    return this.#prepareRoomOperation(
+      roomId,
+      operationId,
+      text,
+      replyToMessageId,
+    );
+  }
+
+  async prepareAssistantIntroduction(
+    roomId: string,
+    operationId: string,
+    language: "en" | "zh",
+  ): Promise<RoomSendOperation> {
+    if (language !== "en" && language !== "zh")
+      throw new Error("Unsupported welcome language");
+    const text = [
+      "This is a Host bootstrap event for a newly created PAW, not a message from the user.",
+      "Proactively send a brief, natural welcome to the Reply Room using zenx_rooms_post_message, and ask what name the user would like to give you. Naming is optional; they can start working immediately.",
+      "When they choose a name, use zenx_rooms_rename and confirm only after it succeeds. Do not choose a name for them or repeat this welcome after they have already replied.",
+      language === "zh"
+        ? "Write the welcome in Chinese."
+        : "Write the welcome in English.",
+    ].join("\n");
+    return this.#prepareRoomOperation(
+      roomId,
+      operationId,
+      text,
+      undefined,
+      "assistantIntroduction",
+    );
+  }
+
+  async #prepareRoomOperation(
+    roomId: string,
+    operationId: string,
+    text: string,
+    replyToMessageId?: string,
+    kind?: "assistantIntroduction",
+  ): Promise<RoomSendOperation> {
     const generation = this.#runningGeneration();
     const id = required(operationId, "operation ID", MAX_ID_BYTES);
     const normalizedText = required(text, "message", MAX_MESSAGE_TEXT_BYTES);
     return await this.#mutate(generation, async (snapshot) => {
       const room = snapshot.rooms.find((entry) => entry.id === roomId);
       if (!room) throw new Error("Room was not found");
+      if (kind && !room.assistant)
+        throw new Error("PAW assistant Room was not found");
       const operations = (room.operations ??= []);
       const existing = operations.find((operation) => operation.id === id);
       if (existing) {
         if (existing.cancelled === true)
           throw new Error("Room operation was cancelled; no message was sent");
         if (
-          existing.text !== normalizedText ||
+          existing.kind !== kind ||
+          (kind === undefined && existing.text !== normalizedText) ||
           existing.replyTo?.messageId !== replyToMessageId
         )
           throw new Error("Operation is bound to a different message");
@@ -1440,6 +1513,7 @@ export class ZenXTriggerService {
           ? undefined
           : roomQuote(room, replyToMessageId);
       const value: RoomSendOperation = {
+        ...(kind === undefined ? {} : { kind }),
         ...(replyTo === undefined ? {} : { replyTo }),
         id,
         text: normalizedText,
@@ -1451,6 +1525,59 @@ export class ZenXTriggerService {
       operations.push(value);
       return structuredClone(value);
     });
+  }
+
+  async startAssistantIntroduction(
+    roomId: string,
+    operationId: string,
+  ): Promise<RoomSendOperation> {
+    const generation = this.#runningGeneration();
+    const committed = await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room?.assistant) throw new Error("PAW assistant Room was not found");
+      const operation = room.operations?.find(
+        (entry) => entry.id === operationId,
+      );
+      if (operation?.kind !== "assistantIntroduction")
+        throw new Error("PAW welcome operation is unavailable");
+      if (operation.cancelled) throw new Error("PAW welcome was cancelled");
+      if (operation.wakeupId) return { operation: structuredClone(operation) };
+      if (!generation.wakeupAdmission)
+        throw new Error("PAW proactive welcome is unavailable on this Host");
+      const trigger = snapshot.triggers.find(
+        (entry) => entry.id === room.assistant!.triggerId && entry.active,
+      );
+      if (!trigger)
+        throw new Error(
+          "PAW replies are paused; resume before starting its welcome",
+        );
+      const occurrenceKey = `paw-bootstrap:${room.id}:${operation.id}`;
+      const wakeup = this.#commitWakeup(snapshot, trigger.id, {
+        reason: "Host bootstrap: welcome the user and ask for a PAW name",
+        occurrenceKey,
+        sourceRoomId: room.id,
+        projection: projectRoomContext(room),
+        bootstrapText: operation.text,
+      });
+      const history = snapshot.history.find(
+        (entry) =>
+          entry.clientUserMessageId ===
+          stableWakeupId(trigger.id, occurrenceKey),
+      );
+      if (!history) throw new Error("PAW welcome was not admitted");
+      operation.wakeupId = history.id;
+      operation.mentions = [
+        {
+          name: room.name,
+          threadId: room.assistant.threadId,
+          triggerIds: [trigger.id],
+        },
+      ];
+      return { operation: structuredClone(operation), wakeup };
+    });
+    if (committed.wakeup && !("rejected" in committed.wakeup))
+      await this.#runCommittedWakeup(generation, committed.wakeup);
+    return committed.operation;
   }
 
   async postPreparedRoomMessage(
@@ -1486,9 +1613,14 @@ export class ZenXTriggerService {
       const operation = room.operations?.find((entry) => entry.id === id);
       if (!operation)
         throw new Error("Room operation is not retained; result unknown");
-      if (operation.cancelled !== true && operation.messageId !== null)
+      if (
+        operation.cancelled !== true &&
+        (operation.messageId !== null || operation.wakeupId !== undefined)
+      )
         throw new Error(
-          `Cannot cancel a saved Room message: ${operation.messageId}`,
+          operation.wakeupId
+            ? "Cannot cancel an admitted PAW welcome"
+            : `Cannot cancel a saved Room message: ${operation.messageId}`,
         );
       operation.cancelled = true;
       operation.acknowledged = true;
@@ -1520,6 +1652,10 @@ export class ZenXTriggerService {
     if (!operation)
       throw new Error("Room operation is not retained; result unknown");
     return {
+      ...(operation.kind === undefined ? {} : { kind: operation.kind }),
+      ...(operation.wakeupId === undefined
+        ? {}
+        : { wakeupId: operation.wakeupId }),
       operationId: operation.id,
       roomId,
       text: operation.text,
@@ -1527,7 +1663,7 @@ export class ZenXTriggerService {
       state:
         operation.cancelled === true
           ? "cancelled"
-          : operation.messageId === null
+          : operation.messageId === null && operation.wakeupId === undefined
             ? "prepared"
             : "saved",
       createdAt: operation.createdAt,
@@ -1559,7 +1695,9 @@ export class ZenXTriggerService {
                   (history) =>
                     history.triggerId === triggerId &&
                     history.sourceRoomId === roomId &&
-                    history.sourceRoomMessageId === operation.messageId,
+                    (operation.wakeupId
+                      ? history.id === operation.wakeupId
+                      : history.sourceRoomMessageId === operation.messageId),
                 );
                 return {
                   triggerId,
@@ -1725,7 +1863,10 @@ export class ZenXTriggerService {
       const operation = snapshot.rooms
         .find((room) => room.id === roomId)
         ?.operations?.find((entry) => entry.id === operationId);
-      if (!operation || operation.messageId === null)
+      if (
+        !operation ||
+        (operation.messageId === null && operation.wakeupId === undefined)
+      )
         throw new Error("Cannot acknowledge an uncommitted Room operation");
       operation.acknowledged = true;
     });
@@ -1791,6 +1932,7 @@ export class ZenXTriggerService {
         (!operation ||
           kind !== "human" ||
           normalizedAuthor !== "You" ||
+          operation.kind !== undefined ||
           operation.text !== normalizedText)
       )
         throw new Error(
@@ -2220,6 +2362,9 @@ export class ZenXTriggerService {
     committed: CommittedWakeup,
   ): Promise<void> {
     const active: ActiveWakeup = {
+      ...(committed.wakeup.bootstrapText === undefined
+        ? {}
+        : { bootstrap: true }),
       historyId: committed.historyId,
       threadId: committed.trigger.threadId,
       clientUserMessageId: committed.clientUserMessageId,
@@ -2350,7 +2495,10 @@ export class ZenXTriggerService {
             );
       // Room posts and independent event Triggers never inherit each other's
       // preference, even when they target the same assistant Thread.
-      const deliveryMode = wakeup.roomDeliveryMode ?? trigger.deliveryMode;
+      const deliveryMode =
+        wakeup.bootstrapText === undefined
+          ? (wakeup.roomDeliveryMode ?? trigger.deliveryMode)
+          : "steer";
       if (this.#history(active.historyId).delivery === undefined) {
         await this.#mutate(generation, async (snapshot) => {
           const entry = snapshot.history.find(
@@ -2363,24 +2511,45 @@ export class ZenXTriggerService {
       const result = await this.#manager.request("zen/turn/wake", {
         threadId: trigger.threadId,
         clientId: active.clientUserMessageId,
-        source: sourceRoom === undefined ? "trigger" : "room",
-        sourceId: sourceRoom?.id ?? trigger.id,
+        source:
+          wakeup.bootstrapText !== undefined
+            ? "bootstrap"
+            : sourceRoom === undefined
+              ? "trigger"
+              : "room",
+        ...(wakeup.bootstrapText === undefined
+          ? { sourceId: sourceRoom?.id ?? trigger.id }
+          : {}),
         text:
-          assistantRooms.length > 0
-            ? assistantWakeupInput(
-                trigger,
-                this.#history(active.historyId),
-                wakeup.projection,
-                assistantRooms,
-                assistantRoom,
-                wakeup.sourceRoomMessageText,
-              )
-            : wakeupInput(
-                trigger,
-                this.#history(active.historyId),
-                wakeup.projection,
-                wakeup.sourceRoomMessageText,
-              ),
+          wakeup.bootstrapText !== undefined
+            ? [
+                assistantWakeupInput(
+                  trigger,
+                  this.#history(active.historyId),
+                  wakeup.projection,
+                  assistantRooms,
+                  assistantRoom,
+                  undefined,
+                  true,
+                ),
+                "",
+                wakeup.bootstrapText,
+              ].join("\n")
+            : assistantRooms.length > 0
+              ? assistantWakeupInput(
+                  trigger,
+                  this.#history(active.historyId),
+                  wakeup.projection,
+                  assistantRooms,
+                  assistantRoom,
+                  wakeup.sourceRoomMessageText,
+                )
+              : wakeupInput(
+                  trigger,
+                  this.#history(active.historyId),
+                  wakeup.projection,
+                  wakeup.sourceRoomMessageText,
+                ),
         ...(deliveryMode === "queue" ? { mode: "queue" as const } : {}),
       });
       if (!this.#isOperational(generation)) return;
@@ -2405,6 +2574,13 @@ export class ZenXTriggerService {
       });
       if (result.turnId)
         await this.#consumePendingCompletion(generation, active, result.turnId);
+      // Recover only the exact canonical receipt when a bootstrap completion
+      // raced admission acknowledgement. Never resend or infer a human input.
+      if (
+        active.bootstrap &&
+        !isTerminal(this.#history(active.historyId).status)
+      )
+        await this.#recoverWakeups(generation);
     } catch (error) {
       if (error instanceof StaleGenerationError) return;
       if (this.#isOperational(generation)) {
@@ -2921,6 +3097,24 @@ export class ZenXTriggerService {
     }
   }
 
+  #hostSource(entry: TriggerHistoryEntry): {
+    source: "bootstrap" | "trigger" | "room";
+    sourceId?: string;
+  } {
+    // The canonical Host receipt owns provenance. Existing history only
+    // correlates the origin: a bootstrap targets a Room without originating
+    // from a Room message; ordinary Room sends always record both identities.
+    // Never infer this from the bounded, evictable Room operation log.
+    const bootstrap =
+      entry.sourceRoomId !== null && entry.sourceRoomMessageId === null;
+    return bootstrap
+      ? { source: "bootstrap" }
+      : {
+          source: entry.sourceRoomId === null ? "trigger" : "room",
+          sourceId: entry.sourceRoomId ?? entry.triggerId,
+        };
+  }
+
   #observeHostWakeup(
     generation: TriggerGeneration,
     item: {
@@ -2946,8 +3140,8 @@ export class ZenXTriggerService {
     // Host source must never acquire this history's reply route.
     if (
       item.source !== undefined &&
-      (item.source !== (entry.sourceRoomId === null ? "trigger" : "room") ||
-        item.sourceId !== (entry.sourceRoomId ?? entry.triggerId))
+      (item.source !== this.#hostSource(entry).source ||
+        item.sourceId !== this.#hostSource(entry).sourceId)
     )
       return undefined;
     const existing = generation.activeWakeups.get(item.clientId);
@@ -2955,6 +3149,7 @@ export class ZenXTriggerService {
     // Recover only observation of this exact canonical identity, including
     // after a service restart or a lost RPC reply. Never dispatch from history.
     const active: ActiveWakeup = {
+      ...(item.source === "bootstrap" ? { bootstrap: true as const } : {}),
       historyId: entry.id,
       threadId: entry.threadId,
       clientUserMessageId: item.clientId,
@@ -3510,6 +3705,7 @@ function assistantWakeupInput(
   rooms: ZenXRoom[],
   sourceRoom: ZenXRoom | undefined,
   sourceMessageText: string | undefined,
+  bootstrap = false,
 ): string {
   const input = wakeupInput(trigger, history, projection, sourceMessageText);
   const preset =
@@ -3522,7 +3718,8 @@ function assistantWakeupInput(
       "",
       ...preset,
       `Reply Room ID: ${sourceRoom.id}`,
-      ...(sourceMessageText !== undefined
+      `Current PAW display name: ${JSON.stringify(sourceRoom.name)}`,
+      ...(sourceMessageText !== undefined || bootstrap
         ? []
         : [
             "The source Room message is no longer retained; recover its context before acting.",

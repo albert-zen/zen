@@ -52,6 +52,7 @@ interface PlaywrightSessionState {
   cliSessionName: string;
   opened: boolean;
   closed: boolean;
+  closeQueued: boolean;
   lifecycleRevision: number;
   operationTail: Promise<void>;
   tabs: Map<string, PlaywrightTabState>;
@@ -150,6 +151,30 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
     this.#artifacts = new BrowserScreenshotArtifactStore(
       options.artifactDirectory,
     );
+  }
+
+  async readCurrentUrl(sessionId: string, tabId: string): Promise<string> {
+    const { session, tab } = this.#requireTab(sessionId, tabId);
+    const assertTabCurrent = () => {
+      if (session.closeQueued)
+        throw new Error("Playwright browser session is closing");
+      if (session.tabs.get(tab.tabKey) !== tab)
+        throw new Error("Playwright tab identity changed or was closed");
+    };
+    assertTabCurrent();
+    return await this.#enqueue(session, undefined, async (revision) => {
+      assertTabCurrent();
+      const documentVersion = tab.documentVersion;
+      const pages = await this.#pageStates(session);
+      this.#assertSession(session, revision);
+      assertTabCurrent();
+      if (tab.documentVersion !== documentVersion)
+        throw new Error("Playwright document changed during URL read");
+      const page = pages.find((candidate) => candidate.tabKey === tab.tabKey);
+      if (page === undefined)
+        throw new Error("Playwright browser tab was closed");
+      return page.url;
+    });
   }
 
   async listTabs(
@@ -547,6 +572,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
   async closeSession(sessionId: string, signal?: AbortSignal): Promise<number> {
     const session = this.#sessions.get(sessionId);
     if (session === undefined) return 0;
+    session.closeQueued = true;
     return await this.#enqueue(
       session,
       signal,
@@ -988,6 +1014,7 @@ export class PlaywrightCliBrowserBackend implements ZenXBrowserBackend {
       cliSessionName: `${playwrightSessionName(sessionId)}-${randomUUID().slice(0, 8)}`,
       opened: false,
       closed: false,
+      closeQueued: false,
       lifecycleRevision: 0,
       operationTail: Promise.resolve(),
       tabs: new Map(),

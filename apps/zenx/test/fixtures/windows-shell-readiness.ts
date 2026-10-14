@@ -1,46 +1,85 @@
+import { performance } from "node:perf_hooks";
 import { stripVTControlCharacters } from "node:util";
 
-// Native evidence: an untouched PowerShell first prompt arrived after the 5s
-// action threshold, observed by 6030ms (CI 38361180443/job115175488678).
-// Only startup gets this budget; commands/output/Stop retain their 5s checks.
-export const WINDOWS_SHELL_READINESS_MS = 10000;
+// Native spawn/control returned in 171ms, but the untouched first PowerShell
+// prompt was observed at 17,033ms (CI 38417468520/job115365619182).
+// Keep creation/control strict. The absolute prompt bound includes creation and
+// gives that observed cold start about 3s of margin, without resetting on output.
+export const WINDOWS_SHELL_CONTROL_MS = 5000;
+export const WINDOWS_SHELL_READINESS_MS = 20000;
 
-export async function waitForWindowsShellReadiness(
-  read: () => Promise<{
-    inputAvailable: boolean;
-    status: string;
-    output: string;
-  }>,
-  createdAt: number,
+type StartupRead = {
+  inputAvailable: boolean;
+  status: string;
+  output: string;
+};
+
+/** Read-only fixture readiness; the caller still owns cleanup on every outcome. */
+export async function waitForWindowsShellReadiness<T>(
+  create: () => Promise<T>,
+  read: (session: T) => Promise<StartupRead>,
   {
-    now = Date.now,
+    now = () => performance.now(),
     sleep = (ms: number) =>
       new Promise<void>((resolve) => setTimeout(resolve, ms)),
   }: {
     now?: () => number;
     sleep?: (ms: number) => Promise<void>;
   } = {},
-): Promise<number> {
-  const deadline = createdAt + WINDOWS_SHELL_READINESS_MS;
-  let last: Awaited<ReturnType<typeof read>> | undefined;
-  while (now() < deadline) {
-    last = await read();
-    // Include creation/control registration and the read itself in one bound.
-    if (now() >= deadline) break;
-    if (
-      last.inputAvailable &&
-      /PS [^\r\n]*> /u.test(stripVTControlCharacters(last.output))
-    )
-      return now() - createdAt;
+): Promise<{ session: T; elapsedMs: number }> {
+  const startedAt = now();
+  const controlDeadline = startedAt + WINDOWS_SHELL_CONTROL_MS;
+  const promptDeadline = startedAt + WINDOWS_SHELL_READINESS_MS;
+  let controlAvailable = false;
+  let last: StartupRead | undefined;
+  const failure = (reason: string) =>
+    new Error(
+      `${reason}: ${JSON.stringify({
+        phase: controlAvailable ? "PowerShell prompt" : "creation/control",
+        budgetMs: controlAvailable
+          ? WINDOWS_SHELL_READINESS_MS
+          : WINDOWS_SHELL_CONTROL_MS,
+        elapsedMs: now() - startedAt,
+        status: last?.status,
+        inputAvailable: last?.inputAvailable,
+        output: last?.output.slice(-4096),
+      })}`,
+    );
+  const timeout = () =>
+    failure("Timed out waiting for Windows Shell readiness");
+  const bounded = async <R>(operation: () => Promise<R>, deadline: number) => {
+    const remaining = deadline - now();
+    if (remaining <= 0) throw timeout();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        operation(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(timeout()), remaining);
+        }),
+      ]);
+      // Creation or an observation completing at/after the bound is not ready.
+      if (now() >= deadline) throw timeout();
+      return result;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+
+  const session = await bounded(create, controlDeadline);
+  for (;;) {
+    last = await bounded(
+      () => read(session),
+      controlAvailable ? promptDeadline : controlDeadline,
+    );
+    if (last.status !== "queued" && last.status !== "running")
+      throw failure("Windows Shell stopped before readiness");
+    if (last.status === "running" && last.inputAvailable) {
+      controlAvailable = true;
+      if (/PS [^\r\n]*> /u.test(stripVTControlCharacters(last.output)))
+        return { session, elapsedMs: now() - startedAt };
+    }
+    const deadline = controlAvailable ? promptDeadline : controlDeadline;
     await sleep(Math.min(10, Math.max(0, deadline - now())));
   }
-  throw new Error(
-    `Timed out waiting for Windows Shell readiness: ${JSON.stringify({
-      budgetMs: WINDOWS_SHELL_READINESS_MS,
-      elapsedMs: now() - createdAt,
-      status: last?.status,
-      inputAvailable: last?.inputAvailable,
-      output: last?.output.slice(-4096),
-    })}`,
-  );
 }

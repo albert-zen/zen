@@ -262,7 +262,7 @@ test("assistant view reads without starting work, pauses future replies explicit
 });
 
 for (const entry of ["primary route", "plugin button"] as const) {
-  test(`PAW explicit existing binding keeps the command and custom identity: ${entry}`, async () => {
+  test(`PAW inline creation keeps explicit existing binding: ${entry}`, async () => {
     const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
     Object.assign(globalThis, {
       window: dom.window,
@@ -325,19 +325,6 @@ for (const entry of ["primary route", "plugin button"] as const) {
       },
     } as unknown as PluginUiSdkV1;
     const root = createRoot(document.getElementById("root")!);
-    const input = (label: string) =>
-      [...document.querySelectorAll("label")]
-        .find((node) => node.querySelector("span")?.textContent === label)!
-        .querySelector("input")!;
-    const fill = async (label: string, value: string) =>
-      act(async () => {
-        const field = input(label);
-        Object.getOwnPropertyDescriptor(
-          dom.window.HTMLInputElement.prototype,
-          "value",
-        )!.set!.call(field, value);
-        field.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-      });
     try {
       await act(async () =>
         root.render(React.createElement(RoomsPage, { sdk })),
@@ -349,20 +336,20 @@ for (const entry of ["primary route", "plugin button"] as const) {
         assert.ok(preset);
         await act(async () => preset.click());
       }
-      assert.ok(
-        document.querySelector('[role="dialog"][aria-label="Create PAW"]'),
+      assert.equal(document.querySelector('[role="dialog"]') !== null, false);
+      assert.ok(document.querySelector(".paw-start-content"));
+      assert.equal(
+        document.querySelector(".paw-start-content input") !== null,
+        false,
       );
-      assert.equal(input("Name").value, "PAW");
-      assert.match(document.body.textContent ?? "", /New PAW conversation/);
       assert.match(
         document.body.textContent ?? "",
-        /creates its own working conversation/,
+        /Create your PAW and it will welcome you/,
       );
-      assert.match(document.body.textContent ?? "", /Chat and memory: Ready/);
       assert.ok(
         calls.every((call) => ["list", "workspaces"].includes(call.id)),
       );
-      await fill("Name", "Daily Companion");
+      assert.match(document.body.textContent ?? "", /Chat and memory: Ready/);
       assert.equal(
         [...document.querySelectorAll("label")].some(
           (node) => node.textContent === "Member name",
@@ -396,7 +383,7 @@ for (const entry of ["primary route", "plugin button"] as const) {
           .click(),
       );
       const create = [...document.querySelectorAll("button")].find(
-        (button) => button.textContent === "Create PAW",
+        (button) => button.textContent === "Create and say hello",
       );
       assert.ok(create);
       assert.equal(create.disabled, false);
@@ -409,8 +396,8 @@ for (const entry of ["primary route", "plugin button"] as const) {
         operationId: string;
         target: unknown;
       };
-      assert.equal(submitted.name, "Daily Companion");
-      assert.equal(submitted.memberName, "Daily Companion");
+      assert.equal(submitted.name, "PAW");
+      assert.equal(submitted.memberName, "PAW");
       assert.equal(typeof submitted.operationId, "string");
       assert.deepEqual(submitted.target, {
         kind: "existing",

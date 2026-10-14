@@ -403,6 +403,60 @@ test("built-in preset refresh preserves a user's hidden selection", () => {
   );
 });
 
+test("a user-configured subscription catalog is never re-seeded with built-in presets", () => {
+  // Deleting gpt-5.4/5.5 in Settings used to resurrect them on the next
+  // profile load or after repackaging, because presets were injected
+  // unconditionally. Once the user owns the catalog, Host leaves it as-is.
+  const kept = structuredLegacyModelCatalog("openai-subscription", [
+    "gpt-5.6-terra",
+  ])[0]!;
+  const owned = applyBuiltInModelCatalogPresets({
+    ...profile,
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models: [kept],
+        modelsUserConfigured: true,
+      },
+    ],
+    defaultModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
+    },
+    titleModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
+    },
+  });
+  assert.deepEqual(
+    owned.providerProfiles[0]?.models.map((model) => model.id),
+    ["gpt-5.6-terra"],
+  );
+  assert.equal(
+    owned.providerProfiles[0]?.modelsUserConfigured,
+    true,
+    "the ownership marker survives validation",
+  );
+  // Without the marker the historical seeding behavior is unchanged.
+  const seeded = applyBuiltInModelCatalogPresets({
+    ...owned,
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models: [kept],
+      },
+    ],
+  });
+  assert.deepEqual(
+    seeded.providerProfiles[0]?.models.map((model) => model.id),
+    ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+  );
+});
+
 test("migrates unconfigured compatible models to text-only without inferring provider controls", () => {
   const unconfigured = {
     ...profile.providerProfiles[0]!.models[1]!,

@@ -403,6 +403,24 @@ function moveIdentifier(
   return moved.every((id, index) => id === current[index]) ? null : moved;
 }
 
+/** The Pinned section renders in `pinnedThreadIds` order, so reordering one
+ * pinned Thread is a permutation of that preference list itself. Unknown ids
+ * (unpinned meanwhile, archived) leave the list untouched. */
+export function movePinnedThreadIds(
+  pinnedThreadIds: readonly string[],
+  sourceThreadId: string,
+  targetThreadId: string,
+  placement: SidebarOrderPlacement,
+): readonly string[] {
+  const moved = moveIdentifier(
+    [...pinnedThreadIds],
+    sourceThreadId,
+    targetThreadId,
+    placement,
+  );
+  return moved === null ? pinnedThreadIds : moved;
+}
+
 function projectLabel(cwd: string): string {
   const normalized = cwd.replace(/[\\/]+$/u, "");
   const parts = normalized.split(/[\\/]/u).filter(Boolean);

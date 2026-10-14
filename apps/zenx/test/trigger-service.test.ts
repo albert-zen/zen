@@ -1907,16 +1907,33 @@ test(
         once: true,
       });
       const delivered = new Promise<void>((resolve, reject) => {
-        let completions = 0;
+        const completedTurns = new Set<string>();
         const deadline = setTimeout(
           () =>
             reject(new Error("Parent did not finish its queued notification")),
           10_000,
         );
         dispose = manager.onNotification((method, params) => {
-          if (method !== "turn/completed") return;
-          const event = params as ServerNotificationParams["turn/completed"];
-          if (event.threadId === parent.id && ++completions === 2) {
+          const terminal =
+            method === "turn/completed"
+              ? (() => {
+                  const event =
+                    params as ServerNotificationParams["turn/completed"];
+                  return { threadId: event.threadId, turnId: event.turn.id };
+                })()
+              : method === "zen/thread/event"
+                ? (() => {
+                    const event = (
+                      params as ServerNotificationParams["zen/thread/event"]
+                    ).event;
+                    return event.type === "turn_completed"
+                      ? { threadId: event.threadId, turnId: event.turnId }
+                      : undefined;
+                  })()
+                : undefined;
+          if (terminal?.threadId !== parent.id) return;
+          completedTurns.add(terminal.turnId);
+          if (completedTurns.size === 2) {
             clearTimeout(deadline);
             resolve();
           }

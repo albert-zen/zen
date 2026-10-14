@@ -510,6 +510,10 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
             ...(operation.replyTo === undefined
               ? {}
               : { replyTo: structuredClone(operation.replyTo) }),
+            ...(operation.kind === undefined ? {} : { kind: operation.kind }),
+            ...(operation.wakeupId === undefined
+              ? {}
+              : { wakeupId: operation.wakeupId }),
             id: operation.id,
             text: operation.text,
             messageId: operation.messageId,
@@ -1041,6 +1045,8 @@ function isRoomOperation(
   return (
     operation !== null &&
     exactKeys(operation, [
+      "kind",
+      "wakeupId",
       "replyTo",
       "id",
       "text",
@@ -1050,6 +1056,14 @@ function isRoomOperation(
       ...(operation["cancelled"] === undefined ? [] : ["cancelled"]),
       "mentions",
     ]) &&
+    (operation["kind"] === undefined ||
+      (operation["kind"] === "assistantIntroduction" &&
+        operation["messageId"] === null &&
+        operation["replyTo"] === undefined)) &&
+    (operation["wakeupId"] === undefined ||
+      (operation["kind"] === "assistantIntroduction" &&
+        string(operation["wakeupId"], MAX_ID_BYTES) &&
+        operation["cancelled"] !== true)) &&
     (operation["replyTo"] === undefined || isRoomQuote(operation["replyTo"])) &&
     string(operation["id"], MAX_ID_BYTES) &&
     string(operation["text"], MAX_MESSAGE_TEXT_BYTES) &&

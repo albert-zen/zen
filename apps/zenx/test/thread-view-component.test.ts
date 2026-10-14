@@ -1943,7 +1943,7 @@ test("streaming append preserves an explicitly closed trace group", async () => 
   });
 });
 
-test("terminal transition folds intermediate trace before Turn history reopens", async () => {
+test("terminal transition folds Turn history without discarding explicit trace choices", async () => {
   await withDom(async (root) => {
     const items = [
       reasoningItem("reasoning-terminal", ["Mapped"], []),
@@ -1964,7 +1964,7 @@ test("terminal transition folds intermediate trace before Turn history reopens",
     await act(async () => requiredButton(".turn-toggle").click());
     assert.equal(
       requiredButton(".trace-toggle").getAttribute("aria-expanded"),
-      "false",
+      "true",
     );
   });
 });

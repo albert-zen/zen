@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Manage shared ZenX Room collaboration.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -749,7 +749,15 @@
             "maxLength": 512
           },
           "emoji": {
-            "enum": ["👍", "❤️", "🎉", "👀", "✅", "🤔", null]
+            "enum": [
+              "\ud83d\udc4d",
+              "\u2764\ufe0f",
+              "\ud83c\udf89",
+              "\ud83d\udc40",
+              "\u2705",
+              "\ud83e\udd14",
+              null
+            ]
           }
         },
         "required": ["roomId", "messageId", "emoji"],
@@ -816,6 +824,56 @@
         "required": ["roomId", "deliveryMode"],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "zenx_rooms_prepare_introduction",
+      "description": "Prepare a trusted PAW bootstrap welcome receipt.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "language": {
+            "type": "string",
+            "enum": ["en", "zh"]
+          }
+        },
+        "required": ["roomId", "operationId", "language"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_start_introduction",
+      "description": "Start the prepared PAW Host bootstrap welcome.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "operationId": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": ["roomId", "operationId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536
     }
   ],
   "ui": {
@@ -963,6 +1021,16 @@
         "id": "assistant-delivery",
         "title": "Set assistant Room message delivery",
         "tool": "zenx_rooms_assistant_delivery"
+      },
+      {
+        "id": "prepare-introduction",
+        "title": "Prepare a trusted PAW bootstrap welcome receipt.",
+        "tool": "zenx_rooms_prepare_introduction"
+      },
+      {
+        "id": "start-introduction",
+        "title": "Start the prepared PAW Host bootstrap welcome.",
+        "tool": "zenx_rooms_start_introduction"
       }
     ]
   }

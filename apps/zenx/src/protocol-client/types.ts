@@ -164,6 +164,8 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportParams;
+  "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
@@ -258,6 +260,11 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportPreview;
+  "zen/thread/import": {
+    thread: ThreadSnapshot;
+    status: "imported" | "already_imported";
+  };
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
@@ -435,3 +442,8 @@ export type ConnectionStatus =
   | { type: "resubscribeFailed"; threadId: string; error: Error }
   | { type: "protocolError"; error: Error }
   | { type: "closed" };
+
+export type {
+  NativeHostWakeupParams,
+  NativeHostWakeupResult,
+} from "../../../../src/protocol/native/wire.js";

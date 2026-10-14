@@ -604,6 +604,30 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return capabilityPackage;
   }
 
+  async readBrowserTargetUrl(
+    threadId: string,
+    targetId: string,
+  ): Promise<string> {
+    const selected = this.#browserProfilePackage;
+    const available = () =>
+      this.#browserProfilePackage === selected &&
+      this.pluginSnapshot().plugins.some(
+        (plugin) =>
+          plugin.id === "browser" && plugin.enabled && plugin.available,
+      );
+    if (
+      !available() ||
+      !(
+        selected instanceof BrowserZenXCapabilityPackage ||
+        selected instanceof BrowserBackendRegistry
+      )
+    )
+      throw new Error("Browser provider is unavailable");
+    const url = await selected.readTargetUrl(threadId, targetId);
+    if (!available()) throw new Error("Browser provider is no longer current");
+    return url;
+  }
+
   observeBrowserLive(
     request: BrowserThreadRequest,
     listener: BrowserThreadListener,

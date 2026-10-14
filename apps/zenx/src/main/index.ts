@@ -808,6 +808,10 @@ async function bootstrapZenX(): Promise<void> {
         request: (method, params) => automationManager.request(method, params),
         onNotification: (listener) =>
           automationManager.onNotification(listener),
+        onReconnect: (listener) =>
+          automationManager.onStatus((status) => {
+            if (status.type === "ready" && status.reconnected) listener();
+          }),
         readThread: async (threadId) => {
           const result = await automationManager.request("thread/read", {
             threadId,
@@ -972,6 +976,21 @@ async function bootstrapZenX(): Promise<void> {
     await settingsService!.reconcileConfiguration();
   };
   await attachConfigurationControl();
+  // An unconfigured OpenAI subscription catalog adopts the account's current
+  // models once, then belongs to the user. This runs after the configuration
+  // control is attached so the persisted catalog publishes to the live Host
+  // instead of waiting for the next restart. It never blocks startup on the
+  // network; failures keep the built-in presets and retry on next launch or
+  // login.
+  void settingsService!
+    .autoConfigureSubscriptionModels()
+    .then(async (configured) => {
+      if (!configured) return;
+      const value = await settingsService!.publicSettings();
+      for (const window of BrowserWindow.getAllWindows())
+        window.webContents.send(ipcChannels.settingsChanged, value);
+    })
+    .catch(() => undefined);
   ipcMain.handle(ipcChannels.settingsSafeRestart, async () => {
     const manager = appServerManager;
     if (!manager || manager.status.type !== "ready")
@@ -2093,6 +2112,9 @@ function installSettingsIpc(
         }
       },
     );
+    // First login is the earliest moment the account's real model catalog is
+    // discoverable; adopt it once when the user has not configured models.
+    await settings.autoConfigureSubscriptionModels().catch(() => false);
     return await settings.publicSettings();
   });
   ipcMain.handle(
@@ -2178,6 +2200,33 @@ function installCapabilityIpc(
   const computerLive = new ComputerLiveObservationIpcBridge(
     capabilities,
     ipcChannels.computerLiveEvent,
+  );
+  ipcMain.handle(
+    ipcChannels.browserOpenExternal,
+    async (event, threadId: unknown, targetId: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const rendererUrl =
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+      if (
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+            mainFrame: event.senderFrame === event.sender.mainFrame,
+            url: event.senderFrame?.url ?? "",
+          },
+          rendererUrl,
+        ) ||
+        typeof threadId !== "string" ||
+        typeof targetId !== "string"
+      )
+        throw new Error(
+          "Browser external opening requires the trusted ZenX window",
+        );
+      await browserLive.openExternal(event.sender, threadId, targetId, (url) =>
+        shell.openExternal(url),
+      );
+    },
   );
   ipcMain.handle(
     ipcChannels.browserLiveSubscribe,

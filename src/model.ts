@@ -1,3 +1,4 @@
+import type { ImportedToolCallOrigin } from "./thread-import.js";
 import type { WorkspaceInstructionFile } from "./item.js";
 import { deduplicateMediaContent } from "./media-content.js";
 import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
@@ -33,6 +34,7 @@ export interface ToolCallModelMessage {
     callId: string;
     name: string;
     arguments: Record<string, unknown>;
+    imported?: ImportedToolCallOrigin;
   }>;
 }
 
@@ -40,7 +42,7 @@ export interface ToolResultModelMessage {
   role: "tool";
   callId: string;
   text: string;
-  exitCode: number;
+  exitCode: number | null;
   modelContent?: UserInput;
 }
 
@@ -298,6 +300,9 @@ function compileCanonicalModelMessages(
               callId: candidate.callId,
               name: candidate.name,
               arguments: candidate.arguments,
+              ...(candidate.imported === undefined
+                ? {}
+                : { imported: candidate.imported }),
             });
             cursor += 1;
           }
@@ -324,6 +329,9 @@ function compileCanonicalModelMessages(
               callId: candidate.callId,
               name: candidate.name,
               arguments: candidate.arguments,
+              ...(candidate.imported === undefined
+                ? {}
+                : { imported: candidate.imported }),
             });
             cursor += 1;
           }

@@ -808,6 +808,20 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       replyToMessageId,
     );
   }
+  async prepareAssistantIntroduction(
+    roomId: string,
+    operationId: string,
+    language: "en" | "zh",
+  ) {
+    return this.#service.prepareAssistantIntroduction(
+      roomId,
+      operationId,
+      language,
+    );
+  }
+  async startAssistantIntroduction(roomId: string, operationId: string) {
+    return this.#service.startAssistantIntroduction(roomId, operationId);
+  }
   async postPreparedRoomMessage(
     roomId: string,
     operationId: string,
