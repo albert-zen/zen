@@ -310,8 +310,9 @@ test("completion setup resolves readable targets without ambiguous writes and re
     ],
   };
   const port: ZenXTriggerAppServerPort = {
-    request: async () => {
-      throw new Error("Completion notifications must use the queue");
+    request: async (method) => {
+      assert.equal(method, "zen/turn/wake");
+      return { mode: "queue", queued: true };
     },
     onNotification: (handler) => {
       listener = handler;
@@ -319,7 +320,6 @@ test("completion setup resolves readable targets without ambiguous writes and re
         listener = undefined;
       };
     },
-    enqueue: async () => {},
     readThread: async (threadId) =>
       ({
         thread: {
@@ -425,6 +425,7 @@ test("completion setup resolves readable targets without ambiguous writes and re
       kind: "thread",
       threadId: "parent-",
       watchedThreadId: "Child",
+      deliveryMode: "queue",
       label: "Watch",
       prompt: "Review",
       once: true,
@@ -753,7 +754,6 @@ test("overlapping enabled Trigger runtime generations keep durable wakeup admiss
     appServer: {
       request: async () => ({}) as never,
       onNotification: () => () => {},
-      enqueue: async () => {},
     },
   });
   try {
@@ -814,7 +814,6 @@ test("a failed shared-container rename leaves both namespaces at the prior snaps
   const appServer = {
     request: async () => ({}) as never,
     onNotification: () => () => {},
-    enqueue: async () => {},
   };
   try {
     const service = await createBundledAutomationPluginService({

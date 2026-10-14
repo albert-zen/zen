@@ -834,6 +834,41 @@ function attach(
               threadId: str("threadId"),
               clientId: str("clientId"),
               text: str("text"),
+              ...(p.sender === undefined
+                ? {}
+                : {
+                    sender: (() => {
+                      if (
+                        typeof p.sender !== "object" ||
+                        p.sender === null ||
+                        Array.isArray(p.sender)
+                      )
+                        throw new RemoteHostError("invalid_request");
+                      const source = p.sender as Record<string, unknown>;
+                      if (
+                        Object.keys(source).some(
+                          (key) =>
+                            !["threadId", "toolCallId", "callId"].includes(key),
+                        ) ||
+                        ![
+                          source.threadId,
+                          source.toolCallId,
+                          source.callId,
+                        ].every(
+                          (value) =>
+                            typeof value === "string" &&
+                            value.length > 0 &&
+                            value.length <= 512,
+                        )
+                      )
+                        throw new RemoteHostError("invalid_request");
+                      return {
+                        threadId: source.threadId as string,
+                        toolCallId: source.toolCallId as string,
+                        callId: source.callId as string,
+                      };
+                    })(),
+                  }),
               ...(p.messageType === undefined
                 ? {}
                 : {

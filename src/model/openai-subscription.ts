@@ -1,3 +1,4 @@
+import { historicalCallId, historicalToolName } from "./imported-history.js";
 import { fetchModelResponse } from "./request-retry.js";
 import type {
   ModelAdapter,
@@ -74,7 +75,11 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       request.messages.flatMap((message) =>
         message.role === "assistant" && "toolCalls" in message
           ? message.toolCalls
-              .filter((call) => replayRawToolNames.has(call.name))
+              .filter((call) =>
+                call.imported
+                  ? call.imported.inputFormat === "text"
+                  : replayRawToolNames.has(call.name),
+              )
               .map((call) => call.callId)
           : [],
       ),
@@ -305,8 +310,11 @@ async function toResponsesInput(
         type: rawCallIds.has(message.callId)
           ? "custom_tool_call_output"
           : "function_call_output",
-        call_id: providerCallId(message.callId),
-        output: `Exit code: ${String(message.exitCode)}\n${message.text}`,
+        call_id:
+          message.exitCode === null
+            ? historicalCallId(message.callId)
+            : providerCallId(message.callId),
+        output: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
       },
     ];
     if (message.modelContent !== undefined) {
@@ -329,6 +337,24 @@ async function toResponsesInput(
       input.push(assistantTextInput(message.text, index));
     }
     for (const call of message.toolCalls) {
+      if (call.imported) {
+        input.push(
+          call.imported.inputFormat === "text"
+            ? {
+                type: "custom_tool_call",
+                call_id: historicalCallId(call.callId),
+                name: historicalToolName(call),
+                input: call.arguments.input,
+              }
+            : {
+                type: "function_call",
+                call_id: historicalCallId(call.callId),
+                name: historicalToolName(call),
+                arguments: serializeArguments(call.arguments),
+              },
+        );
+        continue;
+      }
       assertProviderToolName(call.name);
       if (rawToolNames.has(call.name)) {
         if (

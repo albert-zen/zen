@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { app, BrowserWindow, ipcMain, screen } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, screen } from "electron";
 import { ForegroundActivity } from "./foreground-activity.js";
 import {
   ElectronForegroundActivityPresenter,
@@ -53,6 +53,7 @@ async function verifyForegroundActivityCdpOverlay(
     },
     screen,
     ipcMain,
+    globalShortcut,
     preloadPath,
     language: () => "en",
     onStop: (ids) => activity!.stop(ids),
@@ -209,6 +210,7 @@ async function verifyWindowsForegroundActivityInput(preloadPath: string) {
       },
       screen,
       ipcMain,
+      globalShortcut,
       preloadPath,
       language: () => "en",
       onStop(ids) {
@@ -296,6 +298,65 @@ async function verifyWindowsForegroundActivityInput(preloadPath: string) {
       () => windows.every((window) => window.isDestroyed()),
       "OS-input overlay cleanup",
     );
+    assert.equal(
+      globalShortcut.isRegistered("Escape"),
+      false,
+      "settled activity releases Escape",
+    );
+    entered = false;
+    executionError = undefined;
+    running = activity.run(
+      {
+        callId: "owned-native-escape-fixture",
+        name: "owned_fixture",
+        arguments: {},
+        cwd: process.cwd(),
+        signal: new AbortController().signal,
+      },
+      (signal) =>
+        new Promise<void>((resolve) => {
+          entered = true;
+          release = resolve;
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborts++;
+            },
+            { once: true },
+          );
+        }),
+    );
+    void running.catch((error: unknown) => {
+      executionError = error;
+    });
+    await waitFor(
+      () => entered || executionError !== undefined,
+      "Escape fixture indicator paint",
+    );
+    if (executionError !== undefined) throw executionError;
+    assert.equal(
+      globalShortcut.isRegistered("Escape"),
+      true,
+      "real global Escape registration is required for this native check",
+    );
+    const escapeOwner = activity.snapshot.activities[0]!.id;
+    const escape = await native.pressEscape();
+    await waitFor(() => aborts === 2, "OS-routed global Escape cancellation");
+    assert.deepEqual(stops, [[owner], [escapeOwner]]);
+    assert.equal(activity.snapshot.activities.length, 1);
+    assert.equal(activity.snapshot.activities[0]!.stopping, true);
+    assert.equal(
+      globalShortcut.isRegistered("Escape"),
+      true,
+      "abort does not fabricate settlement",
+    );
+    release?.();
+    await running;
+    await waitFor(
+      () => windows.every((window) => window.isDestroyed()),
+      "Escape overlay cleanup",
+    );
+    assert.equal(globalShortcut.isRegistered("Escape"), false);
     const final = await native.finish();
     assert.equal(failures.length, 0);
     return {
@@ -305,6 +366,8 @@ async function verifyWindowsForegroundActivityInput(preloadPath: string) {
       positiveControl: native.ready,
       edge,
       stop,
+      escape,
+      globalEscapeConfirmed: true,
       final,
       stopCallbacks: stops.length,
       aborts,

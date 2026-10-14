@@ -21,6 +21,8 @@ import {
   windowsBackgroundCaptureCommand,
 } from "./capabilities/windows-background-capture.js";
 
+import { publishWindowsSmokePhase } from "./windows-smoke-phase.js";
+
 const arguments_ = parseArguments(process.argv.slice(2));
 const probeDirectory = requiredString(
   arguments_["probe-directory"],
@@ -451,7 +453,7 @@ public static class ZenXMarkerCheck {
 }
 
 async function stage(phase: string): Promise<void> {
-  await writeFile(path.join(probeDirectory, "phase"), phase);
+  await publishWindowsSmokePhase(probeDirectory, phase);
 }
 
 async function verifyNativeSentinelClassification(

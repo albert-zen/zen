@@ -92,6 +92,8 @@ async function fixture(
         name,
         arguments: args,
         callId,
+        // These convenience invocations model explicit UI input, not a model tool call.
+        trustedPluginUi: true,
         threadId: "source-thread",
         cwd: process.cwd(),
         signal: new AbortController().signal,
@@ -328,6 +330,7 @@ for (const skillMode of ["auto", "manual"] as const) {
                 : { messageType: "follow_up" }),
             },
             callId: randomUUID(),
+            trustedPluginUi: true,
             canonicalToolCallId: "trusted-send-call",
             threadId: "source-thread",
             cwd: root,
@@ -729,7 +732,7 @@ test("a replacement cannot act on a new Turn that starts after its state read", 
   }
 });
 
-test("default send follows the live preference and independent canonical calls remain separate", async () => {
+test("explicit UI send follows the live preference and independent canonical calls remain separate", async () => {
   const f = await fixture({
     provider: "test",
     async *stream(request) {
@@ -758,6 +761,7 @@ test("default send follows the live preference and independent canonical calls r
         arguments: { target, text: "same text" },
         callId: "provider-reuses-this",
         canonicalToolCallId,
+        trustedPluginUi: true,
         threadId: "source",
         cwd: process.cwd(),
         signal: new AbortController().signal,

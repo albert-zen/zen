@@ -86,9 +86,9 @@ const directory = process.argv[1];
 const mode = process.argv[2];
 const foreign = mode === 'foreign' || mode === 'foreign-error';
 const has = name => fs.existsSync(path.join(directory, name));
-const save = (name, phase, injectedClicks, guardMouseDown, guardMouseUp) => {
+const save = (name, phase, injectedClicks, guardMouseDown, guardMouseUp, injectedEscapeEvents) => {
   const p = path.join(directory, name);
-  fs.writeFileSync(p + '.tmp', JSON.stringify({ kind:'windows-os-routed-input', phase, guardPid:foreign ? 1 : process.pid, samples:20, sampledFocusChanges:0, foregroundEvents:[], injectedClicks, guardMouseDown, guardMouseUp }));
+  fs.writeFileSync(p + '.tmp', JSON.stringify({ kind:'windows-os-routed-input', phase, guardPid:foreign ? 1 : process.pid, samples:20, sampledFocusChanges:0, foregroundEvents:[], injectedClicks, guardMouseDown, guardMouseUp, injectedEscapeEvents }));
   fs.renameSync(p + '.tmp', p);
 };
 save('ready.json','ready',1,1,1);
@@ -109,6 +109,8 @@ const timer = setInterval(() => {
     if (command.x !== 15 || command.y !== 20 || command.handle !== '55' || command.pid !== process.ppid) process.exit(5);
     save('stop-result.json','stop',3,2,2); stage++;
   }
+  if (stage === 2 && has('escape')) { save('escape-result.json','escape',3,2,2,2); stage = 4; }
+  if (stage === 4 && has('finish')) { save('final.json','escape',3,2,2,2); stage++; }
   if (stage === 2 && has('finish')) { save('final.json','stop',3,2,2); stage++; }
 },5);
 `;
@@ -250,5 +252,45 @@ test("startup failure and terminal cleanup failure both remain in the causal rep
     await access(directory);
   } finally {
     if (directory) await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Escape evidence requires exactly one OS-routed down/up pair", () => {
+  assert.doesNotThrow(() =>
+    validateNativeProbeReport(
+      { ...report(), phase: "escape", injectedEscapeEvents: 2 },
+      "escape",
+    ),
+  );
+  for (const injectedEscapeEvents of [undefined, 0, 1, 4])
+    assert.throws(() =>
+      validateNativeProbeReport(
+        { ...report(), phase: "escape", injectedEscapeEvents },
+        "escape",
+      ),
+    );
+});
+
+test("Escape client handshake retains the exact guard identity through final settlement", async () => {
+  const { spawn } = await import("node:child_process");
+  const { startWindowsForegroundInputProbe } =
+    await import("../src/main/windows-foreground-input-probe.js");
+  const probe = await startWindowsForegroundInputProbe({
+    platform: "win32",
+    spawnGuard(_script, location) {
+      return spawn(process.execPath, ["-e", childSource, location], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+    },
+  });
+  try {
+    await probe.clickEdge();
+    const handle = Buffer.alloc(8);
+    handle.writeBigUInt64LE(55n);
+    await probe.clickStop({ x: 15, y: 20 }, handle);
+    assert.equal((await probe.pressEscape()).injectedEscapeEvents, 2);
+    assert.equal((await probe.finish()).phase, "escape");
+  } finally {
+    await probe.close();
   }
 });

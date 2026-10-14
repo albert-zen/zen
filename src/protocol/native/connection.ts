@@ -1,3 +1,4 @@
+import { parseSessionImport, previewSessionImport } from "../session-import.js";
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
 import { AppServerError, type ZenAppServer } from "../../app-server.js";
 import type { ApprovalHandler } from "../../tool.js";
@@ -22,6 +23,8 @@ import {
   NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
   NATIVE_QUEUE_EDIT_METHOD,
+  NATIVE_THREAD_MESSAGE_METHOD,
+  NATIVE_TURN_WAKE_METHOD,
   type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
   type NativeTurnSendResult,
@@ -83,6 +86,271 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (message.method === NATIVE_TURN_WAKE_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId.trim() ||
+          typeof params.clientId !== "string" ||
+          typeof params.text !== "string" ||
+          !["bootstrap", "trigger", "room"].includes(params.source as string) ||
+          (params.sourceId !== undefined &&
+            typeof params.sourceId !== "string") ||
+          (params.mode !== undefined &&
+            !["start", "steer", "queue"].includes(params.mode as string)) ||
+          (params.expectedTurnId !== undefined &&
+            (typeof params.expectedTurnId !== "string" ||
+              !params.expectedTurnId.trim())) ||
+          (params.requireUnarchived !== undefined &&
+            typeof params.requireUnarchived !== "boolean") ||
+          Object.keys(params).some(
+            (key) =>
+              ![
+                "threadId",
+                "clientId",
+                "text",
+                "source",
+                "sourceId",
+                "mode",
+                "expectedTurnId",
+                "requireUnarchived",
+              ].includes(key),
+          )
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Invalid Host wakeup input",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Host wakeup is unavailable",
+          );
+        this.#subscriptions.add(params.threadId);
+        const result = await this.#appServer.wakeTurn(
+          params.threadId,
+          {
+            clientId: params.clientId,
+            text: params.text,
+            source: params.source as "bootstrap" | "trigger" | "room",
+            ...(params.sourceId === undefined
+              ? {}
+              : { sourceId: params.sourceId }),
+          },
+          {
+            ...(params.mode === undefined
+              ? {}
+              : { mode: params.mode as "start" | "steer" | "queue" }),
+            ...(params.expectedTurnId === undefined
+              ? {}
+              : { expectedTurnId: params.expectedTurnId }),
+            ...(params.requireUnarchived === undefined
+              ? {}
+              : { requireUnarchived: params.requireUnarchived }),
+            ...(this.#requestApproval === undefined
+              ? {}
+              : { requestApproval: this.#requestApproval }),
+          },
+        );
+        this.#send({ id: message.id, result });
+      } catch (error) {
+        this.#send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message: error instanceof Error ? error.message : String(error),
+            ...(error instanceof AppServerError
+              ? { data: { zenCode: error.code } }
+              : {}),
+          },
+        });
+      }
+      return;
+    }
+    if (message.method === NATIVE_THREAD_MESSAGE_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !this.#appServer ||
+          !isRecord(params) ||
+          Object.keys(params).some(
+            (key) =>
+              ![
+                "threadId",
+                "sourceThreadId",
+                "sourceToolCallId",
+                "sourceCallId",
+                "text",
+                "messageType",
+              ].includes(key),
+          ) ||
+          ![
+            params.threadId,
+            params.sourceThreadId,
+            params.sourceToolCallId,
+            params.sourceCallId,
+            params.text,
+          ].every(
+            (value) => typeof value === "string" && value.trim().length > 0,
+          ) ||
+          (params.messageType !== undefined &&
+            !["guidance", "follow_up", "replacement"].includes(
+              String(params.messageType),
+            ))
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread message requires Host-captured source identity, target and text",
+          );
+        this.#subscriptions.add(params.threadId as string);
+        const result = await this.#appServer.sendThreadMessage(
+          params.threadId as string,
+          {
+            sender: {
+              threadId: params.sourceThreadId as string,
+              toolCallId: params.sourceToolCallId as string,
+              callId: params.sourceCallId as string,
+            },
+            text: params.text as string,
+            ...(params.messageType === undefined
+              ? {}
+              : {
+                  messageType: params.messageType as
+                    "guidance" | "follow_up" | "replacement",
+                }),
+          },
+          this.#requestApproval === undefined
+            ? {}
+            : { requestApproval: this.#requestApproval },
+        );
+        this.#send({ id: message.id, result });
+      } catch (error) {
+        this.#send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message: error instanceof Error ? error.message : String(error),
+            ...(error instanceof AppServerError
+              ? { data: { zenCode: error.code } }
+              : {}),
+          },
+        });
+      }
+      return;
+    }
+    if (
+      message.method === "zen/thread/import/preview" ||
+      message.method === "zen/thread/import"
+    ) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.format !== "string" ||
+          typeof params.contents !== "string"
+        )
+          throw new AppServerError(
+            "invalid_import",
+            "Import format and selected file contents are required",
+          );
+        const history = parseSessionImport({
+          format: params.format,
+          contents: params.contents,
+        });
+        let result: unknown;
+        if (message.method === "zen/thread/import/preview")
+          result = previewSessionImport(history);
+        else {
+          const config = params.configuration;
+          if (
+            params.expectedSha256 !== history.source.sha256 ||
+            !isRecord(config) ||
+            typeof config.cwd !== "string" ||
+            Object.keys(config).some(
+              (key) => !["cwd", "sandbox", "selection"].includes(key),
+            ) ||
+            (config.sandbox !== undefined &&
+              !["read-only", "workspace-write", "danger-full-access"].includes(
+                String(config.sandbox),
+              ))
+          )
+            throw new AppServerError(
+              "invalid_import",
+              "Review the exact file and choose a valid local working directory and permissions",
+            );
+          if (
+            config.selection !== undefined &&
+            (!isRecord(config.selection) ||
+              typeof config.selection.providerProfileId !== "string" ||
+              typeof config.selection.modelId !== "string" ||
+              (config.selection.reasoningEffort !== undefined &&
+                config.selection.reasoningEffort !== null &&
+                typeof config.selection.reasoningEffort !== "string"))
+          )
+            throw new AppServerError(
+              "invalid_import",
+              "Invalid local provider selection",
+            );
+          if (!this.#appServer)
+            throw new AppServerError("unavailable", "Import is unavailable");
+          result = await this.#appServer.importThread(history, {
+            cwd: config.cwd,
+            ...(config.sandbox === undefined
+              ? {}
+              : {
+                  sandbox: config.sandbox as
+                    "read-only" | "workspace-write" | "danger-full-access",
+                }),
+            ...(config.selection === undefined
+              ? {}
+              : {
+                  selection:
+                    config.selection as unknown as import("../../provider-registry.js").ProviderSelectionInput,
+                }),
+          });
+        }
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: -32602,
+              message: error instanceof Error ? error.message : String(error),
+              data: {
+                zenCode:
+                  error instanceof AppServerError
+                    ? error.code
+                    : "invalid_import",
+              },
+            },
+          });
+      }
+      return;
+    }
     if (
       message.method === NATIVE_THREAD_DELETE_METHOD ||
       message.method === NATIVE_THREAD_DELETED_LIST_METHOD ||
@@ -374,7 +642,15 @@ export class NativeConnection {
         };
         this.#subscriptions.add(params.threadId);
         let result: NativeTurnSendResult = {};
-        if (params.mode === "queue" || params.mode === "batch-next") {
+        if (params.mode === undefined) {
+          const turn = await this.#appServer.sendMessage(
+            params.threadId,
+            input,
+            options,
+          );
+          result = { turnId: turn.id };
+          void turn.done.catch(() => undefined);
+        } else if (params.mode === "queue" || params.mode === "batch-next") {
           result = {
             admission: await this.#appServer.queueMessage(
               params.threadId,

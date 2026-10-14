@@ -115,6 +115,8 @@ jobs:
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - name: Exercise trigger process containment on Windows
         run: npm --workspace apps/zenx exec -- tsx --test test/trigger-program-runner.test.ts
+      - name: Verify native smoke phase snapshot sharing
+        run: node --import tsx --test --test-timeout=30000 apps/zenx/test/windows-smoke-phase.test.ts
       - run: npm --workspace apps/zenx run smoke:windows-computer
 
   zenx-windows-packaged-provider-smoke:

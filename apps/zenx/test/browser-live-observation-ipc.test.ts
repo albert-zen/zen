@@ -119,3 +119,126 @@ test("switching threads fences late IPC frames and stale unsubscribe requests", 
   assert.equal(renderer.sent[0]!.event.subscriptionId, "b");
   bridge.close();
 });
+
+function externalFixture() {
+  let receive!: (event: BrowserLiveObservationEvent) => void;
+  let resolve!: (url: string) => void;
+  const reads: string[][] = [];
+  const opened: string[] = [];
+  const bridge = new BrowserLiveObservationIpcBridge(
+    {
+      observeBrowserLive(_request, listener) {
+        receive = listener;
+        return () => {};
+      },
+      readBrowserTargetUrl(threadId: string, targetId: string) {
+        reads.push([threadId, targetId]);
+        return new Promise<string>((done) => {
+          resolve = done;
+        });
+      },
+    },
+    "events",
+  );
+  const renderer = new FakeRenderer();
+  const select = (id = "target-a") =>
+    receive({
+      type: "targets",
+      selectedId: id,
+      targets: [
+        {
+          id,
+          sessionId: "session",
+          tabId: "tab",
+          title: "Page",
+          url: "https://example.com/app",
+          loading: false,
+          mode: "live",
+          canOpenExternally: true,
+        },
+      ],
+    });
+  const subscribe = (id = "sub-a", threadId = "thread-a", frames = true) => {
+    bridge.subscribe(renderer, id, { threadId, frames });
+    select();
+    receive({ type: "status", status: "live", message: "Live" });
+  };
+  const open = () =>
+    bridge.openExternal(renderer, "thread-a", "target-a", async (url) => {
+      opened.push(url);
+    });
+  subscribe();
+  return {
+    bridge,
+    renderer,
+    reads,
+    opened,
+    select,
+    subscribe,
+    open,
+    resolve: (url: string) => resolve(url),
+    receive: (event: BrowserLiveObservationEvent) => receive(event),
+  };
+}
+
+test("external opening resolves the exact selected Host target and preserves query/hash without sending raw URLs to the renderer", async () => {
+  const f = externalFixture();
+  const pending = f.open();
+  assert.deepEqual(f.reads, [["thread-a", "target-a"]]);
+  f.resolve("https://example.com/app?q=zen#/invoices/42");
+  await pending;
+  assert.deepEqual(f.opened, ["https://example.com/app?q=zen#/invoices/42"]);
+  assert.ok(!JSON.stringify(f.renderer.sent).includes("invoices"));
+  f.bridge.close();
+});
+
+test("external opening fails closed for unsupported schemes and duplicate pending requests", async () => {
+  const f = externalFixture();
+  for (const url of [
+    "javascript:alert(1)",
+    "file:///private",
+    "mailto:a@example.com",
+    "zenx://settings",
+    "//example.com",
+    "https://example.com/\nprivate",
+  ]) {
+    const pending = f.open();
+    await assert.rejects(f.open(), /already pending/);
+    f.resolve(url);
+    await assert.rejects(pending, /HTTP\(S\)/);
+  }
+  assert.deepEqual(f.opened, []);
+  f.bridge.close();
+});
+
+test("external opening rejects foreign targets and late reads after target, subscription, visibility or connection changes", async () => {
+  for (const interrupt of [
+    (f: ReturnType<typeof externalFixture>) => f.select("target-b"),
+    (f: ReturnType<typeof externalFixture>) => f.subscribe("sub-b", "thread-b"),
+    (f: ReturnType<typeof externalFixture>) =>
+      f.subscribe("sub-b", "thread-a", false),
+    (f: ReturnType<typeof externalFixture>) =>
+      f.receive({
+        type: "status",
+        status: "unavailable",
+        message: "Disconnected",
+      }),
+    (f: ReturnType<typeof externalFixture>) => f.renderer.destroy(),
+  ]) {
+    const f = externalFixture();
+    await assert.rejects(
+      f.bridge.openExternal(f.renderer, "thread-b", "target-a", async () => {}),
+      /not current/,
+    );
+    await assert.rejects(
+      f.bridge.openExternal(f.renderer, "thread-a", "foreign", async () => {}),
+      /not current/,
+    );
+    const pending = f.open();
+    interrupt(f);
+    f.resolve("https://example.com/current?q=1#hash");
+    await assert.rejects(pending, /no longer current/);
+    assert.deepEqual(f.opened, []);
+    f.bridge.close();
+  }
+});

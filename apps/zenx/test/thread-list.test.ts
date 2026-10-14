@@ -6,6 +6,7 @@ import {
   deriveInboxSections,
   derivePinnedThreads,
   deriveProjectGroups,
+  movePinnedThreadIds,
   moveSidebarProject,
   moveSidebarThread,
   readSidebarMode,
@@ -240,6 +241,22 @@ test("moves Threads only inside their owning Project without changing membership
   });
   assert.equal(threads[0]!.status, "active");
   assert.equal(threads[0]!.currentMetadata.cwd, "/work/a");
+});
+
+test("moves Threads inside the Pinned section by permuting the pinned preference", () => {
+  const pinned = ["p-1", "p-2", "p-3"];
+  assert.deepEqual(
+    [...movePinnedThreadIds(pinned, "p-3", "p-2", "before")],
+    ["p-1", "p-3", "p-2"],
+  );
+  assert.deepEqual(
+    [...movePinnedThreadIds(pinned, "p-1", "p-3", "after")],
+    ["p-2", "p-3", "p-1"],
+  );
+  // No-ops: same row, or a row that is not pinned anymore.
+  assert.equal(movePinnedThreadIds(pinned, "p-2", "p-2", "before"), pinned);
+  assert.equal(movePinnedThreadIds(pinned, "gone", "p-2", "before"), pinned);
+  assert.equal(movePinnedThreadIds(pinned, "p-2", "gone", "after"), pinned);
 });
 
 test("moves Projects globally while retaining per-Project Thread preferences", () => {

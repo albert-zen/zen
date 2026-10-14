@@ -131,7 +131,7 @@ test("groups only consecutive reasoning and tool Items", () => {
       command("tool-b", "npm test"),
     ]),
   );
-  assert.equal(projection.userItems.length, 1);
+  assert.equal(projection.inputItems.length, 1);
   assert.deepEqual(
     projection.history.map((node) =>
       node.kind === "traceGroup" ? [node.kind, node.items.length] : [node.kind],
@@ -154,7 +154,7 @@ test("places a steered user message after its delivery anchor", () => {
   );
 
   assert.deepEqual(
-    projection.userItems.map((item) => item.id),
+    projection.inputItems.map((item) => item.id),
     ["request"],
   );
   assert.deepEqual(
@@ -164,7 +164,7 @@ test("places a steered user message after its delivery anchor", () => {
     [
       ["agent", "progress"],
       ["traceItem", "tool-a"],
-      ["user", "steer"],
+      ["input", "steer"],
       ["agent", "after-steer"],
     ],
   );

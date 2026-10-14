@@ -301,3 +301,34 @@ test("multiple calls for the same normalized agent do not inflate the agent coun
   assert.equal(twoAgents.agentLabel, "Ada + 1");
   assert.equal(twoAgents.title, "Ada、Lin 正在使用你的电脑");
 });
+
+test("Escape copy states only confirmed shortcut availability in both languages", () => {
+  for (const language of ["en", "zh-CN"] as const) {
+    const common = {
+      kind: "status" as const,
+      agentNames: ["ZenX Agent"],
+      stopping: false,
+      language,
+    };
+    const available = foregroundActivityHtml({
+      ...common,
+      escapeAvailable: true,
+    });
+    const unavailable = foregroundActivityHtml({
+      ...common,
+      escapeAvailable: false,
+    });
+    assert.match(
+      available,
+      language === "en" ? /Press Esc to stop/ : /按 Esc 停止操作/,
+    );
+    assert.match(
+      unavailable,
+      language === "en" ? /Esc unavailable/ : /Esc 不可用/,
+    );
+    assert.doesNotMatch(
+      unavailable,
+      language === "en" ? /Press Esc to stop/ : /按 Esc 停止操作/,
+    );
+  }
+});

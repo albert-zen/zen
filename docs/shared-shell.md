@@ -136,37 +136,46 @@ No delayed scan or bare-PID kill is used as a workaround.
 
 ## Windows native acceptance
 
-Native CI observed an untouched first prompt after the five-second action
-threshold and by 6,030 ms. Test fixtures therefore use a separate ten-second
-Windows startup readiness deadline, measured from terminal creation and requiring
-both input control and a real prompt. The foreground Stop fixture also waits for
-that prompt before writing. Command/output and Stop observations remain at five
-seconds; the test and whole-step timeouts are unchanged. This corrects a test
-budget assumption, not product startup speed or the underlying cold-start cause.
+Native acceptance separates process/control creation from an interactive shell
+prompt. The fixture requires the creation request and input control registration
+within five seconds, then a real PowerShell prompt within **20 seconds total
+from the original creation request**. Console control bytes, status `running`, or
+an input handle alone do not establish readiness. Output never resets either
+absolute deadline. Completed/failed/cancelled sessions fail immediately, and
+pending creation/read promises are bounded. A synchronous native call blocking
+the Node event loop remains subject to the existing outer test/step watchdogs.
 
-The cold-start cause remains **unresolved**. Subsequent native runs observed
-first prompts only after roughly 16–18 seconds, followed by subsecond startups.
-For example, [PR #316's failed Windows job](https://github.com/albert-zen/zen/actions/runs/38417468520/job/115365619182)
-at head `355d1d004fdf93d8cf44242c9220af15bd6ae48e` returned from native spawn
-in about 171 ms, failed the 10-second readiness check, and first observed a
-prompt in the 16,033–17,033 ms sampling interval. Cleanup still passed 2/2.
+The prompt budget is based on an untouched cold Windows PowerShell session in
+[PR #316's failed Windows job](https://github.com/albert-zen/zen/actions/runs/38417468520/job/115365619182):
+head `355d1d004fdf93d8cf44242c9220af15bd6ae48e` returned from native spawn
+in about 171 ms but its first prompt was only observed in the 16,033–17,033 ms
+sampling interval. The former ten-second fixture deadline failed a session that
+subsequently reached its actual prompt; other cold observations reached roughly
+16–18 seconds, followed by subsecond startups. Twenty seconds gives the recorded
+17,033 ms observation about three seconds of margin. This is an explicit native
+acceptance budget, not a Windows startup guarantee or a performance improvement.
 
-A [single independent phase-control run](https://github.com/albert-zen/zen/actions/runs/38424560418/job/115390422452)
-at head `e60d348ba96cea9d91319da64322d96c9622b08b` (tree
-`3fc2e8bb1789c61a26388655c7364e61e20e28cb`) observed Windows PowerShell
-5.1.26100.33438 engine output at 2,118 ms and a 264 ms explicit PSReadLine 2.0.0
-import; all four profile files were absent on that runner. The separate
-[unchanged interactive acceptance](https://github.com/albert-zen/zen/actions/runs/38424560330/job/115390422827)
-checked out merge ref `3bd9c1f8b8b0d928fa8e2b0af9e99bc8443ce269` and reached
-readiness at 2,812 ms, with owned native cleanup passing 2/2. Both fresh runners
-were fast on that attempt; this does not identify or fix the earlier slow cause.
-The temporary phase probe and workflow were removed after that one observation.
+The old ten-second failure-only observation is no longer appended to these
+readiness or foreground-start checks. A failure returns directly to the fixture's
+existing `finally` cleanup of the original owned terminal; it never retries a
+launch or accepts a late result after expiry. The five-second command/output and
+Stop assertions, 30-second test timeout and one-minute Shell step timeout remain
+unchanged. Synthetic checks cover delayed readiness, absent control, early exit,
+hung creation/read, absolute-deadline boundaries, and owned cleanup after failure.
+Real native checks still require command evaluation, resize, file output, natural
+exit, Stop, and subprocess settlement.
 
-The fixture retains observation-only elapsed spawn, first-output and first-prompt
-traces to distinguish console control output from actual prompt arrival in a
-future slow run. No prewarming, retry-for-green, profile/security change or
-deadline extension is introduced. A future overrun still fails the original
-10-second check, and the bounded failure-only observer rethrows that failure.
+The cause of the intermittent **16–18 second PowerShell initialization itself
+remains unresolved**. A [single independent phase-control run](https://github.com/albert-zen/zen/actions/runs/38424560418/job/115390422452)
+at `e60d348ba96cea9d91319da64322d96c9622b08b` observed engine output at 2,118 ms
+and a 264 ms explicit PSReadLine import with all four profile files absent. Its
+separate [unchanged interactive acceptance](https://github.com/albert-zen/zen/actions/runs/38424560330/job/115390422827)
+reached readiness at 2,812 ms. Those fast runs do not identify the slow cause.
+The fixture retains elapsed spawn, first-output and first-prompt traces; production
+shell flags, profiles, environment and security validation are unchanged.
+Microsoft's [startup troubleshooting guidance](https://learn.microsoft.com/en-us/powershell/scripting/dev-cross-plat/performance/startup-performance)
+distinguishes process creation, session-state initialization and profile execution;
+creating a ConPTY does not prove that PowerShell has completed those phases.
 
 The real PowerShell fixture first checks basic input, file output and resize in
 an untouched session. It then imports the built-in Utility manifest by its exact

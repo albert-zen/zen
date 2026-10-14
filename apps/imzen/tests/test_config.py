@@ -56,6 +56,27 @@ def test_settings_accept_approval_required_permission_mode(tmp_path):
     assert settings.permission_mode == "approval-required"
 
 
+def test_ordinary_input_defaults_to_independent_soft_steer(tmp_path):
+    settings = Settings.from_env(env(tmp_path, COMPOSER_INPUT_MODE="queue"))
+
+    assert settings.input_continuation == "steer"
+
+
+@pytest.mark.parametrize("value", ["steer", "queue"])
+def test_ordinary_input_accepts_explicit_independent_continuation(tmp_path, value):
+    settings = Settings.from_env(env(tmp_path, IMZEN_INPUT_CONTINUATION=value))
+
+    assert settings.input_continuation == value
+
+
+@pytest.mark.parametrize(
+    "value", ["", "interrupt", "true", "QUEUE", " queue ", None, False, [], {}]
+)
+def test_ordinary_input_rejects_invalid_explicit_continuation(tmp_path, value):
+    with pytest.raises(ConfigurationError, match="IMZEN_INPUT_CONTINUATION"):
+        Settings.from_env(env(tmp_path, IMZEN_INPUT_CONTINUATION=value))
+
+
 def test_settings_reject_unknown_permission_mode(tmp_path):
     with pytest.raises(ConfigurationError, match="IMZEN_PERMISSION_MODE"):
         Settings.from_env(env(tmp_path, IMZEN_PERMISSION_MODE="unsafe"))
