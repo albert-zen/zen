@@ -1,3 +1,9 @@
+import {
+  MessageSourceLink,
+  MessageSourceViewportContext,
+  MessageSourceNavigationContext,
+  type MessageSourceNavigator,
+} from "./message-source-navigation.js";
 import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
@@ -138,6 +144,25 @@ export type MessageForkHandler = (
 export const MessageForkContext = createContext<MessageForkHandler | null>(
   null,
 );
+/** Shared App-owned actions for main and side conversation viewports. */
+export function ThreadViewActionsProvider({
+  fork,
+  source,
+  children,
+}: {
+  fork: MessageForkHandler;
+  source: MessageSourceNavigator;
+  children: ReactNode;
+}) {
+  return (
+    <MessageForkContext.Provider value={fork}>
+      <MessageSourceNavigationContext.Provider value={source}>
+        {children}
+      </MessageSourceNavigationContext.Provider>
+    </MessageForkContext.Provider>
+  );
+}
+
 const CanonicalMessageForkContext = createContext<{
   threadId: string;
   items: Map<string, string | undefined>;
@@ -267,10 +292,12 @@ export function ThreadView(props: ThreadViewProps) {
   return (
     <ThreadReadingContext.Provider value={readingState}>
       <CanonicalMessageForkContext.Provider value={forkContext}>
-        <ThreadViewContent
-          {...props}
-          threadAttachments={canonicalAttachments ?? props.threadAttachments}
-        />
+        <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
+          <ThreadViewContent
+            {...props}
+            threadAttachments={canonicalAttachments ?? props.threadAttachments}
+          />
+        </MessageSourceViewportContext.Provider>
       </CanonicalMessageForkContext.Provider>
     </ThreadReadingContext.Provider>
   );
@@ -3329,11 +3356,15 @@ function InputMessage({
       }
     >
       {item.type === "threadMessage" ? (
-        <small
-          className="thread-message-sender"
-          title={`${item.sender.deviceId === undefined ? "" : `${i18n.t("shell:threadMessageRemoteDetails")}\n`}${JSON.stringify(item.sender)}`}
-        >
-          {i18n.t(
+        <MessageSourceLink
+          target={{
+            kind: "thread",
+            id: item.sender.threadId,
+            ...(item.sender.deviceId === undefined
+              ? {}
+              : { deviceId: item.sender.deviceId }),
+          }}
+          label={i18n.t(
             item.sender.deviceId === undefined
               ? "shell:threadMessageFrom"
               : "shell:remoteThreadMessageFrom",
@@ -3342,7 +3373,7 @@ function InputMessage({
                 item.sender.threadName ?? i18n.t("shell:threadMessageUnnamed"),
             },
           )}
-        </small>
+        />
       ) : null}
       {attachments.length === 0 ? null : (
         <div
@@ -3593,6 +3624,7 @@ function WakeupCard(
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent
+          sourceNavigation
           source={item.source}
           sourceId={item.sourceId}
           text={item.text}
