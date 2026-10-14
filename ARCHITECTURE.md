@@ -5,6 +5,7 @@
 - **Selected-file conversation import** — Version-pinned external parsers live under their protocol adapter and produce bounded provider-neutral historical Items; AppServer atomically creates an idle continuable Thread with canonical source/checkpoint provenance, explicit local cwd/model/permissions, inert tool observations and no inherited execution or source authority. Imported tool outcomes may have a null exitCode only with the historical-result content type; native presentation calls them unknown. The import prefix length lets the first new local Turn load current workspace instructions. Compacted exports use their latest explicit continuation checkpoint and visibly disclose omitted earlier records.
 
 - **Concurrent Browser registry** — ZenX owns independent ephemeral Workspace and explicitly connected external Browser packages; new fixed tool namespaces never inherit legacy tool-name approvals, while backend-qualified tab/observation/target/cursor references prevent cross-backend routing without adding Thread state. External opt-in never removes the Workspace backend. Profile upgrades publish routing only at the existing Catalog transaction boundary; the app-owned Workspace port lends generation-specific opaque sessions, and retirement observes the existing Supervisor runtime drain before detaching only the retiring generation’s leases (no second lease counter or cancellation authority).
+- **ZenX reading state** — One App-owned, memory-only renderer cache retains scroll/follow intent per exact Thread and explicit disclosure choices by exact Thread/Turn/Item identity across navigation, without retaining hidden transcripts or changing execution, canonical history or Host storage.
 
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
@@ -13,6 +14,8 @@
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
 ## 核心概念
+
+- **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
 
 - **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
 - **IMZenX managed configuration** — Its trusted local form uses provider-declared pinned field contracts and the existing OS-encrypted vault to save write-only channel credentials; model tools see only nonsecret references/readiness, explicit connection validates a transient nonsecret reviewed-configuration revision under the runtime queue before decrypting the chosen configuration into the existing private child pipe, and explicit runtime preparation copies the locked packaged project to an IM-owned runtime directory without modifying App Resources or enrolling credentials.
@@ -1165,6 +1168,23 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 ### Always On Assistant preset
 
 An assistant Room binds one real Thread to an owned roomMention Trigger.
+Its personal display name is the existing Room name; an explicit PAW rename
+atomically updates that name, its bound member name and owned Trigger mention.
+Historical messages and canonical Thread titles remain unchanged. First-use
+setup is an inline renderer surface over existing setup/configuration APIs;
+only its optional welcome dismissal is an origin-local presentation preference.
+Conversational initialization is an explicit Host bootstrap wakeup on the owned
+Trigger. Its existing Room operation receipt records a bootstrap kind and wakeup
+ID, never a human Room message; the native Host input retains that provenance in
+the canonical Thread. Only the real Agent posts the welcome. Prepared/cancelled
+receipts use existing explicit recovery; rendering never runs the model. A restored
+connection reconciles terminal observations of known active wakeups by reading
+exact canonical Turns, without replaying input or offline watcher occurrences.
+The Host's canonical calling Thread scopes PAW name-tool updates to
+its exact binding (shared-Thread PAWs require an unambiguous active source Room);
+UI management and ordinary Room tool scope remain unchanged. Existing AGENTS.md
+stays under Core workspace instructions and file permissions, with no second
+Host identity document or bootstrap execution ledger.
 Trusted setup defaults to creating an idle Thread through the existing Host
 Project/thread-start boundary with confirmed settings; explicit existing-Thread
 binding remains available. The Room and its Trigger commit atomically in the

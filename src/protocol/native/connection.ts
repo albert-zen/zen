@@ -25,6 +25,7 @@ import {
   NATIVE_QUEUE_EDIT_METHOD,
   type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
+  NATIVE_TURN_WAKE_METHOD,
   type NativeTurnSendResult,
 } from "./wire.js";
 
@@ -421,6 +422,88 @@ export class NativeConnection {
                   "Queue cancellation outcome is unconfirmed. Read the Thread before retrying.",
               };
         this.#send({ id: message.id, error: reason });
+      }
+      return;
+    }
+    if (message.method === NATIVE_TURN_WAKE_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId.trim() ||
+          typeof params.clientId !== "string" ||
+          !params.clientId.trim() ||
+          typeof params.text !== "string" ||
+          !params.text.trim() ||
+          params.source !== "bootstrap" ||
+          (params.mode !== "start" && params.mode !== "steer") ||
+          (params.mode === "steer" &&
+            (typeof params.expectedTurnId !== "string" ||
+              !params.expectedTurnId.trim())) ||
+          (params.requireUnarchived !== undefined &&
+            typeof params.requireUnarchived !== "boolean")
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Host bootstrap input, client ID and start/steer mode are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Host wakeup is unavailable",
+          );
+        this.#subscriptions.add(params.threadId);
+        const turn = await this.#appServer.wakeTurn(
+          params.threadId,
+          {
+            clientId: params.clientId,
+            text: params.text,
+            source: "bootstrap",
+          },
+          {
+            mode: params.mode,
+            ...(params.mode === "steer"
+              ? { expectedTurnId: params.expectedTurnId as string }
+              : {}),
+            ...(params.requireUnarchived === undefined
+              ? {}
+              : { requireUnarchived: params.requireUnarchived }),
+            ...(this.#requestApproval === undefined
+              ? {}
+              : { requestApproval: this.#requestApproval }),
+          },
+        );
+        void turn.done.catch(() => undefined);
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            result: { turnId: turn.id, mode: turn.mode },
+          });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error:
+              error instanceof AppServerError
+                ? {
+                    code: -32602,
+                    message: error.message,
+                    data: { zenCode: error.code },
+                  }
+                : {
+                    code: -32603,
+                    message:
+                      "Host wakeup outcome is unconfirmed. Read the Thread or retry the same client ID before sending another wakeup.",
+                  },
+          });
       }
       return;
     }

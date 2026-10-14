@@ -134,6 +134,7 @@ export type UserInputPart =
 export interface ClientRequestParams {
   "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportParams;
   "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
+  "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
@@ -231,6 +232,7 @@ export interface ClientRequestResults {
     thread: ThreadSnapshot;
     status: "imported" | "already_imported";
   };
+  "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
@@ -406,3 +408,8 @@ export type ConnectionStatus =
   | { type: "resubscribeFailed"; threadId: string; error: Error }
   | { type: "protocolError"; error: Error }
   | { type: "closed" };
+
+export type {
+  NativeHostWakeupParams,
+  NativeHostWakeupResult,
+} from "../../../../src/protocol/native/wire.js";

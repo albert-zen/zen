@@ -4,7 +4,7 @@ import type {
   ThreadSnapshot,
   QueuedInputAdmission,
 } from "../../app-server.js";
-import type { UserInput, UserInputPart } from "../../item.js";
+import type { HostWakeupInput, UserInput, UserInputPart } from "../../item.js";
 import type { ImageMediaType } from "../../attachment-ref.js";
 import type { SkillReference } from "../../skill-input.js";
 
@@ -19,6 +19,19 @@ export type NativeUserInputPart =
 export const NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY =
   "queued-input-admission-v1";
 export const NATIVE_INLINE_IMAGE_INPUT_CAPABILITY = "inline-image-input-v1";
+
+/** Native-only Host wakeup; CAS never fabricates a user message for this input. */
+export interface NativeHostWakeupParams extends HostWakeupInput {
+  threadId: string;
+  mode: "start" | "steer";
+  expectedTurnId?: string;
+  requireUnarchived?: boolean;
+}
+export interface NativeHostWakeupResult {
+  turnId: string;
+  mode: "start" | "steer";
+}
+export const NATIVE_TURN_WAKE_METHOD = "zen/turn/wake";
 
 export interface NativeTurnSendParams {
   threadId: string;
