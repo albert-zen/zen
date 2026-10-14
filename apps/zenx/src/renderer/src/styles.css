@@ -10434,7 +10434,7 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+  box-shadow: var(--shadow-low);
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -10565,7 +10565,7 @@ button:disabled {
 }
 .model-debug-request-integrity[data-warning="true"],
 .model-debug-integrity-flags {
-  color: var(--color-status-warning, #a66513);
+  color: var(--color-status-warning);
 }
 .model-debug-detail {
   display: flex;
@@ -10706,7 +10706,7 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 .model-debug-warning {
-  color: var(--color-status-warning, #a66513);
+  color: var(--color-status-warning);
 }
 .model-debug-tree,
 .model-debug-payload {
