@@ -19,7 +19,7 @@ import asyncio,sys
 from pathlib import Path
 sys.path.insert(0,{str(source)!r})
 from imzen.zenx import isolate_child_stdin,ThreadedPipeReader
-from imagent.channels.native.media import ImageMediaMaterializer
+from imagent.interaction.channels.ingress_media import ImageMediaMaterializer
 async def unused(*args):
     raise AssertionError('No network expected')
 async def run():

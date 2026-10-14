@@ -1,3 +1,4 @@
+import { validateShellPanelRequest } from "../shell-panel.js";
 import { restoreLoginShellPath } from "./login-shell-environment.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
@@ -155,6 +156,7 @@ import {
   configureChromeNativeHostActivationPolicy,
   chromeNativeHostRegistered,
   registerChromeNativeHost,
+  readBrowserRegistrationTarget,
   unregisterChromeNativeHost,
 } from "./chrome-native-host-registration.js";
 
@@ -462,6 +464,21 @@ async function bootstrapZenX(): Promise<void> {
     ) {
       chromeExtensionBridge = await ChromeExtensionBridge.start({
         runtimeDirectory: join(userDataDirectory, "runtime"),
+        multiInstance: true,
+      });
+      chromeExtensionBridge.onConnectionsChanged(() => {
+        void appServerManager
+          ?.refreshCapabilitiesAfterCommit()
+          .then((result) => {
+            if (result.status === "failed")
+              console.warn(
+                "Browser connection catalog refresh failed",
+                result.message,
+              );
+          })
+          .catch((error) =>
+            console.warn("Browser connection catalog refresh failed", error),
+          );
       });
       browserEnvironment.ZENX_USER_BROWSER_CDP_ENDPOINT =
         chromeExtensionBridge.endpoint;
@@ -596,16 +613,22 @@ async function bootstrapZenX(): Promise<void> {
       toolTargetTransport: (invocation) =>
         fleetToolTransport.invoke(invocation),
       userDataDirectory,
+      workspaceBrowserBackend: workspaceBrowser,
       ...(useSharedWorkspaceBrowser
         ? {
             browserBackend: workspaceBrowser,
             browserBackendAuthoritative: true,
+            connectedBrowserEnabled:
+              browserEnvironment.ZENX_BROWSER_MODE === "user-session",
           }
         : {}),
       allowForegroundRequired:
         settingsService.computerForegroundControlEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
+      ...(chromeExtensionBridge === undefined
+        ? {}
+        : { connectedBrowserSource: chromeExtensionBridge }),
       providerCatalogOptions: {
         environment: browserEnvironment,
         ...(chromeExtensionBridge === undefined
@@ -1361,6 +1384,28 @@ function installProtocolIpc(
         readProjectThreadStartOptions(selection),
       ),
   );
+  ipcMain.handle(
+    ipcChannels.shellPanelRequest,
+    async (event, input: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const rendererUrl =
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+      if (
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+            mainFrame: event.senderFrame === event.sender.mainFrame,
+            url: event.senderFrame?.url ?? "",
+          },
+          rendererUrl,
+        )
+      )
+        throw new Error("Shell requires the trusted ZenX window");
+      validateShellPanelRequest(input);
+      return manager.shellPanelRequest(input);
+    },
+  );
   registerProtocolRequestIpc(manager, (thread) => {
     void observeThreadSnapshotTitle(titles, thread).catch((error: unknown) => {
       console.warn("Could not observe Thread snapshot for ZenX title", error);
@@ -1532,25 +1577,41 @@ function installChromeBridgeIpc(options: {
             : ("inactive" as const),
       packaged: app.isPackaged,
       nativeHostRegistered: await chromeNativeHostRegistered(registration),
+      edgeNativeHostRegistered: await chromeNativeHostRegistered({
+        ...registration,
+        browser: "edge",
+      }),
       extensionDirectory,
       extensionId: ZENX_CHROME_EXTENSION_ID,
       connection: options.bridge?.status() ?? { state: "waiting", tabCount: 0 },
     };
   };
   ipcMain.handle(ipcChannels.chromeBridgeGet, snapshot);
-  ipcMain.handle(ipcChannels.chromeBridgePrepare, async () => {
-    if (!app.isPackaged) {
-      throw new Error(
-        "Build the packaged ZenX app before registering its Chrome connector",
-      );
-    }
-    await registerChromeNativeHost(registration);
-    return await snapshot();
-  });
-  ipcMain.handle(ipcChannels.chromeBridgeRemove, async () => {
-    await unregisterChromeNativeHost(registration);
-    return await snapshot();
-  });
+  ipcMain.handle(
+    ipcChannels.chromeBridgePrepare,
+    async (_event, target: unknown) => {
+      if (!app.isPackaged) {
+        throw new Error(
+          "Build the packaged ZenX app before registering its Chrome connector",
+        );
+      }
+      await registerChromeNativeHost({
+        ...registration,
+        browser: readBrowserRegistrationTarget(target),
+      });
+      return await snapshot();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.chromeBridgeRemove,
+    async (_event, target: unknown) => {
+      await unregisterChromeNativeHost({
+        ...registration,
+        browser: readBrowserRegistrationTarget(target),
+      });
+      return await snapshot();
+    },
+  );
   ipcMain.handle(ipcChannels.chromeBridgeOpenExtension, async () => {
     const failure = await shell.openPath(extensionDirectory);
     if (failure.length > 0) {

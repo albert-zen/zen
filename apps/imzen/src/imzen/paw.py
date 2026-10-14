@@ -11,20 +11,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from imagent.contracts import (
-    ClearConversationThread,
-    ConversationBound,
+from imagent.gateway.delivery import (
     ConversationDeliveryTarget,
-    ConversationRef,
     DeliveryIntent,
     DeliveryPrincipal,
     DeliverySubmissionState,
-    TextContent,
-    TextFormat,
 )
-from imagent.controllers.slash import parse_slash_command
+from imagent.gateway.startup import StartupPreparation
+from imagent.interaction.controllers.common import parse_slash_command
+from imagent.interaction.messages import ConversationRef, TextContent, TextFormat
 
-from .controller import _replace_command_name
+from .controller import _replace_command_name, _require_success
 
 
 class PawRoutingError(RuntimeError):
@@ -133,11 +130,12 @@ class PawState:
 
 
 class PawController:
-    """Consume formal Room posts while retaining the SDK's legacy Thread mode."""
+    """Consume formal Room posts alongside SDK-owned Thread routing."""
 
-    def __init__(self, host, state: PawState):
+    def __init__(self, host, state: PawState, *, channel_instance_ids: frozenset[str]):
         self._host = host
         self._state = state
+        self._channel_instance_ids = frozenset(channel_instance_ids)
         self._legacy = None
         self._gateway = None
         self._views = {}
@@ -149,6 +147,12 @@ class PawController:
         self._legacy = legacy
         legacy.register_command_names({"paw": "paw", "paws": "paws"})
         return self
+
+    def validate_startup(self) -> None:
+        self._legacy.validate_startup()
+
+    async def close(self) -> None:
+        await self._legacy.close()
 
     def attach(self, gateway) -> None:
         self._gateway = gateway
@@ -166,7 +170,11 @@ class PawController:
             raise PermissionError("Invalid PAW delivery credential")
         return DeliveryPrincipal(
             principal_id="imzenx-paw",
-            allowed_conversations=tuple(b.conversation for b in self._state.bindings()),
+            allowed_conversations=tuple(
+                b.conversation
+                for b in self._state.bindings()
+                if b.conversation.channel_instance_id in self._channel_instance_ids
+            ),
         )
 
     async def present(self, message, context):
@@ -174,23 +182,33 @@ class PawController:
         # explicit Room delivery use their respective SDK public delivery paths.
         return None if self._state.get(message.conversation_ref) else message
 
-    async def restore(self) -> None:
-        """Fence any pre-existing Thread routes before SDK startup/recovery."""
-        for room_binding in self._state.bindings():
-            binding = await self._gateway.get_binding(room_binding.conversation)
+    def startup_preparations(self) -> tuple[StartupPreparation, ...]:
+        """Fence obsolete Thread routes before SDK recovery or channel startup."""
+        # Disabled channels retain Room history and checkpoints but have no
+        # startup/delivery scope until the same deployment channel is re-enabled.
+        return tuple(
+            self._prepare_room(binding)
+            for binding in self._state.bindings()
+            if binding.conversation.channel_instance_id in self._channel_instance_ids
+        )
+
+    def _prepare_room(self, room_binding: PawBinding) -> StartupPreparation:
+        async def prepare(actions):
+            binding = await actions.get_binding()
             if binding is None or binding.thread_ref is None:
-                continue
-            result = await self._gateway.execute_gateway(
-                ClearConversationThread(
-                    operation_id=f"paw-restore:{room_binding.generation}",
-                    conversation_ref=room_binding.conversation,
-                    actor="imzenx-paw",
-                    expected_revision=binding.revision,
-                    created_at=datetime.now(UTC),
+                return
+            _require_success(
+                await actions.clear_thread(
+                    action_id=f"paw-restore:{room_binding.generation}:{binding.generation}",
+                    expected_generation=binding.generation,
                 )
             )
-            if not isinstance(result, ConversationBound):
-                raise RuntimeError("PAW could not clear the previous Thread route")
+
+        return StartupPreparation(
+            conversation_ref=room_binding.conversation,
+            actor="imzenx-paw",
+            prepare=prepare,
+        )
 
     async def handle(self, message, actions):
         async with self._lock(message.conversation_ref):
@@ -227,7 +245,7 @@ class PawController:
                 # The SDK handles its own selection errors; inspect its public
                 # binding result before changing the durable Room address.
                 result = await self._legacy.handle(message, actions)
-                binding = await actions.get_binding(message.conversation_ref)
+                binding = await actions.get_binding()
                 if binding is not None and binding.thread_ref is not None:
                     self._state.clear(message.conversation_ref)
                     self._errors.pop(message.conversation_ref, None)
@@ -368,19 +386,14 @@ class PawController:
                 raise ValueError("Invalid PAW number. Use /paws to refresh the list.")
             selector = rooms[int(selector) - 1]["id"]
         room, messages = await self._read(selector)
-        binding = await actions.get_binding(conversation)
+        binding = await actions.get_binding()
         if binding is not None and binding.thread_ref is not None:
-            cleared = await actions.execute_gateway(
-                ClearConversationThread(
-                    operation_id=f"paw-select:{message.message_id}",
-                    conversation_ref=conversation,
-                    actor=message.sender,
-                    expected_revision=binding.revision,
-                    created_at=message.created_at,
+            _require_success(
+                await actions.clear_thread(
+                    action_id=f"paw-select:{message.message_id}",
+                    expected_generation=binding.generation,
                 )
             )
-            if not isinstance(cleared, ConversationBound):
-                raise ValueError("Could not clear the previous Thread route")
         self._state.bind(conversation, room, messages[-1]["id"] if messages else None)
         self._errors.pop(conversation, None)
         return (
@@ -421,6 +434,8 @@ class PawController:
 
     async def poll_once(self) -> None:
         for selected in self._state.bindings():
+            if selected.conversation.channel_instance_id not in self._channel_instance_ids:
+                continue
             if self.route_error(selected.conversation):
                 continue
             try:

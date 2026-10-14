@@ -252,6 +252,13 @@ error. Fleet does not manufacture a new target Agent turn or append a target
 transcript event for this tool request. The calling Agent's ordinary canonical tool
 result records the response.
 
+Local shell task receipts can report independent foreground/stdio facts and an
+observed foreground exit code before completion. The current Fleet wire does not
+project those optional fields: the narrow shell gateway returns a bounded final
+result, and generic remote task envelopes retain their existing fields. Missing
+facts mean unavailable, never foreground-running or EOF. Neither route invents
+pipe-holder identities or support at an older target Host.
+
 Commands are bounded to 30 seconds by default (1–120000 ms), with a bounded output
 preview (1–65536 bytes, default 16384) and explicit truncation. Cancel, socket close,
 revocation and deadline cancellation remain scoped to the existing target shell

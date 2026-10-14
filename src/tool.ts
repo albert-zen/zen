@@ -1,4 +1,9 @@
 import {
+  ShellSessionsRuntime,
+  type ShellPtyProvider,
+  type ShellTerminalControl,
+} from "./shell-session.js";
+import {
   MAX_TOOL_YIELD_TIME_MS,
   ToolTaskManager,
   ToolWaitRuntime,
@@ -13,7 +18,7 @@ export type {
 } from "./tool-task.js";
 import { createHash, randomUUID } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { sandboxCommand } from "./sandbox.js";
 import type { SandboxMode } from "./item.js";
 import { StringDecoder } from "node:string_decoder";
@@ -44,8 +49,32 @@ import {
 const TOOL_OUTPUT_CAPTURE = Symbol("tool-output-capture");
 const TOOL_OUTPUT_SUFFIX = Symbol("tool-output-suffix");
 
+/** Host-resolved target identity; generation is revalidated by the domain Host. */
+export interface ToolApprovalScope {
+  readonly key: string;
+  readonly label: string;
+  readonly generation: string;
+}
+
+/** Observed shell facts, independent of task completion or cancellation. */
+export type ShellLifecycleFacts = {
+  stdio: "open" | "eof";
+} & (
+  | { foreground: "running" }
+  | {
+      foreground: "exited";
+      /** Null means signal termination, not a successful exit. */
+      foreground_exit_code: number | null;
+      foreground_signal: NodeJS.Signals | null;
+    }
+);
+
 export interface ToolInvocation {
+  /** Host-minted human terminal request. Never accepted from tool arguments. */
+  userTerminal?: { cols: number; rows: number };
   callId: string;
+  /** ToolEnvironment-minted snapshot; callers must not supply this field. */
+  readonly approvalScope?: ToolApprovalScope;
   /** Host-minted only for direct plugin UI commands; never inherited from tool arguments. */
   trustedPluginUi?: true;
   /** Runtime-owned canonical tool_call Item identity, independent of provider call IDs. */
@@ -67,6 +96,12 @@ export interface ToolInvocation {
   /** Host-owned streaming sink; bytes emitted here must not be repeated in final output. */
   taskContext?: {
     onOutput(text: string): void;
+    onShellOutput?(text: string): void;
+    onShellControl?(control: ShellTerminalControl): void;
+    /** Trusted executor evidence; settlement alone did not prove cancellation. */
+    onCancellationUnconfirmed?(): void;
+    /** Builtin shell observations only; absent before successful spawn. */
+    onShellLifecycle?(facts: ShellLifecycleFacts): void;
     onModelContent?(content: UserInput): void;
     requestYield?(): void;
   };
@@ -97,6 +132,8 @@ export interface ToolRuntime {
   readonly specification: ModelTool;
   /** Runtime body scheduling only; not permission or resource scope. */
   readonly executionMode?: ToolExecutionMode;
+  /** Trusted local Shell runtime, eligible for non-consuming session observation. */
+  readonly shellSession?: true;
   /** Host builtin enforces invocation.sandbox before producing file effects. */
   readonly enforcesSandbox?: boolean;
   /** Explicit target-side opt-in for ordinary text/JSON remote execution. */
@@ -104,6 +141,8 @@ export interface ToolRuntime {
   readonly taskPolicy?: ToolTaskPolicy;
   /** Invocation-specific Host resource claims, acquired atomically before execute. */
   resourceClaims?(invocation: ToolInvocation): readonly ToolResourceClaim[];
+  /** Trusted target resolver, called once with immutable prepared arguments. */
+  approvalScope?(invocation: ToolInvocation): ToolApprovalScope | undefined;
   /** Known model modalities required before this tool body may execute. */
   readonly requiredModelInputModalities?: readonly string[];
   execute(invocation: ToolInvocation): Promise<ToolExecutionResult>;
@@ -160,10 +199,24 @@ export type StoredToolPolicyDecision = "approved" | "denied";
 export interface ToolPolicyStore {
   get(toolName: string): Promise<StoredToolPolicyDecision | undefined>;
   set(toolName: string, decision: StoredToolPolicyDecision): Promise<void>;
+  /** Optional as a pair; scoped admission never falls back to get/set. */
+  getScoped?(
+    toolName: string,
+    scopeKey: string,
+  ): Promise<StoredToolPolicyDecision | undefined>;
+  setScoped?(
+    toolName: string,
+    scopeKey: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void>;
 }
 
 export class InMemoryToolPolicyStore implements ToolPolicyStore {
   readonly #decisions = new Map<string, StoredToolPolicyDecision>();
+  readonly #scopedDecisions = new Map<
+    string,
+    Map<string, StoredToolPolicyDecision>
+  >();
 
   constructor(
     initial: Readonly<Record<string, StoredToolPolicyDecision>> = {},
@@ -183,11 +236,35 @@ export class InMemoryToolPolicyStore implements ToolPolicyStore {
   ): Promise<void> {
     this.#decisions.set(toolName, decision);
   }
+
+  async getScoped(
+    toolName: string,
+    scopeKey: string,
+  ): Promise<StoredToolPolicyDecision | undefined> {
+    return this.#scopedDecisions.get(toolName)?.get(scopeKey);
+  }
+
+  async setScoped(
+    toolName: string,
+    scopeKey: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void> {
+    let decisions = this.#scopedDecisions.get(toolName);
+    if (decisions === undefined) {
+      decisions = new Map();
+      this.#scopedDecisions.set(toolName, decisions);
+    }
+    decisions.set(scopeKey, decision);
+  }
 }
 
 export class SetToolPolicyStore implements ToolPolicyStore {
   readonly #approvedTools: Set<string>;
   readonly #deniedTools: Set<string>;
+  readonly #scopedDecisions = new Map<
+    string,
+    Map<string, StoredToolPolicyDecision>
+  >();
 
   constructor(options: {
     approvedTools: Set<string>;
@@ -215,9 +292,30 @@ export class SetToolPolicyStore implements ToolPolicyStore {
       this.#deniedTools.add(toolName);
     }
   }
+
+  async getScoped(
+    toolName: string,
+    scopeKey: string,
+  ): Promise<StoredToolPolicyDecision | undefined> {
+    return this.#scopedDecisions.get(toolName)?.get(scopeKey);
+  }
+
+  async setScoped(
+    toolName: string,
+    scopeKey: string,
+    decision: StoredToolPolicyDecision,
+  ): Promise<void> {
+    let decisions = this.#scopedDecisions.get(toolName);
+    if (decisions === undefined) {
+      decisions = new Map();
+      this.#scopedDecisions.set(toolName, decisions);
+    }
+    decisions.set(scopeKey, decision);
+  }
 }
 
 export interface PreparedToolInvocation {
+  readonly approvalScope?: ToolApprovalScope;
   readonly owner: ToolBundleIdentity;
   readonly definition: ModelTool;
   readonly invocation: ToolInvocation;
@@ -281,6 +379,7 @@ export interface ToolTargetRouter {
 }
 
 interface PreparedRuntimeRegistration {
+  admission?: { policy: ToolPolicy; scope?: ToolApprovalScope };
   runtime?: ToolRuntime;
   route?: ToolTargetRoute;
   release: (() => void) | undefined;
@@ -305,11 +404,17 @@ export class ToolEnvironment {
   readonly #unsandboxedAdmissions = new WeakSet<PreparedToolInvocation>();
   readonly #policyStore: ToolPolicyStore;
   readonly #pendingAdmissions = new Map<string, Promise<void>>();
+  readonly #pendingScopedAdmissions = new Map<
+    string,
+    Map<string, Promise<void>>
+  >();
   #targetRouter: ToolTargetRouter | undefined;
 
   constructor(
     options: {
       taskOptions?: ToolTaskOptions;
+      /** Publish read-only shared Shell observation in desktop Hosts. */
+      shellSessions?: boolean;
       toolOutputSpool?: ToolOutputSpool;
       runtimes?: readonly ToolRuntime[];
       bundles?: readonly ToolBundle[];
@@ -347,6 +452,11 @@ export class ToolEnvironment {
     for (const runtime of options.runtimes ?? []) {
       this.registerRuntime(runtime);
     }
+    if (
+      options.shellSessions &&
+      (options.runtimes ?? []).some((runtime) => runtime.shellSession)
+    )
+      this.registerRuntime(new ShellSessionsRuntime(this.taskManager));
     for (const bundle of options.bundles ?? []) {
       this.registerBundle(bundle);
     }
@@ -448,6 +558,13 @@ export class ToolEnvironment {
       throw new Error(`Tool bundle is already registered: ${key}`);
     }
     const runtimes = bundle.tools.map((runtime) => {
+      if (
+        runtime.approvalScope !== undefined &&
+        runtime.enforcesSandbox === true
+      )
+        throw new Error(
+          `Tool ${runtime.name}: approvalScope cannot be combined with enforcesSandbox`,
+        );
       const definition = structuredClone(runtime.specification);
       if (runtime.name.length === 0 || definition.name.length === 0) {
         throw new Error(`Tool bundle ${key} has an empty tool name`);
@@ -543,6 +660,10 @@ export class ToolEnvironment {
     /** A target gateway has already selected this Host; domain execution stays local. */
     options: { targetRouting?: boolean } = {},
   ): PreparedToolInvocation {
+    if ("approvalScope" in invocation)
+      throw new Error(
+        "Tool approval scope must come from the trusted runtime resolver",
+      );
     const registration = this.#tools.get(invocation.name);
     const frozenInvocation: ToolInvocation = Object.freeze({
       ...invocation,
@@ -630,7 +751,19 @@ export class ToolEnvironment {
         arguments: Object.freeze(arguments_),
       });
     }
+    // Scoped targets are resolved only after local routing inputs are final.
+    // Deep-freeze before resolution so approval and dispatch see the same input.
+    let approvalScope: ToolApprovalScope | undefined;
+    if (registration.runtime.approvalScope !== undefined) {
+      deepFreeze(localInvocation.arguments);
+      approvalScope = captureApprovalScope(
+        registration.runtime.approvalScope(localInvocation),
+      );
+      if (approvalScope !== undefined)
+        localInvocation = Object.freeze({ ...localInvocation, approvalScope });
+    }
     const prepared: PreparedToolInvocation = Object.freeze({
+      ...(approvalScope === undefined ? {} : { approvalScope }),
       owner: registration.identity,
       definition: structuredClone(registration.definition),
       executionMode: executionModeFor(registration.runtime),
@@ -653,6 +786,18 @@ export class ToolEnvironment {
   ): Promise<ApprovalDecision> {
     const registration = this.#requirePrepared(prepared);
     const runtime = registration.runtime;
+    const scope = prepared.approvalScope;
+    const approvalRequest =
+      scope === undefined
+        ? options.approvalRequest
+        : {
+            ...options.approvalRequest,
+            approvalTarget: Object.freeze({
+              key: scope.key,
+              label: scope.label,
+            }),
+            command: `[Target: ${scope.label}]\n${options.approvalRequest.command}`,
+          };
     const sandbox = prepared.invocation.sandbox ?? "danger-full-access";
     if (
       sandbox !== "danger-full-access" &&
@@ -666,8 +811,13 @@ export class ToolEnvironment {
         prepared.owner.kind === "builtin" &&
         runtime?.enforcesSandbox === true &&
         !escalation
-      )
+      ) {
+        registration.admission = {
+          policy: options.policy,
+          ...(scope === undefined ? {} : { scope }),
+        };
         return "accept";
+      }
       try {
         if (
           options.policy === "full_access" ||
@@ -679,15 +829,19 @@ export class ToolEnvironment {
         }
         const decision = await waitForToolAbort(
           options.requestApproval({
-            ...options.approvalRequest,
+            ...approvalRequest,
             scope: "once",
-            command: `[One-time full file access: ${sandbox}]\n${options.approvalRequest.command}`,
+            command: `[One-time full file access: ${sandbox}]\n${approvalRequest.command}`,
           }),
           prepared.invocation.signal,
         );
-        if (decision === "accept" || decision === "acceptForSession")
+        if (decision === "accept" || decision === "acceptForSession") {
           this.#unsandboxedAdmissions.add(prepared);
-        else this.#releasePrepared(prepared);
+          registration.admission = {
+            policy: options.policy,
+            ...(scope === undefined ? {} : { scope }),
+          };
+        } else this.#releasePrepared(prepared);
         return decision;
       } catch (error) {
         this.#releasePrepared(prepared);
@@ -698,19 +852,40 @@ export class ToolEnvironment {
       runtime === this.waitRuntime ||
       registration.route?.waitPolicyExempt === true ||
       options.policy === "full_access"
-    )
+    ) {
+      registration.admission = {
+        policy: options.policy,
+        ...(scope === undefined ? {} : { scope }),
+      };
       return "accept";
+    }
 
     const toolName = prepared.invocation.name;
     try {
+      const policy = this.#policyFor(prepared);
+      let pendingAdmissions = this.#pendingAdmissions;
+      if (scope !== undefined) {
+        const scoped =
+          this.#pendingScopedAdmissions.get(toolName) ??
+          new Map<string, Promise<void>>();
+        this.#pendingScopedAdmissions.set(toolName, scoped);
+        pendingAdmissions = scoped;
+      }
+      const pendingKey = scope?.key ?? toolName;
       for (;;) {
-        const stored = await this.#policyStore.get(toolName);
-        if (stored === "approved") return "accept";
+        const stored = await policy.get();
+        if (stored === "approved") {
+          registration.admission = {
+            policy: options.policy,
+            ...(scope === undefined ? {} : { scope }),
+          };
+          return "accept";
+        }
         if (stored === "denied") {
           this.#releasePrepared(prepared);
           return "decline";
         }
-        const pending = this.#pendingAdmissions.get(toolName);
+        const pending = pendingAdmissions.get(pendingKey);
         if (pending !== undefined) {
           await waitForToolAbort(pending, prepared.invocation.signal);
           continue;
@@ -725,24 +900,29 @@ export class ToolEnvironment {
         const admission = new Promise<void>((resolve) => {
           release = resolve;
         });
-        this.#pendingAdmissions.set(toolName, admission);
+        pendingAdmissions.set(pendingKey, admission);
         try {
           const decision = await waitForToolAbort(
-            options.requestApproval(options.approvalRequest),
+            options.requestApproval(approvalRequest),
             prepared.invocation.signal,
           );
           if (decision === "accept") {
-            await this.#policyStore.set(toolName, "approved");
+            await policy.set("approved");
           } else if (decision === "decline") {
-            await this.#policyStore.set(toolName, "denied");
+            await policy.set("denied");
           }
           if (decision === "decline" || decision === "cancel") {
             this.#releasePrepared(prepared);
+          } else {
+            registration.admission = {
+              policy: options.policy,
+              ...(scope === undefined ? {} : { scope }),
+            };
           }
           return decision;
         } finally {
-          if (this.#pendingAdmissions.get(toolName) === admission) {
-            this.#pendingAdmissions.delete(toolName);
+          if (pendingAdmissions.get(pendingKey) === admission) {
+            pendingAdmissions.delete(pendingKey);
           }
           release();
         }
@@ -753,9 +933,10 @@ export class ToolEnvironment {
     }
   }
 
-  /** Inherited child admission: remembered deny wins; unknown never prompts. */
+  /** Scoped children need an exact grant or an admitted Full Access parent. */
   async admitInherited(
     prepared: PreparedToolInvocation,
+    parent?: PreparedToolInvocation,
   ): Promise<ApprovalDecision> {
     const registration = this.#requirePrepared(prepared);
     if (
@@ -764,11 +945,50 @@ export class ToolEnvironment {
     )
       return "accept";
     try {
-      const stored = await this.#policyStore.get(prepared.invocation.name);
-      if (stored === "denied") {
+      let inheritedAdmission: PreparedRuntimeRegistration["admission"];
+      if (parent !== undefined) {
+        const parentRegistration = this.#requirePrepared(parent);
+        if (
+          parent === prepared ||
+          parent.owner.kind !== "builtin" ||
+          parentRegistration.runtime === undefined ||
+          !isCompositeToolRuntime(parentRegistration.runtime) ||
+          parentRegistration.admission === undefined ||
+          parent.invocation.threadId !== prepared.invocation.threadId
+        )
+          throw new Error(
+            "Inherited approval requires an exact admitted composite parent",
+          );
+        inheritedAdmission = parentRegistration.admission;
+      }
+      if (
+        prepared.approvalScope !== undefined &&
+        inheritedAdmission?.policy === "full_access" &&
+        (inheritedAdmission.scope === undefined ||
+          (inheritedAdmission.scope.key === prepared.approvalScope.key &&
+            inheritedAdmission.scope.generation ===
+              prepared.approvalScope.generation))
+      ) {
+        // Each scoped hop narrows even an unscoped Full Access ancestor.
+        registration.admission = {
+          policy: "full_access",
+          scope: prepared.approvalScope,
+        };
+        return "accept";
+      }
+      const stored = await this.#policyFor(prepared).get();
+      if (
+        stored === "denied" ||
+        (prepared.approvalScope !== undefined && stored !== "approved")
+      ) {
         this.#releasePrepared(prepared);
         return "decline";
       }
+      // A separate scoped grant admits this call, not its ancestor's bypass.
+      registration.admission =
+        prepared.approvalScope === undefined
+          ? (inheritedAdmission ?? { policy: "ask_unknown" })
+          : { policy: "ask_unknown", scope: prepared.approvalScope };
       return "accept";
     } catch (error) {
       this.#releasePrepared(prepared);
@@ -837,7 +1057,12 @@ export class ToolEnvironment {
           throw new ToolResultNormalizationError(error);
         }
       };
-      if (runtime instanceof ToolWaitRuntime)
+      // Observation is a control operation, like wait, and must remain usable
+      // when every execution slot is occupied by the sessions being inspected.
+      if (
+        runtime instanceof ToolWaitRuntime ||
+        runtime instanceof ShellSessionsRuntime
+      )
         return await execute(prepared.invocation);
       const scope =
         (isCompositeToolRuntime(runtime)
@@ -885,6 +1110,27 @@ export class ToolEnvironment {
     this.#releasePrepared(prepared);
   }
 
+  #policyFor(prepared: PreparedToolInvocation): {
+    get(): Promise<StoredToolPolicyDecision | undefined>;
+    set(decision: StoredToolPolicyDecision): Promise<void>;
+  } {
+    const toolName = prepared.invocation.name;
+    const scope = prepared.approvalScope;
+    if (scope === undefined)
+      return {
+        get: () => this.#policyStore.get(toolName),
+        set: (decision) => this.#policyStore.set(toolName, decision),
+      };
+    const { getScoped, setScoped } = this.#policyStore;
+    if (getScoped === undefined || setScoped === undefined)
+      throw new Error("Tool policy store does not support scoped decisions");
+    return {
+      get: () => getScoped.call(this.#policyStore, toolName, scope.key),
+      set: (decision) =>
+        setScoped.call(this.#policyStore, toolName, scope.key, decision),
+    };
+  }
+
   #requirePrepared(
     prepared: PreparedToolInvocation,
   ): PreparedRuntimeRegistration {
@@ -904,6 +1150,28 @@ export class ToolEnvironment {
   }
 }
 
+function captureApprovalScope(
+  scope: ToolApprovalScope | undefined,
+): ToolApprovalScope | undefined {
+  if (scope === undefined) return undefined;
+  if (
+    scope === null ||
+    typeof scope !== "object" ||
+    typeof scope.key !== "string" ||
+    scope.key.trim().length === 0 ||
+    typeof scope.label !== "string" ||
+    scope.label.trim().length === 0 ||
+    typeof scope.generation !== "string" ||
+    scope.generation.trim().length === 0
+  )
+    throw new Error("Invalid trusted tool approval scope");
+  return Object.freeze({
+    key: scope.key,
+    label: scope.label,
+    generation: scope.generation,
+  });
+}
+
 function executionModeFor(runtime: ToolRuntime): ToolExecutionMode {
   return runtime.executionMode === "parallel_safe"
     ? "parallel_safe"
@@ -915,6 +1183,11 @@ function remoteEligibility(
 ): Pick<ToolRemoteDefinitionEntry, "eligible" | "reason"> {
   if (runtime instanceof ToolWaitRuntime)
     return { eligible: false, reason: "Task observation is Host-owned" };
+  if (runtime.approvalScope !== undefined)
+    return {
+      eligible: false,
+      reason: "Instance-scoped admission is unavailable for remote execution",
+    };
   if (isCompositeToolRuntime(runtime))
     return { eligible: false, reason: "Composite tools execute locally" };
   if ((runtime.requiredModelInputModalities?.length ?? 0) !== 0)
@@ -1163,6 +1436,8 @@ export interface ApprovalRequest {
   callId: string;
   command: string;
   scope?: "once";
+  /** Trusted target context; never a model-supplied authority. */
+  approvalTarget?: Readonly<Pick<ToolApprovalScope, "key" | "label">>;
   toolName?: string;
   toolArguments?: Readonly<Record<string, unknown>>;
   cwd: string;
@@ -1174,9 +1449,16 @@ export type ApprovalHandler = (
 ) => Promise<ApprovalDecision>;
 
 /** Concrete process execution only; the environment owns waiting and deadlines. */
+export interface ShellProcessTermination {
+  /** The invocation owns launch-observation helpers even after a fast command exits. */
+  readonly ready?: Promise<void>;
+  terminate(): Promise<{ ok: boolean; error: string }>;
+}
+
 export class ShellToolRuntime implements ToolRuntime {
   readonly enforcesSandbox = true;
   readonly remoteExecution = "text-json";
+  readonly shellSession = true;
   readonly name = "shell";
   readonly executionMode = "parallel_safe";
   readonly taskPolicy: ToolTaskPolicy = {
@@ -1187,7 +1469,7 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly specification: ModelTool = {
     name: this.name,
     description:
-      "Run a shell command. Independent commands can run concurrently; await commands sequentially when their effects depend on each other. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours).",
+      "Run a shell command. Independent commands can run concurrently; await commands sequentially when their effects depend on each other. Long operations return a task_id for wait. yield_time_ms controls how long to wait before returning a task receipt (maximum 180 seconds); timeout_ms controls the separate execution deadline (default 10 minutes, maximum 24 hours). Shell task completion waits for the direct command process to exit and stdout/stderr to close; descendants inheriting these pipes can keep it running. Receipts may include independent foreground (running/exited) and stdio (open/eof) observations, plus foreground_exit_code and foreground_signal after exit, even while task status stays running. running (foreground_exited) means exited + open, never completion. Redirect intentional background output to files or /dev/null; backgrounding a compound command such as cd x && nohup y & may leave a subshell holding pipes. Cancellation/timeout targets the owned process group on POSIX (the direct child on Windows); backgrounding is not a detach exemption, but escaped process groups are not contained. Pipe EOF is not proof that every redirected descendant exited. Use an OS service manager for services that must outlive the Host.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1214,6 +1496,9 @@ export class ShellToolRuntime implements ToolRuntime {
   readonly #maxOutputBytes: number;
   readonly #spool: ToolOutputSpool | undefined;
   readonly #outputFilter: ShellOutputFilter | undefined;
+  readonly #pty: ShellPtyProvider | undefined;
+  readonly #trackProcess:
+    ((child: ChildProcess) => ShellProcessTermination) | undefined;
   constructor(
     options: {
       environment?: Readonly<NodeJS.ProcessEnv>;
@@ -1222,6 +1507,10 @@ export class ShellToolRuntime implements ToolRuntime {
       maxOutputBytes?: number;
       toolOutputSpool?: ToolOutputSpool;
       experimentalOutputFilter?: ShellOutputFilter;
+      pty?: ShellPtyProvider;
+      /** Host adapter; ownership stays scoped to this exact invocation. */
+      trackProcess?: (child: ChildProcess) => ShellProcessTermination;
+      ownedCleanupWaitMs?: number;
     } = {},
   ) {
     this.#environment = Object.freeze(
@@ -1235,9 +1524,82 @@ export class ShellToolRuntime implements ToolRuntime {
       options.maxOutputBytes ?? DEFAULT_TOOL_OUTPUT_CAPTURE_BYTES;
     this.#spool = options.toolOutputSpool;
     this.#outputFilter = options.experimentalOutputFilter;
+    this.#pty = options.pty;
+    this.#trackProcess = options.trackProcess;
+    if (options.trackProcess !== undefined) {
+      if (options.ownedCleanupWaitMs !== undefined) {
+        this.taskPolicy = {
+          ...this.taskPolicy,
+          shutdownWaitMs: options.ownedCleanupWaitMs,
+        };
+      }
+      this.specification = {
+        ...this.specification,
+        description: this.specification.description.replace(
+          "the direct child on Windows",
+          "the Host's captured, identity-verified process tree on Windows; ambiguous ownership or failed verification remains cancellation_unconfirmed",
+        ),
+      };
+    }
+  }
+  async #interactive(invocation: ToolInvocation): Promise<ToolExecutionResult> {
+    if (!this.#pty || !invocation.taskContext || !invocation.threadId)
+      throw new Error("Interactive Shell is unavailable on this Host");
+    if (invocation.sandbox !== "danger-full-access")
+      throw new Error(
+        "Interactive terminals require the thread's Full Access policy; restricted Shell commands remain available",
+      );
+    const terminal = await this.#pty.spawn({
+      cwd: invocation.cwd,
+      env: this.#environment,
+      ...invocation.userTerminal!,
+    });
+    const write = (text: string) => {
+      invocation.taskContext!.onShellOutput?.(text);
+      invocation.taskContext!.onOutput(text);
+    };
+    invocation.taskContext.onShellControl?.(terminal);
+    // PTY exit does not establish two pipe EOF observations. Do not synthesize
+    // the optional pipe lifecycle facts provided by ordinary command shells.
+    return await new Promise<ToolExecutionResult>((resolve) => {
+      let ended = false;
+      let forced: NodeJS.Timeout | undefined;
+      const data = terminal.onData(write);
+      const exit = terminal.onExit(({ exitCode }) => {
+        if (ended) return;
+        ended = true;
+        if (forced) clearTimeout(forced);
+        invocation.signal.removeEventListener("abort", abort);
+        data.dispose();
+        exit.dispose();
+        resolve({ output: "", exitCode });
+      });
+      const abort = () => {
+        if (ended) return;
+        try {
+          terminal.kill("SIGTERM");
+        } catch {
+          /* Wait for observed exit. */
+        }
+        forced ??= setTimeout(() => {
+          if (!ended) {
+            try {
+              terminal.kill("SIGKILL");
+            } catch {
+              /* Exit remains unconfirmed. */
+            }
+          }
+        }, this.#terminationGraceMs);
+        forced.unref();
+      };
+      invocation.signal.addEventListener("abort", abort, { once: true });
+      if (invocation.signal.aborted) abort();
+    });
   }
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
     invocation.signal.throwIfAborted();
+    if (invocation.userTerminal !== undefined)
+      return this.#interactive(invocation);
     const command = invocation.arguments.command;
     if (typeof command !== "string" || command.trim().length === 0)
       throw new Error("shell.command must be a non-empty string");
@@ -1263,6 +1625,7 @@ export class ShellToolRuntime implements ToolRuntime {
           ? new ToolOutputWindow(this.#maxOutputBytes, this.#spool)
           : undefined;
     const write = (text: string) => {
+      invocation.taskContext?.onShellOutput?.(text);
       if (rawCapture !== undefined) rawCapture.write(text);
       else if (capture !== undefined) capture.write(text);
       else invocation.taskContext?.onOutput(text);
@@ -1274,6 +1637,56 @@ export class ShellToolRuntime implements ToolRuntime {
         (invocation.sandbox ?? "danger-full-access") === "danger-full-access",
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
+    });
+    let processOwner: ShellProcessTermination | undefined;
+    try {
+      processOwner = this.#trackProcess?.(child);
+    } catch (error) {
+      // A failed ownership observer must not abandon the already-spawned task.
+      processOwner = {
+        async terminate() {
+          return {
+            ok: false,
+            error: `Process ownership unavailable: ${String(error)}`,
+          };
+        },
+      };
+    }
+    let lifecycle: ShellLifecycleFacts | undefined;
+    let stdoutEof = false;
+    let stderrEof = false;
+    let finished = false;
+    const reportLifecycle = () => {
+      if (finished || lifecycle === undefined) return;
+      lifecycle = {
+        ...lifecycle,
+        stdio: stdoutEof && stderrEof ? "eof" : "open",
+      };
+      invocation.taskContext?.onShellLifecycle?.(lifecycle);
+    };
+    child.once("spawn", () => {
+      lifecycle = { foreground: "running", stdio: "open" };
+      reportLifecycle();
+    });
+    child.once("exit", (code, signal) => {
+      if (lifecycle === undefined) return;
+      lifecycle = {
+        foreground: "exited",
+        stdio: "open",
+        foreground_exit_code: code,
+        foreground_signal: signal,
+      };
+      reportLifecycle();
+    });
+    // Only readable end confirms EOF. close/destroy (including forced
+    // cancellation cleanup) cannot establish that writers closed their pipes.
+    child.stdout.once("end", () => {
+      stdoutEof = true;
+      reportLifecycle();
+    });
+    child.stderr.once("end", () => {
+      stderrEof = true;
+      reportLifecycle();
     });
     const stdout = new StringDecoder("utf8"),
       stderr = new StringDecoder("utf8");
@@ -1297,7 +1710,6 @@ export class ShellToolRuntime implements ToolRuntime {
       }
     };
     const exitCode = await new Promise<number>((resolve) => {
-      let finished = false;
       const finish = (code: number) => {
         if (finished) return;
         finished = true;
@@ -1310,6 +1722,31 @@ export class ShellToolRuntime implements ToolRuntime {
       const abort = () => {
         if (aborted || finished) return;
         aborted = true;
+        if (processOwner !== undefined) {
+          void processOwner.terminate().then(
+            (result) => {
+              if (!result.ok) {
+                invocation.taskContext?.onCancellationUnconfirmed?.();
+                write(
+                  `\n[Shell Stop unconfirmed: ${result.error.slice(0, 1024)}]\n`,
+                );
+              }
+              child.stdout.destroy();
+              child.stderr.destroy();
+              finish(130);
+            },
+            (error: unknown) => {
+              invocation.taskContext?.onCancellationUnconfirmed?.();
+              write(
+                `\n[Shell Stop unconfirmed: ${String(error).slice(0, 1024)}]\n`,
+              );
+              child.stdout.destroy();
+              child.stderr.destroy();
+              finish(130);
+            },
+          );
+          return;
+        }
         kill("SIGTERM");
         killTimer = setTimeout(() => {
           kill("SIGKILL");
@@ -1320,9 +1757,27 @@ export class ShellToolRuntime implements ToolRuntime {
       };
       child.once("error", (error) => {
         write(`\n[shell spawn failed: ${error.message}]`);
+        if (aborted && processOwner !== undefined) return;
         finish(1);
       });
       child.once("close", (code) => {
+        // Native child/pipe closure is separate from the adapter's bounded
+        // ownership verification. It cannot prematurely confirm a Stop.
+        if (aborted && processOwner !== undefined) return;
+        if (processOwner?.ready !== undefined) {
+          void processOwner.ready.then(
+            () => {
+              if (!aborted) finish(code ?? 128);
+            },
+            (error: unknown) => {
+              write(
+                `\n[Shell ownership observation failed: ${String(error).slice(0, 1024)}]\n`,
+              );
+              if (!aborted) finish(code ?? 128);
+            },
+          );
+          return;
+        }
         if (aborted) kill("SIGKILL");
         finish(aborted ? 130 : (code ?? 128));
       });
@@ -1625,13 +2080,15 @@ export function sanitizeToolEnvironment(
   source: Readonly<NodeJS.ProcessEnv>,
   blockedEnvironmentVariables: readonly string[] = [],
 ): NodeJS.ProcessEnv {
-  const blocked = new Set(blockedEnvironmentVariables);
+  const key = (name: string) =>
+    process.platform === "win32" ? name.toUpperCase() : name;
+  const blocked = new Set(blockedEnvironmentVariables.map(key));
   const environment: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
     if (
       value !== undefined &&
-      !blocked.has(name) &&
-      (SAFE_ENVIRONMENT_VARIABLES.has(name) || name.startsWith("LC_"))
+      !blocked.has(key(name)) &&
+      (SAFE_ENVIRONMENT_VARIABLES.has(key(name)) || name.startsWith("LC_"))
     ) {
       environment[name] = value;
     }
