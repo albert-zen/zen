@@ -10567,6 +10567,12 @@ button:disabled {
 .model-debug-integrity-flags {
   color: var(--color-status-warning);
 }
+.model-debug-request.selected .model-debug-request-meta,
+.model-debug-request.selected .model-debug-request-heading time,
+.model-debug-request:is(:hover, .selected)
+  .model-debug-request-integrity[data-warning="true"] {
+  color: var(--color-text-primary);
+}
 .model-debug-detail {
   display: flex;
   flex-direction: column;
