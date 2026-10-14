@@ -134,10 +134,20 @@ async function clickMatch(name: "next" | "previous" | "close") {
   );
 }
 
-for (const [name, Editor, path] of [
+type FindEditorProps = {
+  path: string;
+  text: string;
+  onChange(text: string): void;
+  findRequest?: number;
+};
+const editorCases: ReadonlyArray<
+  readonly [string, React.ComponentType<FindEditorProps>, string]
+> = [
   ["source", SourceEditor, "notes.txt"],
   ["Markdown", InlineMarkdownEditor, "notes.md"],
-] as const) {
+];
+
+for (const [name, Editor, path] of editorCases) {
   test(`${name} Find highlights literal matches, navigates both directions and preserves raw draft and undo`, async () => {
     const harness = await mount();
     const original = "\ufefffirst\r\n中文 😀 a.* \\n\nFIRST\r中文 😀 a.* \\n";
