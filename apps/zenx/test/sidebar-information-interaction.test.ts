@@ -93,13 +93,13 @@ test("details retain focus, title directly renames, and late save cannot close a
         pluginId: "zenx-triggers",
         id: "triggers",
         key: "triggers",
-        title: "Automations",
+        title: "Triggers",
         icon: "clock",
         page: {
           id: "triggers",
           route: "/plugins/zenx-triggers/triggers",
           pluginId: "zenx-triggers",
-          title: "Automations",
+          title: "Triggers",
         },
       },
     ],
@@ -223,7 +223,7 @@ test("details retain focus, title directly renames, and late save cannot close a
     const status = document.querySelector(
       '[data-thread-id="a"] .thread-status-rail',
     )!;
-    assert.ok(status.querySelector('[aria-label="1 automation"]'));
+    assert.ok(status.querySelector('[aria-label="1 trigger"]'));
     assert.ok(status.querySelector('[aria-label="Running"]'));
     assert.equal(
       document.querySelector('[data-thread-id="a"] .thread-state-inline'),
