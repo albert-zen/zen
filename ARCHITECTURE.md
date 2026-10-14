@@ -1,6 +1,7 @@
 # ARCHITECTURE
 
 - **Concurrent Browser registry** — ZenX owns independent ephemeral Workspace and explicitly connected external Browser packages; new fixed tool namespaces never inherit legacy tool-name approvals, while backend-qualified tab/observation/target/cursor references prevent cross-backend routing without adding Thread state. External opt-in never removes the Workspace backend. Profile upgrades publish routing only at the existing Catalog transaction boundary; the app-owned Workspace port lends generation-specific opaque sessions, and retirement observes the existing Supervisor runtime drain before detaching only the retiring generation’s leases (no second lease counter or cancellation authority).
+- **ZenX reading state** — One App-owned, memory-only renderer cache retains scroll/follow intent per exact Thread and explicit disclosure choices by exact Thread/Turn/Item identity across navigation, without retaining hidden transcripts or changing execution, canonical history or Host storage.
 
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.

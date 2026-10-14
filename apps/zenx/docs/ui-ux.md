@@ -182,6 +182,8 @@ Trace sequence projection 按 Item 顺序生成：
 
 只有一个 Item 的 trace sequence 直接显示该 Thinking / Tool Call row；连续达到两个或更多 Items 时才显示 Trace Group。sequence identity 取首个 Item 的稳定 identity，因此流式追加只更新现有 sequence，不重挂载 disclosure 或丢失键盘焦点。singleton 升级为 group 时继承用户当前的展开或收起状态；用户在 Turn 运行期间显式展开或收起后，后续 streaming patch 不得覆盖该选择。
 
+用户显式选择的 Turn、Trace Group 与 Tool row 展开/收起状态按精确 Thread / Turn / Item 身份保留；切换会话、进入 Settings 或 loading 重挂载后返回仍沿用该选择。它们仅存在于本次 renderer 内存，不写入历史或 Host 配置，也不常驻隐藏会话 DOM。
+
 Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
 Tool 状态统一投影为 `queued / running / success / failed / cancelled / approval_required`。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。
@@ -231,6 +233,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - 不在 Composer 重复显示 Turn 已经表达的运行时长或状态。
 - Approval bar 位于聊天流与 Composer 之间，不塞入 Trace Group 或 Composer toolbar。
 - 用户处于实时底部时，新 Item 自动跟随；用户向上阅读后，不改变滚动位置，并显示 **Back to live**。
+- 手动上翻、键盘阅读、展开/聚焦 transcript 或选择文字后暂停跟随，即使仍在底部附近也不自动重启。空闲会话的 ResizeObserver、Composer 高度、窗口宽度与焦点变化不吸附到底部；切换线程或页面后按精确 Thread 恢复上次阅读位置。
 - Back to live 返回实时底部后才恢复自动跟随。流式 patch 不得丢失 disclosure、焦点或草稿。
 - Composer（含审批条与上下文行）是浮在满高 transcript 滚动区底部的 overlay：transcript 滚动条贯穿右侧从上到下，列表底部保留与 bottom zone 等高的虚拟留白，Back to live 悬浮在 bottom zone 正上方并随其高度上移。所有可滚动表面使用统一的细滚动条。这是布局与视觉校准，不改变 live following 的交互合同。
 - Tool completion 与 Final Message / Turn completion 的到达顺序可能不同；UI 等到可展示终态后再切换完成态投影。
