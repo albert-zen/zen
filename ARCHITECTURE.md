@@ -1235,15 +1235,28 @@ displayed list; a rejected oversized refresh leaves the previous numbers intact.
 Non-numeric queries may resolve an authoritative bounded search without publishing
 new numbers. `/new` clears selection and the next input creates a Thread.
 
-ZAS `thread/resume` owns a non-reentrant per-Thread observation barrier. The product
-client serializes its authoritative-read and explicit-resume calls through that
-same public boundary per Thread, including recovery resumes. Queued callers may
-cancel without dispatch; an admitted native request keeps its transient lock until
-its actual result or SDK-bounded timeout/reset even if its caller cancels. The
-client owns and observes those original request tasks, fences new admission before
-close, closes the SDK transport, and joins the tasks; cancellation of a close
-waiter cannot abandon this cleanup. It never caches snapshots, adds outcome
-retries, or blocks an unrelated Thread behind another Thread's read.
+IM ordinary input has an independent deployment continuation preference, default
+soft steer or explicit queue, passed only to the public SDK Gateway. The SDK owns
+durable IM admission/reply correlation while canonical queued identity and
+execution remain in the native ItemList; the consumer adds no scheduler. PAW Room
+posts, Trigger policies, Composer preferences, commands and approval replies keep
+their separate owners. Changing the deployment preference never rewrites an
+already admitted input's identity or continuation mode.
+Queue status presentation and `/queued`/`/unqueue` are product-only views over
+the SDK's original-actor/conversation-scoped controls; they do not select a Thread,
+accept native queue IDs as authority, retain a second queue, or interrupt an
+admitted Turn. Late automatic notices retain the existing foreground/PAW route
+fence, while an explicit original-scope query does not change that route.
+
+ZAS `thread/resume` owns a non-reentrant per-Thread observation barrier. The SDK
+client owns serialization for every public resume entry, including recovery;
+IMZen only adapts its authoritative reads to that public observation boundary.
+Queued callers may cancel without dispatch; an admitted native request remains
+owned until its actual result or SDK-bounded timeout/reset even if its caller
+cancels. The SDK fences new admission before close, resets transport and joins
+original tasks before propagating close cancellation. IMZen has no duplicate
+lifecycle owner, snapshot cache or outcome retry, and unrelated Threads remain
+independent.
 
 The IMZen legacy-state upgrader is a product deployment boundary: it validates a
 copy of the selected old SQLite state against authoritative native Thread/workspace

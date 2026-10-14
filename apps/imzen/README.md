@@ -42,6 +42,35 @@ default) or `approval-required`. Both use Zen's supported
 `danger-full-access` sandbox; they differ only in approval policy (`never` or
 `on-request`). This sandbox is not isolation.
 
+`IMZEN_INPUT_CONTINUATION` accepts `steer` (the default) or `queue`. It controls
+ordinary IM messages in Thread mode only. Old configuration files that omit it
+keep soft steering; explicit empty or unknown values are rejected. IMZenX exposes
+the same independent choice as **Ordinary IM input** in advanced settings. Save
+and reconnect to apply it. This does not change Composer, Trigger, or Room input
+settings. PAW text continues through the Host's Room admission service and its
+own configuration. Approval responses and slash commands are not ordinary input.
+
+Queue mode uses Zen's canonical queue, including verified image bytes. It does
+not start a turn to upload media or fall back to steering when the native Host
+lacks queue support. A queued receipt means admission, not execution completion.
+The SDK keeps the original IM sender, conversation, Thread and reply identity
+across restart, even if the deployment later switches back to `steer`.
+
+- `/queued <original IM message ID>` reads your message's canonical queue state.
+- `/unqueue <original IM message ID>` cancels it before a turn admits it.
+  This cannot interrupt an already admitted turn. `/cancel` still answers an
+  approval request; it is not a queue command.
+- Quote IDs containing spaces. The ID is a lookup key, not authorization: only
+  the original actor in the original conversation can control that input.
+- A failed start remains pending in Zen. Inspect the Thread and use its existing
+  Resume action when ready. Unknown admission or cancellation is shown explicitly
+  and is never automatically resent. Queue editing remains a ZenX operation; no
+  IM edit command is introduced.
+
+Queue controls remain available after switching the conversation to another
+Thread or a PAW, without changing that selection. Automatic old-Thread notices
+and output remain fenced by the current route.
+
 `IMZEN_GATEWAY_STATE_FILE` is required. It holds SDK-owned bridge state such as
 durable idempotency claims, including `side_effect_started`; this prevents a
 native redelivery after process restart from reauthorizing an input whose App
@@ -52,7 +81,8 @@ for another root. Keep the identity and original state file when restarting.
 
 `IMZEN_APP_SERVER_SHARED_FILESYSTEM_ROOT` declares the trusted local image root.
 The SDK reads bounded, no-follow image bytes beneath it, validates declared sizes,
-and sends a data URI to ZAS. IMZen never falls back to a path-only image payload.
+and sends verified bytes to ZAS (a data URI for steering, typed image bytes for
+queue admission). IMZen never falls back to a path-only image payload.
 Legacy typed image inputs may omit `size_bytes`: IMZen derives bounded size
 metadata only beneath that same selected root and retains the original LocalPath
 for the SDK's no-follow read. Explicit invalid sizes are not repaired, symlinks

@@ -7,12 +7,22 @@ coordinated across the project, lock, readiness guard and channel-schema revisio
 The runtime uses one coherent Gateway store and scoped public actions, including
 fenced Thread creation profiles and preparation before startup recovery.
 
-Ordinary input now steers a steady active Turn that already has IM reply
+By default, ordinary input steers a steady active Turn that already has IM reply
 correlation, keeping the original reply target. Idle input starts a new Turn.
 An externally started active Turn without IM correlation, admission races and
 ended Turns can still reject input; unknown outcomes are never automatically
 replayed. Images use bounded bytes from the trusted root, with no path-only
 fallback. Permission presets are explicit registered creation profiles.
+
+The independent **Ordinary IM input** advanced setting also supports explicit
+queue mode. Omitted legacy settings retain soft steer. Save and reconnect to
+apply a change; Composer, Trigger and PAW Room settings are separate. Queue mode
+uses the native canonical queue for text and verified image bytes, retaining the
+original IM reply identity through restart. Admission is not execution completion.
+Use `/queued <original IM message ID>` for your input's status and
+`/unqueue <original IM message ID>` to cancel before it starts. `/cancel` remains
+an approval reply. A failed start stays pending for an explicit Resume in Zen;
+unknown outcomes never cause an automatic resend. Queue editing stays in ZenX.
 
 The plugin build generates `python/` from `apps/imzen`; its copied project,
 lock and readiness guard must match the channel-schema SDK revision. Rebuild
@@ -104,7 +114,8 @@ timeout/shutdown until terminal closure, preventing overlapping retries.
   channel/allowlist contract. It never constructs a Gateway or starts transport
 - `imzenx_prepare` uses `imzenx.configure` to save only `pythonExecutable`,
   `channelsConfigFile`, `cwd`, optional `sharedFilesystemRoot`, `permissionMode`,
-  and `allowUnrestrictedFullAccess`. When `sharedFilesystemRoot` is empty, this
+  `inputContinuation` (`steer` by default or `queue`), and
+  `allowUnrestrictedFullAccess`. When `sharedFilesystemRoot` is empty, this
   local Host composition selects an enabled channel's explicitly configured
   inbound media directory only if it contains every other declared media root.
   It never trusts an undeclared common ancestor. Disjoint roots stay unattested

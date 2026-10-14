@@ -89,6 +89,11 @@ export const en = {
   imWorkspaceDescription:
     "New conversations and PAW lists in IM use this directory.",
   imConnectionConfiguration: "Connection configuration",
+  imInputContinuation: "Ordinary IM input",
+  imInputContinuationSteer: "Soft steer (default)",
+  imInputContinuationQueue: "Queue for the next turn",
+  imInputContinuationDescription:
+    "Independent from Composer, Room and Trigger settings. Saving takes effect after reconnecting and does not change already accepted input.",
   imPrivatePathNotice:
     "Use absolute paths and your own IMZen-format configuration. Enter only paths here; set credential values in the private local file.",
   imPreparationDoesNotConnect:
@@ -925,6 +930,11 @@ export const zhCN = {
     "本机进程状态不能证明 QQ 等渠道已完成真实消息投递",
   imWorkspaceDescription: "IM 中的新会话与 PAW 列表使用这个目录。",
   imConnectionConfiguration: "连接配置",
+  imInputContinuation: "普通 IM 输入",
+  imInputContinuationSteer: "柔性引导（默认）",
+  imInputContinuationQueue: "排队到下一轮",
+  imInputContinuationDescription:
+    "独立于输入框、Room 和 Trigger 设置。保存后重新连接生效，已接收的消息不受影响。",
   imPrivatePathNotice:
     "使用绝对路径和自己的 IMZen格式配置。这里只填写路径；凭证值在本机私有文件中设置。",
   imPreparationDoesNotConnect: "保存准备不会启动或重启连接",
