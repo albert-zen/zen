@@ -322,3 +322,216 @@ test("complete payload tree folds without losing raw retained text", async () =>
       null,
     );
   }));
+
+test("compact inspector preserves list state and focus when returning from a narrow detail", async () =>
+  withDom(async (root) => {
+    await i18n.changeLanguage("en");
+    const store = new ModelRequestDebugStore();
+    store.control({ action: "setEnabled", enabled: true });
+    await capture(store);
+    const commands: ModelRequestDebugCommand[] = [];
+    connect(async (input) => {
+      commands.push(input);
+      return store.control(input);
+    });
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, {
+          threadId: "synthetic-thread",
+        }),
+      ),
+    );
+    await settle();
+    assert.equal(
+      document.querySelector("h2"),
+      null,
+      "embedded inspector has no repeated title",
+    );
+    const list = document.querySelector<HTMLElement>(".model-debug-list")!;
+    list.scrollTop = 120;
+    const selected = button("synthetic-model");
+    await click("synthetic-model");
+    assert.equal(
+      document.querySelector(".model-debug-body")?.getAttribute("data-detail"),
+      "true",
+    );
+    assert.equal(
+      document.activeElement,
+      document.querySelector(".model-debug-detail-heading"),
+    );
+    await click("Back to requests");
+    assert.equal(
+      document.querySelector(".model-debug-body")?.getAttribute("data-detail"),
+      "false",
+    );
+    assert.equal(list.scrollTop, 120);
+    assert.equal(document.activeElement, selected);
+    assert.equal(selected.getAttribute("aria-current"), "true");
+    assert.equal(
+      commands.some((command) => command.action === "setEnabled"),
+      false,
+    );
+  }));
+
+test("inspector responds to its own container and keeps search, selection and scroll on Back", async () =>
+  withDom(async (root) => {
+    await i18n.changeLanguage("en");
+    let resize: ResizeObserverCallback | undefined;
+    const originalObserver = globalThis.ResizeObserver;
+    Object.assign(globalThis, {
+      ResizeObserver: class {
+        constructor(callback: ResizeObserverCallback) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    });
+    try {
+      const store = new ModelRequestDebugStore();
+      store.control({ action: "setEnabled", enabled: true });
+      await capture(store);
+      connect(async (input) => store.control(input));
+      await act(async () =>
+        root.render(
+          createElement(ModelRequestDebugPanel, {
+            threadId: "synthetic-thread",
+          }),
+        ),
+      );
+      await settle();
+      const input = document.querySelector<HTMLInputElement>(
+        ".model-debug-search input",
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(input, "synthetic");
+        input.dispatchEvent(new window.Event("input", { bubbles: true }));
+        input.dispatchEvent(new window.Event("change", { bubbles: true }));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 220));
+      });
+      await act(async () =>
+        resize!(
+          [{ contentRect: { width: 1000 } } as ResizeObserverEntry],
+          {} as ResizeObserver,
+        ),
+      );
+      const sidebar = document.querySelector<HTMLElement>(
+        ".model-debug-sidebar",
+      )!;
+      const detail = document.querySelector<HTMLElement>(
+        ".model-debug-detail",
+      )!;
+      assert.equal(sidebar.hidden, false);
+      await click("synthetic-model");
+      assert.equal(sidebar.hidden, false, "wide container shows both panes");
+      await act(async () =>
+        resize!(
+          [{ contentRect: { width: 600 } } as ResizeObserverEntry],
+          {} as ResizeObserver,
+        ),
+      );
+      assert.equal(
+        sidebar.hidden,
+        true,
+        "narrow container hides the list without unmounting it",
+      );
+      assert.equal(detail.hidden, false);
+      const list = document.querySelector<HTMLElement>(".model-debug-list")!;
+      list.scrollTop = 70;
+      await click("Back to requests");
+      assert.equal(sidebar.hidden, false);
+      assert.equal(detail.hidden, true);
+      assert.equal(document.querySelector(".model-debug-search input"), input);
+      assert.equal(input.value, "synthetic");
+      assert.equal(list.scrollTop, 70);
+      assert.equal(document.activeElement, button("synthetic-model"));
+    } finally {
+      Object.assign(globalThis, { ResizeObserver: originalObserver });
+    }
+  }));
+
+test("Back during a pending section read stays in the list and does not change capture", async () =>
+  withDom(async (root) => {
+    const store = new ModelRequestDebugStore();
+    store.control({ action: "setEnabled", enabled: true });
+    await capture(store);
+    const pending = deferredResult();
+    let delayed: ModelRequestDebugResult | undefined;
+    connect(async (input) => {
+      if (input.action === "read" && input.view === "tools") {
+        delayed = store.control(input);
+        return pending.promise;
+      }
+      return store.control(input);
+    });
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, { threadId: "synthetic-thread" }),
+      ),
+    );
+    await settle();
+    await click("synthetic-model");
+    await click("Tools");
+    await click("Back to requests");
+    await act(async () => pending.resolve(delayed!));
+    assert.equal(
+      document.querySelector(".model-debug-body")?.getAttribute("data-detail"),
+      "false",
+    );
+    assert.equal(store.control({ action: "status" }).enabled, true);
+  }));
+
+test("critical consent stays visible before enabling and simultaneous integrity flags remain discoverable", async () =>
+  withDom(async (root) => {
+    await i18n.changeLanguage("en");
+    const store = new ModelRequestDebugStore();
+    connect(async (input) => {
+      const result = store.control(input);
+      if (result.page)
+        Object.assign(result.page.record, {
+          truncated: true,
+          redacted: true,
+          format: "model-input",
+        });
+      return result;
+    });
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, { threadId: "synthetic-thread" }),
+      ),
+    );
+    await settle();
+    const consent = document.querySelector(".model-debug-consent")!;
+    assert.match(
+      consent.textContent!,
+      /Device-wide.*private content.*Memory only.*Closing keeps capture on; disabling clears it/,
+    );
+    assert.equal(
+      button("Enable capture").getAttribute("aria-describedby"),
+      consent.id,
+    );
+    await click("Enable capture");
+    await capture(store);
+    await click("Refresh");
+    await click("synthetic-model");
+    const summary = document.querySelector(
+      ".model-debug-record-info > summary",
+    )!;
+    assert.match(summary.textContent!, /Model input only/);
+    assert.match(summary.textContent!, /Truncated/);
+    assert.match(summary.textContent!, /Redacted/);
+    assert.equal(button("Messages / input").disabled, true);
+    const metadata = document.querySelector<HTMLDetailsElement>(
+      ".model-debug-record-info",
+    )!;
+    assert.equal(metadata.open, false);
+    metadata.open = true;
+    assert.match(metadata.textContent!, /not a captured provider request/);
+    assert.match(metadata.textContent!, /omitted content is unavailable/);
+    assert.match(metadata.textContent!, /not byte-identical/);
+  }));

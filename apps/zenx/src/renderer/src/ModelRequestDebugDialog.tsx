@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type {
   ModelRequestDebugCommand,
@@ -23,7 +30,56 @@ export function ModelRequestDebugPanel({
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [offsets, setOffsets] = useState<number[]>([]);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [narrow, setNarrow] = useState(true);
+  const panel = useRef<HTMLDivElement>(null);
+  const detailHeading = useRef<HTMLDivElement>(null);
+  const selectedButton = useRef<HTMLButtonElement | null>(null);
+  const focusDetail = useRef(false);
+  const focusList = useRef(false);
+  const detailScroller = useRef<HTMLDivElement>(null);
+  const captureInfo = useRef<HTMLDetailsElement>(null);
+  const disclosureId = useId();
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => {
+      const info = captureInfo.current;
+      if (info?.open && !info.contains(event.target as Node)) info.open = false;
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, []);
   const sequence = useRef(0);
+  useEffect(() => {
+    const element = panel.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setNarrow(entry.contentRect.width <= 720);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (page && detailOpen && focusDetail.current) {
+      focusDetail.current = false;
+      detailHeading.current?.focus({ preventScroll: true });
+    }
+    if (!detailOpen && focusList.current) {
+      focusList.current = false;
+      selectedButton.current?.focus({ preventScroll: true });
+    }
+  }, [page, detailOpen]);
+  useEffect(() => {
+    if (detailScroller.current) detailScroller.current.scrollTop = 0;
+  }, [page?.record.id, page?.view, page?.offset]);
+  useEffect(() => {
+    if (
+      narrow &&
+      detailOpen &&
+      selectedButton.current === document.activeElement
+    ) {
+      detailHeading.current?.focus({ preventScroll: true });
+    }
+  }, [narrow, detailOpen]);
   const current = useRef<ModelRequestDebugResult | null>(null);
   const busyRef = useRef(false);
   const run = useCallback(async (input: ModelRequestDebugCommand) => {
@@ -31,12 +87,10 @@ export function ModelRequestDebugPanel({
     busyRef.current = true;
     setBusy(true);
     setError(false);
-    if (
-      input.action === "clear" ||
-      input.action === "setEnabled" ||
-      input.action === "read"
-    )
+    if (input.action === "clear" || input.action === "setEnabled") {
       setPage(undefined);
+      setDetailOpen(false);
+    }
     try {
       const bridge = window.zenx.modelRequestDebug;
       if (!bridge) throw new Error("Local model debug unavailable");
@@ -48,6 +102,7 @@ export function ModelRequestDebugPanel({
       ) {
         setPage(undefined);
         setOffsets([]);
+        setDetailOpen(false);
       }
       const next = {
         ...result,
@@ -60,11 +115,14 @@ export function ModelRequestDebugPanel({
       };
       current.current = next;
       setState(next);
-      if (result.page) setPage(result.page);
+      if (result.page) {
+        setPage(result.page);
+      }
     } catch {
       if (version === sequence.current) {
         setError(true);
         setPage(undefined);
+        setDetailOpen(false);
       }
     } finally {
       if (version === sequence.current) {
@@ -99,96 +157,140 @@ export function ModelRequestDebugPanel({
     id: string,
     view: ModelRequestDebugView = "payload",
     offset = 0,
-  ) => void run({ action: "read", id, view, offset });
+  ) => {
+    if (page?.record.id !== id) setPage(undefined);
+    setDetailOpen(true);
+    void run({ action: "read", id, view, offset });
+  };
+  const back = () => {
+    setDetailOpen(false);
+    focusList.current = true;
+  };
   const record = page?.record;
   return (
-    <>
-      <header className="model-debug-header">
-        <div>
-          <p className="model-debug-eyebrow">{t("modelDebugLocal")}</p>
-          <h2>{t("modelDebugTitle")}</h2>
-        </div>
-        <div className="model-debug-header-actions">
-          <span
-            className={state?.enabled ? "model-debug-live" : "model-debug-off"}
-            role="status"
+    <div className="model-debug-panel" ref={panel} data-narrow={narrow}>
+      <header className="model-debug-controls">
+        <span
+          className={state?.enabled ? "model-debug-live" : "model-debug-off"}
+          role="status"
+        >
+          {state?.enabled ? t("modelDebugOn") : t("modelDebugOff")}
+        </span>
+        <button
+          className="model-debug-switch"
+          type="button"
+          role="switch"
+          aria-checked={state?.enabled ?? false}
+          aria-label={
+            state?.enabled ? t("modelDebugDisable") : t("modelDebugEnable")
+          }
+          title={
+            state?.enabled ? t("modelDebugDisable") : t("modelDebugEnable")
+          }
+          aria-describedby={!state?.enabled ? disclosureId : undefined}
+          disabled={state === null || busy}
+          onClick={() =>
+            void run({ action: "setEnabled", enabled: !state?.enabled })
+          }
+        >
+          <span />
+        </button>
+        <span className="model-debug-control-spacer" />
+        <button
+          className="icon-button"
+          type="button"
+          aria-label={t("modelDebugRefresh")}
+          title={t("modelDebugRefresh")}
+          disabled={busy}
+          onClick={() => void run({ action: "list", threadId, query })}
+        >
+          <Icon name="reload" />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          aria-label={t("modelDebugClear")}
+          title={t("modelDebugClear")}
+          disabled={!state?.retainedCount || busy}
+          onClick={() => void run({ action: "clear" })}
+        >
+          <svg
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            aria-hidden="true"
           >
-            {state?.enabled ? t("modelDebugOn") : t("modelDebugOff")}
-          </span>
-          <button
-            className="model-debug-switch"
-            type="button"
-            role="switch"
-            aria-checked={state?.enabled ?? false}
-            aria-label={
-              state?.enabled ? t("modelDebugDisable") : t("modelDebugEnable")
+            <path d="M3 4.5h10M6 4.5V2.8h4v1.7M4.2 4.5l.6 8.7h6.4l.6-8.7M6.5 7v3.8M9.5 7v3.8" />
+          </svg>
+        </button>
+        <details
+          className="model-debug-capture-info"
+          ref={captureInfo}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && event.currentTarget.open) {
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector("summary")?.focus();
             }
-            title={
-              state?.enabled ? t("modelDebugDisable") : t("modelDebugEnable")
-            }
-            disabled={state === null || busy}
-            onClick={() =>
-              void run({ action: "setEnabled", enabled: !state?.enabled })
-            }
+          }}
+        >
+          <summary
+            aria-label={t("modelDebugCaptureInfo")}
+            title={t("modelDebugCaptureInfo")}
           >
-            <span />
-          </button>
-          <span className="model-debug-action-divider" />
+            <Icon name="lock" />
+          </summary>
+          <div>
+            <strong>{t("modelDebugLocal")}</strong>
+            <p>{t("modelDebugPrivacy")}</p>
+            {state ? (
+              <p>
+                {t("modelDebugRetention", {
+                  count: state.retainedCount,
+                  used: (state.retainedBytes / 1048576).toFixed(1),
+                  limit: (state.limits.maxBytes / 1048576).toFixed(0),
+                  evicted: state.evictedCount,
+                })}
+              </p>
+            ) : null}
+          </div>
+        </details>
+        {onClose ? (
           <button
             className="icon-button"
             type="button"
-            aria-label={t("modelDebugRefresh")}
-            title={t("modelDebugRefresh")}
-            disabled={busy}
-            onClick={() => void run({ action: "list", threadId, query })}
+            aria-label={t("modelDebugClose")}
+            onClick={onClose}
           >
-            <Icon name="reload" />
+            <Icon name="x" />
           </button>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label={t("modelDebugClear")}
-            title={t("modelDebugClear")}
-            disabled={!state?.retainedCount || busy}
-            onClick={() => void run({ action: "clear" })}
-          >
-            <svg
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.2"
-              aria-hidden="true"
-            >
-              <path d="M3 4.5h10M6 4.5V2.8h4v1.7M4.2 4.5l.6 8.7h6.4l.6-8.7M6.5 7v3.8M9.5 7v3.8" />
-            </svg>
-          </button>
-          {onClose ? (
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={t("modelDebugClose")}
-              onClick={onClose}
-            >
-              <Icon name="x" />
-            </button>
-          ) : null}
-        </div>
+        ) : null}
       </header>
+      {!state?.enabled ? (
+        <p className="model-debug-consent" id={disclosureId}>
+          {t("modelDebugPrivacySummary")}
+        </p>
+      ) : null}
       {error ? (
         <p className="form-error" role="alert">
           {t("modelDebugError")}
         </p>
       ) : null}
-      <div className="model-debug-body" aria-busy={busy}>
-        <aside className="model-debug-sidebar">
-          <div className="model-debug-sidebar-title">
-            <strong>{t("modelDebugRequests")}</strong>
+      <div
+        className="model-debug-body"
+        aria-busy={busy}
+        data-detail={detailOpen}
+      >
+        <aside className="model-debug-sidebar" hidden={narrow && detailOpen}>
+          <div className="model-debug-list-heading">
+            <span className="model-debug-scope" title={threadId}>
+              {threadId
+                ? t("modelDebugCurrentThread")
+                : t("modelDebugAllThreads")}
+            </span>
             <span>{state?.records?.length ?? 0}</span>
-          </div>
-          <div className="model-debug-scope" title={threadId}>
-            {threadId
-              ? t("modelDebugCurrentThread")
-              : t("modelDebugAllThreads")}
           </div>
           <label className="model-debug-search">
             <span className="sr-only">{t("modelDebugSearch")}</span>
@@ -203,52 +305,46 @@ export function ModelRequestDebugPanel({
             className="model-debug-list"
             aria-label={t("modelDebugRequests")}
           >
-            {(state?.records ?? []).map((entry, index) => (
+            {(state?.records ?? []).map((entry) => (
               <button
                 type="button"
                 key={entry.id}
                 className={`model-debug-request${record?.id === entry.id ? " selected" : ""}`}
-                onClick={() => {
+                onClick={(event) => {
+                  selectedButton.current = event.currentTarget;
+                  focusDetail.current = true;
                   setOffsets([]);
                   select(entry.id);
                 }}
-                aria-expanded={record?.id === entry.id}
+                aria-current={record?.id === entry.id ? "true" : undefined}
               >
-                <span className="model-debug-request-index">
-                  {String((state?.records?.length ?? 0) - index).padStart(
-                    2,
-                    "0",
-                  )}
+                <span className="model-debug-request-heading">
+                  <strong title={`${entry.provider} / ${entry.model}`}>
+                    {entry.model}
+                  </strong>
+                  <time>
+                    {new Date(entry.capturedAt).toLocaleTimeString([], {
+                      hour12: false,
+                    })}
+                  </time>
                 </span>
-                <span className="model-debug-request-content">
-                  <span className="model-debug-request-heading">
-                    <strong>{entry.model}</strong>
-                    <time>
-                      {new Date(entry.capturedAt).toLocaleTimeString([], {
-                        hour12: false,
-                      })}
-                    </time>
-                  </span>
-                  <span className="model-debug-request-meta">
+                <span className="model-debug-request-meta">
+                  <span>
                     {entry.purpose === "compaction"
                       ? t("modelDebugCompaction")
-                      : t("modelDebugTurn")}
-                    <span>·</span>
-                    {entry.format}
+                      : t("modelDebugTurn")}{" "}
+                    · {entry.format}
                   </span>
-                  <span className="model-debug-request-meta">
-                    <span
-                      className="model-debug-attempt"
-                      title={t("modelDebugAttempt", {
-                        sample: entry.sampleAttempt,
-                        transport: entry.transportAttempt,
-                      })}
-                    >
-                      S{entry.sampleAttempt} / HTTP {entry.transportAttempt}
-                    </span>
-                    <span className="model-debug-request-size">
-                      {(entry.retainedBytes / 1024).toFixed(1)} KB
-                    </span>
+                  <span>{(entry.retainedBytes / 1024).toFixed(1)} KB</span>
+                </span>
+                <span className="model-debug-request-meta">
+                  <span
+                    title={t("modelDebugAttempt", {
+                      sample: entry.sampleAttempt,
+                      transport: entry.transportAttempt,
+                    })}
+                  >
+                    S{entry.sampleAttempt} / HTTP {entry.transportAttempt}
                   </span>
                   <span
                     className="model-debug-request-integrity"
@@ -258,13 +354,15 @@ export function ModelRequestDebugPanel({
                       entry.format === "model-input"
                     }
                   >
-                    {entry.format === "model-input"
-                      ? t("modelDebugProjection")
-                      : entry.truncated
-                        ? t("modelDebugTruncated")
-                        : entry.redacted
-                          ? t("modelDebugRedacted")
-                          : t("modelDebugComplete")}
+                    {[
+                      entry.format === "model-input"
+                        ? t("modelDebugProjection")
+                        : null,
+                      entry.truncated ? t("modelDebugTruncatedShort") : null,
+                      entry.redacted ? t("modelDebugRedactedShort") : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || t("modelDebugCompleteShort")}
                   </span>
                 </span>
               </button>
@@ -279,75 +377,58 @@ export function ModelRequestDebugPanel({
         <section
           className="model-debug-detail"
           aria-label={t("modelDebugDetail")}
+          hidden={narrow && !detailOpen}
         >
           {page && record ? (
             <>
-              <div className="model-debug-detail-heading">
-                <div>
-                  <span className="model-debug-inspector-label">
-                    {record.provider} / {record.model}
-                  </span>
-                  <strong>
-                    {record.format === "model-input"
-                      ? t("modelDebugProjection")
-                      : t("modelDebugDispatch")}
-                  </strong>
-                </div>
-                <span>
-                  {t("modelDebugBytes", {
-                    retained: record.retainedBytes,
-                    original: record.originalBytes,
-                  })}
-                </span>
-              </div>
-              {record.truncated ? (
-                <p className="model-debug-warning">
-                  {t("modelDebugTruncatedWarning")}
-                </p>
-              ) : null}
-              {record.redacted ? (
-                <p className="model-debug-warning">
-                  {t("modelDebugRedactedWarning")}
-                </p>
-              ) : null}
-              {record.format === "model-input" ? (
-                <p className="model-debug-warning">
-                  {t("modelDebugUnsupported")}
-                </p>
-              ) : (
-                <p className="model-debug-note">
-                  {t("modelDebugDispatchNote")}
-                </p>
-              )}
               <div
-                className="model-debug-views"
-                role="group"
-                aria-label={t("modelDebugViews")}
+                className="model-debug-detail-heading"
+                tabIndex={-1}
+                ref={detailHeading}
               >
-                {(
-                  ["payload", "messages", "tools", "configuration"] as const
-                ).map((view) => (
+                {narrow ? (
                   <button
-                    key={view}
                     type="button"
-                    className="model-debug-tab"
-                    aria-pressed={page.view === view}
-                    disabled={busy || (record.truncated && view !== "payload")}
-                    onClick={() => {
-                      setOffsets([]);
-                      select(record.id, view);
-                    }}
+                    className="model-debug-back"
+                    aria-label={t("modelDebugBack")}
+                    onClick={back}
                   >
-                    {t(`modelDebugView_${view}`)}
+                    <Icon name="chevron-left" />
+                    {t("modelDebugBackShort")}
                   </button>
-                ))}
+                ) : null}
+                <strong title={`${record.provider} / ${record.model}`}>
+                  {record.provider} / {record.model}
+                </strong>
               </div>
               <div className="model-debug-content-toolbar">
-                <span>
-                  {page.view === "payload"
-                    ? record.format
-                    : t(`modelDebugView_${page.view}`)}
-                </span>
+                <div
+                  className="model-debug-views"
+                  role="group"
+                  aria-label={t("modelDebugViews")}
+                >
+                  {(
+                    ["payload", "messages", "tools", "configuration"] as const
+                  ).map((view) => (
+                    <button
+                      key={view}
+                      type="button"
+                      className="model-debug-tab"
+                      aria-label={t(`modelDebugView_${view}`)}
+                      title={t(`modelDebugView_${view}`)}
+                      aria-pressed={page.view === view}
+                      disabled={
+                        busy || (record.truncated && view !== "payload")
+                      }
+                      onClick={() => {
+                        setOffsets([]);
+                        select(record.id, view);
+                      }}
+                    >
+                      {t(`modelDebugCompactView_${view}`)}
+                    </button>
+                  ))}
+                </div>
                 <div
                   className="model-debug-presentation"
                   role="group"
@@ -362,141 +443,150 @@ export function ModelRequestDebugPanel({
                   </button>
                   <button
                     type="button"
+                    aria-label={t("modelDebugRaw")}
                     aria-pressed={presentation === "raw"}
                     onClick={() => setPresentation("raw")}
                   >
-                    {t("modelDebugRaw")}
+                    {t("modelDebugRawShort")}
                   </button>
                 </div>
               </div>
-              <RequestContent
-                key={`${record.id}:${page.view}:${page.offset}:${presentation}`}
-                text={page.text}
-                structured={
-                  presentation === "tree" &&
-                  !record.truncated &&
-                  page.offset === 0 &&
-                  page.nextOffset === null
-                }
-              />
-              <details className="model-debug-identities">
-                <summary>{t("modelDebugIdentity")}</summary>
-                <dl>
-                  <dt>Thread</dt>
-                  <dd>{record.threadId}</dd>
-                  <dt>Turn</dt>
-                  <dd>{record.turnId ?? t("modelDebugNoTurn")}</dd>
-                  <dt>Sample</dt>
-                  <dd>{record.sampleId}</dd>
-                  <dt>{t("modelDebugBoundary")}</dt>
-                  <dd>{record.contextBoundaryItemId}</dd>
-                </dl>
-              </details>
-              {record.sourceAttachmentCount > 0 ? (
-                <details className="model-debug-identities">
+              <div
+                className="model-debug-detail-scroll"
+                tabIndex={0}
+                ref={detailScroller}
+              >
+                <details className="model-debug-record-info" key={record.id}>
                   <summary>
-                    {t("modelDebugAttachments", {
-                      count: record.sourceAttachmentCount,
-                      shown: record.sourceAttachments.length,
-                    })}
+                    <span>{t("modelDebugDetail")}</span>
+                    <span className="model-debug-integrity-flags">
+                      {record.format === "model-input" ? (
+                        <span>{t("modelDebugProjection")}</span>
+                      ) : null}
+                      {record.truncated ? (
+                        <span>{t("modelDebugTruncatedShort")}</span>
+                      ) : null}
+                      {record.redacted ? (
+                        <span>{t("modelDebugRedactedShort")}</span>
+                      ) : null}
+                    </span>
+                    <span className="model-debug-bytes">
+                      {(record.retainedBytes / 1024).toFixed(1)} KB
+                    </span>
                   </summary>
-                  <p>{t("modelDebugAttachmentsNote")}</p>
-                  <pre>{JSON.stringify(record.sourceAttachments, null, 2)}</pre>
+                  <div className="model-debug-record-metadata">
+                    <p>
+                      {record.format === "model-input"
+                        ? t("modelDebugUnsupported")
+                        : t("modelDebugDispatchNote")}
+                    </p>
+                    {record.truncated ? (
+                      <p className="model-debug-warning">
+                        {t("modelDebugTruncatedWarning")}
+                      </p>
+                    ) : null}
+                    {record.redacted ? (
+                      <p className="model-debug-warning">
+                        {t("modelDebugRedactedWarning")}
+                      </p>
+                    ) : null}
+                    <p>
+                      {t("modelDebugBytes", {
+                        retained: record.retainedBytes,
+                        original: record.originalBytes,
+                      })}
+                    </p>
+                    <p>
+                      {record.format} ·{" "}
+                      {t("modelDebugAttempt", {
+                        sample: record.sampleAttempt,
+                        transport: record.transportAttempt,
+                      })}
+                    </p>
+                    <dl>
+                      <dt>Thread</dt>
+                      <dd>{record.threadId}</dd>
+                      <dt>Turn</dt>
+                      <dd>{record.turnId ?? t("modelDebugNoTurn")}</dd>
+                      <dt>Sample</dt>
+                      <dd>{record.sampleId}</dd>
+                      <dt>{t("modelDebugBoundary")}</dt>
+                      <dd>{record.contextBoundaryItemId}</dd>
+                    </dl>
+                    {record.sourceAttachmentCount > 0 ? (
+                      <details className="model-debug-identities">
+                        <summary>
+                          {t("modelDebugAttachments", {
+                            count: record.sourceAttachmentCount,
+                            shown: record.sourceAttachments.length,
+                          })}
+                        </summary>
+                        <p>{t("modelDebugAttachmentsNote")}</p>
+                        <pre>
+                          {JSON.stringify(record.sourceAttachments, null, 2)}
+                        </pre>
+                      </details>
+                    ) : null}
+                  </div>
                 </details>
-              ) : null}
-
-              <footer className="model-debug-pagination">
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label={t("modelDebugPrevious")}
-                  title={t("modelDebugPrevious")}
-                  disabled={busy || offsets.length === 0}
-                  onClick={() => {
-                    const previous = offsets.at(-1)!;
-                    setOffsets(offsets.slice(0, -1));
-                    select(record.id, page.view, previous);
-                  }}
-                >
-                  <Icon name="chevron-left" />
-                </button>
-                <span>
-                  {t("modelDebugPage", {
-                    start: page.offset + 1,
-                    end: page.offset + page.text.length,
-                    total: page.totalCharacters,
-                  })}
-                </span>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label={t("modelDebugNext")}
-                  title={t("modelDebugNext")}
-                  disabled={busy || page.nextOffset === null}
-                  onClick={() => {
-                    setOffsets([...offsets, page.offset]);
-                    select(record.id, page.view, page.nextOffset!);
-                  }}
-                >
-                  <Icon name="chevron-right" />
-                </button>
-              </footer>
+                <RequestContent
+                  key={`${record.id}:${page.view}:${page.offset}:${presentation}`}
+                  text={page.text}
+                  structured={
+                    presentation === "tree" &&
+                    !record.truncated &&
+                    page.offset === 0 &&
+                    page.nextOffset === null
+                  }
+                />
+                {page.nextOffset !== null || page.offset > 0 ? (
+                  <footer className="model-debug-pagination">
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label={t("modelDebugPrevious")}
+                      title={t("modelDebugPrevious")}
+                      disabled={busy || offsets.length === 0}
+                      onClick={() => {
+                        const previous = offsets.at(-1)!;
+                        setOffsets(offsets.slice(0, -1));
+                        select(record.id, page.view, previous);
+                      }}
+                    >
+                      <Icon name="chevron-left" />
+                    </button>
+                    <span>
+                      {t("modelDebugPage", {
+                        start: page.offset + 1,
+                        end: page.offset + page.text.length,
+                        total: page.totalCharacters,
+                      })}
+                    </span>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label={t("modelDebugNext")}
+                      title={t("modelDebugNext")}
+                      disabled={busy || page.nextOffset === null}
+                      onClick={() => {
+                        setOffsets([...offsets, page.offset]);
+                        select(record.id, page.view, page.nextOffset!);
+                      }}
+                    >
+                      <Icon name="chevron-right" />
+                    </button>
+                  </footer>
+                ) : null}
+              </div>
             </>
           ) : (
             <div className="model-debug-welcome">
-              <span className="model-debug-welcome-icon" aria-hidden="true">
-                {"{ }"}
-              </span>
-              <h3>
-                {state?.enabled
-                  ? t("modelDebugInspectTitle")
-                  : t("modelDebugStartTitle")}
-              </h3>
-              <p>
-                {state?.enabled ? t("modelDebugSelect") : t("modelDebugEmpty")}
-              </p>
-              {!state?.enabled && (
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={state === null || busy}
-                  onClick={() =>
-                    void run({ action: "setEnabled", enabled: true })
-                  }
-                >
-                  {t("modelDebugEnable")}
-                </button>
-              )}
-              <span>{t("modelDebugLocal")}</span>
+              <p>{t("modelDebugSelect")}</p>
             </div>
           )}
         </section>
       </div>
-      <footer className="model-debug-footer">
-        {" "}
-        <details className="model-debug-privacy">
-          <summary>
-            <Icon name="lock" />
-            <span>{t("modelDebugPrivacySummary")}</span>
-            <span className="model-debug-privacy-more">
-              {t("modelDebugPrivacyMore")}
-            </span>
-            <Icon name="chevron-down" />
-          </summary>
-          <p>{t("modelDebugPrivacy")}</p>
-        </details>
-        {state && (
-          <span className="model-debug-retention">
-            {t("modelDebugRetention", {
-              count: state.retainedCount,
-              used: (state.retainedBytes / 1048576).toFixed(1),
-              limit: (state.limits.maxBytes / 1048576).toFixed(0),
-              evicted: state.evictedCount,
-            })}
-          </span>
-        )}
-      </footer>
-    </>
+    </div>
   );
 }
 
