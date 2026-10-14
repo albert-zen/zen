@@ -447,6 +447,10 @@ export interface FailureItem extends ItemBase {
   turnId: string;
   code: string;
   message: string;
+  /** Bounded in-turn sample replays exhausted before this failure. */
+  retried?: number;
+  /** Points at the persisted raw failure context in the Host diagnostics log. */
+  diagnosticId?: string;
 }
 
 interface ContextCompactionItemBase extends ItemBase {
@@ -1184,6 +1188,12 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireTurnId(item, type);
       requireNonEmptyString(item.code, `${type}.code`);
       requireString(item.message, `${type}.message`);
+      if (item.retried !== undefined) {
+        requireTokenCount(item.retried, `${type}.retried`);
+        if ((item.retried as number) < 1)
+          throw new Error("failure.retried must be a positive safe integer");
+      }
+      requireOptionalNonEmptyString(item.diagnosticId, `${type}.diagnosticId`);
       break;
     default:
       return unreachableItemType(type);

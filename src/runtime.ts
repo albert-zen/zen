@@ -501,6 +501,7 @@ export class AgentRuntime {
         return;
       }
 
+      const sampleFailureDiagnosticId = failureDiagnosticId(error);
       const failure: FailureItem = {
         id: this.#id(),
         threadId: options.thread.id,
@@ -512,6 +513,12 @@ export class AgentRuntime {
             ? "unsupported_sandbox"
             : "runtime_error",
         message: describeError(error),
+        ...(error instanceof SampleRetriesExhaustedError
+          ? { retried: error.retried }
+          : {}),
+        ...(sampleFailureDiagnosticId === undefined
+          ? {}
+          : { diagnosticId: sampleFailureDiagnosticId }),
       };
       await this.#completeItem(failure, options);
       const completed: TurnCompletedItem = {
@@ -553,6 +560,13 @@ export class AgentRuntime {
         attempt >= maxAttempts ||
         !isRetryableModelSampleError(result.error)
       ) {
+        if (
+          attempt > 1 &&
+          result.error instanceof Error &&
+          isRetryableModelSampleError(result.error)
+        ) {
+          throw new SampleRetriesExhaustedError(result.error, attempt - 1);
+        }
         throw result.error;
       }
       const delayMs = Math.round(
@@ -1789,6 +1803,26 @@ function readCommand(toolCall: {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** Internal marker: a retryable sample failure that exhausted its replay budget. */
+class SampleRetriesExhaustedError extends Error {
+  readonly retried: number;
+
+  constructor(cause: Error, retried: number) {
+    super(cause.message);
+    this.name = "SampleRetriesExhaustedError";
+    this.cause = cause;
+    this.retried = retried;
+  }
+}
+
+function failureDiagnosticId(error: unknown): string | undefined {
+  const direct = (error as { diagnosticId?: unknown } | null)?.diagnosticId;
+  if (typeof direct === "string") return direct;
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  const nested = (cause as { diagnosticId?: unknown } | null)?.diagnosticId;
+  return typeof nested === "string" ? nested : undefined;
 }
 
 function describeError(error: unknown): string {

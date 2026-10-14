@@ -1793,6 +1793,13 @@ function retryableStreamError(message: string): Error {
   return Object.assign(new Error(message), { retryable: true });
 }
 
+function retryableDiagnosedStreamError(message: string): Error {
+  return Object.assign(new Error(message), {
+    retryable: true,
+    diagnosticId: "diag-stream-1",
+  });
+}
+
 function sampleRetryRuntime(): AgentRuntime {
   return new AgentRuntime({
     toolEnvironment: new ToolEnvironment({
@@ -1801,6 +1808,44 @@ function sampleRetryRuntime(): AgentRuntime {
     sampleRetry: { maxAttempts: 3, baseDelayMs: 0 },
   });
 }
+
+test("HTTP credentials crossing the message bound never reach the journal or later model context", async () => {
+  const key = "private-provider-key-value";
+  const model = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: key,
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({
+          error: { message: "x".repeat(8_192 - key.length + 1) + key },
+        }),
+        { status: 400 },
+      )) as typeof fetch,
+  });
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(
+    JSON.stringify(snapshot.items).includes(key.slice(0, -1)),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(compileModelMessages(snapshot.items)).includes(
+      key.slice(0, -1),
+    ),
+    false,
+  );
+  assert.equal(
+    projectThread(snapshot, {
+      includeTurns: true,
+    }).turns[0]?.error?.message.includes(key.slice(0, -1)),
+    false,
+  );
+});
 
 test("retryable model stream failures are replayed within the turn", async () => {
   let attempts = 0;
@@ -1884,7 +1929,7 @@ test("sample retries are bounded and surface the failure after exhaustion", asyn
     async *stream(): AsyncIterable<ModelEvent> {
       attempts += 1;
       yield { type: "text_delta", delta: `draft ${String(attempts)}` };
-      throw retryableStreamError(
+      throw retryableDiagnosedStreamError(
         "OpenAI-compatible model returned invalid tool arguments",
       );
     },
@@ -1901,6 +1946,14 @@ test("sample retries are bounded and surface the failure after exhaustion", asyn
   assert.equal(
     snapshot.items.find((item) => item.type === "failure")?.message,
     "OpenAI-compatible model returned invalid tool arguments",
+  );
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.retried,
+    2,
+  );
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.diagnosticId,
+    "diag-stream-1",
   );
   const partials = snapshot.items.filter(
     (item): item is Extract<CanonicalItem, { type: "agent_message" }> =>

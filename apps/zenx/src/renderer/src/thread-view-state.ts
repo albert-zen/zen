@@ -240,6 +240,26 @@ export function applyNativeThreadEvent(
   }
   if (event.type === "item_completed") {
     if (event.item.type === "context_compaction") return thread;
+    if (event.item.type === "failure") {
+      // Failure Items project to null as ThreadItems; surface them through the
+      // turn error immediately instead of waiting for the next snapshot read.
+      const failure = event.item;
+      return {
+        ...thread,
+        turns: thread.turns.map((turn) =>
+          turn.id === failure.turnId
+            ? {
+                ...turn,
+                error: {
+                  message: failure.message,
+                  codexErrorInfo: null,
+                  additionalDetails: null,
+                },
+              }
+            : turn,
+        ),
+      };
+    }
     if (event.item.type === "tool_result") {
       return updateCommandResult(thread, event.item);
     }

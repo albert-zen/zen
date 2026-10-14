@@ -397,10 +397,21 @@ function compileCanonicalModelMessages(
         break;
       }
       case "failure":
-        messages.push({
-          role: "assistant",
-          text: `[failure: ${item.message}]`,
-        });
+        {
+          // The journal keeps the full provider message; the model only needs
+          // the actionable head — long bodies would tax every later sample.
+          const firstLine = item.message.split("\n", 1)[0] ?? "";
+          const summary =
+            firstLine.length > 240 ? `${firstLine.slice(0, 240)}…` : firstLine;
+          const pointer =
+            item.diagnosticId === undefined
+              ? ""
+              : ` (diagnostic ${item.diagnosticId})`;
+          messages.push({
+            role: "assistant",
+            text: `[failure: ${summary}${item.message.includes("\n") ? " …" : ""}${pointer}]`,
+          });
+        }
         break;
       case "thread_metadata":
         if (item.sandbox !== "danger-full-access")

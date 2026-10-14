@@ -51,7 +51,7 @@
 - **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取完整 canonical snapshot；Host 用 Item/Turn 边界派生分页，并在所有模型可见预览与续读前递归投影可公开的 Item：标记 opaque 的结构只保留定位字段与公开 summary，public reasoning 与工具原文字符串不改写，journal 与可信原生读取/恢复仍完整。发送幂等键和 Turn fence 从可信工具调用身份及当前快照推导；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
 - **Trigger Thread Watch** — 既有 Trigger 配置固定来源 device/workspace/Thread 与目标 Thread，可监听一次或后续各 Turn 的终态；原生远端订阅由定义版本、生命周期和订阅身份围栏保护，canonical 快照与实时事件通过命名空间去重写入既有历史，一次性监听在事件接纳时停用；sourceError 仅为易失投影，不增加 journal 或补发无关历史事件。
 - **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
-- **Model Sample 有界重放** — 模型采样在任何工具副作用产生前完成；适配器标记 retryable 的流式协议/传输失败由 AgentRuntime 在同一 Turn 内以有界次数与抖动退避重放，失败尝试的部分输出以 incomplete Item 留痕且不进入模型投影，重试耗尽或不可重试的失败仍明确落 failure Item。HTTP 准入失败仍由请求层处理；首个采样最多四次准入请求，后续每个采样仅一次请求（每轮采样含重试的默认总上限六次 HTTP 请求），永久 Provider 错误、明确 terminal 原因、取消与 journal 失败不重试。
+- **Model Sample 有界重放** — 模型采样在任何工具副作用产生前完成；适配器标记 retryable 的流式协议/传输失败由 AgentRuntime 在同一 Turn 内以有界次数与抖动退避重放，失败尝试的部分输出以 incomplete Item 留痕且不进入模型投影，重试耗尽或不可重试的失败仍明确落 failure Item（含已重试次数与诊断指针，全文留在 journal，模型投影只保留可操作的首行）。HTTP 准入失败仍由请求层处理；首个采样最多四次准入请求，后续每个采样仅一次请求（每轮采样含重试的默认总上限六次 HTTP 请求），永久 Provider 错误、明确 terminal 原因、取消与 journal 失败不重试。
 - **ZenX 界面控件** — Renderer 的共享 Select、Popover、Dialog 使用无样式可访问性 primitives 与既有主题 tokens 统一键盘、焦点、浮层避让及可取消动效，只管理易失展示状态。
 - **Plugin UI 主题快照** — Host renderer 向 trusted/isolated surface 提供版本化、只读的颜色、密度与 reduced-motion 变量，主题变化仅更新展示，不重载插件或放宽隔离。
 - **ZenX 插件就绪预览** — Host 通过只读 IPC 投影当前平台许可和用户配置，Renderer 在启用 Browser/Computer 前显示 manifest 请求范围及分别可操作的准备步骤；此预览不代替原生 helper 与具体工具执行时的能力检查，也不保存授权事实。

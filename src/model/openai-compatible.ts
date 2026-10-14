@@ -49,6 +49,8 @@ export class OpenAiCompatibleModelError extends Error {
   readonly requestId: string | undefined;
   readonly retryable: boolean;
   readonly explicitlyRejectsImageInput: boolean;
+  /** Set once the failure's raw context has been persisted to diagnostics. */
+  diagnosticId: string | undefined;
 
   constructor(
     kind: OpenAiCompatibleModelErrorKind,
@@ -58,6 +60,7 @@ export class OpenAiCompatibleModelError extends Error {
       requestId?: string;
       retryable?: boolean;
       explicitlyRejectsImageInput?: boolean;
+      diagnosticId?: string;
     } = {},
   ) {
     super(message);
@@ -68,6 +71,7 @@ export class OpenAiCompatibleModelError extends Error {
     this.retryable = options.retryable ?? false;
     this.explicitlyRejectsImageInput =
       options.explicitlyRejectsImageInput ?? false;
+    this.diagnosticId = options.diagnosticId;
   }
 }
 
@@ -205,17 +209,52 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
 
     if (!response.ok) {
-      const providerError = await readProviderError(response);
+      const providerError = await readProviderError(response, this.#apiKey);
       const requestId = safeRequestId(response.headers, this.#apiKey);
+      let diagnosticId: string | undefined;
+      if (!request.signal.aborted && this.#onStreamFailure !== undefined) {
+        try {
+          const candidateDiagnosticId = randomUUID();
+          await this.#onStreamFailure({
+            timestamp: new Date().toISOString(),
+            diagnosticId: candidateDiagnosticId,
+            model: request.model.includes(this.#apiKey)
+              ? "[redacted]"
+              : request.model.slice(0, 200),
+            status: response.status,
+            payloadIndex: 1,
+            ...(request.sessionId === undefined
+              ? {}
+              : { sessionId: request.sessionId }),
+            ...(requestId === undefined ? {} : { requestId }),
+            failure: `OpenAI-compatible model request failed with HTTP ${response.status}`,
+            payloads: [
+              {
+                index: 1,
+                text: providerError.body,
+                truncated: providerError.truncated,
+              },
+            ],
+          });
+          diagnosticId = candidateDiagnosticId;
+        } catch {
+          console.error("Model stream diagnostic could not be persisted");
+        }
+      }
+      // Surface the provider's own reason (bounded, credential-redacted);
+      // without it a bare status like 400 is indistinguishable from a dozen
+      // different causes.
+      const providerMessage = providerError.message;
       throw new OpenAiCompatibleModelError(
         "http",
         `OpenAI-compatible model request failed with HTTP ${response.status}${
-          requestId === undefined ? "" : ` (request ${requestId})`
-        }`,
+          providerMessage === undefined ? "" : `: ${providerMessage}`
+        }${requestId === undefined ? "" : ` (request ${requestId})`}`,
         {
           status: response.status,
           ...(requestId === undefined ? {} : { requestId }),
           retryable: isRetryableStatus(response.status),
+          ...(diagnosticId === undefined ? {} : { diagnosticId }),
           explicitlyRejectsImageInput:
             providerError.explicitlyRejectsImageInput,
         },
@@ -280,6 +319,8 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             : "Model stream read failed";
         try {
           await this.#onStreamFailure(diagnostic);
+          if (error instanceof OpenAiCompatibleModelError)
+            error.diagnosticId = diagnostic.diagnosticId;
         } catch {
           console.error("Model stream diagnostic could not be persisted");
         }
@@ -443,22 +484,53 @@ function shouldReplayReasoning(
   );
 }
 
+function redactProviderText(text: string, apiKey: string): string {
+  return text
+    .split(apiKey)
+    .join("[redacted]")
+    .split(JSON.stringify(apiKey).slice(1, -1))
+    .join("[redacted]");
+}
+
+function boundedProviderText(
+  text: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } {
+  const bytes = Buffer.from(text);
+  return {
+    text: new TextDecoder().decode(bytes.subarray(0, maxBytes), {
+      stream: true,
+    }),
+    truncated: bytes.length > maxBytes,
+  };
+}
+
 async function readProviderError(
   response: Response,
-): Promise<{ explicitlyRejectsImageInput: boolean }> {
+  apiKey: string,
+): Promise<{
+  explicitlyRejectsImageInput: boolean;
+  message?: string;
+  body: string;
+  truncated: boolean;
+}> {
   let text: string;
   try {
-    text = (await response.text()).slice(0, 16_384);
+    // response.text() already buffers the body; redact before any bounded projection
+    // so a credential crossing the cutoff cannot escape as a nearly complete key.
+    text = await response.text();
   } catch {
-    return { explicitlyRejectsImageInput: false };
+    return { explicitlyRejectsImageInput: false, body: "", truncated: false };
   }
+  const bounded = boundedProviderText(redactProviderText(text, apiKey), 16_384);
+  const payload = { body: bounded.text, truncated: bounded.truncated };
   try {
     const body = JSON.parse(text) as unknown;
     if (typeof body !== "object" || body === null || !("error" in body))
-      return { explicitlyRejectsImageInput: false };
+      return { explicitlyRejectsImageInput: false, ...payload };
     const error = (body as { error?: unknown }).error;
     if (typeof error !== "object" || error === null)
-      return { explicitlyRejectsImageInput: false };
+      return { explicitlyRejectsImageInput: false, ...payload };
     const value = error as {
       code?: unknown;
       type?: unknown;
@@ -472,7 +544,8 @@ async function readProviderError(
           : undefined;
     const message =
       typeof value.message === "string"
-        ? value.message.slice(0, 2_048)
+        ? boundedProviderText(redactProviderText(value.message, apiKey), 8_192)
+            .text
         : undefined;
     const detail = `${code ?? ""} ${message ?? ""}`.toLowerCase();
     return {
@@ -481,9 +554,11 @@ async function readProviderError(
         /not supported|unsupported|does not accept|invalid.*(?:image|content[_ -]?type)/u.test(
           detail,
         ),
+      ...(message === undefined ? {} : { message }),
+      ...payload,
     };
   } catch {
-    return { explicitlyRejectsImageInput: false };
+    return { explicitlyRejectsImageInput: false, ...payload };
   }
 }
 
