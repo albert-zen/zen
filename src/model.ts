@@ -1,3 +1,4 @@
+import type { ImportedToolCallOrigin } from "./thread-import.js";
 import type { WorkspaceInstructionFile } from "./item.js";
 import { deduplicateMediaContent } from "./media-content.js";
 import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
@@ -33,6 +34,7 @@ export interface ToolCallModelMessage {
     callId: string;
     name: string;
     arguments: Record<string, unknown>;
+    imported?: ImportedToolCallOrigin;
   }>;
 }
 
@@ -40,7 +42,7 @@ export interface ToolResultModelMessage {
   role: "tool";
   callId: string;
   text: string;
-  exitCode: number;
+  exitCode: number | null;
   modelContent?: UserInput;
 }
 
@@ -260,6 +262,12 @@ function compileCanonicalModelMessages(
       continue;
     }
     switch (item.type) {
+      case "host_message":
+        messages.push({
+          role: "user",
+          text: `[Host bootstrap wakeup. Sender: host. This is a system-origin instruction, not a message from the human user.]\n${item.text}`,
+        });
+        break;
       case "thread_instruction":
         messages.push({ role: "user", text: item.text });
         break;
@@ -286,6 +294,9 @@ function compileCanonicalModelMessages(
               callId: candidate.callId,
               name: candidate.name,
               arguments: candidate.arguments,
+              ...(candidate.imported === undefined
+                ? {}
+                : { imported: candidate.imported }),
             });
             cursor += 1;
           }
@@ -312,6 +323,9 @@ function compileCanonicalModelMessages(
               callId: candidate.callId,
               name: candidate.name,
               arguments: candidate.arguments,
+              ...(candidate.imported === undefined
+                ? {}
+                : { imported: candidate.imported }),
             });
             cursor += 1;
           }
@@ -560,7 +574,7 @@ function orderSteeredMessagesForSampling(
   const anchored = new Map<
     string,
     Array<{
-      item: Extract<CanonicalItem, { type: "user_message" }>;
+      item: Extract<CanonicalItem, { type: "user_message" | "host_message" }>;
       index: number;
     }>
   >();
@@ -570,7 +584,10 @@ function orderSteeredMessagesForSampling(
     if (item === undefined) {
       continue;
     }
-    if (item.type === "user_message" && item.deliveryAfter !== undefined) {
+    if (
+      (item.type === "user_message" || item.type === "host_message") &&
+      item.deliveryAfter !== undefined
+    ) {
       const pending = anchored.get(item.deliveryAfter) ?? [];
       pending.push({ item, index });
       anchored.set(item.deliveryAfter, pending);

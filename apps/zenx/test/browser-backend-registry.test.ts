@@ -982,3 +982,70 @@ test("all advertised namespaced tool references identify tools that exist", () =
     inspect(manifest);
   }
 });
+
+test("human current-URL reads keep exact connection generation and Thread identity", async () => {
+  const workspace = fixture("Workspace"),
+    connected = fixture("Chrome");
+  let resolve!: (value: string) => void;
+  connected.backend.readCurrentUrl = async () =>
+    new Promise<string>((done) => {
+      resolve = done;
+    });
+  const connection = {
+    connectionId: "11111111-1111-4111-8111-111111111111",
+    generation: "one",
+    browser: "chrome" as const,
+    label: "Chrome",
+    state: "connected" as const,
+  };
+  const registry = new BrowserBackendRegistry(
+    workspace.backend,
+    undefined,
+    undefined,
+    {
+      connections: () => [connection],
+      connectInstance: async () => ({
+        backend: connected.backend,
+        product: "fixture",
+      }),
+      onConnectionsChanged: () => () => {},
+    },
+  );
+  const events: BrowserThreadEvent[] = [];
+  const stop = registry.observeThread(
+    { threadId: "thread", frames: false },
+    (event) => events.push(event),
+  );
+  try {
+    await registry.invoke("browser_connected_list_tabs", {
+      ...invocation({ connectionId: connection.connectionId }),
+      approvalScope: {
+        key: `browser-instance:${connection.connectionId}`,
+        label: connection.label,
+        generation: connection.generation,
+      },
+    });
+    const snapshot = events.findLast((event) => event.type === "targets")!;
+    assert.equal(snapshot.type, "targets");
+    if (snapshot.type !== "targets") return;
+    const targetId = snapshot.selectedId!;
+    await assert.rejects(
+      registry.readTargetUrl("foreign-thread", targetId),
+      /unavailable/,
+    );
+    const first = registry.readTargetUrl("thread", targetId);
+    resolve("https://example.test/current?q=1#hash");
+    assert.equal(await first, "https://example.test/current?q=1#hash");
+    const late = registry.readTargetUrl("thread", targetId);
+    connection.generation = "reconnected";
+    resolve("https://example.test/old?q=private#route");
+    await assert.rejects(late, /no longer current/);
+    await assert.rejects(
+      registry.readTargetUrl("thread", targetId),
+      /unavailable/,
+    );
+  } finally {
+    stop();
+    await registry.close();
+  }
+});

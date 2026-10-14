@@ -1,7 +1,10 @@
 import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
-import { deliverAssistantInput } from "./assistant-preset.js";
+import {
+  deliverAssistantInput,
+  deliverAssistantWakeup,
+} from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
@@ -819,6 +822,10 @@ async function bootstrapZenX(): Promise<void> {
         request: (method, params) => automationManager.request(method, params),
         onNotification: (listener) =>
           automationManager.onNotification(listener),
+        onReconnect: (listener) =>
+          automationManager.onStatus((status) => {
+            if (status.type === "ready" && status.reconnected) listener();
+          }),
         readThread: (threadId) =>
           automationManager.request("thread/read", {
             threadId,
@@ -843,6 +850,10 @@ async function bootstrapZenX(): Promise<void> {
           ),
         sendAssistant: (params, signal) =>
           deliverAssistantInput(automationManager, params, signal),
+        sendAssistantWakeup: (params, signal) =>
+          deliverAssistantWakeup(automationManager, params, signal, {
+            requireUnarchived: true,
+          }),
         enqueue: async (params) => {
           await automationManager.request("turn/queue", params);
         },
@@ -2185,6 +2196,33 @@ function installCapabilityIpc(
   const computerLive = new ComputerLiveObservationIpcBridge(
     capabilities,
     ipcChannels.computerLiveEvent,
+  );
+  ipcMain.handle(
+    ipcChannels.browserOpenExternal,
+    async (event, threadId: unknown, targetId: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const rendererUrl =
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+      if (
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+            mainFrame: event.senderFrame === event.sender.mainFrame,
+            url: event.senderFrame?.url ?? "",
+          },
+          rendererUrl,
+        ) ||
+        typeof threadId !== "string" ||
+        typeof targetId !== "string"
+      )
+        throw new Error(
+          "Browser external opening requires the trusted ZenX window",
+        );
+      await browserLive.openExternal(event.sender, threadId, targetId, (url) =>
+        shell.openExternal(url),
+      );
+    },
   );
   ipcMain.handle(
     ipcChannels.browserLiveSubscribe,

@@ -16,6 +16,7 @@ export type IconName =
   | "computer"
   | "compress"
   | "expand"
+  | "external-link"
   | "maximize"
   | "minimize"
   | "chip"
@@ -42,6 +43,7 @@ export type IconName =
   | "pin"
   | "pin-off"
   | "reasoning"
+  | "reply"
   | "restore"
   | "settings"
   | "search"
@@ -51,6 +53,7 @@ export type IconName =
   | "tree"
   | "stop"
   | "send"
+  | "smile"
   | "terminal"
   | "users"
   | "x"
@@ -110,6 +113,12 @@ const paths: Record<IconName, ReactNode> = {
   plus: <path d="M8 3v10M3 8h10" />,
   "arrow-down": <path d="M8 2.2v11.2m-4-4 4 4 4-4" />,
   expand: <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />,
+  "external-link": (
+    <>
+      <path d="M9 2h5v5M14 2 7 9" />
+      <path d="M7 2H3.5C2.7 2 2 2.7 2 3.5v9c0 .8.7 1.5 1.5 1.5h9c.8 0 1.5-.7 1.5-1.5V9" />
+    </>
+  ),
   maximize: (
     <>
       <path d="M6.25 6.25 2.5 2.5M2.5 5.75V2.5h3.25" />
@@ -237,6 +246,13 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M8 2.1a4.4 4.4 0 0 0-2.7 7.9c.5.4.8.9.8 1.5h3.8c0-.6.3-1.1.8-1.5A4.4 4.4 0 0 0 8 2.1Z" />
       <path d="M6.5 13.8h3M6.2 11.5h3.6" />
+    </>
+  ),
+  reply: <path d="m6 3-4 4 4 4M2 7h7a5 5 0 0 1 5 5" />,
+  smile: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M5.4 6h.1M10.5 6h.1M5.2 9.5a3 3 0 0 0 5.6 0" />
     </>
   ),
   restore: (

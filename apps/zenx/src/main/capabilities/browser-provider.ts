@@ -135,7 +135,7 @@ export type BrowserLiveObservationEvent =
       message: string;
     }
   | { type: "frame"; frame: BrowserLiveObservationFrame }
-  | { type: "metadata"; title: string; url: string };
+  | { type: "metadata"; title: string; url: string; loading?: boolean };
 
 export type BrowserLiveObservationListener = (
   event: BrowserLiveObservationEvent,
@@ -144,6 +144,8 @@ export type BrowserLiveObservationListener = (
 export interface ZenXBrowserBackend {
   /** Bind the provider's opaque session to its trusted Thread owner. */
   bindThreadSession?(sessionId: string, threadId: string): void;
+  /** Trusted human UI only: never include the unredacted URL in tool results. */
+  readCurrentUrl?(sessionId: string, tabId: string): Promise<string>;
   scroll?(
     sessionId: string,
     tabId: string,
@@ -611,6 +613,10 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     listener: BrowserThreadListener,
   ): () => void {
     return this.#threadObservation.observe(request, listener);
+  }
+
+  async readTargetUrl(threadId: string, targetId: string): Promise<string> {
+    return await this.#threadObservation.readTargetUrl(threadId, targetId);
   }
 
   async #invokeAndObserve(
@@ -1355,6 +1361,8 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     return observeElectronPage(
       {
         capture: async () => await tab.window.webContents.capturePage(),
+        events: tab.window.webContents,
+        metadata: () => summarizeTab(tab),
         current: () =>
           this.#closing ||
           this.#tabs.get(tabId) !== tab ||
@@ -1364,6 +1372,30 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       },
       listener,
     );
+  }
+
+  async readCurrentUrl(sessionId: string, tabId: string): Promise<string> {
+    const tab = this.#requireTab(sessionId, tabId);
+    const documentVersion = tab.documentVersion;
+    const assertCurrent = () => {
+      this.#requireTab(sessionId, tabId);
+      if (
+        this.#closing ||
+        this.#tabs.get(tabId) !== tab ||
+        tab.incarnation.invalidated ||
+        this.#sessions.get(sessionId) !== tab.incarnation ||
+        tab.window.webContents.isDestroyed()
+      )
+        throw new Error("Browser session or target was closed during URL read");
+      if (tab.documentVersion !== documentVersion)
+        throw new Error("Browser document changed during URL read");
+      if (tab.window.webContents.isLoading())
+        throw new Error("Browser page is still loading");
+    };
+    assertCurrent();
+    const url = tab.window.webContents.getURL();
+    assertCurrent();
+    return url;
   }
 
   async listTabs(sessionId: string): Promise<BrowserTabSummary[]> {

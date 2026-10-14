@@ -5132,3 +5132,101 @@ for (const entry of ["heading", "chip"] as const) {
     });
   }
 }
+test("import saved but native open failed retains App-level retry without reimport", async () => {
+  let importCalls = 0;
+  let resumeCalls = 0;
+  const { parseSessionImport, previewSessionImport } =
+    await import("../../../src/protocol/session-import.js");
+  const contents = [
+    {
+      type: "session_meta",
+      payload: { id: "app-import", cli_version: "0.146.0", cwd: "/source" },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "app integration fixture" }],
+      },
+    },
+  ]
+    .map((entry) =>
+      JSON.stringify({ timestamp: "2026-10-12T00:00:00Z", ...entry }),
+    )
+    .join("\n");
+  const harness = await mountApp(oneProject(), {
+    request: async (method) => {
+      if (method === "zen/thread/import/preview")
+        return previewSessionImport(
+          parseSessionImport({ format: "codex-rollout-0.146.0", contents }),
+        );
+      if (method === "zen/thread/import") {
+        importCalls++;
+        return { thread: { id: "thread-1" }, status: "imported" };
+      }
+      if (method === "zen/thread/resume") {
+        resumeCalls++;
+        if (resumeCalls === 1) throw new Error("Synthetic import open failure");
+        return resumed(liveThread());
+      }
+      return {};
+    },
+  });
+  try {
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Import Codex conversation"]',
+      ),
+    );
+    await act(async () => open.click());
+    const input = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(
+        '.session-import-dialog input[type="file"]',
+      ),
+    );
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [
+        {
+          name: "selected.jsonl",
+          size: Buffer.byteLength(contents),
+          arrayBuffer: async () => new TextEncoder().encode(contents).buffer,
+        },
+      ],
+    });
+    await act(async () =>
+      input.dispatchEvent(
+        new harness.dom.window.Event("change", { bubbles: true }),
+      ),
+    );
+    const confirm = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) =>
+          button.textContent === "Import and open" && !button.disabled,
+      ),
+    );
+    await act(async () => confirm.click());
+    const retry = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) =>
+          button.textContent === "Open imported conversation" &&
+          !button.disabled,
+      ),
+    );
+    assert(document.querySelector(".session-import-dialog"));
+    assert(
+      document
+        .querySelector(".session-import-dialog [role=alert]")
+        ?.textContent?.includes("Synthetic import open failure"),
+    );
+    assert.equal(importCalls, 1);
+    assert.equal(resumeCalls, 1);
+    await act(async () => retry.click());
+    await waitFor(() => !document.querySelector(".session-import-dialog"));
+    assert.equal(importCalls, 1);
+    assert.equal(resumeCalls, 2);
+  } finally {
+    await unmountApp(harness);
+  }
+});

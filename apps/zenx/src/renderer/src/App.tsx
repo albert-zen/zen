@@ -1,9 +1,12 @@
+import { SessionImportDialog } from "./SessionImportDialog.js";
 import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
+import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
+import { RoomHeaderContext } from "./room-header.js";
 import {
   ROOM_ROUTE,
   useRoomConversations,
@@ -398,6 +401,15 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  return (
+    <ThreadReadingStateProvider>
+      <AppContent />
+    </ThreadReadingStateProvider>
+  );
+}
+
+function AppContent() {
+  const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
@@ -993,7 +1005,11 @@ export function App() {
       });
   };
 
-  const resumeThread = async (threadId: string, preserveNavigation = false) => {
+  const resumeThread = async (
+    threadId: string,
+    preserveNavigation = false,
+    propagateFailure = false,
+  ) => {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
@@ -1019,7 +1035,11 @@ export function App() {
       const result = await window.zenx.protocol.request("zen/thread/resume", {
         threadId,
       });
-      if (selectionEpoch.current !== epoch) return;
+      if (selectionEpoch.current !== epoch) {
+        if (propagateFailure)
+          throw new Error(i18n.t("shell:importOpenSuperseded"));
+        return;
+      }
       const pending = pendingResumeProjectionRef.current;
       const notifications =
         pending?.epoch === epoch && pending.threadId === threadId
@@ -1092,6 +1112,7 @@ export function App() {
           pendingResumeProjectionRef.current = null;
         setThreadError(describeError(error));
       }
+      if (propagateFailure) throw error;
     } finally {
       if (selectionEpoch.current === epoch) setThreadLoading(false);
     }
@@ -1560,6 +1581,8 @@ export function App() {
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
   );
+  const [roomHeaderTarget, setRoomHeaderTarget] =
+    useState<HTMLDivElement | null>(null);
   const roomPanel = roomQuery.get("panel");
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
@@ -2719,6 +2742,16 @@ export function App() {
                   })
             }
             title={selectedRoom?.name ?? genericPluginTarget.title}
+            actions={
+              genericPluginTarget.pluginId === "zenx-rooms" &&
+              genericPluginTarget.route === ROOM_ROUTE &&
+              selectedRoomId !== null ? (
+                <div
+                  className="room-title-actions-host"
+                  ref={setRoomHeaderTarget}
+                />
+              ) : undefined
+            }
           />
         ) : null}
       </WindowTitleBar>
@@ -2815,6 +2848,10 @@ export function App() {
         }
         onNewThread={(workspace) => {
           openNewThreadDraft(workspace);
+        }}
+        onImportSession={() => {
+          setImportSessionOpen(true);
+          void loadComposerCatalog();
         }}
         onAddProject={() => openProjectPicker("add-project")}
         newThreadDisabled={newThreadPending}
@@ -2962,16 +2999,20 @@ export function App() {
           {page === "settings" ? null : genericPluginTarget !== undefined &&
             pluginSnapshot !== null ? (
             <ImZenXDraftContext.Provider value={imzenxDrafts}>
-              <PluginProductPage
-                context={
-                  genericPluginTarget.pluginId === "zenx-rooms"
-                    ? { primaryNavigation: true }
-                    : undefined
-                }
-                snapshot={pluginSnapshot}
-                route={page}
-                navigate={openPage}
-              />
+              <RoomHeaderContext.Provider
+                value={{ roomId: selectedRoomId, element: roomHeaderTarget }}
+              >
+                <PluginProductPage
+                  context={
+                    genericPluginTarget.pluginId === "zenx-rooms"
+                      ? { primaryNavigation: true }
+                      : undefined
+                  }
+                  snapshot={pluginSnapshot}
+                  route={page}
+                  navigate={openPage}
+                />
+              </RoomHeaderContext.Provider>
             </ImZenXDraftContext.Provider>
           ) : (
             <AgentSurface
@@ -3180,6 +3221,7 @@ export function App() {
               threads={[...activeSummaries, ...archivedSummaries]}
               snapshot={pluginSnapshot}
               section={roomPanel === "open" ? "" : roomPanel}
+              sectionRequest={roomQuery.get("request") ?? undefined}
               navigate={openPage}
               onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
             />
@@ -3261,6 +3303,17 @@ export function App() {
         </main>
       </RoomDraftContext.Provider>
 
+      {importSessionOpen && (
+        <SessionImportDialog
+          models={models}
+          initialCwd={lastUsedWorkspace ?? ""}
+          onClose={() => setImportSessionOpen(false)}
+          onImported={async (id) => {
+            await Promise.all([loadThreadSummaries(), loadProjects()]);
+            await resumeThread(id, false, true);
+          }}
+        />
+      )}
       {editingProject !== null ? (
         <ProjectEditor
           workspace={editingProject.workspace}
@@ -3476,10 +3529,12 @@ function PageTitleBar({
   onOpenSidebar,
   subtitle,
   title,
+  actions,
 }: {
   onOpenSidebar(): void;
   subtitle: string;
   title: string;
+  actions?: ReactNode;
 }) {
   return (
     <div className="workspace-header">
@@ -3494,9 +3549,10 @@ function PageTitleBar({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{subtitle}</p>
+          {subtitle !== title ? <p>{subtitle}</p> : null}
         </div>
       </div>
+      {actions}
     </div>
   );
 }

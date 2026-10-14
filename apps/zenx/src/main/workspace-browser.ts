@@ -579,6 +579,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     const tab = this.#requireAgentTab(sessionId, tabId);
     return observeElectronPage(
       {
+        events: tab.view.webContents,
+        metadata: () => this.#agentSummary(sessionId, tab),
         capture: async () =>
           await this.#rendered(tab, async () => {
             this.#requireAgentTab(sessionId, tabId);
@@ -595,6 +597,34 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       },
       listener,
     );
+  }
+
+  async readCurrentUrl(sessionId: string, tabId: string): Promise<string> {
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    const incarnation = this.#sessionIncarnations.get(sessionId);
+    const navigationGeneration = tab.navigationGeneration;
+    const documentVersion = tab.documentVersion;
+    const assertCurrent = () => {
+      this.#requireAgentTab(sessionId, tabId);
+      if (
+        this.#tabs.get(tabId) !== tab ||
+        this.#sessionIncarnations.get(sessionId) !== incarnation
+      )
+        throw new Error("Browser session or target changed during URL read");
+      this.#assertAgentOperationCurrent(
+        sessionId,
+        tab,
+        navigationGeneration,
+        documentVersion,
+        "URL read",
+      );
+      if (tab.view.webContents.isLoading())
+        throw new Error("Browser page is still loading");
+    };
+    assertCurrent();
+    const url = tab.view.webContents.getURL();
+    assertCurrent();
+    return url;
   }
 
   async listTabs(sessionId: string): Promise<BrowserTabSummary[]> {

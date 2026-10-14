@@ -13,6 +13,8 @@ export interface BrowserThreadTarget extends BrowserTabSummary {
   connectionLabel?: string;
   id: string;
   mode: "live" | "snapshot";
+  /** Product-only capability; full URLs are resolved privately by the Host. */
+  canOpenExternally?: boolean;
 }
 export interface BrowserThreadRequest {
   threadId: string;
@@ -124,6 +126,7 @@ export class BrowserThreadObservation {
             title: summary.title,
             url: summary.url,
             loading: summary.loading,
+            canOpenExternally: this.#backend.readCurrentUrl !== undefined,
             id: prior?.summary.id ?? randomUUID(),
             mode:
               this.#backend.observeTab === undefined
@@ -146,6 +149,34 @@ export class BrowserThreadObservation {
       }
     }
     this.#notify(session.threadId);
+  }
+
+  async readTargetUrl(threadId: string, targetId: string): Promise<string> {
+    const session = [...this.#sessions.values()].find(
+      (value) =>
+        value.threadId === threadId &&
+        [...value.targets.values()].some(
+          (target) => target.summary.id === targetId,
+        ),
+    );
+    const target =
+      session &&
+      [...session.targets.values()].find(
+        (value) => value.summary.id === targetId,
+      );
+    if (this.#closed || !session || !target || !this.#backend.readCurrentUrl)
+      throw new Error("Browser target is unavailable");
+    const url = await this.#backend.readCurrentUrl(
+      session.providerSessionId,
+      target.summary.tabId,
+    );
+    if (
+      this.#closed ||
+      this.#sessions.get(session.key) !== session ||
+      session.targets.get(target.summary.tabId)?.summary.id !== targetId
+    )
+      throw new Error("Browser target is no longer current");
+    return url;
   }
 
   observe(
@@ -238,6 +269,11 @@ export class BrowserThreadObservation {
           selected.session.providerSessionId,
           selected.target.summary.tabId,
           (event) => {
+            if (
+              observer.generation !== generation ||
+              !this.#observers.has(observer)
+            )
+              return;
             if (event.type !== "metadata") {
               send(event);
               return;
@@ -250,6 +286,9 @@ export class BrowserThreadObservation {
               ...current.summary,
               title: event.title,
               url: event.url,
+              ...(event.loading === undefined
+                ? {}
+                : { loading: event.loading }),
             };
             for (const candidate of [...this.#observers]) {
               if (candidate.request.threadId !== selected.session.threadId)

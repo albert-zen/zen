@@ -295,6 +295,7 @@ declare global {
         openSettings(kind: "accessibility" | "screen-recording"): Promise<void>;
       };
       browserObservation: {
+        openExternal(threadId: string, targetId: string): Promise<void>;
         subscribe(
           request: BrowserThreadRequest,
           listener: (event: BrowserThreadEvent) => void,

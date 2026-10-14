@@ -483,6 +483,7 @@ export class ImZenXRuntime {
             "gateway.sqlite3",
           ),
           IMZEN_PERMISSION_MODE: config.permissionMode,
+          IMZEN_INPUT_CONTINUATION: config.inputContinuation,
           IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS: String(
             config.allowUnrestrictedFullAccess,
           ),
