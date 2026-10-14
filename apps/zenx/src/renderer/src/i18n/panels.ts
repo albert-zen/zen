@@ -1,4 +1,8 @@
 export const en = {
+  wakeupDelivery: "This Trigger’s message delivery",
+  roomMessageDelivery: "This Room’s message delivery",
+  wakeupSteer: "Steer active work (default)",
+  wakeupQueue: "Queue for the next Turn",
   shellTitle: "Terminal",
   shellChooser: "Manage shared Shell sessions and open your own terminal",
   shellLocalHost: "This thread · This device",
@@ -89,6 +93,11 @@ export const en = {
   imWorkspaceDescription:
     "New conversations and PAW lists in IM use this directory.",
   imConnectionConfiguration: "Connection configuration",
+  imInputContinuation: "Ordinary IM input",
+  imInputContinuationSteer: "Soft steer (default)",
+  imInputContinuationQueue: "Queue for the next turn",
+  imInputContinuationDescription:
+    "Independent from Composer, Room and Trigger settings. Saving takes effect after reconnecting and does not change already accepted input.",
   imPrivatePathNotice:
     "Use absolute paths and your own IMZen-format configuration. Enter only paths here; set credential values in the private local file.",
   imPreparationDoesNotConnect:
@@ -181,7 +190,43 @@ export const en = {
   pawDelegateWork: "Delegate work",
   imReadinessChanged:
     "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again.",
-  mentionAgentForReply: "@mention an agent to request a reply",
+  mentionAgentForReply: "Type @ to choose a room member",
+  roomRepliesUnavailableCount_one:
+    "Automatic replies are off for {{count}} member",
+  roomRepliesUnavailableCount_other:
+    "Automatic replies are off for {{count}} members",
+  roomViewReplySettings: "View settings",
+  roomRepliesUnavailableHelp:
+    "Replies may be unconfigured, paused, or disabled for this Host. Review a member's settings to see its current setup. Viewing settings does not enable replies or replay earlier messages.",
+  roomMemberReplySettings: "Reply settings for @{{member}}",
+  roomSourceNotRecorded: "Source not recorded",
+  roomUnknownSender: "Unknown member",
+  roomMessageActions: "Message actions",
+  roomDelivered: "Delivered",
+  roomReadCount_one: "Read by {{count}}",
+  roomReadCount_other: "Read by {{count}}",
+  roomTechnicalDetails: "Technical details",
+  roomReactionSummary: "{{emoji}} · {{count}} · {{names}}",
+  roomRemoveReaction: "Remove {{emoji}} reaction",
+  roomUnnamedSender: "Unnamed conversation",
+  roomSenderProfile: "About {{name}}",
+  roomOpenSourceConversation: "Open source conversation",
+  roomSourceNotRecordedHelp:
+    "The source conversation was not saved with this message.",
+  roomSourceThread: "Thread · {{name}}",
+  roomSourceThreadHelp:
+    "Open the recorded source conversation: {{id}}. Its displayed name is current.",
+  roomSourcePaw: "Linked PAW · {{name}}",
+  roomSourcePawHelp:
+    "Current PAW binding for this source conversation; it does not change the recorded message author.",
+  roomSourcePawCount_one: "{{count}} linked PAW",
+  roomSourcePawCount_other: "{{count}} linked PAWs",
+  scrollForEarlierMessages: "Scroll up for earlier messages",
+  earliestRetainedMessages: "Start of retained history",
+  retryEarlierMessages: "Retry earlier messages",
+  roomHistoryChangedRetry:
+    "New messages arrived while loading history. Try again.",
+
   roomSettingsTitle: "{{name}} settings",
   messageRole: "Message role: {{role}}",
   sidePanelFor: "Side panel for {{title}}",
@@ -571,6 +616,9 @@ export const en = {
   forward: "Forward",
   reloadPage: "Reload page",
   browserAddress: "Browser address",
+  openCurrentPageExternally: "Open current page in external browser",
+  openCurrentPageFailed:
+    "Could not open the current page. Check that it is still connected, then try again.",
   enterAUrl: "Enter a URL",
   go: "Go",
   interactiveWebPage: "Interactive web page",
@@ -840,6 +888,10 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  wakeupDelivery: "此 Trigger 的消息投递",
+  roomMessageDelivery: "此聊天室的消息投递",
+  wakeupSteer: "补充到当前工作（默认）",
+  wakeupQueue: "排队到下一轮",
   shellTitle: "终端",
   shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
   shellLocalHost: "当前线程 · 本机",
@@ -925,6 +977,11 @@ export const zhCN = {
     "本机进程状态不能证明 QQ 等渠道已完成真实消息投递",
   imWorkspaceDescription: "IM 中的新会话与 PAW 列表使用这个目录。",
   imConnectionConfiguration: "连接配置",
+  imInputContinuation: "普通 IM 输入",
+  imInputContinuationSteer: "柔性引导（默认）",
+  imInputContinuationQueue: "排队到下一轮",
+  imInputContinuationDescription:
+    "独立于输入框、Room 和 Trigger 设置。保存后重新连接生效，已接收的消息不受影响。",
   imPrivatePathNotice:
     "使用绝对路径和自己的 IMZen格式配置。这里只填写路径；凭证值在本机私有文件中设置。",
   imPreparationDoesNotConnect: "保存准备不会启动或重启连接",
@@ -1010,7 +1067,37 @@ export const zhCN = {
   pawDelegateWork: "委派工作",
   imReadinessChanged:
     "检查准备情况后，IM 设置发生了变化。请重新检查准备情况，确认其他机器人消费进程已停止，再连接。",
-  mentionAgentForReply: "@提及 Agent 来请求回复",
+  mentionAgentForReply: "输入 @ 选择房间成员",
+  roomRepliesUnavailableCount_one: "{{count}} 位成员的自动回复未启用",
+  roomRepliesUnavailableCount_other: "{{count}} 位成员的自动回复未启用",
+  roomViewReplySettings: "查看设置",
+  roomRepliesUnavailableHelp:
+    "可能尚未设置回复、已暂停，或此主机已关闭自动回复。查看成员的设置可确认当前配置；查看不会启用回复，也不会重放此前的消息。",
+  roomMemberReplySettings: "@{{member}} 的回复设置",
+  roomSourceNotRecorded: "来源未记录",
+  roomUnknownSender: "未知成员",
+  roomMessageActions: "消息操作",
+  roomDelivered: "已送达",
+  roomReadCount_one: "{{count}} 人已读",
+  roomReadCount_other: "{{count}} 人已读",
+  roomTechnicalDetails: "技术详情",
+  roomReactionSummary: "{{emoji}} · {{count}} · {{names}}",
+  roomRemoveReaction: "移除 {{emoji}} 表情",
+  roomUnnamedSender: "未命名会话",
+  roomSenderProfile: "关于 {{name}}",
+  roomOpenSourceConversation: "打开来源会话",
+  roomSourceNotRecordedHelp: "这条消息未保存来源会话。",
+  roomSourceThread: "会话 · {{name}}",
+  roomSourceThreadHelp: "打开记录的来源会话：{{id}}。显示的是当前会话名称。",
+  roomSourcePaw: "关联 PAW · {{name}}",
+  roomSourcePawHelp: "来源会话当前关联的 PAW；不改变消息记录的作者身份。",
+  roomSourcePawCount_one: "关联 {{count}} 个 PAW",
+  roomSourcePawCount_other: "关联 {{count}} 个 PAW",
+  scrollForEarlierMessages: "向上滚动查看更早消息",
+  earliestRetainedMessages: "已到保留记录的开头",
+  retryEarlierMessages: "重试加载更早消息",
+  roomHistoryChangedRetry: "加载历史时有新消息到达，请重试。",
+
   roomSettingsTitle: "{{name}} 设置",
   messageRole: "消息角色：{{role}}",
   sidePanelFor: "{{title}} 的侧边面板",
@@ -1367,6 +1454,8 @@ export const zhCN = {
   forward: "前进",
   reloadPage: "重新加载页面",
   browserAddress: "浏览器地址",
+  openCurrentPageExternally: "在外部浏览器打开当前页面",
+  openCurrentPageFailed: "无法打开当前页面。请确认页面仍已连接，再重试。",
   enterAUrl: "输入网址",
   go: "前往",
   interactiveWebPage: "交互式网页",

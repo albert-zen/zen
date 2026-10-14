@@ -15,13 +15,11 @@ test("Room delivered and per-recipient read derive from durable message and exac
     sends = 0;
   const port: any = {
     onNotification: () => () => {},
-    request: async () => {
-      throw Error("unexpected start");
-    },
-    sendAssistant: async (params: any) => {
-      inputId = params.clientUserMessageId;
+    request: async (method: string, params: any) => {
+      assert.equal(method, "zen/turn/wake");
+      inputId = params.clientId;
       sends++;
-      return { turnId: "turn" };
+      return { turnId: "turn", mode: "steer" };
     },
     readThread: async (id: string) => {
       if (mode === "missing") throw Error("missing Thread");
@@ -38,8 +36,8 @@ test("Room delivered and per-recipient read derive from durable message and exac
                       {
                         type:
                           mode === "queued"
-                            ? "userMessageQueued"
-                            : "userMessage",
+                            ? "hostMessageQueued"
+                            : "hostMessage",
                         id: "canonical",
                         clientId:
                           mode === "wrong-client" ? "unrelated" : inputId,

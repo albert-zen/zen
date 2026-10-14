@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { Icon } from "./icons.js";
+import { BrowserExternalOpen } from "./browser-external-open.js";
 import React, { useEffect, useId, useRef, useState } from "react";
 import type {
   WorkspaceBrowserCommand,
@@ -257,7 +258,7 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
           >
             <Icon name="reload" />
           </button>
-          <div className="workspace-browser-location">
+          <div className="workspace-browser-location browser-url-field">
             <input
               ref={addressInput}
               aria-label={i18n.t("panels:browserAddress")}
@@ -265,14 +266,10 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
               value={address}
               onChange={(event) => setAddress(event.target.value)}
             />
-            <button
-              type="submit"
-              aria-label={i18n.t("panels:go")}
-              title={i18n.t("panels:go")}
-              disabled={busy}
-            >
-              <Icon name="arrow-right" />
-            </button>
+            <BrowserExternalOpen
+              url={active.url}
+              disabled={!open || busy || active.loading}
+            />
           </div>
         </form>
         {active.error ? (

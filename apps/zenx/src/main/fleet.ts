@@ -368,6 +368,16 @@ export class FleetRouter {
       throw new Error("This tool does not support Fleet");
     if (device.access !== "control" && !fleetReadTools.has(invocation.name))
       throw new Error(`Fleet device ${deviceId} is read-only`);
+    if (
+      invocation.trustedPluginUi !== true &&
+      invocation.name === "zenx_threads_send" &&
+      invocation.threadId !== undefined &&
+      invocation.canonicalToolCallId !== undefined &&
+      device.transport !== "https"
+    )
+      throw new Error(
+        "Source-attributed Agent Thread messages require an authenticated native Fleet Host. SSH bridge sends cannot verify remote sender provenance; no message was sent.",
+      );
     const { device: _device, ...args } = invocation.arguments;
     const request: FleetRequest = {
       // Old bridges strictly reject v2 before executing their unfenced sends.
@@ -381,10 +391,12 @@ export class FleetRouter {
       name: invocation.name,
       arguments: args,
       callId: invocation.callId,
-      ...(invocation.canonicalToolCallId
+      ...(invocation.trustedPluginUi !== true && invocation.canonicalToolCallId
         ? { canonicalToolCallId: invocation.canonicalToolCallId }
         : {}),
-      ...(invocation.threadId ? { threadId: invocation.threadId } : {}),
+      ...(invocation.trustedPluginUi !== true && invocation.threadId
+        ? { threadId: invocation.threadId }
+        : {}),
     };
     if (request.name === "zenx_threads_send" && args.messageType === undefined)
       request.arguments.messageType = "guidance";

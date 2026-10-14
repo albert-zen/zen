@@ -122,6 +122,12 @@ test("thread subscriptions, manual page selection, late frames and provider reti
   assert.equal(listeners.at(-1)!.tab, firstA.tab);
   const beforeLate = a.length;
   firstA.send(frame);
+  firstA.send({
+    type: "metadata",
+    title: "Stale",
+    url: "https://stale.example/",
+    loading: true,
+  });
   assert.equal(a.length, beforeLate);
   stopA();
   const priorCount = listeners.length;

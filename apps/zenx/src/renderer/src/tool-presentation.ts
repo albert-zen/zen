@@ -1,8 +1,10 @@
+import { IMPORTED_TOOL_RESULT_CONTENT_TYPE } from "../../../../../src/thread-import.js";
 import { i18n } from "./i18n.js";
 import type { IconName } from "./icons.js";
 import type { ThreadItem } from "../../protocol-client/index.js";
 
 export type CommandPhase =
+  | "imported"
   | "requested"
   | "admitting"
   | "queued"
@@ -55,12 +57,18 @@ export function commandTask(
   };
 }
 export function isTerminalCommandPhase(phase: CommandPhase): boolean {
-  return ["completed", "failed", "timed_out", "cancelled", "declined"].includes(
-    phase,
-  );
+  return [
+    "imported",
+    "completed",
+    "failed",
+    "timed_out",
+    "cancelled",
+    "declined",
+  ].includes(phase);
 }
 /** Task lifetime is independent of an enclosing call being aborted/declined. */
 export function commandPhase(item: CommandItem): CommandPhase {
+  if (item.contentType === IMPORTED_TOOL_RESULT_CONTENT_TYPE) return "imported";
   const receipt = commandTask(item);
   if (receipt !== null && receipt.phase !== "completed") return receipt.phase;
   if (item.status === "failed" || item.status === "declined")
@@ -71,6 +79,7 @@ export function commandPhase(item: CommandItem): CommandPhase {
 }
 export function commandPhaseLabel(phase: CommandPhase): string {
   const keys = {
+    imported: "importedHistory",
     requested: "requested",
     admitting: "admitting",
     queued: "queued",

@@ -8,6 +8,7 @@ import {
 import type { ToolInvocation } from "../../../src/tool.js";
 const invocation = {
   name: "zenx_threads_send",
+  trustedPluginUi: true,
   callId: "call",
   canonicalToolCallId: "item",
   threadId: "caller",
@@ -205,4 +206,20 @@ test("cancellation while assistant snapshot is read prevents later admission", a
     ),
   );
   assert.equal(sends, 0);
+});
+
+test("SSH Agent sends reject unsupported provenance without connecting or user fallback", async () => {
+  let calls = 0;
+  const router = new FleetRouter(
+    async () => parseFleetConfig(config),
+    async () => {
+      calls++;
+    },
+  );
+  const { trustedPluginUi: _ui, ...agent } = invocation;
+  await assert.rejects(
+    router.invoke("workstation", agent),
+    /cannot verify remote sender provenance/,
+  );
+  assert.equal(calls, 0);
 });

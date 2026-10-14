@@ -15,10 +15,6 @@ import type { ModelAdapter, ModelEvent } from "../../../src/model.js";
 import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
 import { ZenXProtocolClient } from "../src/protocol-client/index.js";
 import {
-  deliverAssistantInput,
-  deliverAssistantWakeup,
-} from "../src/main/assistant-preset.js";
-import {
   ZenXTriggerService,
   type ZenXTriggerAppServerPort,
 } from "../src/main/trigger-service.js";
@@ -125,12 +121,6 @@ for (const reconnect of [
           );
         return client.request("thread/read", { threadId, includeTurns: true });
       },
-      sendAssistant: (params, signal) =>
-        deliverAssistantInput(client, params, signal),
-      sendAssistantWakeup: (params, signal) =>
-        deliverAssistantWakeup(client, params, signal, {
-          requireUnarchived: true,
-        }),
     };
     const service = new ZenXTriggerService(
       port,
@@ -180,7 +170,7 @@ for (const reconnect of [
         unsubscribe();
       }
       failCompletionRead = reconnect === "failed-read";
-      const expectedStatus = failCompletionRead ? "failed" : "completed";
+      const expectedStatus = "completed";
       const completed = waitHistory(
         service,
         () => service.snapshot().history[0]?.status === expectedStatus,
@@ -212,9 +202,10 @@ for (const reconnect of [
         "Canonical bootstrap completed, but TriggerService did not reconcile its terminal observation",
       );
       if (failCompletionRead)
-        assert.match(
-          service.snapshot().history[0]!.error ?? "",
-          /Completion could not be confirmed.*Scripted completion read unavailable/,
+        assert.equal(
+          service.snapshot().history[0]!.error,
+          null,
+          "Buffered canonical source and terminal facts remain valid when optional compatibility history fails",
         );
       failCompletionRead = false;
       await service.postRoomMessage(
@@ -233,17 +224,19 @@ for (const reconnect of [
       await within(nextCompleted);
       assert.equal(service.snapshot().rooms[0]!.messages.length, 1);
       assert.equal(service.snapshot().rooms[0]!.messages[0]!.kind, "human");
-      assert.equal(
-        (await appServer.readThread(thread.id)).items.filter(
-          (item) => item.type === "host_message",
-        ).length,
-        1,
+      const final = await appServer.readThread(thread.id);
+      const hostInputs = final.items.filter(
+        (item) => item.type === "host_message",
       );
+      assert.deepEqual(
+        hostInputs.map((item) => item.source),
+        ["bootstrap", "room"],
+      );
+      assert.equal(hostInputs[1]!.sourceId, room.id);
       assert.equal(
-        (await appServer.readThread(thread.id)).items.filter(
-          (item) => item.type === "user_message",
-        ).length,
-        1,
+        final.items.filter((item) => item.type === "user_message").length,
+        0,
+        "A human-authored Room post retains its Room provenance in the working Thread",
       );
     } finally {
       release.resolve();

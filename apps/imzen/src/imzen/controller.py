@@ -26,6 +26,7 @@ from imagent.applications import ProjectRef, ThreadRef
 from imagent.applications.adapters.appserver.client import AppServerError
 from imagent.applications.requests import ApprovalRequest, ApprovalResponse, RequestRef
 from imagent.gateway.input import InboundFailurePhase
+from imagent.gateway.persistence.effects import ActionErrorCode
 from imagent.interaction.controllers import (
     MarkdownRequestPresenter,
     RequestPresentation,
@@ -49,6 +50,7 @@ from imagent.interaction.messages import (
 )
 
 from .config import PermissionMode
+from .queued_input import queued_input_text
 
 # Matches the pinned Zen adapter's public image contract. Public adapter tests
 # cover both boundaries so a future dependency change cannot silently drift.
@@ -76,6 +78,8 @@ _COMMAND_NAMES = {
         "history",
         "respond",
         "answer",
+        "queued",
+        "unqueue",
     )
 }
 _COMMAND_NAMES.update({"start": "help", "project": "use", "thread": "pick", "archive": "delete"})
@@ -235,6 +239,8 @@ class ImZenController:
             "approve",
             "deny",
             "cancel",
+            "queued",
+            "unqueue",
         ):
             self._registry.register(
                 CommandDefinition(
@@ -242,7 +248,11 @@ class ImZenController:
                     aliases=aliases.get(name, ()),
                     handler=self._command,
                     arguments=CommandArgumentContract(0, 32),
-                    safety=CommandExecutionSafety.EFFECTFUL,
+                    safety=(
+                        CommandExecutionSafety.READ_ONLY
+                        if name == "queued"
+                        else CommandExecutionSafety.EFFECTFUL
+                    ),
                 )
             )
         self._registry.freeze()
@@ -285,6 +295,10 @@ class ImZenController:
                 )
             if len(candidates) == 1 and command.name not in self._command_names:
                 message = _replace_command_name(message, candidates[0])
+            # Queue controls address the original inbound scope, even after a
+            # Thread/PAW switch. They must not select, bind or create a Thread.
+            if candidates and candidates[0] in {"queued", "unqueue"}:
+                return await self._registry.handle(message, actions)
             # The single-application product chooses its configured workspace.
             # Selection uses fenced actions even when the next command is read-only.
             await self._ensure_project(message, actions)
@@ -319,6 +333,8 @@ class ImZenController:
                 text = await self._pick(message, command, actions)
             elif name in {"approve", "deny", "cancel"}:
                 text = await self._approval(message, command, actions)
+            elif name in {"queued", "unqueue"}:
+                text = await self._queued(command, message, actions)
             else:
                 text = self._help()
             return CommandResult.text(text)
@@ -549,12 +565,39 @@ class ImZenController:
         )
         return f"Approval {command.arguments[0]}: {choice}."
 
+    async def _queued(self, command, message, actions):
+        if len(command.arguments) != 1:
+            raise ValueError(f"Use /{command.name} <original IM message ID>.")
+        message_id = command.arguments[0]
+        if command.name == "queued":
+            outcome = await actions.read_queued_input(message_id)
+        else:
+            outcome = await actions.cancel_queued_input(
+                message_id, action_id=_operation_id(message, "queued.cancel")
+            )
+            if (
+                isinstance(outcome, Failed)
+                and outcome.error.code is ActionErrorCode.QUEUE_ALREADY_ADMITTED
+            ):
+                return "This message already started in a turn. Queue cancellation cannot stop it."
+            if isinstance(outcome, OutcomeUnknown) or (
+                isinstance(outcome, Failed)
+                and outcome.error.code is ActionErrorCode.NATIVE_OUTCOME_UNKNOWN
+            ):
+                return (
+                    "Queue cancellation outcome is unknown. Check /queued with the original "
+                    "IM message ID before trying again; the message has not been resent."
+                )
+        return queued_input_text(_require_success(outcome))
+
     def _help(self):
         text = (
             f"{self._presenter.help()}\n"
             "- `/model [name]` — list or switch Zen models\n"
             "- `/permission [full-access|approval-required]` — choose the next Thread preset\n"
-            "- `/approve|/deny|/cancel <request-id>` — approval response shortcuts"
+            "- `/approve|/deny|/cancel <request-id>` — approval response shortcuts\n"
+            "- `/queued <original IM message ID>` — check your queued message\n"
+            "- `/unqueue <original IM message ID>` — cancel it before it starts"
         )
         if self._subscription_commands:
             text += (

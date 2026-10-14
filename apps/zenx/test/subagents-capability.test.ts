@@ -20,6 +20,7 @@ function invocation(
   return {
     name,
     callId: "call",
+    canonicalToolCallId: "trusted-call-item",
     arguments: args,
     cwd: "/workspace",
     threadId: "trusted-parent",
@@ -54,6 +55,14 @@ function fixture() {
           nextCursor: null,
         };
       if (method === "turn/start") return { turn: { id: "turn" } };
+      if (method === "zen/thread/message")
+        return {
+          turnId: "turn",
+          mode: "batch-next",
+          queued: false,
+          messageId: "received",
+          clientId: "agent-message",
+        };
       if (method === "thread/name/set") return {};
       throw new Error("unexpected " + method);
     },
@@ -140,18 +149,25 @@ test("explicit task uses existing send semantics and reports acceptance without 
       task: "User task",
     }),
   )) as { delivery: { mode: string; turnId: string } };
-  assert.equal(result.delivery.mode, "start");
+  assert.equal(result.delivery.mode, "batch-next");
   assert.equal(result.delivery.turnId, "turn");
   assert.deepEqual(
     f.requests.find((r) => r.method === "thread/name/set")?.params,
     { threadId: "child", name: "Child" },
   );
-  const sent = f.requests.find((r) => r.method === "turn/start")?.params as {
+  const sent = f.requests.find((r) => r.method === "zen/thread/message")
+    ?.params as {
     threadId: string;
-    input: unknown;
+    text: string;
+    sourceThreadId: string;
+    sourceToolCallId: string;
+    messageType?: string;
   };
   assert.equal(sent.threadId, "child");
-  assert.deepEqual(sent.input, [{ type: "text", text: "User task" }]);
+  assert.equal(sent.text, "User task");
+  assert.equal(sent.sourceThreadId, "trusted-parent");
+  assert.equal(sent.sourceToolCallId, "trusted-call-item");
+  assert.equal(sent.messageType, undefined);
   assert.equal("completed" in result, false);
 });
 test("list derives nested relationships from native summaries, retains archived child and does not own persistence", async () => {
@@ -201,7 +217,7 @@ test("read and send retain standard public projections for any Thread without a 
     }),
   )) as { threadId: string };
   assert.equal(result.threadId, "child");
-  assert.equal(f.requests.at(-1)?.method, "turn/start");
+  assert.equal(f.requests.at(-1)?.method, "zen/thread/message");
   const read = (await f.service.invoke(
     "zenx_subagents_read",
     invocation("zenx_subagents_read", {

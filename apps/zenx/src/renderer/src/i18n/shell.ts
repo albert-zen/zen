@@ -1,4 +1,43 @@
 export const en = {
+  importSourceModel: "Original provider / model (reference only)",
+  importCheckpointWarning:
+    "Continuing from the source checkpoint on line {{line}}. {{count}} earlier records remain only in the original file; this import is not a full transcript archive.",
+  importedThreadNotice: "Imported history · new Zen session",
+  importedThreadDetails: "Source and import details",
+  importedThreadIdentity:
+    "Source {{format}} · {{id}}. Original directory: {{cwd}}. Current model, workspace and permissions are local Zen settings.",
+
+  importOpenSuperseded:
+    "The conversation was saved, but newer navigation interrupted opening it. You can open it again.",
+  importSession: "Import Codex conversation",
+  importExplanation:
+    "Choose a codex-cli 0.146.0 JSONL export to create a new Zen conversation you can continue. No source work runs during import.",
+  importSelectedFile: "Selected JSONL export",
+  importTooLarge: "Import exceeds the 16 MiB limit.",
+  importReading: "Reading and validating…",
+  importCounts:
+    "{{turns}} turns · {{messages}} messages · {{calls}} tool calls",
+  importSourceCwd: "Original project directory (reference only)",
+  importUnconfirmed:
+    "{{count}} turns have no confirmed completion; their imported snapshots will be closed without resuming work.",
+  importExclusions: "What will not be restored",
+  importPreview: "Preview first messages",
+  importLocalDirectory: "Local project directory",
+  importBrowseDirectory: "Choose local directory",
+  importLocalModel: "Provider / model for continuing",
+  importChooseModel: "Choose an available model",
+  importPermissions: "New local file permissions",
+  importReadOnly: "Read only",
+  importWorkspaceWrite: "Workspace write",
+  importFullAccess: "Full access",
+  importFreshAuthority:
+    "Starts with Ask approvals. Source instructions, credentials, approvals, opaque reasoning, and provider-side continuity are not restored. Text and paired tool output are imported as historical context; unsupported media or opaque-only checkpoints are rejected. Compacted exports continue from the last explicit checkpoint; earlier transcript remains in the original file.",
+  importSaved: "Imported. Open the saved conversation to continue.",
+  importSaving: "Importing…",
+  importOpen: "Open imported conversation",
+  importConfirm: "Import and open",
+  importedHistory: "Historical result · outcome unknown",
+
   sidebarWidth: "Sidebar width",
   sidebarWidthPixels: "{{width}} pixels",
   sidebarResizeHelp:
@@ -348,6 +387,26 @@ export const en = {
   send: "Send",
   sendAMessageToWakeThisThread: "Send a message to wake this thread…",
   sendMessage: "Send message",
+  threadMessageFrom: "From {{name}}",
+  remoteThreadMessageFrom: "Remote: {{name}}",
+  threadMessageUnnamed: "another agent",
+  threadMessageRemoteDetails:
+    "Authenticated remote device; the source identity is peer-reported, not verified locally.",
+  hostMessageTrigger: "Trigger",
+  hostMessageRoom: "Room",
+  hostMessageHost: "Host",
+  showHostMessageDetails: "Show Host message details",
+  hideHostMessageDetails: "Hide Host message details",
+  hostTriggerUpdate: "Triggered update",
+  hostRoomUpdate: "Room update",
+  hostUpdate: "Host update",
+  hostSourceId: "Source ID: {{id}}",
+  copyHostExcerpt: "Copy shown excerpt",
+  copiedHostExcerpt: "Excerpt copied",
+  copyHostMessage: "Copy Host message",
+  copiedHostMessage: "Host message copied",
+  copyThreadMessage: "Copy agent message",
+  copiedThreadMessage: "Agent message copied",
   sendOptions: "Send options",
   sentMessage: "Sent message",
   setAsDefault: "Set as default",
@@ -476,7 +535,10 @@ export const en = {
   dismiss: "Dismiss",
   copiedFromUnavailableSource: "Copied from unavailable source",
   copiedFrom: "Copied from {{name}}",
-  whatShouldWeBuildIn: "What should we build in",
+  // Split around the inline Project name so each language keeps its own
+  // word order: "What should we build in {Project}?" vs 我们要在 {Project} 中构建什么？
+  whatShouldWeBuildInStart: "What should we build in",
+  whatShouldWeBuildInEnd: "?",
   olderQueuePreference:
     "Your older Queue preference could not distinguish the old default from a manual choice. Running-turn sends now steer the current Turn; messages already queued keep their choice.",
   restorePerMessageQueue: "Restore per-message Queue",
@@ -628,6 +690,44 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  importSourceModel: "原 Provider / 模型（仅供参考）",
+  importCheckpointWarning:
+    "将从原文件第 {{line}} 行的检查点继续。此前 {{count}} 条记录仅保留在原文件中；这不是完整历史归档。",
+  importedThreadNotice: "已导入的历史 · 新 Zen 会话",
+  importedThreadDetails: "来源与导入详情",
+  importedThreadIdentity:
+    "来源 {{format}} · {{id}}。原目录：{{cwd}}。当前模型、工作区和权限使用本机 Zen 设置。",
+
+  importOpenSuperseded:
+    "会话已保存，但新的导航中断了打开操作。你可以重新打开。",
+  importSession: "导入 Codex 会话",
+  importExplanation:
+    "选择 codex-cli 0.146.0 JSONL 导出文件，创建可以继续对话和执行的 Zen 会话。导入不会运行原会话的任务。",
+  importSelectedFile: "选择 JSONL 导出文件",
+  importTooLarge: "导入文件超过 16 MiB 限制。",
+  importReading: "正在读取并校验…",
+  importCounts: "{{turns}} 轮 · {{messages}} 条消息 · {{calls}} 次工具调用",
+  importSourceCwd: "原项目目录（仅供参考）",
+  importUnconfirmed:
+    "{{count}} 轮缺少已确认的完成记录；导入快照会关闭，不会恢复原任务。",
+  importExclusions: "不会恢复的内容",
+  importPreview: "预览前几条消息",
+  importLocalDirectory: "本机项目目录",
+  importBrowseDirectory: "选择本机目录",
+  importLocalModel: "继续会话使用的 Provider / 模型",
+  importChooseModel: "选择可用模型",
+  importPermissions: "新的本机文件权限",
+  importReadOnly: "只读",
+  importWorkspaceWrite: "工作区可写",
+  importFullAccess: "完全访问",
+  importFreshAuthority:
+    "以询问审批模式开始。不会恢复原指令、凭证、审批、私有推理或 Provider 服务端会话状态。文字和配对的工具输出会作为历史上下文导入；不支持的媒体或仅有私有状态的检查点会明确拒绝。压缩过的导出从最后一个明确检查点继续；更早的记录保留在原文件中。",
+  importSaved: "导入已保存。打开会话即可继续。",
+  importSaving: "正在导入…",
+  importOpen: "打开已导入会话",
+  importConfirm: "导入并打开",
+  importedHistory: "历史结果 · 执行状态未知",
+
   sidebarWidth: "侧边栏宽度",
   sidebarWidthPixels: "{{width}} 像素",
   sidebarResizeHelp: "拖动调整宽度 · 方向键微调 · 回车收起",
@@ -962,6 +1062,26 @@ export const zhCN = {
   send: "发送",
   sendAMessageToWakeThisThread: "发送消息以唤醒此会话…",
   sendMessage: "发送消息",
+  threadMessageFrom: "来自 {{name}}",
+  remoteThreadMessageFrom: "远端：{{name}}",
+  threadMessageUnnamed: "其他 Agent",
+  threadMessageRemoteDetails:
+    "远端设备已经认证；来源身份由对端报告，未经本机验证。",
+  hostMessageTrigger: "触发器",
+  hostMessageRoom: "房间",
+  hostMessageHost: "宿主",
+  showHostMessageDetails: "展开宿主消息详情",
+  hideHostMessageDetails: "收起宿主消息详情",
+  hostTriggerUpdate: "触发器更新",
+  hostRoomUpdate: "房间更新",
+  hostUpdate: "宿主更新",
+  hostSourceId: "来源 ID：{{id}}",
+  copyHostExcerpt: "复制当前节选",
+  copiedHostExcerpt: "已复制节选",
+  copyHostMessage: "复制宿主消息",
+  copiedHostMessage: "已复制宿主消息",
+  copyThreadMessage: "复制 Agent 消息",
+  copiedThreadMessage: "已复制 Agent 消息",
   sendOptions: "发送选项",
   sentMessage: "已发送消息",
   setAsDefault: "设为默认",
@@ -1086,7 +1206,8 @@ export const zhCN = {
   dismiss: "关闭",
   copiedFromUnavailableSource: "复制自不可用的来源",
   copiedFrom: "复制自 {{name}}",
-  whatShouldWeBuildIn: "我们要在以下项目中构建什么",
+  whatShouldWeBuildInStart: "我们要在",
+  whatShouldWeBuildInEnd: " 中构建什么？",
   olderQueuePreference:
     "旧版“队列”偏好无法区分旧默认值与手动选择。执行期间发送的消息现在会引导当前轮次；已排队的消息保留原来的选择。",
   restorePerMessageQueue: "恢复逐条消息排队",

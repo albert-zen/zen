@@ -16,10 +16,8 @@ import {
   type ZenXTriggerAppServerPort,
 } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
-import type {
-  ClientRequestParams,
-  ClientRequestResults,
-} from "../src/protocol-client/index.js";
+import type { ClientRequestParams } from "../src/protocol-client/index.js";
+import type { NativeThreadRecoverySnapshot } from "../../../src/protocol/native/recovery.js";
 import {
   createZenXTrustedPlugin,
   type ZenXRoomsTrustedService,
@@ -29,6 +27,7 @@ class ModelStub implements ZenXTriggerAppServerPort {
   listener:
     Parameters<ZenXTriggerAppServerPort["onNotification"]>[0] | undefined;
   requests: ClientRequestParams["turn/start"][] = [];
+  readRequests: string[] = [];
   failure = false;
   wakeups: Array<{
     threadId: string;
@@ -36,34 +35,64 @@ class ModelStub implements ZenXTriggerAppServerPort {
     source: "bootstrap";
     text: string;
   }> = [];
-  async sendAssistantWakeup(params: {
-    threadId: string;
-    clientId: string;
-    source: "bootstrap";
-    text: string;
-  }) {
-    this.wakeups.push(params);
-    const result = await this.request("turn/start", {
-      threadId: params.threadId,
-      input: [{ type: "text", text: params.text }],
-    });
-    // The compatibility projection honestly contains no userMessage for a Host wakeup.
+  async request(method: any, params: any): Promise<any> {
+    if (method === "zen/thread/resume") {
+      this.readRequests.push(params.threadId);
+      // A failed wake has no canonical receipt in this fixture. Recovery is
+      // read-only and must not fabricate another wake or a completion event.
+      return {
+        processEpoch: "model-stub",
+        threadId: params.threadId,
+        watermark: 0,
+        thread: {
+          id: params.threadId,
+          items: [],
+          turns: [],
+          cwd: tmpdir(),
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+          model: "fake",
+          provider: "fake",
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
+          archived: false,
+        },
+        events: [],
+      } satisfies NativeThreadRecoverySnapshot;
+    }
+    assert.equal(method, "zen/turn/wake", "Unexpected ModelStub RPC method");
+    const request =
+      params.text === undefined
+        ? params
+        : {
+            threadId: params.threadId,
+            clientUserMessageId: params.clientId,
+            input: [{ type: "text", text: params.text }],
+          };
+    this.requests.push(request);
+    if (params.source === "bootstrap") this.wakeups.push(params);
+    if (this.failure) throw new Error("thread_busy");
+    const turnId = `turn-${this.requests.length}`;
     this.listener?.("turn/completed", {
       threadId: params.threadId,
-      turn: result.turn,
-    });
-    return { turnId: result.turn.id };
-  }
-  async request(
-    _method: "turn/start",
-    params: ClientRequestParams["turn/start"],
-  ): Promise<ClientRequestResults["turn/start"]> {
-    this.requests.push(params);
-    if (this.failure) throw new Error("thread_busy");
-    return {
       turn: {
-        id: `turn-${this.requests.length}`,
+        id: turnId,
+        status: "completed",
+        itemsView: "full",
+        error: null,
+        startedAt: 0,
+        completedAt: 1,
+        durationMs: 1,
         items: [
+          {
+            type: "hostMessage",
+            id: randomUUID(),
+            clientId: params.clientId,
+            source: params.source,
+            text: params.text,
+            mode: "start",
+          },
           {
             id: randomUUID(),
             type: "agentMessage",
@@ -72,33 +101,17 @@ class ModelStub implements ZenXTriggerAppServerPort {
             text: "Mock assistant reply",
           },
         ],
-        itemsView: "full",
-        status: "completed",
-        error: null,
-        startedAt: 0,
-        completedAt: 1,
-        durationMs: 1,
-      },
-    };
-  }
-  async sendAssistant(params: ClientRequestParams["turn/queue"]) {
-    const result = await this.request("turn/start", params);
-    this.listener?.("turn/completed", {
-      threadId: params.threadId,
-      turn: {
-        ...result.turn,
-        items: [
-          {
-            type: "userMessage",
-            id: randomUUID(),
-            clientId: params.clientUserMessageId ?? null,
-            content: [{ type: "text", text: "input", text_elements: [] }],
-          },
-          ...result.turn.items,
-        ],
       },
     });
-    return { turnId: result.turn.id };
+    return { mode: "start", turnId };
+  }
+  async sendAssistant(params: ClientRequestParams["turn/queue"]) {
+    return this.request("zen/turn/wake", {
+      threadId: params.threadId,
+      clientId: params.clientUserMessageId,
+      source: "room",
+      text: JSON.stringify(params.input),
+    });
   }
   onNotification(
     listener: Parameters<ZenXTriggerAppServerPort["onNotification"]>[0],
@@ -179,9 +192,19 @@ test("busy wakeup is explicit failure and never auto-retried", async () => {
     assert.equal(f.model.requests.length, 1);
     assert.equal(f.service.snapshot().history[0]?.status, "failed");
     assert.match(f.service.snapshot().history[0]?.error ?? "", /thread_busy/);
+    assert.deepEqual(f.model.readRequests, []);
+    const messages = structuredClone(f.service.snapshot().rooms[0]!.messages);
+    assert.equal(
+      messages.filter((message) => message.kind === "agent").length,
+      0,
+    );
     await f.service.stop();
     await f.service.start();
+    assert.deepEqual(f.model.readRequests, ["chief-thread"]);
     assert.equal(f.model.requests.length, 1);
+    assert.equal(f.service.snapshot().history[0]?.status, "failed");
+    assert.equal(f.service.snapshot().history[0]?.delivery, "unknown");
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, messages);
   } finally {
     await f.close();
   }
@@ -263,11 +286,15 @@ test("model arguments cannot impersonate trusted assistant setup or pause UI", a
     setAssistantReplies: async () => {
       setups++;
     },
+    setAssistantDeliveryMode: async () => {
+      setups++;
+    },
   } as unknown as ZenXRoomsTrustedService;
   const runtime = createZenXTrustedPlugin(service);
   for (const toolName of [
     "zenx_rooms_create_assistant",
     "zenx_rooms_assistant_replies",
+    "zenx_rooms_assistant_delivery",
   ]) {
     await assert.rejects(
       runtime.invoke(toolName, {
@@ -908,7 +935,11 @@ test("failed bootstrap delivery stays explicit and never redispatches after rest
       signal: new AbortController().signal,
     })) as { rooms: Array<{ introduction: { state: string; error: string } }> };
     assert.equal(result.rooms[0]!.introduction.state, "failed");
-    assert.match(result.rooms[0]!.introduction.error, /thread_busy/);
+    assert.match(
+      result.rooms[0]!.introduction.error,
+      /No matching canonical Host receipt.*no wakeup was resent/,
+    );
+    assert.equal(f.model.readRequests.length, 1);
   } finally {
     await f.close();
   }
@@ -961,24 +992,45 @@ test("bootstrap reconciles the exact admitted terminal Turn when its completion 
   try {
     const room = await f.service.createAssistantRoom(input);
     const id = `${room.operationEpoch}:${randomUUID()}`;
-    let terminal: ClientRequestResults["turn/start"]["turn"];
-    f.model.sendAssistantWakeup = async (params) => {
-      f.model.wakeups.push(params);
-      terminal = (
-        await f.model.request("turn/start", {
-          threadId: params.threadId,
-          input: [{ type: "text", text: params.text }],
-        })
-      ).turn;
-      return { turnId: terminal.id };
+    const originalRequest = f.model.request.bind(f.model);
+    let admitted: {
+      threadId: string;
+      clientId: string;
+      source: "bootstrap";
+      text: string;
     };
     let reads = 0;
-    Object.assign(f.model, {
-      readThread: async (threadId: string) => {
-        reads++;
-        return { thread: { id: threadId, turns: [terminal] } };
-      },
-    });
+    f.model.request = async (method, params) => {
+      if (method === "zen/turn/wake") {
+        admitted = params;
+        f.model.wakeups.push(params);
+        return { mode: "start", turnId: "early-terminal" };
+      }
+      assert.equal(method, "zen/thread/resume");
+      reads++;
+      const recovery = await originalRequest(method, params);
+      return {
+        ...recovery,
+        thread: {
+          ...recovery.thread,
+          items: [
+            {
+              id: "canonical-bootstrap",
+              threadId: admitted.threadId,
+              turnId: "early-terminal",
+              createdAt: "2026-01-01T00:00:00Z",
+              type: "host_message",
+              sender: "host",
+              mode: "start",
+              clientId: admitted.clientId,
+              source: admitted.source,
+              text: admitted.text,
+            },
+          ],
+          turns: [{ id: "early-terminal", status: "completed", items: [] }],
+        },
+      };
+    };
     await f.service.prepareAssistantIntroduction(room.id, id, "en");
     await f.service.startAssistantIntroduction(room.id, id);
     assert.equal(reads, 1);
