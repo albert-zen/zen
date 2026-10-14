@@ -146,6 +146,13 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
+        input: {
+          index: resolve(__dirname, "src/preload/index.ts"),
+          "foreground-activity": resolve(
+            __dirname,
+            "src/preload/foreground-activity.ts",
+          ),
+        },
         output: {
           format: "cjs",
           entryFileNames: "[name].cjs",

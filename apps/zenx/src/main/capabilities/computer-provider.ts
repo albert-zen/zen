@@ -1,3 +1,4 @@
+import type { ForegroundActivityRunner } from "../foreground-activity.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -173,9 +174,18 @@ export interface ZenXComputerBackend {
     y: number,
     button: "left" | "right",
     signal: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void>;
-  foregroundKeyPress(key: ComputerKey, signal: AbortSignal): Promise<void>;
-  foregroundScroll(deltaY: number, signal: AbortSignal): Promise<void>;
+  foregroundKeyPress(
+    key: ComputerKey,
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<void>;
+  foregroundScroll(
+    deltaY: number,
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<void>;
   close(): Promise<void> | void;
 }
 
@@ -392,6 +402,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       selector: { ...control.selector, observationId },
     }),
   });
+  readonly #foregroundActivity?: ForegroundActivityRunner;
   #foregroundControlAllowed: boolean;
   #foregroundConsent = new AbortController();
 
@@ -399,8 +410,10 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     backend: ZenXComputerBackend,
     manifest: ZenXPluginManifestV2 = computerCapabilityManifest,
     foregroundControlAllowed = false,
+    foregroundActivity?: ForegroundActivityRunner,
   ) {
     this.#backend = backend;
+    this.#foregroundActivity = foregroundActivity;
     this.#threadObservation = new ComputerThreadObservation(backend);
     this.manifest = manifest;
     this.#foregroundControlAllowed = foregroundControlAllowed;
@@ -597,18 +610,34 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         if (button !== "left" && button !== "right") {
           throw new Error("button must be left or right");
         }
-        await foregroundTakeoverNotice(signal);
-        this.#assertForegroundControlAllowed(toolName);
-        this.#presentation.invalidateAll();
-        await this.#backend.foregroundClick(x, y, button, signal);
+        await this.#withForegroundActivity(
+          invocation,
+          signal,
+          async (signal, onStopping) => {
+            this.#assertForegroundControlAllowed(toolName);
+            this.#presentation.invalidateAll();
+            await this.#backend.foregroundClick(
+              x,
+              y,
+              button,
+              signal,
+              onStopping,
+            );
+          },
+        );
         return { action: "click", x, y, button, impact: "foreground_takeover" };
       }
       case "computer_foreground_key_press": {
         const key = requiredComputerKey(invocation.arguments);
-        await foregroundTakeoverNotice(signal);
-        this.#assertForegroundControlAllowed(toolName);
-        this.#presentation.invalidateAll();
-        await this.#backend.foregroundKeyPress(key, signal);
+        await this.#withForegroundActivity(
+          invocation,
+          signal,
+          async (signal, onStopping) => {
+            this.#assertForegroundControlAllowed(toolName);
+            this.#presentation.invalidateAll();
+            await this.#backend.foregroundKeyPress(key, signal, onStopping);
+          },
+        );
         return { action: "key_press", key, impact: "foreground_takeover" };
       }
       case "computer_foreground_scroll": {
@@ -618,14 +647,37 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             "deltaY must be non-zero and between -10000 and 10000",
           );
         }
-        await foregroundTakeoverNotice(signal);
-        this.#assertForegroundControlAllowed(toolName);
-        this.#presentation.invalidateAll();
-        await this.#backend.foregroundScroll(deltaY, signal);
+        await this.#withForegroundActivity(
+          invocation,
+          signal,
+          async (signal, onStopping) => {
+            this.#assertForegroundControlAllowed(toolName);
+            this.#presentation.invalidateAll();
+            await this.#backend.foregroundScroll(deltaY, signal, onStopping);
+          },
+        );
         return { action: "scroll", deltaY, impact: "foreground_takeover" };
       }
       default:
         throw new Error(`Unsupported foreground computer tool: ${toolName}`);
+    }
+  }
+
+  async #withForegroundActivity(
+    invocation: ToolInvocation,
+    signal: AbortSignal,
+    operation: (signal: AbortSignal, onStopping?: () => void) => Promise<void>,
+  ): Promise<void> {
+    const execute = async (signal: AbortSignal, onStopping?: () => void) => {
+      await foregroundTakeoverNotice(signal);
+      signal.throwIfAborted();
+      await operation(signal, onStopping);
+    };
+    if (this.#foregroundActivity) {
+      await this.#foregroundActivity.run({ ...invocation, signal }, execute);
+    } else {
+      // Non-desktop provider tests and explicitly owned native smoke fixtures.
+      await execute(signal);
     }
   }
 
@@ -1182,6 +1234,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     y: number,
     button: "left" | "right",
     signal: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void> {
     requireMacOs();
     const { screen } = await import("electron");
@@ -1202,22 +1255,33 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     await this.#foregroundInput.run(
       { operation: "click", x: Math.round(x), y: Math.round(y), button },
       signal,
+      onStopping,
     );
   }
 
   async foregroundKeyPress(
     key: ComputerKey,
     signal: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void> {
     requireMacOs();
-    await this.#foregroundInput.run({ operation: "key", key }, signal);
+    await this.#foregroundInput.run(
+      { operation: "key", key },
+      signal,
+      onStopping,
+    );
   }
 
-  async foregroundScroll(deltaY: number, signal: AbortSignal): Promise<void> {
+  async foregroundScroll(
+    deltaY: number,
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<void> {
     requireMacOs();
     await this.#foregroundInput.run(
       { operation: "scroll", deltaY: Math.round(deltaY) },
       signal,
+      onStopping,
     );
   }
 
@@ -1255,6 +1319,7 @@ export class MacForegroundInputDriver {
   async run(
     request: Record<string, unknown>,
     signal: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void> {
     signal.throwIfAborted();
     const executable = await (this.#executable ??= this.#compileHelper());
@@ -1265,6 +1330,8 @@ export class MacForegroundInputDriver {
       10_000,
       JSON.stringify(request),
       signal,
+      undefined,
+      onStopping,
     );
   }
 
@@ -1937,6 +2004,7 @@ export async function runProcess(
   stdin?: string,
   signal?: AbortSignal,
   spawnProcess: typeof spawn = spawn,
+  onStopping?: () => void,
 ): Promise<string> {
   signal?.throwIfAborted();
   return await new Promise<string>((resolve, reject) => {
@@ -1947,52 +2015,85 @@ export async function runProcess(
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let settled = false;
+    let spawned = child.pid !== undefined;
+    let terminationRequested = false;
+    let failure: unknown;
     const finish = (callback: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       callback();
     };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(() =>
-        reject(
+    const requestTermination = (reason: unknown): void => {
+      if (settled || terminationRequested) return;
+      terminationRequested = true;
+      failure = reason;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      try {
+        onStopping?.();
+      } catch {
+        /* Presentation cannot prevent termination. */
+      }
+      // kill() acknowledges sending a signal, not process termination. Even a
+      // false return, throw or post-spawn error must retain the invocation until
+      // native close. There is no timer that fabricates a stopped helper.
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* The original failure is retained. */
+      }
+    };
+    const timer = setTimeout(
+      () =>
+        requestTermination(
           new Error(
             `${path.basename(command)} timed out after ${String(timeoutMs)}ms`,
           ),
         ),
+      timeoutMs,
+    );
+    const abort = (): void =>
+      requestTermination(
+        signal?.reason ??
+          new DOMException(
+            "The foreground operation was cancelled",
+            "AbortError",
+          ),
       );
-    }, timeoutMs);
-    const abort = (): void => {
-      child.kill("SIGKILL");
-      finish(() =>
-        reject(
-          signal?.reason ??
-            new DOMException(
-              "The foreground operation was cancelled",
-              "AbortError",
-            ),
-        ),
-      );
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-    if (stdin !== undefined) child.stdin?.end(stdin, "utf8");
-    child.once("error", (error) => finish(() => reject(error)));
+    child.once("spawn", () => {
+      spawned = true;
+    });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (!terminationRequested) stdout.push(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (!terminationRequested) stderr.push(chunk);
+    });
+    child.once("error", (error) => {
+      if (!spawned && !terminationRequested) finish(() => reject(error));
+      else requestTermination(error);
+    });
     child.once("close", (code, exitSignal) => {
       finish(() => {
-        signal?.removeEventListener("abort", abort);
-        if (code === 0) resolve(Buffer.concat(stdout).toString("utf8"));
-        else {
+        if (terminationRequested) reject(failure);
+        else if (code === 0) resolve(Buffer.concat(stdout).toString("utf8"));
+        else
           reject(
             new Error(
               `${path.basename(command)} failed (${exitSignal ?? String(code)}): ${Buffer.concat(stderr).toString("utf8").trim().slice(0, 2048)}`,
             ),
           );
-        }
       });
     });
+    signal?.addEventListener("abort", abort, { once: true });
+    child.stdin?.once("error", requestTermination);
+    try {
+      if (stdin !== undefined) child.stdin?.end(stdin, "utf8");
+    } catch (error) {
+      requestTermination(error);
+    }
     if (signal?.aborted === true) abort();
   });
 }

@@ -372,6 +372,7 @@
   协商实际影响且禁止静默降级；`foreground_required` 默认不投影也不执行，只有本机用户在 ZenX 中明确
   开启可撤销的 foreground computer control 后才可用，旧 permission grants 不构成授权；foreground helper
   从准备到实际进程 spawn 的每个边界都重验当前 consent，已撤销的 signal 绝不启动全局输入 helper。
+- **ZenXForegroundActivity** — Electron main projects only admitted, validated foreground Computer calls into disposable, non-activating native indicators across current displays; an indicator must be visible before input, remains until provider settlement, and its exact-owner Stop reuses cancellation/Turn interruption. It grants no consent, owns no scheduler or durable state, and never marks background-safe work as global control. A Host-owned global Escape registration exists only while foreground owners remain and uses the same exact-owner Stop boundary; failed registration is presented honestly with the button fallback.
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
