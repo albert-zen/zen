@@ -893,14 +893,15 @@ test("a model calls the advertised bounded original-history tool after compactio
         assert(resultMessage?.role === "tool");
         const result = JSON.parse(resultMessage.text);
         if (result.granularity === "items") {
-          itemId = result.items.find(
+          const preview = result.items.find(
             (item: { type: string }) => item.type === "tool_result",
-          ).itemId;
+          );
+          itemId = preview.itemId;
           yield {
             type: "tool_call",
             callId: "original-detail",
             name: "zenx_threads_read",
-            arguments: { threadId, throughItemId, granularity: "item", itemId },
+            arguments: preview.read,
           };
         } else {
           assert.equal(result.offset, exact.length);

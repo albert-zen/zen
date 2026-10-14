@@ -223,7 +223,9 @@ function previewItem(
       : { preview: raw.slice(0, 500) }),
     truncated,
     read: {
-      target: item.threadId,
+      ...(throughItemId === undefined
+        ? { target: item.threadId }
+        : { threadId: item.threadId }),
       granularity: "item",
       itemId: item.id,
       ...(throughItemId === undefined ? {} : { throughItemId }),
@@ -301,7 +303,8 @@ export interface PublicHistoryItem {
   preview?: string;
   truncated: boolean;
   read: {
-    target: string;
+    target?: string;
+    threadId?: string;
     granularity: "item";
     itemId: string;
     throughItemId?: string;
