@@ -279,7 +279,7 @@ test("fork preserves effective compaction context with remapped references", asy
   assert.ok(forkCompaction);
   assert.deepEqual(forkMessages.at(-1), {
     role: "user",
-    text: `[Zen compacted context]\n${forkCompaction.summary}\n[Original ItemList: zen-thread://${fork.id}/items?through=${forkCompaction.coveredThroughItemId}; use authorized thread/original/read, do not infer hidden content]`,
+    text: `[Zen compacted context]\n${forkCompaction.summary}\n[Original ItemList: zen-thread://${fork.id}/items?through=${forkCompaction.coveredThroughItemId}; logical reference, not a filesystem path. Read only through an available authorized history reader; do not infer hidden content]`,
   });
   assert.notEqual(
     forkCompaction.coveredThroughItemId,

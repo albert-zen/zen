@@ -789,3 +789,248 @@ test("explicit UI send follows the live preference and independent canonical cal
     await f.close();
   }
 });
+
+test("a model calls the advertised bounded original-history tool after compaction and retrieves exact tool-result chunks", async () => {
+  let f: Awaited<ReturnType<typeof fixture>>;
+  let retrieve = false;
+  let seeded = false;
+  let stage = 0;
+  let threadId = "";
+  let throughItemId = "";
+  let itemId = "";
+  let exact = "";
+  const originalOutput = "Original tool output 世界\n".repeat(650);
+  const port = new MutableAppServerRequestPort();
+  const manifest = new ZenXSelfControlCapabilityPackage({ appServer: port })
+    .manifest;
+  const read = manifest.tools.find(
+    (tool) => tool.name === "zenx_threads_read",
+  )!;
+  assert.deepEqual(read.permissions, ["zenx-self-control.workspace-read"]);
+  const tools = new ToolEnvironment({
+    bundles: [
+      {
+        identity: { kind: "external", id: "original-history-test" },
+        tools: [
+          {
+            name: read.name,
+            specification: read,
+            execute: async (invocation) => ({
+              output: JSON.stringify(
+                await f.control.invoke(read.name, invocation),
+              ),
+              exitCode: 0,
+            }),
+          },
+          {
+            name: "fixture_output",
+            specification: {
+              name: "fixture_output",
+              description: "Synthetic original-output fixture",
+              inputSchema: { type: "object", properties: {} },
+            },
+            execute: async () => ({ output: originalOutput, exitCode: 0 }),
+          },
+        ],
+      },
+    ],
+  });
+  f = await fixture(
+    {
+      provider: "test",
+      async *stream(request) {
+        if (
+          request.messages.some(
+            (message) =>
+              "text" in message &&
+              message.text?.includes("ZEN_CONTEXT_COMPACTION_V1"),
+          )
+        ) {
+          yield {
+            type: "text_delta",
+            delta: "Continue using the enabled original reference if needed.",
+          };
+          return;
+        }
+        if (!retrieve) {
+          if (!seeded) {
+            seeded = true;
+            yield {
+              type: "tool_call",
+              callId: "seed-call",
+              name: "fixture_output",
+              arguments: {},
+            };
+          } else yield { type: "text_delta", delta: "Seed completed." };
+          return;
+        }
+        assert(
+          request.tools.some(
+            (tool) =>
+              tool.name === "zenx_threads_read" &&
+              tool.description.includes("throughItemId"),
+          ),
+        );
+        if (stage++ === 0) {
+          const summary = request.messages.find(
+            (message) =>
+              "text" in message && message.text?.includes("zen-thread://"),
+          );
+          assert(summary && "text" in summary && summary.text);
+          assert(summary.text.includes(`through=${throughItemId}`));
+          assert(!summary.text.includes("use authorized thread/original/read"));
+          yield {
+            type: "tool_call",
+            callId: "original-page",
+            name: "zenx_threads_read",
+            arguments: { threadId, throughItemId, maxItemsPerTurn: 25 },
+          };
+          return;
+        }
+        const resultMessage = request.messages.findLast(
+          (message) => message.role === "tool",
+        );
+        assert(resultMessage?.role === "tool");
+        const result = JSON.parse(resultMessage.text);
+        if (result.granularity === "items") {
+          itemId = result.items.find(
+            (item: { type: string }) => item.type === "tool_result",
+          ).itemId;
+          yield {
+            type: "tool_call",
+            callId: "original-detail",
+            name: "zenx_threads_read",
+            arguments: { threadId, throughItemId, granularity: "item", itemId },
+          };
+        } else {
+          assert.equal(result.offset, exact.length);
+          exact += result.content;
+          if (result.nextCursor)
+            yield {
+              type: "tool_call",
+              callId: `original-chunk-${stage}`,
+              name: "zenx_threads_read",
+              arguments: {
+                threadId,
+                throughItemId,
+                granularity: "item",
+                itemId,
+                cursor: result.nextCursor,
+              },
+            };
+          else
+            yield {
+              type: "text_delta",
+              delta: "The exact original output was recovered.",
+            };
+        }
+      },
+    },
+    tools,
+  );
+  try {
+    const { thread } = await f.client.request("thread/start", {});
+    threadId = thread.id;
+    await (
+      await f.app.startTurn(threadId, "Seed original tool output.")
+    ).done;
+    const before = await f.app.readThread(threadId);
+    await f.client.request("thread/compact", {
+      threadId,
+      retention: { mode: "selected-items", itemIds: [] },
+    });
+    const compaction = (await f.app.readThread(threadId)).items.findLast(
+      (item) => item.type === "context_compaction",
+    );
+    assert(compaction?.type === "context_compaction");
+    throughItemId = compaction.coveredThroughItemId;
+    retrieve = true;
+    await (
+      await f.app.startTurn(
+        threadId,
+        "Read the original result using its reference.",
+      )
+    ).done;
+    assert.equal(JSON.parse(exact).output, originalOutput);
+    assert(
+      stage >= 4,
+      "the model really requested and consumed multiple chunks",
+    );
+    const after = await f.app.readThread(threadId);
+    assert.deepEqual(after.items.slice(0, before.items.length), before.items);
+    assert(
+      after.items.some(
+        (item) =>
+          item.type === "agent_message" &&
+          item.text === "The exact original output was recovered.",
+      ),
+    );
+    await assert.rejects(
+      f.invoke("zenx_threads_read", { target: threadId, throughItemId }),
+      /exact threadId/,
+    );
+    await assert.rejects(
+      f.invoke("zenx_threads_read", {
+        threadId,
+        throughItemId,
+        granularity: "item",
+        itemId: after.items.at(-1)!.id,
+      }),
+      /Unknown itemId/,
+    );
+    await f.client.request("thread/compact", { threadId });
+    const original = await f.client.request("zen/thread/original/read", {
+      threadId,
+      throughItemId,
+    });
+    assert.equal(original.snapshotThroughItemId, throughItemId);
+    if (original.granularity !== "items") throw new Error();
+    assert(
+      !original.items.some((item) => item.itemId === after.items.at(-1)!.id),
+    );
+    const { thread: fork } = await f.client.request("thread/fork", {
+      sourceThreadId: threadId,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    });
+    const forkSnapshot = await f.app.readThread(fork.id);
+    const forkCompaction = forkSnapshot.items.find(
+      (item) => item.type === "context_compaction",
+    );
+    assert(forkCompaction?.type === "context_compaction");
+    await assert.rejects(
+      f.client.request("zen/thread/original/read", {
+        threadId: fork.id,
+        throughItemId,
+      }),
+      /not enabled/,
+    );
+    const forkPage = await f.client.request("zen/thread/original/read", {
+      threadId: fork.id,
+      throughItemId: forkCompaction.coveredThroughItemId,
+    });
+    assert.equal(forkPage.threadId, fork.id);
+    const disabled = await f.client.request("thread/start", {});
+    retrieve = false;
+    await (
+      await f.app.startTurn(disabled.thread.id, "No reference")
+    ).done;
+    await f.client.request("thread/compact", {
+      threadId: disabled.thread.id,
+      includeOriginalReference: false,
+    });
+    const noRef = (await f.app.readThread(disabled.thread.id)).items.findLast(
+      (item) => item.type === "context_compaction",
+    );
+    assert(noRef?.type === "context_compaction");
+    await assert.rejects(
+      f.invoke("zenx_threads_read", {
+        threadId: disabled.thread.id,
+        throughItemId: noRef.coveredThroughItemId,
+      }),
+      /not enabled/,
+    );
+  } finally {
+    await f.close();
+  }
+});

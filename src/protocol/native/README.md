@@ -36,3 +36,27 @@ established. Deletion never removes children, journal files, workspace files or
 shared attachment blobs, and has no automatic retention/purge policy. As with
 other Thread mutation fences, this is a single Host guarantee, not a distributed
 writer lock between independent Hosts sharing a journal directory.
+
+## Original compaction history
+
+`zen/thread/original/read` requires an initialized, authorized local connection
+and `{ threadId, throughItemId }` from an enabled stored compaction reference.
+It uses the same AppServer read authority as `zen/thread/read`. It is not a
+remote-host workspace grant or a CAS 0.146.0 claim.
+
+- The default `granularity: "items"` returns at most `limit` (1–50, default 50)
+  public Item previews in canonical order, newest page first. Pass `nextCursor`
+  unchanged as `cursor` with the same Thread and cutoff to read an older page.
+- `granularity: "item"` requires `itemId` inside that prefix and returns
+  `format: "public_item_json"`, `content`, `offset`, `totalLength`, `truncated`
+  and `nextCursor`. Concatenate the explicit 8,000-character chunks to recover
+  the complete public Item. Item text and tool output are not summarized.
+- Structured opaque provider data exposes only existing public summary and
+  identity fields, recursively; lifecycle deletion/restoration controls are
+  omitted consistently with the existing public history reader.
+- Missing, disabled or invalid cutoffs, mismatched cursors and later Items fail
+  explicitly. A reference never creates filesystem access or another transcript.
+
+The older `thread/original/read` retains its legacy CAS display-item shape;
+clients needing faithful public tool results and canonical identities use this
+native reader.
