@@ -1811,6 +1811,31 @@ button:disabled {
   background: var(--surface-2);
   color: var(--text);
 }
+.message-actions:has(.message-fork-error),
+.message-actions:has(.message-fork[aria-busy="true"]) {
+  opacity: 1;
+}
+.message-actions:has(.message-fork) {
+  flex-wrap: wrap;
+}
+.message-actions button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.message-fork-error {
+  flex-basis: 100%;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+@media (hover: none), (pointer: coarse) {
+  .message-actions {
+    opacity: 1;
+  }
+  .message-actions button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 .message-time,
 .message-cache {
   white-space: nowrap;

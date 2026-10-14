@@ -26,6 +26,7 @@ export type IconName =
   | "chevron-right"
   | "compose"
   | "copy"
+  | "fork"
   | "folder"
   | "file"
   | "inbox"
@@ -66,6 +67,14 @@ type IconProps = SVGProps<SVGSVGElement> & {
 };
 
 const paths: Record<IconName, ReactNode> = {
+  fork: (
+    <>
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="18" cy="5" r="2" />
+      <circle cx="6" cy="19" r="2" />
+      <path d="M6 7v10M18 7v2a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4" />
+    </>
+  ),
   book: (
     <>
       <path d="M8 4.2C6.2 2.9 4.2 2.5 2 3v9.5c2.2-.5 4.2-.1 6 1.2 1.8-1.3 3.8-1.7 6-1.2V3c-2.2-.5-4.2-.1-6 1.2Z" />
