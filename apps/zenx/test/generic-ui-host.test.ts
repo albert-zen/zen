@@ -383,7 +383,7 @@ test("normal bundled product composition owns real Trigger and Room generic UI",
     "zenx-triggers",
   ]);
   assert.deepEqual(normal.settings, []);
-  assert.equal(normal.commands.length, 19);
+  assert.equal(normal.commands.length, 20);
   assert.deepEqual(normal.commands.map((command) => command.tool).sort(), [
     "zenx_rooms_add_member",
     "zenx_rooms_create",
@@ -400,6 +400,7 @@ test("normal bundled product composition owns real Trigger and Room generic UI",
     "zenx_triggers_preview_target",
     "zenx_triggers_result",
     "zenx_triggers_resume",
+    "zenx_triggers_sidebar_facts",
     "zenx_triggers_signal",
     "zenx_triggers_threads",
     "zenx_triggers_update",

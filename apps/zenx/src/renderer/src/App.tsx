@@ -1,3 +1,9 @@
+import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
+import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
+import {
+  useConversationReadPreference,
+  unreadThreadIds,
+} from "./conversation-read-state.js";
 import { SessionImportDialog } from "./SessionImportDialog.js";
 import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
 import { ThreadReadingStateProvider } from "./thread-reading-state.js";
@@ -1507,16 +1513,29 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    const dispose = window.zenx.titles.onChange(setTitleSnapshot);
-    void window.zenx.titles
-      .get()
-      .then(setTitleSnapshot)
-      .catch((error: unknown) =>
-        setRequestError(
-          i18n.t("shell:titleMetadataFailed", { error: describeError(error) }),
-        ),
-      );
-    return dispose;
+    let active = true;
+    let notified = false;
+    const dispose = window.zenx.titles.onChange((snapshot) => {
+      notified = true;
+      if (active) setTitleSnapshot(snapshot);
+    });
+    void window.zenx.titles.get().then(
+      (snapshot) => {
+        if (active && !notified) setTitleSnapshot(snapshot);
+      },
+      (error: unknown) => {
+        if (active && !notified)
+          setRequestError(
+            i18n.t("shell:titleMetadataFailed", {
+              error: describeError(error),
+            }),
+          );
+      },
+    );
+    return () => {
+      active = false;
+      dispose();
+    };
   }, []);
 
   useEffect(() => {
@@ -1529,6 +1548,8 @@ function AppContent() {
     return () => window.removeEventListener("keydown", close);
   }, [projectPickerIntent, sidebarOpen]);
 
+  const readPreference = useConversationReadPreference();
+  const unreadThreads = unreadThreadIds(threadSummaries, readPreference);
   const activeSummaries = threadSummaries.map((summary) =>
     titleSnapshot[summary.threadId]?.title === undefined
       ? summary
@@ -1732,10 +1753,9 @@ function AppContent() {
         )
         .then((projection) => {
           if (projection !== undefined)
-            setTitleSnapshot((current) => ({
-              ...current,
-              [threadId]: projection,
-            }));
+            setTitleSnapshot((current) =>
+              applyThreadTitleReceipt(current, projection),
+            );
         })
         .catch((error: unknown) =>
           setRequestError(
@@ -2391,10 +2411,7 @@ function AppContent() {
 
   const renameThread = async (threadId: string, title: string) => {
     const projection = await window.zenx.titles.rename(threadId, title);
-    setTitleSnapshot((current) => ({
-      ...current,
-      [threadId]: projection,
-    }));
+    setTitleSnapshot((current) => applyThreadTitleReceipt(current, projection));
   };
 
   const changeThreadPinned = async (summary: NativeThreadSummary) => {
@@ -2564,10 +2581,7 @@ function AppContent() {
   const retrySelectedTitle = async () => {
     if (selectedSummary === null) return;
     const projection = await window.zenx.titles.retry(selectedSummary.threadId);
-    setTitleSnapshot((current) => ({
-      ...current,
-      [selectedSummary.threadId]: projection,
-    }));
+    setTitleSnapshot((current) => applyThreadTitleReceipt(current, projection));
   };
 
   const changeComposerSendMode = async (
@@ -2789,6 +2803,8 @@ function AppContent() {
         </button>
       ) : null}
       <Sidebar
+        triggerAdmissionId={sidebarTriggerAdmissionId(pluginSnapshot)}
+        unreadThreadIds={unreadThreads}
         roomConversations={roomsAdmitted ? roomConversations : undefined}
         selectedRoomId={selectedRoomId}
         collapsed={sidebarCollapsed}
@@ -3481,6 +3497,7 @@ function ConversationTitleBar({
               navigate={onNavigate}
             />
             <ThreadTitleEditor
+              key={selectedSummary.threadId}
               editable={!selectedSummary.archived}
               onRename={onRename}
               onRetry={onRetryTitle}

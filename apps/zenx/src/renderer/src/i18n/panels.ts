@@ -1,4 +1,5 @@
 export const en = {
+  unreadMessages: "{{count}} unread messages",
   wakeupDelivery: "This Trigger’s message delivery",
   roomMessageDelivery: "This Room’s message delivery",
   wakeupSteer: "Steer active work (default)",
@@ -888,6 +889,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  unreadMessages: "{{count}} 条未读消息",
   wakeupDelivery: "此 Trigger 的消息投递",
   roomMessageDelivery: "此聊天室的消息投递",
   wakeupSteer: "补充到当前工作（默认）",

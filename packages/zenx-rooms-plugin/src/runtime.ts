@@ -263,10 +263,16 @@ export function createZenXTrustedPlugin(
           if (!Number.isSafeInteger(cursor) || cursor < 0)
             throw new Error("Invalid Room list cursor");
           return {
+            readCursorVersion: 1,
             nextCursor: cursor + 1 < state.rooms.length ? cursor + 1 : null,
             rooms: state.rooms.slice(cursor, cursor + 1).map((room) => ({
               ...readSafeRoom(room),
               messageCount: room.messages.length,
+              ...roomMessageReadProjection(
+                room.messages,
+                record(args["readCursors"])?.[room.id],
+                args["readSince"],
+              ),
               messages: room.messages
                 .slice(-1)
                 .map(
@@ -645,6 +651,59 @@ function members(value: unknown): RoomMember[] {
       threadId: string(member, "threadId", MAX_ID_BYTES),
     };
   });
+}
+
+/** Read-only metadata over retained canonical Room messages; never a delivery receipt. */
+export function roomMessageReadProjection(
+  messages: readonly RoomMessage[],
+  readCursor: unknown,
+  readSince: unknown,
+) {
+  const latest = messages.at(-1);
+  const agent = messages.findLast((message) => message.kind === "agent");
+  const candidate = record(readCursor);
+  const validCursor =
+    candidate &&
+    typeof candidate["id"] === "string" &&
+    typeof candidate["createdAt"] === "number" &&
+    Number.isFinite(candidate["createdAt"])
+      ? { id: candidate["id"], createdAt: candidate["createdAt"] }
+      : null;
+  const index = validCursor
+    ? messages.findIndex((message) => message.id === validCursor.id)
+    : -1;
+  const since = validCursor?.createdAt ?? readSince;
+  return {
+    ...(latest
+      ? {
+          lastMessage: {
+            id: latest.id,
+            createdAt: latest.createdAt,
+            kind: latest.kind,
+          },
+        }
+      : {}),
+    ...(agent
+      ? { lastAgentMessage: { id: agent.id, createdAt: agent.createdAt } }
+      : {}),
+    ...(typeof since === "number" &&
+    Number.isFinite(since) &&
+    !(
+      validCursor &&
+      index < 0 &&
+      messages.some(
+        (message) => message.kind === "agent" && message.createdAt === since,
+      )
+    )
+      ? {
+          unreadCount: messages.filter(
+            (message, position) =>
+              message.kind === "agent" &&
+              (index >= 0 ? position > index : message.createdAt > since),
+          ).length,
+        }
+      : {}),
+  };
 }
 
 function readSafeRoom(room: Room) {

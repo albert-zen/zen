@@ -43,6 +43,19 @@
           "cursor": {
             "type": "integer",
             "minimum": 0
+          },
+          "readSince": { "type": "number" },
+          "readCursors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "maxLength": 512 },
+                "createdAt": { "type": "number" }
+              },
+              "required": ["id", "createdAt"],
+              "additionalProperties": false
+            }
           }
         },
         "required": [],

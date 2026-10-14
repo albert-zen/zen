@@ -9,6 +9,7 @@ import type {
   TriggerProgramConfig,
   TriggerProgramSpec,
   TriggerSnapshot,
+  TriggerSidebarSnapshot,
   UpdateTriggerInput,
   ZenXRoom,
   ZenXTrigger,
@@ -73,6 +74,7 @@ export interface ZenXAutomationControlPort {
     preview: string;
   }>;
   snapshot(): TriggerSnapshot;
+  sidebarFacts?(): TriggerSidebarSnapshot;
   assistantWorkspace?(roomId: string): AssistantWorkspace;
   updateAssistantWorkspace?(
     input: UpdateAssistantWorkspaceInput,
@@ -303,6 +305,17 @@ const manifest: ZenXPluginManifestV2 = {
       [],
       false,
     ),
+    {
+      ...tool(
+        "zenx_triggers_sidebar_facts",
+        "Read only Trigger identity, Thread binding, status, and next scheduled time.",
+        {},
+        [],
+        false,
+      ),
+      // The registry bounds 256 definitions and each identity to 512 UTF-8 bytes.
+      maxOutputBytes: 524288,
+    },
     tool(
       "zenx_triggers_create",
       "Create a timer, Thread watcher, Room mention, or signal Trigger, optionally with a local predicate/action.",
@@ -458,6 +471,10 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
           rooms: snapshot.rooms.map(readSafeRoom),
         };
       }
+      case "zenx_triggers_sidebar_facts":
+        if (this.#port.sidebarFacts === undefined)
+          throw new Error("Trigger sidebar facts are unavailable");
+        return this.#port.sidebarFacts();
       case "zenx_triggers_create":
         return await this.#port.create(
           triggerInput({
@@ -568,6 +585,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
     this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
     this.manifest = automationPluginManifest(this.#delegate.manifest, {
       id: ZENX_TRIGGERS_CAPABILITY_ID,
+      version: "1.0.1",
       displayName: "Triggers",
       description: "Schedule and inspect ZenX Trigger wakeups.",
       toolPrefix: "zenx_triggers_",
@@ -677,6 +695,7 @@ function automationPluginManifest(
   source: ZenXPluginManifestV2,
   plugin: {
     id: string;
+    version?: string;
     displayName: string;
     description: string;
     toolPrefix: string;
@@ -707,6 +726,7 @@ function automationPluginManifest(
     ...structuredClone(capability),
     schemaVersion: 2,
     id: plugin.id,
+    version: plugin.version ?? source.version,
     name: plugin.displayName,
     compatibility: { zenx: ">=0.1.0 <0.2.0" },
     runtime: {

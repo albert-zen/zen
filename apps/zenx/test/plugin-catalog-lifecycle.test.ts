@@ -350,3 +350,69 @@ test("update swaps version and contributions atomically while preserving lifecyc
   assert.equal(registry.pluginSnapshot().pages[0]?.title, "Fixture v2");
   assert.equal(registry.hostSnapshot().definitions[0]?.name, "fixture_run");
 });
+
+test("runtime admission identity changes on same-version profile replacement, never on unrelated emits or storage", async () => {
+  let saved: ZenXPluginCatalogState | undefined;
+  const registry = new ZenXPluginCatalog({
+    load: async () => ({ disabled: [], uninstalled: [], packages: {} }),
+    save: async (value) => {
+      saved = structuredClone(value);
+    },
+  });
+  await registry.initialize();
+  const source = {
+    mode: "bundled" as const,
+    packageSpec: "/resources/fixture-1.0.0.tgz",
+    resolvedSpec: "/resources/fixture-1.0.0.tgz",
+    packageName: "fixture-plugin",
+    packageVersion: "1.0.0",
+  };
+  await registry.install(plugin(manifest()), "bundled", {
+    generation: "10000000-0000-4000-8000-000000000000",
+    packageName: "fixture-plugin",
+    source,
+  });
+  const original = registry.pluginSnapshot();
+  const admission = original.plugins[0]?.admissionId;
+  assert.equal(typeof admission, "string");
+  registry.recordDiscoveryError("unrelated diagnostic");
+  await registry.install(plugin(manifest("unrelated", "unrelated_run")));
+  assert.equal(
+    registry.pluginSnapshot().plugins.find((entry) => entry.id === "fixture")
+      ?.admissionId,
+    admission,
+  );
+  await registry.update(
+    plugin(manifest()),
+    "bundled",
+    {
+      generation: "20000000-0000-4000-8000-000000000000",
+      packageName: "fixture-plugin",
+      source,
+    },
+    { allowSameVersionBundledVariant: true },
+  );
+  const replacement = registry.pluginSnapshot();
+  const replaced = replacement.plugins.find((entry) => entry.id === "fixture")!;
+  assert.equal(replaced.version, original.plugins[0]?.version);
+  assert.deepEqual(replaced.profileSource, original.plugins[0]?.profileSource);
+  assert.notEqual(replaced.admissionId, admission);
+  assert.ok(replaced.admissionId);
+  assert.deepEqual(
+    replacement.pages.filter((entry) => entry.pluginId === "fixture"),
+    original.pages,
+  );
+  assert.doesNotMatch(JSON.stringify(saved), /admissionId/);
+  await registry.setEnabled("fixture", false);
+  assert.equal(
+    registry.pluginSnapshot().plugins.find((entry) => entry.id === "fixture")
+      ?.admissionId,
+    undefined,
+  );
+  await registry.setEnabled("fixture", true);
+  assert.notEqual(
+    registry.pluginSnapshot().plugins.find((entry) => entry.id === "fixture")
+      ?.admissionId,
+    replaced.admissionId,
+  );
+});

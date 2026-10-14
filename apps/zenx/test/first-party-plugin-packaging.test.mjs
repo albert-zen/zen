@@ -47,7 +47,7 @@ const expected = [
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.3.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.7.tgz"],
   ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
-  ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.0.tgz"],
+  ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.1.tgz"],
 ];
 
 const providerVariants = new Map([

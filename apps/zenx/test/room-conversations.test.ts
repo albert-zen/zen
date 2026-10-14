@@ -201,7 +201,8 @@ test("unrelated catalog subscriptions preserve Room rows, focus and disclosure w
   await withDom(async (root) => {
     const timers = controlledTimers();
     let calls = 0;
-    setExecute(async () => {
+    setExecute(async (plugin) => {
+      if (plugin === "zenx-triggers") return { triggers: [] };
       calls += 1;
       return { rooms: [storedRoom("one")], nextCursor: null };
     });
@@ -542,6 +543,61 @@ test("advancing empty pages also stop at the bounded page limit", async () => {
     assert.equal(calls, 128);
     assert.deepEqual(discoveryState().rooms, []);
     assert.match(discoveryState().error ?? "", /pagination.*limit/iu);
+  });
+});
+
+test("Room unread query waits for runtime capability, then follows read preference on the existing refresh loop", async () => {
+  await withDom(async (root) => {
+    const timers = controlledTimers();
+    const calls: unknown[][] = [];
+    setExecute(async (...args) => {
+      calls.push(args);
+      return {
+        readCursorVersion: 1,
+        rooms: [
+          storedRoom("one", {
+            lastMessage: { id: "reply", createdAt: 150, kind: "agent" },
+            lastAgentMessage: { id: "reply", createdAt: 150 },
+            ...((args[2] as { readSince?: number }).readSince === undefined
+              ? {}
+              : { unreadCount: 4 }),
+          }),
+        ],
+        nextCursor: null,
+      };
+    });
+    await act(async () => root.render(React.createElement(Discovery)));
+    assert.deepEqual(calls[0], ["zenx-rooms", "list", { cursor: 0 }]);
+    assert.equal(discoveryState().rooms[0]?.unreadCount, undefined);
+    await act(async () => timers.fire());
+    assert.equal(
+      typeof (calls[1]?.[2] as { readSince?: number }).readSince,
+      "number",
+    );
+    assert.equal(discoveryState().rooms[0]?.unreadCount, 4);
+    assert.equal(timers.pending.size, 1, "no additional polling loop");
+  });
+});
+
+test("Room navigation renders exact accessible unread count and bounded visible badge", async () => {
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        React.createElement(
+          Sidebar,
+          sidebarProps({
+            roomConversations: {
+              rooms: [{ ...room, unreadCount: 120 }],
+              loading: false,
+              error: null,
+            },
+          }),
+        ),
+      ),
+    );
+    const badge = document.querySelector(".room-unread-count")!;
+    assert.equal(badge.textContent, "99+");
+    assert.equal(badge.getAttribute("aria-label"), "120 unread messages");
   });
 });
 

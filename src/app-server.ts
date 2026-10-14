@@ -4535,7 +4535,33 @@ export class ZenAppServer {
       (metadata.importedFrom ? importedThreadDisplayName(items) : undefined);
     const fork = latestThreadFork(items);
     const forkIndex = fork === undefined ? -1 : items.indexOf(fork);
+    const lastMessage = items.findLast(
+      (item) => item.type === "user_message" || item.type === "agent_message",
+    );
+    const lastAgentMessage = items.findLast(
+      (item) => item.type === "agent_message",
+    );
     return {
+      ...(lastMessage === undefined
+        ? {}
+        : {
+            lastMessage: {
+              id: lastMessage.id,
+              createdAt: lastMessage.createdAt,
+              kind:
+                lastMessage.type === "user_message"
+                  ? ("user" as const)
+                  : ("agent" as const),
+            },
+          }),
+      ...(lastAgentMessage === undefined
+        ? {}
+        : {
+            lastAgentMessage: {
+              id: lastAgentMessage.id,
+              createdAt: lastAgentMessage.createdAt,
+            },
+          }),
       threadId: thread.id,
       lastItemId: items.at(-1)!.id,
       currentMetadata: configuration,

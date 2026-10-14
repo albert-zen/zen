@@ -175,6 +175,8 @@
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **TurnSortAt** — 原生 Thread summary 从本地 `turn_started` 的最新时间（fork 后的 Turn；没有则本线程创建时间）推导默认列表排序键，独立于 updatedAt，可随 journal 重建。
+- **SidebarThreadInformation** — 既有 host-local ThreadSummary / Project 投影与已 admit Trigger 插件显式声明的 sidebar-facts 窄只读命令组成的可丢弃 renderer 投影，在 Host 序列化前只取绑定/调度白名单字段；由 Catalog 每次真实 activation 的易失 admissionId 隔离替换回执，不因无关 catalog 通知重读，不拥有 scheduler 或 Thread 状态。
+- **ZenXConversationReadPreference** — Renderer 在本机 app origin 保存初装时间与已看见的 canonical 消息 ID/时间游标；Thread 的最后 user/agent 消息由既有 summary 扫描投影，Room 的未读数字由既有 list 在权威消息数组上按本机游标计数（只计 Agent，human 为本机用户，system 不计），仅前台有焦点且消息末尾实际进入阅读范围才推进，不发外部已读回执、不持久化消息镜像、不新增轮询。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
   ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
   `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。

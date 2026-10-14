@@ -28,7 +28,7 @@ test(
     const resources = path.join(root, "resources");
     await mkdir(workspace);
     await mkdir(path.join(resources, "plugins"), { recursive: true });
-    for (const file of [ZENX_ROOMS_TARBALL, "zenx-triggers-plugin-1.0.0.tgz"])
+    for (const file of [ZENX_ROOMS_TARBALL, "zenx-triggers-plugin-1.0.1.tgz"])
       await copyFile(
         path.resolve("resources/plugins", file),
         path.join(resources, "plugins", file),

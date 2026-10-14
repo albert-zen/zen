@@ -16,7 +16,16 @@ export interface CurrentMetadata {
   approvalPolicy: ApprovalPolicy;
 }
 
+export interface ThreadMessageSummary {
+  id: string;
+  createdAt: string;
+  kind: "user" | "agent";
+}
+
 export interface ThreadSummary {
+  /** Canonical messages only; omitted on empty/legacy projections. */
+  lastMessage?: ThreadMessageSummary;
+  lastAgentMessage?: Omit<ThreadMessageSummary, "kind">;
   threadId: string;
   /** Canonical delete fence; absent only on legacy or unavailable projections. */
   lastItemId?: string;
@@ -164,12 +173,28 @@ export function isNativeThreadSummary(
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
     (value.turnSortAt === undefined || typeof value.turnSortAt === "string") &&
+    (value.lastMessage === undefined ||
+      (isMessageSummary(value.lastMessage) &&
+        (value.lastMessage.kind === "user" ||
+          value.lastMessage.kind === "agent"))) &&
+    (value.lastAgentMessage === undefined ||
+      isMessageSummary(value.lastAgentMessage)) &&
     (value.forkedFromThreadId === undefined ||
       typeof value.forkedFromThreadId === "string") &&
     (value.forkedFromTurnId === undefined ||
       typeof value.forkedFromTurnId === "string") &&
     value.error === undefined &&
     isCurrentMetadata(value.currentMetadata)
+  );
+}
+
+function isMessageSummary(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.createdAt === "string" &&
+    Number.isFinite(Date.parse(value.createdAt))
   );
 }
 

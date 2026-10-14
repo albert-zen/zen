@@ -1,4 +1,20 @@
 export const en = {
+  threadDetails: "Thread details",
+  threadProjectLabel: "Project",
+  threadMachineLabel: "Machine",
+  threadThisMachine: "This machine",
+  threadLastMessage: "Last message",
+  threadNextTrigger: "Next trigger",
+  threadAutomationsLabel: "Automations",
+  threadFactUnknown: "Unavailable",
+  threadTriggersPaused: "Paused",
+  threadTriggerOnEvent: "When an event matches",
+  threadOtherTriggersUnknown: "Other trigger times are unavailable",
+  threadAutomationCount: "{{count}} automations",
+  threadAutomationCount_one: "{{count}} automation",
+  threadAutomationCount_other: "{{count}} automations",
+  threadUnreadReply: "Unread agent reply",
+  renameThreadNamed: "Rename {{title}}",
   importSourceModel: "Original provider / model (reference only)",
   importCheckpointWarning:
     "Continuing from the source checkpoint on line {{line}}. {{count}} earlier records remain only in the original file; this import is not a full transcript archive.",
@@ -690,6 +706,22 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  threadDetails: "线程详情",
+  threadProjectLabel: "项目",
+  threadMachineLabel: "机器",
+  threadThisMachine: "本机",
+  threadLastMessage: "最近消息",
+  threadNextTrigger: "下次触发",
+  threadAutomationsLabel: "自动化",
+  threadFactUnknown: "暂不可用",
+  threadTriggersPaused: "已暂停",
+  threadTriggerOnEvent: "符合条件时触发",
+  threadOtherTriggersUnknown: "其他触发时间暂不可用",
+  threadAutomationCount: "{{count}} 个自动化",
+  threadAutomationCount_one: "{{count}} 个自动化",
+  threadAutomationCount_other: "{{count}} 个自动化",
+  threadUnreadReply: "Agent 有未读回复",
+  renameThreadNamed: "重命名 {{title}}",
   importSourceModel: "原 Provider / 模型（仅供参考）",
   importCheckpointWarning:
     "将从原文件第 {{line}} 行的检查点继续。此前 {{count}} 条记录仅保留在原文件中；这不是完整历史归档。",

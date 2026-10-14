@@ -1,3 +1,4 @@
+import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
 import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
@@ -460,6 +461,29 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastCanonicalAgentMessage = thread?.canonicalItems?.findLast(
+    (item) => item.type === "agent_message",
+  );
+  const readMessageOrder = useMemo(
+    () =>
+      thread?.canonicalItems?.flatMap((item) =>
+        item.type === "agent_message" ? [item.id] : [],
+      ),
+    [thread?.canonicalItems],
+  );
+  useReadVisibleMessage({
+    scope: "threads",
+    conversationId: thread?.id,
+    message: lastCanonicalAgentMessage
+      ? {
+          id: lastCanonicalAgentMessage.id,
+          createdAt: Date.parse(lastCanonicalAgentMessage.createdAt),
+        }
+      : undefined,
+    messageOrder: readMessageOrder,
+    viewport: scrollRef,
+    occluder: bottomZoneRef,
+  });
   const runningTurn = thread === null ? null : activeTurn(thread);
   const runKey =
     thread && runningTurn ? JSON.stringify([thread.id, runningTurn.id]) : null;
@@ -3211,7 +3235,7 @@ function AgentMessage({
   usage?: ModelUsageAggregate;
 }) {
   return (
-    <article className="agent-copy">
+    <article className="agent-copy" data-read-message-id={item.id}>
       <Markdown text={item.text} />
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
       {showActions ? (

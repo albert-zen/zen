@@ -1,3 +1,4 @@
+import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { useContext, useLayoutEffect } from "react";
@@ -5,6 +6,7 @@ import { RoomDraftContext } from "./room-drafts.js";
 import React, {
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -1665,7 +1667,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const composer = useRef<HTMLTextAreaElement>(null);
   const dialogClose = useRef<HTMLButtonElement>(null);
   const dialogEpoch = useRef(0);
+  const nameComposing = useRef(false);
   useLayoutEffect(() => {
+    // A removed IME input may never dispatch compositionend.
+    nameComposing.current = false;
     dialogEpoch.current += 1;
   }, [panel]);
   const dialog = useRef<HTMLElement>(null);
@@ -2114,6 +2119,29 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ? "saved · reviewed"
           : "saved"
         : "delivery unconfirmed";
+  const latestRoomAgentMessage = room?.messages.findLast(
+    (message) => message.kind === "agent",
+  );
+  const readRoomMessageOrder = useMemo(
+    () =>
+      room?.messages
+        .filter((message) => message.kind === "agent")
+        .map((message) => message.id),
+    [room?.messages],
+  );
+  useReadVisibleMessage({
+    scope: "rooms",
+    conversationId: room?.id,
+    message: latestRoomAgentMessage
+      ? {
+          id: latestRoomAgentMessage.id,
+          createdAt: latestRoomAgentMessage.createdAt,
+        }
+      : undefined,
+    messageOrder: readRoomMessageOrder,
+    viewport: feed,
+    enabled: panel === null,
+  });
   useLayoutEffect(() => {
     const element = feed.current;
     const anchor = feedAnchor.current;
@@ -2213,7 +2241,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (greeting) greetingAdmission.current = greeting;
     const current = () =>
       epoch === viewEpoch.current &&
-      (!creation || dialogToken === dialogEpoch.current);
+      (!(creation || command === "rename") ||
+        dialogToken === dialogEpoch.current);
     actionBusy.current = true;
     setBusy(true);
     setError(null);
@@ -3064,6 +3093,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     className="room-message"
                     data-kind={message.kind}
                     data-room-message-id={message.id}
+                    data-read-message-id={message.id}
                     key={message.id}
                   >
                     <header>
@@ -3386,48 +3416,84 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 {i18n.t("panels:pawStartHelp")}
               </p>
             ) : null}
-            {panel !== "create" || !assistantDialog ? (
-              <Field
-                label={
-                  room?.assistant || assistantDialog
-                    ? i18n.t("panels:name")
-                    : i18n.t("panels:roomName")
+            <form
+              className="room-name-form"
+              onCompositionStart={() => {
+                nameComposing.current = true;
+              }}
+              onCompositionEnd={() => {
+                nameComposing.current = false;
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  (nameComposing.current ||
+                    event.nativeEvent.isComposing ||
+                    event.keyCode === 229)
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
                 }
-                value={name}
-                onChange={setName}
-                disabled={
-                  panel === "create" &&
-                  assistantDialog &&
-                  (busy ||
-                    (assistantCreation.current !== null &&
-                      assistantCreationFailed))
-                }
-              />
-            ) : null}
-            {assistantDialog && assistantNameTooLong ? (
-              <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
-            ) : null}
-            {panel !== "create" ? (
-              <button
-                type="button"
-                disabled={
+              }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (
+                  panel === "create" ||
+                  !room ||
                   busy ||
+                  nameComposing.current ||
                   !name.trim() ||
-                  name === room?.name ||
-                  (Boolean(room?.assistant) && assistantNameTooLong)
-                }
-                onClick={() => {
-                  const epoch = dialogEpoch.current;
-                  void run("rename", { roomId: room?.id, name }).then((ok) => {
+                  name === room.name ||
+                  (Boolean(room.assistant) && assistantNameTooLong)
+                )
+                  return;
+                const epoch = dialogEpoch.current;
+                void run("rename", { roomId: room.id, name: name.trim() }).then(
+                  (ok) => {
                     if (ok && epoch === dialogEpoch.current) closeDialog();
-                  });
-                }}
-              >
-                {panel === "rename"
-                  ? i18n.t("panels:saveName")
-                  : i18n.t("panels:rename")}
-              </button>
-            ) : null}
+                  },
+                );
+              }}
+            >
+              {panel !== "create" || !assistantDialog ? (
+                <Field
+                  label={
+                    room?.assistant || assistantDialog
+                      ? i18n.t("panels:name")
+                      : i18n.t("panels:roomName")
+                  }
+                  value={name}
+                  onChange={setName}
+                  disabled={
+                    panel === "create" &&
+                    assistantDialog &&
+                    (busy ||
+                      (assistantCreation.current !== null &&
+                        assistantCreationFailed))
+                  }
+                />
+              ) : null}
+              {assistantDialog && assistantNameTooLong ? (
+                <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
+              ) : null}
+              {panel !== "create" ? (
+                <button
+                  type="submit"
+                  disabled={
+                    busy ||
+                    !name.trim() ||
+                    name === room?.name ||
+                    (Boolean(room?.assistant) && assistantNameTooLong)
+                  }
+                >
+                  {busy
+                    ? i18n.t("shell:saving")
+                    : panel === "rename"
+                      ? i18n.t("panels:saveName")
+                      : i18n.t("panels:rename")}
+                </button>
+              ) : null}
+            </form>
             {panel === "create" || (panel === "manage" && !room?.assistant) ? (
               <>
                 {!assistantDialog ? (

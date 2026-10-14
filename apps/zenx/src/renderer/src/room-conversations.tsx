@@ -1,3 +1,7 @@
+import {
+  conversationReadStore,
+  useConversationReadPreference,
+} from "./conversation-read-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -17,6 +21,9 @@ export interface RoomConversation {
   members: readonly { name: string; threadId: string }[];
   memberCount: number;
   messagePreview: string | null;
+  lastMessage?: { id: string; createdAt: number; kind: string };
+  lastAgentMessage?: { id: string; createdAt: number };
+  unreadCount?: number;
 }
 
 export interface RoomConversationState {
@@ -43,6 +50,7 @@ export function roomConversationAdmissionRevision(
 
 /** A bounded navigation projection; the Rooms plugin remains its sole authority. */
 export function useRoomConversations(enabled: boolean, revision?: unknown) {
+  const readPreference = useConversationReadPreference();
   const [state, setState] = useState<
     RoomConversationState & { revision: unknown }
   >({
@@ -60,6 +68,7 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
 
   useEffect(() => {
     let active = true;
+    let readCursorSupported = false;
     let timer: number | undefined;
     let pending: Promise<void> | null = null;
     setState({ rooms: [], error: null, loading: enabled, revision });
@@ -86,7 +95,13 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
           // particular an empty list must not alternate its placeholders with
           // a loading row and shift every section below it on each poll.
           try {
-            const rooms = await readRoomConversations(() => active);
+            const rooms = await readRoomConversations(
+              () => active,
+              () => readCursorSupported,
+              () => {
+                readCursorSupported = true;
+              },
+            );
             if (active)
               setState({ rooms, error: null, loading: false, revision });
           } catch (error) {
@@ -117,10 +132,22 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
     };
   }, [enabled, revision]);
 
+  useEffect(() => {
+    void refresh();
+  }, [readPreference.rooms, refresh]);
+
   // Admission changes hide the old projection during the render itself,
   // before effect cleanup has had a chance to run.
   return {
-    rooms: enabled && Object.is(state.revision, revision) ? state.rooms : [],
+    rooms:
+      enabled && Object.is(state.revision, revision)
+        ? state.rooms.map((room) =>
+            room.lastAgentMessage !== undefined &&
+            room.lastAgentMessage.id === readPreference.rooms[room.id]?.id
+              ? { ...room, unreadCount: 0 }
+              : room,
+          )
+        : [],
     error: enabled && Object.is(state.revision, revision) ? state.error : null,
     loading: enabled && (state.loading || !Object.is(state.revision, revision)),
     refresh,
@@ -129,6 +156,8 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
 
 async function readRoomConversations(
   active: () => boolean,
+  readCursorSupported: () => boolean,
+  acceptReadCursorSupport: () => void,
 ): Promise<RoomConversation[]> {
   const api = window.zenx?.plugins;
   if (api?.executeCommand === undefined)
@@ -139,11 +168,20 @@ async function readRoomConversations(
   for (let pageNumber = 0; pageNumber < MAX_ROOMS; pageNumber += 1) {
     if (!active()) return [];
     const page = record(
-      await api.executeCommand("zenx-rooms", "list", { cursor }),
+      await api.executeCommand("zenx-rooms", "list", {
+        cursor,
+        ...(readCursorSupported()
+          ? {
+              readSince: conversationReadStore().getSnapshot().baseline,
+              readCursors: conversationReadStore().getSnapshot().rooms,
+            }
+          : {}),
+      }),
     );
     if (!active()) return [];
     if (!page || !Array.isArray(page.rooms))
       throw new Error(i18n.t("panels:invalidRoomList"));
+    if (page.readCursorVersion === 1) acceptReadCursorSupport();
     if (rooms.length + page.rooms.length > MAX_ROOMS)
       throw new Error(i18n.t("panels:roomListExceedsItsNavigationLimit"));
     for (const value of page.rooms) {
@@ -195,6 +233,8 @@ function navigationRoom(value: unknown): RoomConversation {
       triggerId: candidate.triggerId,
     };
   }
+  const lastMessage = record(room.lastMessage);
+  const lastAgentMessage = record(room.lastAgentMessage);
   const messages = Array.isArray(room.messages) ? room.messages : [];
   const latest = record(messages.at(-1));
   const preview = typeof latest?.text === "string" ? latest.text : null;
@@ -204,6 +244,35 @@ function navigationRoom(value: unknown): RoomConversation {
     ...(assistant ? { assistant } : {}),
     members,
     memberCount: members.length,
+    ...(lastMessage &&
+    text(lastMessage.id, 512) &&
+    typeof lastMessage.createdAt === "number" &&
+    Number.isFinite(lastMessage.createdAt) &&
+    typeof lastMessage.kind === "string"
+      ? {
+          lastMessage: {
+            id: lastMessage.id,
+            createdAt: lastMessage.createdAt,
+            kind: lastMessage.kind,
+          },
+        }
+      : {}),
+    ...(lastAgentMessage &&
+    text(lastAgentMessage.id, 512) &&
+    typeof lastAgentMessage.createdAt === "number" &&
+    Number.isFinite(lastAgentMessage.createdAt)
+      ? {
+          lastAgentMessage: {
+            id: lastAgentMessage.id,
+            createdAt: lastAgentMessage.createdAt,
+          },
+        }
+      : {}),
+    ...(typeof room.unreadCount === "number" &&
+    Number.isSafeInteger(room.unreadCount) &&
+    room.unreadCount >= 0
+      ? { unreadCount: room.unreadCount }
+      : {}),
     messagePreview:
       preview === null
         ? null
@@ -421,7 +490,11 @@ function ConversationRow({
         className="room-conversation-row"
         aria-label={`Open ${group.displayKind} ${room.name}`}
         aria-current={selected ? "page" : undefined}
-        title={room.name}
+        title={
+          room.lastMessage
+            ? `${room.name} · ${new Date(room.lastMessage.createdAt).toLocaleString(i18n.resolvedLanguage)}`
+            : room.name
+        }
         onClick={() => onOpen(roomConversationRoute(room.id))}
       >
         <Icon name={group.icon} size={14} />
@@ -434,6 +507,16 @@ function ConversationRow({
                 : i18n.t("panels:memberCount", { count: room.memberCount }))}
           </small>
         </span>
+        {room.unreadCount !== undefined && room.unreadCount > 0 ? (
+          <span
+            className="room-unread-count"
+            aria-label={i18n.t("panels:unreadMessages", {
+              count: room.unreadCount,
+            })}
+          >
+            {room.unreadCount > 99 ? "99+" : room.unreadCount}
+          </span>
+        ) : null}
       </button>
       <ActionMenu
         compact

@@ -21,8 +21,8 @@ test(
     const resources = path.join(root, "resources");
     await mkdir(path.join(resources, "plugins"), { recursive: true });
     await copyFile(
-      path.resolve("resources/plugins/zenx-triggers-plugin-1.0.0.tgz"),
-      path.join(resources, "plugins", "zenx-triggers-plugin-1.0.0.tgz"),
+      path.resolve("resources/plugins/zenx-triggers-plugin-1.0.1.tgz"),
+      path.join(resources, "plugins", "zenx-triggers-plugin-1.0.1.tgz"),
     );
     const projection = new ZenXProjectProjection();
     await projection.updateConfiguration([process.cwd()], process.cwd());

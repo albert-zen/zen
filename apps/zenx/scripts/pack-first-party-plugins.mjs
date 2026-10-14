@@ -96,7 +96,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/triggers-plugin",
     "zenx-triggers-plugin",
-    "zenx-triggers-plugin-1.0.0.tgz",
+    "zenx-triggers-plugin-1.0.1.tgz",
   ),
 ]);
 

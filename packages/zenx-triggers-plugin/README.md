@@ -29,3 +29,7 @@ Model callers can use `zenx_triggers_threads` to discover targets. `zenx_trigger
 - Failed/unknown attempts remain visible in history. **Set up again** fills a new editable watch draft; saving it is an explicit new attempt, not an automatic retry. Source results remain in the source Thread's canonical history independently of bounded Trigger history.
 
 Timer, local program, Room mention and named signal behavior remains available through the same plugin. Optional local actions finish as program outcomes instead of sending an Agent notification.
+
+## Sidebar scheduling facts
+
+Version 1.0.1 declares the optional read-only `sidebar-facts` command. It returns only Trigger identity, Thread binding, active state, next scheduled time, and a fixed source-unavailable status. Projection happens in the Host before cloning the shared snapshot; prompts, programs, history, and Room content are never read by this command. The existing `list` response is unchanged. Clients must require the declared command and a current runtime admission identity, and leave facts unavailable for older packages without falling back to `list`. Storage remains version 1, so existing Trigger and Room data is preserved during the ordinary profile upgrade.

@@ -884,6 +884,17 @@ test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing
         ?.version,
       "1.0.7",
     );
+    const unreadList = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "list",
+      { cursor: 0, readSince: 0, readCursors: {} },
+    )) as {
+      readCursorVersion: number;
+      rooms: Array<{ id: string; unreadCount: number }>;
+    };
+    assert.equal(unreadList.readCursorVersion, 1);
+    assert.equal(unreadList.rooms[0]?.id, "companion-room");
+    assert.equal(unreadList.rooms[0]?.unreadCount, 0);
     const before = await capabilities.executePluginCommand(
       ZENX_ROOMS_CAPABILITY_ID,
       "workspace",

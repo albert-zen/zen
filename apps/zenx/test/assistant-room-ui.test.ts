@@ -123,10 +123,27 @@ test("assistant view reads without starting work, pauses future replies explicit
     await act(async () =>
       (editName as any)[reactProps].onChange({ target: { value: "Milo" } }),
     );
+    assert.ok(
+      editName.form,
+      "PAW name must use native form submission so Enter saves",
+    );
+    const composingEnter = new dom.window.KeyboardEvent("keydown", {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => editName.dispatchEvent(composingEnter));
+    assert.equal(
+      composingEnter.defaultPrevented,
+      true,
+      "IME confirmation must not submit",
+    );
+    assert.equal(calls.filter((x) => x.id === "rename").length, 0);
     await act(async () =>
-      [...document.querySelectorAll("button")]
-        .find((x) => x.textContent === "Save name")!
-        .click(),
+      editName.form!.dispatchEvent(
+        new dom.window.Event("submit", { bubbles: true, cancelable: true }),
+      ),
     );
     assert.deepEqual(
       calls.filter((x) => x.id === "rename"),
