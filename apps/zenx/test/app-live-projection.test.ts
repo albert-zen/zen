@@ -2056,7 +2056,7 @@ for (const interaction of ["none", "manual", "navigate"] as const) {
   });
 }
 
-test("message Fork still opens after the source Turn finishes without user navigation", async () => {
+test("message action row appears only after the source Turn finishes, then Fork opens its exact reply", async () => {
   let notify: NotificationListener | undefined;
   const requests: Array<{ method: string; params: unknown }> = [];
   const pending = deferred<unknown>();
@@ -2088,14 +2088,9 @@ test("message Fork still opens after the source Turn finishes without user navig
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
     );
-    const button = await waitFor(() =>
-      document.querySelector<HTMLButtonElement>(".message-fork"),
-    );
-    await act(async () => {
-      button.focus();
-      button.click();
-    });
-    assert.equal(button.disabled, true);
+    await waitFor(() => document.querySelector(".agent-copy"));
+    assert.equal(document.querySelector(".assistant-message-actions"), null);
+    assert.equal(document.querySelector(".message-fork"), null);
     await act(async () => {
       notify?.(
         "zen/thread/event",
@@ -2124,6 +2119,26 @@ test("message Fork still opens after the source Turn finishes without user navig
     assert.ok(
       document.querySelector(".turn.completed"),
       "source completed normally",
+    );
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    assert.equal(
+      document.querySelectorAll(".assistant-message-actions").length,
+      1,
+    );
+    await act(async () => {
+      button.focus();
+      button.click();
+    });
+    assert.equal(button.disabled, true);
+    assert.deepEqual(
+      requests.find((r) => r.method === "zen/thread/fork")?.params,
+      {
+        sourceThreadId: "thread-1",
+        through: { type: "item", itemId: "agent-boundary" },
+        workspace: { type: "same-directory" },
+      },
     );
     await act(async () =>
       pending.resolve({

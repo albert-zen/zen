@@ -12,6 +12,7 @@ import { emptyComposerState } from "../src/renderer/src/composer-state.js";
 import {
   runtimeThread,
   runtimeMessage,
+  runtimeCommand,
 } from "./fixtures/agent-runtime-data.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import type { Thread } from "../src/protocol-client/index.js";
@@ -80,13 +81,13 @@ function buttons() {
   return [...document.querySelectorAll<HTMLButtonElement>(".message-fork")];
 }
 
-test("each canonical Agent message places Fork directly after Copy and binds exact source identities", async () => {
+test("only the terminal Agent response places Fork after Copy and binds its exact identity", async () => {
   await mount(async (render) => {
     const calls: unknown[] = [];
     await render(fixture(), async (target) => {
       calls.push(target);
     });
-    assert.equal(buttons().length, 2);
+    assert.equal(buttons().length, 1);
     for (const button of buttons()) {
       assert.equal(button.previousElementSibling?.className, "message-copy");
       assert.equal(
@@ -99,7 +100,7 @@ test("each canonical Agent message places Fork directly after Copy and binds exa
     }
     await act(async () => buttons()[0]!.click());
     assert.deepEqual(calls, [
-      { sourceThreadId: "source-thread", itemId: "message-a" },
+      { sourceThreadId: "source-thread", itemId: "message-b" },
     ]);
   });
 });
@@ -111,7 +112,7 @@ test("stream-only and wrong-thread or wrong-turn Items cannot become fork bounda
       (item) => item.id !== "message-b",
     );
     await render({ ...thread, canonicalItems: items }, noop);
-    assert.equal(buttons().length, 1);
+    assert.equal(buttons().length, 0);
     await render(
       {
         ...thread,
@@ -195,3 +196,62 @@ test("pending completion loses navigation ownership after switching threads", as
     assert.equal(document.querySelector('[role="alert"]'), null);
   });
 });
+
+for (const status of [
+  "completed",
+  "inProgress",
+  "interrupted",
+  "failed",
+] as const) {
+  test(`${status}: canonical commentary and tool-adjacent messages never acquire action rows`, async () => {
+    await mount(async (render) => {
+      const thread = runtimeThread(
+        [
+          {
+            ...runtimeMessage("commentary", "Checking the implementation."),
+            phase: "commentary",
+          },
+          runtimeCommand("tool"),
+          {
+            ...runtimeMessage("between-tools", "The first check is complete."),
+            phase: "commentary",
+          },
+          runtimeCommand("tool-two"),
+          runtimeMessage("terminal-reply", "Here is the result."),
+        ],
+        status,
+        "source-thread",
+      );
+      await render(
+        {
+          ...thread,
+          canonicalItems: nativeRecoveryForThread(thread).thread.items,
+        },
+        noop,
+      );
+      const toggle = document.querySelector<HTMLButtonElement>(".turn-toggle");
+      if (toggle?.getAttribute("aria-expanded") === "false")
+        await act(async () => toggle.click());
+      for (const id of ["commentary", "between-tools"]) {
+        const message = document.querySelector(
+          `[data-read-message-id="${id}"]`,
+        )!;
+        assert.ok(message, "history must be visible for this regression check");
+        assert.equal(message.querySelector(".assistant-message-actions"), null);
+        assert.equal(message.querySelector(".message-copy"), null);
+        assert.equal(message.querySelector(".message-fork"), null);
+      }
+      assert.equal(
+        document.querySelectorAll(".assistant-message-actions").length,
+        status === "inProgress" ? 0 : 1,
+      );
+      assert.equal(buttons().length, status === "inProgress" ? 0 : 1);
+      if (status !== "inProgress")
+        assert.ok(
+          document.querySelector(
+            '[data-read-message-id="terminal-reply"] .message-fork',
+          ),
+        );
+    });
+  });
+}
