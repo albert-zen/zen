@@ -590,3 +590,26 @@ Delivered and queued Thread messages expose a compact source action using the ca
 ### 2026-10-14: Opt-in Thread debug mode
 
 Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an unchecked-by-default option in the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode never enables Host request capture; that remains a separate explicit control with unchanged safety boundaries.
+
+### 2026-10-14: Compact request inspection
+
+Items remains the default canonical-history view. Actual requests is a separate,
+local-owned Host observation surface. Its embedded UI has one capture controls
+row, without repeating the debugger title or a permanent privacy footer. The
+critical device-wide/private-content, RAM-only, close-keeps-capturing and
+disable-clears disclosure is visible before capture can be enabled; full scope
+and retention remain available from the privacy control. Navigation, section
+selection and closing debug mode never enable or disable capture implicitly.
+
+The request inspector uses the width of its actual container, including when a
+workspace is open or the page is zoomed. Above 720px it shows a 240px request index
+alongside detail. At 720px or below it shows the list or the selected detail, with
+Back restoring the same search, selection, list scroll and keyboard focus. It
+never reserves a horizontal request-card strip above a narrow payload. Compact
+section and Tree/Raw controls use quiet selected backgrounds, without underlines.
+
+The detail has one vertical scrolling owner. Ordinary Tree strings wrap; Raw
+preserves the exact retained page text and can scroll horizontally inside the
+code block. Identity, dispatch caveats, byte counts and source-attachment metadata
+are available on demand. Projection, truncation and redaction are independent
+visible flags, so simultaneous anomalies are never collapsed into one status.
