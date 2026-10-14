@@ -1243,3 +1243,5 @@ Extension-created tab groups are ephemeral visual organization scoped to the cur
 ### Browser targeted input
 
 Browser coordinate click and named-key input are transient, observation-bound CDP operations: one captured screenshot, CSS viewport, page-local focus and document/control generation authorize a bounded event pair on the exact tab; uncertain held input blocks further mutations until that tab is closed, with no OS-input fallback, automatic retry, or durable recovery state. CDP acknowledgement and exact Host fences authorize the planned pair; page-consumable event counters are supplementary interference evidence. Bounded open-shadow resolution and mutation observation reuse this per-document state; exact-node CDP shadow metadata distinguishes ordinary containers from actual closed roots without a tag denylist, while known closed or untracked surfaces remain locally unsupported. Structured probe denials have a bounded shared classification; arbitrary Runtime exceptions are never classified as native-surface refusal.
+
+ZenX 的离线 package size report 只读投影现有 Provider assembly 目录与 provider-lock 中的归档 pin，区分文件逻辑大小、文件系统分配块、symlink 和已验证缓存归档，不决定安装、可用性、兼容性或默认分发内容。
