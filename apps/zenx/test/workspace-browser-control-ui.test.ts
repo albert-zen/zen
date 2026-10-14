@@ -1,6 +1,8 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -259,4 +261,62 @@ test("one stable permission switch ends the address bar without a status row or 
       /Done, continue|You control|Agent control enabled/,
     );
   });
+});
+
+test("native smoke layout probe resolves the current permission UI in every state", async () => {
+  // Execute the exact browser-side probe from the native smoke against real
+  // production markup. JSDOM verifies its selectors and accessibility contract;
+  // the hosted Chromium smoke remains authoritative for physical geometry.
+  const smoke = readFileSync(
+    new URL("../src/main/workspace-browser-smoke.ts", import.meta.url),
+    "utf8",
+  );
+  const probe = smoke.match(
+    /const measured = await layout\.webContents\s*\.executeJavaScript\(`([\s\S]*?)`\);/,
+  )?.[1];
+  assert.ok(probe, "Native layout smoke must expose its browser-side probe");
+  const dom = new JSDOM('<main id="fixture"></main>', {
+    pretendToBeVisual: true,
+    runScripts: "outside-only",
+  });
+  try {
+    for (const language of ["en", "zh-CN"]) {
+      await i18n.changeLanguage(language);
+      for (const state of [
+        {},
+        { control: "human", requiresFreshObservation: true },
+        { requiresFreshObservation: true },
+        { agentActionsInFlight: 1, requiresFreshObservation: true },
+        { agentActionOutcomeUnknown: true, requiresFreshObservation: true },
+        {},
+      ]) {
+        const current = tab(state);
+        const markup = renderToStaticMarkup(
+          React.createElement(WorkspaceBrowserPanel, {
+            threadId: current.threadId,
+            tab: current,
+            open: true,
+          }),
+        );
+        const measured = (await dom.window.eval(
+          probe.replace("${JSON.stringify(markup)}", JSON.stringify(markup)),
+        )) as Record<string, unknown>;
+        assert.equal(
+          measured.permissionChecked,
+          String(current.control === "agent"),
+        );
+        assert.equal(
+          measured.permissionLabel,
+          i18n.t("panels:browserAgentPermission"),
+        );
+        assert.equal(measured.permissionInToolbar, true);
+        assert.equal(measured.permissionFocusable, true);
+        assert.equal(measured.permissionDetailsAccessible, true);
+        assert.equal(measured.legacyControlCount, 0);
+      }
+    }
+  } finally {
+    await i18n.changeLanguage("en");
+    dom.window.close();
+  }
 });

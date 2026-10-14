@@ -759,7 +759,7 @@ void app.whenReady().then(async () => {
           "all human-owned Agent mutations reject; return requires fresh observation",
           "human confirmation occurs exactly once and is never replayed on return",
           "old no-reference close remains fenced even after a fresh inspection",
-          "production control status preserves native viewport geometry at 320/390/900px in English and Chinese",
+          "production permission switch preserves native viewport geometry at 320/390/900px in English and Chinese",
         ],
       }),
     );
@@ -1374,6 +1374,7 @@ async function closeFixture(): Promise<void> {
 /** Real Chromium layout, with production panel markup and the actual stylesheet.
  * This development smoke is invoked from apps/zenx by its package script. */
 async function assertStableControlLayout(): Promise<void> {
+  smokePhase = "permission-switch-layout";
   const css = readFileSync(path.resolve("src/renderer/src/styles.css"), "utf8");
   const layout = new BrowserWindow({ show: false, width: 900, height: 700 });
   try {
@@ -1415,8 +1416,6 @@ async function assertStableControlLayout(): Promise<void> {
           );
         });
         let expected: unknown;
-        let buttonsVisible = true;
-        let statusesReadable = true;
         for (const state of [
           {},
           { control: "human", requiresFreshObservation: true },
@@ -1437,9 +1436,12 @@ async function assertStableControlLayout(): Promise<void> {
             document.querySelector('#fixture').innerHTML=${JSON.stringify(markup)};
             await new Promise(requestAnimationFrame);
             const viewport=document.querySelector('.workspace-browser-viewport').getBoundingClientRect();
-            const control=document.querySelector('.workspace-browser-control').getBoundingClientRect();
-            const button=document.querySelector('.workspace-browser-control button').getBoundingClientRect();
-            const status=document.querySelector('[role="status"]');
+            const toolbar=document.querySelector('.workspace-browser-address');
+            const control=toolbar.getBoundingClientRect();
+            const permission=document.querySelector('.browser-permission-switch[role="switch"]');
+            const button=permission.getBoundingClientRect();
+            const description=document.getElementById(permission.getAttribute('aria-describedby'));
+            permission.focus();
             const geometry=(selector)=>{
               try {
                 const element=document.querySelector(selector), style=getComputedStyle(element), rect=element.getBoundingClientRect();
@@ -1473,8 +1475,13 @@ async function assertStableControlLayout(): Promise<void> {
             return {viewport:[viewport.x,viewport.y,viewport.width,viewport.height],
               layout:{compatMode:document.compatMode,innerWidth,fixtureCount:document.querySelectorAll('#fixture').length,styleSheetCount:document.styleSheets.length,
                 geometry:['#fixture','.workspace-browser-panel','.workspace-browser-viewport'].map(geometry),fixtureRules:fixtureRules()},
-              buttonVisible:button.x>=control.x&&button.right<=control.right&&button.y>=control.y&&button.bottom<=control.bottom,
-              statusKeyboardScrollable:status.tabIndex===0&&status.clientHeight>0&&getComputedStyle(status).overflowY==='auto'};
+              toolbarHeight:control.height, toolbarWidth:toolbar.clientWidth, toolbarScrollWidth:toolbar.scrollWidth,
+              buttonVisible:button.width>0&&button.height>0&&button.x>=control.x&&button.right<=control.right&&button.y>=control.y&&button.bottom<=control.bottom,
+              permissionInToolbar:permission.parentElement===toolbar&&toolbar.querySelector(':scope > button:last-of-type')===permission,
+              permissionChecked:permission.getAttribute('aria-checked'), permissionLabel:permission.getAttribute('aria-label'),
+              permissionFocusable:!permission.disabled&&permission.tabIndex===0&&document.activeElement===permission,
+              permissionDetailsAccessible:!!permission.title&&description?.textContent===permission.title,
+              legacyControlCount:document.querySelectorAll('.workspace-browser-control').length};
           })()`);
           assert.equal(
             measured.viewport[2],
@@ -1487,19 +1494,50 @@ async function assertStableControlLayout(): Promise<void> {
             expected,
             `Status changed native viewport at ${width}px/${language}: ${JSON.stringify(state)}`,
           );
-          buttonsVisible &&= measured.buttonVisible;
-          statusesReadable &&= measured.statusKeyboardScrollable;
+          assert.equal(
+            measured.toolbarHeight,
+            44,
+            "Permission uses the existing toolbar height",
+          );
+          assert.equal(
+            measured.toolbarScrollWidth,
+            measured.toolbarWidth,
+            "Toolbar must not overflow at narrow widths",
+          );
+          assert.equal(
+            measured.buttonVisible,
+            true,
+            "Permission switch must stay entirely visible",
+          );
+          assert.equal(
+            measured.permissionInToolbar,
+            true,
+            "Permission switch must end the address toolbar",
+          );
+          assert.equal(
+            measured.permissionChecked,
+            String((state.control ?? tab.control) === "agent"),
+          );
+          assert.equal(
+            measured.permissionLabel,
+            i18n.t("panels:browserAgentPermission"),
+          );
+          assert.equal(
+            measured.permissionFocusable,
+            true,
+            "Permission switch must remain keyboard-focusable",
+          );
+          assert.equal(
+            measured.permissionDetailsAccessible,
+            true,
+            "Complete permission details must be available on hover and through the accessible description",
+          );
+          assert.equal(
+            measured.legacyControlCount,
+            0,
+            "Permission must not add a separate control banner",
+          );
         }
-        assert.equal(
-          buttonsVisible,
-          true,
-          "Control action must stay visible without scrolling status",
-        );
-        assert.equal(
-          statusesReadable,
-          true,
-          "Overflowing notices remain keyboard-readable",
-        );
       }
     }
   } finally {
