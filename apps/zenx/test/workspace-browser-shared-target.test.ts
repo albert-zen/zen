@@ -1051,7 +1051,8 @@ class FakeDebugger extends EventEmitter {
     this.attached = true;
   }
   async sendCommand(method: string, params?: Record<string, unknown>) {
-    if (method === "Page.enable") return {};
+    if (method === "Page.enable" || method === "Page.captureScreenshot")
+      return {};
     if (method === "Page.getFrameTree")
       return { frameTree: { frame: { id: "main-frame" } } };
     if (method === "Page.createIsolatedWorld") {
@@ -1922,3 +1923,68 @@ for (const action of ["scroll", "click"] as const)
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+for (const change of ["navigation", "control", "session", "mount"] as const) {
+  test(`${change} during capture redraw prevents native copy and observation publication`, async () => {
+    const f = await sharedFixture();
+    const entered = deferred<void>(),
+      release = deferred<void>();
+    try {
+      f.browser.bindThreadSession("a", "thread-a");
+      const tab = await f.browser.open("a", "https://example.test/start");
+      const view = f.views[0]!;
+      const send = view.webContents.debuggerApi.sendCommand.bind(
+        view.webContents.debuggerApi,
+      );
+      view.webContents.debuggerApi.sendCommand = async (method, params) => {
+        if (method === "Page.captureScreenshot") {
+          entered.resolve();
+          await release.promise;
+          return {};
+        }
+        return await send(method, params);
+      };
+      let copies = 0;
+      view.webContents.capturePage = async () => {
+        copies++;
+        return new FakeImage();
+      };
+      const inspection = f.browser.inspect("a", tab.tabId);
+      const rejected = assert.rejects(
+        inspection,
+        /stale|control|session|target|changed/iu,
+      );
+      await entered.promise;
+      if (change === "navigation")
+        await view.webContents.loadURL("https://example.test/new");
+      if (change === "control")
+        f.browser.command(
+          f.sender as never,
+          "thread-a",
+          "take-control",
+          tab.tabId,
+        );
+      if (change === "session") {
+        await f.browser.closeSession("a");
+        f.browser.bindThreadSession("a", "thread-a");
+      }
+      if (change === "mount")
+        f.browser.mount(f.sender as never, {
+          threadId: "thread-a",
+          tabId: tab.tabId,
+          lease: "new-render-owner",
+          bounds: { x: 0, y: 0, width: 640, height: 480 },
+        });
+      release.resolve();
+      await rejected;
+      assert.equal(
+        copies,
+        0,
+        "an expired witness cannot dispatch the native copy",
+      );
+    } finally {
+      release.resolve();
+      await f.close();
+    }
+  });
+}

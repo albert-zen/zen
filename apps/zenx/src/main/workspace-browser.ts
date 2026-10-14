@@ -584,9 +584,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         capture: async () =>
           await this.#rendered(tab, async () => {
             this.#requireAgentTab(sessionId, tabId);
-            return await captureWorkspacePage(tab.view, () => {
-              tab.observation = undefined;
-            });
+            return await this.#capture(sessionId, tab);
           }),
         current: () =>
           this.#sessionThreads.get(sessionId) === tab.threadId &&
@@ -716,9 +714,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         renderRevision,
       );
       const observationId = randomUUID();
-      const image = await captureWorkspacePage(tab.view, () => {
-        tab.observation = undefined;
-      });
+      const image = await this.#capture(sessionId, tab);
       let png = image.toPNG();
       if (png.byteLength > 4 * 1024 * 1024) {
         const size = image.getSize();
@@ -1363,6 +1359,36 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       if (dispatched) tab.agentActionsInFlight -= 1;
       this.#publish(tab.threadId);
     }
+  }
+
+  #capture(sessionId: string, tab: Tab) {
+    const navigationGeneration = tab.navigationGeneration;
+    const documentVersion = tab.documentVersion;
+    const renderRevision = tab.renderRevision;
+    const controlRevision = tab.controlRevision;
+    const incarnation = this.#sessionIncarnations.get(sessionId);
+    return captureWorkspacePage(
+      tab.view,
+      () => {
+        tab.observation = undefined;
+      },
+      undefined,
+      () => {
+        this.#assertControlRevision(tab, controlRevision);
+        this.#assertAgentOperationCurrent(
+          sessionId,
+          tab,
+          navigationGeneration,
+          documentVersion,
+          "capture",
+          renderRevision,
+        );
+        if (this.#sessionIncarnations.get(sessionId) !== incarnation)
+          throw new Error(
+            "Browser session changed during capture; inspect again",
+          );
+      },
+    );
   }
 
   async #rendered<T>(
