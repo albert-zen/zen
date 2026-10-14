@@ -237,16 +237,15 @@ export const en = {
   conversationUnavailable: "Conversation unavailable",
   conversationsProjectsAndThreads: "Conversations, projects and threads",
   copied: "Copied",
-  copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
-    "Copies through the latest complete Turn and uses the same working directory.",
+  forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
+    "Forks through the latest complete Turn and uses the same working directory.",
   copy: "Copy",
   copyAssistantMessage: "Copy assistant message",
   forkFromMessage: "Fork thread from this message",
   forkingMessage: "Forking thread…",
   messageForkFailed: "Could not fork: {{error}}",
-  copyThread: "Copy thread",
+  forkThread: "Fork thread",
   copyUserMessage: "Copy user message",
-  copying: "Copying…",
   couldNotCopySelectTheSummaryTextToCopyIt:
     "Could not copy. Select the summary text to copy it.",
   couldNotOpenConversation: "Could not open conversation",
@@ -940,16 +939,15 @@ export const zhCN = {
   conversationUnavailable: "会话不可用",
   conversationsProjectsAndThreads: "会话与项目",
   copied: "已复制",
-  copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
-    "复制到最近完成的轮次，并使用相同的工作目录。",
+  forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory:
+    "从最近完成的轮次分叉，并使用相同的工作目录。",
   copy: "复制",
   copyAssistantMessage: "复制助手消息",
   forkFromMessage: "从此消息分叉线程",
   forkingMessage: "正在分叉线程…",
   messageForkFailed: "分叉失败：{{error}}",
-  copyThread: "复制会话",
+  forkThread: "分叉线程",
   copyUserMessage: "复制用户消息",
-  copying: "正在复制…",
   couldNotCopySelectTheSummaryTextToCopyIt:
     "复制失败。请选择摘要文字进行复制。",
   couldNotOpenConversation: "无法打开会话",
