@@ -832,12 +832,20 @@ export function PluginSpaces({
           aria-current={
             selectedPage === contribution.page.route ? "page" : undefined
           }
-          title={contribution.label}
+          title={
+            contribution.pluginId === "zenx-triggers"
+              ? i18n.t("panels:automations")
+              : contribution.label
+          }
           key={contribution.key}
           onClick={() => onOpen(contribution.page.route)}
         >
           <Icon name={contribution.icon} size={14} />
-          <span>{contribution.label}</span>
+          <span>
+            {contribution.pluginId === "zenx-triggers"
+              ? i18n.t("panels:automations")
+              : contribution.label}
+          </span>
         </button>
       ))}
     </nav>
@@ -2032,7 +2040,7 @@ function ThreadRow({
   }, [detailsOpen]);
   const boundTriggers =
     information?.triggers.triggers.filter(
-      (t) => t.threadId === thread.threadId,
+      (t) => t.threadId === thread.threadId && t.active,
     ) ?? [];
   const unread = information?.unreadThreadIds.has(thread.threadId) ?? false;
   const statusCount =

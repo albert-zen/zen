@@ -285,7 +285,8 @@ export const en = {
   chooseARoomMember: "Choose a Room member",
   once: "Once",
   threadTriggers: "Thread triggers",
-  automations: "Automations",
+  automations: "Triggers",
+  triggerPluginDescription: "Schedule and inspect triggers.",
   anEarlierThreadCreationDidNotReturn:
     "An earlier Thread creation did not return a confirmed outcome. Inspect Threads before retrying; leaving its form did not cancel the Host request.",
   anEarlierTriggerSaveReturnedAnUncertain:
@@ -680,7 +681,7 @@ export const en = {
     "Closing the window keeps the connection; quitting ZenX or disabling the plugin disconnects it.",
   sleepOrHostExitPausesExecutionMissed:
     "Sleep or Host exit pauses execution; missed timers fire at most once when Host resumes. Unknown deliveries are not retried automatically. Pausing or deleting a trigger leaves history intact.",
-  allAutomations: "All automations",
+  allAutomations: "All triggers",
   backToRoom: "Back to Room",
   repliesTo: "Replies to @",
   in: "in #",
@@ -750,17 +751,17 @@ export const en = {
   directThreadMessagesStayInTheThread:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without duplicating replies.",
   creatingAPawEnablesMessageWakeupsOnly:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Automations when needed; they can consume model quota. Reading this workspace does not start a run.",
+    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start a run.",
   membersShareThisConversationChooseAMember:
     "members share this conversation. Choose a member above to use its files, browser and other thread tools.",
-  automationStatusUnavailable: "Automation status unavailable:",
+  automationStatusUnavailable: "Trigger status unavailable:",
   refresh: "Refresh",
   assistantWrittenPlansAndNotesLinkedExecution:
     "Assistant-written plans and notes. Linked execution status is shown separately.",
   noMattersRecordedYetAskYourPaw:
     "No matters recorded yet. Ask your PAW to track something.",
   next: "· next",
-  configureAutomations: "Configure automations",
+  configureAutomations: "Configure triggers",
   otherDelegatedWorkAppearsUnderItsMatter:
     "Other delegated work appears under its matter with its device and workspace identity.",
   resourcesFrom: "Resources from",
@@ -800,7 +801,7 @@ export const en = {
   pawThreadRoomNote:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without copying every message between them.",
   pawWakeupNote:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Automations when needed; they can consume model quota. Reading this workspace does not start agent work.",
+    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start agent work.",
   mattersDescription:
     "Assistant-written plans and notes. Linked execution status is shown separately.",
   delegatedWorkDescription:
@@ -888,7 +889,7 @@ export const en = {
 
 export const zhCN = {
   unreadMessages: "{{count}} 条未读消息",
-  wakeupDelivery: "此 Trigger 的消息投递",
+  wakeupDelivery: "此 触发器 的消息投递",
   roomMessageDelivery: "此聊天室的消息投递",
   wakeupSteer: "补充到当前工作（默认）",
   wakeupQueue: "排队到下一轮",
@@ -981,7 +982,7 @@ export const zhCN = {
   imInputContinuationSteer: "柔性引导（默认）",
   imInputContinuationQueue: "排队到下一轮",
   imInputContinuationDescription:
-    "独立于输入框、Room 和 Trigger 设置。保存后重新连接生效，已接收的消息不受影响。",
+    "独立于输入框、Room 和 触发器 设置。保存后重新连接生效，已接收的消息不受影响。",
   imPrivatePathNotice:
     "使用绝对路径和自己的 IMZen格式配置。这里只填写路径；凭证值在本机私有文件中设置。",
   imPreparationDoesNotConnect: "保存准备不会启动或重启连接",
@@ -1145,7 +1146,8 @@ export const zhCN = {
   chooseARoomMember: "选择房间成员",
   once: "一次",
   threadTriggers: "会话触发器",
-  automations: "自动化",
+  automations: "触发器",
+  triggerPluginDescription: "配置和查看触发器。",
   anEarlierThreadCreationDidNotReturn:
     "之前创建会话的结果尚未确认。重试前请检查会话列表；离开表单并未取消 Host 请求。",
   anEarlierTriggerSaveReturnedAnUncertain:
@@ -1509,7 +1511,7 @@ export const zhCN = {
     "关闭窗口仍保持连接；退出 ZenX 或停用插件后断开。",
   sleepOrHostExitPausesExecutionMissed:
     "休眠或 Host 退出会暂停执行；Host 恢复后漏掉的定时器最多触发一次。未知投递不会自动重试。暂停或删除触发器不会删除历史。",
-  allAutomations: "所有自动化",
+  allAutomations: "所有触发器",
   backToRoom: "返回房间",
   repliesTo: "回复 @",
   in: "在 #",
@@ -1575,16 +1577,16 @@ export const zhCN = {
   directThreadMessagesStayInTheThread:
     "直接发送给会话的消息留在会话中。助手仅通过房间消息工具在此发言。此绑定使两个会话保持关联，而不会重复回复。",
   creatingAPawEnablesMessageWakeupsOnly:
-    "创建 PAW 只启用消息唤醒。需要时在自动化中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动运行。",
+    "创建 PAW 只启用消息唤醒。需要时在触发器中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动运行。",
   membersShareThisConversationChooseAMember:
     "名成员共享此会话。请在上方选择成员，以使用其文件、浏览器和其他会话工具。",
-  automationStatusUnavailable: "自动化状态不可用：",
+  automationStatusUnavailable: "触发器状态不可用：",
   refresh: "刷新",
   assistantWrittenPlansAndNotesLinkedExecution:
     "助手编写的计划与笔记。关联的执行状态会单独显示。",
   noMattersRecordedYetAskYourPaw: "尚无记录的事项。请让 PAW 跟进某件事。",
   next: "· 下次",
-  configureAutomations: "配置自动化",
+  configureAutomations: "配置触发器",
   otherDelegatedWorkAppearsUnderItsMatter:
     "其他委派工作显示在所属事项下，并标明设备和工作区身份。",
   resourcesFrom: "资源来自",
@@ -1623,7 +1625,7 @@ export const zhCN = {
   pawThreadRoomNote:
     "直接发送给会话的消息留在会话中。助手仅通过房间消息工具在此发言。此绑定使两个会话保持关联，而不会复制每条消息。",
   pawWakeupNote:
-    "创建 PAW 只启用消息唤醒。需要时在自动化中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动 Agent 工作。",
+    "创建 PAW 只启用消息唤醒。需要时在触发器中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动 Agent 工作。",
   mattersDescription: "助手编写的计划和笔记。关联的执行状态会单独显示。",
   delegatedWorkDescription:
     "其他委派工作显示在所属事项下，并标明设备和工作区身份。",

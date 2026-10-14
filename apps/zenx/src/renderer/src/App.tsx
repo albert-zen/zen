@@ -2794,7 +2794,12 @@ function AppContent() {
                       plugin: genericPluginTarget.pluginId,
                     })
               }
-              title={selectedRoom?.name ?? genericPluginTarget.title}
+              title={
+                selectedRoom?.name ??
+                (genericPluginTarget.pluginId === "zenx-triggers"
+                  ? i18n.t("panels:automations")
+                  : genericPluginTarget.title)
+              }
               actions={
                 genericPluginTarget.pluginId === "zenx-rooms" &&
                 genericPluginTarget.route === ROOM_ROUTE &&

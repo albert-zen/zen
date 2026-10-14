@@ -1,7 +1,7 @@
 {
   "id": "zenx-triggers",
   "version": "1.0.1",
-  "description": "Schedule and inspect ZenX Trigger wakeups.",
+  "description": "Schedule and inspect ZenX Triggers.",
   "provider": {
     "id": "zenx-automation-service",
     "platforms": ["*"],
@@ -39,7 +39,7 @@
     },
     {
       "name": "zenx_triggers_workspaces",
-      "description": "List configured Project workspaces eligible for a new automation Thread.",
+      "description": "List configured Project workspaces eligible for a new trigger Thread.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -72,7 +72,7 @@
     },
     {
       "name": "zenx_triggers_create_target",
-      "description": "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+      "description": "Create an idle dedicated trigger Thread only after confirming current Host defaults and workspace.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -680,7 +680,7 @@
     "pages": [
       {
         "id": "triggers",
-        "title": "Automations",
+        "title": "Triggers",
         "route": "/plugins/zenx-triggers/triggers",
         "surfaceId": "triggers-page"
       }
@@ -688,7 +688,7 @@
     "sidebar": [
       {
         "id": "triggers",
-        "label": "Automations",
+        "label": "Triggers",
         "icon": "clock",
         "pageId": "triggers",
         "order": 10
@@ -702,7 +702,7 @@
       },
       {
         "id": "workspaces",
-        "title": "List configured Project workspaces eligible for a new automation Thread.",
+        "title": "List configured Project workspaces eligible for a new trigger Thread.",
         "tool": "zenx_triggers_workspaces"
       },
       {
@@ -712,7 +712,7 @@
       },
       {
         "id": "create-target",
-        "title": "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+        "title": "Create an idle dedicated trigger Thread only after confirming current Host defaults and workspace.",
         "tool": "zenx_triggers_create_target"
       },
       {

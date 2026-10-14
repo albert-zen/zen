@@ -135,8 +135,8 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 
 ### 4.1 Thread row 与管理菜单
 
-- Thread 标题用满除真实状态以外的可用宽度。绑定的 Trigger 用时钟表示，运行用明确 spinner；时钟位于 spinner 左侧，未读 Agent 回复用独立的小点。详细密度保留 Working 文字，reduced-motion 使用静态进度图形与可读状态。管理三点只在 hover / keyboard focus / 菜单打开时显示，渐变表面覆盖标题尾部，不永久空留操作栏；无 hover 的触屏保留可见的 44px 操作入口。 时钟、进度与三点使用相同 16px 图形画布和等距槽位；尾部遮罩覆盖会话行整高，左缘圆弧配柔和渐变、右缘沿行圆角，不露出上沿文字。
-- Hover / row keyboard focus 打开右侧非模态详情；不抢焦点，浮层可跨间隙进入并点击，Arrow Right 进入完整名称，Escape 关闭并还焦点。完整名称按钮直接进入原有 Thread rename；触屏三点内提供同样完整信息。详情显示已知 Project、机器、最近 canonical 消息时间以及绑定 Trigger 的最早有效未来时间；过期、读取失败或缺失投影明确不可用，不从 updatedAt 推断消息时间，不从 timer interval 私算下次运行。只有事件型 Trigger 显示符合条件时触发，全部暂停显示已暂停。
+- Thread 标题用满除真实状态以外的可用宽度。仅有活跃的 Trigger 时用时钟表示，运行用明确 spinner；时钟位于 spinner 左侧，未读 Agent 回复用独立的小点。详细密度保留 Working 文字，reduced-motion 使用静态进度图形与可读状态。管理三点只在 hover / keyboard focus / 菜单打开时显示，渐变表面覆盖标题尾部，不永久空留操作栏；无 hover 的触屏保留可见的 44px 操作入口。 时钟、进度与三点使用相同 16px 图形画布和等距槽位；尾部遮罩覆盖会话行整高，左缘圆弧配柔和渐变、右缘沿行圆角，不露出上沿文字。
+- Hover / row keyboard focus 打开右侧非模态详情；不抢焦点，浮层可跨间隙进入并点击，Arrow Right 进入完整名称，Escape 关闭并还焦点。完整名称按钮直接进入原有 Thread rename；触屏三点内提供同样完整信息。详情显示已知 Project、机器、最近 canonical 消息时间以及活跃 Trigger 的最早有效未来时间和活跃数量；过期、读取失败或缺失投影明确不可用，不从 updatedAt 推断消息时间，不从 timer interval 私算下次运行。只有事件型 Trigger 显示符合条件时触发，不虚构时间；无活跃 Trigger（包括全部暂停、已完成或插件禁用）时隐藏时钟与下次触发行。用户可见名称统一为英文 Trigger / Triggers、中文触发器，保留既有协议与存储标识。
 - Thread 与 PAW/Room 名称保持各自对象身份。改名使用原有权威命令，Enter 保存、IME Enter 不提交、Escape 取消；保存中防重复、失败保留草稿并显示错误，晚到回执不能关闭新编辑器、改变新选择或抢走焦点。
 
 - Thread management menu 存在于每个 Thread row，触发器使用正常重量的 horizontal ellipsis。
@@ -464,7 +464,7 @@ ThreadView
 - 普通 Room 输入 `@` 弹出可搜索的成员候选；上下方向键选择、Enter/Tab 确认、Escape 关闭，选择不会同时发送消息，中文输入法确认与长按 Enter 不触发重复提交。成员选择保留 literal `@name` 及前后文本，与 Host 的 mention 匹配规则一致。Always On Assistant 不要求 `@`，新消息仍在现有下一周期 steering 路径接入。
 - Thread 的文件、线程、工作流和 Room 的成员候选共享 viewport-anchored portal 呈现，避开 Composer 底部滚动容器的裁剪；候选保持编辑器焦点，窗口变化后重新定位，不复制数据或执行语义。
 - Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 只在消息 More 菜单的技术详情中保留，不常驻显示。
-- Room 的设置与未确定投递状态保持可见且可操作。自动化卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
+- Room 的设置与未确定投递状态保持可见且可操作。触发器卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
 - Room 的标题与重命名、工作区、设置操作共享应用外壳中的同一标题行，正文上方不再另起操作栏；保留原生窗口控件和拖动区域边界。自动回复未启用时，只在现有设置入口显示轻量状态提示，具体成员数量和配置入口收进会话设置，不额外占用常驻状态栏或标题空间。“未启用”不擅自区分未配置、暂停或 Host 全局关闭。展开和查看设置不启用 Trigger，也不重放消息。投递失败和结果待确认仍独立可见、可操作。
 - Room 向上滚动到历史边缘时自动分批读取，保留当前可见消息的位置；首次打开不自动扫全量历史，读取失败停止并提供明确重试。迟到响应不改变新的房间，实时消息和分页使用消息 ID 对齐。界面只展示 Host 当前保留的历史（现有上限 256 条），到达边界不冒充永久完整档案。
 - Room 消息头只显示一个发送者名称和时间，不叠加 Agent、成员、Thread、PAW 或来源未知标签。优先保留消息记录的有效作者名；通用 Agent 名仅可由记录的来源 Thread 匹配真实成员或明确的会话名称，没有来源时使用中性的“未知成员”，不从正文 @提及反推作者。点击名字按需展示来源会话和当前关联 PAW 的导航，关联关系不改写历史身份；原始 message/thread/turn/operation IDs 只在 More 菜单的技术详情中出现。
@@ -473,7 +473,7 @@ ThreadView
 - Linux 与 Windows 的工作区入口避让原生最小化、最大化和关闭按钮，不能将打开面板的点击交给原生关闭区域。
 
 - Room 的自动回复设置按明确成员导航到现有 Room mention Trigger 编辑器；路由参数只表达临时 UI 意图，成员和目标从最新 Host Room / Thread 投影验证，显式 Save 才写入定义，不修改权限、不重放旧消息。Cancel / Back 返回原 Room，不把离开表单当作取消已提交的 Host 请求。Member conversation 选项以标题和短工作区 / 可区分短 ID 呈现，完整身份仍可搜索、查看并由无障碍名称读取。
-- Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用自动化编辑器保留原有完整选择能力。
+- Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用触发器编辑器保留原有完整选择能力。
 
 本轮视觉和交互校准参考 [DeepSeek Harness 的输入候选组件](https://github.com/deepseek-ai/deepseek-harness/tree/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-input-trigger)、[T3 Code 的 ComposerCommandMenu](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ComposerCommandMenu.tsx) 与 [Linear 的 UI refresh](https://linear.app/changelog/2026-03-12-ui-refresh)。这些是参考材料，不替代本文的产品语义，也不引入它们的运行模型或样式框架。
 
@@ -493,11 +493,11 @@ Reference decisions (official documentation checked 2026-10-12): [OpenClaw boots
 
 Creating PAW defaults to a new idle working Thread in a configured Project, with the current Host model and permissions previewed before the explicit Create action. The Host creation itself creates no Turn; the explicit “Create and say hello” UI action then admits a Host-origin bootstrap wakeup. The working Thread records a canonical host_message and no fabricated user_message. Binding an existing available Thread is a separate, explicit alternative. Cancel before submission creates nothing; dismissing an already submitted form does not undo accepted Host work or replace a newer navigation. Confirmed creation remains confirmed if the subsequent list refresh fails. An uncertain Thread start or preset-save failure is visible with inspection/binding guidance, and the same setup operation cannot silently start another Thread.
 
-The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
+The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Triggers and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
 
 Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
 
-Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Automations tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
+Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Triggers tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
 
 ## 2026-10-02：持续适用的 UI 修改与验收原则
 
