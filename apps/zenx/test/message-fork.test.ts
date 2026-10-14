@@ -209,12 +209,10 @@ for (const status of [
         [
           {
             ...runtimeMessage("commentary", "Checking the implementation."),
-            phase: "commentary",
           },
           runtimeCommand("tool"),
           {
             ...runtimeMessage("between-tools", "The first check is complete."),
-            phase: "commentary",
           },
           runtimeCommand("tool-two"),
           runtimeMessage("terminal-reply", "Here is the result."),
