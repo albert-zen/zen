@@ -252,6 +252,8 @@ export interface ZenXPluginSummary {
   lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
   available: boolean;
+  /** Opaque, process-local runtime admission identity; never persisted. */
+  admissionId?: string;
   /** Current load failure, separate from the user's saved enablement. */
   unavailableReason?: string;
   contributionCount: number;

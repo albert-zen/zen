@@ -1,3 +1,14 @@
+import { useReadVisibleMessage } from "./conversation-read-state.js";
+import { HostMessageContent } from "./HostMessageContent.js";
+import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
+import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
+import {
+  ThreadReadingContext,
+  useThreadReadingState,
+  useReadingDisclosure,
+  useReadingDisclosures,
+  disclosureKey,
+} from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import type { SkillEntry } from "../../../../cli/src/skills.js";
@@ -13,6 +24,7 @@ import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
   useEffect,
+  useContext,
   useCallback,
   useId,
   useLayoutEffect,
@@ -184,7 +196,29 @@ interface ThreadViewProps {
   ): Promise<void>;
 }
 
-export function ThreadView({
+export function ThreadView(props: ThreadViewProps) {
+  const readingState = useThreadReadingState(props.thread?.id);
+  const items = props.thread?.canonicalItems;
+  const canonicalAttachments = useMemo(
+    () =>
+      items === undefined ? undefined : projectThreadAttachmentItems(items),
+    [items],
+  );
+  // Native history and its image placeholders commit together, even while a
+  // separate media refresh/payload read is pending. A newer canonical snapshot
+  // also removes old references synchronously; never merge stale Host results.
+
+  return (
+    <ThreadReadingContext.Provider value={readingState}>
+      <ThreadViewContent
+        {...props}
+        threadAttachments={canonicalAttachments ?? props.threadAttachments}
+      />
+    </ThreadReadingContext.Provider>
+  );
+}
+
+function ThreadViewContent({
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
@@ -240,6 +274,7 @@ export function ThreadView({
   onOpenMessageLink,
 }: ThreadViewProps) {
   useTranslation("shell");
+  const readingState = useContext(ThreadReadingContext)!;
   const queueFailure =
     suppliedQueueFailure &&
     thread?.queuedMessages?.some(
@@ -325,6 +360,7 @@ export function ThreadView({
   const editableQueue = new Map(
     nativeQueue.flatMap((item) => {
       if (
+        item.type !== "user_message_queued" ||
         !thread?.queuedMessages?.some(
           (message) =>
             message.id === item.id && message.clientId === item.clientId,
@@ -401,7 +437,7 @@ export function ThreadView({
   useEffect(() => {
     if (!queuePreviewCurrent) setPreview(null);
   }, [queuePreviewCurrent]);
-  const [atLive, setAtLive] = useState(true);
+  const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
   const skillDraft = parseSkillDraft(composer.draft.text);
@@ -422,10 +458,33 @@ export function ThreadView({
     };
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const shouldFollowRef = useRef(true);
+  const shouldFollowRef = useRef(readingState.scroll?.following ?? true);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastCanonicalAgentMessage = thread?.canonicalItems?.findLast(
+    (item) => item.type === "agent_message",
+  );
+  const readMessageOrder = useMemo(
+    () =>
+      thread?.canonicalItems?.flatMap((item) =>
+        item.type === "agent_message" ? [item.id] : [],
+      ),
+    [thread?.canonicalItems],
+  );
+  useReadVisibleMessage({
+    scope: "threads",
+    conversationId: thread?.id,
+    message: lastCanonicalAgentMessage
+      ? {
+          id: lastCanonicalAgentMessage.id,
+          createdAt: Date.parse(lastCanonicalAgentMessage.createdAt),
+        }
+      : undefined,
+    messageOrder: readMessageOrder,
+    viewport: scrollRef,
+    occluder: bottomZoneRef,
+  });
   const runningTurn = thread === null ? null : activeTurn(thread);
   const runKey =
     thread && runningTurn ? JSON.stringify([thread.id, runningTurn.id]) : null;
@@ -468,53 +527,35 @@ export function ThreadView({
   });
   const selectorId = useId();
 
-  useEffect(() => {
+  const saveReadingPosition = useCallback(() => {
     const scroll = scrollRef.current;
-    if (
-      scroll !== null &&
-      shouldFollowRef.current &&
-      !transcriptHasSelection(scroll)
-    ) {
-      scroll.scrollTop = scroll.scrollHeight;
-      setAtLive(true);
+    if (scroll)
+      readingState.scroll = {
+        top: scroll.scrollTop,
+        following: shouldFollowRef.current,
+      };
+  }, [readingState]);
+  const pauseFollowing = useCallback(() => {
+    shouldFollowRef.current = false;
+    setAtLive(false);
+    saveReadingPosition();
+  }, [saveReadingPosition]);
+  const followBottom = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll || !shouldFollowRef.current) return;
+    if (transcriptHasSelection(scroll)) {
+      pauseFollowing();
+      return;
     }
-  }, [approvals, composer.compaction, thread?.canonicalItems, thread?.turns]);
-
-  useEffect(() => {
-    const selection = () => {
-      if (transcriptHasSelection(scrollRef.current)) {
-        shouldFollowRef.current = false;
-        setAtLive(false);
-      }
-    };
-    document.addEventListener("selectionchange", selection);
-    return () => document.removeEventListener("selectionchange", selection);
-  }, []);
-  useLayoutEffect(() => {
-    const content = scrollRef.current?.firstElementChild;
-    if (!content || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      const scroll = scrollRef.current;
-      if (scroll && shouldFollowRef.current && !transcriptHasSelection(scroll))
-        scroll.scrollTop = scroll.scrollHeight;
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, []);
-
-  // Keep a newly failed request visible when approvals, queued messages and a
-  // long draft overflow the bottom zone. User scrolling afterwards is left
-  // alone; focus can still scroll the queue and approval controls into view.
-  useLayoutEffect(() => {
-    if (composer.compaction?.status !== "failed") return;
-    const zone = bottomZoneRef.current;
-    if (zone !== null) zone.scrollTop = zone.scrollHeight;
-  }, [composer.compaction, thread?.id]);
+    scroll.scrollTop = scroll.scrollHeight;
+    saveReadingPosition();
+  }, [pauseFollowing, saveReadingPosition]);
 
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
-  // space and Back to live can float just above it; growth keeps a live
-  // view pinned to the bottom.
+  // space and Back to live can float just above it. This is geometry only;
+  // publishing a height never changes the reader's follow intent. Re-publish
+  // on identity changes too: cached App navigation reuses this same DOM.
   useLayoutEffect(() => {
     const view = viewRef.current;
     const zone = bottomZoneRef.current;
@@ -524,13 +565,6 @@ export function ThreadView({
       if (view.style.getPropertyValue("--bottom-zone-height") === height)
         return;
       view.style.setProperty("--bottom-zone-height", height);
-      const scroll = scrollRef.current;
-      if (
-        shouldFollowRef.current &&
-        scroll !== null &&
-        !transcriptHasSelection(scroll)
-      )
-        scroll.scrollTop = scroll.scrollHeight;
     };
     publish();
     if (typeof ResizeObserver === "undefined") return;
@@ -539,7 +573,72 @@ export function ThreadView({
     return () => {
       observer.disconnect();
     };
-  }, []);
+  }, [readingState]);
+
+  // Restore only after this thread's Composer inset above has been published.
+  // Otherwise scrollTop clamps to the temporary CSS fallback range and saving
+  // that clamp loses near-bottom positions, especially with a tall draft.
+  // This finishes synchronously: no delayed restore can override later input.
+  // A new thread opens at live.
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const saved = readingState.scroll;
+    shouldFollowRef.current = saved?.following ?? true;
+    scroll.scrollTop = saved?.top ?? scroll.scrollHeight;
+    setAtLive(shouldFollowRef.current);
+    saveReadingPosition();
+  }, [readingState, saveReadingPosition]);
+
+  // New transcript data may advance a live reader. Approvals, focus and Composer
+  // layout are not new messages and must not independently pull an idle reader.
+  const latestTurn = turns.at(-1);
+  const transcriptArrival = JSON.stringify([
+    thread?.id,
+    turns.length,
+    latestTurn?.id,
+    latestTurn?.status,
+    latestTurn?.items.length,
+    latestTurn?.items.at(-1)?.id,
+    thread?.canonicalItems?.length,
+    thread?.canonicalItems?.at(-1)?.id,
+  ]);
+  useEffect(() => {
+    followBottom();
+  }, [followBottom, transcriptArrival]);
+
+  useEffect(() => {
+    const selection = () => {
+      if (transcriptHasSelection(scrollRef.current)) pauseFollowing();
+    };
+    document.addEventListener("selectionchange", selection);
+    return () => document.removeEventListener("selectionchange", selection);
+  }, [pauseFollowing]);
+  const streamingRef = useRef(false);
+  streamingRef.current = runningTurn !== null;
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    const content = scroll?.firstElementChild;
+    if (!scroll || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (streamingRef.current) followBottom();
+      else if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1)
+        pauseFollowing();
+      // Idle layout changes can expose a Back to live action, never activate it.
+    });
+    observer.observe(content);
+    observer.observe(scroll);
+    return () => observer.disconnect();
+  }, [followBottom, pauseFollowing]);
+
+  // Keep a newly failed request visible when approvals, queued messages and a
+  // long draft overflow the bottom zone. User scrolling afterwards is left
+  // alone; focus can still scroll the queue and approval controls into view.
+  useLayoutEffect(() => {
+    if (composer.compaction?.status !== "failed") return;
+    const zone = bottomZoneRef.current;
+    if (zone !== null) zone.scrollTop = zone.scrollHeight;
+  }, [composer.compaction, thread?.id]);
 
   const submit = (intent: ComposerIntent) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
@@ -895,16 +994,38 @@ export function ThreadView({
             isNestedTranscriptScroll(event.target, event.currentTarget)
           )
             return;
-          shouldFollowRef.current = false;
-          setAtLive(false);
+          pauseFollowing();
+        }}
+        onPointerDownCapture={(event) => {
+          if (!isNestedTranscriptScroll(event.target, event.currentTarget))
+            pauseFollowing();
+        }}
+        onFocusCapture={pauseFollowing}
+        onKeyDownCapture={(event) => {
+          if (
+            [
+              "ArrowUp",
+              "ArrowDown",
+              "PageUp",
+              "PageDown",
+              "Home",
+              "End",
+              " ",
+            ].includes(event.key) &&
+            !isNestedTranscriptScroll(event.target, event.currentTarget)
+          )
+            pauseFollowing();
         }}
         onScroll={(event) => {
           const target = event.currentTarget;
-          const live =
-            !transcriptHasSelection(target) &&
-            target.scrollHeight - target.scrollTop - target.clientHeight < 80;
-          shouldFollowRef.current = live;
-          setAtLive(live);
+          // A scroll event (including one generated by layout/anchoring) may
+          // pause following, but proximity to bottom never resumes it.
+          if (
+            transcriptHasSelection(target) ||
+            target.scrollHeight - target.scrollTop - target.clientHeight > 1
+          )
+            pauseFollowing();
+          saveReadingPosition();
         }}
       >
         <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
@@ -918,6 +1039,7 @@ export function ThreadView({
             }}
           >
             <div className="messages-inner">
+              <ImportedThreadNotice items={thread?.canonicalItems ?? []} />
               {transcriptRows.length === 0
                 ? (emptyContent ?? (
                     <div className="thread-empty">
@@ -929,7 +1051,7 @@ export function ThreadView({
                     row.type === "turn" ? (
                       <TurnBlock
                         index={row.index}
-                        key={row.turn.id}
+                        key={JSON.stringify([thread?.id, row.turn.id])}
                         turn={row.turn}
                         stopping={
                           interrupting && row.turn.id === runningTurn?.id
@@ -992,6 +1114,7 @@ export function ThreadView({
             document.getSelection()?.removeAllRanges();
             scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
             setAtLive(true);
+            saveReadingPosition();
           }}
         >
           <Icon name="arrow-down" size={14} />
@@ -1180,7 +1303,9 @@ export function ThreadView({
                   type="button"
                   className="quiet-button"
                   key={skill.id}
-                  aria-label={i18n.t("shell:removeSkill", { name: skill.name })}
+                  aria-label={i18n.t("shell:removeSkill", {
+                    name: skill.name,
+                  })}
                   onClick={() =>
                     onDraftChange(
                       withSkillDraft(
@@ -1582,7 +1707,9 @@ export function ThreadView({
                   )
                     preview.trigger.focus({ preventScroll: true });
                   else
-                    composerTextareaRef.current?.focus({ preventScroll: true });
+                    composerTextareaRef.current?.focus({
+                      preventScroll: true,
+                    });
                 }
               : undefined
           }
@@ -1979,7 +2106,10 @@ function TurnBlock({
   );
   const sectionRef = useRef<HTMLElement>(null);
   const historyId = useId();
-  const [expandedOverride, setExpanded] = useState<boolean | null>(null);
+  const [expandedOverride, setExpanded] = useReadingDisclosure(
+    disclosureKey("turn", turn.id),
+  );
+  const [protectedOpen, setProtectedOpen] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const previousStatus = useRef(turn.status);
   // selectionchange is queued by browsers. Observe the still-mounted history
@@ -1997,12 +2127,15 @@ function TurnBlock({
           !!sectionRef.current?.contains(active)))
     ) {
       setInspecting(true);
-      setExpanded(true);
+      setProtectedOpen(true);
     }
   }
   const expanded =
-    expandedOverride ??
-    (turn.status === "failed" || turn.status === "interrupted" || inspecting);
+    protectedOpen ||
+    (expandedOverride ??
+      (turn.status === "failed" ||
+        turn.status === "interrupted" ||
+        inspecting));
   const complete = turn.status !== "inProgress";
   useEffect(() => {
     const preserve = () => {
@@ -2036,14 +2169,28 @@ function TurnBlock({
       toggle?.scrollIntoView?.({ block: "nearest" });
     });
   };
-  const renderUserItem = (
-    item: Extract<ThreadItem, { type: "userMessage" }>,
+  const renderInputItem = (
+    item: Extract<
+      ThreadItem,
+      { type: "userMessage" | "threadMessage" | "hostMessage" }
+    >,
   ) => {
     const wakeup = wakeups.find(
-      (entry) => entry.clientUserMessageId === item.clientId,
+      (entry) =>
+        entry.clientUserMessageId === item.clientId &&
+        (item.type === "userMessage" ||
+          (item.type === "hostMessage" &&
+            (item.source === "trigger"
+              ? entry.triggerId === item.sourceId
+              : item.source === "room" &&
+                entry.sourceRoomId === item.sourceId))),
     );
+    if (item.type === "hostMessage")
+      return (
+        <WakeupCard key={item.id} item={item} entry={wakeup} turn={turn} />
+      );
     return wakeup === undefined ? (
-      <UserMessage
+      <InputMessage
         attachments={attachments[item.id] ?? []}
         item={item}
         key={item.id}
@@ -2061,14 +2208,17 @@ function TurnBlock({
       className={`turn ${turn.status}`}
       aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
     >
-      {projection.userItems.map(renderUserItem)}
+      {projection.inputItems.map(renderInputItem)}
       {complete ? (
         <button
           className="turn-toggle"
           type="button"
           aria-expanded={expanded}
           aria-controls={historyId}
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => {
+            setProtectedOpen(false);
+            setExpanded(!expanded);
+          }}
         >
           <span>
             {confirmedStopped
@@ -2089,8 +2239,8 @@ function TurnBlock({
       {!complete || expanded ? (
         <div className="turn-history" id={historyId}>
           {projection.history.map((node) =>
-            node.kind === "user" ? (
-              renderUserItem(node.item)
+            node.kind === "input" ? (
+              renderInputItem(node.item)
             ) : (
               <DisplayNode
                 key={node.kind === "agent" ? node.item.id : node.id}
@@ -2117,10 +2267,10 @@ function TurnBlock({
       {complete && !expanded
         ? projection.history
             .filter(
-              (node): node is Extract<TurnDisplayNode, { kind: "user" }> =>
-                node.kind === "user",
+              (node): node is Extract<TurnDisplayNode, { kind: "input" }> =>
+                node.kind === "input",
             )
-            .map((node) => renderUserItem(node.item))
+            .map((node) => renderInputItem(node.item))
         : null}
       {complete && projection.finalItem !== null ? (
         <div className="turn-final">
@@ -2198,10 +2348,12 @@ function TurnFailureOutcome({
   diagnosticId: string | undefined;
 }) {
   const [showDetails, setShowDetails] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState(false);
   const firstLine = text.split("\n", 1)[0] ?? "";
   const summary =
     firstLine.length > 240 ? `${firstLine.slice(0, 240)}…` : firstLine;
-  const hasMore = text.length > summary.length;
+  const hasMore = text !== summary;
+  const hasDetails = hasMore || diagnosticId !== undefined;
   return (
     <div className="turn-outcome-failure">
       <p>
@@ -2214,12 +2366,20 @@ function TurnFailureOutcome({
         ) : null}
       </p>
       {showDetails ? (
-        <p className="turn-outcome-error" role="alert">
-          {text}
-        </p>
+        <div>
+          <p className="turn-outcome-error" role="alert">
+            {text}
+          </p>
+          {diagnosticId !== undefined ? (
+            <p>{i18n.t("shell:failureDiagnosticId", { id: diagnosticId })}</p>
+          ) : null}
+        </div>
+      ) : null}
+      {diagnosticsError ? (
+        <p role="alert">{i18n.t("shell:couldNotOpenModelDiagnostics")}</p>
       ) : null}
       <div className="turn-outcome-actions">
-        {hasMore ? (
+        {hasDetails ? (
           <button
             type="button"
             className="quiet-button"
@@ -2236,9 +2396,10 @@ function TurnFailureOutcome({
             type="button"
             className="quiet-button"
             onClick={() => {
+              setDiagnosticsError(false);
               void window.zenx.settings
-                .openDiagnosticsFolder()
-                .catch(() => undefined);
+                .openDiagnosticsFolder("model")
+                .catch(() => setDiagnosticsError(true));
             }}
           >
             {i18n.t("shell:openDiagnosticsFolder")}
@@ -2530,7 +2691,7 @@ function DisplayNode({
   pluginSnapshot,
   pluginUiRegistry,
 }: {
-  node: Exclude<TurnDisplayNode, { kind: "user" }>;
+  node: Exclude<TurnDisplayNode, { kind: "input" }>;
   observations: TraceObservationIndex;
   approvals: readonly ApprovalCardState[];
   turn: Turn;
@@ -2602,11 +2763,14 @@ function TraceSequence({
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expandedChoice, setExpanded] = useReadingDisclosure(
+    disclosureKey("trace", turn.id, node.id),
+  );
+  const expanded = expandedChoice ?? false;
+  const { choices, set: setChoice } = useReadingDisclosures();
   const sectionRef = useRef<HTMLElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
-  const [openItems, setOpenItems] = useState<Set<string>>(new Set());
-  const [visited, setVisited] = useState(false);
+  const [visited, setVisited] = useState(expanded);
   const [visitedItems, setVisitedItems] = useState<Set<string>>(new Set());
   const grouped = node.kind === "traceGroup";
   const activity = summarizeTraceActivity(
@@ -2627,7 +2791,7 @@ function TraceSequence({
     setVisited(true);
     if (!expanded && singleton !== null && singletonExpandable) {
       setVisitedItems((seen) => new Set(seen).add(singleton.id));
-      setOpenItems(new Set([singleton.id]));
+      setChoice(disclosureKey("item", turn.id, singleton.id), true);
     }
     setExpanded((current) => !current);
   };
@@ -2700,7 +2864,7 @@ function TraceSequence({
       )}
       {!grouped && singletonExpandable ? (
         <TraceReveal open={expanded} id={detailsId}>
-          {visited ? (
+          {visited || expanded ? (
             <TraceDetail
               item={singleton}
               pluginSnapshot={pluginSnapshot}
@@ -2711,7 +2875,7 @@ function TraceSequence({
       ) : null}
       {grouped ? (
         <TraceReveal open={expanded} id={detailsId}>
-          {visited ? (
+          {visited || expanded ? (
             <div
               className="trace-items"
               role="region"
@@ -2754,7 +2918,9 @@ function TraceSequence({
                     );
                   }
                   const { item, nested, parentToolName } = row;
-                  const open = openItems.has(item.id);
+                  const open =
+                    choices.get(disclosureKey("item", turn.id, item.id)) ??
+                    false;
                   const expandable = traceItemExpandable(item);
                   return (
                     <div
@@ -2778,12 +2944,10 @@ function TraceSequence({
                             setVisitedItems((current) =>
                               new Set(current).add(item.id),
                             );
-                            setOpenItems((current) => {
-                              const next = new Set(current);
-                              if (next.has(item.id)) next.delete(item.id);
-                              else next.add(item.id);
-                              return next;
-                            });
+                            setChoice(
+                              disclosureKey("item", turn.id, item.id),
+                              (current) => !current,
+                            );
                           }}
                         >
                           <TraceItemHeader
@@ -2809,7 +2973,7 @@ function TraceSequence({
                       )}
                       {expandable ? (
                         <TraceReveal open={open}>
-                          {visitedItems.has(item.id) ? (
+                          {visitedItems.has(item.id) || open ? (
                             <TraceDetail
                               item={item}
                               pluginSnapshot={pluginSnapshot}
@@ -2907,7 +3071,13 @@ function StatusMark({
       ? commandStatus(item)
       : commandPhaseLabel(phase);
   if (status === i18n.t("shell:completed")) return null;
-  return <small className={`tool-status ${item.status}`}>{status}</small>;
+  return (
+    <small
+      className={`tool-status ${phase === "imported" ? "imported" : item.status}`}
+    >
+      {status}
+    </small>
+  );
 }
 
 function TraceDetail({
@@ -3017,14 +3187,14 @@ function reasoningContentText(
   return item.content.join("\n");
 }
 
-function UserMessage({
+function InputMessage({
   item,
   attachments,
   turn,
   onOpenImage,
   onReadAttachment,
 }: {
-  item: Extract<ThreadItem, { type: "userMessage" }>;
+  item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
   attachments: readonly AttachmentRef[];
   turn: Turn;
   onOpenImage(
@@ -3036,7 +3206,29 @@ function UserMessage({
 }) {
   const text = item.content.map((content) => content.text).join("\n");
   return (
-    <article className="user-row">
+    <article
+      className={
+        item.type === "threadMessage"
+          ? "user-row thread-message-row"
+          : "user-row"
+      }
+    >
+      {item.type === "threadMessage" ? (
+        <small
+          className="thread-message-sender"
+          title={`${item.sender.deviceId === undefined ? "" : `${i18n.t("shell:threadMessageRemoteDetails")}\n`}${JSON.stringify(item.sender)}`}
+        >
+          {i18n.t(
+            item.sender.deviceId === undefined
+              ? "shell:threadMessageFrom"
+              : "shell:remoteThreadMessageFrom",
+            {
+              name:
+                item.sender.threadName ?? i18n.t("shell:threadMessageUnnamed"),
+            },
+          )}
+        </small>
+      ) : null}
       {attachments.length === 0 ? null : (
         <div
           className="message-images"
@@ -3060,8 +3252,16 @@ function UserMessage({
       )}
       <MessageActions
         className="user-message-actions"
-        copyLabel={i18n.t("shell:copyUserMessage")}
-        copiedLabel={i18n.t("shell:copiedUserMessage")}
+        copyLabel={i18n.t(
+          item.type === "threadMessage"
+            ? "shell:copyThreadMessage"
+            : "shell:copyUserMessage",
+        )}
+        copiedLabel={i18n.t(
+          item.type === "threadMessage"
+            ? "shell:copiedThreadMessage"
+            : "shell:copiedUserMessage",
+        )}
         text={text}
         turn={turn}
       />
@@ -3123,7 +3323,7 @@ function AgentMessage({
   usage?: ModelUsageAggregate;
 }) {
   return (
-    <article className="agent-copy">
+    <article className="agent-copy" data-read-message-id={item.id}>
       <Markdown text={item.text} />
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
       {showActions ? (
@@ -3196,7 +3396,37 @@ function MessageActions({
   );
 }
 
-function WakeupCard({ entry }: { entry: TriggerHistoryEntry }) {
+function WakeupCard(
+  props:
+    | { entry: TriggerHistoryEntry }
+    | {
+        item: Extract<ThreadItem, { type: "hostMessage" }>;
+        entry?: TriggerHistoryEntry;
+        turn: Turn;
+      },
+) {
+  if ("item" in props) {
+    const { item, entry, turn } = props;
+    return (
+      <article className="wakeup-card host-message-row">
+        <HostMessageContent
+          source={item.source}
+          sourceId={item.sourceId}
+          text={item.text}
+          prompt={entry?.prompt}
+          copyAction={false}
+        />
+        <MessageActions
+          className="host-message-actions"
+          copyLabel={i18n.t("shell:copyHostMessage")}
+          copiedLabel={i18n.t("shell:copiedHostMessage")}
+          text={item.text}
+          turn={turn}
+        />
+      </article>
+    );
+  }
+  const { entry } = props;
   return (
     <article className={`wakeup-card ${entry.status}`}>
       <header>

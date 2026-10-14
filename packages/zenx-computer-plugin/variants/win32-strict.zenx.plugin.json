@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 2,
+  "id": "computer",
+  "name": "Computer",
+  "version": "1.2.0",
+  "description": "Verified ZenX downstream UIA client with automatic focus disabled. Exact native controls support single semantic actions without requested activation; the target application may still change focus itself. Strict capture never restores or activates windows.",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls.",
+  "provider": {
+    "id": "zenx-winapp-uia",
+    "platforms": ["win32"],
+    "interactionModes": ["background_safe"],
+    "capabilities": [
+      "window.list",
+      "uia.inspect",
+      "uia.invoke",
+      "uia.set_value",
+      "uia.wait_for.verify",
+      "printwindow.capture",
+      "cancellable",
+      "bounded_output",
+      "uia.auto_set_focus_disabled",
+      "native_identity_revalidated",
+      "single_pattern_dispatch"
+    ]
+  },
+  "permissions": [
+    {
+      "id": "computer.accessibility.inspect",
+      "title": "Inspect a targeted app",
+      "description": "Read a bounded accessibility tree for an explicitly targeted app or window.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.accessibility.act",
+      "title": "Act on a targeted control",
+      "description": "Invoke or set a value through Windows UI Automation on an explicitly selected control.",
+      "scope": "local-device"
+    },
+    {
+      "id": "computer.window.capture",
+      "title": "Capture a targeted window",
+      "description": "Capture one explicitly targeted HWND without restoring or activating it. Unavailable background frames fail closed.",
+      "scope": "local-device"
+    }
+  ],
+  "tools": [
+    {
+      "name": "computer_list_windows",
+      "description": "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Copy a returned target directly into computer_inspect; this is not a catalog of installed apps.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["window.list", "no_global_input"],
+      "maxOutputBytes": 1048576
+    },
+    {
+      "name": "computer_inspect",
+      "description": "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. baseObservationId requests a diff only of a retained first-page baseline; omit it or set full:true to resync. target.windowTitle is required. Windows reads are scoped to one exact HWND through UI Automation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["uia.inspect", "app_targeted", "no_global_input"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "computer_press",
+      "description": "Invoke once on one freshly observed, uniquely identified native HWND control using the verified downstream UIA client with AutoSetFocus=false. No selector, other-pattern, activation or global-input fallback. Virtual and stale controls are refused. The target application itself can still change focus; interruption after possible dispatch has an unknown outcome and must not be retried automatically.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          }
+        },
+        "required": ["target", "control"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "uia.invoke",
+        "app_targeted",
+        "no_global_input",
+        "uia.auto_set_focus_disabled",
+        "native_identity_revalidated"
+      ]
+    },
+    {
+      "name": "computer_set_value",
+      "description": "Set and verify the exact supplied text on one freshly observed, uniquely identified native HWND control using the verified downstream UIA client with AutoSetFocus=false. No selector, other-pattern, activation or global-input fallback. Virtual and stale controls are refused. The target application itself can still change focus; interruption after possible dispatch has an unknown outcome and must not be retried automatically.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "control": {
+            "type": "object",
+            "properties": {
+              "observationId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": ["observationId", "targetId"]
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": ["target", "control", "value"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.act"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "uia.set_value",
+        "app_targeted",
+        "no_global_input",
+        "uia.auto_set_focus_disabled",
+        "native_identity_revalidated"
+      ]
+    },
+    {
+      "name": "computer_screenshot",
+      "description": "Capture one exact Windows HWND through a strict background PrintWindow helper. Minimized, hidden, protected or blank windows fail without activation. Returns private five-minute PNG metadata/path, never pixels in the Thread journal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.window.capture"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "printwindow.capture",
+        "app_targeted",
+        "no_global_input"
+      ],
+      "maxOutputBytes": 4096
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "before": {
+    "baseCommit": "5610974",
+    "sourceCommit": "5610974",
+    "sourceFiles": {
+      "App.tsx": "8d5bb7782f8d2d348e8736d00df2e9263ff7066020a3fc9c3bf90b0173df10f6",
+      "bundled-automation-ui.tsx": "cb40165f70bc3c019a33389023a7eb31b0281c7be713cac501b4785f315cc028",
+      "icons.tsx": "4338c1bd5010d0067c2f7f8a4e57d002fe2e91da1d5bfa45c874fc9decc47ef7",
+      "rooms-layout.css": "1920eff1ea74118c17d72e7d57e5df512e66e929ac687ba350c81357cba69b6f",
+      "i18n/panels.ts": "f2f66d0484e7946516842cb1df594f2a311217def4ecbcf0628ca664a707cadc"
+    },
+    "bundleSha256": "138890898c5b12e28911be1419c5adfa1c281ca3d40d620e60610447ad8ecf64",
+    "stylesheetSha256": "dde37ae2bb1cdfbfa8d302f3e9e69079097f57af4d92c698c6ab672bc915525b",
+    "fixtureSha256": "ab11250f9b78aa8036e41d8de07d7462de715a2b0c408d5d120de194315ffd32",
+    "createdAt": "2026-10-08T04:03:08.592Z"
+  },
+  "after": {
+    "baseCommit": "5610974",
+    "sourceCommit": "b34b9cfbd0f73aa1c08283bb21960a9410afd3ba",
+    "sourceFiles": {
+      "App.tsx": "c28b75d5f287acad773a94436a947d7ec4ec4a2b3bf0a89b7ce8ca9bf8d2de32",
+      "room-header.tsx": "62d6ba2d71feb275f2ad793f8d910d4ffdb1a80a96dffe365aa6b939d4e02540",
+      "bundled-automation-ui.tsx": "e3b1f3fb776d8c3e32d1ff5b7100f45a74d787088dd6409acf8d64abc52f38b2",
+      "RoomMessageSource.tsx": "ed172bc41a1fd1ceb9d6a00dabf8d5bea9ab60c5c979fa7aba97d7520b8e54e1",
+      "RoomMessageActions.tsx": "e1e1c016a134408522cdb8d8fd864ece4c1f2b8416f01ee3c4a7a8249187b852",
+      "RoomReplySetupNotice.tsx": "8bf6c8456658982da244523fa72d6fc4ac899e5eb52061dcf2d7f2433c96f5aa",
+      "room-message-actions.css": "1945bd58afe0236d915885ef4520bf4321c98bcaf419e3ca3fa0320d6dfda09d",
+      "icons.tsx": "3a227d6d01b7753a61dba5f72b39abcd8351e78b0e1efe1f265c80359984961a",
+      "room-history.ts": "8615d5089aeae36e63e5c107a26f8f1edbcdcd4719354247eaef7b5aa27c65d9",
+      "rooms-layout.css": "665a4ed2bf98467ad0752cd2b709df1e49e01ad452aacd5afe295b81c53d2c34",
+      "i18n/panels.ts": "3adb747390890edec237b46bcdeb5be36cdebb15d3b15880055934c1667bd7e5"
+    },
+    "bundleSha256": "0deb284cd24d3fe97e7164de9cbd657b5c203b1a27ef700ace37441cded3c67d",
+    "stylesheetSha256": "5520dfc77653c6f469a32b95f76f0246fbc4f12bdcfc28f6e4bbbd20f8da371f",
+    "fixtureSha256": "ab11250f9b78aa8036e41d8de07d7462de715a2b0c408d5d120de194315ffd32",
+    "createdAt": "2026-10-08T05:52:43.350Z",
+    "verifiedRendererMatchesCommit": true,
+    "sourceHashMatchesCommit": {
+      "App.tsx": true,
+      "room-header.tsx": true,
+      "bundled-automation-ui.tsx": true,
+      "RoomMessageSource.tsx": true,
+      "RoomMessageActions.tsx": true,
+      "RoomReplySetupNotice.tsx": true,
+      "room-message-actions.css": true,
+      "icons.tsx": true,
+      "room-history.ts": true,
+      "rooms-layout.css": true,
+      "i18n/panels.ts": true
+    }
+  },
+  "scope": "Actual Linux Electron full-App renderer with one matched synthetic IPC fixture; no live Host or private data."
+}

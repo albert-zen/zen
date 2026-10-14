@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,7 +16,10 @@ import {
   type ComputerInspection,
 } from "../src/main/capabilities/computer-provider.js";
 import { MemoryZenXPluginCatalogStore } from "../src/main/capabilities/plugin-catalog-store.js";
+import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
+import { createDelegatingFirstPartyProfileLoader } from "../src/main/first-party-profile-loader.js";
+import { createZenXTrustedPlugin } from "../../../packages/zenx-computer-plugin/src/runtime.js";
 import {
   runBoundedProcess,
   windowsComputerCapabilityManifest,
@@ -66,6 +76,7 @@ test("Windows provider maps WinApp JSON into opaque bounded UIA controls", async
   const capability = new ComputerZenXCapabilityPackage(
     backend,
     windowsComputerCapabilityManifest,
+    true,
   );
 
   const inspected = (await capability.invoke(
@@ -498,26 +509,202 @@ test("Windows provider rejects legacy inspect envelopes instead of silently misp
   );
 });
 
-test("Windows manifest exposes background-safe WinApp operations without unscoped input injection", () => {
-  assert.equal(
-    windowsComputerCapabilityManifest.provider.id,
-    "microsoft-winapp-cli",
-  );
-  assert.deepEqual(windowsComputerCapabilityManifest.provider.platforms, [
-    "win32",
-  ]);
-  assert.equal(
-    windowsComputerCapabilityManifest.tools.every(
-      (tool) => tool.interactionMode === "background_safe",
+test("Windows activating mutations are classified without removing read-only UIA or capture", () => {
+  const tools = windowsComputerCapabilityManifest.tools;
+  for (const name of ["computer_press", "computer_set_value"]) {
+    const tool = tools.find((entry) => entry.name === name)!;
+    assert.equal(tool.interactionMode, "foreground_required");
+    assert.ok(tool.permissions.includes("computer.foreground.control"));
+    assert.ok(tool.capabilities?.includes("may_activate_target"));
+  }
+  assert.ok(
+    windowsComputerCapabilityManifest.provider.interactionModes.includes(
+      "foreground_required",
     ),
-    true,
   );
+  for (const name of [
+    "computer_list_windows",
+    "computer_inspect",
+    "computer_screenshot",
+  ]) {
+    assert.equal(
+      tools.find((tool) => tool.name === name)?.interactionMode,
+      "background_safe",
+    );
+  }
   assert.equal(
-    windowsComputerCapabilityManifest.tools.some((tool) =>
-      tool.name.startsWith("computer_foreground_"),
-    ),
+    tools.some((tool) => tool.name.startsWith("computer_foreground_")),
     false,
   );
+});
+
+for (const toolName of ["computer_press", "computer_set_value"] as const) {
+  test(`Windows ${toolName} refuses before resolving or consuming the inspected control without foreground permission`, async () => {
+    const runner = new FixtureWinAppRunner();
+    const capability = new ComputerZenXCapabilityPackage(
+      new WinAppCliComputerBackend({ platform: "win32", runner }),
+      windowsComputerCapabilityManifest,
+    );
+    const inspected = (await capability.invoke(
+      "computer_inspect",
+      invocation({ target }),
+    )) as ComputerInspection;
+    const value = '中文 😀 "quoted" \\';
+    const args = {
+      target,
+      control:
+        inspected.controls[toolName === "computer_press" ? 0 : 1]!.selector,
+      ...(toolName === "computer_set_value" ? { value } : {}),
+    };
+    const before = runner.commands.length;
+    await assert.rejects(
+      capability.invoke(toolName, invocation(args)),
+      /foreground_required.*enable Foreground computer control/u,
+    );
+    assert.equal(
+      runner.commands.length,
+      before,
+      "denial must precede every native call and preserve the observation",
+    );
+    assert.equal(runner.writtenValue, "");
+    capability.setForegroundControlAllowed(true);
+    const result = (await capability.invoke(toolName, invocation(args))) as {
+      impact: string;
+      characterCount?: number;
+    };
+    assert.equal(result.impact, "foreground_takeover");
+    if (toolName === "computer_set_value") {
+      assert.equal(result.characterCount, value.length);
+      assert.equal(runner.writtenValue, value);
+    } else {
+      assert.equal(
+        runner.commands.filter((args) => args[1] === "invoke").length,
+        1,
+      );
+    }
+    capability.setForegroundControlAllowed(false);
+    await assert.rejects(
+      capability.invoke(toolName, invocation(args)),
+      /foreground_required/u,
+    );
+    await capability.close();
+  });
+
+  test(`Windows ${toolName} foreground permission can be revoked during its cancellation notice`, async () => {
+    const runner = new FixtureWinAppRunner();
+    const capability = new ComputerZenXCapabilityPackage(
+      new WinAppCliComputerBackend({ platform: "win32", runner }),
+      windowsComputerCapabilityManifest,
+      true,
+    );
+    const inspected = (await capability.invoke(
+      "computer_inspect",
+      invocation({ target }),
+    )) as ComputerInspection;
+    const before = runner.commands.length;
+    const execution = capability.invoke(
+      toolName,
+      invocation({
+        target,
+        control:
+          inspected.controls[toolName === "computer_press" ? 0 : 1]!.selector,
+        ...(toolName === "computer_set_value"
+          ? { value: "must not be written" }
+          : {}),
+      }),
+    );
+    capability.setForegroundControlAllowed(false);
+    capability.setForegroundControlAllowed(true);
+    await assert.rejects(execution, /foreground_required/u);
+    assert.equal(runner.commands.length, before);
+    await capability.close();
+  });
+}
+
+test("Windows host catalog hides activating mutations until explicit foreground permission and removes them on revoke", async () => {
+  const runner = new FixtureWinAppRunner();
+  const capability = new ComputerZenXCapabilityPackage(
+    new WinAppCliComputerBackend({ platform: "win32", runner }),
+    windowsComputerCapabilityManifest,
+  );
+  const catalog = new ZenXPluginCatalog(new MemoryZenXPluginCatalogStore(), {
+    platform: "win32",
+  });
+  await catalog.initialize();
+  await catalog.install(capability, "bundled");
+  const exposed = (name: string) =>
+    catalog.hostSnapshot().definitions.some((tool) => tool.name === name);
+  assert.equal(exposed("computer_inspect"), true);
+  assert.equal(exposed("computer_screenshot"), true);
+  for (const name of ["computer_press", "computer_set_value"]) {
+    assert.equal(exposed(name), false);
+    assert.throws(
+      () => catalog.assertToolExposed(name),
+      /foreground_required/u,
+    );
+  }
+  catalog.setForegroundRequiredAllowed(true);
+  for (const name of ["computer_press", "computer_set_value"]) {
+    assert.equal(exposed(name), true);
+    catalog.assertToolExposed(name);
+  }
+  catalog.setForegroundRequiredAllowed(false);
+  for (const name of ["computer_press", "computer_set_value"]) {
+    assert.equal(exposed(name), false);
+  }
+  assert.equal(exposed("computer_inspect"), true);
+  await catalog.close();
+});
+
+test("Windows activating mutations reject stale background-safe profile metadata at the actual delegated service", async () => {
+  const runner = new FixtureWinAppRunner();
+  const service = new ComputerZenXCapabilityPackage(
+    new WinAppCliComputerBackend({ platform: "win32", runner }),
+    windowsComputerCapabilityManifest,
+  );
+  const runtime = createDelegatingFirstPartyProfileLoader(() => service)({
+    createZenXTrustedPlugin,
+  });
+  const staleManifest = structuredClone(windowsComputerCapabilityManifest);
+  staleManifest.version = "1.1.3";
+  for (const tool of staleManifest.tools) {
+    if (tool.name !== "computer_press" && tool.name !== "computer_set_value")
+      continue;
+    tool.interactionMode = "background_safe";
+    tool.permissions = tool.permissions.filter(
+      (permission) => permission !== "computer.foreground.control",
+    );
+  }
+  const catalog = new ZenXPluginCatalog(new MemoryZenXPluginCatalogStore(), {
+    platform: "win32",
+  });
+  await catalog.initialize();
+  await catalog.install(
+    { manifest: staleManifest, invoke: runtime.invoke },
+    "bundled",
+  );
+  try {
+    for (const name of ["computer_press", "computer_set_value"]) {
+      catalog.assertToolExposed(name);
+      await assert.rejects(
+        runtime.invoke(
+          name,
+          invocation({
+            target,
+            control: { observationId: "old", targetId: "old" },
+            ...(name === "computer_set_value"
+              ? { value: "must not be written" }
+              : {}),
+          }),
+        ),
+        /foreground_required/u,
+      );
+    }
+    assert.equal(runner.commands.length, 0);
+  } finally {
+    await catalog.close();
+    await service.close();
+  }
 });
 
 test("WinApp diagnostic is actionable without installing on non-Windows test hosts", async () => {
@@ -683,6 +870,97 @@ test("WinApp process runner enforces cancellation, timeout, and output bounds", 
   ).catch((error: unknown) => error);
   assert.match(String(sensitiveFailure), /\[REDACTED\]/u);
   assert.doesNotMatch(String(sensitiveFailure), /exact-private-value/u);
+});
+
+test("revoking foreground permission during WinApp launch preparation prevents process spawn", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-winapp-preparation-"),
+  );
+  const marker = path.join(directory, "must-not-exist");
+  const controller = new AbortController();
+  let entered!: () => void;
+  const preparing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const operation = runBoundedProcess(
+    process.execPath,
+    [
+      "-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unsafe spawn');`,
+    ],
+    {
+      timeoutMs: 3000,
+      signal: controller.signal,
+      verifyBeforeSpawn: async () => {
+        entered();
+        await gate;
+      },
+    },
+  );
+  await preparing;
+  controller.abort(new Error("foreground_required permission revoked"));
+  release();
+  await assert.rejects(operation, /foreground_required/u);
+  await assert.rejects(readFile(marker), { code: "ENOENT" });
+  await rm(directory, { recursive: true, force: true });
+});
+
+test("WinApp cancellation settles and releases its binding only after the real child is gone", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-winapp-settlement-"),
+  );
+  const ready = path.join(directory, "ready");
+  const controller = new AbortController();
+  let childPid: number | undefined;
+  let aliveWhenReleased: boolean | undefined;
+  const operation = runBoundedProcess(
+    process.execPath,
+    [
+      "-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`,
+    ],
+    {
+      timeoutMs: 5000,
+      signal: controller.signal,
+      bindBeforeSpawn: async () => async () => {
+        try {
+          process.kill(childPid!, 0);
+          aliveWhenReleased = true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+          aliveWhenReleased = false;
+        }
+      },
+    },
+  );
+  const rejection = assert.rejects(operation, /fixture cancellation/u);
+  try {
+    const deadline = Date.now() + 3000;
+    while (childPid === undefined && Date.now() < deadline) {
+      try {
+        childPid = Number(await readFile(ready, "utf8"));
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    assert.ok(childPid);
+    controller.abort(new Error("fixture cancellation"));
+    await rejection;
+    assert.equal(
+      aliveWhenReleased,
+      false,
+      "kill request is not observed process termination",
+    );
+    assert.throws(() => process.kill(childPid!, 0), { code: "ESRCH" });
+  } finally {
+    controller.abort(new Error("fixture cancellation"));
+    await rejection;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 class FixtureWinAppRunner implements WinAppCliRunner {

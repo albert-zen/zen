@@ -353,8 +353,11 @@ contextBridge.exposeInMainWorld("zenx", {
     ): Promise<void> => {
       await ipcRenderer.invoke(ipcChannels.settingsDiagnosticRecord, event);
     },
-    openDiagnosticsFolder: async (): Promise<void> => {
-      await ipcRenderer.invoke(ipcChannels.settingsDiagnosticsOpenFolder);
+    openDiagnosticsFolder: async (source?: "model"): Promise<void> => {
+      await ipcRenderer.invoke(
+        ipcChannels.settingsDiagnosticsOpenFolder,
+        source,
+      );
     },
     addProvider: async (
       provider: ZenXProviderProfile,
@@ -514,6 +517,12 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.computerReadinessOpenSettings, kind),
   },
   browserObservation: {
+    openExternal: async (threadId: string, targetId: string): Promise<void> =>
+      await ipcRenderer.invoke(
+        ipcChannels.browserOpenExternal,
+        threadId,
+        targetId,
+      ),
     subscribe: (
       request: BrowserThreadRequest,
       listener: (event: BrowserThreadEvent) => void,

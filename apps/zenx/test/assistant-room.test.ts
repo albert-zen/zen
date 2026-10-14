@@ -1,3 +1,9 @@
+import "./dom-primitives.js";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import { JSDOM } from "jsdom";
+import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
+import { createZenXRoomsProfileLoader } from "../src/main/rooms-profile-loader.js";
 import { ALWAYS_ON_ASSISTANT_PROMPT } from "../src/main/assistant-preset.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -10,10 +16,8 @@ import {
   type ZenXTriggerAppServerPort,
 } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
-import type {
-  ClientRequestParams,
-  ClientRequestResults,
-} from "../src/protocol-client/index.js";
+import type { ClientRequestParams } from "../src/protocol-client/index.js";
+import type { NativeThreadRecoverySnapshot } from "../../../src/protocol/native/recovery.js";
 import {
   createZenXTrustedPlugin,
   type ZenXRoomsTrustedService,
@@ -23,17 +27,72 @@ class ModelStub implements ZenXTriggerAppServerPort {
   listener:
     Parameters<ZenXTriggerAppServerPort["onNotification"]>[0] | undefined;
   requests: ClientRequestParams["turn/start"][] = [];
+  readRequests: string[] = [];
   failure = false;
-  async request(
-    _method: "turn/start",
-    params: ClientRequestParams["turn/start"],
-  ): Promise<ClientRequestResults["turn/start"]> {
-    this.requests.push(params);
+  wakeups: Array<{
+    threadId: string;
+    clientId: string;
+    source: "bootstrap";
+    text: string;
+  }> = [];
+  async request(method: any, params: any): Promise<any> {
+    if (method === "zen/thread/resume") {
+      this.readRequests.push(params.threadId);
+      // A failed wake has no canonical receipt in this fixture. Recovery is
+      // read-only and must not fabricate another wake or a completion event.
+      return {
+        processEpoch: "model-stub",
+        threadId: params.threadId,
+        watermark: 0,
+        thread: {
+          id: params.threadId,
+          items: [],
+          turns: [],
+          cwd: tmpdir(),
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+          model: "fake",
+          provider: "fake",
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
+          archived: false,
+        },
+        events: [],
+      } satisfies NativeThreadRecoverySnapshot;
+    }
+    assert.equal(method, "zen/turn/wake", "Unexpected ModelStub RPC method");
+    const request =
+      params.text === undefined
+        ? params
+        : {
+            threadId: params.threadId,
+            clientUserMessageId: params.clientId,
+            input: [{ type: "text", text: params.text }],
+          };
+    this.requests.push(request);
+    if (params.source === "bootstrap") this.wakeups.push(params);
     if (this.failure) throw new Error("thread_busy");
-    return {
+    const turnId = `turn-${this.requests.length}`;
+    this.listener?.("turn/completed", {
+      threadId: params.threadId,
       turn: {
-        id: `turn-${this.requests.length}`,
+        id: turnId,
+        status: "completed",
+        itemsView: "full",
+        error: null,
+        startedAt: 0,
+        completedAt: 1,
+        durationMs: 1,
         items: [
+          {
+            type: "hostMessage",
+            id: randomUUID(),
+            clientId: params.clientId,
+            source: params.source,
+            text: params.text,
+            mode: "start",
+          },
           {
             id: randomUUID(),
             type: "agentMessage",
@@ -42,33 +101,17 @@ class ModelStub implements ZenXTriggerAppServerPort {
             text: "Mock assistant reply",
           },
         ],
-        itemsView: "full",
-        status: "completed",
-        error: null,
-        startedAt: 0,
-        completedAt: 1,
-        durationMs: 1,
-      },
-    };
-  }
-  async sendAssistant(params: ClientRequestParams["turn/queue"]) {
-    const result = await this.request("turn/start", params);
-    this.listener?.("turn/completed", {
-      threadId: params.threadId,
-      turn: {
-        ...result.turn,
-        items: [
-          {
-            type: "userMessage",
-            id: randomUUID(),
-            clientId: params.clientUserMessageId ?? null,
-            content: [{ type: "text", text: "input", text_elements: [] }],
-          },
-          ...result.turn.items,
-        ],
       },
     });
-    return { turnId: result.turn.id };
+    return { mode: "start", turnId };
+  }
+  async sendAssistant(params: ClientRequestParams["turn/queue"]) {
+    return this.request("zen/turn/wake", {
+      threadId: params.threadId,
+      clientId: params.clientUserMessageId,
+      source: "room",
+      text: JSON.stringify(params.input),
+    });
   }
   onNotification(
     listener: Parameters<ZenXTriggerAppServerPort["onNotification"]>[0],
@@ -149,9 +192,19 @@ test("busy wakeup is explicit failure and never auto-retried", async () => {
     assert.equal(f.model.requests.length, 1);
     assert.equal(f.service.snapshot().history[0]?.status, "failed");
     assert.match(f.service.snapshot().history[0]?.error ?? "", /thread_busy/);
+    assert.deepEqual(f.model.readRequests, []);
+    const messages = structuredClone(f.service.snapshot().rooms[0]!.messages);
+    assert.equal(
+      messages.filter((message) => message.kind === "agent").length,
+      0,
+    );
     await f.service.stop();
     await f.service.start();
+    assert.deepEqual(f.model.readRequests, ["chief-thread"]);
     assert.equal(f.model.requests.length, 1);
+    assert.equal(f.service.snapshot().history[0]?.status, "failed");
+    assert.equal(f.service.snapshot().history[0]?.delivery, "unknown");
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, messages);
   } finally {
     await f.close();
   }
@@ -233,11 +286,15 @@ test("model arguments cannot impersonate trusted assistant setup or pause UI", a
     setAssistantReplies: async () => {
       setups++;
     },
+    setAssistantDeliveryMode: async () => {
+      setups++;
+    },
   } as unknown as ZenXRoomsTrustedService;
   const runtime = createZenXTrustedPlugin(service);
   for (const toolName of [
     "zenx_rooms_create_assistant",
     "zenx_rooms_assistant_replies",
+    "zenx_rooms_assistant_delivery",
   ]) {
     await assert.rejects(
       runtime.invoke(toolName, {
@@ -372,6 +429,613 @@ test("direct working Thread completion stays out of the PAW Room", async () => {
       f.service.snapshot().rooms[0]!.messages.map((m) => m.text),
       ["Explicit IM reply"],
     );
+  } finally {
+    await f.close();
+  }
+});
+
+test("renaming a PAW atomically updates its speaking identity and mention without renaming the working Thread", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    await f.service.renameRoom(room.id, "Nova");
+    const saved = await f.store.read();
+    assert.equal(saved.rooms[0]?.name, "Nova");
+    assert.equal(saved.rooms[0]?.members[0]?.name, "Nova");
+    assert.equal(saved.rooms[0]?.members[0]?.threadId, "chief-thread");
+    assert.equal(saved.triggers[0]?.room?.mention, "Nova");
+    assert.equal(f.model.requests.length, 0);
+    await assert.rejects(f.service.renameRoom(room.id, "x".repeat(129)));
+    assert.equal((await f.store.read()).rooms[0]?.name, "Nova");
+  } finally {
+    await f.close();
+  }
+});
+
+test("conversation introduction receipt survives restart and the bound naming tool updates future speakers", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom({
+      name: "PAW",
+      members: [{ name: "PAW", threadId: "chief-thread" }],
+    });
+    const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "en");
+    await f.service.startAssistantIntroduction(room.id, operationId);
+    assert.equal(f.service.snapshot().rooms[0]!.messages.length, 0);
+    assert.match(f.model.wakeups[0]!.text, /Host bootstrap event/);
+    assert.doesNotMatch(f.model.wakeups[0]!.text, /Current user message/);
+    await f.service.acknowledgeRoomOperation(room.id, operationId);
+    const requests = f.model.requests.length;
+    assert.equal(requests, 1);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    const invoke = (tool: string, args: Record<string, unknown>) =>
+      runtime.invoke(tool, {
+        callId: randomUUID(),
+        threadId: "chief-thread",
+        cwd: "/project",
+        arguments: args,
+        signal: new AbortController().signal,
+      });
+    // Scripted model actions traverse the production tool/Host/store seam.
+    await invoke("zenx_rooms_post_message", {
+      roomId: room.id,
+      text: "Welcome. What would you like to call me?",
+    });
+    await f.service.postRoomMessage(room.id, "You", "Call yourself Nova");
+    await invoke("zenx_rooms_rename", { roomId: room.id, name: "Nova" });
+    await invoke("zenx_rooms_post_message", {
+      roomId: room.id,
+      text: "My name is now Nova.",
+    });
+    const renamed = f.service
+      .snapshot()
+      .rooms.find((entry) => entry.id === room.id)!;
+    assert.equal(renamed.name, "Nova");
+    assert.equal(renamed.members[0]!.name, "Nova");
+    assert.equal(renamed.messages.at(-1)!.author, "Nova");
+    assert.equal(
+      renamed.messages.find((message) => message.text.startsWith("Welcome"))!
+        .author,
+      "PAW",
+    );
+    const beforeRestart = f.model.requests.length;
+    await f.service.stop();
+    await f.service.start();
+    assert.equal(f.model.requests.length, beforeRestart);
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "zh");
+    await f.service.startAssistantIntroduction(room.id, operationId);
+    assert.equal(f.model.requests.length, beforeRestart);
+    assert.equal(
+      f.service
+        .snapshot()
+        .rooms[0]!.messages.filter((message) => message.kind === "human")
+        .length,
+      1,
+    );
+    assert.equal(f.service.snapshot().rooms[0]!.name, "Nova");
+  } finally {
+    await f.close();
+  }
+});
+
+test("explicit Start introduction works after cancelling an unsent introduction", async () => {
+  const f = await fixture();
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  });
+  dom.window.HTMLElement.prototype.scrollTo = () => {};
+  Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "en");
+    await f.service.cancelPreparedRoomOperation(room.id, operationId);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    let settleIntroduction!: () => void;
+    const introductionSettled = new Promise<void>((resolve) => {
+      settleIntroduction = resolve;
+    });
+    const sdk = {
+      context: {
+        route: `/plugins/zenx-rooms/rooms?roomId=${room.id}`,
+        primaryNavigation: true,
+      },
+      navigation: { navigate: () => {} },
+      commands: {
+        execute: async (id: string, input: any = {}) => {
+          try {
+            const result = await runtime.invoke(
+              `zenx_rooms_${id.replaceAll("-", "_")}`,
+              {
+                callId: randomUUID(),
+                trustedPluginUi: true,
+                cwd: "/project",
+                signal: new AbortController().signal,
+                arguments: { input },
+              },
+            );
+            if (id === "ack-operation") settleIntroduction();
+            return result;
+          } catch (error) {
+            if (id === "prepare-introduction" || id === "start-introduction")
+              settleIntroduction();
+            throw error;
+          }
+        },
+      },
+    };
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    const start = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((b) => b.textContent === "Start introduction")!;
+    assert.ok(
+      start,
+      "cancelled operation is acknowledged and the start button is offered again",
+    );
+    await act(async () => {
+      start.click();
+      await introductionSettled;
+    });
+    assert.equal(f.model.requests.length, 1, document.body.textContent!);
+    assert.equal(
+      f.service.roomOperation(room.id, operationId).state,
+      "cancelled",
+    );
+    assert.equal(f.service.snapshot().rooms[0]!.messages.length, 0);
+    assert.equal(
+      f.service
+        .snapshot()
+        .rooms[0]!.operations?.filter((entry) => entry.wakeupId !== undefined)
+        .length,
+      1,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    await f.close();
+  }
+});
+
+test("restarted introduction retains its new operation when delivery and refresh are uncertain", async () => {
+  const f = await fixture();
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  });
+  dom.window.HTMLElement.prototype.scrollTo = () => {};
+  Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const operationId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    await f.service.prepareAssistantIntroduction(room.id, operationId, "en");
+    await f.service.cancelPreparedRoomOperation(room.id, operationId);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    let hideResult = false;
+    const prepared: string[] = [];
+    const sdk = {
+      context: {
+        route: `/plugins/zenx-rooms/rooms?roomId=${room.id}`,
+        primaryNavigation: true,
+      },
+      navigation: { navigate: () => {} },
+      commands: {
+        execute: async (id: string, input: any = {}) => {
+          if (id === "list" && hideResult)
+            throw Error("list transport unavailable");
+          if (id === "prepare-introduction") prepared.push(input.operationId);
+          const result = await runtime.invoke(
+            `zenx_rooms_${id.replaceAll("-", "_")}`,
+            {
+              callId: randomUUID(),
+              trustedPluginUi: true,
+              cwd: "/project",
+              signal: new AbortController().signal,
+              arguments: { input },
+            },
+          );
+          if (id === "start-introduction") {
+            hideResult = true;
+            throw Error("post result lost after admission");
+          }
+          return result;
+        },
+      },
+    };
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    const startButton = () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent === "Start introduction",
+      )!;
+    await act(async () => startButton().click());
+    for (let i = 0; i < 100 && startButton()?.disabled; i++)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    assert.equal(
+      f.model.requests.length,
+      1,
+      "the first renewed introduction was accepted exactly once",
+    );
+    assert.ok(
+      startButton() && !startButton().disabled,
+      "the UI offers an explicit retry after its delivery and list reads fail",
+    );
+    await act(async () => startButton().click());
+    for (let i = 0; i < 100 && startButton()?.disabled; i++)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    assert.equal(
+      f.model.requests.length,
+      1,
+      `an uncertain introduction must never dispatch a second model turn; prepared operations: ${prepared.join(", ")}`,
+    );
+    assert.equal(
+      new Set(prepared).size,
+      1,
+      `uncertain retry must retain its renewed operation: ${prepared.join(", ")}`,
+    );
+    await act(async () => root.render(null));
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    assert.equal(
+      startButton(),
+      undefined,
+      "unknown Host state after remount cannot authorize a new introduction",
+    );
+    assert.equal(f.model.requests.length, 1);
+    hideResult = false;
+    await act(async () => root.render(null));
+    await act(async () =>
+      root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+    );
+    assert.equal(
+      startButton(),
+      undefined,
+      "Host receipt and saved message recover the existing attempt after remount",
+    );
+    assert.equal(f.model.requests.length, 1);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    await f.close();
+  }
+});
+
+test("restarted introduction lookup across remount retains one admission", async () => {
+  const f = await fixture();
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  });
+  dom.window.HTMLElement.prototype.scrollTo = () => {};
+  Object.assign(window, { zenx: { threads: { list: async () => [] } } });
+  const root = createRoot(document.getElementById("root")!);
+  let releaseLookup!: () => void;
+  const heldLookup = new Promise<void>((resolve) => (releaseLookup = resolve));
+  let lookupHeld = false;
+  let acks = 0;
+  const prepared: string[] = [];
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const originalId = `${room.operationEpoch}:00000000-0000-4000-8000-000000000001`;
+    await f.service.prepareAssistantIntroduction(room.id, originalId, "en");
+    await f.service.cancelPreparedRoomOperation(room.id, originalId);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    const sdk = {
+      context: {
+        route: `/plugins/zenx-rooms/rooms?roomId=${room.id}`,
+        primaryNavigation: true,
+      },
+      navigation: { navigate: () => {} },
+      commands: {
+        execute: async (id: string, input: any = {}) => {
+          if (id === "prepare-introduction") prepared.push(input.operationId);
+          const result = await runtime.invoke(
+            `zenx_rooms_${id.replaceAll("-", "_")}`,
+            {
+              callId: randomUUID(),
+              trustedPluginUi: true,
+              cwd: "/project",
+              signal: new AbortController().signal,
+              arguments: { input },
+            },
+          );
+          if (id === "operation" && !lookupHeld) {
+            lookupHeld = true;
+            await heldLookup;
+          }
+          if (id === "ack-operation") acks++;
+          return result;
+        },
+      },
+    };
+    const render = () =>
+      act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk: sdk as any })),
+      );
+    const start = () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent === "Start introduction",
+      );
+    const until = async (condition: () => boolean) => {
+      for (let i = 0; i < 100 && !condition(); i++)
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 10));
+        });
+      assert.ok(condition());
+    };
+    await render();
+    await act(async () => start()!.click());
+    await until(() => lookupHeld);
+    assert.equal(f.model.requests.length, 0);
+    // Leaving the plugin surface and returning remounts RoomsPage, while its
+    // existing command promise still settles normally through PluginUiHost.
+    await act(async () => root.render(null));
+    await render();
+    assert.ok(
+      start() && !start()!.disabled,
+      "the new viewport offers Start while the old read is pending",
+    );
+    await act(async () => start()!.click());
+    await until(() => acks === 1);
+    assert.equal(f.model.requests.length, 1);
+    await act(async () => releaseLookup());
+    await until(() => acks === 2);
+    assert.equal(
+      f.model.requests.length,
+      1,
+      `the old viewport must not independently send a second introduction: ${prepared.join(", ")}`,
+    );
+  } finally {
+    releaseLookup();
+    await act(async () => root.unmount());
+    dom.window.close();
+    await f.close();
+  }
+});
+
+test("PAW bootstrap is an honest Host event with no Room sender, and early completion is retained", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    const operation = await f.service.prepareAssistantIntroduction(
+      room.id,
+      id,
+      "zh",
+    );
+    assert.equal(operation.kind, "assistantIntroduction");
+    assert.equal(operation.messageId, null);
+    assert.equal(f.model.requests.length, 0);
+    await assert.rejects(
+      f.service.postPreparedRoomMessage(room.id, id, operation.text),
+      /different message/,
+    );
+    await Promise.all([
+      f.service.startAssistantIntroduction(room.id, id),
+      f.service.startAssistantIntroduction(room.id, id),
+    ]);
+    assert.equal(f.model.wakeups.length, 1);
+    assert.equal(f.model.wakeups[0]!.source, "bootstrap");
+    assert.match(f.model.wakeups[0]!.text, /Write the welcome in Chinese/);
+    const snapshot = f.service.snapshot();
+    assert.deepEqual(snapshot.rooms[0]!.messages, []);
+    assert.equal(snapshot.history.length, 1);
+    assert.equal(snapshot.history[0]!.sourceRoomMessageId, null);
+    assert.equal(
+      snapshot.history[0]!.status,
+      "completed",
+      "completion before admission response must not remain running",
+    );
+    const receipt = f.service.roomOperation(room.id, id);
+    assert.equal(receipt.state, "saved");
+    assert.equal(receipt.messageId, null);
+    assert.equal(receipt.wakeupId, snapshot.history[0]!.id);
+    await assert.rejects(
+      f.service.cancelPreparedRoomOperation(room.id, id),
+      /Cannot cancel an admitted/,
+    );
+    await assert.rejects(
+      f.service.prepareRoomMessage(room.id, id, operation.text),
+      /different message/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("interrupted preparation remains explicit and cancellable across restart without a fabricated welcome", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    await f.service.prepareAssistantIntroduction(room.id, id, "en");
+    await f.service.stop();
+    await f.service.start();
+    assert.equal(f.service.roomOperation(room.id, id).state, "prepared");
+    assert.equal(f.model.wakeups.length, 0);
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, []);
+    await f.service.cancelPreparedRoomOperation(room.id, id);
+    await f.service.stop();
+    await f.service.start();
+    await assert.rejects(
+      f.service.startAssistantIntroduction(room.id, id),
+      /cancelled/,
+    );
+    assert.equal(f.service.roomOperation(room.id, id).state, "cancelled");
+    assert.equal(f.model.wakeups.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed bootstrap delivery stays explicit and never redispatches after restart", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    f.model.failure = true;
+    await f.service.prepareAssistantIntroduction(room.id, id, "en");
+    await f.service.startAssistantIntroduction(room.id, id);
+    assert.equal(f.service.snapshot().history[0]!.status, "failed");
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, []);
+    await f.service.acknowledgeRoomOperation(room.id, id);
+    await f.service.stop();
+    await f.service.start();
+    f.model.failure = false;
+    await f.service.startAssistantIntroduction(room.id, id);
+    assert.equal(f.model.wakeups.length, 1);
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    const result = (await runtime.invoke("zenx_rooms_list", {
+      callId: randomUUID(),
+      trustedPluginUi: true,
+      cwd: "/project",
+      arguments: { input: {} },
+      signal: new AbortController().signal,
+    })) as { rooms: Array<{ introduction: { state: string; error: string } }> };
+    assert.equal(result.rooms[0]!.introduction.state, "failed");
+    assert.match(
+      result.rooms[0]!.introduction.error,
+      /No matching canonical Host receipt.*no wakeup was resent/,
+    );
+    assert.equal(f.model.readRequests.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("bootstrap commands require trusted UI and cannot be reinterpreted as ordinary Room messaging", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    const runtime = createZenXRoomsProfileLoader(() => f.service as never)({
+      createZenXTrustedPlugin,
+    });
+    for (const tool of [
+      "zenx_rooms_prepare_introduction",
+      "zenx_rooms_start_introduction",
+    ]) {
+      await assert.rejects(
+        runtime.invoke(tool, {
+          callId: randomUUID(),
+          threadId: "chief-thread",
+          cwd: "/project",
+          arguments: { roomId: room.id, operationId: id, language: "en" },
+          signal: new AbortController().signal,
+        }),
+        /Trusted Room UI required/,
+      );
+    }
+    const ordinary = await f.service.createRoom(input);
+    await assert.rejects(
+      f.service.prepareAssistantIntroduction(
+        ordinary.id,
+        `${ordinary.operationEpoch}:${randomUUID()}`,
+        "en",
+      ),
+      /PAW assistant Room/,
+    );
+    assert.equal(f.model.wakeups.length, 0);
+    assert.deepEqual(
+      f.service.snapshot().rooms.map((entry) => entry.messages),
+      [[], []],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("bootstrap reconciles the exact admitted terminal Turn when its completion event is already gone", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const id = `${room.operationEpoch}:${randomUUID()}`;
+    const originalRequest = f.model.request.bind(f.model);
+    let admitted: {
+      threadId: string;
+      clientId: string;
+      source: "bootstrap";
+      text: string;
+    };
+    let reads = 0;
+    f.model.request = async (method, params) => {
+      if (method === "zen/turn/wake") {
+        admitted = params;
+        f.model.wakeups.push(params);
+        return { mode: "start", turnId: "early-terminal" };
+      }
+      assert.equal(method, "zen/thread/resume");
+      reads++;
+      const recovery = await originalRequest(method, params);
+      return {
+        ...recovery,
+        thread: {
+          ...recovery.thread,
+          items: [
+            {
+              id: "canonical-bootstrap",
+              threadId: admitted.threadId,
+              turnId: "early-terminal",
+              createdAt: "2026-01-01T00:00:00Z",
+              type: "host_message",
+              sender: "host",
+              mode: "start",
+              clientId: admitted.clientId,
+              source: admitted.source,
+              text: admitted.text,
+            },
+          ],
+          turns: [{ id: "early-terminal", status: "completed", items: [] }],
+        },
+      };
+    };
+    await f.service.prepareAssistantIntroduction(room.id, id, "en");
+    await f.service.startAssistantIntroduction(room.id, id);
+    assert.equal(reads, 1);
+    assert.equal(f.service.snapshot().history[0]!.status, "completed");
+    assert.deepEqual(f.service.snapshot().rooms[0]!.messages, []);
   } finally {
     await f.close();
   }

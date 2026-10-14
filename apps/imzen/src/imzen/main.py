@@ -5,7 +5,7 @@ import signal
 from pathlib import Path
 
 from imagent import Gateway, GatewayExtensions, ProjectionPolicy, SQLiteGatewayStore
-from imagent.applications import ZenApplicationAdapter
+from imagent.applications import InputContinuationPreference, ZenApplicationAdapter
 from imagent.applications.adapters.appserver.client import AppServerClient, AppServerSupervisor
 
 from .channels import build_channels, load_channel_config, shared_media_root
@@ -18,6 +18,7 @@ from .controller import (
     ImZenRequestPresenter,
     thread_start_options,
 )
+from .queued_input import ImZenQueuedInputPresenter
 
 
 async def run(settings: Settings | None = None) -> None:
@@ -185,6 +186,11 @@ def create_gateway(
         applications=[application],
         store=gateway_state,
         controller=controller,
+        input_continuation=(
+            InputContinuationPreference.QUEUE
+            if resolved.input_continuation == "queue"
+            else InputContinuationPreference.PREFER_ACTIVE_TURN
+        ),
         projection_policy=ProjectionPolicy.FOREGROUND_ONLY,
         delivery_authorizer=delivery_authorizer,
         extensions=GatewayExtensions(
@@ -193,6 +199,7 @@ def create_gateway(
             inbound_content_transformer=ImZenContentTransformer(shared_filesystem_root),
             inbound_failure_presenter=ImZenFailurePresenter(),
             request_presenter=ImZenRequestPresenter(),
+            queued_input_presenter=ImZenQueuedInputPresenter(),
         ),
     )
     return gateway, gateway_state

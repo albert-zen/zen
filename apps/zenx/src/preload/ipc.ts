@@ -86,6 +86,7 @@ export const ipcChannels = {
   pluginsChanged: "zenx:plugins:changed",
   browserLiveSubscribe: "zenx:browser-live:subscribe",
   browserLiveUnsubscribe: "zenx:browser-live:unsubscribe",
+  browserOpenExternal: "zenx:browser-live:open-external",
   browserLiveEvent: "zenx:browser-live:event",
   computerLiveSubscribe: "zenx:computer-live:subscribe",
   computerLiveUnsubscribe: "zenx:computer-live:unsubscribe",

@@ -39,6 +39,12 @@ import {
   type SidebarOrderPlacement,
 } from "./thread-list.js";
 
+import {
+  nextSidebarTrigger,
+  useSidebarTriggers,
+  type SidebarTriggerState,
+} from "./sidebar-thread-information.js";
+
 import { startSidebarDrag } from "./sidebar-drag.js";
 
 import { useSidebarExpansion } from "./sidebar-expansion.js";
@@ -55,10 +61,18 @@ import {
 
 const THREAD_DENSITY_STORAGE_KEY = "zenx.sidebar.thread-density";
 type ThreadDensity = "compact" | "detailed";
-const SidebarSettingsContext = createContext<PublicHostSettings | null>(null);
+const SidebarSettingsContext = createContext<{
+  settings: PublicHostSettings | null;
+  projects: ZenXProjectProjectionSnapshot;
+  triggers: SidebarTriggerState;
+  refreshTriggers(): Promise<void>;
+  unreadThreadIds: ReadonlySet<string>;
+  selectionKey: string;
+} | null>(null);
 
 interface SidebarProps {
   collapsed?: boolean;
+  unreadThreadIds?: ReadonlySet<string>;
   mode: SidebarMode;
   open: boolean;
   onClose(): void;
@@ -77,9 +91,17 @@ interface SidebarProps {
     targetThreadId: string,
     placement: SidebarOrderPlacement,
   ): Promise<void>;
+  /** Reordering inside the Pinned section permutes the pinnedThreadIds
+   * preference itself; it never touches Project or Thread ordering. */
+  onReorderPinnedThread?(
+    sourceThreadId: string,
+    targetThreadId: string,
+    placement: SidebarOrderPlacement,
+  ): Promise<void>;
   onNewThread(workspace?: string): void;
   newThreadDisabled?: boolean;
   onAddProject(): void;
+  onImportSession?(): void;
   onRemoveProject(workspace: string): void;
   onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
@@ -91,6 +113,7 @@ interface SidebarProps {
   onSelectThread(threadId: string): void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   pluginContributions: readonly LoadedPluginContribution[];
+  triggerAdmissionId?: string | null;
   roomConversations?: RoomConversationState;
   selectedRoomId?: string | null;
   selectedPage: string;
@@ -107,6 +130,7 @@ interface SidebarProps {
 
 export function Sidebar({
   collapsed = false,
+  unreadThreadIds = new Set<string>(),
   mode,
   open,
   onClose,
@@ -115,9 +139,11 @@ export function Sidebar({
   onChangeProjectPinned,
   onReorderProject,
   onReorderThread,
+  onReorderPinnedThread,
   onNewThread,
   newThreadDisabled = false,
   onAddProject,
+  onImportSession,
   onRemoveProject,
   onEditProject,
   onSetDefaultProject,
@@ -129,6 +155,7 @@ export function Sidebar({
   onSelectThread,
   pendingApprovalThreadIds,
   pluginContributions,
+  triggerAdmissionId = null,
   roomConversations,
   selectedRoomId,
   selectedPage,
@@ -366,7 +393,7 @@ export function Sidebar({
     const shortcutsBlocked = (event: KeyboardEvent) =>
       event.isComposing ||
       document.querySelector(
-        '[role="dialog"], dialog[open], [aria-modal="true"]',
+        '[role="dialog"]:not(.thread-information), dialog[open], [aria-modal="true"]',
       ) !== null ||
       (event.target instanceof window.Element &&
         event.target.closest(
@@ -438,9 +465,20 @@ export function Sidebar({
       window.removeEventListener("blur", clearShortcutHints);
     };
   }, []);
+  const triggerRevision = `${selectedPage}:${threads.map((thread) => `${thread.threadId}:${thread.status}`).join("|")}`;
+  const triggers = useSidebarTriggers(triggerAdmissionId, triggerRevision);
   const watchingThreadIds = new Set<string>();
   return (
-    <SidebarSettingsContext.Provider value={settings}>
+    <SidebarSettingsContext.Provider
+      value={{
+        settings,
+        projects,
+        triggers: triggers.state,
+        refreshTriggers: triggers.refresh,
+        unreadThreadIds,
+        selectionKey: `${selectedPage}:${selectedThreadId ?? ""}`,
+      }}
+    >
       <aside
         id="primary-sidebar"
         className={`sidebar${open ? " open" : ""}`}
@@ -581,6 +619,17 @@ export function Sidebar({
                     : i18n.t("shell:compact")}
                 </span>
               </button>
+              {onImportSession && (
+                <button
+                  className="sidebar-inline-action"
+                  type="button"
+                  aria-label={i18n.t("shell:importSession")}
+                  title={i18n.t("shell:importSession")}
+                  onClick={onImportSession}
+                >
+                  <Icon name="arrow-down" size={14} />
+                </button>
+              )}
               {mode === "projects" ? (
                 <button
                   className="sidebar-inline-action"
@@ -655,6 +704,9 @@ export function Sidebar({
                   onRenameThread={onRenameThread}
                   onForkThread={onForkThread}
                   onSelectThread={onSelectThread}
+                  onReorderPinnedThread={onReorderPinnedThread}
+                  onSidebarOrderError={reportSidebarOrderError}
+                  onSidebarOrderAttempt={clearSidebarOrderError}
                   pendingApprovalThreadIds={pendingApprovalThreadIds}
                   selectedThreadId={selectedThreadId}
                   threads={pinnedThreads}
@@ -858,6 +910,9 @@ function PinnedThreadsView({
   onRenameThread,
   onForkThread,
   onSelectThread,
+  onReorderPinnedThread,
+  onSidebarOrderError,
+  onSidebarOrderAttempt,
   pendingApprovalThreadIds,
   selectedThreadId,
   threads,
@@ -869,11 +924,28 @@ function PinnedThreadsView({
   onRenameThread(threadId: string, title: string): Promise<void>;
   onForkThread(threadId: string): Promise<void>;
   onSelectThread(threadId: string): void;
+  onReorderPinnedThread?: SidebarProps["onReorderPinnedThread"];
+  onSidebarOrderError?: (error: unknown, retry: () => Promise<void>) => void;
+  onSidebarOrderAttempt?: () => void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   selectedThreadId: string | null;
   threads: readonly NativeThreadSummary[];
   watchingThreadIds: ReadonlySet<string>;
 }) {
+  // The Pinned section reorders the pinnedThreadIds preference by dragging
+  // rows onto each other, mirroring per-Project Thread sorting semantics.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{
+    targetId: string;
+    placement: SidebarOrderPlacement;
+  } | null>(null);
+  const dragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanup.current?.(), []);
+  const clearDrag = () => {
+    dragCleanup.current = null;
+    setDraggingId(null);
+    setDrop(null);
+  };
   return (
     <section
       className="pinned-thread-group"
@@ -882,7 +954,7 @@ function PinnedThreadsView({
       <h2 id="sidebar-pinned-heading" tabIndex={-1}>
         {i18n.t("shell:pinned")}
       </h2>
-      {threads.map((thread) => (
+      {threads.map((thread, threadIndex) => (
         <ThreadRow
           hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
           key={thread.threadId}
@@ -896,6 +968,96 @@ function PinnedThreadsView({
           selected={thread.threadId === selectedThreadId}
           thread={thread}
           watching={watchingThreadIds.has(thread.threadId)}
+          reorder={
+            onReorderPinnedThread === undefined
+              ? undefined
+              : {
+                  controlId: sidebarOrderControlId("thread", thread.threadId),
+                  dragging: draggingId === thread.threadId,
+                  placement:
+                    drop?.targetId === thread.threadId
+                      ? drop.placement
+                      : undefined,
+                  onDragLeave: (event) => {
+                    if (
+                      !(event.relatedTarget instanceof Node) ||
+                      !event.currentTarget.contains(event.relatedTarget)
+                    )
+                      setDrop(null);
+                  },
+                  onDragStart: (event) => {
+                    dragCleanup.current?.();
+                    setDraggingId(thread.threadId);
+                    setDrop(null);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", thread.threadId);
+                    dragCleanup.current = startSidebarDrag(
+                      event.currentTarget,
+                      event.dataTransfer,
+                      threadTitle(thread),
+                      "thread",
+                      event,
+                      clearDrag,
+                    );
+                  },
+                  onDragEnd: clearDrag,
+                  onDragOver: (event) => {
+                    if (draggingId === null || draggingId === thread.threadId)
+                      return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    event.stopPropagation();
+                    setDrop({
+                      targetId: thread.threadId,
+                      placement: dropPlacement(event),
+                    });
+                  },
+                  onDrop: (event) => {
+                    const sourceThreadId = draggingId;
+                    clearDrag();
+                    if (
+                      sourceThreadId === null ||
+                      sourceThreadId === thread.threadId
+                    )
+                      return;
+                    event.preventDefault();
+                    const placement = dropPlacement(event);
+                    void reorderAndRestoreFocus(
+                      sidebarOrderControlId("thread", sourceThreadId),
+                      () =>
+                        onReorderPinnedThread(
+                          sourceThreadId,
+                          thread.threadId,
+                          placement,
+                        ),
+                      onSidebarOrderAttempt,
+                      onSidebarOrderError,
+                    );
+                  },
+                  onKeyDown: (event) => {
+                    if (!event.altKey) return;
+                    const target =
+                      event.key === "ArrowUp"
+                        ? threads[threadIndex - 1]
+                        : event.key === "ArrowDown"
+                          ? threads[threadIndex + 1]
+                          : undefined;
+                    if (target === undefined) return;
+                    event.preventDefault();
+                    void reorderAndRestoreFocus(
+                      sidebarOrderControlId("thread", thread.threadId),
+                      () =>
+                        onReorderPinnedThread(
+                          thread.threadId,
+                          target.threadId,
+                          event.key === "ArrowUp" ? "before" : "after",
+                        ),
+                      onSidebarOrderAttempt,
+                      onSidebarOrderError,
+                    );
+                  },
+                }
+          }
         />
       ))}
     </section>
@@ -1089,14 +1251,10 @@ function ProjectsView({
                 )
                   return;
                 event.preventDefault();
+                const placement = projectDropPlacement(event);
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("project", sourceKey),
-                  () =>
-                    onReorderProject(
-                      sourceKey,
-                      group.key,
-                      projectDropPlacement(event),
-                    ),
+                  () => onReorderProject(sourceKey, group.key, placement),
                   onSidebarOrderAttempt,
                   onSidebarOrderError,
                 );
@@ -1187,6 +1345,7 @@ function ProjectsView({
                 )
                   return;
                 event.preventDefault();
+                const placement = dropPlacement(event);
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("thread", source.threadId),
                   () =>
@@ -1195,7 +1354,7 @@ function ProjectsView({
                       source.threadId,
                       group.key,
                       targetThreadId,
-                      dropPlacement(event),
+                      placement,
                     ),
                   onSidebarOrderAttempt,
                   onSidebarOrderError,
@@ -1699,9 +1858,48 @@ function ThreadRow({
   reorder?: ThreadRowReorderHandlers;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
+  const information = useContext(SidebarSettingsContext);
+  const detailsRef = useRef<HTMLDivElement>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const menuEpoch = useRef(0);
+  const suppressDetailsFocus = useRef(false);
+  const clearDetailsTimer = () => {
+    if (detailsTimer.current !== null) clearTimeout(detailsTimer.current);
+    detailsTimer.current = null;
+  };
+  const showDetails = (immediate = false) => {
+    clearDetailsTimer();
+    if (menuOpen) return;
+    const open = () => {
+      setDetailsOpen(true);
+      void information?.refreshTriggers();
+    };
+    if (immediate) open();
+    else detailsTimer.current = setTimeout(open, 350);
+  };
+  const leaveDetails = () => {
+    clearDetailsTimer();
+    detailsTimer.current = setTimeout(() => {
+      if (
+        !detailsRef.current?.contains(document.activeElement) &&
+        !rowRef.current?.contains(document.activeElement)
+      )
+        setDetailsOpen(false);
+    }, 180);
+  };
+  useEffect(
+    () => () => {
+      clearDetailsTimer();
+      menuEpoch.current += 1;
+    },
+    [],
+  );
+
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreMenuFocusRef = useRef(false);
+  const menuFocusOrigin = useRef<"trigger" | "row">("trigger");
   const initialMenuFocusRef = useRef<"first" | "last">("first");
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -1710,6 +1908,7 @@ function ThreadRow({
     "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
   const busyActionRef = useRef(false);
+  const actionFocusRef = useRef<Element | null>(null);
   const retryFocusRef = useRef<string | null>(null);
   const [menuError, setMenuError] = useState<string | null>(null);
   useLayoutEffect(() => {
@@ -1723,10 +1922,26 @@ function ThreadRow({
       ?.focus({ preventScroll: true });
   }, [busyAction, menuError]);
   const closeMenu = (restoreFocus = true) => {
-    restoreMenuFocusRef.current = restoreFocus;
+    menuEpoch.current += 1;
+    const focused = document.activeElement;
+    const ownsFocus =
+      menuRef.current?.contains(focused) ||
+      focused === menuTriggerRef.current ||
+      (focused === document.body &&
+        document.hasFocus() &&
+        actionFocusRef.current?.matches(":disabled"));
+    restoreMenuFocusRef.current = restoreFocus && !!ownsFocus;
     setMenuOpen(false);
     setRenaming(false);
   };
+  const lastSelectionKey = useRef(information?.selectionKey);
+  useLayoutEffect(() => {
+    if (lastSelectionKey.current === information?.selectionKey) return;
+    lastSelectionKey.current = information?.selectionKey;
+    clearDetailsTimer();
+    setDetailsOpen(false);
+    closeMenu(false);
+  }, [information?.selectionKey]);
   const focusThreadListHeading = (nextPinned = pinned) => {
     document
       .getElementById(
@@ -1757,10 +1972,67 @@ function ThreadRow({
   useLayoutEffect(() => {
     if (menuOpen || !restoreMenuFocusRef.current) return;
     restoreMenuFocusRef.current = false;
-    menuTriggerRef.current?.focus();
+    // Reveal the focus-within action rail via its row before focusing an
+    // ellipsis invoker. Full-name details keep their row as the return target.
+    // Both paths run only while this editor still owns focus.
+    suppressDetailsFocus.current = true;
+    const row = rowRef.current?.querySelector<HTMLElement>(".thread-row");
+    (row ?? menuTriggerRef.current)?.focus({ preventScroll: true });
+    if (menuFocusOrigin.current === "trigger")
+      menuTriggerRef.current?.focus({ preventScroll: true });
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const outside = (event: PointerEvent) => {
+      if (
+        !rowRef.current?.contains(event.target as Node) &&
+        !detailsRef.current?.contains(event.target as Node)
+      )
+        setDetailsOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [detailsOpen]);
+  const boundTriggers =
+    information?.triggers.triggers.filter(
+      (t) => t.threadId === thread.threadId,
+    ) ?? [];
+  const unread = information?.unreadThreadIds.has(thread.threadId) ?? false;
+  const statusCount =
+    Number(boundTriggers.length > 0) +
+    Number(hasActiveTurn || pendingApproval || watching) +
+    Number(unread);
+  const beginRename = () => {
+    clearDetailsTimer();
+    setDetailsOpen(false);
+    menuEpoch.current += 1;
+    setMenuError(null);
+    setRenameDraft(threadTitle(thread));
+    setRenaming(true);
+    setMenuOpen(true);
+  };
+  const project = information?.projects.projects.find((p) =>
+    p.threadIds.includes(thread.threadId),
+  );
+  const detailsContents = (
+    <ThreadInformation
+      thread={thread}
+      projectName={project?.name ?? threadProject(thread)}
+      projectPath={
+        project?.workspace ??
+        (thread.status === "systemError" ? null : thread.currentMetadata.cwd)
+      }
+      triggers={boundTriggers}
+      triggerStatus={information?.triggers.status ?? "unavailable"}
+      onRename={() => {
+        menuFocusOrigin.current = "row";
+        beginRename();
+      }}
+    />
+  );
   const identity = threadModelIdentity(thread);
-  const settings = useContext(SidebarSettingsContext);
+  const settings = information?.settings ?? null;
   const providerProfileId =
     thread.status === "systemError"
       ? undefined
@@ -1791,9 +2063,11 @@ function ThreadRow({
         <span
           className="thread-project"
           title={
-            thread.status === "systemError"
-              ? undefined
-              : (thread.currentMetadata.cwd ?? undefined)
+            thread.status !== "systemError" && thread.currentMetadata.cwd
+              ? i18n.t("shell:workingDirectoryPath", {
+                  path: thread.currentMetadata.cwd,
+                })
+              : undefined
           }
         >
           <Icon name="folder" size={12} />
@@ -1804,23 +2078,10 @@ function ThreadRow({
       ) : null}
       <span className="thread-title">
         <span>{threadTitle(thread)}</span>
-        {pendingApproval ? (
-          <span
-            className="thread-title-status needs-dot"
-            aria-label={i18n.t("shell:needsYou")}
-          />
-        ) : thread.status === "active" ? (
-          <span
-            className="thread-title-status live-dot ready"
-            aria-label={i18n.t("shell:running")}
-          />
-        ) : watching ? (
-          <Icon name="moon" size={12} aria-label={i18n.t("shell:watching")} />
-        ) : null}
       </span>
       {(identity === null || modelProvider === null) &&
       !pendingApproval &&
-      thread.status !== "active" ? null : (
+      !hasActiveTurn ? null : (
         <span className="thread-model">
           {identity === null || modelProvider === null ? null : (
             <>
@@ -1833,12 +2094,8 @@ function ThreadRow({
               </span>
             </>
           )}
-          {pendingApproval || thread.status === "active" ? (
+          {pendingApproval || hasActiveTurn ? (
             <span className="thread-state-inline">
-              <span
-                className={pendingApproval ? "needs-dot" : "live-dot ready"}
-                aria-hidden="true"
-              />
               {pendingApproval
                 ? i18n.t("shell:needsYourApproval")
                 : i18n.t("shell:working")}
@@ -1854,6 +2111,8 @@ function ThreadRow({
   ) => {
     if (busyActionRef.current) return;
     busyActionRef.current = true;
+    actionFocusRef.current = document.activeElement;
+    const epoch = menuEpoch.current;
     setBusyAction(action);
     setMenuError(null);
     try {
@@ -1861,14 +2120,16 @@ function ThreadRow({
         focusThreadListHeading();
       await operation();
       if (action === "copy") focusThreadListHeading(false);
-      closeMenu(action === "rename");
+      if (epoch === menuEpoch.current) closeMenu(action === "rename");
     } catch (error) {
+      if (epoch !== menuEpoch.current) return;
       setMenuError(error instanceof Error ? error.message : String(error));
       if (action !== "rename") {
         retryFocusRef.current = action;
       }
     } finally {
       busyActionRef.current = false;
+      actionFocusRef.current = null;
       setBusyAction(null);
     }
   };
@@ -1877,6 +2138,27 @@ function ThreadRow({
       ref={rowRef}
       className={`thread-row-shell${reorder === undefined ? "" : " reorderable"}`}
       data-thread-id={thread.threadId}
+      data-selected={selected || undefined}
+      data-menu-open={menuOpen || undefined}
+      data-unread={unread || undefined}
+      style={
+        {
+          "--thread-state-space": `${statusCount * 28}px`,
+        } as CSSProperties
+      }
+      onPointerEnter={(event) => {
+        if (event.pointerType !== "touch") showDetails();
+      }}
+      onPointerLeave={leaveDetails}
+      onFocus={(event) => {
+        if (suppressDetailsFocus.current) {
+          suppressDetailsFocus.current = false;
+          return;
+        }
+        if (event.target === rowRef.current?.querySelector(".thread-row"))
+          showDetails(true);
+      }}
+      onBlur={leaveDetails}
       data-dragging={reorder?.dragging || undefined}
       data-drop-placement={reorder?.placement}
       onDragLeave={reorder?.onDragLeave}
@@ -1884,7 +2166,7 @@ function ThreadRow({
       onDragStart={(event) => {
         if (
           (event.target as HTMLElement | null)?.closest(
-            ".thread-menu-trigger, .thread-item-menu",
+            ".thread-menu-trigger, .thread-item-menu, .thread-information",
           ) !== null
         ) {
           event.preventDefault();
@@ -1896,9 +2178,21 @@ function ThreadRow({
       onDragOver={reorder?.onDragOver}
       onDrop={reorder?.onDrop}
       onKeyDown={(event) => {
-        if (menuOpen && event.key === "Escape") {
+        if (event.key === "Escape" && (menuOpen || detailsOpen)) {
           event.preventDefault();
-          closeMenu();
+          event.stopPropagation();
+          clearDetailsTimer();
+          setDetailsOpen(false);
+          if (menuOpen) closeMenu();
+        }
+        if (!menuOpen && event.key === "ArrowRight") {
+          event.preventDefault();
+          showDetails(true);
+          requestAnimationFrame(() =>
+            detailsRef.current
+              ?.querySelector<HTMLButtonElement>("button")
+              ?.focus(),
+          );
         }
       }}
     >
@@ -1916,7 +2210,6 @@ function ThreadRow({
         </div>
       ) : (
         <button
-          title={`${threadTitle(thread)}${identity ? ` · ${identity.label}` : ""}${thread.currentMetadata.cwd ? ` · ${i18n.t("shell:workingDirectoryPath", { path: thread.currentMetadata.cwd })}` : ""}`}
           className={`thread-row${selected ? " selected" : ""}${inbox ? " inbox" : ""}`}
           type="button"
           id={reorder?.controlId}
@@ -1924,49 +2217,149 @@ function ThreadRow({
           aria-keyshortcuts={
             reorder === undefined ? undefined : "Alt+ArrowUp Alt+ArrowDown"
           }
-          onClick={() => onSelectThread(thread.threadId)}
+          onClick={() => {
+            setDetailsOpen(false);
+            onSelectThread(thread.threadId);
+          }}
           onKeyDown={reorder?.onKeyDown}
         >
           {contents}
         </button>
       )}
-      <button
-        ref={menuTriggerRef}
-        className="thread-menu-trigger"
-        type="button"
-        id={`thread-menu-trigger-${thread.threadId}`}
-        aria-label={i18n.t("shell:manageThread", {
-          title: threadTitle(thread),
-        })}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        aria-controls={menuOpen ? `thread-menu-${thread.threadId}` : undefined}
-        title={i18n.t("shell:manageThread", { title: threadTitle(thread) })}
-        onClick={() => {
-          if (menuOpen) {
-            closeMenu();
-            return;
+      <span className="thread-status-rail">
+        {boundTriggers.length > 0 ? (
+          <span className="thread-status-slot">
+            <Icon
+              name="clock"
+              size={16}
+              aria-label={i18n.t("shell:threadAutomationCount", {
+                count: boundTriggers.length,
+              })}
+            />
+          </span>
+        ) : null}
+        {pendingApproval || hasActiveTurn || watching ? (
+          <span className="thread-status-slot">
+            {pendingApproval ? (
+              <span
+                className="needs-dot"
+                aria-label={i18n.t("shell:needsYou")}
+              />
+            ) : hasActiveTurn ? (
+              <svg
+                className="thread-running-spinner"
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                role="img"
+                aria-label={i18n.t("shell:running")}
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="5.7"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeDasharray="27 9"
+                  strokeLinecap="round"
+                />
+              </svg>
+            ) : (
+              <Icon
+                name="moon"
+                size={16}
+                aria-label={i18n.t("shell:watching")}
+              />
+            )}
+          </span>
+        ) : null}
+        {unread ? (
+          <span className="thread-status-slot">
+            <span
+              className="thread-unread-dot"
+              aria-label={i18n.t("shell:threadUnreadReply")}
+            />
+          </span>
+        ) : null}
+        <button
+          ref={menuTriggerRef}
+          className="thread-menu-trigger"
+          type="button"
+          id={`thread-menu-trigger-${thread.threadId}`}
+          aria-label={i18n.t("shell:manageThread", {
+            title: threadTitle(thread),
+          })}
+          aria-haspopup={renaming ? "dialog" : "menu"}
+          aria-expanded={menuOpen}
+          aria-controls={
+            menuOpen ? `thread-menu-${thread.threadId}` : undefined
           }
-          initialMenuFocusRef.current = "first";
-          setMenuError(null);
-          setRenaming(false);
-          setRenameDraft(threadTitle(thread));
-          setMenuOpen(true);
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-          event.preventDefault();
-          initialMenuFocusRef.current =
-            event.key === "ArrowUp" ? "last" : "first";
-          setMenuError(null);
-          setRenaming(false);
-          setRenameDraft(threadTitle(thread));
-          setMenuOpen(true);
-        }}
-      >
-        <Icon name="more" size={18} />
-      </button>
+          title={i18n.t("shell:manageThread", { title: threadTitle(thread) })}
+          onClick={() => {
+            if (menuOpen) {
+              closeMenu();
+              return;
+            }
+            clearDetailsTimer();
+            setDetailsOpen(false);
+            menuEpoch.current += 1;
+            void information?.refreshTriggers();
+            menuFocusOrigin.current = "trigger";
+            initialMenuFocusRef.current = "first";
+            setMenuError(null);
+            setRenaming(false);
+            setRenameDraft(threadTitle(thread));
+            setMenuOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            event.preventDefault();
+            clearDetailsTimer();
+            setDetailsOpen(false);
+            menuEpoch.current += 1;
+            void information?.refreshTriggers();
+            menuFocusOrigin.current = "trigger";
+            initialMenuFocusRef.current =
+              event.key === "ArrowUp" ? "last" : "first";
+            setMenuError(null);
+            setRenaming(false);
+            setRenameDraft(threadTitle(thread));
+            setMenuOpen(true);
+          }}
+        >
+          <Icon name="more" size={16} />
+        </button>
+      </span>
+      {detailsOpen && !menuOpen ? (
+        <SidebarMenuPopover
+          anchorRef={rowRef}
+          menuRef={detailsRef}
+          className="thread-information"
+          role="dialog"
+          aria-label={i18n.t("shell:threadDetails")}
+          onPointerEnter={clearDetailsTimer}
+          onPointerLeave={leaveDetails}
+          onFocus={clearDetailsTimer}
+          onBlur={leaveDetails}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              clearDetailsTimer();
+              setDetailsOpen(false);
+              suppressDetailsFocus.current = true;
+              rowRef.current
+                ?.querySelector<HTMLButtonElement>(".thread-row")
+                ?.focus();
+            }
+          }}
+        >
+          {detailsContents}
+        </SidebarMenuPopover>
+      ) : null}
       <ThreadItemMenu
+        details={detailsContents}
         archived={thread.archived}
         busyAction={busyAction}
         error={menuError}
@@ -1982,7 +2375,7 @@ function ThreadRow({
         onArchive={() =>
           void runAction("archive", () => onChangeThreadLifecycle(thread))
         }
-        onBeginRename={() => setRenaming(true)}
+        onBeginRename={beginRename}
         onCopy={() =>
           void runAction("copy", () => onForkThread(thread.threadId))
         }
@@ -2007,7 +2400,130 @@ function ThreadRow({
   );
 }
 
+function ThreadInformation({
+  thread,
+  projectName,
+  projectPath,
+  triggers,
+  triggerStatus,
+  onRename,
+}: {
+  thread: NativeThreadSummary;
+  projectName: string;
+  projectPath: string | null;
+  triggers: SidebarTriggerState["triggers"];
+  triggerStatus: SidebarTriggerState["status"];
+  onRename(): void;
+}) {
+  const [now, setNow] = useState(Date.now);
+  const next = nextSidebarTrigger(triggers, now);
+  useEffect(() => {
+    setNow(Date.now());
+  }, [triggers]);
+  useEffect(() => {
+    if (next.nextRunAt === null) return;
+    // Expire only this displayed timestamp. The Trigger service owns scheduling.
+    const timer = setTimeout(
+      () => setNow(Date.now()),
+      Math.min(2_147_483_647, Math.max(1, next.nextRunAt - Date.now() + 1)),
+    );
+    return () => clearTimeout(timer);
+  }, [next.nextRunAt]);
+  // Native message metadata is optional on older/unavailable Hosts. Never use
+  // updatedAt (tool calls, title changes, etc.) as a message timestamp.
+  const lastMessage =
+    thread.status === "systemError" ? undefined : thread.lastMessage;
+  const messageAt = lastMessage?.createdAt;
+  const formatDate = (value: string | number | undefined) => {
+    if (value === undefined || !Number.isFinite(new Date(value).getTime()))
+      return i18n.t("shell:threadFactUnknown");
+    return new Date(value).toLocaleString(i18n.language, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+  // Sidebar summaries come exclusively from manager.listThreadSummaries's
+  // host-local child IPC. Fleet remote references are not admitted here.
+  return (
+    <>
+      <button
+        type="button"
+        className="thread-information-title"
+        onClick={onRename}
+        aria-label={i18n.t("shell:renameThreadNamed", {
+          title: threadTitle(thread),
+        })}
+      >
+        <span>{threadTitle(thread)}</span>
+        <Icon name="compose" size={14} />
+      </button>
+      <dl className="thread-information-facts">
+        <div>
+          <dt>{i18n.t("shell:threadProjectLabel")}</dt>
+          <dd>
+            {projectName}
+            <small>{projectPath}</small>
+          </dd>
+        </div>
+        <div>
+          <dt>{i18n.t("shell:threadMachineLabel")}</dt>
+          <dd>{i18n.t("shell:threadThisMachine")}</dd>
+        </div>
+        <div>
+          <dt>{i18n.t("shell:threadLastMessage")}</dt>
+          <dd>
+            {messageAt ? (
+              <time dateTime={messageAt}>{formatDate(messageAt)}</time>
+            ) : (
+              i18n.t("shell:threadFactUnknown")
+            )}
+          </dd>
+        </div>
+        {triggers.length > 0 ? (
+          <div>
+            <dt>{i18n.t("shell:threadNextTrigger")}</dt>
+            <dd>
+              {triggerStatus !== "ready" ? (
+                i18n.t("shell:threadFactUnknown")
+              ) : next.nextRunAt !== null ? (
+                <time dateTime={new Date(next.nextRunAt).toISOString()}>
+                  {formatDate(next.nextRunAt)}
+                </time>
+              ) : (
+                i18n.t(
+                  next.state === "paused"
+                    ? "shell:threadTriggersPaused"
+                    : next.state === "event"
+                      ? "shell:threadTriggerOnEvent"
+                      : "shell:threadFactUnknown",
+                )
+              )}
+              {next.incomplete && next.nextRunAt !== null ? (
+                <small>{i18n.t("shell:threadOtherTriggersUnknown")}</small>
+              ) : null}
+              <small>
+                {i18n.t("shell:threadAutomationCount", {
+                  count: triggers.length,
+                })}
+              </small>
+            </dd>
+          </div>
+        ) : triggerStatus !== "ready" ? (
+          <div>
+            <dt>{i18n.t("shell:threadAutomationsLabel")}</dt>
+            <dd>{i18n.t("shell:threadFactUnknown")}</dd>
+          </div>
+        ) : null}
+      </dl>
+    </>
+  );
+}
+
 export function ThreadItemMenu({
+  details,
   archived,
   busyAction,
   error,
@@ -2030,6 +2546,7 @@ export function ThreadItemMenu({
   onRename,
   onUnarchive,
 }: {
+  details?: ReactNode;
   archived: boolean;
   busyAction:
     "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null;
@@ -2053,6 +2570,31 @@ export function ThreadItemMenu({
   onRename(): void;
   onUnarchive(): void;
 }) {
+  const composing = useRef(false);
+  const renameInput = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    // Composition belongs to this input lifetime, not the persistent menu.
+    composing.current = false;
+    if (!open || !renaming) return;
+    const previousFocus = document.activeElement;
+    const input = renameInput.current;
+    const request =
+      window.requestAnimationFrame ??
+      ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
+    const cancel = window.cancelAnimationFrame ?? window.clearTimeout;
+    const frame = request(() => {
+      if (!input?.isConnected) return;
+      // The portal is initially hidden until positioned. React autoFocus runs
+      // too early in Chromium; only complete that same focus intent afterward.
+      if (
+        document.activeElement === previousFocus ||
+        (document.activeElement === document.body &&
+          !previousFocus?.isConnected)
+      )
+        input.focus({ preventScroll: true });
+    });
+    return () => cancel(frame);
+  }, [open, renaming]);
   if (!open) return null;
   const busy = busyAction !== null;
   return (
@@ -2061,7 +2603,7 @@ export function ThreadItemMenu({
       className="thread-item-menu"
       id={menuId}
       menuRef={menuRef}
-      role="menu"
+      role={renaming ? "dialog" : "menu"}
       aria-labelledby={labelledBy}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
@@ -2070,7 +2612,10 @@ export function ThreadItemMenu({
           onRequestClose?.();
           return;
         }
-        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        if (
+          renaming ||
+          !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
+        ) {
           return;
         }
         const items = enabledMenuItems(event.currentTarget);
@@ -2094,17 +2639,39 @@ export function ThreadItemMenu({
         items[nextIndex]?.focus();
       }}
     >
+      {!renaming && details ? (
+        <div className="thread-menu-information">{details}</div>
+      ) : null}
       {renaming ? (
         <form
           className="thread-menu-rename"
+          onCompositionStart={() => {
+            composing.current = true;
+          }}
+          onCompositionEnd={() => {
+            composing.current = false;
+          }}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Enter" &&
+              (composing.current ||
+                event.nativeEvent.isComposing ||
+                event.keyCode === 229)
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
           onSubmit={(event) => {
             event.preventDefault();
+            if (busy || composing.current || !renameDraft.trim()) return;
             onRename();
           }}
         >
           <label>
             <span>{i18n.t("shell:threadName")}</span>
             <input
+              ref={renameInput}
               autoFocus
               value={renameDraft}
               onChange={(event) => onDraftChange(event.target.value)}

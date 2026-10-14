@@ -403,6 +403,60 @@ test("built-in preset refresh preserves a user's hidden selection", () => {
   );
 });
 
+test("a user-configured subscription catalog is never re-seeded with built-in presets", () => {
+  // Deleting gpt-5.4/5.5 in Settings used to resurrect them on the next
+  // profile load or after repackaging, because presets were injected
+  // unconditionally. Once the user owns the catalog, Host leaves it as-is.
+  const kept = structuredLegacyModelCatalog("openai-subscription", [
+    "gpt-5.6-terra",
+  ])[0]!;
+  const owned = applyBuiltInModelCatalogPresets({
+    ...profile,
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models: [kept],
+        modelsUserConfigured: true,
+      },
+    ],
+    defaultModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
+    },
+    titleModel: {
+      providerProfileId: "openai-codex",
+      modelId: "gpt-5.6-terra",
+    },
+  });
+  assert.deepEqual(
+    owned.providerProfiles[0]?.models.map((model) => model.id),
+    ["gpt-5.6-terra"],
+  );
+  assert.equal(
+    owned.providerProfiles[0]?.modelsUserConfigured,
+    true,
+    "the ownership marker survives validation",
+  );
+  // Without the marker the historical seeding behavior is unchanged.
+  const seeded = applyBuiltInModelCatalogPresets({
+    ...owned,
+    providerProfiles: [
+      {
+        providerProfileId: "openai-codex",
+        type: "openai-subscription",
+        displayName: "OpenAI subscription",
+        models: [kept],
+      },
+    ],
+  });
+  assert.deepEqual(
+    seeded.providerProfiles[0]?.models.map((model) => model.id),
+    ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+  );
+});
+
 test("migrates unconfigured compatible models to text-only without inferring provider controls", () => {
   const unconfigured = {
     ...profile.providerProfiles[0]!.models[1]!,
@@ -785,7 +839,7 @@ test("old ambiguous Queue is migrated once with an undo record; trustworthy choi
         composerSendMode: mode,
         ...(mode === "batch" ? { composerSendModeExplicit: false } : {}),
       });
-      assert.equal(fromPast.composerSendMode, mode);
+      assert.equal(fromPast.composerSendMode, mode === "batch" ? "soft" : mode);
       assert.equal(fromPast.composerSendModeMigration, undefined);
     }
     assert.equal(
@@ -796,6 +850,38 @@ test("old ambiguous Queue is migrated once with an undo record; trustworthy choi
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("implicit Composer modes normalize to soft without changing explicit choices", () => {
+  const { composerSendMode: _mode, ...missing } = profile;
+  assert.equal(validateHostProfile(missing).composerSendMode, "soft");
+  for (const mode of ["queue", "batch", "hard"] as const) {
+    assert.equal(
+      validateHostProfile({
+        ...profile,
+        composerSendMode: mode,
+        composerSendModeExplicit: false,
+      }).composerSendMode,
+      "soft",
+    );
+    assert.equal(
+      validateHostProfile({
+        ...profile,
+        composerSendMode: mode,
+        composerSendModeExplicit: true,
+      }).composerSendMode,
+      mode,
+    );
+  }
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        composerSendMode: "invalid",
+        composerSendModeExplicit: false,
+      }),
+    /send mode/,
+  );
 });
 
 test("compaction retention settings persist without requiring a custom prompt and reach the Host", async () => {

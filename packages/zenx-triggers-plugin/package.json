@@ -1,6 +1,6 @@
 {
   "name": "@zenx/triggers-plugin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "First-party ZenX Triggers plugin",
   "type": "module",
   "files": [

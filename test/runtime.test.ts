@@ -1809,6 +1809,44 @@ function sampleRetryRuntime(): AgentRuntime {
   });
 }
 
+test("HTTP credentials crossing the message bound never reach the journal or later model context", async () => {
+  const key = "private-provider-key-value";
+  const model = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: key,
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({
+          error: { message: "x".repeat(8_192 - key.length + 1) + key },
+        }),
+        { status: 400 },
+      )) as typeof fetch,
+  });
+  const server = createServer({ model });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(
+    JSON.stringify(snapshot.items).includes(key.slice(0, -1)),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(compileModelMessages(snapshot.items)).includes(
+      key.slice(0, -1),
+    ),
+    false,
+  );
+  assert.equal(
+    projectThread(snapshot, {
+      includeTurns: true,
+    }).turns[0]?.error?.message.includes(key.slice(0, -1)),
+    false,
+  );
+});
+
 test("retryable model stream failures are replayed within the turn", async () => {
   let attempts = 0;
   const model: ModelAdapter = {

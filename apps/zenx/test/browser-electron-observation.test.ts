@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { observeElectronPage } from "../src/main/capabilities/browser-electron-observation.js";
@@ -84,4 +85,37 @@ test("Electron observer marks a frame live and reports a closed target", async (
   );
   const last = closed.at(-1);
   assert.equal(last?.type === "status" && last.status, "unavailable");
+});
+
+test("native metadata failure retires listeners without throwing from a page event", async () => {
+  const native = new EventEmitter();
+  const events: BrowserLiveObservationEvent[] = [];
+  let failed = false;
+  const stop = observeElectronPage(
+    {
+      events: native,
+      metadata: () => {
+        if (failed) throw new Error("Native read failed");
+        return { title: "Page", url: "https://example.test/", loading: false };
+      },
+      current: () => 1,
+      capture: async () =>
+        ({
+          isEmpty: () => false,
+          getSize: () => ({ width: 100, height: 80 }),
+          toJPEG: () => Buffer.from("frame"),
+        }) as any,
+    },
+    (event) => events.push(event),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  failed = true;
+  assert.doesNotThrow(() => native.emit("did-stop-loading"));
+  const last = events.at(-1);
+  assert.equal(last?.type === "status" && last.status, "failed");
+  assert.equal(native.listenerCount("did-stop-loading"), 0);
+  const count = events.length;
+  native.emit("did-start-loading");
+  assert.equal(events.length, count);
+  stop();
 });

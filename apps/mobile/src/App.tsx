@@ -11,7 +11,7 @@ import {
   StyleSheet,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { createSession, type Host } from "./session.mjs";
+import { createSession, type Host, type Item } from "./session.mjs";
 import { createAppActions } from "./app-actions.mjs";
 import { fixtureHosts } from "./fixture.mjs";
 import {
@@ -37,6 +37,43 @@ const colors = {
   accent: "#82dfbf",
   warn: "#ffc482",
 };
+
+function MessageCard({ item }: { item: Item }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const hostContext =
+    item.role === "host_message" && item.sourceLabel !== "Host";
+  return (
+    <View style={styles.card}>
+      <Text style={styles.meta}>
+        {item.sourceLabel ?? item.role} · {item.status}
+      </Text>
+      <Text selectable style={styles.name}>
+        {hostContext && !detailsOpen
+          ? `Message from ${item.sourceLabel}`
+          : item.text}
+      </Text>
+      {item.sourceDetails && (
+        <>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Source details"
+            accessibilityState={{ expanded: detailsOpen }}
+            onPress={() => setDetailsOpen((open) => !open)}
+          >
+            <Text style={styles.meta}>
+              {detailsOpen ? "Hide source details" : "Source details"}
+            </Text>
+          </Pressable>
+          {detailsOpen && (
+            <Text selectable style={styles.meta}>
+              {item.sourceDetails}
+            </Text>
+          )}
+        </>
+      )}
+    </View>
+  );
+}
 
 export default function App() {
   const [screen, setScreen] = useState<ScreenState | null>(null);
@@ -658,14 +695,7 @@ export default function App() {
                   {selectedThread?.title ?? "Conversation"}
                 </Text>
                 {s.items.map((item) => (
-                  <View key={item.id} style={styles.card}>
-                    <Text style={styles.meta}>
-                      {item.role} · {item.status}
-                    </Text>
-                    <Text selectable style={styles.name}>
-                      {item.text}
-                    </Text>
-                  </View>
+                  <MessageCard key={item.id} item={item} />
                 ))}
                 {s.turns.map((turn) => (
                   <Text key={turn.id} style={styles.meta}>

@@ -1323,7 +1323,11 @@ test("marks mid-stream transport failures as retryable sample failures", async (
                 }),
               ),
             );
-            controller.error(new TypeError("terminated"));
+            controller.error(
+              new TypeError("terminated", {
+                cause: { code: "UND_ERR_SOCKET" },
+              }),
+            );
           },
         }).pipeThrough(new TextEncoderStream()),
         {
@@ -1415,6 +1419,113 @@ test("persisted diagnostics are linked back onto the thrown error", async () => 
   await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
     assert.ok(error instanceof OpenAiCompatibleModelError);
     assert.equal(error.diagnosticId, events[0]?.diagnosticId);
+    return true;
+  });
+});
+
+test("HTTP error redaction precedes message and diagnostic truncation", async () => {
+  for (const size of [8_192, 16_384]) {
+    const prefix = JSON.stringify({ error: { message: "" } }).indexOf('""') + 1;
+    const message =
+      "x".repeat(size - fakeKey.length + 1 - (size === 16_384 ? prefix : 0)) +
+      fakeKey;
+    const records: ModelStreamDiagnostic[] = [];
+    const adapter = new OpenAiCompatibleModel({
+      baseUrl: "https://provider.test/v1",
+      apiKey: fakeKey,
+      onStreamFailure: async (event) => {
+        records.push(event);
+      },
+      fetch: (async () =>
+        new Response(JSON.stringify({ error: { message } }), {
+          status: 400,
+        })) as typeof fetch,
+    });
+    await assert.rejects(
+      collect(adapter.stream(request())),
+      (error: unknown) => {
+        assert.ok(error instanceof OpenAiCompatibleModelError);
+        assert.equal(error.message.includes(fakeKey.slice(0, -1)), false);
+        assert.equal(
+          records[0]?.payloads?.[0]?.text.includes(fakeKey.slice(0, -1)),
+          false,
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("large HTTP JSON retains a byte-bounded reason and honestly marked diagnostic truncation", async () => {
+  const records: ModelStreamDiagnostic[] = [];
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    onStreamFailure: async (event) => {
+      records.push(event);
+    },
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({ error: { message: "配置无效".repeat(8_000) } }),
+        { status: 400 },
+      )) as typeof fetch,
+  });
+  await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
+    assert.ok(error instanceof OpenAiCompatibleModelError);
+    assert.match(error.message, /HTTP 400: 配置无效/u);
+    const message = error.message.split("HTTP 400: ")[1]!;
+    assert(Buffer.byteLength(message) <= 8_192);
+    assert(Buffer.byteLength(records[0]!.payloads![0]!.text) <= 16_384);
+    assert.equal(records[0]!.payloads![0]!.truncated, true);
+    return true;
+  });
+});
+
+test("HTTP diagnostics redact JSON-escaped keys before truncating without calling redaction truncation", async () => {
+  const key = 'key-"quoted"-\\path';
+  const records: ModelStreamDiagnostic[] = [];
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: key,
+    onStreamFailure: async (event) => {
+      records.push(event);
+    },
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({ error: { message: `invalid key ${key}` } }),
+        { status: 400 },
+      )) as typeof fetch,
+  });
+  await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
+    assert.ok(error instanceof OpenAiCompatibleModelError);
+    assert.match(error.message, /invalid key \[redacted\]/u);
+    const payload = records[0]!.payloads![0]!;
+    assert.equal(payload.text.includes(key), false);
+    assert.equal(
+      payload.text.includes(JSON.stringify(key).slice(1, -1)),
+      false,
+    );
+    assert.equal(payload.truncated, false);
+    return true;
+  });
+});
+
+test("HTTP diagnostic persistence failure does not publish a dangling pointer", async () => {
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://provider.test/v1",
+    apiKey: fakeKey,
+    onStreamFailure: async () => {
+      throw new Error("disk unavailable");
+    },
+    fetch: (async () =>
+      new Response(JSON.stringify({ error: { message: "bad request" } }), {
+        status: 400,
+      })) as typeof fetch,
+  });
+  await assert.rejects(collect(adapter.stream(request())), (error: unknown) => {
+    assert.ok(error instanceof OpenAiCompatibleModelError);
+    assert.match(error.message, /HTTP 400: bad request/u);
+    assert.equal(error.diagnosticId, undefined);
     return true;
   });
 });
