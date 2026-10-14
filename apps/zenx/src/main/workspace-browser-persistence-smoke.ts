@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { app, type WebContentsView } from "electron";
 
@@ -19,8 +20,13 @@ void app.whenReady().then(async () => {
     onCreateView: (view) => views.push(view),
   });
   try {
-    assert.equal(app.getPath("userData"), profile);
-    assert.equal(app.getPath("sessionData"), profile);
+    // Electron canonicalizes platform aliases such as macOS /var -> /private/var.
+    // Compare physical directories while still requiring the exact fixture profile.
+    assert.equal(realpathSync(app.getPath("userData")), realpathSync(profile));
+    assert.equal(
+      realpathSync(app.getPath("sessionData")),
+      realpathSync(profile),
+    );
     browser.bindThreadSession("fixture-session", "fixture-thread");
     assert.deepEqual(await browser.listTabs("fixture-session"), []);
     const tab = await browser.open(
@@ -31,8 +37,8 @@ void app.whenReady().then(async () => {
     const session = view.webContents.session;
     assert.ok(session.isPersistent());
     assert.equal(
-      session.storagePath,
-      path.join(profile, "Partitions", "zenx-workspace-browser"),
+      realpathSync(session.storagePath!),
+      realpathSync(path.join(profile, "Partitions", "zenx-workspace-browser")),
     );
     const state = () =>
       view.webContents.executeJavaScript(`({
