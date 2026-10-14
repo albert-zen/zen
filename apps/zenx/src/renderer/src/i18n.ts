@@ -6,9 +6,12 @@ import * as settings from "./i18n/settings.js";
 import * as selector from "./i18n/selector.js";
 import * as panels from "./i18n/panels.js";
 
+import * as cockpit from "./i18n/cockpit.js";
+
 export const resources = {
   en: {
     common: common.en,
+    cockpit: cockpit.en,
     shell: shell.en,
     settings: settings.en,
     panels: panels.en,
@@ -16,6 +19,7 @@ export const resources = {
   },
   "zh-CN": {
     common: common.zhCN,
+    cockpit: cockpit.zhCN,
     shell: shell.zhCN,
     settings: settings.zhCN,
     panels: panels.zhCN,

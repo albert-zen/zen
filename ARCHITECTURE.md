@@ -10,6 +10,9 @@
 
 ## 核心概念
 
+- **实验 Cockpit** — 默认关闭的 Renderer 视图从现有 ThreadSummary、审批与无订阅 canonical snapshot 派生跨 workspace 概览和焦点事件，显式发送/中断仍走原生 App Server，不保存任务、调度或 Inbox 状态。
+- **实验 Cockpit component** — 可选 `cockpit-component` 插件把有界 agent-authored HTML 与同 Thread Item 引用作为既有 structured tool result 保存；用户显式打开后复用 Generic UI Host 的隔离 frame，桥只允许读取已核对的来源，不授予命令或导航能力，内容不成为可信状态。
+- **public Item projection** — Cockpit 生成组件与 self-control history 共用 public Item projection：递归剔除 opaque payload，只保留既有可公开元数据与 summary；可信原生 canonical source inspector 仍可查看完整 Item。
 - **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
 - **IMZenX managed configuration** — Its trusted local form uses provider-declared pinned field contracts and the existing OS-encrypted vault to save write-only channel credentials; model tools see only nonsecret references/readiness, explicit connection validates a transient nonsecret reviewed-configuration revision under the runtime queue before decrypting the chosen configuration into the existing private child pipe, and explicit runtime preparation copies the locked packaged project to an IM-owned runtime directory without modifying App Resources or enrolling credentials.
 

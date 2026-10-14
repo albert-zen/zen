@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 2,
+  "id": "cockpit-component",
+  "name": "Cockpit component experiment",
+  "version": "0.1.0",
+  "description": "Publish a bounded agent-authored component as a canonical tool result.",
+  "compatibility": { "zenx": ">=0.1.0 <0.2.0" },
+  "runtime": { "type": "process", "entry": "./runtime.mjs" },
+  "mainDocument": "Use cockpit_component_publish only when the human asks for a component. First inspect canonical source Item IDs with ZenX self-control. Supply 1-12 earlier Item IDs from the current Thread, a title and <=24 KiB HTML. Do not invent citations. The human opens the result in the experimental Cockpit. HTML runs inside the existing isolated UI frame; no network, command or navigation is available. Use zenx-plugin-ui:init to access event.detail.sdk.handles.read(sourceItemId), then render source text safely with textContent. The component is an interpretation, never authoritative task state.",
+  "provider": {
+    "id": "cockpit-component-process",
+    "platforms": ["darwin", "linux", "win32"],
+    "interactionModes": ["background_safe"],
+    "capabilities": ["cockpit-component.publish"]
+  },
+  "permissions": [],
+  "tools": [
+    {
+      "name": "cockpit_component_publish",
+      "description": "Publish an isolated HTML component with canonical same-thread source Item IDs. Only when explicitly requested. Does not run HTML or change tasks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "maxLength": 120 },
+          "html": { "type": "string", "maxLength": 24576 },
+          "sourceItemIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["title", "html", "sourceItemIds"],
+        "additionalProperties": false
+      },
+      "permissions": [],
+      "interactionMode": "background_safe",
+      "capabilities": ["cockpit-component.publish"],
+      "maxOutputBytes": 131072
+    }
+  ]
+}

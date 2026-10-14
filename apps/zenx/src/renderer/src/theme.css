@@ -1,4 +1,13 @@
 :root {
+  /* Cockpit deliberately maintains an instrument palette in either shell theme. */
+  --color-cockpit-background: #172934;
+  --color-cockpit-panel: #1e3541;
+  --color-cockpit-raised: #284653;
+  --color-cockpit-text: #edf3f4;
+  --color-cockpit-muted: #a9bec8;
+  --color-cockpit-accent: #91d5e3;
+  --color-cockpit-warning: #f2c078;
+  --color-cockpit-line: #3e5965;
   color-scheme: dark;
   --font-body: "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
   --font-heading:
