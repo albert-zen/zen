@@ -73,3 +73,5 @@ precedents, not evidence that every Codex browser operation uses diff output:
 - [DeepSeek Harness source at the inspected revision](https://github.com/deepseek-ai/deepseek-harness/tree/ddefc45) is the source for the provider composition comparison. Provider-specific behavior is not claimed to be a universal harness contract.
 
 Private task reports retain runtime diagnostics and experiment details. Public documentation deliberately excludes user application inventories and screenshots of existing documents.
+
+The Browser registry now keeps Workspace and one external browser available together. Chrome and Edge have separate, explicitly requested native-host registration locations. A competing external connection is rejected without replacing the current one. The [concurrency contract](../../../docs/browser-concurrency.md) records tool namespaces, reference and permission isolation, and native platform validation limits.

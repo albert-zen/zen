@@ -32,6 +32,7 @@ def test_imzen_keeps_only_product_composition_modules():
         "config.py",
         "controller.py",
         "main.py",
+        "migration.py",
         "paw.py",
         "paw_pipe.py",
         "readiness.py",

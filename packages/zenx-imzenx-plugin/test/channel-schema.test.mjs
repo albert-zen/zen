@@ -12,7 +12,7 @@ test("versioned IM provider form fields match the pinned from_config declaration
   assert.equal(IM_CHANNEL_SCHEMA_VERSION, 1);
   assert.equal(
     IM_CHANNEL_SDK_REVISION,
-    "7d5f1179365679d0f95abd5cb2ce76547238d05f",
+    "b90a2a3b4418025fb8e81e526a9d042271138823",
   );
   const byId = Object.fromEntries(
     IM_CHANNEL_SCHEMAS.map((schema) => [schema.id, schema]),
