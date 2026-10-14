@@ -26,6 +26,8 @@ import type {
   TurnStartedItem,
   UserInput,
   UserMessageItem,
+  HostMessageItem,
+  HostWakeupInput,
 } from "./item.js";
 import {
   AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
@@ -144,6 +146,7 @@ export interface RunTurnOptions {
   reloadWorkspaceInstructions?: () => Promise<WorkspaceInstructionFile[]>;
   turnId?: string;
   input: UserInput;
+  hostInput?: HostWakeupInput;
   clientId?: string;
   /** Fixed FIFO admission snapshot; each entry retains a canonical identity. */
   initialMessages?: readonly { input: UserInput; clientId: string }[];
@@ -283,9 +286,24 @@ export class AgentRuntime {
     let initialInputCommitted = false;
     try {
       this.#assertSandbox(options.configuration.sandbox);
-      for (const message of options.initialMessages ?? [
-        { input: options.input, clientId: options.clientId },
-      ]) {
+      if (options.hostInput !== undefined) {
+        const hostItem: HostMessageItem = {
+          id: this.#id(),
+          threadId: options.thread.id,
+          turnId,
+          createdAt: this.#now(),
+          type: "host_message",
+          sender: "host",
+          mode: "start",
+          ...options.hostInput,
+        };
+        await this.#completeItem(hostItem, options);
+      }
+      for (const message of options.hostInput !== undefined
+        ? []
+        : (options.initialMessages ?? [
+            { input: options.input, clientId: options.clientId },
+          ])) {
         const userItem: UserMessageItem = {
           id: this.#id(),
           threadId: options.thread.id,

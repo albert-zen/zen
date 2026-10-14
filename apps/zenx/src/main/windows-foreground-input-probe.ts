@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Smoke-only evidence. This is never a provider, permission or product input path.
-type Phase = "ready" | "edge" | "stop";
+type Phase = "ready" | "edge" | "stop" | "escape";
 type Report = {
   kind: "windows-os-routed-input";
   phase: Phase;
@@ -16,6 +16,7 @@ type Report = {
   injectedClicks: number;
   guardMouseDown: number;
   guardMouseUp: number;
+  injectedEscapeEvents?: number;
 };
 
 export function validateNativeProbeReport(
@@ -44,6 +45,7 @@ export function validateNativeProbeReport(
   );
   assert.equal(report.guardMouseDown, phase === "ready" ? 1 : 2);
   assert.equal(report.guardMouseUp, phase === "ready" ? 1 : 2);
+  if (phase === "escape") assert.equal(report.injectedEscapeEvents, 2);
 }
 
 export async function startWindowsForegroundInputProbe(
@@ -185,6 +187,7 @@ export async function startWindowsForegroundInputProbe(
   };
   try {
     const ready = await report("ready.json", "ready");
+    let escaped = false;
     return {
       ready,
       async clickEdge() {
@@ -206,9 +209,18 @@ export async function startWindowsForegroundInputProbe(
         );
         return report("stop-result.json", "stop");
       },
+      async pressEscape() {
+        await writeFile(
+          join(directory, "escape"),
+          "one OS-routed Escape key press",
+        );
+        const result = await report("escape-result.json", "escape");
+        escaped = true;
+        return result;
+      },
       async finish() {
         await writeFile(join(directory, "finish"), "finish measured epoch");
-        return report("final.json", "stop");
+        return report("final.json", escaped ? "escape" : "stop");
       },
       close,
     };
@@ -239,7 +251,9 @@ public sealed class ZenXOverlayGuard : Form {
   [StructLayout(LayoutKind.Sequential)] struct Point { public int X,Y; }
   [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left,Top,Right,Bottom; }
   [StructLayout(LayoutKind.Sequential)] struct MouseInput { public int X,Y; public uint Data,Flags,Time; public UIntPtr Extra; }
-  [StructLayout(LayoutKind.Sequential)] struct Input { public uint Type; public MouseInput Mouse; }
+  [StructLayout(LayoutKind.Sequential)] struct KeyboardInput { public ushort Key,Scan; public uint Flags,Time; public UIntPtr Extra; }
+  [StructLayout(LayoutKind.Explicit)] struct InputData { [FieldOffset(0)] public MouseInput Mouse; [FieldOffset(0)] public KeyboardInput Keyboard; }
+  [StructLayout(LayoutKind.Sequential)] struct Input { public uint Type; public InputData Data; }
   delegate void EventProc(IntPtr hook,uint kind,IntPtr hwnd,int obj,int child,uint thread,uint time);
   [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
@@ -256,7 +270,7 @@ public sealed class ZenXOverlayGuard : Form {
   readonly List<int> transitions = new List<int>();
   readonly EventProc callback; IntPtr hook; IntPtr guard;
   volatile bool sampling; Thread sampler;
-  int samples,focusChanges,down,up,clicks,state;
+  int samples,focusChanges,down,up,clicks,state,escapeEvents;
   long changedAt; readonly Stopwatch clock = Stopwatch.StartNew();
   public static void Run(string directory,int parentPid) {
     // Per-thread coordinate mode only; never change the desktop's DPI settings.
@@ -292,18 +306,26 @@ public sealed class ZenXOverlayGuard : Form {
   void OnForeground(IntPtr hook,uint kind,IntPtr hwnd,int obj,int child,uint thread,uint time) {
     if(sampling && hwnd!=guard) { uint pid; GetWindowThreadProcessId(hwnd,out pid); if(transitions.Count<256) transitions.Add((int)pid); else focusChanges++; }
   }
-  object Evidence(string phase) { return new { kind="windows-os-routed-input",phase,guardPid=Process.GetCurrentProcess().Id,samples=Volatile.Read(ref samples),sampledFocusChanges=Volatile.Read(ref focusChanges),foregroundEvents=transitions.ToArray(),injectedClicks=clicks,guardMouseDown=down,guardMouseUp=up }; }
+  object Evidence(string phase) { return new { kind="windows-os-routed-input",phase,guardPid=Process.GetCurrentProcess().Id,samples=Volatile.Read(ref samples),sampledFocusChanges=Volatile.Read(ref focusChanges),foregroundEvents=transitions.ToArray(),injectedClicks=clicks,guardMouseDown=down,guardMouseUp=up,injectedEscapeEvents=escapeEvents }; }
   void InjectClick(int x,int y) {
     if(GetForegroundWindow()!=guard) throw new Exception("Guard is not foreground before native click");
     int vx=GetSystemMetrics(76),vy=GetSystemMetrics(77),vw=GetSystemMetrics(78),vh=GetSystemMetrics(79);
     if(vw<2 || vh<2 || x<vx || y<vy || x>=vx+vw || y>=vy+vh) throw new Exception("Native point outside virtual desktop");
     var inputs=new Input[3];
-    inputs[0].Mouse.X=(int)Math.Round((x-vx)*65535.0/(vw-1));
-    inputs[0].Mouse.Y=(int)Math.Round((y-vy)*65535.0/(vh-1));
-    inputs[0].Mouse.Flags=0x0001|0x8000|0x4000;
-    inputs[1].Mouse.Flags=0x0002; inputs[2].Mouse.Flags=0x0004;
+    inputs[0].Data.Mouse.X=(int)Math.Round((x-vx)*65535.0/(vw-1));
+    inputs[0].Data.Mouse.Y=(int)Math.Round((y-vy)*65535.0/(vh-1));
+    inputs[0].Data.Mouse.Flags=0x0001|0x8000|0x4000;
+    inputs[1].Data.Mouse.Flags=0x0002; inputs[2].Data.Mouse.Flags=0x0004;
     if(SendInput(3,inputs,Marshal.SizeOf(typeof(Input)))!=3) throw new Exception("Native SendInput did not insert all three events");
     clicks++; changedAt=clock.ElapsedMilliseconds;
+  }
+  void InjectEscape() {
+    if(GetForegroundWindow()!=guard) throw new Exception("Guard is not foreground before Escape");
+    var inputs=new Input[2];
+    inputs[0].Type=1; inputs[0].Data.Keyboard.Key=0x1B;
+    inputs[1].Type=1; inputs[1].Data.Keyboard.Key=0x1B; inputs[1].Data.Keyboard.Flags=0x0002;
+    if(SendInput(2,inputs,Marshal.SizeOf(typeof(Input)))!=2) throw new Exception("Native Escape injection did not insert both events");
+    escapeEvents+=2; changedAt=clock.ElapsedMilliseconds;
   }
   void Tick() {
     try {
@@ -331,6 +353,10 @@ public sealed class ZenXOverlayGuard : Form {
         InjectClick(x,y);state=5;
       }
       else if(state==5 && clock.ElapsedMilliseconds-changedAt>=250) { Save("stop-result.json",Evidence("stop"));state=6; }
+      else if(state==6 && Has("escape")) { InjectEscape();state=9; }
+      else if(state==9 && clock.ElapsedMilliseconds-changedAt>=250) { Save("escape-result.json",Evidence("escape"));state=10; }
+      else if(state==10 && Has("finish")) { changedAt=clock.ElapsedMilliseconds;state=11; }
+      else if(state==11 && clock.ElapsedMilliseconds-changedAt>=150) { Save("final.json",Evidence("escape"));state=12; }
       else if(state==6 && Has("finish")) { changedAt=clock.ElapsedMilliseconds;state=7; }
       else if(state==7 && clock.ElapsedMilliseconds-changedAt>=150) { Save("final.json",Evidence("stop"));state=8; }
     } catch(Exception error) { if(!Has("error.json")) Save("error.json",new {error=error.Message});Close(); }

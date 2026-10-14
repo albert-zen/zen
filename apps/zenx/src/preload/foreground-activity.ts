@@ -16,6 +16,7 @@ ipcRenderer.on(
       stopLabel: string;
       stopDescription: string;
       title: string;
+      escapeHint: string;
       stopping: boolean;
     },
   ) => {
@@ -24,6 +25,8 @@ ipcRenderer.on(
     const activity = document.getElementById("activity-label");
     const stop = document.getElementById("stop") as HTMLButtonElement | null;
     const status = document.getElementById("status");
+    const escapeHint = document.getElementById("escape-hint");
+    if (escapeHint) escapeHint.textContent = state.escapeHint;
     if (names) names.textContent = state.agentLabel;
     if (activity) activity.textContent = state.activityLabel;
     if (stop) {

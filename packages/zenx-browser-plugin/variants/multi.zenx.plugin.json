@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "browser",
   "name": "Browser",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Workspace, Chrome and Edge browser instances with separate targets and approvals.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -42,7 +42,7 @@
     {
       "id": "browser.interact",
       "title": "Interact with pages",
-      "description": "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
+      "description": "Click, type, or select an option in an explicitly targeted visible page element, scroll the page viewport, or dispatch bounded coordinate/key input to the observed tab.",
       "scope": "browser-session"
     },
     {
@@ -60,7 +60,7 @@
     {
       "id": "browser.connected.interact",
       "title": "Connected browser: Interact with pages",
-      "description": "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
+      "description": "Click, type, or select an option in an explicitly targeted visible page element, scroll the page viewport, or dispatch bounded coordinate/key input to the observed tab.",
       "scope": "browser-session"
     }
   ],
@@ -267,6 +267,105 @@
       "permissions": ["browser.interact", "browser.tabs.read"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "cdp", "dom.click"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_pointer_click",
+      "description": "[Workspace browser] Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No frames, dragging, OS input or automatic foreground fallback. Detected page, viewport, focus, or user input changes reject. Open shadow roots resolve within bounded limits; ordinary div/span containers remain supported after exact-node metadata checks, while known closed or unresolved shadow surfaces reject locally. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "x", "y"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "input.pointer"],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_workspace_key_press",
+      "description": "[Workspace browser] Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Open shadow focus resolves to its real node; ordinary focused contenteditable containers remain supported after exact-node metadata checks, while known closed or unresolved shadow focus is unavailable. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "Enter",
+              "Tab",
+              "Escape",
+              "ArrowUp",
+              "ArrowDown",
+              "ArrowLeft",
+              "ArrowRight",
+              "Backspace",
+              "Delete",
+              "Home",
+              "End",
+              "PageUp",
+              "PageDown",
+              "Space"
+            ]
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "key"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact", "browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp", "input.keyboard"],
       "maxOutputBytes": 131072
     },
     {
@@ -674,6 +773,142 @@
         "authenticated_state_in_place",
         "cdp",
         "dom.click"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_pointer_click",
+      "description": "[Connected external browser] Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No frames, dragging, OS input or automatic foreground fallback. Detected page, viewport, focus, or user input changes reject. Open shadow roots resolve within bounded limits; ordinary div/span containers remain supported after exact-node metadata checks, while known closed or unresolved shadow surfaces reject locally. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0
+          },
+          "connectionId": {
+            "type": "string",
+            "description": "Exact opaque connectionId from browser_connections. Required even when only one browser is connected."
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "x",
+          "y",
+          "connectionId"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "input.pointer"
+      ],
+      "maxOutputBytes": 131072
+    },
+    {
+      "name": "browser_connected_key_press",
+      "description": "[Connected external browser] Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Open shadow focus resolves to its real node; ordinary focused contenteditable containers remain supported after exact-node metadata checks, while known closed or unresolved shadow focus is unavailable. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+          },
+          "baseObservationId": {
+            "type": "string",
+            "description": "Request a diff only when you still retain that observation's full first-page baseline (or have applied its diffs). Omit after context compaction or lost context to receive a self-contained full view."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "Enter",
+              "Tab",
+              "Escape",
+              "ArrowUp",
+              "ArrowDown",
+              "ArrowLeft",
+              "ArrowRight",
+              "Backspace",
+              "Delete",
+              "Home",
+              "End",
+              "PageUp",
+              "PageDown",
+              "Space"
+            ]
+          },
+          "connectionId": {
+            "type": "string",
+            "description": "Exact opaque connectionId from browser_connections. Required even when only one browser is connected."
+          }
+        },
+        "required": [
+          "sessionId",
+          "tabId",
+          "observationId",
+          "key",
+          "connectionId"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "browser.connected.interact",
+        "browser.connected.tabs.read"
+      ],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "user_session",
+        "authenticated_state_in_place",
+        "cdp",
+        "input.keyboard"
       ],
       "maxOutputBytes": 131072
     },

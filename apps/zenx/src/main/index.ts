@@ -7,7 +7,10 @@ import {
 import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
-import { deliverAssistantInput } from "./assistant-preset.js";
+import {
+  deliverAssistantInput,
+  deliverAssistantWakeup,
+} from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
@@ -24,6 +27,7 @@ import {
   desktopCapturer,
   dialog,
   ipcMain,
+  globalShortcut,
   Menu,
   safeStorage,
   screen,
@@ -614,6 +618,7 @@ async function bootstrapZenX(): Promise<void> {
       createWindow: (options) => new BrowserWindow(options),
       screen,
       ipcMain,
+      globalShortcut,
       preloadPath: join(__dirname, "../preload/foreground-activity.cjs"),
       language: nativeLanguage,
       onStop: (ids) => foregroundActivity?.stop(ids),
@@ -862,6 +867,10 @@ async function bootstrapZenX(): Promise<void> {
         request: (method, params) => automationManager.request(method, params),
         onNotification: (listener) =>
           automationManager.onNotification(listener),
+        onReconnect: (listener) =>
+          automationManager.onStatus((status) => {
+            if (status.type === "ready" && status.reconnected) listener();
+          }),
         readThread: (threadId) =>
           automationManager.request("thread/read", {
             threadId,
@@ -886,6 +895,10 @@ async function bootstrapZenX(): Promise<void> {
           ),
         sendAssistant: (params, signal) =>
           deliverAssistantInput(automationManager, params, signal),
+        sendAssistantWakeup: (params, signal) =>
+          deliverAssistantWakeup(automationManager, params, signal, {
+            requireUnarchived: true,
+          }),
         enqueue: async (params) => {
           await automationManager.request("turn/queue", params);
         },

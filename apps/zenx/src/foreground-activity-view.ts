@@ -3,6 +3,7 @@ export interface ForegroundActivityViewOptions {
   agentNames: readonly string[];
   stopping: boolean;
   language: "en" | "zh-CN";
+  escapeAvailable?: boolean;
 }
 
 const style = `
@@ -48,6 +49,8 @@ const style = `
     box-shadow: 0 2px 5px rgb(0 0 0 / 22%), inset 0 1px 0 rgb(255 255 255 / 4%);
   }
   .activity-icon { flex: 0 0 18px; width: 18px; height: 18px; color: #b3c2ff; }
+  .message-stack { min-width: 0; display: grid; gap: 1px; }
+  .escape-hint { color: #b8bdca; font-size: 10px; line-height: 13px; white-space: nowrap; }
   .message { display: flex; align-items: baseline; gap: 4px; min-width: 0; font-size: 13px; line-height: 18px; }
   .agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
   .activity-label { flex-shrink: 0; color: #c8cbd5; white-space: nowrap; }
@@ -82,9 +85,10 @@ const style = `
   @keyframes edge-breathe { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
   @media (max-width: 380px) {
     #status { gap: 8px; padding-left: 11px; border-radius: 15px; }
-    .message { display: block; }
+    .message { display: block; line-height: 15px; }
     .agent-name { display: block; }
-    .activity-label { display: block; font-size: 11px; line-height: 15px; }
+    .activity-label { display: block; font-size: 11px; line-height: 13px; }
+    .escape-hint { font-size: 10px; line-height: 12px; }
     #stop { min-width: 60px; padding: 0 8px; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -95,7 +99,7 @@ const style = `
     .edge-frame { border: 2px solid Highlight; box-shadow: none; }
     .edge-frame::after { display: none; }
     #status { background: Canvas; color: CanvasText; border: 1px solid CanvasText; box-shadow: none; }
-    .activity-icon, #status[data-stopping="true"] .activity-icon, .activity-label { color: CanvasText; }
+    .activity-icon, #status[data-stopping="true"] .activity-icon, .activity-label, .escape-hint { color: CanvasText; }
     #stop, #stop:hover:not(:disabled), #stop:active:not(:disabled) { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
     #stop:disabled { background: ButtonFace; color: GrayText; border-color: GrayText; }
     #stop:focus-visible { outline-color: Highlight; }
@@ -133,7 +137,7 @@ function safeName(value: string | undefined): string {
 export function foregroundActivityText(
   options: Pick<
     ForegroundActivityViewOptions,
-    "agentNames" | "stopping" | "language"
+    "agentNames" | "stopping" | "language" | "escapeAvailable"
   >,
 ): {
   agentLabel: string;
@@ -141,6 +145,7 @@ export function foregroundActivityText(
   stopLabel: string;
   stopDescription: string;
   title: string;
+  escapeHint: string;
 } {
   const chinese = options.language === "zh-CN";
   const uniqueNames = [...new Set(options.agentNames.map(safeName))];
@@ -182,6 +187,17 @@ export function foregroundActivityText(
     stopLabel,
     stopDescription: options.stopping ? stopLabel : stopDescription,
     title,
+    escapeHint: options.stopping
+      ? chinese
+        ? "正在等待操作结束"
+        : "Waiting for the operation to stop"
+      : options.escapeAvailable
+        ? chinese
+          ? "按 Esc 停止操作"
+          : "Press Esc to stop"
+        : chinese
+          ? "Esc 不可用，请点击停止"
+          : "Esc unavailable; click Stop",
   };
 }
 
@@ -190,14 +206,20 @@ export function foregroundActivityHtml(
   options: ForegroundActivityViewOptions,
 ): string {
   const chinese = options.language === "zh-CN";
-  const { agentLabel, activityLabel, stopLabel, stopDescription, title } =
-    foregroundActivityText(options);
+  const {
+    agentLabel,
+    activityLabel,
+    stopLabel,
+    stopDescription,
+    title,
+    escapeHint,
+  } = foregroundActivityText(options);
   const content =
     options.kind === "edges"
       ? `<div id="edges" class="edge-frame" data-stopping="${options.stopping}" aria-hidden="true"></div>`
       : `<div id="status" data-stopping="${options.stopping}" role="status" aria-live="polite" aria-atomic="true" title="${escapeHtml(title)}">
   <svg class="activity-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="2.5" y="3.5" width="15" height="10.5" rx="2"/><path d="M7 17h6m-3-3v3m-4-9h3m-3 3h6"/></svg>
-  <span class="message"><bdi id="agent-names" class="agent-name" dir="auto">${escapeHtml(agentLabel)}</bdi><span id="activity-label" class="activity-label">${escapeHtml(activityLabel)}</span></span>
+  <span class="message-stack"><span class="message"><bdi id="agent-names" class="agent-name" dir="auto">${escapeHtml(agentLabel)}</bdi><span id="activity-label" class="activity-label">${escapeHtml(activityLabel)}</span></span><span id="escape-hint" class="escape-hint">${escapeHtml(escapeHint)}</span></span>
   <button id="stop" type="button" aria-label="${escapeHtml(stopDescription)}"${options.stopping ? ' disabled aria-disabled="true"' : ""}>${escapeHtml(stopLabel)}</button>
 </div>`;
 

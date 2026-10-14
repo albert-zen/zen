@@ -52,7 +52,14 @@ test("PAW defaults to its own new working Thread, and duplicate clicks share one
     assert.equal(creates[0]!.input.name, "PAW");
     assert.equal(typeof creates[0]!.input.operationId, "string");
     await act(async () => release({ id: "created-paw" }));
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector(".paw-start-content"), null);
+    const introduction = calls.filter(
+      (call) => call.id === "start-introduction",
+    );
+    assert.equal(introduction.length, 1);
+    assert.equal(introduction[0]!.input.roomId, "created-paw");
+    assert.equal(introduction[0]!.input.text, undefined);
+    assert.equal(calls.filter((call) => call.id === "post-message").length, 0);
   });
 });
 
@@ -99,7 +106,7 @@ test("equivalent SDK replacement retains the open PAW Project and preview withou
       assert.equal(project.textContent, selected);
       assert.equal(createButton().disabled, false);
       assert.doesNotMatch(
-        document.querySelector('[role="dialog"]')?.textContent ?? "",
+        document.querySelector(".paw-start-content")?.textContent ?? "",
         /Add a Project before|Unavailable selection/,
       );
       releaseSetupReads();
@@ -159,7 +166,7 @@ for (const interruption of [
         await act(async () => createButton().click());
       if (interruption.startsWith("cancel"))
         await act(async () => {
-          document.querySelector('[role="dialog"]')!.dispatchEvent(
+          document.querySelector(".paw-start-content")!.dispatchEvent(
             new window.KeyboardEvent("keydown", {
               key: "Escape",
               bubbles: true,
@@ -187,7 +194,7 @@ for (const interruption of [
         routes.every((route) => !route.includes("late-paw")),
         "accepted background creation cannot replace newer intent",
       );
-      assert.equal(document.querySelector('[role="dialog"]'), null);
+      assert.equal(document.querySelector(".paw-start-content"), null);
     });
   });
 }
@@ -200,8 +207,8 @@ test("a failed PAW setup preserves its error and blocks blind new-Thread retries
     );
     assert.equal(createButton().disabled, true);
     assert.match(
-      document.querySelector('[role="dialog"] [role="alert"]')?.textContent ??
-        "",
+      document.querySelector('.paw-start-content [role="alert"]')
+        ?.textContent ?? "",
       /new-thread.*setup failed/,
     );
     await act(async () => createButton().click());
@@ -220,7 +227,7 @@ test("confirmed PAW creation navigates even when follow-up list refresh fails", 
     failRefresh();
     await act(async () => release({ id: "saved-paw" }));
     assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms?roomId=saved-paw"]);
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(document.querySelector(".paw-start-content"), null);
   });
 });
 
@@ -231,11 +238,6 @@ test("a failed explicit binding keeps visible fields aligned with its retained s
     await act(async () => createButton().click());
     await act(async () =>
       reject(Error("Binding result could not be confirmed")),
-    );
-    assert.equal(
-      document.querySelector<HTMLInputElement>('[role="dialog"] input')!
-        .disabled,
-      true,
     );
     assert.equal(
       document.querySelector<HTMLButtonElement>(
@@ -268,7 +270,7 @@ async function choose(label: string, value: string) {
 }
 function createButton() {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent === "Create PAW",
+    (button) => button.textContent === "Create and say hello",
   )!;
 }
 async function withForm(
@@ -280,9 +282,16 @@ async function withForm(
     release: (value: unknown) => void;
     reject: (reason: unknown) => void;
     failRefresh: () => void;
+    delayRefresh: () => void;
+    releaseRefresh: () => void;
+    failIntroduction: () => void;
+    delayIntroduction: () => void;
+    releaseIntroduction: () => void;
     delaySetupReads: () => void;
     releaseSetupReads: () => void;
   }) => Promise<void>,
+  _legacyStartAtName = false,
+  failFirstSetupRead = false,
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost",
@@ -323,6 +332,17 @@ async function withForm(
   const routes: string[] = [];
   let release!: (value: unknown) => void, reject!: (reason: unknown) => void;
   let refreshFails = false;
+  let refreshDelayed = false;
+  let releaseRefresh!: () => void;
+  const refreshWait = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  let introductionFails = false;
+  let introductionDelayed = false;
+  let releaseIntroduction!: () => void;
+  const introductionWait = new Promise<void>((resolve) => {
+    releaseIntroduction = resolve;
+  });
   let delaySetup = false;
   let releaseSetupReads!: () => void;
   const setupReads = new Promise<void>((resolve) => {
@@ -341,9 +361,14 @@ async function withForm(
           calls.push({ id, input });
           if (id === "list") {
             if (refreshFails) throw Error("List unavailable");
+            if (refreshDelayed) await refreshWait;
             return { rooms: [] };
           }
           if (id === "workspaces") {
+            if (failFirstSetupRead) {
+              failFirstSetupRead = false;
+              throw new Error("Project settings temporarily unavailable");
+            }
             if (delaySetup) await setupReads;
             return ["/project", "/second"];
           }
@@ -356,6 +381,14 @@ async function withForm(
             };
           }
           if (id === "create-assistant") return await creation;
+          if (id === "prepare-introduction") return {};
+          if (id === "start-introduction") {
+            if (introductionDelayed) await introductionWait;
+            if (introductionFails)
+              throw new Error("Introduction transport outcome unknown");
+            return { wakeupId: "introduction" };
+          }
+          if (id === "ack-operation") return { acknowledged: true };
           throw Error(id);
         },
       },
@@ -372,6 +405,17 @@ async function withForm(
       sdk,
       release,
       reject,
+      delayIntroduction: () => {
+        introductionDelayed = true;
+      },
+      releaseIntroduction,
+      failIntroduction: () => {
+        introductionFails = true;
+      },
+      delayRefresh: () => {
+        refreshDelayed = true;
+      },
+      releaseRefresh,
       failRefresh: () => {
         refreshFails = true;
       },
@@ -385,3 +429,189 @@ async function withForm(
     dom.window.close();
   }
 }
+
+test("first-use PAW creation is inline, has no name form, and can be postponed without a turn", async () => {
+  await withForm(async ({ calls, routes }) => {
+    assert.equal(document.querySelector('[role="dialog"]') !== null, false);
+    assert.equal(
+      document.querySelector(".paw-start-content input") !== null,
+      false,
+    );
+    assert.match(
+      document.querySelector(".paw-start-content")!.textContent!,
+      /will introduce itself/,
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Later")!
+        .click(),
+    );
+    assert.equal(document.querySelector(".paw-start-content") !== null, false);
+    assert.equal(
+      calls.some((call) =>
+        [
+          "create-assistant",
+          "prepare-introduction",
+          "start-introduction",
+        ].includes(call.id),
+      ),
+      false,
+    );
+    assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms"]);
+  });
+});
+
+test("failed setup reads preserve the form and explicitly retry without creating work", async () => {
+  await withForm(
+    async ({ calls }) => {
+      assert.match(
+        document.body.textContent!,
+        /Project settings temporarily unavailable/,
+      );
+      assert.equal(createButton().disabled, true);
+      await act(async () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent === "Retry setup checks")!
+          .click(),
+      );
+      assert.equal(createButton().disabled, false);
+      assert.equal(calls.filter((call) => call.id === "workspaces").length, 2);
+      assert.equal(
+        calls.some((call) => call.id === "create-assistant"),
+        false,
+      );
+    },
+    false,
+    true,
+  );
+});
+
+test("uncertain introduction opens the created Room without recreating it or inventing a reply", async () => {
+  await withForm(
+    async ({ calls, routes, release, failIntroduction, root, sdk }) => {
+      failIntroduction();
+      await act(async () => createButton().click());
+      await act(async () =>
+        release({ id: "saved-paw", operationEpoch: "epoch" }),
+      );
+      assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms?roomId=saved-paw"]);
+      assert.equal(
+        calls.filter((call) => call.id === "create-assistant").length,
+        1,
+      );
+      assert.equal(
+        calls.filter((call) => call.id === "start-introduction").length,
+        1,
+      );
+      assert.equal(
+        calls.filter((call) => call.id === "ack-operation").length,
+        0,
+      );
+      await act(async () =>
+        root.render(React.createElement(RoomsPage, { sdk: sdk(routes[0]) })),
+      );
+      assert.equal(
+        calls.filter((call) => call.id === "start-introduction").length,
+        1,
+        "reopening does not resend initialization",
+      );
+      assert.equal(
+        document.querySelector(".room-message") !== null,
+        false,
+        "no renderer-generated model welcome",
+      );
+    },
+  );
+});
+
+test("confirmed creation opens chat before introduction admission, and a newer route is never replaced", async () => {
+  await withForm(
+    async ({
+      calls,
+      routes,
+      release,
+      delayIntroduction,
+      releaseIntroduction,
+      root,
+      sdk,
+    }) => {
+      delayIntroduction();
+      await act(async () => createButton().click());
+      await act(async () =>
+        release({ id: "new-chat", operationEpoch: "epoch" }),
+      );
+      assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms?roomId=new-chat"]);
+      assert.equal(
+        calls.filter((call) => call.id === "start-introduction").length,
+        1,
+      );
+      assert.equal(
+        calls.filter((call) => call.id === "ack-operation").length,
+        0,
+      );
+      await act(async () =>
+        root.render(
+          React.createElement(RoomsPage, {
+            sdk: sdk("/plugins/zenx-rooms/rooms?roomId=other"),
+          }),
+        ),
+      );
+      await act(async () => releaseIntroduction());
+      assert.deepEqual(routes, ["/plugins/zenx-rooms/rooms?roomId=new-chat"]);
+      assert.equal(
+        calls.filter((call) => call.id === "start-introduction").length,
+        1,
+      );
+      assert.equal(
+        calls.filter((call) => call.id === "ack-operation").length,
+        1,
+      );
+    },
+  );
+});
+
+test("admission opens new PAW before unrelated list refresh settles", async () => {
+  await withForm(
+    async ({ calls, routes, release, delayRefresh, releaseRefresh }) => {
+      await act(async () => createButton().click());
+      delayRefresh();
+      await act(async () =>
+        release({ id: "accepted-paw", operationEpoch: "epoch" }),
+      );
+      try {
+        assert.deepEqual(
+          [...routes],
+          ["/plugins/zenx-rooms/rooms?roomId=accepted-paw"],
+        );
+        assert.equal(
+          calls.filter((c) => c.id === "prepare-introduction").length,
+          1,
+        );
+      } finally {
+        await act(async () => releaseRefresh());
+      }
+    },
+  );
+});
+
+test("accepted explicit greeting survives navigation during create admission", async () => {
+  await withForm(async ({ root, sdk, calls, routes, release }) => {
+    await act(async () => createButton().click());
+    await act(async () =>
+      root.render(
+        React.createElement(RoomsPage, {
+          sdk: sdk("/plugins/zenx-rooms/rooms?roomId=other"),
+        }),
+      ),
+    );
+    await act(async () =>
+      release({ id: "accepted-paw", operationEpoch: "epoch" }),
+    );
+    assert.deepEqual(routes, []);
+    assert.equal(
+      calls.filter((c) => c.id === "prepare-introduction").length,
+      1,
+      "create-and-greet owns its accepted request even when navigation changes",
+    );
+  });
+});

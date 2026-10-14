@@ -346,6 +346,258 @@ test("browser instance identity survives reconnect and worker restart but differ
   assert.equal(Object.keys(stored).length, 1);
 });
 
+test("new inactive tabs share a connection/window group without touching user tabs or focus", async () => {
+  const fixture = await workerFixture();
+  await connectFixture(fixture);
+  const [first, second] = await Promise.all([
+    createFixtureTab(fixture, "first"),
+    createFixtureTab(fixture, "second"),
+  ]);
+  assert.deepEqual(first.result.grouping, { status: "grouped", groupId: 10 });
+  assert.deepEqual(second.result.grouping, first.result.grouping);
+  assert.deepEqual(
+    fixture.groupCalls.map((call) => [...call.tabIds]),
+    [[100], [101]],
+  );
+  assert.deepEqual(fixture.groupUpdates, [
+    { id: 10, title: "ZenX", color: "blue" },
+  ]);
+  assert.equal(fixture.tabs.get(1).groupId, -1);
+  assert.equal(fixture.tabs.get(2).groupId, -1);
+  assert.equal(fixture.createCalls.length, 2);
+  for (const properties of fixture.createCalls)
+    assert.equal(properties.active, false);
+  assert.deepEqual(fixture.commands, []);
+  assert.deepEqual(fixture.attachCalls, []);
+});
+
+test("grouping follows the created window and never moves tabs into another window", async () => {
+  let windowId = 1;
+  const fixture = await workerFixture({ createWindowId: () => windowId });
+  await connectFixture(fixture);
+  const first = await createFixtureTab(fixture, "window-one");
+  windowId = 2;
+  const second = await createFixtureTab(fixture, "window-two");
+  windowId = 1;
+  const third = await createFixtureTab(fixture, "window-one-again");
+  assert.equal(first.result.grouping.groupId, 10);
+  assert.equal(second.result.grouping.groupId, 11);
+  assert.equal(third.result.grouping.groupId, 10);
+  assert.deepEqual(
+    fixture.groupCalls.map((call) => JSON.parse(JSON.stringify(call))),
+    [
+      { tabIds: [100], createProperties: { windowId: 1 } },
+      { tabIds: [101], createProperties: { windowId: 2 } },
+      { tabIds: [102], groupId: 10 },
+    ],
+  );
+});
+
+test("renamed groups and manually removed tabs stay as the user left them", async () => {
+  const fixture = await workerFixture();
+  await connectFixture(fixture);
+  await createFixtureTab(fixture, "first");
+  await createFixtureTab(fixture, "second");
+  fixture.groups.get(10).title = "My research";
+  fixture.groups.get(10).color = "red";
+  const moved = fixture.tabs.get(100);
+  moved.groupId = -1;
+  fixture.chrome.tabs.onUpdated.emit(100, { groupId: -1 }, moved);
+  await createFixtureTab(fixture, "third");
+  assert.equal(moved.groupId, -1);
+  assert.equal(fixture.groups.get(10).title, "My research");
+  assert.equal(fixture.groups.get(10).color, "red");
+  assert.equal(fixture.groupUpdates.length, 1);
+  assert.deepEqual(
+    fixture.groupCalls.map((call) => [...call.tabIds]),
+    [[100], [101], [102]],
+  );
+});
+
+test("groups without remaining agent tabs are not reclaimed and deleted groups are forgotten", async () => {
+  const fixture = await workerFixture();
+  await connectFixture(fixture);
+  await createFixtureTab(fixture, "first");
+  fixture.tabs.get(100).groupId = -1;
+  fixture.tabs.get(1).groupId = 10; // User now keeps their own tab in the old group.
+  const second = await createFixtureTab(fixture, "second");
+  assert.equal(second.result.grouping.groupId, 11);
+  assert.equal(fixture.tabs.get(1).groupId, 10);
+  await fixture.chrome.tabs.remove(101);
+  fixture.groups.delete(11);
+  fixture.chrome.tabGroups.onRemoved.emit({ id: 11, windowId: 1 });
+  const third = await createFixtureTab(fixture, "third");
+  assert.equal(third.result.grouping.groupId, 12);
+});
+
+test("moving an existing group to another window does not pull new tabs across windows", async () => {
+  const fixture = await workerFixture();
+  await connectFixture(fixture);
+  await createFixtureTab(fixture, "first");
+  fixture.groups.get(10).windowId = 2;
+  fixture.tabs.get(100).windowId = 2;
+  const second = await createFixtureTab(fixture, "second");
+  assert.equal(second.result.grouping.groupId, 11);
+  assert.equal(fixture.tabs.get(100).windowId, 2);
+  assert.equal(fixture.tabs.get(101).windowId, 1);
+});
+
+test("a new connection does not inherit or rename the previous connection's group", async () => {
+  const fixture = await workerFixture();
+  await connectFixture(fixture);
+  await createFixtureTab(fixture, "first");
+  fixture.groups.get(10).title = "Keep me";
+  fixture.clicked.emit(tab(1));
+  await waitFor(() => fixture.ports[0].disconnected);
+  await connectFixture(fixture, 1);
+  const second = await createFixtureTab(fixture, "second");
+  assert.equal(second.result.grouping.groupId, 11);
+  assert.equal(fixture.groups.get(10).title, "Keep me");
+  assert.equal(fixture.tabs.get(100).groupId, 10);
+});
+
+test("group failure keeps the successful target and does not poison subsequent creation", async () => {
+  let fail = true;
+  const fixture = await workerFixture({
+    group: async () => {
+      if (fail) throw new Error("Group denied ".repeat(40));
+    },
+  });
+  await connectFixture(fixture);
+  const first = await createFixtureTab(fixture, "failed-group");
+  assert.equal(first.error, undefined);
+  assert.equal(first.result.targetId, "chrome-tab-100");
+  assert.equal(first.result.grouping.status, "failed");
+  assert.ok(first.result.grouping.reason.length <= 160);
+  assert.equal(fixture.createCalls.length, 1);
+  assert.equal(fixture.tabs.has(100), true);
+  assert.deepEqual(fixture.removed, []);
+  fail = false;
+  const second = await createFixtureTab(fixture, "next-group");
+  assert.equal(second.result.grouping.status, "grouped");
+  assert.equal(fixture.createCalls.length, 2);
+});
+
+test("unavailable grouping returns the created target without claiming a group", async () => {
+  const fixture = await workerFixture({ groupingUnavailable: true });
+  await connectFixture(fixture);
+  const result = await createFixtureTab(fixture, "unsupported");
+  assert.equal(result.result.targetId, "chrome-tab-100");
+  assert.equal(result.result.grouping.status, "unavailable");
+  assert.deepEqual(fixture.groupCalls, []);
+  assert.equal(fixture.createCalls.length, 1);
+});
+
+test("a group title update failure keeps successful grouping and an initial user title is preserved", async () => {
+  const fixture = await workerFixture({
+    groupUpdate: async () => {
+      throw new Error("Title unavailable");
+    },
+  });
+  await connectFixture(fixture);
+  const result = await createFixtureTab(fixture, "title-failure");
+  assert.equal(result.result.targetId, "chrome-tab-100");
+  assert.equal(result.result.grouping.status, "grouped");
+  assert.equal(result.result.grouping.groupId, 10);
+  assert.match(result.result.grouping.reason, /Title unavailable/);
+  const renamed = await workerFixture({ newGroupTitle: "User named first" });
+  await connectFixture(renamed);
+  await createFixtureTab(renamed, "user-title");
+  assert.deepEqual(renamed.groupUpdates, []);
+  assert.equal(renamed.groups.get(10).title, "User named first");
+});
+
+test("a tab moved while its grouping waits is left alone", async () => {
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fixture = await workerFixture({ group: async () => await pending });
+  await connectFixture(fixture);
+  const first = createFixtureTab(fixture, "first");
+  await waitFor(() => fixture.groupCalls.length === 1);
+  const second = createFixtureTab(fixture, "second");
+  await waitFor(() => fixture.tabs.has(101));
+  fixture.tabs.get(101).windowId = 2;
+  release();
+  await first;
+  const moved = await second;
+  assert.equal(moved.result.targetId, "chrome-tab-101");
+  assert.equal(moved.result.grouping.status, "unavailable");
+  assert.equal(fixture.groupCalls.length, 1);
+  assert.equal(fixture.tabs.get(101).groupId, -1);
+});
+
+test("disconnect prevents queued grouping and late group metadata mutation", async () => {
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fixture = await workerFixture({ group: async () => await pending });
+  await connectFixture(fixture);
+  const port = fixture.ports[0];
+  for (const requestId of ["first", "second"])
+    port.onMessage.emit({
+      type: "cdp-command",
+      requestId,
+      method: "Target.createTarget",
+      params: { url: "about:blank#zenx-pending-1234-abcd" },
+    });
+  await waitFor(() => fixture.groupCalls.length === 1 && fixture.tabs.has(101));
+  fixture.clicked.emit(tab(1));
+  await waitFor(() => port.disconnected);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(fixture.groupCalls.length, 1);
+  assert.deepEqual(fixture.groupUpdates, []);
+  assert.equal(
+    port.messages.some(
+      (message) =>
+        message.requestId === "first" || message.requestId === "second",
+    ),
+    false,
+  );
+  assert.equal(fixture.tabs.has(100), true);
+  assert.equal(fixture.tabs.has(101), true);
+});
+
+test("extension declares the tabGroups permission used for group metadata", async () => {
+  const manifest = JSON.parse(
+    await readFile(
+      new URL("../resources/chrome-extension/manifest.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.ok(manifest.permissions.includes("tabGroups"));
+});
+
+async function connectFixture(fixture, portIndex = 0) {
+  fixture.clicked.emit(tab(1));
+  await waitFor(() =>
+    fixture.ports[portIndex]?.messages.some(
+      (message) => message.type === "browser-connected",
+    ),
+  );
+}
+
+async function createFixtureTab(fixture, requestId) {
+  const port = fixture.ports.at(-1);
+  port.onMessage.emit({
+    type: "cdp-command",
+    requestId,
+    method: "Target.createTarget",
+    params: { url: "about:blank#zenx-pending-1234-abcd" },
+  });
+  await waitFor(() =>
+    port.messages.some((message) => message.requestId === requestId),
+  );
+  return JSON.parse(
+    JSON.stringify(
+      port.messages.find((message) => message.requestId === requestId),
+    ),
+  );
+}
+
 async function workerFixture(options = {}) {
   const clicked = event();
   const ports = [];
@@ -353,6 +605,12 @@ async function workerFixture(options = {}) {
   const detachCalls = [];
   const removed = [];
   const commands = [];
+  const createCalls = [];
+  const groupCalls = [];
+  const groupUpdates = [];
+  const groups = new Map();
+  let nextTabId = 100;
+  let nextGroupId = 10;
   const attached = new Set();
   const debuggerDetached = event();
   const tabs = new Map(
@@ -407,16 +665,47 @@ async function workerFixture(options = {}) {
       onCreated: event(),
       onUpdated: event(),
       onRemoved: event(),
-      query: async () => [...tabs.values()],
+      query: async (query = {}) =>
+        [...tabs.values()].filter(
+          (entry) =>
+            query.groupId === undefined || entry.groupId === query.groupId,
+        ),
       get: async (id) => {
         if (!tabs.has(id)) throw new Error("Tab closed");
-        return tabs.get(id);
+        return { ...tabs.get(id) };
       },
-      create: async ({ url }) => {
-        const entry = { ...tab(100), url: "", pendingUrl: url };
+      create: async (properties) => {
+        createCalls.push(properties);
+        const entry = {
+          ...tab(nextTabId++),
+          windowId: options.createWindowId?.() ?? 1,
+          url: "",
+          pendingUrl: properties.url,
+        };
         tabs.set(entry.id, entry);
         chrome.tabs.onCreated.emit(entry);
-        return entry;
+        return { ...entry };
+      },
+      group: async (properties) => {
+        groupCalls.push(properties);
+        await options.group?.(properties);
+        const groupId = properties.groupId ?? nextGroupId++;
+        if (properties.groupId !== undefined && !groups.has(groupId))
+          throw new Error("Group removed");
+        if (!groups.has(groupId))
+          groups.set(groupId, {
+            id: groupId,
+            windowId: properties.createProperties.windowId,
+            title: options.newGroupTitle ?? "",
+            color: "grey",
+          });
+        for (const id of properties.tabIds) {
+          const entry = tabs.get(id);
+          if (!entry) throw new Error("Tab closed");
+          entry.groupId = groupId;
+          chrome.tabs.onUpdated.emit(id, { groupId }, entry);
+        }
+        return groupId;
       },
       remove: async (id) => {
         removed.push(id);
@@ -424,7 +713,22 @@ async function workerFixture(options = {}) {
         chrome.tabs.onRemoved.emit(id);
       },
     },
+    tabGroups: {
+      onRemoved: event(),
+      get: async (id) => {
+        if (!groups.has(id)) throw new Error("Group removed");
+        return { ...groups.get(id) };
+      },
+      update: async (id, properties) => {
+        groupUpdates.push({ id, ...properties });
+        await options.groupUpdate?.(id, properties);
+        if (!groups.has(id)) throw new Error("Group removed");
+        Object.assign(groups.get(id), properties);
+        return { ...groups.get(id) };
+      },
+    },
   };
+  if (options.groupingUnavailable) delete chrome.tabGroups;
   const source = await readFile(
     path.join(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -450,6 +754,10 @@ async function workerFixture(options = {}) {
     attached,
     removed,
     commands,
+    createCalls,
+    groupCalls,
+    groupUpdates,
+    groups,
     chrome,
     tabs,
   };
@@ -502,7 +810,13 @@ function nativePort(options = {}) {
 }
 
 function tab(id) {
-  return { id, title: `Tab ${id}`, url: `https://tab-${id}.test/` };
+  return {
+    id,
+    title: `Tab ${id}`,
+    url: `https://tab-${id}.test/`,
+    windowId: 1,
+    groupId: -1,
+  };
 }
 
 async function waitFor(predicate) {
@@ -533,4 +847,59 @@ test("a rejected competing browser reports the conflict without discovering or a
   );
   assert.deepEqual(fixture.attachCalls, []);
   assert.deepEqual(fixture.removed, []);
+});
+
+test("a stalled group never hides successful creation and late completion performs no follow-up", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fixture = await workerFixture({ group: async () => await gate });
+  await connectFixture(fixture);
+  const first = await createFixtureTab(fixture, "group-timeout");
+  assert.equal(first.result.targetId, "chrome-tab-100");
+  assert.equal(first.result.grouping.status, "unknown");
+  assert.match(
+    first.result.grouping.reason,
+    /may still finish.*do not recreate/,
+  );
+  assert.equal(fixture.createCalls.length, 1);
+  assert.equal(fixture.groupCalls.length, 1);
+  const second = await createFixtureTab(fixture, "while-stalled");
+  assert.equal(second.result.targetId, "chrome-tab-101");
+  assert.equal(second.result.grouping.status, "unavailable");
+  assert.equal(fixture.groupCalls.length, 1);
+  fixture.tabs.get(100).windowId = 2;
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(fixture.groupCalls.length, 1);
+  assert.deepEqual(
+    fixture.groupUpdates,
+    [],
+    "late result must never rename or regroup after timeout/takeover",
+  );
+  assert.equal(fixture.createCalls.length, 2);
+  assert.deepEqual(fixture.removed, []);
+});
+
+test("queued grouping expires without issuing another group after the blocked request settles", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fixture = await workerFixture({ group: async () => await gate });
+  await connectFixture(fixture);
+  const first = createFixtureTab(fixture, "pending-first");
+  await waitFor(() => fixture.groupCalls.length === 1);
+  const second = createFixtureTab(fixture, "pending-second");
+  const results = await Promise.all([first, second]);
+  assert.ok(
+    results.every((result) => result.result.grouping.status === "unknown"),
+  );
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(fixture.groupCalls.length, 1);
+  assert.deepEqual(fixture.groupUpdates, []);
+  assert.equal(fixture.tabs.get(101).groupId, -1);
+  assert.equal(fixture.createCalls.length, 2);
 });
