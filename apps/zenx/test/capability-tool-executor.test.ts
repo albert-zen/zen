@@ -949,3 +949,51 @@ test("connected browser admission uses only trusted captured instance scopes", a
   await pending;
   await environment.close();
 });
+
+test("targeted browser input claims the same exact page resource as inspect", () => {
+  for (const prefix of [
+    "browser_",
+    "browser_workspace_",
+    "browser_connected_",
+  ]) {
+    const names = ["inspect", "pointer_click", "key_press"].map(
+      (name) => prefix + name,
+    );
+    const definitions = names.map((name) => tool(name, name));
+    const bundle = new ZenXHostToolBundle({
+      capabilities: {
+        definitions,
+        plugins: [
+          {
+            id: "browser",
+            name: "Browser",
+            description: "Browser",
+            status: "enabled",
+            mainDocument: "Browser",
+            tools: definitions,
+          },
+        ],
+      },
+      send: () => undefined,
+    });
+    try {
+      const invocation = {
+        name: names[0]!,
+        callId: "resource",
+        arguments: { sessionId: "work", tabId: "exact-page" },
+        threadId: "thread",
+        cwd: process.cwd(),
+        signal: new AbortController().signal,
+      };
+      const claims = bundle.tools.map((runtime) =>
+        runtime.resourceClaims?.(invocation),
+      );
+      assert.ok(claims[0]);
+      assert.deepEqual(claims[1], claims[0]);
+      assert.deepEqual(claims[2], claims[0]);
+      assert.equal(claims[0]?.length, 2);
+    } finally {
+      bundle.close();
+    }
+  }
+});

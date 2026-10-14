@@ -1,3 +1,4 @@
+import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -13,6 +14,7 @@ import {
   UserBrowserDocumentChangedBeforeDispatchError,
   UserBrowserCdpOutcomeUnknownError,
   windowsBrowserExecutableCandidates,
+  type UserBrowserInputCaptureDiagnostic,
 } from "./capabilities/user-browser-provider.js";
 import type { UserBrowserLiveImageDecoder } from "./capabilities/user-browser-live-frame.js";
 import {
@@ -21,12 +23,20 @@ import {
   type OwnedChildTerminalOutcome,
 } from "./owned-child-process.js";
 import type { BrowserLiveObservationEvent } from "./capabilities/browser-provider.js";
+import {
+  runTargetedInputContractSmoke,
+  targetedInputContractPage,
+} from "./browser-parallel-input-smoke.js";
 
 if (process.platform !== "win32") {
   throw new Error("The real user-browser CDP smoke is Windows-only");
 }
 
 const fixtureRequests: string[] = [];
+const inputCaptureDiagnostics: Array<
+  UserBrowserInputCaptureDiagnostic & { phase: string }
+> = [];
+let inputPhase = "initial-inspection";
 const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
   encoded,
 ) => ({
@@ -39,6 +49,12 @@ const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
 });
 const server = createServer((request, response) => {
   if (fixtureRequests.length < 32) fixtureRequests.push(request.url ?? "");
+  if (request.url?.startsWith("/input-contract")) {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.end(targetedInputContractPage(request.url));
+    return;
+  }
   if (request.url === "/seed") {
     response.statusCode = 302;
     response.setHeader(
@@ -56,6 +72,15 @@ const server = createServer((request, response) => {
     request.url === "/opened"
       ? "ZenX provider background target"
       : "ZenX original active target";
+  if (request.url === "/opened") {
+    response.end(`<!doctype html><title>${title}</title><style>body{margin:0;min-height:2200px}canvas{position:absolute;left:10px;top:100px;background:#adc}form{position:absolute;left:10px;top:200px}#native-file{position:absolute;left:10px;top:300px}</style>
+      <p id="visibility"></p><output id="result">No canvas click</output><p id="focus">Focus none</p>
+      <canvas width="200" height="80" tabindex="0" onclick="this.focus();document.querySelector('#result').textContent='Canvas clicked '+event.isTrusted"></canvas>
+      <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next focus</button></form>
+      <input type="file" id="native-file"><label for="native-file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
+      <script>const updateVisibility=()=>document.querySelector('#visibility').textContent='Visibility '+document.visibilityState;updateVisibility();document.addEventListener('visibilitychange',updateVisibility);document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
+    return;
+  }
   response.end(
     `<!doctype html><title>${title}</title><main><p>${authenticated ? "Signed in through existing browser state" : "Signed out"}</p><p id="visibility">Visibility ${"${document.visibilityState}"}</p><button id="continue" onclick="this.textContent='Attached action complete'">Continue</button><script>const visibility = document.querySelector('#visibility'); const updateVisibility = () => visibility.textContent = 'Visibility ' + document.visibilityState; updateVisibility(); document.addEventListener('visibilitychange', updateVisibility);</script></main>`,
   );
@@ -108,6 +133,11 @@ try {
     userBrowserConnector: async (candidateEndpoint, signal) =>
       await connectUserBrowserCdp(candidateEndpoint, signal, {
         liveFrameImageDecoder: decodeNodeSmokeLiveImage,
+        onInputCaptureDiagnostic: (value) => {
+          inputCaptureDiagnostics.push({ ...value, phase: inputPhase });
+          if (inputCaptureDiagnostics.length > 8)
+            inputCaptureDiagnostics.shift();
+        },
       }),
   });
   const backend = selection.backend;
@@ -226,6 +256,7 @@ try {
     accountVisibilityBeforeOpen,
     "background_safe browser_open must preserve existing-tab visibility",
   );
+  inputPhase = "opened-inactive-inspection";
   const openedInspection = await retryDocumentInspection(() =>
     backend.inspect("windows-smoke", opened.tabId),
   );
@@ -234,6 +265,179 @@ try {
     "hidden",
     "background_safe browser_open must leave the created tab hidden",
   );
+  assert.ok(
+    backend.pointerClick && backend.keyPress,
+    "The CDP backend must implement targeted input",
+  );
+  assert.equal(
+    openedInspection.screenshot.status,
+    "captured",
+    "A fallback PNG cannot authorize coordinate input",
+  );
+  assert.ok(
+    openedInspection.inputViewport,
+    "The real screenshot must carry a coherent CSS viewport",
+  );
+  await backend.pointerClick(
+    "windows-smoke",
+    opened.tabId,
+    openedInspection.observationId,
+    50,
+    130,
+  );
+  inputPhase = "after-canvas-click";
+  let inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+  assert.match(
+    inputInspection.visibleText,
+    /Canvas clicked true/u,
+    "A real trusted canvas click must reach the inactive page",
+  );
+  await backend.keyPress(
+    "windows-smoke",
+    opened.tabId,
+    inputInspection.observationId,
+    "ArrowDown",
+  );
+  inputPhase = "after-arrow-scroll";
+  await retry(async () => {
+    inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+    return (inputInspection.inputViewport?.scrollY ?? 0) > 0 ? true : undefined;
+  });
+  await backend.scroll!(
+    "windows-smoke",
+    opened.tabId,
+    inputInspection.observationId,
+    "up",
+    2000,
+  );
+  inputPhase = "after-dom-scroll-up";
+  inputInspection = await retry(async () => {
+    const inspected = await backend.inspect("windows-smoke", opened.tabId);
+    return inspected.inputViewport?.scrollY === 0 ? inspected : undefined;
+  });
+  await backend.pointerClick(
+    "windows-smoke",
+    opened.tabId,
+    inputInspection.observationId,
+    40,
+    210,
+  );
+  inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+  await backend.keyPress(
+    "windows-smoke",
+    opened.tabId,
+    inputInspection.observationId,
+    "Space",
+  );
+  inputPhase = "after-space-key";
+  inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+  assert.equal(
+    inputInspection.targets.find((target) => target.name === "Targeted text")
+      ?.value,
+    " ",
+    "Space must insert text, not only notify a keydown listener",
+  );
+  const textTarget = inputInspection.targets.find(
+    (target) => target.name === "Targeted text",
+  );
+  assert.ok(textTarget);
+  await backend.type(
+    "windows-smoke",
+    opened.tabId,
+    inputInspection.observationId,
+    textTarget.targetId,
+    "background form",
+    false,
+  );
+  inputPhase = "after-dom-type";
+  inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+  await backend.keyPress(
+    "windows-smoke",
+    opened.tabId,
+    inputInspection.observationId,
+    "Enter",
+  );
+  inputPhase = "after-enter-key";
+  inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+  assert.match(
+    inputInspection.visibleText,
+    /Submitted background form/u,
+    "Enter must trigger the form's real default submission behavior",
+  );
+  await backend.keyPress(
+    "windows-smoke",
+    opened.tabId,
+    inputInspection.observationId,
+    "Tab",
+  );
+  inputPhase = "after-tab-key";
+  inputInspection = await backend.inspect("windows-smoke", opened.tabId);
+  assert.match(
+    inputInspection.visibleText,
+    /Focus next/u,
+    "Tab must move page-local focus",
+  );
+  await assert.rejects(
+    backend.pointerClick(
+      "windows-smoke",
+      opened.tabId,
+      inputInspection.observationId,
+      30,
+      310,
+    ),
+    (error: unknown) =>
+      error instanceof BrowserInputUnsupportedError &&
+      error.code === "BROWSER_INPUT_UNSUPPORTED" &&
+      error.reason === "native-surface",
+  );
+  await assert.rejects(
+    backend.pointerClick(
+      "windows-smoke",
+      opened.tabId,
+      inputInspection.observationId,
+      30,
+      360,
+    ),
+    (error: unknown) =>
+      error instanceof BrowserInputUnsupportedError &&
+      error.code === "BROWSER_INPUT_UNSUPPORTED" &&
+      error.reason === "native-surface",
+  );
+  const afterTargetedInput = await browserTargetSnapshot(
+    endpoint,
+    fixtureBrowserHwnd,
+  );
+  assert.equal(
+    foregroundWindowHandle(),
+    foregroundBeforeOpen,
+    "Targeted browser input must preserve the actual foreground HWND",
+  );
+  assert.equal(
+    afterTargetedInput.activeTargetId,
+    targetsBeforeOpen.activeTargetId,
+    "Targeted browser input must preserve the actual active tab",
+  );
+  assert.equal(
+    afterTargetedInput.visibilityByTarget.get(opened.tabId),
+    "hidden",
+    "The operated target must remain inactive after canvas and keyboard default actions",
+  );
+  const targetedInputContracts = await runTargetedInputContractSmoke({
+    backend,
+    sessionId: "windows-smoke",
+    tabId: opened.tabId,
+    endpoint,
+    origin: `http://127.0.0.1:${String(port)}`,
+    guard: async () => {
+      assert.equal(foregroundWindowHandle(), foregroundBeforeOpen);
+      const snapshot = await browserTargetSnapshot(
+        endpoint,
+        fixtureBrowserHwnd,
+      );
+      assert.equal(snapshot.activeTargetId, targetsBeforeOpen.activeTargetId);
+      assert.equal(snapshot.visibilityByTarget.get(opened.tabId), "hidden");
+    },
+  });
   const detached = await backend.closeSession("windows-smoke");
   await retry(async () =>
     liveEvents.some(
@@ -310,6 +514,7 @@ try {
       ),
       providerCreatedTargetSurvivedHidden:
         targetsAfterClose.visibilityByTarget.get(opened.tabId) === "hidden",
+      targetedInputContracts,
     }),
   );
 } catch (error) {
@@ -326,7 +531,14 @@ try {
   } catch (diagnosticError) {
     targets = String(diagnosticError);
   }
-  console.error(JSON.stringify({ fixtureRequests, targets }));
+  console.error(
+    JSON.stringify({
+      fixtureRequests,
+      targets,
+      inputPhase,
+      inputCaptureDiagnostics,
+    }),
+  );
   console.error(browserObservation?.diagnostics("smoke failed", String(error)));
   throw error;
 } finally {

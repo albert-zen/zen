@@ -1,4 +1,5 @@
 import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
+import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
@@ -396,6 +397,14 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  return (
+    <ThreadReadingStateProvider>
+      <AppContent />
+    </ThreadReadingStateProvider>
+  );
+}
+
+function AppContent() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
@@ -559,6 +568,7 @@ export function App() {
   const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
     {},
   );
+  const messageLinkSequence = useRef(0);
   const [messageLinkRequest, setMessageLinkRequest] = useState<{
     id: number;
     threadId: string;
@@ -2530,11 +2540,11 @@ export function App() {
         void resumeThread(id)
           .then(() => {
             if (selectedThreadIdRef.current !== id) return;
-            setMessageLinkRequest((previous) => ({
+            setMessageLinkRequest({
               ...target,
-              id: (previous?.id ?? 0) + 1,
+              id: ++messageLinkSequence.current,
               threadId: id,
-            }));
+            });
             setBrowserPanels((current) => ({
               ...current,
               [id]: true,
@@ -2881,11 +2891,11 @@ export function App() {
                 ) : null
               }
               onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest((previous) => ({
+                setMessageLinkRequest({
                   ...target,
-                  id: (previous?.id ?? 0) + 1,
+                  id: ++messageLinkSequence.current,
                   threadId,
-                }));
+                });
                 setBrowserPanels((current) => ({
                   ...current,
                   [threadId]: true,
@@ -3075,6 +3085,7 @@ export function App() {
               threads={[...activeSummaries, ...archivedSummaries]}
               snapshot={pluginSnapshot}
               section={roomPanel === "open" ? "" : roomPanel}
+              sectionRequest={roomQuery.get("request") ?? undefined}
               navigate={openPage}
               onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
             />
@@ -3112,6 +3123,11 @@ export function App() {
                 messageLinkRequest?.threadId === threadDetail.id
                   ? messageLinkRequest
                   : null
+              }
+              onMessageLinkRequestHandled={(id) =>
+                setMessageLinkRequest((current) =>
+                  current?.id === id ? null : current,
+                )
               }
               navigate={openPage}
               onWidthChange={setWorkspacePanelWidth}
@@ -3384,7 +3400,7 @@ function PageTitleBar({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{subtitle}</p>
+          {subtitle !== title ? <p>{subtitle}</p> : null}
         </div>
       </div>
     </div>

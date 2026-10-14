@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   BrowserBackendRegistry,
   concurrentBrowserManifest,
+  multiBrowserManifest,
 } from "../src/main/capabilities/browser-backend-registry.js";
 import type {
   BrowserInspection,
@@ -223,12 +224,12 @@ test("a missing external connection never falls back to the Workspace backend", 
 
 test("registry tools retain separate approval names and generated permission scopes", () => {
   const manifest = concurrentBrowserManifest();
-  assert.equal(manifest.tools.length, 20);
+  assert.equal(manifest.tools.length, 24);
   assert.doesNotMatch(
     JSON.stringify(manifest),
     /browser_(?!workspace_|connected_)/u,
   );
-  assert.equal(new Set(manifest.tools.map((tool) => tool.name)).size, 20);
+  assert.equal(new Set(manifest.tools.map((tool) => tool.name)).size, 24);
   for (const tool of manifest.tools) {
     assert.ok(
       tool.permissions.every((permission) =>
@@ -951,5 +952,33 @@ test("multiple connected instances require exact scope and keep colliding refere
   } finally {
     stop();
     await registry.close();
+  }
+});
+
+test("all advertised namespaced tool references identify tools that exist", () => {
+  for (const create of [concurrentBrowserManifest, multiBrowserManifest]) {
+    const manifest = create();
+    const names = new Set(manifest.tools.map((tool) => tool.name));
+    const inspect = (value: unknown): void => {
+      if (typeof value === "string") {
+        for (const reference of value.matchAll(/\bbrowser_[a-z_]+/gu)) {
+          if (reference[0].endsWith("_")) continue; // documented namespace wildcard
+          assert.ok(
+            names.has(reference[0]),
+            `${manifest.provider.id}: unknown tool ${reference[0]}`,
+          );
+        }
+      } else if (value && typeof value === "object") {
+        for (const [key, child] of Object.entries(value)) {
+          if (
+            key === "description" ||
+            key === "mainDocument" ||
+            typeof child === "object"
+          )
+            inspect(child);
+        }
+      }
+    };
+    inspect(manifest);
   }
 });

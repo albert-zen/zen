@@ -1,6 +1,7 @@
 # ARCHITECTURE
 
 - **Concurrent Browser registry** — ZenX owns independent ephemeral Workspace and explicitly connected external Browser packages; new fixed tool namespaces never inherit legacy tool-name approvals, while backend-qualified tab/observation/target/cursor references prevent cross-backend routing without adding Thread state. External opt-in never removes the Workspace backend. Profile upgrades publish routing only at the existing Catalog transaction boundary; the app-owned Workspace port lends generation-specific opaque sessions, and retirement observes the existing Supervisor runtime drain before detaching only the retiring generation’s leases (no second lease counter or cancellation authority).
+- **ZenX reading state** — One App-owned, memory-only renderer cache retains scroll/follow intent per exact Thread and explicit disclosure choices by exact Thread/Turn/Item identity across navigation, without retaining hidden transcripts or changing execution, canonical history or Host storage.
 
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
@@ -9,6 +10,8 @@
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
 ## 核心概念
+
+- **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
 
 - **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
 - **IMZenX managed configuration** — Its trusted local form uses provider-declared pinned field contracts and the existing OS-encrypted vault to save write-only channel credentials; model tools see only nonsecret references/readiness, explicit connection validates a transient nonsecret reviewed-configuration revision under the runtime queue before decrypting the chosen configuration into the existing private child pipe, and explicit runtime preparation copies the locked packaged project to an IM-owned runtime directory without modifying App Resources or enrolling credentials.
@@ -388,11 +391,13 @@
   投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
   只读窗口发现返回所属应用与可直接传给现有定向工具的精确 target；列表截断与查询过滤不改变目标身份。
+  WinApp downstream build candidate 是独立构建期产物：固定上游 source/patch/SDK，记录依赖闭包与原生 binary provenance，只供 native 验证；未经过正式 provider trust-chain 集成和 packaged 验证前，不改变运行时 provider 选择或 background 声明。
   Windows 截图由应用内固定源码、独立限时进程的 PrintWindow helper 获取，禁止激活/恢复窗口；像素仅经 Host 校验后写入瞬时 artifact，无法后台渲染时显式失败。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
+- **ZenXWorkspaceBrowserRenderLease** — Hidden or minimized shared views borrow a non-activating compositor surface using only the current mount owner, lease and render revision; user remount/show/restore/hide invalidates that transient borrow immediately; control changes return the still-owned physical view before expiring its observation witness, and cleanup never shows or activates its window. Before rendering, a lease-scoped Electron frame subscription waits at most five seconds for a nonempty, backing-display-scaled frame after non-activating renderer display; ownership changes, cancellation and cleanup stop that subscription without replaying capture. This is compositor readiness evidence, not a guarantee against a later native/GPU copy failure.
 - **ZenXWorkspaceBrowserControl** — the existing same-Thread shared page registry owns an ephemeral, user-selected Agent/human mutation barrier and control revision. Takeover invalidates observations; only trusted Browser UI returns control. Once a tab has entered handoff mode, every Agent mutation (including navigate/close) consumes the latest post-return observation reference, so pre-takeover queued requests cannot regain authority after a later inspect. Dispatch fences cover asynchronous renderer/CDP preparation; already-dispatched work is counted until settlement and reported as uncertain across control changes, never as cancelled or automatically replayed. Inspect while work is still in flight cannot renew action authority. Human input, Thread scoping and shared-profile behavior remain unchanged; this is not a Core scheduler, durable handoff record, cross-Thread transfer, or website confirmation grant.
 - **ZenXWorkspaceBrowserUnmountedRenderer** — 共享 Browser 的页面未挂到用户窗口时，Host 在 Agent 观察或操作期间把同一 WebContentsView 临时挂到不可见的本地渲染窗口，提供有界视口并在完成、失败或用户挂载时释放；它不复制页面、不持有 Thread 状态，也不改变页面归属。
 - **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
@@ -1159,6 +1164,23 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 ### Always On Assistant preset
 
 An assistant Room binds one real Thread to an owned roomMention Trigger.
+Its personal display name is the existing Room name; an explicit PAW rename
+atomically updates that name, its bound member name and owned Trigger mention.
+Historical messages and canonical Thread titles remain unchanged. First-use
+setup is an inline renderer surface over existing setup/configuration APIs;
+only its optional welcome dismissal is an origin-local presentation preference.
+Conversational initialization is an explicit Host bootstrap wakeup on the owned
+Trigger. Its existing Room operation receipt records a bootstrap kind and wakeup
+ID, never a human Room message; the native Host input retains that provenance in
+the canonical Thread. Only the real Agent posts the welcome. Prepared/cancelled
+receipts use existing explicit recovery; rendering never runs the model. A restored
+connection reconciles terminal observations of known active wakeups by reading
+exact canonical Turns, without replaying input or offline watcher occurrences.
+The Host's canonical calling Thread scopes PAW name-tool updates to
+its exact binding (shared-Thread PAWs require an unambiguous active source Room);
+UI management and ordinary Room tool scope remain unchanged. Existing AGENTS.md
+stays under Core workspace instructions and file permissions, with no second
+Host identity document or bootstrap execution ledger.
 Trusted setup defaults to creating an idle Thread through the existing Host
 Project/thread-start boundary with confirmed settings; explicit existing-Thread
 binding remains available. The Room and its Trigger commit atomically in the
@@ -1248,3 +1270,9 @@ IMZenX may explicitly bind an external IM conversation to an existing PAW Room i
 ### Browser instance resource routing
 
 The process-local Browser backend registry owns independent capability sessions for the app-owned Workspace port and each explicitly connected external browser instance. `BrowserConnectionSource` projects only opaque installation identity, human label, connection state and Host generation; lazy instance CDP views never enumerate another instance's tabs. Native sockets, pending commands, observation references, preview selection and approvals retain that instance/generation, while the Supervisor remains the sole runtime retirement authority. This resource catalog is not a new Thread history or permission graph.
+
+Extension-created tab groups are ephemeral visual organization scoped to the current native connection and browser window; group membership is not target authorization, and ZenX never repairs a user's tab moves or overwrites a renamed existing group.
+
+### Browser targeted input
+
+Browser coordinate click and named-key input are transient, observation-bound CDP operations: one captured screenshot, CSS viewport, page-local focus and document/control generation authorize a bounded event pair on the exact tab; uncertain held input blocks further mutations until that tab is closed, with no OS-input fallback, automatic retry, or durable recovery state. CDP acknowledgement and exact Host fences authorize the planned pair; page-consumable event counters are supplementary interference evidence. Bounded open-shadow resolution and mutation observation reuse this per-document state; exact-node CDP shadow metadata distinguishes ordinary containers from actual closed roots without a tag denylist, while known closed or untracked surfaces remain locally unsupported. Structured probe denials have a bounded shared classification; arbitrary Runtime exceptions are never classified as native-surface refusal.
