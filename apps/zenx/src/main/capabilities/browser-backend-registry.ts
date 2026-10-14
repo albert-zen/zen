@@ -41,7 +41,7 @@ export function concurrentBrowserManifest(): ZenXPluginManifestV2 {
     qualifySchemaDescriptions(tool.inputSchema, connectedPrefix);
   return {
     ...workspace,
-    version: "1.0.6",
+    version: "1.0.7",
     description:
       "The shared ZenX browser and an explicitly connected external browser, available together with independent targets and tool approvals.",
     provider: {
@@ -92,7 +92,7 @@ export function concurrentBrowserManifest(): ZenXPluginManifestV2 {
 /** One catalog, not a copy of each tool per connected profile. */
 export function multiBrowserManifest(): ZenXPluginManifestV2 {
   const manifest = concurrentBrowserManifest();
-  manifest.version = "1.0.7";
+  manifest.version = "1.0.8";
   manifest.provider.id = "multi-browser";
   manifest.description =
     "Workspace, Chrome and Edge browser instances with separate targets and approvals.";

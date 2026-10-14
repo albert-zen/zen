@@ -403,12 +403,12 @@ class NativeWebContents extends EventEmitter {
     canGoBack: () => false,
     canGoForward: () => false,
   };
-  readonly debugger = {
+  readonly debugger = Object.assign(new EventEmitter(), {
     attach() {},
     async sendCommand() {
       return {};
     },
-  };
+  });
   readonly session = {
     setPermissionRequestHandler() {},
     setPermissionCheckHandler() {},

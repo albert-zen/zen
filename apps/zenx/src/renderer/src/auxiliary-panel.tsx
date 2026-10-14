@@ -33,6 +33,10 @@ interface ContentTab {
   browser?: WorkspaceBrowserTab;
   render?: () => React.ReactNode;
 }
+
+/** Per-conversation expanded state; the panel remounts on every thread switch. */
+const expandedByConversation = new Map<string, boolean>();
+
 export type AuxiliaryConversationContext =
   | { kind: "thread"; threadId: string }
   | {
@@ -67,6 +71,8 @@ type AuxiliaryPanelProps = {
     kind: "file" | "browser";
     value: string;
   } | null;
+  /** Acknowledges a handled request; the owner clears it so remounts never replay it. */
+  onMessageLinkRequestHandled?(id: number): void;
   onWidthChange?(width: number): void;
   navigate?(route: string): void;
   fileDrafts?: WorkspaceFileDrafts;
@@ -102,6 +108,7 @@ export function AuxiliaryPanel({
   onTabsChange,
   onWidthChange,
   messageLinkRequest,
+  onMessageLinkRequestHandled,
   threadContext,
   conversation,
 }: AuxiliaryPanelProps) {
@@ -142,7 +149,26 @@ export function AuxiliaryPanel({
       onWidthChange(0);
     };
   }, [open, onWidthChange]);
-  const [expanded, setExpanded] = useState(false);
+  const expandedKey = roomContext
+    ? `room:${roomContext.roomId}`
+    : `thread:${threadId}`;
+  const [expanded, setExpandedState] = useState(
+    () => expandedByConversation.get(expandedKey) ?? false,
+  );
+  useEffect(() => {
+    setExpandedState(expandedByConversation.get(expandedKey) ?? false);
+  }, [expandedKey]);
+  const setExpanded = (update: React.SetStateAction<boolean>) => {
+    setExpandedState((current) => {
+      const next =
+        typeof update === "function"
+          ? (update as (value: boolean) => boolean)(current)
+          : update;
+      if (next) expandedByConversation.set(expandedKey, true);
+      else expandedByConversation.delete(expandedKey);
+      return next;
+    });
+  };
   const restoreToggleFocus = useRef(false);
   useLayoutEffect(() => {
     if (open) {
@@ -462,8 +488,14 @@ export function AuxiliaryPanel({
     )
       return;
     handledLink.current = messageLinkRequest.id;
-    selectionEpoch.current += 1;
-    let active = true;
+    // Consume the request: the panel is keyed by thread and remounts on
+    // every switch, so a stale request would otherwise reopen the link.
+    onMessageLinkRequestHandled?.(messageLinkRequest.id);
+    const operationEpoch = ++selectionEpoch.current;
+    const bindingEpoch = resourceEpoch.current;
+    const current = () =>
+      resourceCurrent(bindingEpoch, threadId) &&
+      selectionEpoch.current === operationEpoch;
     setError("");
     void (async () => {
       try {
@@ -478,20 +510,19 @@ export function AuxiliaryPanel({
             undefined,
             messageLinkRequest.value,
           );
-          if (active) {
+          if (current()) {
             setBrowserTabs(tabs);
             const newest = tabs.at(-1);
             if (newest) select(`browser:${newest.id}`);
           }
         }
       } catch (reason) {
-        if (active)
+        if (current())
           setError(reason instanceof Error ? reason.message : String(reason));
       }
     })();
-    return () => {
-      active = false;
-    };
+    // Clearing the inbox acknowledges consumption, not cancellation. Existing
+    // resource/selection epochs fence newer navigation and actual unmounts.
     // A request id represents a single click; render changes must not replay it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messageLinkRequest?.id, threadId]);

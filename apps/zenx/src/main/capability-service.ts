@@ -573,7 +573,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
               "uia.inspect",
               "uia.invoke",
               "uia.set_value",
-              "wgc.capture",
+              "printwindow.capture",
             ],
             reason: diagnostic.message,
             executable: diagnostic.executable,

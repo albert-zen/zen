@@ -37,14 +37,14 @@ const expected = [
   ["@zenx/fleet-plugin", "zenx-fleet-plugin-1.0.0.tgz"],
   ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.2.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.5.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-multi-1.0.7.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-concurrent-1.0.6.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.6.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-multi-1.0.8.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-concurrent-1.0.7.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.5.tgz"],
-  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.5.tgz"],
+  ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.6.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.2.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.1.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.2.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.3.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.6.tgz"],
   ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.0.tgz"],
@@ -52,24 +52,24 @@ const expected = [
 
 const providerVariants = new Map([
   [
-    "zenx-browser-plugin-multi-1.0.7.tgz",
-    ["browser", "1.0.7", "multi-browser", 21],
+    "zenx-browser-plugin-multi-1.0.8.tgz",
+    ["browser", "1.0.8", "multi-browser", 25],
   ],
   [
-    "zenx-browser-plugin-concurrent-1.0.6.tgz",
-    ["browser", "1.0.6", "concurrent-browser", 20],
+    "zenx-browser-plugin-concurrent-1.0.7.tgz",
+    ["browser", "1.0.7", "concurrent-browser", 24],
   ],
   [
-    "zenx-browser-plugin-electron-1.0.5.tgz",
-    ["browser", "1.0.5", "electron-dedicated-browser", 10],
+    "zenx-browser-plugin-electron-1.0.6.tgz",
+    ["browser", "1.0.6", "electron-dedicated-browser", 12],
   ],
   [
     "zenx-browser-plugin-playwright-1.0.5.tgz",
     ["browser", "1.0.5", "playwright-cli", 10],
   ],
   [
-    "zenx-browser-plugin-user-session-1.0.5.tgz",
-    ["browser", "1.0.5", "user-browser-cdp", 10],
+    "zenx-browser-plugin-user-session-1.0.6.tgz",
+    ["browser", "1.0.6", "user-browser-cdp", 12],
   ],
   [
     "zenx-computer-plugin-macos-1.0.2.tgz",
@@ -80,8 +80,8 @@ const providerVariants = new Map([
     ["computer", "1.0.1", "peekaboo-cli", 7],
   ],
   [
-    "zenx-computer-plugin-win32-1.1.2.tgz",
-    ["computer", "1.1.2", "microsoft-winapp-cli", 5],
+    "zenx-computer-plugin-win32-1.1.3.tgz",
+    ["computer", "1.1.3", "microsoft-winapp-cli", 5],
   ],
 ]);
 
@@ -347,14 +347,14 @@ test("Host provider selection maps every real manifest variant deterministically
       firstPartyProviderTarball("computer", "microsoft-winapp-cli"),
     ],
     [
-      "zenx-browser-plugin-electron-1.0.5.tgz",
-      "zenx-browser-plugin-concurrent-1.0.6.tgz",
-      "zenx-browser-plugin-multi-1.0.7.tgz",
+      "zenx-browser-plugin-electron-1.0.6.tgz",
+      "zenx-browser-plugin-concurrent-1.0.7.tgz",
+      "zenx-browser-plugin-multi-1.0.8.tgz",
       "zenx-browser-plugin-playwright-1.0.5.tgz",
-      "zenx-browser-plugin-user-session-1.0.5.tgz",
+      "zenx-browser-plugin-user-session-1.0.6.tgz",
       "zenx-computer-plugin-macos-1.0.2.tgz",
       "zenx-computer-plugin-peekaboo-1.0.1.tgz",
-      "zenx-computer-plugin-win32-1.1.2.tgz",
+      "zenx-computer-plugin-win32-1.1.3.tgz",
     ],
   );
   assert.throws(

@@ -28,6 +28,7 @@ import { validateShellPanelRequest } from "../src/shell-panel.js";
 
 import { createFailedStartupObserver } from "./fixtures/failed-startup-observation.js";
 import { waitForWindowsShellReadiness } from "./fixtures/windows-shell-readiness.js";
+import { createShellStartupTrace } from "./fixtures/shell-startup-trace.js";
 
 const observeFailedStartup = createFailedStartupObserver({
   enabled:
@@ -79,13 +80,18 @@ function fixture(
           : {}),
         pty: {
           async spawn(options) {
+            const startup = createShellStartupTrace({
+              enabled: process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1",
+            });
             const trace = (stage: string) => {
               if (process.env.ZENX_SHELL_TEST_DIAGNOSTICS === "1")
                 console.info(`[Shell PTY ${process.platform}] ${stage}`);
             };
             trace("spawn started");
+            startup.stage("spawn started");
             const terminal = await pty.spawn(options);
             trace("spawn returned");
+            startup.stage("spawn returned");
             return {
               write(data) {
                 trace("write");
@@ -95,7 +101,11 @@ function fixture(
                 trace(`resize ${cols}x${rows}`);
                 terminal.resize(cols, rows);
               },
-              onData: (listener) => terminal.onData(listener),
+              onData: (listener) =>
+                terminal.onData((data) => {
+                  startup.onData(data);
+                  listener(data);
+                }),
               onExit: (listener) =>
                 terminal.onExit((event) => {
                   trace("observed exit");

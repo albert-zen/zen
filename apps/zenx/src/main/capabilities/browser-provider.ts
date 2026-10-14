@@ -1,3 +1,18 @@
+import {
+  assertBrowserInputSnapshot,
+  browserInputKeys,
+  browserInputKey,
+  browserInputProbeScript,
+  browserInputSnapshotScript,
+  browserTargetedInputPolicy,
+  dispatchBrowserTargetedInput,
+  requireBrowserInputSnapshot,
+  includesBrowserInputSnapshot,
+  resolveBrowserInputEvidence,
+  type BrowserInputKey,
+  type BrowserInputObservation,
+  type BrowserInputViewport,
+} from "./browser-targeted-input.js";
 import { observeElectronPage } from "./browser-electron-observation.js";
 import {
   ObservationPresentation,
@@ -36,12 +51,20 @@ import type { BrowserWindow, Session } from "electron";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import type { ZenXPluginManifestV2, ZenXCapabilityPackage } from "./types.js";
 
+export interface BrowserTabGrouping {
+  status: "grouped" | "failed" | "unavailable" | "unknown";
+  groupId?: number;
+  reason?: string;
+}
+
 export interface BrowserTabSummary {
   sessionId: string;
   tabId: string;
   title: string;
   url: string;
   loading: boolean;
+  /** Optional visual grouping outcome for an agent-created external tab; not authority. */
+  grouping?: BrowserTabGrouping;
   /** Shared Workspace Browser only; other backends omit control metadata. */
   control?: "agent" | "human";
   agentActionsInFlight?: number;
@@ -58,6 +81,9 @@ export interface BrowserInspection extends BrowserTabSummary {
   documentVersion: number;
   visibleText: string;
   screenshot: BrowserScreenshotArtifact;
+  inputViewport?: BrowserInputViewport;
+  focusedInputAvailable?: boolean;
+  inputPolicy?: typeof browserTargetedInputPolicy;
   targets: Array<{
     targetId: string;
     role: string;
@@ -170,6 +196,21 @@ export interface ZenXBrowserBackend {
     submit: boolean,
     signal?: AbortSignal,
   ): Promise<BrowserTabSummary>;
+  pointerClick?(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    x: number,
+    y: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary>;
+  keyPress?(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    key: BrowserInputKey,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary>;
   select?(
     sessionId: string,
     tabId: string,
@@ -195,7 +236,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "browser",
   name: "Browser",
-  version: "1.0.5",
+  version: "1.0.6",
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -233,7 +274,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       id: "browser.interact",
       title: "Interact with pages",
       description:
-        "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
+        "Click, type, or select an option in an explicitly targeted visible page element, scroll the page viewport, or dispatch bounded coordinate/key input to the observed tab.",
       scope: "browser-session",
     },
   ],
@@ -343,6 +384,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       capabilities: ["dedicated_profile", "cdp", "dom.click"],
       maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
     },
+    ...browserTargetedInputTools(),
     {
       name: "browser_type",
       description:
@@ -427,6 +469,49 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   ],
 };
 
+function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
+  const common = () => ({
+    observationId: stringSchema(),
+    observe: observationOption(),
+    baseObservationId: structuredClone(
+      observationReadProperties.baseObservationId,
+    ),
+    full: structuredClone(observationReadProperties.full),
+  });
+  return [
+    {
+      name: "browser_pointer_click",
+      description:
+        "Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No frames, dragging, OS input or automatic foreground fallback. Detected page, viewport, focus, or user input changes reject. Open shadow roots resolve within bounded limits; ordinary div/span containers remain supported after exact-node metadata checks, while known closed or unresolved shadow surfaces reject locally. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+      inputSchema: browserTargetSchema(
+        {
+          ...common(),
+          x: { type: "number", minimum: 0 },
+          y: { type: "number", minimum: 0 },
+        },
+        ["observationId", "x", "y"],
+      ),
+      permissions: ["browser.interact", "browser.tabs.read"],
+      interactionMode: "background_safe",
+      capabilities: ["dedicated_profile", "cdp", "input.pointer"],
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
+    },
+    {
+      name: "browser_key_press",
+      description:
+        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Open shadow focus resolves to its real node; ordinary focused contenteditable containers remain supported after exact-node metadata checks, while known closed or unresolved shadow focus is unavailable. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+      inputSchema: browserTargetSchema(
+        { ...common(), key: { type: "string", enum: [...browserInputKeys] } },
+        ["observationId", "key"],
+      ),
+      permissions: ["browser.interact", "browser.tabs.read"],
+      interactionMode: "background_safe",
+      capabilities: ["dedicated_profile", "cdp", "input.keyboard"],
+      maxOutputBytes: MAX_OBSERVATION_PAGE_BYTES,
+    },
+  ];
+}
+
 function optionalTargetId(
   arguments_: Readonly<Record<string, unknown>>,
   name: string,
@@ -459,6 +544,8 @@ const BROWSER_OBSERVABLE_ACTIONS = new Set([
   "browser_type",
   "browser_select",
   "browser_scroll",
+  "browser_pointer_click",
+  "browser_key_press",
 ]);
 
 export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
@@ -577,6 +664,8 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
         "browser_type",
         "browser_select",
         "browser_scroll",
+        "browser_pointer_click",
+        "browser_key_press",
       ].includes(toolName)
     ) {
       if (invocation.threadId !== undefined || this.#presentation.has(key)) {
@@ -584,7 +673,13 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           invocation.arguments,
           "observationId",
         );
-        if (toolName === "browser_scroll")
+        if (
+          [
+            "browser_scroll",
+            "browser_pointer_click",
+            "browser_key_press",
+          ].includes(toolName)
+        )
           await this.#presentation.assertObservation(
             key,
             observationId,
@@ -621,7 +716,12 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
         action.tabId,
         invocation.signal,
       );
-      return this.#presentInspection(inspected, options);
+      return this.#presentInspection(
+        action.grouping === undefined
+          ? inspected
+          : { ...inspected, grouping: action.grouping },
+        options,
+      );
     } catch (error) {
       // The mutation already completed. Never turn a failed follow-up read into
       // an invitation to retry the action (which could submit the form twice).
@@ -704,6 +804,31 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           requiredTargetId(invocation.arguments, "tabId"),
           requiredTargetId(invocation.arguments, "observationId"),
           requiredTargetId(invocation.arguments, "targetId"),
+          invocation.signal,
+        );
+      case "browser_pointer_click":
+        if (this.#backend.pointerClick === undefined)
+          throw new Error(
+            "This browser backend does not support targeted pointer input",
+          );
+        return await this.#backend.pointerClick(
+          sessionId,
+          requiredTargetId(invocation.arguments, "tabId"),
+          requiredTargetId(invocation.arguments, "observationId"),
+          invocation.arguments.x as number,
+          invocation.arguments.y as number,
+          invocation.signal,
+        );
+      case "browser_key_press":
+        if (this.#backend.keyPress === undefined)
+          throw new Error(
+            "This browser backend does not support targeted keyboard input",
+          );
+        return await this.#backend.keyPress(
+          sessionId,
+          requiredTargetId(invocation.arguments, "tabId"),
+          requiredTargetId(invocation.arguments, "observationId"),
+          browserInputKey(invocation.arguments.key),
           invocation.signal,
         );
       case "browser_type":
@@ -802,6 +927,9 @@ interface BrowserTab {
   incarnation: BrowserSessionIncarnation;
   documentVersion: number;
   observation?: BrowserObservation;
+  inputQuarantine?: string;
+  inputInFlight?: boolean;
+  nativeDialogOpen?: boolean;
 }
 
 interface BrowserSessionIncarnation {
@@ -833,6 +961,7 @@ export interface BrowserTargetFingerprint {
 
 /** Internal result produced only in a provider-controlled isolated world. */
 export interface BrowserDomInspection {
+  inputSnapshot?: unknown;
   visibleText: string;
   targets: BrowserTargetFingerprint[];
   documentIdentity?: string;
@@ -887,6 +1016,7 @@ export function browserDomCapture(
 }
 
 export interface BrowserObservation {
+  input?: BrowserInputObservation;
   id: string;
   documentVersion: number;
   documentIdentity?: string;
@@ -1307,6 +1437,12 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         documentVersion: 0,
       };
       this.#tabs.set(tabId, tab);
+      window.webContents.debugger.on("message", (_event, method) => {
+        if (method === "Page.javascriptDialogOpening")
+          tab.nativeDialogOpen = true;
+        if (method === "Page.javascriptDialogClosed")
+          tab.nativeDialogOpen = false;
+      });
       window.webContents.on(
         "did-start-navigation",
         (_event, _url, isInPlace, isMainFrame) => {
@@ -1321,6 +1457,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       await window.loadURL(url);
       window.webContents.debugger.attach("1.3");
       await window.webContents.debugger.sendCommand("Runtime.enable");
+      await window.webContents.debugger.sendCommand("Page.enable");
       if (
         this.#closing ||
         incarnation.invalidated ||
@@ -1345,6 +1482,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     url: string,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireTab(sessionId, tabId);
+    this.#assertInputAvailable(tab);
     this.#invalidateDocument(tab);
     await tab.window.loadURL(url);
     return summarizeTab(tab);
@@ -1359,6 +1497,25 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     );
     const observationId = randomUUID();
     const screenshot = await this.#captureScreenshot(tab, observationId);
+    let input: BrowserInputObservation | undefined;
+    if (
+      inspected.inputSnapshot !== undefined &&
+      screenshot.status === "captured" &&
+      tab.inputQuarantine === undefined &&
+      !tab.inputInFlight
+    ) {
+      try {
+        const snapshot = requireBrowserInputSnapshot(inspected.inputSnapshot);
+        const after = requireBrowserInputSnapshot(
+          await evaluateInTab(tab, browserInputSnapshotScript),
+        );
+        assertBrowserInputSnapshot(snapshot, after);
+        input = { snapshot, screenshotId: observationId };
+      } catch {
+        // DOM observations remain usable when the optional input snapshot cannot
+        // establish an unzoomed, unchanged viewport.
+      }
+    }
     if (tab.documentVersion !== documentVersion) {
       await this.#artifacts.removeArtifact(
         screenshot.artifactPath,
@@ -1393,6 +1550,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
         };
       });
     tab.observation = {
+      ...(input === undefined ? {} : { input }),
       id: observationId,
       documentVersion: tab.documentVersion,
       ...(inspected.documentIdentity === undefined
@@ -1406,6 +1564,13 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       documentVersion: tab.documentVersion,
       visibleText: inspected.visibleText.slice(0, 8_000),
       screenshot,
+      ...(input === undefined
+        ? {}
+        : {
+            inputViewport: input.snapshot.viewport,
+            focusedInputAvailable: input.snapshot.focusId !== null,
+            inputPolicy: browserTargetedInputPolicy,
+          }),
       targets: projectedTargets.slice(0, 80),
       [OBSERVATION_CAPTURE]: {
         ...browserDomCapture(
@@ -1427,6 +1592,127 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     };
   }
 
+  pointerClick(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    x: number,
+    y: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    return this.#targetedInput(
+      sessionId,
+      tabId,
+      observationId,
+      { kind: "click", x, y },
+      signal,
+    );
+  }
+
+  keyPress(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    key: BrowserInputKey,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    return this.#targetedInput(
+      sessionId,
+      tabId,
+      observationId,
+      { kind: "key", key },
+      signal,
+    );
+  }
+
+  async #targetedInput(
+    sessionId: string,
+    tabId: string,
+    observationId: string,
+    action:
+      | { kind: "click"; x: number; y: number }
+      | { kind: "key"; key: BrowserInputKey },
+    signal?: AbortSignal,
+  ): Promise<BrowserTabSummary> {
+    const tab = this.#requireTab(sessionId, tabId);
+    this.#assertInputAvailable(tab);
+    assertBrowserObservation(
+      tab.observation,
+      tab.documentVersion,
+      observationId,
+    );
+    const observation = tab.observation;
+    const input = observation.input;
+    if (input === undefined || input.screenshotId !== observationId)
+      throw new Error(
+        "A real, coherent screenshot is required for browser targeted input; inspect again",
+      );
+    const version = tab.documentVersion;
+    let dispatched = false;
+    tab.inputInFlight = true;
+    try {
+      await dispatchBrowserTargetedInput(
+        {
+          assertCurrent: () => {
+            if (tab.nativeDialogOpen)
+              throw new Error(
+                "Browser native dialog requires human control; no automatic dialog acceptance or foreground fallback",
+              );
+            if (!dispatched && tab.observation !== observation)
+              throw new Error(
+                "Browser observation changed before targeted input",
+              );
+            if (
+              this.#requireTab(sessionId, tabId) !== tab ||
+              tab.documentVersion !== version
+            )
+              throw new Error(
+                "Browser document or session changed during targeted input",
+              );
+          },
+          snapshot: async () =>
+            requireBrowserInputSnapshot(
+              await evaluateInTab(tab, browserInputProbeScript(action)),
+            ),
+          beforeDispatch: () => {
+            if (tab.observation !== observation)
+              throw new Error(
+                "Browser observation changed before targeted input",
+              );
+            dispatched = true;
+            tab.observation = undefined;
+          },
+          dispatch: async (method, params, onDispatched) => {
+            const pending = tab.window.webContents.debugger.sendCommand(
+              method,
+              params,
+            );
+            onDispatched();
+            return await pending;
+          },
+          quarantine: (error) => {
+            tab.inputQuarantine = error.message;
+            tab.observation = undefined;
+          },
+        },
+        input.snapshot,
+        action,
+        signal,
+      );
+      return summarizeTab(tab);
+    } finally {
+      tab.inputInFlight = false;
+    }
+  }
+
+  #assertInputAvailable(tab: BrowserTab): void {
+    if (tab.inputQuarantine !== undefined) throw new Error(tab.inputQuarantine);
+    if (tab.inputInFlight)
+      throw new Error(
+        "Browser targeted input is already in flight; wait and inspect again",
+      );
+  }
+
   async click(
     sessionId: string,
     tabId: string,
@@ -1434,6 +1720,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     targetId: string,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireTab(sessionId, tabId);
+    this.#assertInputAvailable(tab);
     const target = this.#requireObservedTarget(
       tab,
       observationId,
@@ -1444,6 +1731,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
       tab,
       browserActionScript(target, "click"),
+      () => this.#assertInputAvailable(tab),
     );
     if (!result.ok) {
       throw new Error(
@@ -1463,6 +1751,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     submit: boolean,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireTab(sessionId, tabId);
+    this.#assertInputAvailable(tab);
     const target = this.#requireObservedTarget(
       tab,
       observationId,
@@ -1473,6 +1762,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
       tab,
       browserActionScript(target, "type", text, submit),
+      () => this.#assertInputAvailable(tab),
     );
     if (!result.ok) {
       throw new Error(
@@ -1491,6 +1781,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     option: string,
   ): Promise<BrowserTabSummary> {
     const tab = this.#requireTab(sessionId, tabId);
+    this.#assertInputAvailable(tab);
     const target = this.#requireObservedTarget(
       tab,
       observationId,
@@ -1501,6 +1792,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
       tab,
       browserActionScript(target, "select", option),
+      () => this.#assertInputAvailable(tab),
     );
     if (!result.ok) {
       throw new Error(
@@ -1521,6 +1813,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
   ): Promise<BrowserTabSummary> {
     signal?.throwIfAborted();
     const tab = this.#requireTab(sessionId, tabId);
+    this.#assertInputAvailable(tab);
     assertBrowserObservation(
       tab.observation,
       tab.documentVersion,
@@ -1539,7 +1832,9 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     // Runtime.evaluate cannot reliably stop a dispatched mutation. Keep awaiting
     // its real settlement; cancellation must not imply the page stopped moving.
     try {
-      await evaluateInTab(tab, expression);
+      await evaluateInTab(tab, expression, () =>
+        this.#assertInputAvailable(tab),
+      );
     } catch (error) {
       if (signal?.aborted) {
         throw new Error(
@@ -1919,6 +2214,7 @@ export const browserInspectScript = `(() => {
   const text = (document.body?.innerText ?? "").replace(/\\s+/g, " ").trim();
   return {
     documentIdentity,
+    inputSnapshot: ${browserInputSnapshotScript},
     itemTotal: elements.length,
     textTotal: text.length,
     visibleText: text.slice(0, ${MAX_OBSERVATION_CAPTURE_TEXT}),
@@ -2532,10 +2828,12 @@ async function settlePage(window: BrowserWindow): Promise<void> {
 async function evaluateInTab<T>(
   tab: BrowserTab,
   expression: string,
+  beforeDispatch?: () => void,
 ): Promise<T> {
   return await evaluateBrowserDocument<T>(
     tab.window.webContents.debugger,
     expression,
+    beforeDispatch,
   );
 }
 
@@ -2575,6 +2873,20 @@ export async function evaluateBrowserDocument<T>(
     throw new Error(
       `Browser CDP evaluation failed: ${response.exceptionDetails.text ?? response.result?.description ?? "unknown error"}`,
     );
+  }
+  if (includesBrowserInputSnapshot(expression)) {
+    return (await resolveBrowserInputEvidence(
+      response.result?.value,
+      async (method, params) => {
+        beforeDispatch?.();
+        return await debuggerApi.sendCommand(method, {
+          ...params,
+          ...(method === "Runtime.evaluate"
+            ? { contextId: world.executionContextId }
+            : {}),
+        });
+      },
+    )) as T;
   }
   return response.result?.value as T;
 }

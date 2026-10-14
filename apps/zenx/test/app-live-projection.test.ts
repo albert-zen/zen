@@ -807,7 +807,67 @@ test("deletion invalidates a selected Thread's pending resume and does not reope
   }
 });
 
+test("App message requests survive acknowledgements, repeated clicks, and Thread remounts", async () => {
+  const reads: string[] = [];
+  const harness = await mountApp({
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") {
+        const id = (params as { threadId: string }).threadId;
+        return resumed(
+          threadWithAgentMessage(
+            id,
+            "[first](first.md) [second](second.md)",
+            false,
+          ),
+        );
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    readFile: async (threadId, path) => {
+      reads.push(`${threadId}:${path}`);
+      throw new Error("Expected unavailable fixture file");
+    },
+  });
+  const selectThread = async (name: string) => {
+    const row = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (value) => value.textContent?.includes(name),
+      ),
+    );
+    await act(async () => row.click());
+    await waitFor(() => document.querySelector(".markdown-body a"));
+  };
+  const clickLink = async (index: number) =>
+    act(async () =>
+      document
+        .querySelectorAll<HTMLAnchorElement>(".markdown-body a")
+        [index]!.click(),
+    );
+  try {
+    await selectThread("Thread one");
+    await clickLink(0);
+    await clickLink(1);
+    await clickLink(1);
+    assert.deepEqual(reads, [
+      "thread-1:first.md",
+      "thread-1:second.md",
+      "thread-1:second.md",
+    ]);
+    await selectThread("Thread two");
+    await selectThread("Thread one");
+    assert.equal(reads.length, 3);
+    await clickLink(0);
+    assert.equal(reads.at(-1), "thread-1:first.md");
+    assert.equal(reads.length, 4);
+  } finally {
+    await harness.unmount();
+  }
+});
+
 interface MountOptions {
+  readFile?(threadId: string, path: string): Promise<never>;
   pluginSnapshot?: ZenXPluginSnapshot;
   request(method: string, params?: unknown): Promise<unknown>;
   attachments?(threadId: string): Promise<ZenXThreadAttachmentProjection>;
@@ -849,6 +909,7 @@ async function mountApp(options: MountOptions) {
     detachEvent: { value: () => undefined },
   });
   const zenx = {
+    workspaceFiles: { read: options.readFile },
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {
