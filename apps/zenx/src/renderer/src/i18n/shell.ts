@@ -851,7 +851,8 @@ export const zhCN = {
   toolCalls: "{{count}} 次工具调用",
   toolFailures: "{{count}} 次工具失败",
   shellNonzeroStatus: "Shell返回非零状态",
-  shellNonzeroResults: "{{count}} 次Shell非零结果",
+  shellNonzeroResults_one: "{{count}} 次Shell非零结果",
+  shellNonzeroResults_other: "{{count}} 次Shell非零结果",
   shellNonzeroHint:
     "非零状态本身不能证明执行故障或搜索无匹配，请查看命令、退出码与输出。",
   toolCancelled: "{{count}} 次已取消或拒绝",
