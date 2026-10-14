@@ -52,10 +52,13 @@ public static class ZenXCaptureSampler {
   [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
   public static bool IsForeground(IntPtr hwnd) { return GetForegroundWindow()==hwnd; }
-  // Phase publication replaces a complete file. Keep the old snapshot readable
-  // without locking out the writer's rename; never read an in-place partial write.
+  // Completed generations have immutable names. A reader may retain an old
+  // snapshot without blocking the next publication; temporary files are ignored.
   public static FileStream OpenPhase(string directory) {
-    return new FileStream(Path.Combine(directory, "phase"), FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+    var snapshots = Directory.GetFiles(directory, "phase-*.snapshot");
+    if (snapshots.Length == 0) throw new FileNotFoundException("No published phase");
+    Array.Sort(snapshots, StringComparer.Ordinal);
+    return File.OpenRead(snapshots[snapshots.Length - 1]);
   }
   public static void Start(IntPtr guard, IntPtr target, string directory, string epoch) {
     Point initial; GetCursorPos(out initial);

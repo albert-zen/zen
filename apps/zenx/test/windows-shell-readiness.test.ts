@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   waitForWindowsShellReadiness,
+  WINDOWS_SHELL_CONTROL_MS,
   WINDOWS_SHELL_READINESS_MS,
 } from "./fixtures/windows-shell-readiness.js";
 
@@ -18,64 +19,219 @@ function clock(initial = 0) {
   };
 }
 const prompt = "\x1b[?9001h\x1b[?1004hPS C:\\fixture> ";
+const session = { taskId: "original" };
+const create = async () => session;
+const observation = (
+  output: string,
+  inputAvailable = true,
+  status = "running",
+) => ({ inputAvailable, status, output });
 
-test("cold startup may cross the action budget but must reach a real prompt", async () => {
+test("the observed seventeen-second cold startup retains its original session", async () => {
   const time = clock();
-  const elapsed = await waitForWindowsShellReadiness(
-    async () => ({
-      inputAvailable: true,
-      status: "running",
-      output: time.now() >= 6030 ? prompt : "\x1b[?9001h\x1b[?1004h",
-    }),
-    0,
+  let creates = 0;
+  const result = await waitForWindowsShellReadiness(
+    async () => {
+      creates++;
+      time.advance(171);
+      return session;
+    },
+    async (original) => {
+      assert.equal(original, session);
+      return observation(
+        time.now() >= 17033 ? prompt : "\x1b[?9001h\x1b[?1004h",
+      );
+    },
     time,
   );
-  assert.equal(elapsed, 6030);
-  assert.equal(WINDOWS_SHELL_READINESS_MS, 10000);
+  assert.equal(result.session, session);
+  assert.equal(result.elapsedMs, 17041);
+  assert.equal(creates, 1);
+  assert.equal(WINDOWS_SHELL_CONTROL_MS, 5000);
+  assert.equal(WINDOWS_SHELL_READINESS_MS, 20000);
 });
 
-test("a control handle or prompt alone cannot establish interactive readiness", async () => {
-  for (const observation of [
-    {
-      inputAvailable: true,
-      status: "running",
-      output: "\x1b[?9001h\x1b[?1004h",
-    },
-    { inputAvailable: false, status: "running", output: prompt },
-  ]) {
+test("a control handle or console output alone never establishes readiness", async () => {
+  for (const output of ["", "\x1b[?9001h\x1b[?1004h"]) {
     const time = clock();
     await assert.rejects(
-      waitForWindowsShellReadiness(async () => observation, 0, time),
-      /Timed out waiting for Windows Shell readiness/,
+      waitForWindowsShellReadiness(
+        create,
+        async () => observation(output),
+        time,
+      ),
+      /"phase":"PowerShell prompt".*"elapsedMs":20000/,
     );
-    assert.equal(time.now(), 10000);
+    assert.equal(time.now(), 20000);
   }
 });
 
-test("startup includes elapsed creation time and cannot accept a late read", async () => {
-  const time = clock(9900);
+test("a prompt cannot extend the deadline when input control never registers", async () => {
+  const time = clock();
+  await assert.rejects(
+    waitForWindowsShellReadiness(
+      create,
+      async () => observation(prompt, false),
+      time,
+    ),
+    /"phase":"creation\/control".*"elapsedMs":5000/,
+  );
+  assert.equal(time.now(), 5000);
+});
+
+test("late creation and late control registration fail within the creation phase", async () => {
+  for (const lateCreate of [true, false]) {
+    const time = clock();
+    await assert.rejects(
+      waitForWindowsShellReadiness(
+        async () => {
+          if (lateCreate) time.advance(5000);
+          return session;
+        },
+        async () => {
+          assert.equal(lateCreate, false, "late creation must not be read");
+          time.advance(5000);
+          return observation(prompt);
+        },
+        time,
+      ),
+      /"phase":"creation\/control".*"elapsedMs":5000/,
+    );
+  }
+});
+
+test("the prompt deadline includes creation and never resets with output", async () => {
+  const time = clock();
+  await assert.rejects(
+    waitForWindowsShellReadiness(
+      async () => {
+        time.advance(4000);
+        return session;
+      },
+      async () => observation(`progress ${time.now()}`),
+      time,
+    ),
+    /"phase":"PowerShell prompt".*"elapsedMs":20000/,
+  );
+  assert.equal(time.now(), 20000);
+});
+
+test("a prompt read completing at the absolute deadline remains a failure", async () => {
+  const time = clock();
   let reads = 0;
   await assert.rejects(
     waitForWindowsShellReadiness(
+      create,
+      async () => {
+        if (++reads === 1) return observation("");
+        time.advance(20000 - time.now());
+        return observation(prompt);
+      },
+      time,
+    ),
+    /"phase":"PowerShell prompt".*"elapsedMs":20000/,
+  );
+  assert.equal(reads, 2);
+});
+
+test("exit or cancellation before readiness fails immediately, even with retained prompt bytes", async () => {
+  for (const status of [
+    "completed",
+    "failed",
+    "timed_out",
+    "cancel_requested",
+    "cancellation_unconfirmed",
+    "cancelled",
+  ]) {
+    const time = clock();
+    await assert.rejects(
+      waitForWindowsShellReadiness(
+        create,
+        async () => observation(prompt, true, status),
+        time,
+      ),
+      /Windows Shell stopped before readiness/,
+    );
+    assert.equal(time.now(), 0);
+  }
+});
+
+test("creation and read errors propagate unchanged without retry", async () => {
+  for (const stage of ["create", "read"]) {
+    const failure = new Error(stage);
+    let creates = 0,
+      reads = 0;
+    await assert.rejects(
+      waitForWindowsShellReadiness(
+        async () => {
+          creates++;
+          if (stage === "create") throw failure;
+          return session;
+        },
+        async () => {
+          reads++;
+          throw failure;
+        },
+      ),
+      (error) => error === failure,
+    );
+    assert.equal(creates, 1);
+    assert.equal(reads, stage === "create" ? 0 : 1);
+  }
+});
+
+test("a pending creation has a hard bound and a late rejection remains observed", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let rejectCreate!: (error: Error) => void;
+  const pending = new Promise<typeof session>((_, reject) => {
+    rejectCreate = reject;
+  });
+  let reads = 0;
+  const rejected = assert.rejects(
+    waitForWindowsShellReadiness(
+      () => pending,
       async () => {
         reads++;
-        time.advance(101);
-        return { inputAvailable: true, status: "running", output: prompt };
+        return observation(prompt);
       },
-      0,
-      time,
+      { now: Date.now },
     ),
-    /"elapsedMs":10001/,
+    /"phase":"creation\/control".*"elapsedMs":5000/,
   );
-  assert.equal(reads, 1);
-  await assert.rejects(
+  t.mock.timers.tick(5000);
+  await rejected;
+  rejectCreate(new Error("late creation failure"));
+  await Promise.resolve();
+  assert.equal(reads, 0);
+});
+
+test("a pending prompt read is bounded and late success cannot become readiness", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let resolveRead!: (value: ReturnType<typeof observation>) => void;
+  const pending = new Promise<ReturnType<typeof observation>>((resolve) => {
+    resolveRead = resolve;
+  });
+  let signalRead!: () => void;
+  const readStarted = new Promise<void>((resolve) => {
+    signalRead = resolve;
+  });
+  let reads = 0;
+  const rejected = assert.rejects(
     waitForWindowsShellReadiness(
+      create,
       async () => {
-        throw new Error("expired startup must not read");
+        if (++reads === 1) return observation("");
+        signalRead();
+        return pending;
       },
-      0,
-      time,
+      { now: Date.now, sleep: async () => {} },
     ),
-    /Timed out waiting for Windows Shell readiness/,
+    /"phase":"PowerShell prompt".*"elapsedMs":20000/,
   );
+  await readStarted;
+  t.mock.timers.tick(20000);
+  await rejected;
+  resolveRead(observation(prompt));
+  await Promise.resolve();
+  assert.equal(reads, 2);
 });

@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   mkdtemp,
-  mkdir,
   open,
   readFile,
   readdir,
@@ -22,16 +21,17 @@ async function fixture() {
 test("phase publication preserves complete old and new snapshots", async () => {
   const directory = await fixture();
   try {
-    await publishWindowsSmokePhase(directory, "uia-set-value");
-    const old = await open(path.join(directory, "phase"), "r");
+    const original = await publishWindowsSmokePhase(directory, "uia-set-value");
+    const old = await open(original, "r");
     try {
-      await publishWindowsSmokePhase(directory, "uia-refresh");
+      const updated = await publishWindowsSmokePhase(directory, "uia-refresh");
       assert.equal(await old.readFile("utf8"), "uia-set-value");
-      assert.equal(
-        await readFile(path.join(directory, "phase"), "utf8"),
-        "uia-refresh",
-      );
-      assert.deepEqual(await readdir(directory), ["phase"]);
+      assert.equal(await readFile(updated, "utf8"), "uia-refresh");
+      assert.deepEqual((await readdir(directory)).sort(), [
+        path.basename(original),
+        path.basename(updated),
+      ]);
+      assert.notEqual(updated, original);
     } finally {
       await old.close();
     }
@@ -40,19 +40,18 @@ test("phase publication preserves complete old and new snapshots", async () => {
   }
 });
 
-test("failed publication rejects and removes only its owned temporary file", async () => {
+test("failed publication preserves existing snapshots and unrelated files", async () => {
   const directory = await fixture();
   try {
-    await mkdir(path.join(directory, "phase"));
-    await writeFile(
-      path.join(directory, "phase", "owned-by-fixture"),
-      "retained",
-    );
-    await assert.rejects(publishWindowsSmokePhase(directory, "uia-refresh"));
-    assert.deepEqual(await readdir(directory), ["phase"]);
-    assert.equal(
-      await readFile(path.join(directory, "phase", "owned-by-fixture"), "utf8"),
-      "retained",
+    const original = await publishWindowsSmokePhase(directory, "uia-set-value");
+    const blocked = path.join(directory, "not-a-directory");
+    await writeFile(blocked, "retained");
+    await assert.rejects(publishWindowsSmokePhase(blocked, "uia-refresh"));
+    assert.equal(await readFile(original, "utf8"), "uia-set-value");
+    assert.equal(await readFile(blocked, "utf8"), "retained");
+    assert.deepEqual(
+      (await readdir(directory)).sort(),
+      ["not-a-directory", path.basename(original)].sort(),
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -63,7 +62,7 @@ test("failed publication rejects and removes only its owned temporary file", asy
 // creating its windows or invoking native input. Hold its real read handle open
 // across publication so this regression does not depend on winning a race.
 test(
-  "Windows sampler shares replacement while retaining its original snapshot",
+  "Windows sampler reads immutable generations while retaining its original snapshot",
   {
     skip:
       process.platform !== "win32" ? "Windows file-sharing contract" : false,
@@ -84,7 +83,8 @@ test(
     const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
     try {
       for (const shared of [false, true]) {
-        await publishWindowsSmokePhase(directory, "uia-set-value");
+        if (shared) await publishWindowsSmokePhase(directory, "uia-set-value");
+        else await writeFile(path.join(directory, "phase"), "uia-set-value");
         const ready = path.join(
           directory,
           shared ? "shared-ready" : "old-ready",
@@ -111,6 +111,13 @@ try {
   }
   $reader = New-Object IO.StreamReader($stream)
   try { [Console]::Out.WriteLine($reader.ReadToEnd()) } finally { $reader.Dispose() }
+  ${
+    shared
+      ? `[Console]::Out.WriteLine('latest:')
+  $latest = New-Object IO.StreamReader([ZenXCaptureSampler]::OpenPhase($directory))
+  try { [Console]::Out.WriteLine($latest.ReadToEnd()) } finally { $latest.Dispose() }`
+      : ""
+  }
 } finally { $stream.Dispose() }
 `;
         const child = spawn(
@@ -154,11 +161,16 @@ try {
             await new Promise((resolve) => setTimeout(resolve, 10));
           }
           if (shared) {
-            await publishWindowsSmokePhase(directory, "uia-refresh");
-            assert.equal(
-              await readFile(path.join(directory, "phase"), "utf8"),
+            // A deliberately incomplete temporary file must never be sampled.
+            await writeFile(
+              path.join(directory, ".phase-incomplete"),
+              "partial",
+            );
+            const updated = await publishWindowsSmokePhase(
+              directory,
               "uia-refresh",
             );
+            assert.equal(await readFile(updated, "utf8"), "uia-refresh");
           } else {
             // File.ReadAllText uses this read-only sharing mode. Holding it makes
             // the old in-place write fail deterministically, reproducing CI EBUSY.
@@ -181,8 +193,8 @@ try {
         }
         assert.equal(
           stdout.trim(),
-          "uia-set-value",
-          "held handle must keep its complete original version",
+          shared ? "uia-set-value\r\nlatest:\r\nuia-refresh" : "uia-set-value",
+          "held native handle retains old bytes and fresh sampler selects complete latest generation",
         );
       }
     } finally {
