@@ -143,6 +143,7 @@ export interface WinAppCliRunOptions {
   stdin?: string;
   signal?: AbortSignal;
   onStopping?: () => void;
+  onSpawn?: (pid: number) => void;
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   redactions?: readonly string[];
@@ -739,6 +740,23 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     );
   }
 
+  /** Host-only seam: preserve exact stock window resolution for the strict UIA client. */
+  async resolveWindowForStrictUia(
+    target: ComputerTarget,
+    signal?: AbortSignal,
+  ): Promise<{
+    hwnd: string;
+    pid: number;
+    target: ComputerInspection["target"];
+  }> {
+    const window = await this.#resolveWindow(target, signal);
+    return {
+      hwnd: BigInt(window.hwnd).toString(),
+      pid: window.processId,
+      target: resolvedTarget(window),
+    };
+  }
+
   async #resolveWindow(
     target: ComputerTarget,
     signal?: AbortSignal,
@@ -960,6 +978,9 @@ export async function runBoundedProcess(
       shell: false,
       windowsHide: true,
       stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+    child.once("spawn", () => {
+      if (child.pid !== undefined) options.onSpawn?.(child.pid);
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

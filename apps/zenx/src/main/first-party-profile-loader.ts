@@ -126,6 +126,8 @@ export function firstPartyProviderTarball(
   if (pluginId === "computer") {
     if (providerId === "macos-desktop")
       return "zenx-computer-plugin-macos-1.0.2.tgz";
+    if (providerId === "zenx-winapp-uia")
+      return "zenx-computer-plugin-win32-strict-1.2.0.tgz";
     if (providerId === "microsoft-winapp-cli")
       return "zenx-computer-plugin-win32-1.1.5.tgz";
     if (providerId === "peekaboo-cli")

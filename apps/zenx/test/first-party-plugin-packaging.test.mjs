@@ -18,6 +18,7 @@ import {
 import { firstPartyProviderTarball } from "../src/main/first-party-profile-loader.ts";
 import { browserCapabilityManifest } from "../src/main/capabilities/browser-provider.ts";
 import { computerCapabilityManifest } from "../src/main/capabilities/computer-provider.ts";
+import { windowsStrictUiaCapabilityManifest } from "../src/main/capabilities/windows-strict-uia-provider.ts";
 import { windowsComputerCapabilityManifest } from "../src/main/capabilities/windows-computer-provider.ts";
 import {
   selectBrowserProviderVariant,
@@ -45,12 +46,17 @@ const expected = [
   ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.2.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.1.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.5.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-win32-strict-1.2.0.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.7.tgz"],
   ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.1.tgz"],
 ];
 
 const providerVariants = new Map([
+  [
+    "zenx-computer-plugin-win32-strict-1.2.0.tgz",
+    ["computer", "1.2.0", "zenx-winapp-uia", 5],
+  ],
   [
     "zenx-browser-plugin-multi-1.0.8.tgz",
     ["browser", "1.0.8", "multi-browser", 25],
@@ -125,6 +131,10 @@ test("all packaged Browser and Computer manifests match their runtime observatio
   }
   assert.equal(peekaboo.manifest.provider.id, "peekaboo-cli");
   for (const [relative, runtime] of [
+    [
+      "zenx-computer-plugin/variants/win32-strict.zenx.plugin.json",
+      windowsStrictUiaCapabilityManifest,
+    ],
     ["zenx-browser-plugin/zenx.plugin.json", browserCapabilityManifest],
     [
       "zenx-browser-plugin/variants/multi.zenx.plugin.json",

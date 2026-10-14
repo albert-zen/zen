@@ -402,8 +402,11 @@
   投影为既有的有界 opaque observation 与按真实影响分类的 computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
   只读窗口发现返回所属应用与可直接传给现有定向工具的精确 target；列表截断与查询过滤不改变目标身份。
-  WinApp UIA set-value 与 Invoke 已实测可能激活目标窗口，故在任何原生调用之前要求既有可撤销 foreground computer control 许可；app-targeted/no-global-input 不是 focus-isolated 的证明，不启用自动授权、焦点恢复或输入注入 fallback。
-  WinApp downstream build candidate 是独立构建期产物：固定上游 source/patch/SDK，记录依赖闭包与原生 binary provenance，只供 native 验证；未经过正式 provider trust-chain 集成和 packaged 验证前，不改变运行时 provider 选择或 background 声明。
+  Stock/system WinApp UIA set-value 与 Invoke 已实测可能激活目标窗口，故在任何原生调用之前要求既有可撤销 foreground computer control 许可；app-targeted/no-global-input 不是 focus-isolated 的证明，不启用自动授权、焦点恢复或输入注入 fallback。
+- **ZenXStrictUiaComputerProvider** — Windows App build 将固定上游/patch/SDK/真实 NuGet closure 编译成独立 `zenx-winapp-uia` NativeAOT 资源，同一构建的显式 provenance digest 交给既有 assembler；compiled manifest digest 是唯一产品 trust anchor，覆盖 exe、完整 native bin 树及逐文件、source/patch/closure/provenance/license，选择与每次启动均重验，不覆盖 official archive、不在用户机器编译或降级。
+  构建时仅把精确顶层 `bin/winapp.pdb` 的调试符号移到独立 CI evidence，以原 publish 全量清单、符号 hash 与产品 provenance digest 证明分区完整；其它未知资产仍全部留在无 ignored paths 的 runtime bin 闭包，符号证据不是运行时依赖或新的 trust anchor。
+  新后台语义 route 仅在 verified packaged 身份及 live AutoSetFocus FALSE 合同成立时开放；既有 opaque observation 保存精确进程出生、HWND/class/RuntimeId/完整语义几何身份，私有原生命令拒绝虚拟、陈旧、歧义或变化目标，只对同一验证过的 UIA element 单次调用指定 ValuePattern 或 InvokePattern，不走 selector/ancestor/其它 pattern fallback。最终校验不是原子性或所有第三方应用零焦点副作用保证；此客户端不请求激活，目标应用自身仍可能改变焦点。
+  同一 Host 取消和 retirement signal 覆盖启动前边界，已可能派发但缺少可信完成回执的失败/中断保持 outcome unknown，等待实际 child/pipe close 后结算而不假称回滚或自动重试。旧 Computer profile 先恢复已提交的精确 backend，新 variant 与既有 Catalog transaction 一起提交；失败保持旧 generation，disabled/uninstalled/external override 与 foreground consent 不变，旧 grants 不构成新增授权。
   Windows 截图由应用内固定源码、独立限时进程的 PrintWindow helper 获取，禁止激活/恢复窗口；像素仅经 Host 校验后写入瞬时 artifact，无法后台渲染时显式失败。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。

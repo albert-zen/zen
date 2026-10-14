@@ -42,6 +42,7 @@ import {
   selectBrowserProvider,
   selectBrowserProviderVariant,
   selectComputerProvider,
+  selectComputerProviderVariant,
   type ZenXCapabilityProviderCatalogOptions,
 } from "./capabilities/provider-catalog.js";
 import { WinAppCliComputerBackend } from "./capabilities/windows-computer-provider.js";
@@ -148,6 +149,12 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   #stagedBrowserProfilePackage: ZenXCapabilityPackage | undefined;
   #stagedComputerProfilePackage: ZenXCapabilityPackage | undefined;
   #pendingBrowserProfileSelection:
+    | {
+        capabilityPackage?: ZenXCapabilityPackage;
+        diagnostics: ZenXPluginDiagnostics["providerDiagnostics"];
+      }
+    | undefined;
+  #pendingComputerProfileSelection:
     | {
         capabilityPackage?: ZenXCapabilityPackage;
         diagnostics: ZenXPluginDiagnostics["providerDiagnostics"];
@@ -533,27 +540,55 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async #selectComputerProfileProvider(): Promise<void> {
-    const selection = await this.#resolveComputerProfileProvider();
-    this.#computerProfilePackage = selection.capabilityPackage;
-    this.#registry.replaceProviderDiagnostics(
-      "computer",
-      selection.diagnostics,
-    );
+    const selected = await this.#resolveComputerProfileProvider();
+    const descriptor = this.#registry.packageDescriptors().computer;
+    const committedId = descriptor?.manifest.provider.id;
+    const lifecycle = this.#registry
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === "computer")?.lifecycle;
+    if (
+      this.#computerBackend === undefined &&
+      descriptor?.source === "bundled" &&
+      descriptor.profileSource?.mode === "bundled" &&
+      lifecycle !== "uninstalled" &&
+      (committedId === "microsoft-winapp-cli" ||
+        committedId === "zenx-winapp-uia") &&
+      selected.capabilityPackage?.manifest.provider.id !== committedId
+    ) {
+      // Restore the Catalog-owned generation first. The new backend is an
+      // unpublished candidate until the existing profile transaction commits.
+      this.#pendingComputerProfileSelection = selected;
+      const committed = await this.#resolveComputerProfileProvider(committedId);
+      this.#computerProfilePackage = committed.capabilityPackage;
+      this.#registry.replaceProviderDiagnostics(
+        "computer",
+        committed.diagnostics,
+      );
+      return;
+    }
+    this.#pendingComputerProfileSelection = undefined;
+    this.#computerProfilePackage = selected.capabilityPackage;
+    this.#registry.replaceProviderDiagnostics("computer", selected.diagnostics);
   }
 
-  async #resolveComputerProfileProvider(): Promise<{
+  async #resolveComputerProfileProvider(
+    providerId?: "microsoft-winapp-cli" | "zenx-winapp-uia",
+  ): Promise<{
     capabilityPackage?: ZenXCapabilityPackage;
     diagnostics: ZenXPluginDiagnostics["providerDiagnostics"];
   }> {
+    const options = {
+      ...this.#providerCatalogOptions,
+      userDataDirectory: this.#userDataDirectory,
+      bundledProvidersOnly: this.#bundledProvidersOnly,
+      resourcesDirectory: this.#resourcesDirectory,
+      bundledManifestSha256: this.#bundledManifestSha256,
+    };
     const selection =
       this.#computerBackend === undefined
-        ? await selectComputerProvider({
-            ...this.#providerCatalogOptions,
-            userDataDirectory: this.#userDataDirectory,
-            bundledProvidersOnly: this.#bundledProvidersOnly,
-            resourcesDirectory: this.#resourcesDirectory,
-            bundledManifestSha256: this.#bundledManifestSha256,
-          })
+        ? providerId === undefined
+          ? await selectComputerProvider(options)
+          : await selectComputerProviderVariant(providerId, options)
         : {
             backend: this.#computerBackend,
             manifest: this.#computerManifest,
@@ -1428,13 +1463,19 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           ),
       );
     }
-    await this.#serializeServiceMutation(
-      async () =>
-        await this.#syncProviderVariant(
-          "computer",
-          this.#computerProfilePackage,
-        ),
-    );
+    const pendingComputer = this.#pendingComputerProfileSelection;
+    this.#pendingComputerProfileSelection = undefined;
+    if (pendingComputer !== undefined) {
+      await this.#applySelectedProviderCandidate("computer", pendingComputer);
+    } else {
+      await this.#serializeServiceMutation(
+        async () =>
+          await this.#syncProviderVariant(
+            "computer",
+            this.#computerProfilePackage,
+          ),
+      );
+    }
   }
 
   async #discardPendingBrowserProfileSelection(): Promise<void> {
@@ -1475,7 +1516,14 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       await this.#discardProviderCandidate(pluginId, candidate);
       return;
     }
-    if ((await realpath(selected)) === descriptor.profileSource.packageSpec) {
+    let selectedPath: string;
+    try {
+      selectedPath = await realpath(selected);
+    } catch (error) {
+      await this.#discardProviderCandidate(pluginId, candidate);
+      throw error;
+    }
+    if (selectedPath === descriptor.profileSource.packageSpec) {
       await this.#discardProviderCandidate(pluginId, candidate);
       this.#registry.replaceProviderDiagnostics(
         pluginId,
@@ -1710,6 +1758,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     const packages = new Set(
       [
         this.#pendingBrowserProfileSelection?.capabilityPackage,
+        this.#pendingComputerProfileSelection?.capabilityPackage,
         this.#stagedBrowserProfilePackage,
         this.#stagedComputerProfilePackage,
         this.#browserProfilePackage,
@@ -1720,6 +1769,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       ),
     );
     this.#pendingBrowserProfileSelection = undefined;
+    this.#pendingComputerProfileSelection = undefined;
     this.#stagedBrowserProfilePackage = undefined;
     this.#stagedComputerProfilePackage = undefined;
     this.#browserProfilePackage = undefined;

@@ -31,6 +31,14 @@ import {
   WinAppCliComputerBackend,
 } from "./windows-computer-provider.js";
 import type { WinAppCliRunner } from "./windows-computer-provider.js";
+import {
+  WinAppStrictUiaComputerBackend,
+  windowsStrictUiaCapabilityManifest,
+} from "./windows-strict-uia-provider.js";
+import {
+  STRICT_UIA_PROVIDER_ID,
+  STRICT_UIA_VERSION,
+} from "./windows-strict-uia-contract.js";
 import type {
   ZenXPluginManifestV2,
   ZenXCapabilityProviderDiagnostic,
@@ -431,6 +439,29 @@ export function userBrowserManifest(): ZenXPluginManifestV2 {
 export async function selectComputerProvider(
   options: ZenXCapabilityProviderCatalogOptions,
 ): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  return await selectComputerProviderForId(
+    options,
+    options.bundledProvidersOnly === true &&
+      (options.platform ?? process.platform) === "win32"
+      ? STRICT_UIA_PROVIDER_ID
+      : undefined,
+  );
+}
+
+/** Restore an exact committed Windows variant without redirecting its generation. */
+export async function selectComputerProviderVariant(
+  providerId: "microsoft-winapp-cli" | typeof STRICT_UIA_PROVIDER_ID,
+  options: ZenXCapabilityProviderCatalogOptions,
+): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  return await selectComputerProviderForId(options, providerId);
+}
+
+async function selectComputerProviderForId(
+  options: ZenXCapabilityProviderCatalogOptions,
+  providerId?: "microsoft-winapp-cli" | typeof STRICT_UIA_PROVIDER_ID,
+): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  if (providerId === STRICT_UIA_PROVIDER_ID)
+    return await selectStrictWindowsProvider(options);
   const runner = options.runner ?? new SystemExternalProviderProcessRunner();
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -955,6 +986,77 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function selectStrictWindowsProvider(
+  options: ZenXCapabilityProviderCatalogOptions,
+): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  const manifest = windowsStrictUiaCapabilityManifest;
+  const unavailable = (reason: string) => ({
+    manifest,
+    diagnostics: [
+      unavailableDiagnostic(
+        "computer",
+        STRICT_UIA_PROVIDER_ID,
+        manifest.provider.interactionModes,
+        manifest.provider.capabilities,
+        reason,
+      ),
+    ],
+  });
+  const platform = options.platform ?? process.platform;
+  if (
+    platform !== "win32" ||
+    options.bundledProvidersOnly !== true ||
+    !options.resourcesDirectory ||
+    !options.bundledManifestSha256
+  )
+    return unavailable(
+      "Strict UIA requires the verified Windows application bundle and compiled manifest trust anchor",
+    );
+  const resolved = await resolveBundledProvider(STRICT_UIA_PROVIDER_ID, {
+    resourcesDirectory: options.resourcesDirectory,
+    platform,
+    expectedManifestSha256: options.bundledManifestSha256,
+    expectedVersion: STRICT_UIA_VERSION,
+  });
+  const provider = resolved.provider;
+  if (!provider)
+    return unavailable(resolved.reason ?? "Strict UIA provider is unavailable");
+  const backend = new WinAppStrictUiaComputerBackend({
+    command: provider.executable,
+    platform,
+    runner: options.winAppRunner,
+    bindBeforeSpawn: async () =>
+      await bindBundledProviderLaunch(provider, {
+        resourcesDirectory: options.resourcesDirectory!,
+        platform,
+        verifyDirectoryAssets: true,
+      }),
+  });
+  const diagnostic = await backend.diagnose();
+  if (!diagnostic.ready) {
+    await backend.close();
+    return unavailable(diagnostic.message);
+  }
+  return {
+    backend,
+    manifest,
+    diagnostics: [
+      {
+        capabilityId: "computer",
+        providerId: STRICT_UIA_PROVIDER_ID,
+        status: "selected",
+        interactionModes: manifest.provider.interactionModes,
+        capabilities: manifest.provider.capabilities,
+        executable: provider.executable,
+        version: provider.version,
+        integrity: "verified",
+        permissionSummary:
+          "Verified downstream UIA client disables automatic focus and dispatches one exact native pattern. Target applications can still change focus themselves. Strict capture performs no restore or activation; no global input or selector fallback.",
+      },
+    ],
+  };
 }
 
 function requireBundledRuntime<

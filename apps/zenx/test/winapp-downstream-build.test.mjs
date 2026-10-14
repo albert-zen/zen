@@ -49,10 +49,12 @@ async function fixture(t) {
   const contents = new Map();
   let current;
   for (const line of patch.split("\n")) {
-    if (line.startsWith("--- a/")) {
+    if (line.startsWith("--- /dev/null") || line.startsWith("diff --git ")) {
+      current = undefined;
+    } else if (line.startsWith("--- a/")) {
       current = line.slice(6);
       contents.set(current, []);
-    } else if (line.startsWith("@@ ")) {
+    } else if (current && line.startsWith("@@ ")) {
       const start = Number(line.match(/^@@ -(\d+)/u)[1]);
       const lines = contents.get(current);
       while (lines.length < start - 1)
@@ -87,7 +89,8 @@ async function fixture(t) {
   const fixtureLock = structuredClone(lock);
   fixtureLock.upstream.commit = git(source, "rev-parse", "HEAD");
   for (const name of Object.keys(fixtureLock.sourceFiles))
-    fixtureLock.sourceFiles[name] = git(source, "rev-parse", `HEAD:${name}`);
+    if (fixtureLock.sourceFiles[name] !== null)
+      fixtureLock.sourceFiles[name] = git(source, "rev-parse", `HEAD:${name}`);
   return { directory, source, lock: fixtureLock };
 }
 
@@ -110,7 +113,7 @@ test("downstream source, patch and toolchain pins agree with the isolated workfl
       "DOTNET_INSTALL_DIR: ${{ runner.temp }}/zenx-dotnet-candidate",
     ),
   );
-  assert.equal(lock.dependencyLockMode, "capture-then-locked-restore");
+  assert.equal(lock.dependencyLockMode, "frozen-locked-restore");
 });
 
 test("runner-local SDK path uses a supported step context instead of job env", async () => {
@@ -141,6 +144,14 @@ test("Windows-style fresh clone preserves the exact hashed patch bytes", async (
   const patchFile = path.join(source, lock.patch.path);
   await mkdir(path.dirname(patchFile), { recursive: true });
   await writeFile(patchFile, patch);
+  for (const file of [
+    "vendor/winapp-0.3.1/source.lock.json",
+    lock.dependencyLock.path,
+  ])
+    await writeFile(
+      path.join(source, file),
+      await readFile(path.join(root, file)),
+    );
   await writeFile(
     path.join(source, ".gitattributes"),
     await readFile(path.join(root, ".gitattributes")),
@@ -170,6 +181,15 @@ test("Windows-style fresh clone preserves the exact hashed patch bytes", async (
   const checkedOut = await readFile(path.join(checkout, lock.patch.path));
   assert.equal(digest(checkedOut), lock.patch.sha256);
   assert.equal(checkedOut.toString("utf8"), patch);
+  for (const file of [
+    "vendor/winapp-0.3.1/source.lock.json",
+    lock.dependencyLock.path,
+  ]) {
+    assert.deepEqual(
+      await readFile(path.join(checkout, file)),
+      await readFile(path.join(root, file)),
+    );
+  }
 });
 
 test("SDK runtime resolution is bound to the same framework, RID and version before build", async () => {
@@ -361,6 +381,7 @@ test("extra patch paths are rejected before materializing them", async (t) => {
 test("feature evidence requires the exact downstream identity and actual boolean FALSE", () => {
   const contract = {
     schemaVersion: 1,
+    contractVersion: 1,
     providerBuild: lock.downstream.providerBuild,
     upstreamCommit: lock.upstream.commit,
     autoSetFocus: false,
@@ -375,6 +396,7 @@ test("feature evidence requires the exact downstream identity and actual boolean
     { providerBuild: "stock-winapp" },
     { upstreamCommit: "0".repeat(40) },
     { schemaVersion: 2 },
+    { contractVersion: 0 },
     { backgroundSafeForAllApps: true },
   ]) {
     assert.throws(() =>
@@ -410,3 +432,81 @@ test(
     await assert.rejects(buildDownstream({}), /require Windows/u);
   },
 );
+
+test("reviewed NuGet closure is frozen as the exact CI-produced bytes", async () => {
+  const bytes = await readFile(
+    path.join(root, "vendor/winapp-0.3.1/packages.lock.json"),
+  );
+  assert.equal(bytes.length, 13704);
+  assert.equal(
+    digest(bytes),
+    "33e2b9b7fad15c4b582be384306f769ead57ac17cfc598672c3d361a54e4860a",
+  );
+  assert.ok(bytes.includes(Buffer.from("\r\n")));
+  assert.equal(lock.dependencyLock.sha256, digest(bytes));
+  const script = await readFile(
+    path.join(root, "scripts/build-zenx-winapp-downstream.mjs"),
+    "utf8",
+  );
+  assert.doesNotMatch(script, /--use-lock-file/u);
+});
+
+test("new patch paths require absence from the exact source commit", async (t) => {
+  const f = await fixture(t);
+  const name = "unexpected-new.cs";
+  await writeFile(path.join(f.source, name), "existing source\n");
+  git(f.source, "add", name);
+  git(
+    f.source,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-m",
+    "existing new path",
+  );
+  f.lock.upstream.commit = git(f.source, "rev-parse", "HEAD");
+  f.lock.sourceFiles[name] = null;
+  await assert.rejects(
+    verifyAndPatchSource({ root, sourceDirectory: f.source, lock: f.lock }),
+    /New source path already exists/u,
+  );
+});
+
+test("product CI builds native once and reuses its explicit digest for smoke and app", async () => {
+  const workflow = await readFile(
+    path.join(root, ".github/workflows/ci.yml"),
+    "utf8",
+  );
+  const job = workflow
+    .split("  zenx-windows-packaged-provider-smoke:")[1]
+    .split("  zenx-windows-user-browser-smoke:")[0];
+  assert.equal(
+    job.match(/node scripts\/build-zenx-winapp-downstream\.mjs/gu)?.length,
+    1,
+  );
+  assert.equal(
+    job.match(
+      /--downstream-sha256 "\$\{\{ steps\.build-downstream\.outputs\.provenance-sha256 \}\}"/gu,
+    )?.length,
+    2,
+  );
+  assert.ok(job.includes(`ref: ${lock.upstream.commit}`));
+  assert.ok(job.includes(`node-version: ${lock.nodeVersion}`));
+  assert.ok(job.includes(`dotnet-version: ${lock.dotnetSdk}`));
+  assert.match(
+    job,
+    /windows-project-workspace-smoke\.ps1 -PackagedExecutable/u,
+  );
+  assert.doesNotMatch(job, /download-artifact|workflow_run/u);
+  const packager = await readFile(
+    path.join(root, "apps/zenx/scripts/package-zenx-portable.mjs"),
+    "utf8",
+  );
+  assert.match(
+    packager,
+    /downstreamAssemblyArguments\(\s*arguments_,\s*process\.platform,?\s*\)/u,
+  );
+  assert.match(packager, /\.\.\.downstreamArguments/u);
+});

@@ -20,7 +20,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import { acquireVerifiedArtifact } from "./verified-artifact-acquisition.mjs";
+import { verifyDownstreamCandidate } from "./build-zenx-winapp-downstream.mjs";
+
+// Download transport is only loaded for archive acquisition, not native handoff validation.
+async function acquireVerifiedArtifact(options) {
+  const transport = await import("./verified-artifact-acquisition.mjs");
+  return transport.acquireVerifiedArtifact(options);
+}
 
 const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -48,6 +54,17 @@ if (isDirectExecution()) {
 }
 
 export async function assembleZenXProviders(arguments_) {
+  const downstreamArguments = downstreamAssemblyArguments(
+    arguments_,
+    process.platform,
+  );
+  // Fail before any downloads or clearing the output when the handoff is invalid.
+  if (downstreamArguments.length > 0) {
+    await verifyDownstreamCandidate({
+      directory: downstreamArguments[1],
+      provenanceSha256: downstreamArguments[3],
+    });
+  }
   const outputArgument = argumentValue(arguments_, "--output");
   const cacheArgument = argumentValue(arguments_, "--cache");
   const lockArgument = argumentValue(arguments_, "--provider-lock");
@@ -155,6 +172,13 @@ export async function assembleZenXProviders(arguments_) {
         },
       },
     };
+    if (downstreamArguments.length > 0) {
+      manifest.providers["zenx-winapp-uia"] = await assembleDownstreamProvider({
+        directory: downstreamArguments[1],
+        provenanceSha256: downstreamArguments[3],
+        providersDirectory: providers,
+      });
+    }
     const manifestBytes = Buffer.from(
       `${JSON.stringify(manifest, null, 2)}\n`,
       "utf8",
@@ -184,6 +208,89 @@ export async function assembleZenXProviders(arguments_) {
     return result;
   } finally {
     await rm(work, { recursive: true, force: true });
+  }
+}
+
+export function downstreamAssemblyArguments(arguments_, platform) {
+  const names = ["--downstream", "--downstream-sha256"];
+  const values = names.map((name) => {
+    const occurrences = arguments_.filter((value) => value === name).length;
+    if (occurrences > 1) throw new Error(`Duplicate ${name} argument`);
+    const index = arguments_.indexOf(name);
+    if (index === -1) return undefined;
+    const value = arguments_[index + 1];
+    if (!value || value.startsWith("--"))
+      throw new Error(`Missing ${name} argument`);
+    return value;
+  });
+  if (platform !== "win32") {
+    if (values.some((value) => value !== undefined))
+      throw new Error("Downstream UIA input is Windows-only");
+    return [];
+  }
+  if (!values[0] || !/^[a-f0-9]{64}$/u.test(values[1] ?? "")) {
+    throw new Error(
+      "Windows packaging requires --downstream DIR --downstream-sha256 SHA256 from the same authorized native build",
+    );
+  }
+  return [names[0], path.resolve(values[0]), names[1], values[1]];
+}
+
+export async function assembleDownstreamProvider({
+  directory,
+  provenanceSha256,
+  providersDirectory,
+  root,
+}) {
+  const options = {
+    directory,
+    provenanceSha256,
+    ...(root === undefined ? {} : { root }),
+  };
+  await verifyDownstreamCandidate(options);
+  const id = "zenx-winapp-uia";
+  const destination = path.join(providersDirectory, id);
+  await mkdir(providersDirectory, { recursive: true });
+  // Never merge with an older candidate. The enclosing assembly owns this fresh output.
+  await mkdir(destination);
+  try {
+    for (const name of await readdir(directory)) {
+      await cp(path.join(directory, name), path.join(destination, name), {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+      });
+    }
+    const verified = await verifyDownstreamCandidate({
+      ...options,
+      directory: destination,
+    });
+    const assetPath = (relative) => path.posix.join(id, relative);
+    const assets = [
+      {
+        path: assetPath("bin"),
+        kind: "directory",
+        sha256: await hashBrowserPayloadDirectory(
+          path.join(destination, "bin"),
+        ),
+      },
+      ...verified.inventory.files.map((file) => ({
+        path: assetPath(file.path),
+        sha256: file.sha256,
+      })),
+      { path: assetPath("provenance.json"), sha256: provenanceSha256 },
+    ];
+    return {
+      executable: assetPath("bin/winapp.exe"),
+      version: verified.lock.downstream.version,
+      sha256: verified.provenance.executable.sha256,
+      platforms: ["win32"],
+      assets,
+      downstream: verified.downstream,
+    };
+  } catch (error) {
+    await rm(destination, { recursive: true, force: true });
+    throw error;
   }
 }
 

@@ -121,17 +121,35 @@ jobs:
 
   zenx-windows-packaged-provider-smoke:
     name: ZenX Windows packaged bundled-provider smoke
-    runs-on: windows-latest
-    timeout-minutes: 45
+    runs-on: windows-2025
+    timeout-minutes: 90
     env:
       WINAPP_CLI_UPDATE_CHECK: "0"
       WINAPP_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_MULTILEVEL_LOOKUP: "0"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
+          repository: microsoft/winappCli
+          ref: c8ada4a403c43b96780b87abc454cba51f649c60 # v0.3.1
+          path: .native-sources/winappcli
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.3
           cache: npm
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/zenx-dotnet-candidate
+        with:
+          dotnet-version: 10.0.401
+      - name: Validate downstream build and assembly contracts
+        run: node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs apps/zenx/test/winapp-downstream-symbols.test.mjs
+      - name: Build one native provider for this authorized app-build run
+        id: build-downstream
+        run: node scripts/build-zenx-winapp-downstream.mjs --source .native-sources/winappcli --output "${{ runner.temp }}/zenx-winapp-downstream" --symbols-output "${{ runner.temp }}/zenx-winapp-symbols"
       - name: Cache verified provider archives
         uses: actions/cache@v4
         with:
@@ -145,7 +163,7 @@ jobs:
       - name: Package and diagnose Windows smoke publication
         env:
           ZENX_PACKAGE_DIAG: "1"
-        run: npm --workspace apps/zenx run smoke:packaged
+        run: npm --workspace apps/zenx run smoke:packaged -- --downstream "${{ runner.temp }}/zenx-winapp-downstream" --downstream-sha256 "${{ steps.build-downstream.outputs.provenance-sha256 }}"
       - name: Confirm packaged smoke left no shared build output
         shell: pwsh
         run: |
@@ -153,7 +171,7 @@ jobs:
             throw "smoke:packaged wrote shared apps/zenx/out"
           }
       - name: Package the real ZenX portable app
-        run: npm --workspace apps/zenx run package:portable
+        run: npm --workspace apps/zenx run package:portable -- --downstream "${{ runner.temp }}/zenx-winapp-downstream" --downstream-sha256 "${{ steps.build-downstream.outputs.provenance-sha256 }}"
       - name: Exercise packaged Chrome native host framing
         run: node apps/zenx/scripts/smoke-chrome-native-host.mjs
       - name: Inspect the portable app without launching it
@@ -169,6 +187,10 @@ jobs:
             "$artifact/resources/app/out/renderer/index.html",
             "$artifact/resources/app/node_modules/ws/package.json",
             "$artifact/resources/providers/manifest.json",
+            "$artifact/resources/providers/zenx-winapp-uia/bin/winapp.exe",
+            "$artifact/resources/providers/zenx-winapp-uia/bin/libSkiaSharp.dll",
+            "$artifact/resources/providers/zenx-winapp-uia/provenance.json",
+            "$artifact/resources/providers/zenx-winapp-uia/packages.lock.json",
             "$artifact/resources/providers/playwright-browsers/chromium-1237/INSTALLATION_COMPLETE",
             "$artifact/resources/providers/playwright-browsers/chromium-1237/chrome-win64/chrome.exe"
           )
@@ -188,24 +210,134 @@ jobs:
             throw "Portable ZenX manifest does not cover the browser payload"
           }
 
-  zenx-windows-project-workspace-smoke:
-    name: ZenX Windows packaged Project workspace smoke
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Exercise Project identity rules
+        run: npm --workspace apps/zenx run test:project-identity
+      - name: Exercise Project workspace with the same packaged app
+        shell: pwsh
+        run: ./apps/zenx/scripts/windows-project-workspace-smoke.ps1 -PackagedExecutable "apps/zenx/.packaged/artifact/ZenX-win32-x64/ZenX.exe"
+      - name: Retain the same-run native input and provenance for review
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          node-version: 22
-          cache: npm
-      - name: Cache verified provider archives
-        uses: actions/cache@v4
+          name: zenx-winapp-product-input-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-winapp-downstream
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Collect the actual portable app trust inputs
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $resources = Join-Path $PWD "apps/zenx/.packaged/artifact/ZenX-win32-x64/resources"
+          $manifest = Join-Path $resources "providers/manifest.json"
+          if (!(Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            Write-Host "No actual portable app manifest was produced."
+            exit 0
+          }
+          $digest = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
+          $main = Join-Path $resources "app/out/main"
+          $anchors = @(Get-ChildItem -LiteralPath $main -Recurse -File -Filter "*.js" | Where-Object {
+            [System.IO.File]::ReadAllText($_.FullName).Contains($digest, [System.StringComparison]::Ordinal)
+          })
+          if ($anchors.Count -eq 0) {
+            throw "The actual portable app has no compiled anchor matching its manifest bytes."
+          }
+          $proof = Join-Path $env:RUNNER_TEMP "zenx-winapp-product-proof"
+          $providers = Join-Path $proof "resources/providers"
+          New-Item -ItemType Directory -Force -Path $providers | Out-Null
+          Copy-Item -LiteralPath $manifest -Destination (Join-Path $providers "manifest.json")
+          Copy-Item -LiteralPath (Join-Path $resources "providers/zenx-winapp-uia") -Destination $providers -Recurse
+          $anchorReceipts = @()
+          foreach ($anchor in $anchors) {
+            $relative = [System.IO.Path]::GetRelativePath($resources, $anchor.FullName)
+            $destination = Join-Path (Join-Path $proof "resources") $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $anchor.FullName -Destination $destination
+            $anchorReceipts += @{ path = $relative; sha256 = (Get-FileHash -LiteralPath $anchor.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+          }
+          @{ schemaVersion = 1; manifestSha256 = $digest; compiledAnchors = $anchorReceipts } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $proof "trust-evidence.json") -Encoding utf8
+      - name: Retain the actual portable app trust inputs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          path: apps/zenx/.packaged/cache/artifacts/sha256/[0-9a-f]*
-          key: zenx-provider-archives-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/zenx/resources/providers/provider-lock.json') }}
-      - run: npm ci
-      - run: npm --workspace apps/zenx run test:project-identity
-      - run: npm --workspace apps/zenx run smoke:windows-projects
+          name: zenx-winapp-product-proof-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-winapp-product-proof
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Inspect the generated RuntimeId ABI without element contents
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $source = Join-Path $PWD ".native-sources/winappcli/src/winapp-CLI/WinApp.Cli"
+          $files = @(Get-ChildItem -LiteralPath (Join-Path $source "obj") -Recurse -File -Filter "*.NativeMethods.g.cs" |
+            Where-Object { $_.FullName -match '[\\/]Generated[\\/]CsWin32[\\/]' })
+          function Find-Definition($lines, $pattern) {
+            for ($start = 0; $start -lt $lines.Length; $start++) {
+              if ($lines[$start] -notmatch $pattern) { continue }
+              $depth = 0; $opened = $false
+              for ($end = $start; $end -lt $lines.Length; $end++) {
+                if ($lines[$end].Contains("{")) { $opened = $true }
+                $depth += ([regex]::Matches($lines[$end], '\{')).Count
+                $depth -= ([regex]::Matches($lines[$end], '\}')).Count
+                if ($opened -and $depth -eq 0) { return @{ start = $start; end = $end } }
+              }
+              throw "Generated ABI definition was incomplete."
+            }
+            return $null
+          }
+          $snippets = [System.Collections.Generic.List[string]]::new()
+          $foundArray = $false; $foundMethod = $false
+          foreach ($file in $files) {
+            $lines = [System.IO.File]::ReadAllLines($file.FullName)
+            $relative = [System.IO.Path]::GetRelativePath($source, $file.FullName)
+            $array = Find-Definition $lines '^\s*(?:public|internal).*\bstruct\s+SAFEARRAY\b'
+            if ($null -ne $array) {
+              if ($array.end - $array.start -gt 256) { throw "Generated SAFEARRAY exceeds diagnostic bound." }
+              $snippets.Add("FILE ${relative}:$($array.start + 1) SAFEARRAY")
+              $first = [Math]::Max(0, $array.start - 8); $last = $array.end
+              $snippets.Add(($lines[$first..$last] -join "`n"))
+              $foundArray = $true
+            }
+            $element = Find-Definition $lines '^\s*(?:public|internal).*\binterface\s+IUIAutomationElement\b'
+            if ($null -ne $element) {
+              for ($line = $element.start; $line -le $element.end; $line++) {
+                if ($lines[$line] -notmatch '\bGetRuntimeId\s*\(') { continue }
+                $snippets.Add("FILE ${relative}:$($line + 1) IUIAutomationElement.GetRuntimeId")
+                $first = [Math]::Max($element.start, $line - 12); $last = [Math]::Min($element.end, $line + 12)
+                $snippets.Add(($lines[$first..$last] -join "`n"))
+                $foundMethod = $true
+              }
+            }
+          }
+          if (!$foundArray -or !$foundMethod) { throw "Expected generated RuntimeId ABI symbols were unavailable." }
+          $text = $snippets -join "`n`n"
+          if ([System.Text.Encoding]::UTF8.GetByteCount($text) -gt 65536) { throw "Generated ABI exceeds diagnostic byte bound." }
+          $evidence = Join-Path $env:RUNNER_TEMP "zenx-winapp-interop"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          [System.IO.File]::WriteAllText((Join-Path $evidence "runtime-id-abi.txt"), $text, [System.Text.UTF8Encoding]::new($false))
+          Write-Host "::group::Generated RuntimeId ABI (no element data)"
+          Write-Host $text
+          Write-Host "::endgroup::"
+      - name: Retain the bounded generated RuntimeId ABI
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenx-winapp-runtime-id-abi-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-winapp-interop/runtime-id-abi.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Retain detached native debug symbols as same-run build evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenx-winapp-debug-symbols-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/zenx-winapp-symbols/winapp.pdb
+            ${{ runner.temp }}/zenx-winapp-symbols/symbols-provenance.json
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-windows-user-browser-smoke:
     name: ZenX Windows attached user-browser smoke
