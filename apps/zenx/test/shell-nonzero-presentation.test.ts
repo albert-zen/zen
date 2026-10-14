@@ -46,6 +46,8 @@ async function settle(env: ToolEnvironment, result: ToolExecutionResult) {
     last.structuredContent &&
     typeof last.structuredContent === "object" &&
     !Array.isArray(last.structuredContent) &&
+    "status" in last.structuredContent &&
+    "task_id" in last.structuredContent &&
     ["running", "queued"].includes(String(last.structuredContent.status))
   ) {
     last = await env.waitRuntime.execute({
