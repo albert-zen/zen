@@ -2180,6 +2180,33 @@ function installCapabilityIpc(
     ipcChannels.computerLiveEvent,
   );
   ipcMain.handle(
+    ipcChannels.browserOpenExternal,
+    async (event, threadId: unknown, targetId: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const rendererUrl =
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+      if (
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+            mainFrame: event.senderFrame === event.sender.mainFrame,
+            url: event.senderFrame?.url ?? "",
+          },
+          rendererUrl,
+        ) ||
+        typeof threadId !== "string" ||
+        typeof targetId !== "string"
+      )
+        throw new Error(
+          "Browser external opening requires the trusted ZenX window",
+        );
+      await browserLive.openExternal(event.sender, threadId, targetId, (url) =>
+        shell.openExternal(url),
+      );
+    },
+  );
+  ipcMain.handle(
     ipcChannels.browserLiveSubscribe,
     (event, subscriptionId, request) => {
       browserLive.subscribe(event.sender, subscriptionId, request);

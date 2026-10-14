@@ -147,6 +147,7 @@
 - **First-party Plugin Tarball** — Browser、Computer、ZenX self-control、Triggers 与 Rooms 的标准 npm tarball，随 App Resources 分发并通过同一个 profile installer 首装或重装。
 - **Plugin Marketplace Inventory** — ZenX 唯一的插件浏览与管理读模型，把 Host-owned 内置库存、只读外部 package metadata 和 Catalog 中已安装 package 合并去重，所有动作仍委托同一个 profile lifecycle authority。
 - **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
+- **Room Header Presentation Slot** — App 提供仅匹配当前 Room 路由的 renderer-local 标题栏位置；Rooms 可经 React portal 展示既有操作，但不取得新的导航、执行或持久状态 authority。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
 - **Tool Result Renderer** — 按 namespaced content type 渲染既有 `ToolResultItem` 可选 structured content 的插件 UI contribution；renderer 缺失时必须回退 text/JSON，且不得改写历史 Item。
@@ -413,6 +414,7 @@
   fence 校验的 viewport compositor JPEG。无 document/世代绑定的 screencast 事件仅 ack 并触发新采集，绝不发布其像素；
   采集保持单次串行，事件触发间隔至少 100ms，静默时每 500ms 采集；收到真实帧后才标记 Live。
   此投影不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
+- **ZenXBrowserExternalOpening** — 人工 Browser 快捷入口由可信窗口当前观察订阅绑定精确 Thread、target 与 backend generation；Host 临时读取该页面的实际 HTTP(S) URL 后交给系统浏览器，异步前后复核选择与资源身份。完整 query/hash 只在 Host 的读取/打开调用中流转，不加入工具摘要、renderer 回执或持久日志，现有工具 URL 脱敏保持不变。Electron/Workspace 的人工观察 loading 从精确 WebContents 的实时加载事件更新，订阅退役移除事件监听；历史工具 summary 不充当持续的加载状态权威。
 - **ZenXBrowserThreadObservation** — Browser 插件沿可信工具上下文接收 threadId，在 Host 内将每线程的逻辑 session 隔离为独立 provider session，并把目标集合、最近观察截图和定向实时订阅投影到线程右栏；这些瞬时资源随 provider 退役失效，不从模型参数或当前选中线程推断归属，不增加会话历史权威。
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
   单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle

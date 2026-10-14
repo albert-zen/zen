@@ -338,7 +338,7 @@ test("Browser name and Computer action tooltip translate without resetting pinne
   }
 });
 
-test("Room message-role names use the existing translated roles while preserving messages, draft and command payloads", async () => {
+test("Room sender names localize only owned labels while preserving messages, draft and command payloads", async () => {
   const { dom, root, close } = fixture();
   Object.assign(window, { zenx: { threads: { list: async () => [] } } });
   const messages = (["human", "agent", "system"] as const).map((kind) => ({
@@ -351,6 +351,25 @@ test("Room message-role names use the existing translated roles while preserving
     originThreadId: null,
     originTurnId: null,
   }));
+  const rawAuthorMessages = [...messages];
+  for (const [kind, author] of [
+    ["human", "You"],
+    ["system", "System"],
+    ["agent", "Agent"],
+    ["agent", "You"],
+    ["agent", "System"],
+  ] as const) {
+    messages.push({
+      id: `builtin-${kind}-${author}/id`,
+      roomId: "raw-room/id",
+      author,
+      text: `Unchanged ${kind} ${author} body <&>`,
+      kind,
+      createdAt: 0,
+      originThreadId: null,
+      originTurnId: null,
+    });
+  }
   const originalMessages = structuredClone(messages);
   const calls: Array<{ id: string; input: unknown }> = [];
   const sdk = {
@@ -381,12 +400,36 @@ test("Room message-role names use the existing translated roles while preserving
       await i18n.changeLanguage("en");
       root.render(React.createElement(RoomsPage, { sdk }));
     });
-    const roles = [...document.querySelectorAll(".room-role")];
-    assert.deepEqual(
-      roles.map((role) => role.getAttribute("aria-label")),
-      ["Message role: You", "Message role: Agent", "Message role: System"],
-    );
     const articles = [...document.querySelectorAll(".room-message")];
+    const names = articles.map((article) => {
+      const senderNames = article.querySelectorAll("header strong");
+      assert.equal(senderNames.length, 1, "one sender name per message");
+      return senderNames[0]!;
+    });
+    const profiles = [...document.querySelectorAll(".room-sender-name")];
+    function assertSenderLabels(language: string) {
+      assert.equal(document.querySelectorAll(".room-role").length, 0);
+      const owned =
+        language === "en"
+          ? ["You", "System", "Unknown member"]
+          : ["你", "系统", "未知成员"];
+      assert.deepEqual(
+        names.map((name) => name.textContent),
+        [
+          ...rawAuthorMessages.map((message) => message.author),
+          ...owned,
+          "You",
+          "System",
+        ],
+      );
+      assert.deepEqual(
+        profiles.map((profile) => profile.getAttribute("title")),
+        [rawAuthorMessages[1]!.author, owned[2], "You", "System"].map((name) =>
+          language === "en" ? `About ${name}` : `关于 ${name}`,
+        ),
+      );
+    }
+    assertSenderLabels("en");
     const input =
       document.querySelector<HTMLTextAreaElement>("#room-chat-input")!;
     await act(async () => {
@@ -400,23 +443,21 @@ test("Room message-role names use the existing translated roles while preserving
     const callsBefore = structuredClone(calls);
     for (const language of ["zh-CN", "en", "zh-CN"]) {
       await act(async () => i18n.changeLanguage(language));
-      assert.deepEqual(
-        roles.map((role) => role.getAttribute("aria-label")),
-        language === "en"
-          ? ["Message role: You", "Message role: Agent", "Message role: System"]
-          : ["消息角色：你", "消息角色：Agent", "消息角色：系统"],
-      );
-      assert.deepEqual(
-        roles.map((role) => role.textContent),
-        language === "en"
-          ? ["You", "Agent", "System"]
-          : ["你", "Agent", "系统"],
-      );
-      const currentRoles = [...document.querySelectorAll(".room-role")];
+      assertSenderLabels(language);
       const currentArticles = [...document.querySelectorAll(".room-message")];
-      assert.equal(currentRoles.length, roles.length);
+      const currentNames = [
+        ...document.querySelectorAll(".room-message header strong"),
+      ];
+      const currentProfiles = [
+        ...document.querySelectorAll(".room-sender-name"),
+      ];
+      assert.equal(currentNames.length, names.length);
       assert.equal(currentArticles.length, articles.length);
-      roles.forEach((role, index) => assert.equal(currentRoles[index], role));
+      assert.equal(currentProfiles.length, profiles.length);
+      names.forEach((name, index) => assert.equal(currentNames[index], name));
+      profiles.forEach((profile, index) =>
+        assert.equal(currentProfiles[index], profile),
+      );
       articles.forEach((article, index) =>
         assert.equal(currentArticles[index], article),
       );
@@ -424,8 +465,10 @@ test("Room message-role names use the existing translated roles while preserving
       assert.equal(input.value, "Raw unsent draft <&> 中文");
       assert.deepEqual(calls, callsBefore);
       assert.deepEqual(messages, originalMessages);
-      for (const message of messages) {
+      for (const message of rawAuthorMessages) {
         assert.ok(document.body.textContent?.includes(message.author));
+      }
+      for (const message of messages) {
         assert.ok(document.body.textContent?.includes(message.text));
       }
     }
