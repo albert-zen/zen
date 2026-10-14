@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from imagent.applications.appserver_client import AppServerClient
+from imagent.applications.adapters.appserver.client import AppServerClient
 
 
 class ImZenAppServerClient(AppServerClient):
     async def read_thread(self, thread_id: str, *, include_turns: bool = False):
         # ZAS resume attaches this socket to live events and returns the snapshot
         # behind its resume barrier. It does not activate any desktop window.
-        # The pinned SDK has no native subscribe hook, so its authoritative reads
-        # establish transport observation; SDK routes still gate IM recipients.
-        result = await super().resume_thread(threadId=thread_id)
+        # These product-authoritative reads also establish output observation.
+        # The SDK owns all public resume admission, cancellation and close tasks;
+        # its projection routes remain the authority for IM recipients.
+        result = await self.resume_thread(threadId=thread_id)
         if not include_turns:
             result = {**result, "thread": {**result["thread"], "turns": []}}
         return result

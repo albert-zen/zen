@@ -1,0 +1,55 @@
+--- a/src/winapp-CLI/WinApp.Cli/NativeMethods.txt
++++ b/src/winapp-CLI/WinApp.Cli/NativeMethods.txt
+@@ -47,6 +47,7 @@
+ DBG_EXCEPTION_NOT_HANDLED
+ GetShortPathName
+ IUIAutomation
++IUIAutomation2
+ CUIAutomation8
+ IUIAutomationElement
+ IUIAutomationCondition
+--- a/src/winapp-CLI/WinApp.Cli/Program.cs
++++ b/src/winapp-CLI/WinApp.Cli/Program.cs
+@@ -88,6 +88,18 @@
+
+         using var serviceProvider = services.BuildServiceProvider();
+
++        // Private downstream build contract. This probes the same registered UIA service
++        // used by semantic commands, without targeting an application or issuing an action.
++        if (args.Length == 1 && args[0] == "--zenx-uia-contract")
++        {
++            var uia = (UiAutomationService)serviceProvider.GetRequiredService<IUiAutomationService>();
++            var autoSetFocus = uia.ZenXAutoSetFocus;
++            Console.Out.WriteLine("{\"schemaVersion\":1,\"providerBuild\":\"zenx-winapp-0.3.1-af0.1\","
++                + "\"upstreamCommit\":\"c8ada4a403c43b96780b87abc454cba51f649c60\","
++                + "\"autoSetFocus\":" + (autoSetFocus ? "true" : "false") + "}");
++            return autoSetFocus ? 1 : 0;
++        }
++
+         var rootCommand = serviceProvider.GetRequiredService<WinAppRootCommand>();
+
+         // Skip first-run notice for machine-readable output modes and completions
+--- a/src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs
++++ b/src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs
+@@ -23,8 +23,19 @@
+     {
+         _logger = logger;
+         _selectorService = selectorService;
+-        _automation = CUIAutomation8.CreateInstance<IUIAutomation>();
+-    }
++        // ZenX downstream variant: configure the actual action client before any UIA work.
++        // CsWin32 generates this interface from the Windows SDK; no handwritten ABI.
++        var automation = CUIAutomation8.CreateInstance<IUIAutomation2>();
++        automation.put_AutoSetFocus(false);
++        if (automation.get_AutoSetFocus())
++        {
++            throw new InvalidOperationException("ZenX UIA client did not disable AutoSetFocus.");
++        }
++        _automation = automation;
++    }
++
++    // Report the live setting of this service instance, not an assumed compile-time value.
++    internal bool ZenXAutoSetFocus => ((IUIAutomation2)_automation).get_AutoSetFocus();
+
+     public List<(nint Hwnd, int Pid, string Title)> FindWindowsByTitle(string titleQuery)
+     {

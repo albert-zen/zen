@@ -72,3 +72,52 @@ name implementation.
 Playwright's ARIA targets can include offscreen controls that its native actions
 scroll into view. Electron and attached CDP targets are limited to the viewport.
 Independent page scrolling is available in all three providers.
+
+## Shared-page human control (1.0.5)
+
+Shared Workspace tabs expose control and mutationsRequireObservation. Human control blocks Agent mutations; only the user can return control. After takeover, every mutation, including browser_navigate/browser_close, must carry the latest observationId from a new browser_inspect after return. In-flight/unknown actions are not cancelled; never replay them automatically.
+
+The control button does not approve a website action or stop already-sent work.
+After return, inspect the same tab and verify the user’s actual changes before
+continuing. Once takeover has occurred, navigate and close consume the latest
+observation just like target actions; include observationId even if an old
+queued inspection has since finished. Other backends keep their existing
+contracts and do not gain shared-page handoff.
+
+## Targeted input (Electron/user-session 1.0.6; multi-instance 1.0.8)
+
+`browser_pointer_click` takes the explicit session, tab, latest observation ID,
+and CSS-viewport x/y. Use only the `inputViewport` returned beside that real
+screenshot. Convert screenshot pixels using the viewport/image width and height
+ratios; do not assume DPR is one. `browser_key_press` takes one named key and
+requires `focusedInputAvailable`; first click the desired page-local element and
+inspect again. `observe: true` follows the same action-completed/error rules as
+the existing Browser tools. Registry tools retain their Workspace/connected
+prefixes and explicit connection IDs.
+
+Ordinary click/key input is directed to its exact observed tab and is available
+while another tab or app is active. Native picker/dialog interactions require
+human control; there is no automatic global-input or foreground fallback. The
+same boundary is exposed through `inputPolicy`.
+
+No new operation requests browser activation or sends global OS input. Site-triggered
+popups/dialogs remain possible and are not a no-interruption guarantee. Frames,
+file/native pickers, drag and arbitrary shortcuts are not supported. Unsupported
+zoom/fallback capture omits input metadata while preserving DOM inspection.
+Playwright CLI does not advertise these two operations. When the result reports
+unknown held input, do not repeat it: the user must close the actual browser
+tab before further automation; detaching ZenX alone does not release held input.
+
+Extension-created tabs get a connection/window-local ZenX group without tab
+activation. `grouping` reports grouped, failed, unavailable or unknown independently of
+the successful creation; never create a duplicate tab to retry grouping. User
+names/moved tabs are preserved. Direct CDP reports grouping unavailable.
+
+Extension 3.1.0 adds the `tabGroups` permission. The user must update/reload the
+extension and approve any browser permission prompt; this code change does not
+install, register, or approve the extension automatically. Group metadata waits
+at most 500 ms after creation. A timeout returns the already-created target and
+`grouping.status: "unknown"`: an already-sent native group command may still
+finish, but ZenX will not follow it with renaming, regrouping, rollback, or a
+duplicate create. Never interpret missing group acknowledgement as no tab or no
+group having been created.

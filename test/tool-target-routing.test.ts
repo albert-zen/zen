@@ -803,3 +803,61 @@ test("target gateway local binding never consults a caller target router", async
     await environment.close();
   }
 });
+
+for (const resolvesScope of [true, false]) {
+  test(`scope-resolving runtimes are excluded from remote execution (${resolvesScope})`, async () => {
+    let resolutions = 0;
+    let remoteExecutions = 0;
+    const scoped: ToolRuntime = {
+      ...ordinary(),
+      name: "scoped_browser",
+      specification: { ...ordinary().specification, name: "scoped_browser" },
+      approvalScope() {
+        resolutions += 1;
+        return resolvesScope
+          ? { key: "a", label: "Browser a", generation: "one" }
+          : undefined;
+      },
+    };
+    const tools = new ToolEnvironment({
+      runtimes: [ordinary(), scoped],
+      targetRouter: router(async (call) => {
+        remoteExecutions += 1;
+        return { output: `remote ${call.name}`, exitCode: 0 };
+      }),
+    });
+    try {
+      const definitions = tools.remoteDefinitions;
+      const scopedDefinition = definitions.find(
+        (entry) => entry.definition.name === "scoped_browser",
+      );
+      assert.equal(scopedDefinition?.eligible, false);
+      assert.equal(
+        scopedDefinition?.reason,
+        "Instance-scoped admission is unavailable for remote execution",
+      );
+      assert.throws(
+        () => tools.prepare(invocation("scoped_browser", { device: "peer" })),
+        /not eligible.*Instance-scoped admission is unavailable for remote execution/u,
+      );
+      assert.equal(resolutions, 0);
+      assert.equal(remoteExecutions, 0);
+      assert.equal(
+        definitions.find((entry) => entry.definition.name === "ordinary")
+          ?.eligible,
+        true,
+      );
+      assert.equal(
+        (
+          await tools.execute(
+            tools.prepare(invocation("ordinary", { device: "peer" })),
+          )
+        ).output,
+        "remote ordinary",
+      );
+      assert.equal(remoteExecutions, 1);
+    } finally {
+      await tools.close();
+    }
+  });
+}

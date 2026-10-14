@@ -61,3 +61,34 @@ test("Browser Host accepts web message URLs and rejects unsafe navigation", () =
     /credentials/u,
   );
 });
+
+test("message classification preserves explicit and Host current-page URL targets", () => {
+  // The external-opening callers use the same classifier for exact Host URLs.
+  for (const href of [
+    "https://example.test/report%EF%BC%88v2%EF%BC%89.html",
+    "https://example.test/search?q=one%EF%BC%8Ctwo",
+    "https://example.test/app#chapter_1!",
+    "https://example.test/a_",
+    "https://example.test/a**",
+    "https://example.test/报告（v2）.html",
+  ]) {
+    const expected = new URL(href).toString();
+    const target = classifyMessageLink(href);
+    assert.deepEqual(target, { kind: "browser", value: expected }, href);
+    if (target.kind === "browser")
+      assert.equal(workspaceBrowserUrl(target.value), expected);
+  }
+  assert.deepEqual(classifyMessageLink("#第1节（修订）"), {
+    kind: "anchor",
+    href: "#第1节（修订）",
+  });
+  const mailto = "mailto:owner@example.test?subject=report%EF%BC%88v2%EF%BC%89";
+  assert.deepEqual(classifyMessageLink(mailto), {
+    kind: "external",
+    href: mailto,
+  });
+  assert.deepEqual(classifyMessageLink("报告（v2）.md"), {
+    kind: "file",
+    value: "报告（v2）.md",
+  });
+});

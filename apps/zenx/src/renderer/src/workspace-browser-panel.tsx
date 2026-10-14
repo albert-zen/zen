@@ -1,25 +1,37 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { Icon } from "./icons.js";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import type {
   WorkspaceBrowserCommand,
   WorkspaceBrowserTab,
 } from "../../main/workspace-browser.js";
 
-export function WorkspaceBrowserPanel({
-  threadId,
-  tab: active,
-  open,
-}: {
+type BrowserPanelProps = {
   threadId: string;
   tab: WorkspaceBrowserTab;
   open: boolean;
-}) {
+};
+
+export function WorkspaceBrowserPanel(props: BrowserPanelProps) {
+  return (
+    <BrowserPanel
+      key={JSON.stringify([props.threadId, props.tab.id, props.open])}
+      {...props}
+    />
+  );
+}
+
+function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
   useTranslation("panels");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [controlBusy, setControlBusy] = useState(false);
+  const [controlError, setControlError] = useState("");
+  const [mountError, setMountError] = useState("");
+  const pending = useRef({ navigation: false, control: false });
+  const controlDescription = useId();
   const area = useRef<HTMLDivElement>(null);
   const addressInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
@@ -70,7 +82,10 @@ export function WorkspaceBrowserPanel({
             : {}),
         })
         .catch((reason) => {
-          if (!stopped) setError(String(reason.message ?? reason));
+          if (!stopped)
+            setMountError(
+              reason instanceof Error ? reason.message : String(reason),
+            );
         });
     };
     const observer = new ResizeObserver(mount);
@@ -95,8 +110,15 @@ export function WorkspaceBrowserPanel({
     tabId = active?.id,
     url?: string,
   ) => {
-    setBusy(true);
-    setError("");
+    const control =
+      operation === "take-control" || operation === "return-control";
+    const lane = control ? "control" : "navigation";
+    if (!open || pending.current[lane]) return;
+    pending.current[lane] = true;
+    const setPending = control ? setControlBusy : setBusy;
+    const setCommandError = control ? setControlError : setError;
+    setPending(true);
+    setCommandError("");
     const request = generation.current;
     try {
       await window.zenx.workspaceBrowser.command(
@@ -108,9 +130,14 @@ export function WorkspaceBrowserPanel({
       if (request !== generation.current) return;
     } catch (reason) {
       if (request === generation.current)
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setCommandError(
+          reason instanceof Error ? reason.message : String(reason),
+        );
     } finally {
-      if (request === generation.current) setBusy(false);
+      if (request === generation.current) {
+        pending.current[lane] = false;
+        setPending(false);
+      }
     }
   };
   return (
@@ -129,6 +156,70 @@ export function WorkspaceBrowserPanel({
         }
       }}
     >
+      <div className="workspace-browser-control">
+        <div
+          id={controlDescription}
+          role="status"
+          aria-live="polite"
+          tabIndex={0}
+          aria-label={i18n.t("panels:browserControlStatus")}
+        >
+          <strong>
+            {i18n.t(
+              active.control === "human"
+                ? "panels:browserHumanControl"
+                : "panels:browserAgentControl",
+            )}
+          </strong>
+          <p>
+            {i18n.t(
+              active.control === "human"
+                ? "panels:browserHumanControlDetail"
+                : "panels:browserAgentControlDetail",
+            )}
+          </p>
+          {active.agentActionsInFlight > 0 ? (
+            <p>
+              {i18n.t("panels:browserActionsInFlight", {
+                count: active.agentActionsInFlight,
+              })}
+            </p>
+          ) : null}
+          {active.agentActionOutcomeUnknown ? (
+            <p>{i18n.t("panels:browserActionOutcomeUnknown")}</p>
+          ) : null}
+          {active.control === "agent" && active.requiresFreshObservation ? (
+            <p>{i18n.t("panels:browserFreshObservationRequired")}</p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          aria-describedby={controlDescription}
+          aria-busy={controlBusy}
+          disabled={!open || controlBusy}
+          onClick={() =>
+            void command(
+              active.control === "human" ? "return-control" : "take-control",
+            )
+          }
+        >
+          {i18n.t(
+            active.control === "human"
+              ? "panels:browserReturnControl"
+              : "panels:browserTakeControl",
+          )}
+        </button>
+      </div>
+      {controlError ? (
+        <p role="alert" className="browser-ui-error">
+          {controlError}
+        </p>
+      ) : null}
+      {mountError ? (
+        <p role="alert" className="browser-ui-error">
+          {mountError}
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="browser-ui-error">
           {error}

@@ -114,6 +114,15 @@ test(
         discovered.filter((id) => id !== created.thread.id).length,
         1,
       );
+      const imCreatedId = discovered.find((id) => id !== created.thread.id)!;
+      const nativeCreated = await manager.request("zen/thread/read", {
+        threadId: imCreatedId,
+      });
+      const creation = nativeCreated.thread.items.find(
+        (item) => item.type === "thread_metadata",
+      );
+      assert.equal(creation?.approvalPolicy, "always");
+      assert.equal(creation?.sandbox, "danger-full-access");
       const namingDeadline = Date.now() + 2000;
       while (
         !observedTitles.includes("im-new-thread") &&

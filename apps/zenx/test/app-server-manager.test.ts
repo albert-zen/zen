@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { JsonlThreadJournal } from "../../../src/journal.js";
 
 import {
   AppServerManager,
@@ -193,7 +194,20 @@ setInterval(() => {}, 1_000);
     void startup.catch(() => undefined);
     await waitFor(() => manager.processId !== undefined);
     const processId = manager.processId!;
-    await assert.rejects(startup, /Timed out starting Zen App Server/u);
+    await assert.rejects(startup, (error: unknown) => {
+      assert(error instanceof AggregateError);
+      assert(
+        error.errors.some((cause) =>
+          /Timed out starting Zen App Server/u.test(String(cause)),
+        ),
+      );
+      assert(
+        error.errors.some((cause) =>
+          /Host cleanup is unconfirmed/u.test(String(cause)),
+        ),
+      );
+      return true;
+    });
     assert.equal(manager.processId, undefined);
     assertShutdown(processId);
     assert.throws(
@@ -212,11 +226,30 @@ setInterval(() => {}, 1_000);
     );
     const cancelledProcessId = manager.processId!;
     const stopping = manager.stop();
-    await assert.rejects(
-      cancelledStartup,
-      /exited during startup|startup was cancelled/u,
-    );
-    await stopping;
+    void stopping.catch(() => undefined);
+    await assert.rejects(cancelledStartup, (error: unknown) => {
+      assert(error instanceof AggregateError);
+      assert(
+        error.errors.some((cause) =>
+          /exited during startup|startup was cancelled/u.test(String(cause)),
+        ),
+      );
+      assert(
+        error.errors.some((cause) =>
+          /Host cleanup is unconfirmed/u.test(String(cause)),
+        ),
+      );
+      return true;
+    });
+    await assert.rejects(stopping, (error: unknown) => {
+      assert(error instanceof AggregateError);
+      assert(
+        error.errors.some((cause) =>
+          /Host cleanup is unconfirmed/u.test(String(cause)),
+        ),
+      );
+      return true;
+    });
     assertShutdown(cancelledProcessId);
     assert.throws(
       () => process.kill(cancelledProcessId, 0),
@@ -242,6 +275,11 @@ test("hosts a real App Server and removes its private token on shutdown", async 
       backwardsCursor: null,
     });
     const started = await manager.request("thread/start", {});
+    const journal = new JsonlThreadJournal(
+      path.join(directory, "data", "threads"),
+    );
+    const lastItem = (await journal.read(started.thread.id)).at(-1);
+    assert.ok(lastItem, "the Host persisted the new Thread's canonical tail");
     const summaries = await manager.listThreadSummaries();
     assert.equal(summaries.length, 1);
     const summary = summaries[0]!;
@@ -253,6 +291,7 @@ test("hosts a real App Server and removes its private token on shutdown", async 
     assert.equal(summary.updatedAt, summary.createdAt);
     assert.deepEqual(summary, {
       threadId: started.thread.id,
+      lastItemId: lastItem.id,
       currentMetadata: {
         providerProfileId: "fake",
         modelId: "fake",

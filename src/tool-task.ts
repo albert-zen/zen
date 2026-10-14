@@ -1,3 +1,8 @@
+import type {
+  ShellSessionSummary,
+  ShellSessionRead,
+  ShellTerminalControl,
+} from "./shell-session.js";
 import { randomUUID } from "node:crypto";
 import { validateUserInput, type UserInput } from "./item.js";
 import {
@@ -10,6 +15,7 @@ import {
   toolOutputSuffix,
   ToolOutputWindow,
   type ToolInvocation,
+  type ShellLifecycleFacts,
   type ToolRuntime,
   type ToolExecutionResult,
 } from "./tool.js";
@@ -28,6 +34,8 @@ export interface ToolTaskPolicy {
   resourceQueue?: "fifo";
   /** Only adapters which confirm the underlying operation has stopped may opt in. */
   cancellation?: "confirmed-on-settle" | "unconfirmed";
+  /** Trusted native cleanup join policy; expiry is failure, never proof of cleanup. */
+  shutdownWaitMs?: number;
 }
 export interface ToolResourceClaim {
   /** Host-owned identity compared with JavaScript Map key equality. */
@@ -58,6 +66,90 @@ type Status =
 /** Host-local executions, output windows, cancellation evidence and retained resources. */
 export class ToolTaskManager {
   readonly #tasks = new Map<string, Task>();
+  // Completed observations only; these records cannot execute, wait or cancel.
+  readonly #shellHistory = new Map<
+    string,
+    { view: ShellSessionRead; expires: number }
+  >();
+
+  #pruneShellHistory() {
+    for (const [id, entry] of this.#shellHistory)
+      if (entry.expires <= Date.now()) this.#shellHistory.delete(id);
+  }
+  #archiveShell(task: Task) {
+    if (!task.isShell) return;
+    this.#pruneShellHistory();
+    const view = task.shellRead(undefined, 65536);
+    view.session.retained = true;
+    view.session.inputAvailable = false;
+    this.#shellHistory.set(task.id, {
+      view,
+      expires: Date.now() + this.#options.retentionMs,
+    });
+    while (this.#shellHistory.size > this.#options.maxTasks)
+      this.#shellHistory.delete(this.#shellHistory.keys().next().value!);
+  }
+  listShellSessions(threadId: string): ShellSessionSummary[] {
+    this.#pruneShellHistory();
+    return [
+      ...[...this.#tasks.values()]
+        .filter((task) => task.isShell && task.threadId === threadId)
+        .map((task) => task.shellSummary()),
+      ...[...this.#shellHistory.values()]
+        .filter(({ view }) => view.session.threadId === threadId)
+        .map(({ view }) => structuredClone(view.session)),
+    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  readShellSession(
+    threadId: string,
+    taskId: string,
+    cursor?: unknown,
+  ): ShellSessionRead {
+    validateShellCursor(cursor);
+    this.#pruneShellHistory();
+    const task = this.#tasks.get(taskId);
+    if (task?.isShell && task.threadId === threadId)
+      return task.shellRead(cursor);
+    const retained = this.#shellHistory.get(taskId)?.view;
+    if (!retained || retained.session.threadId !== threadId)
+      throw new Error("Shell session not found for this thread");
+    return sliceShellView(retained, cursor);
+  }
+  #shellTask(threadId: string, taskId: string): Task {
+    const task = this.#tasks.get(taskId);
+    if (!task?.isShell || task.threadId !== threadId)
+      throw new Error("Shell session not found for this thread");
+    return task;
+  }
+  writeShellSession(threadId: string, taskId: string, data: unknown): void {
+    if (
+      typeof data !== "string" ||
+      data.length === 0 ||
+      Buffer.byteLength(data) > 65536
+    )
+      throw new Error("Shell input must be 1–65536 bytes");
+    this.#shellTask(threadId, taskId).shellInput().write(data);
+  }
+  resizeShellSession(
+    threadId: string,
+    taskId: string,
+    cols: unknown,
+    rows: unknown,
+  ): void {
+    this.#shellTask(threadId, taskId)
+      .shellInput()
+      .resize(integer(cols, "cols", 500), integer(rows, "rows", 200));
+  }
+  async stopShellSession(
+    threadId: string,
+    taskId: string,
+  ): Promise<ShellSessionSummary> {
+    const task = this.#shellTask(threadId, taskId);
+    task.cancel(false);
+    await task.observe(this.#options.shutdownWaitMs, true);
+    return task.shellSummary();
+  }
+
   readonly #resources = new Map<
     unknown,
     Map<Task, ToolResourceClaim["access"]>
@@ -66,6 +158,7 @@ export class ToolTaskManager {
   readonly #options: Required<Omit<ToolTaskOptions, "toolOutputSpool">> &
     Pick<ToolTaskOptions, "toolOutputSpool">;
   #closed = false;
+  #closing: Promise<void> | undefined;
   readonly #invocations = new WeakSet<ToolInvocation>();
   ownsInvocation(invocation: ToolInvocation) {
     return this.#invocations.has(invocation);
@@ -207,7 +300,10 @@ export class ToolTaskManager {
         options.release?.();
         this.#dispatchQueued();
       },
-      onExpire: () => this.#tasks.delete(task.id),
+      onExpire: () => {
+        this.#archiveShell(task);
+        this.#tasks.delete(task.id);
+      },
     });
     this.#tasks.set(task.id, task);
     this.#invocations.add(invocation);
@@ -280,6 +376,10 @@ export class ToolTaskManager {
     const terminate = invocation.arguments.terminate ?? false;
     if (typeof terminate !== "boolean")
       throw new Error("wait.terminate must be a boolean");
+    if (terminate && task.humanTerminal)
+      throw new Error(
+        "Human terminals are read-only to the Agent; use the Terminal panel to stop this session",
+      );
     if (terminate) task.cancel(false);
     if (task.observed) {
       if (terminate)
@@ -291,10 +391,15 @@ export class ToolTaskManager {
       );
     }
     const releaseObservation = task.acquireObservation();
-    const abort = () => task.cancel(false);
+    const abort = () => {
+      if (!task.humanTerminal) task.cancel(false);
+    };
     invocation.signal.addEventListener("abort", abort, { once: true });
     try {
-      await task.observe(yieldMs, terminate);
+      if (task.humanTerminal) {
+        await task.observe(yieldMs, terminate, invocation.signal);
+        invocation.signal.throwIfAborted();
+      } else await task.observe(yieldMs, terminate);
       const result = await task.drain(false);
       if (!task.yielded || finalResult(result)) await this.#consume(task);
       return result;
@@ -304,21 +409,39 @@ export class ToolTaskManager {
     }
   }
   async #consume(task: Task) {
+    this.#archiveShell(task);
     await task.shutdown();
     this.#tasks.delete(task.id);
   }
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closing !== undefined) return this.#closing;
     this.#closed = true;
+    this.#closing = this.#closeTasks();
+    return this.#closing;
+  }
+  async #closeTasks(): Promise<void> {
     const tasks = [...this.#tasks.values()];
+    const started = Date.now();
     for (const task of tasks) task.cancel(false);
-    await Promise.all(
-      tasks.map((task) => task.observe(this.#options.shutdownWaitMs)),
+    const results = await Promise.all(
+      tasks.map((task) => task.joinShutdown(started + task.shutdownWaitMs)),
+    );
+    const failures = tasks.flatMap((task, index) =>
+      task.requiresCleanupJoin && (!results[index] || !task.terminal)
+        ? [
+            new Error(
+              "Shell cleanup is unconfirmed; native ownership or cleanup did not settle successfully before the Host deadline",
+            ),
+          ]
+        : [],
     );
     for (const task of tasks) await task.shutdown();
     this.#tasks.clear();
+    this.#shellHistory.clear();
     this.#queue.splice(0);
     this.#resources.clear();
+    if (failures.length > 0)
+      throw new AggregateError(failures, "Host tool cleanup is unconfirmed");
   }
 
   #capacityBusy(runtime: ToolRuntime): boolean {
@@ -391,6 +514,71 @@ export class ToolTaskManager {
 }
 
 class Task {
+  readonly #createdAt = new Date().toISOString();
+  #shellOutput = "";
+  #shellOffset = 0;
+  #shellControl: ShellTerminalControl | undefined;
+  get humanTerminal() {
+    return this.isShell && this.#invocation.userTerminal !== undefined;
+  }
+  get isShell() {
+    return this.#runtime.shellSession === true && this.threadId !== undefined;
+  }
+  shellSummary(): ShellSessionSummary {
+    return {
+      taskId: this.id,
+      threadId: this.threadId!,
+      origin: this.#invocation.userTerminal ? "user" : "agent",
+      kind: this.#invocation.userTerminal ? "terminal" : "command",
+      command: this.#invocation.userTerminal
+        ? "Interactive shell"
+        : String(this.#invocation.arguments.command ?? ""),
+      cwd: this.#invocation.cwd,
+      createdAt: this.#createdAt,
+      status: this.status,
+      exitCode: this.terminal
+        ? this.status === "cancelled"
+          ? 130
+          : this.status === "timed_out"
+            ? 124
+            : (this.#result?.exitCode ?? 1)
+        : null,
+      ...(this.#shellLifecycle === undefined
+        ? {}
+        : { lifecycle: { ...this.#shellLifecycle } }),
+      inputAvailable:
+        this.#invocation.userTerminal !== undefined &&
+        this.#shellControl !== undefined &&
+        this.status === "running",
+      retained: false,
+    };
+  }
+  shellRead(cursor?: unknown, limit = 32768): ShellSessionRead {
+    const full = {
+      session: this.shellSummary(),
+      output: this.#shellOutput,
+      cursor: this.#shellOffset + this.#shellOutput.length,
+      truncated: this.#shellOffset > 0,
+    };
+    return sliceShellView(full, cursor, limit);
+  }
+  shellInput(): ShellTerminalControl {
+    if (
+      !this.#invocation.userTerminal ||
+      !this.#shellControl ||
+      this.status !== "running"
+    )
+      throw new Error("Only a running human terminal accepts input");
+    return this.#shellControl;
+  }
+  #appendShellOutput(text: string) {
+    if (!this.isShell || this.#closed) return;
+    this.#shellOutput += text;
+    let trim = Math.max(0, this.#shellOutput.length - 65536);
+    if (trim && /[\uDC00-\uDFFF]/u.test(this.#shellOutput[trim]!)) trim++;
+    this.#shellOutput = this.#shellOutput.slice(trim);
+    this.#shellOffset += trim;
+  }
   readonly completion: Promise<void>;
   #complete!: () => void;
   #yieldRequested = false;
@@ -411,10 +599,12 @@ class Task {
   #window: ToolOutputWindow;
   #modelContent: UserInput[number][] = [];
   #result: ToolExecutionResult | undefined;
+  #shellLifecycle: ShellLifecycleFacts | undefined;
   #error: unknown;
   #settled = false;
   #dispatched = false;
   #cancelReason: "timeout" | "cancel" | undefined;
+  #cancellationUnconfirmed = false;
   #deadline: NodeJS.Timeout | undefined;
   #expiry: NodeJS.Timeout | undefined;
   #released = false;
@@ -479,6 +669,7 @@ class Task {
   }
   get status(): Status {
     if (this.#cancelReason !== undefined) {
+      if (this.#cancellationUnconfirmed) return "cancellation_unconfirmed";
       if (this.#settled && !this.#dispatched)
         return this.#cancelReason === "timeout" ? "timed_out" : "cancelled";
       if (
@@ -512,15 +703,42 @@ class Task {
       this.status,
     );
   }
+  get requiresCleanupJoin() {
+    return this.#runtime.taskPolicy?.shutdownWaitMs !== undefined;
+  }
+  get shutdownWaitMs() {
+    return integer(
+      this.#runtime.taskPolicy?.shutdownWaitMs ?? this.#options.shutdownWaitMs,
+      "shutdownWaitMs",
+      60000,
+    );
+  }
+  async joinShutdown(deadline: number): Promise<boolean> {
+    if (this.#settled) return true;
+    return await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(
+        () => resolve(false),
+        Math.max(0, deadline - Date.now()),
+      );
+      void this.completion.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
   arm() {
     this.#invocation.signal.addEventListener("abort", this.#abort, {
       once: true,
     });
-    this.#deadline = setTimeout(
-      () => this.cancel(true),
-      this.#options.timeoutMs,
-    );
-    this.#deadline.unref();
+    // A human's interactive terminal is owned until exit/Stop/Host disposal.
+    // Ordinary Agent executions retain their existing deadline unchanged.
+    if (!this.humanTerminal) {
+      this.#deadline = setTimeout(
+        () => this.cancel(true),
+        this.#options.timeoutMs,
+      );
+      this.#deadline.unref();
+    }
     if (this.#invocation.signal.aborted) this.cancel(false);
   }
   dispatch() {
@@ -533,6 +751,24 @@ class Task {
           ...this.#invocation,
           signal: this.#controller.signal,
           taskContext: {
+            onCancellationUnconfirmed: () => {
+              if (this.#closed) return;
+              this.#cancellationUnconfirmed = true;
+              this.#notify();
+            },
+            onShellControl: (control) => {
+              if (
+                this.isShell &&
+                this.#invocation.userTerminal &&
+                !this.#closed
+              )
+                this.#shellControl = control;
+            },
+            onShellOutput: (text) => this.#appendShellOutput(text),
+            onShellLifecycle: (facts) => {
+              if (this.#closed) return;
+              this.#shellLifecycle = { ...facts };
+            },
             onModelContent: (content) => {
               if (this.#closed) return;
               validateUserInput(content, "$modelContent");
@@ -594,8 +830,13 @@ class Task {
     }
     this.#notify();
   }
-  async observe(ms: number, cancelRequested = false): Promise<void> {
+  async observe(
+    ms: number,
+    cancelRequested = false,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (
+      signal?.aborted ||
       this.terminal ||
       this.#yieldRequested ||
       (cancelRequested && this.status === "cancellation_unconfirmed")
@@ -617,9 +858,12 @@ class Task {
       function done() {
         clearTimeout(timer);
         self.#listeners.delete(changed);
+        signal?.removeEventListener("abort", done);
         resolve();
       }
       this.#listeners.add(changed);
+      signal?.addEventListener("abort", done, { once: true });
+      if (signal?.aborted) done();
     });
   }
   async drain(quiet: boolean): Promise<ToolExecutionResult> {
@@ -631,6 +875,7 @@ class Task {
     await previous;
     try {
       const status = this.status;
+      const shellLifecycle = this.#shellLifecycle;
       this.#yieldRequested = false;
       const terminal = this.terminal;
       if (
@@ -686,7 +931,14 @@ class Task {
         );
       }
       this.yielded = true;
-      return this.#receipt(status, capture, result, modelContent, diagnostic);
+      return this.#receipt(
+        status,
+        shellLifecycle,
+        capture,
+        result,
+        modelContent,
+        diagnostic,
+      );
     } finally {
       release();
     }
@@ -694,6 +946,7 @@ class Task {
   snapshot(output: string): ToolExecutionResult {
     return this.#receipt(
       this.status,
+      this.#shellLifecycle,
       { output: "" },
       undefined,
       undefined,
@@ -702,6 +955,7 @@ class Task {
   }
   #receipt(
     status: Status,
+    shellLifecycle: ShellLifecycleFacts | undefined,
     capture: Awaited<ReturnType<ToolOutputWindow["finish"]>>,
     result?: ToolExecutionResult,
     modelContent = result?.modelContent,
@@ -718,6 +972,7 @@ class Task {
           : (result?.exitCode ?? this.#result?.exitCode ?? 1)
       : 0;
     const cancellation =
+      !this.#cancellationUnconfirmed &&
       this.#runtime.taskPolicy?.cancellation === "confirmed-on-settle"
         ? "confirmable"
         : "best_effort";
@@ -728,7 +983,16 @@ class Task {
           (this.#runtime.executionMode === "parallel_safe"
             ? "independent"
             : "bundle"));
-    const control = `\n[tool task ${status}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${this.#options.timeoutMs}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}`;
+    const foregroundExited =
+      status === "running" &&
+      shellLifecycle?.foreground === "exited" &&
+      shellLifecycle.stdio === "open";
+    const shellFacts =
+      shellLifecycle === undefined
+        ? ""
+        : `\nforeground: ${shellLifecycle.foreground}\nstdio: ${shellLifecycle.stdio}${shellLifecycle.foreground === "exited" ? `\nforeground_exit_code: ${shellLifecycle.foreground_exit_code}\nforeground_signal: ${shellLifecycle.foreground_signal}` : ""}${foregroundExited ? "\nThe foreground exited; output pipes remain open. Continue wait to collect output, or terminate to cancel the owned process group (including intentional background processes on POSIX). Pipe-holder identities are unavailable." : ""}`;
+    const timeoutMs = this.humanTerminal ? null : this.#options.timeoutMs;
+    const control = `\n[tool task ${status}${foregroundExited ? " (foreground_exited)" : ""}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${timeoutMs ?? "none"}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}${shellFacts}`;
     return attachToolOutputCapture(
       {
         output: capture.output,
@@ -738,11 +1002,12 @@ class Task {
           status,
           task_id: this.id,
           tool_name: this.#runtime.name,
-          timeout_ms: this.#options.timeoutMs,
+          timeout_ms: timeoutMs,
           cancellation,
           resource_scope: resourceScope,
           lifetime: "host_instance",
           exit_code: terminal ? exitCode : null,
+          ...shellLifecycle,
           ...(result?.structuredContent === undefined
             ? {}
             : { result: result.structuredContent }),
@@ -803,7 +1068,7 @@ export class ToolWaitRuntime implements ToolRuntime {
     this.specification = {
       name: this.name,
       description:
-        "Tools, including run_code programs, automatically return task_id when they are queued or exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report queued/running state, confirmable or best_effort cancellation, and resource_scope without exposing resource keys. Running claims/bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart.",
+        "Tools, including run_code programs, automatically return task_id when they are queued or exceed their yield time; no separate background mode is required. wait returns when the task completes or yield_time_ms expires, with output produced since the previous receipt. Expiry does not stop the task; its execution deadline remains separate. Program-side await tools.* waits for the actual result. terminate requests cancellation; receipts report queued/running state, confirmable or best_effort cancellation, and resource_scope without exposing resource keys. Running claims/bundle/runtime resources stay busy; independent tasks can coexist. Only cancelled/timed_out confirm cancellation. Tasks belong to this Host instance and do not resume after restart. Local shell receipts may include independent foreground/stdio observations; foreground_exit_code is available after the direct process exits, even while status is running. Only running + foreground=exited + stdio=open derives foreground_exited, a nonterminal label. EOF alone is not completion; forced pipe closure is not observed EOF. terminate/timeout follows the originating Shell runtime's declared ownership scope (POSIX process group; Windows direct child unless the Host declares an identity-verified adapter). Escaped descendants may survive, and unconfirmed cleanup remains explicitly unconfirmed.",
       inputSchema: {
         type: "object",
         properties: {
@@ -888,4 +1153,34 @@ function sameMapKey(left: unknown, right: unknown): boolean {
       Number.isNaN(left) &&
       Number.isNaN(right))
   );
+}
+
+function validateShellCursor(
+  cursor: unknown,
+): asserts cursor is number | undefined {
+  if (
+    cursor !== undefined &&
+    (typeof cursor !== "number" || !Number.isSafeInteger(cursor) || cursor < 0)
+  )
+    throw new Error("Invalid Shell output cursor");
+}
+function sliceShellView(
+  full: ShellSessionRead,
+  cursor?: unknown,
+  limit = 32768,
+): ShellSessionRead {
+  validateShellCursor(cursor);
+  const start = full.cursor - full.output.length;
+  if (cursor !== undefined && cursor > full.cursor)
+    throw new Error("Shell output cursor is ahead of this session");
+  const offset = Math.max(start, cursor ?? start);
+  let end = Math.min(full.cursor, offset + limit);
+  if (end < full.cursor && /[\uDC00-\uDFFF]/u.test(full.output[end - start]!))
+    end--;
+  return {
+    session: structuredClone(full.session),
+    output: full.output.slice(offset - start, end - start),
+    cursor: end,
+    truncated: (cursor ?? 0) < start,
+  };
 }
