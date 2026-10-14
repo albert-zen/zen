@@ -3,6 +3,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { syncBuiltinESMExports } from "node:module";
+import { setImmediate } from "node:timers/promises";
 
 import { png1x1 } from "./fixtures.js";
 
@@ -1628,6 +1630,98 @@ test("subscription sample replays do not restart admission retries", async () =>
     /HTTP 503/u,
   );
   assert.equal(calls, 1);
+});
+
+test("subscription model request bounds include at most one credential renewal per sample", async (t) => {
+  for (const renewal of [false, true]) {
+    await t.test(
+      renewal ? "twelve requests with renewal" : "six requests without renewal",
+      async (t) => {
+        t.mock.timers.enable({ apis: ["setTimeout"] });
+        syncBuiltinESMExports();
+        t.after(() => {
+          t.mock.timers.reset();
+          syncBuiltinESMExports();
+        });
+        const statuses = renewal
+          ? [503, 503, 503, 401, 503, 503, 503, 200, 401, 200, 401, 200]
+          : [503, 503, 503, 200, 200, 200];
+        let calls = 0;
+        let renewals = 0;
+        const sampleCalls: number[] = [];
+        const adapter = new OpenAiSubscriptionModel({
+          acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+          renewAccessLease: async () => {
+            renewals += 1;
+            return { accessToken: jwt(accountId, "renewed") };
+          },
+          fetch: async () => {
+            assert.ok(calls < statuses.length, "model request budget exceeded");
+            const status = statuses[calls++];
+            return status === 200
+              ? new Response("data: {}\n\n")
+              : new Response(null, { status: status! });
+          },
+        });
+        let finished = false;
+        const samples = (async () => {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const before = calls;
+            await assert.rejects(
+              collect(
+                adapter.stream(
+                  request(attempt > 0 ? { isSamplingRetry: true } : {}),
+                ),
+              ),
+              (error: unknown) =>
+                (error as { retryable?: boolean }).retryable === true,
+            );
+            sampleCalls.push(calls - before);
+          }
+        })().finally(() => {
+          finished = true;
+        });
+        // Drive only the real admission backoff; the model adapter is not mocked.
+        while (!finished) {
+          t.mock.timers.tick(10_000);
+          await setImmediate();
+        }
+        await samples;
+        assert.deepEqual(sampleCalls, renewal ? [8, 2, 2] : [4, 1, 1]);
+        assert.equal(calls, renewal ? 12 : 6);
+        assert.equal(renewals, renewal ? 3 : 0);
+      },
+    );
+  }
+});
+
+test("subscription replay renewal cannot recur or restart admission retries", async (t) => {
+  for (const renewedStatus of [401, 503]) {
+    await t.test(`renewed request returns HTTP ${renewedStatus}`, async () => {
+      let calls = 0;
+      let renewals = 0;
+      const adapter = new OpenAiSubscriptionModel({
+        acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+        renewAccessLease: async () => {
+          renewals += 1;
+          return { accessToken: jwt(accountId, "renewed") };
+        },
+        fetch: async () => {
+          calls += 1;
+          assert.ok(calls <= 2, "renewal must not restart the replay budget");
+          return new Response(null, {
+            status: calls === 1 ? 401 : renewedStatus,
+          });
+        },
+      });
+      await assert.rejects(
+        collect(adapter.stream(request({ isSamplingRetry: true }))),
+        new RegExp(`HTTP ${renewedStatus}`, "u"),
+      );
+      assert.equal(calls, 2);
+      assert.equal(renewals, 1);
+    });
+  }
 });
 
 test("subscription terminal reasons stay non-retryable through every supported terminal event", async (t) => {
