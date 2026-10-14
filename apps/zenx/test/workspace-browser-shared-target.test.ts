@@ -1,3 +1,4 @@
+import { BrowserInputUnsupportedError } from "../src/main/capabilities/browser-targeted-input.js";
 import { BrowserBackendRegistry } from "../src/main/capabilities/browser-backend-registry.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -1037,7 +1038,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-class FakeDebugger {
+class FakeDebugger extends EventEmitter {
   attached = false;
   evaluations = 0;
   defaultValue: unknown = { visibleText: "fixture", targets: [] };
@@ -1050,6 +1051,7 @@ class FakeDebugger {
     this.attached = true;
   }
   async sendCommand(method: string, params?: Record<string, unknown>) {
+    if (method === "Page.enable") return {};
     if (method === "Page.getFrameTree")
       return { frameTree: { frame: { id: "main-frame" } } };
     if (method === "Page.createIsolatedWorld") {
@@ -1099,6 +1101,10 @@ class FakeImage {
 }
 
 class FakeWebContents extends EventEmitter {
+  frame?: (image: {
+    isEmpty(): boolean;
+    getSize(): { width: number; height: number };
+  }) => void;
   readonly debuggerApi = new FakeDebugger();
   readonly debugger = this.debuggerApi;
   readonly session = {
@@ -1153,6 +1159,15 @@ class FakeWebContents extends EventEmitter {
     this.nextCapture = undefined;
     if (next !== undefined) return next.promise;
     return Promise.resolve(new FakeImage());
+  }
+  beginFrameSubscription(
+    _dirty: boolean,
+    callback: NonNullable<FakeWebContents["frame"]>,
+  ) {
+    this.frame = callback;
+  }
+  endFrameSubscription() {
+    this.frame = undefined;
   }
   setWindowOpenHandler() {
     return undefined;
@@ -1284,3 +1299,626 @@ test("concurrent routing preserves human takeover, fresh return and native navig
     await f.close();
   }
 });
+
+test("Workspace targeted input publishes CSS viewport and consumes a coherent screenshot observation", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    assert.equal(observed.inputViewport?.width, 640);
+    assert.equal(observed.inputViewport?.deviceScaleFactor, 2);
+    await f.browser.pointerClick(
+      "a",
+      tab.tabId,
+      observed.observationId,
+      60,
+      40,
+    );
+    assert.deepEqual(
+      input.events.map((event) => event.params.type),
+      ["mousePressed", "mouseReleased"],
+    );
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 60, 40),
+      /stale|unknown/,
+    );
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    await f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter");
+    assert.deepEqual(
+      input.events.slice(-2).map((event) => event.params.type),
+      ["keyDown", "keyUp"],
+    );
+    assert.equal(
+      input.events.every((event) => event.method.startsWith("Input.dispatch")),
+      true,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace rejects targeted input when screenshot has no coherent viewport or changed focus", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const unavailable = await f.browser.inspect("a", tab.tabId);
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, unavailable.observationId, 20, 30),
+      /coherent screenshot/,
+    );
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.snapshot.focusId = "human-selected-other-field";
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+      /focus or input changed/,
+    );
+    assert.equal(input.events.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace takeover between targeted press and release blocks old release and quarantines input", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      f.browser.command(
+        f.sender as never,
+        "thread-a",
+        "take-control",
+        tab.tabId,
+      );
+      f.browser.command(
+        f.sender as never,
+        "thread-a",
+        "return-control",
+        tab.tabId,
+      );
+    };
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 20, 30),
+      /outcome is unknown/,
+    );
+    assert.equal(input.events.length, 1);
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    assert.equal(fresh.agentActionOutcomeUnknown, true);
+    assert.equal(fresh.inputViewport, undefined);
+    await assert.rejects(
+      f.browser.navigate(
+        "a",
+        tab.tabId,
+        "https://example.test/no",
+        undefined,
+        fresh.observationId,
+      ),
+      /input is blocked/,
+    );
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter"),
+      /input is blocked/,
+    );
+    await f.browser.closeTab("a", tab.tabId, undefined, fresh.observationId);
+    assert.equal((await f.browser.listTabs("a")).length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+function installTargetedInputFixture(debuggerApi: FakeDebugger) {
+  const snapshot = {
+    documentKey: "0123456789abcdef0123456789abcdef|https://example.test/input",
+    viewport: {
+      width: 640,
+      height: 480,
+      deviceScaleFactor: 2,
+      scrollX: 0,
+      scrollY: 0,
+      visualScale: 1,
+      visualOffsetX: 0,
+      visualOffsetY: 0,
+    },
+    focusId: "input-1",
+    focusNeedsShadowEvidence: true,
+    inputRevision: 0,
+    layoutRevision: 0,
+  };
+  const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const state: {
+    snapshot: typeof snapshot;
+    events: typeof events;
+    afterInput?: () => void;
+  } = { snapshot, events };
+  const original = debuggerApi.sendCommand.bind(debuggerApi);
+  debuggerApi.sendCommand = async (method, params) => {
+    if (method.startsWith("Input.")) {
+      events.push({ method, params: params ?? {} });
+      snapshot.inputRevision++;
+      state.afterInput?.();
+      return {} as never;
+    }
+    if (method === "DOM.describeNode")
+      return {
+        node: {
+          backendNodeId: 101,
+          nodeType: 1,
+          localName: "input",
+          attributes: ["type", "text"],
+        },
+      } as never;
+    if (method === "Runtime.releaseObject") return {} as never;
+    if (method === "Runtime.evaluate") {
+      if (params?.returnByValue === false)
+        return {
+          result: { subtype: "node", objectId: "workspace:focus" },
+        } as never;
+      assert.equal(params?.contextId, 42);
+      return {
+        result: {
+          value: String(params?.expression).includes("const elements =")
+            ? { ...actionInspection, inputSnapshot: structuredClone(snapshot) }
+            : structuredClone(snapshot),
+        },
+      } as never;
+    }
+    return await original(method, params);
+  };
+  return state;
+}
+
+test("Workspace zoom keeps DOM inspection while omitting unsupported targeted input", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    input.snapshot.viewport.visualScale = 2;
+    const observed = await f.browser.inspect("a", tab.tabId);
+    assert.equal(observed.visibleText, "fixture");
+    assert.ok(observed.targets.some((target) => target.name === "Act"));
+    assert.equal(observed.inputViewport, undefined);
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 60, 40),
+      /coherent screenshot/,
+    );
+    assert.equal(input.events.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace native dialog blocks targeted input without accepting or activating it", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const debuggerApi = f.views[0]!.webContents.debuggerApi;
+    const input = installTargetedInputFixture(debuggerApi);
+    const observed = await f.browser.inspect("a", tab.tabId);
+    debuggerApi.emit("message", {}, "Page.javascriptDialogOpening");
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, observed.observationId, 20, 30),
+      /native dialog requires human control/,
+    );
+    assert.equal(input.events.length, 0);
+    debuggerApi.emit("message", {}, "Page.javascriptDialogClosed");
+    await f.browser.pointerClick(
+      "a",
+      tab.tabId,
+      observed.observationId,
+      20,
+      30,
+    );
+    assert.equal(input.events.length, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace preserves stable native refusal but never classifies an unknown Runtime exception", async () => {
+  for (const known of [true, false]) {
+    const f = await sharedFixture();
+    try {
+      f.browser.bindThreadSession("a", "thread-a");
+      const tab = await f.browser.open("a", "https://example.test/input");
+      const debuggerApi = f.views[0]!.webContents.debuggerApi;
+      const input = installTargetedInputFixture(debuggerApi);
+      const observed = await f.browser.inspect("a", tab.tabId);
+      const send = debuggerApi.sendCommand.bind(debuggerApi);
+      debuggerApi.sendCommand = async (method, params) => {
+        if (
+          method === "Runtime.evaluate" &&
+          String(params?.expression).includes("const hit = resolveHit")
+        )
+          return (
+            known
+              ? {
+                  result: {
+                    value: { browserInputUnsupported: "native-surface" },
+                  },
+                }
+              : {
+                  exceptionDetails: {
+                    text: "Uncaught",
+                    exception: {
+                      description: "BROWSER_INPUT_UNSUPPORTED:native-surface",
+                    },
+                  },
+                }
+          ) as never;
+        return await send(method, params);
+      };
+      await assert.rejects(
+        f.browser.pointerClick("a", tab.tabId, observed.observationId, 5, 5),
+        (error) =>
+          known
+            ? error instanceof BrowserInputUnsupportedError &&
+              error.reason === "native-surface"
+            : !(error instanceof BrowserInputUnsupportedError) &&
+              /evaluation failed/.test(String(error)),
+      );
+      assert.equal(input.events.length, 0);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("borrowed rendering respects unchanged mounts, new leases and stale hide requests", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-render-lease-"));
+  const sender = new FakeWebContents(99),
+    window = new FakeWindow(sender),
+    view = new FakeView();
+  let witness:
+    | import("../src/main/workspace-browser-renderer.js").WorkspaceBrowserRenderMount
+    | undefined;
+  const releases: Array<boolean | undefined> = [];
+  const browser = new WorkspaceBrowser({
+    artifactDirectory: directory,
+    dependencies: {
+      createView: () => view as never,
+      windowFor: () => window as never,
+      renderWhileUnmounted: async (_view, current, operation) => {
+        witness = current();
+        return await operation();
+      },
+      releaseUnmountedView: () => {
+        releases.push(witness?.isCurrent());
+        if (witness?.isCurrent()) witness.invalidate();
+      },
+    },
+  });
+  try {
+    browser.bindThreadSession("session", "thread");
+    const tab = await browser.open("session", "https://example.test/start");
+    const bounds = { x: 20, y: 30, width: 640, height: 480 };
+    const mount = (lease: string, next = bounds) =>
+      browser.mount(sender as never, {
+        threadId: "thread",
+        tabId: tab.tabId,
+        lease,
+        bounds: next,
+      });
+    mount("old");
+    await browser.inspect("session", tab.tabId);
+    const first = witness!;
+    assert.equal(first.isCurrent(), true);
+    const count = releases.length;
+    view.setBounds({ x: 0, y: 0, width: 640, height: 480 }); // Temporary compositor origin.
+    mount("old");
+    assert.equal(
+      releases.length,
+      count,
+      "identical UI notification must not interrupt the borrow",
+    );
+    assert.equal(first.isCurrent(), true);
+    assert.deepEqual(view.getBounds(), { x: 0, y: 0, width: 640, height: 480 });
+    const newer = { x: 7, y: 8, width: 600, height: 400 };
+    mount("new", newer);
+    assert.equal(releases.length, count + 1);
+    assert.equal(
+      releases.at(-1),
+      true,
+      "return old view before publishing a newer mount",
+    );
+    assert.equal(first.isCurrent(), false);
+    assert.deepEqual(view.getBounds(), newer);
+    await browser.inspect("session", tab.tabId);
+    const fresh = witness!;
+    browser.mount(sender as never, { lease: "old" });
+    assert.equal(fresh.isCurrent(), true);
+    browser.mount(sender as never, { lease: "new" });
+    assert.equal(fresh.isCurrent(), false);
+    assert.equal(
+      releases.at(-1),
+      false,
+      "hide invalidates before release so cleanup cannot reattach the view",
+    );
+  } finally {
+    await browser.shutdown();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+class PhysicalView extends FakeView {
+  parent?: PhysicalWindow;
+  visible = true;
+  override setVisible(value = true) {
+    this.visible = value;
+    return undefined;
+  }
+  getVisible() {
+    return this.visible;
+  }
+}
+class PhysicalWindow extends EventEmitter {
+  visible = false;
+  destroyed = false;
+  readonly children: PhysicalView[] = [];
+  readonly contentView = {
+    children: this.children,
+    addChildView: (view: PhysicalView) => {
+      view.parent?.contentView.removeChildView(view);
+      this.children.push(view);
+      view.parent = this;
+    },
+    removeChildView: (view: PhysicalView) => {
+      const index = this.children.indexOf(view);
+      if (index >= 0) this.children.splice(index, 1);
+      if (view.parent === this) view.parent = undefined;
+    },
+  };
+  constructor(readonly webContents = new FakeWebContents(99)) {
+    super();
+  }
+  getContentSize() {
+    return [1200, 800];
+  }
+  isDestroyed() {
+    return this.destroyed;
+  }
+  isVisible() {
+    return this.visible;
+  }
+  isMinimized() {
+    return false;
+  }
+  setIgnoreMouseEvents(value: boolean) {
+    assert.equal(value, true);
+  }
+  showInactive() {
+    this.visible = true;
+    for (const view of this.children) {
+      const callback = view.webContents.frame;
+      setTimeout(
+        () =>
+          callback?.({ isEmpty: () => false, getSize: () => view.getBounds() }),
+        10,
+      );
+    }
+  }
+  destroy() {
+    assert.equal(this.children.length, 0);
+    this.destroyed = true;
+    this.emit("closed");
+  }
+}
+
+for (const command of ["take-control", "return-control"] as const) {
+  for (const stage of ["compositor-wait", "capture-pending"] as const) {
+    for (const issuer of ["mount-owner", "other-ui-owner"] as const) {
+      test(`${command} from ${issuer} during ${stage} returns the physical view before invalidating observation`, async () => {
+        const { WorkspaceBrowserRenderer } =
+          await import("../src/main/workspace-browser-renderer.js");
+        const directory = await mkdtemp(
+          path.join(os.tmpdir(), "zenx-control-render-"),
+        );
+        const owner = new PhysicalWindow(),
+          other = new PhysicalWindow(new FakeWebContents(100));
+        const view = new PhysicalView(),
+          temporary: PhysicalWindow[] = [];
+        const renderer = new WorkspaceBrowserRenderer(
+          () => {
+            const window = new PhysicalWindow();
+            temporary.push(window);
+            return window as never;
+          },
+          () => 1,
+        );
+        const browser = new WorkspaceBrowser({
+          artifactDirectory: directory,
+          dependencies: {
+            createView: () => view as never,
+            windowFor: (sender) => (sender.id === 99 ? owner : other) as never,
+            renderWhileUnmounted: (v, current, operation) =>
+              renderer.render(v, current, operation),
+            releaseUnmountedView: (v) => renderer.release(v),
+            closeUnmountedRenderer: () => renderer.close(),
+          },
+        });
+        const captured = deferred<void>(),
+          finish = deferred<FakeImage>();
+        const nativeCapture = view.webContents.capturePage.bind(
+          view.webContents,
+        );
+        try {
+          browser.bindThreadSession("session", "thread");
+          const tab = await browser.open(
+            "session",
+            "https://example.test/start",
+          );
+          const bounds = { x: 20, y: 30, width: 640, height: 480 };
+          const mount = (lease = "old") =>
+            browser.mount(owner.webContents as never, {
+              threadId: "thread",
+              tabId: tab.tabId,
+              lease,
+              bounds,
+            });
+          mount();
+          if (command === "return-control")
+            browser.command(
+              owner.webContents as never,
+              "thread",
+              "take-control",
+              tab.tabId,
+            );
+          let captureCalls = 0;
+          view.webContents.capturePage = () => {
+            captureCalls++;
+            captured.resolve();
+            return finish.promise;
+          };
+          const pending = browser.inspect("session", tab.tabId);
+          const rejected = assert.rejects(pending, /stale|changed/);
+          if (stage === "capture-pending") await captured.promise;
+          else await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(view.parent, temporary[0]);
+          const sender = issuer === "mount-owner" ? owner : other;
+          browser.command(
+            sender.webContents as never,
+            "thread",
+            command,
+            tab.tabId,
+          );
+          assert.equal(
+            view.parent,
+            owner,
+            "control command must return immediately, before native settlement",
+          );
+          assert.deepEqual(view.getBounds(), bounds);
+          finish.resolve(new FakeImage());
+          await rejected;
+          assert.equal(captureCalls, stage === "capture-pending" ? 1 : 0);
+          assert.equal(temporary[0]!.destroyed, true);
+          mount();
+          assert.equal(view.parent, owner);
+          mount("new");
+          assert.equal(view.parent, owner);
+          view.webContents.capturePage = nativeCapture;
+          await browser.inspect("session", tab.tabId);
+          assert.equal(view.parent, owner);
+          assert.equal(owner.visible, false);
+          // A later legitimate owner must not be overwritten by old cleanup.
+          browser.mount(other.webContents as never, {
+            threadId: "thread",
+            tabId: tab.tabId,
+            lease: "successor",
+            bounds,
+          });
+          await browser.inspect("session", tab.tabId);
+          assert.equal(view.parent, other);
+          assert.equal(owner.children.length, 0);
+        } finally {
+          finish.resolve(new FakeImage());
+          await browser.shutdown();
+          await rm(directory, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+}
+
+for (const action of ["scroll", "click"] as const)
+  test(`Workspace ${action} forwards cancellation into the pending compositor lease before dispatch`, async () => {
+    const { WorkspaceBrowserRenderer } =
+      await import("../src/main/workspace-browser-renderer.js");
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-frame-abort-"),
+    );
+    const owner = new PhysicalWindow(),
+      view = new PhysicalView();
+    const renderer = new WorkspaceBrowserRenderer(
+      () => new PhysicalWindow() as never,
+      () => 1,
+    );
+    let observedSignal: AbortSignal | undefined;
+    const browser = new WorkspaceBrowser({
+      artifactDirectory: directory,
+      dependencies: {
+        createView: () => view as never,
+        windowFor: () => owner as never,
+        renderWhileUnmounted: (target, current, operation, signal) => {
+          observedSignal = signal;
+          return renderer.render(target, current, operation, signal);
+        },
+        releaseUnmountedView: (target) => renderer.release(target),
+        closeUnmountedRenderer: () => renderer.close(),
+      },
+    });
+    try {
+      browser.bindThreadSession("session", "thread");
+      const tab = await browser.open("session", "https://example.test/start");
+      browser.mount(owner.webContents as never, {
+        threadId: "thread",
+        tabId: tab.tabId,
+        lease: "ui",
+        bounds: { x: 20, y: 30, width: 640, height: 480 },
+      });
+      view.webContents.debuggerApi.defaultValue = actionInspection;
+      const observation = await browser.inspect("session", tab.tabId);
+      const evaluations = view.webContents.debuggerApi.evaluations;
+      view.webContents.beginFrameSubscription = () => {
+        view.webContents.frame = undefined;
+      };
+      const controller = new AbortController(),
+        reason = new Error("cancel before frame");
+      const pending =
+        action === "scroll"
+          ? browser.scroll(
+              "session",
+              tab.tabId,
+              observation.observationId,
+              "down",
+              100,
+              controller.signal,
+            )
+          : browser.click(
+              "session",
+              tab.tabId,
+              observation.observationId,
+              observation.targets[0]!.targetId,
+              controller.signal,
+            );
+      const rejected = assert.rejects(pending, (error) => error === reason);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(observedSignal, controller.signal);
+      assert.notEqual(view.parent, owner);
+      controller.abort(reason);
+      assert.equal(
+        view.parent,
+        owner,
+        "cancel immediately returns the physical view",
+      );
+      await rejected;
+      assert.equal(
+        view.webContents.debuggerApi.evaluations,
+        evaluations,
+        "cancelled readiness dispatches no page code",
+      );
+      assert.equal(
+        browser.command(owner.webContents as never, "thread", "list")[0]!
+          .agentActionOutcomeUnknown,
+        false,
+        "no page action was dispatched",
+      );
+    } finally {
+      await browser.shutdown();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });

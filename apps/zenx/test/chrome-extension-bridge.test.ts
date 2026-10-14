@@ -7,6 +7,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import WebSocket from "ws";
+import {
+  fakeBrowserInputSnapshot,
+  fakeInputScreenshotData,
+} from "./fixtures/user-browser-cdp.js";
 
 import {
   ChromeExtensionBridge,
@@ -177,6 +181,16 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
     );
     const forwardedMethods: string[] = [];
     const forwardedTargets: number[] = [];
+    const inputCommands: Array<{
+      method: string;
+      tabId?: number;
+      params?: Record<string, unknown>;
+    }> = [];
+    const inputSnapshots = new Map([
+      [42, fakeBrowserInputSnapshot()],
+      [43, fakeBrowserInputSnapshot()],
+      [44, fakeBrowserInputSnapshot()],
+    ]);
     let documentUrl = "https://example.test/account";
     native.on("message", (data) => {
       const message = JSON.parse(data.toString()) as {
@@ -192,7 +206,15 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
       forwardedMethods.push(method);
       if (message.tabId !== undefined) forwardedTargets.push(message.tabId);
       let result: unknown = {};
-      if (method === "Target.createTarget") {
+      const inputSnapshot = inputSnapshots.get(message.tabId ?? 42)!;
+      if (method.startsWith("Input.")) {
+        inputCommands.push({
+          method,
+          tabId: message.tabId,
+          params: message.params,
+        });
+        inputSnapshot.inputRevision++;
+      } else if (method === "Target.createTarget") {
         documentUrl = String(message.params?.url);
         native!.send(
           JSON.stringify({
@@ -200,7 +222,10 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
             tab: { id: 44, title: "New tab", url: documentUrl },
           }),
         );
-        result = { targetId: "chrome-tab-44" };
+        result = {
+          targetId: "chrome-tab-44",
+          grouping: { status: "grouped", groupId: 73 },
+        };
       } else if (method === "Page.getFrameTree") {
         result = {
           frameTree: {
@@ -209,6 +234,19 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
         };
       } else if (method === "Page.createIsolatedWorld") {
         result = { executionContextId: 100 };
+      } else if (method === "DOM.describeNode") {
+        result = {
+          node: {
+            backendNodeId:
+              message.params?.backendNodeId ??
+              (String(message.params?.objectId).includes("hitNode")
+                ? 102
+                : 101),
+            nodeType: 1,
+            localName: "input",
+            attributes: ["type", "text"],
+          },
+        };
       } else if (method === "Runtime.evaluate") {
         const expression = String(message.params?.expression ?? "");
         result = {
@@ -217,25 +255,45 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
               ? { ok: true }
               : expression === "void 0"
                 ? undefined
-                : {
-                    visibleText: "Signed in as Alice",
-                    targets: [
-                      {
-                        selector: "#continue",
-                        tag: "button",
-                        role: "button",
-                        name: "Continue",
-                        type: "",
-                        id: "continue",
-                        fieldName: "",
-                        autocomplete: "",
-                        href: "",
-                        actions: ["click"],
-                      },
-                    ],
-                  },
+                : expression.includes("zenx-browser-targeted-input-v2") &&
+                    !expression.includes("visibleText:")
+                  ? {
+                      ...structuredClone(inputSnapshot),
+                      ...(expression.includes("const hit = resolveHit")
+                        ? { pointerPoint: { x: 1, y: 1 } }
+                        : {}),
+                    }
+                  : {
+                      inputSnapshot: structuredClone(inputSnapshot),
+                      visibleText: "Signed in as Alice",
+                      targets: [
+                        {
+                          selector: "#continue",
+                          tag: "button",
+                          role: "button",
+                          name: "Continue",
+                          type: "",
+                          id: "continue",
+                          fieldName: "",
+                          autocomplete: "",
+                          href: "",
+                          actions: ["click"],
+                        },
+                      ],
+                    },
           },
         };
+        if (
+          message.params?.returnByValue === false &&
+          expression.includes("zenx-browser-targeted-input-v2")
+        ) {
+          result = {
+            result: {
+              subtype: "node",
+              objectId: `${message.tabId}:${expression.includes("state?.hitNode") ? "hitNode" : "focusNode"}`,
+            },
+          };
+        }
       } else if (method === "Page.captureScreenshot") {
         // chrome.debugger rejects view captures; real attached Chrome requires
         // a compositor-surface capture, bounded to the viewport.
@@ -256,7 +314,7 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
           return;
         }
         result = {
-          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          data: fakeInputScreenshotData(),
         };
       } else if (method === "Page.navigate") {
         documentUrl = String(message.params?.url ?? documentUrl);
@@ -303,6 +361,46 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
         inspection.observationId,
         actionTarget.targetId,
       );
+      const pointerObservation = await connection.backend.inspect(
+        "thread-1",
+        "chrome-tab-42",
+      );
+      await connection.backend.pointerClick!(
+        "thread-1",
+        "chrome-tab-42",
+        pointerObservation.observationId,
+        10,
+        20,
+      );
+      const keyObservation = await connection.backend.inspect(
+        "thread-1",
+        "chrome-tab-43",
+      );
+      await connection.backend.keyPress!(
+        "thread-1",
+        "chrome-tab-43",
+        keyObservation.observationId,
+        "Enter",
+      );
+      assert.deepEqual(
+        inputCommands.map((command) => [
+          command.tabId,
+          command.method,
+          command.params?.type,
+        ]),
+        [
+          [42, "Input.dispatchMouseEvent", "mousePressed"],
+          [42, "Input.dispatchMouseEvent", "mouseReleased"],
+          [43, "Input.dispatchKeyEvent", "keyDown"],
+          [43, "Input.dispatchKeyEvent", "keyUp"],
+        ],
+      );
+      assert.equal(
+        forwardedMethods.some((method) =>
+          /activate|bringToFront/i.test(method),
+        ),
+        false,
+      );
       const navigated = await connection.backend.navigate(
         "thread-1",
         "chrome-tab-42",
@@ -318,6 +416,7 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
       );
       assert.equal(created.tabId, "chrome-tab-44");
       assert.equal(created.url, "https://example.test/new");
+      assert.deepEqual(created.grouping, { status: "grouped", groupId: 73 });
       for (const method of [
         "Page.enable",
         "Runtime.enable",

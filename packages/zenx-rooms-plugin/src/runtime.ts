@@ -26,6 +26,9 @@ export interface RoomMessage {
 }
 
 export interface RoomOperation {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
+  cancelled?: true;
   id: string;
   text: string;
   messageId: string | null;
@@ -130,6 +133,15 @@ export interface ZenXRoomsTrustedService {
     text: string,
     replyToMessageId?: string,
   ): Promise<RoomOperation>;
+  prepareAssistantIntroduction?(
+    roomId: string,
+    operationId: string,
+    language: "en" | "zh",
+  ): Promise<RoomOperation>;
+  startAssistantIntroduction?(
+    roomId: string,
+    operationId: string,
+  ): Promise<RoomOperation>;
   postPreparedRoomMessage?(
     roomId: string,
     operationId: string,
@@ -150,6 +162,11 @@ export interface ZenXRoomsTrustedService {
   acknowledgeRoomOperation?(roomId: string, operationId: string): Promise<void>;
   snapshot(): {
     rooms: Room[];
+    history?: Array<{
+      id: string;
+      status: "starting" | "running" | "completed" | "failed";
+      error: string | null;
+    }>;
     triggers?: Array<{
       id?: string;
       active: boolean;
@@ -274,6 +291,26 @@ export function createZenXTrustedPlugin(
                             t.id === room.assistant!.triggerId,
                         ) === true
                       : undefined,
+                    introduction: (() => {
+                      const operation = room.operations
+                        ?.filter(
+                          (entry) => entry.kind === "assistantIntroduction",
+                        )
+                        .at(-1);
+                      if (!operation) return undefined;
+                      const history = state.history?.find(
+                        (entry) => entry.id === operation.wakeupId,
+                      );
+                      return {
+                        operationId: operation.id,
+                        state: operation.cancelled
+                          ? "cancelled"
+                          : operation.wakeupId
+                            ? (history?.status ?? "unknown")
+                            : "prepared",
+                        error: history?.error ?? null,
+                      };
+                    })(),
                     operationEpoch: room.operationEpoch ?? "legacy",
                     pendingCount: (room.operations ?? []).filter(
                       (operation) => !operation.acknowledged,
@@ -338,6 +375,8 @@ export function createZenXTrustedPlugin(
             (operation) => !operation.acknowledged,
           );
           const page = pending.slice(cursor, cursor + 8).map((operation) => ({
+            kind: operation.kind,
+            wakeupId: operation.wakeupId,
             id: operation.id,
             text: Array.from(operation.text).slice(0, 120).join(""),
             messageId: operation.messageId,
@@ -351,6 +390,25 @@ export function createZenXTrustedPlugin(
                 : null,
           };
         }
+        case "zenx_rooms_prepare_introduction":
+          if (uiInput === null || !service.prepareAssistantIntroduction)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["roomId", "operationId", "language"]);
+          if (args["language"] !== "en" && args["language"] !== "zh")
+            throw new Error("Unsupported welcome language");
+          return await service.prepareAssistantIntroduction(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+            args["language"],
+          );
+        case "zenx_rooms_start_introduction":
+          if (uiInput === null || !service.startAssistantIntroduction)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["roomId", "operationId"]);
+          return await service.startAssistantIntroduction(
+            string(args, "roomId", MAX_ID_BYTES),
+            string(args, "operationId", MAX_ID_BYTES),
+          );
         case "zenx_rooms_prepare_message":
           if (uiInput === null || !service.prepareRoomMessage)
             throw new Error("Trusted Room UI required");

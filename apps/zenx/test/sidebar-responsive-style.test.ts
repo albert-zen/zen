@@ -332,3 +332,16 @@ test("shell owns the sidebar width default before and after the resizer mounts",
   assert.equal(Number(defaultWidth), SIDEBAR_DEFAULT_WIDTH);
   assert.match(shell, /--sidebar-track:\s*var\(--sidebar-width\);/u);
 });
+
+test("Room unread numbers have explicit symmetric layout and zero inherited indentation", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/room-conversations.css", import.meta.url),
+    "utf8",
+  );
+  const badge = styles.match(/\.room-unread-count\s*\{[^}]*\}/u)?.[0] ?? "";
+  assert.match(badge, /display: inline-grid;/u);
+  assert.match(badge, /place-items: center;/u);
+  assert.match(badge, /text-align: center;/u);
+  assert.match(badge, /text-indent: 0;/u);
+  assert.match(badge, /line-height: 18px;/u);
+});

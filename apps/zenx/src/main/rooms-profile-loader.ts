@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { assertPawRenameScope } from "./room-identity.js";
 
 import type { ZenXBundledAutomationPluginService } from "./automation-plugin-service.js";
 import type { ZenXAutomationControlPort } from "./capabilities/automation-control-package.js";
@@ -100,7 +101,9 @@ export function createZenXRoomsProfileLoader(
         return domain.createRoom(input);
       },
       renameRoom: (id: string, name: string) => {
-        call();
+        const caller = call();
+        if (!caller.trustedUi)
+          assertPawRenameScope(domain.snapshot(), id, caller.threadId);
         return domain.renameRoom(id, name);
       },
       deleteRoom: (id: string) => {
@@ -155,6 +158,18 @@ export function createZenXRoomsProfileLoader(
       ) => {
         requireUi();
         return domain.prepareRoomMessage(id, key, text, replyToMessageId);
+      },
+      prepareAssistantIntroduction: (
+        id: string,
+        key: string,
+        language: "en" | "zh",
+      ) => {
+        requireUi();
+        return domain.prepareAssistantIntroduction(id, key, language);
+      },
+      startAssistantIntroduction: (id: string, key: string) => {
+        requireUi();
+        return domain.startAssistantIntroduction(id, key);
       },
       postPreparedRoomMessage: (id: string, key: string, text: string) => {
         requireUi();

@@ -5,6 +5,7 @@ import {
   unreadThreadIds,
 } from "./conversation-read-state.js";
 import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
+import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
@@ -402,6 +403,14 @@ function updateThreadProjectionCache(
 }
 
 export function App() {
+  return (
+    <ThreadReadingStateProvider>
+      <AppContent />
+    </ThreadReadingStateProvider>
+  );
+}
+
+function AppContent() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
@@ -3092,6 +3101,7 @@ export function App() {
               threads={[...activeSummaries, ...archivedSummaries]}
               snapshot={pluginSnapshot}
               section={roomPanel === "open" ? "" : roomPanel}
+              sectionRequest={roomQuery.get("request") ?? undefined}
               navigate={openPage}
               onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
             />
@@ -3407,7 +3417,7 @@ function PageTitleBar({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{subtitle}</p>
+          {subtitle !== title ? <p>{subtitle}</p> : null}
         </div>
       </div>
     </div>

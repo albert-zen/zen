@@ -34,6 +34,7 @@ export type ItemType =
   | "user_message_queue_cancelled"
   | "user_message_queue_edited"
   | "user_message"
+  | "host_message"
   | "agent_message"
   | "model_usage"
   | "reasoning"
@@ -58,6 +59,7 @@ const CANONICAL_ITEM_TYPES = {
   user_message_queue_cancelled: true,
   user_message_queue_edited: true,
   user_message: true,
+  host_message: true,
   agent_message: true,
   model_usage: true,
   reasoning: true,
@@ -126,6 +128,22 @@ export interface ThreadDeletedItem extends ItemBase {
 export interface ThreadRestoredItem extends ItemBase {
   type: "thread_restored";
   deletionItemId: string;
+}
+
+/** Host-origin wakeup input; never a human message or fabricated agent output. */
+export interface HostWakeupInput {
+  clientId: string;
+  source: "bootstrap";
+  text: string;
+}
+
+export interface HostMessageItem extends ItemBase, HostWakeupInput {
+  type: "host_message";
+  sender: "host";
+  turnId: string;
+  mode: "start" | "steer";
+  /** Same durable response/tool boundary used by human same-Turn steering. */
+  deliveryAfter?: string;
 }
 
 export interface CanonicalProviderSelection {
@@ -432,6 +450,7 @@ export type CanonicalItem =
   | TurnAbortedItem
   | TurnReplacementRequestedItem
   | UserMessageItem
+  | HostMessageItem
   | AgentMessageItem
   | ModelUsageItem
   | ReasoningItem
@@ -620,6 +639,20 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         item.deletionItemId,
         "thread_restored.deletionItemId",
       );
+      break;
+    case "host_message":
+      requireTurnId(item, type);
+      requireEnum(item.sender, ["host"], "host_message.sender");
+      requireEnum(item.source, ["bootstrap"], "host_message.source");
+      requireEnum(item.mode, ["start", "steer"], "host_message.mode");
+      requireNonEmptyString(item.clientId, "host_message.clientId");
+      requireNonEmptyString(item.text, "host_message.text");
+      requireOptionalNonEmptyString(
+        item.deliveryAfter,
+        "host_message.deliveryAfter",
+      );
+      if (item.mode === "start" && item.deliveryAfter !== undefined)
+        throw new Error("Host start input cannot have a delivery anchor");
       break;
     case "thread_instruction":
       requireNoTurnId(item);
