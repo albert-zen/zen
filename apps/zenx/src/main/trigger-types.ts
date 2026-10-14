@@ -128,6 +128,9 @@ export interface RoomMessage {
   originTurnId: string | null;
 }
 export interface RoomSendOperation {
+  /** Host bootstrap receipt; never a human Room message. */
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   replyTo?: RoomQuote;
   id: string;
   text: string;
@@ -139,6 +142,8 @@ export interface RoomSendOperation {
   mentions: Array<{ name: string; threadId: string; triggerIds: string[] }>;
 }
 export interface RoomDeliveryView {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   operationId: string;
   roomId: string;
   text: string;

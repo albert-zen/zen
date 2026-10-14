@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
+import { ActionMenu } from "./ui/controls.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import { useSidebarExpansion } from "./sidebar-expansion.js";
 
@@ -349,44 +350,162 @@ function ConversationGroup({
         {expanded ? (
           <>
             {group.rooms.map((room) => (
-              <button
-                type="button"
-                className="room-conversation-row"
+              <ConversationRow
                 key={room.id}
-                aria-label={`Open ${group.displayKind} ${room.name}`}
-                aria-current={
+                room={room}
+                group={group}
+                selected={
                   selectedRoomId === room.id &&
                   selectedPage.split(/[?#]/u, 1)[0] === ROOM_ROUTE
-                    ? "page"
-                    : undefined
                 }
-                title={room.name}
-                onClick={() => onOpen(roomConversationRoute(room.id))}
-              >
-                <Icon name={group.icon} size={14} />
-                <span className="room-conversation-label">
-                  <strong>{room.name}</strong>
-                  <small>
-                    {room.messagePreview ||
-                      (room.assistant
-                        ? i18n.t("panels:personalConversation")
-                        : i18n.t("panels:memberCount", {
-                            count: room.memberCount,
-                          }))}
-                  </small>
-                </span>
-              </button>
+                onOpen={onOpen}
+              />
             ))}
             {group.rooms.length === 0 && !loading && error === null ? (
-              <p className="room-conversation-empty">
-                {group.kind === "companion"
-                  ? i18n.t("panels:yourPawConversations")
-                  : i18n.t("panels:yourSharedConversations")}
-              </p>
+              group.kind === "companion" ? (
+                <PawWelcome onOpen={onOpen} />
+              ) : (
+                <p className="room-conversation-empty">
+                  {i18n.t("panels:yourSharedConversations")}
+                </p>
+              )
             ) : null}
           </>
         ) : null}
       </div>
     </section>
+  );
+}
+
+function ConversationRow({
+  room,
+  group,
+  selected,
+  onOpen,
+}: {
+  room: RoomConversation;
+  group: { displayKind: string; icon: "conversation" | "users" };
+  selected: boolean;
+  onOpen(route: string): void;
+}) {
+  const row = useRef<HTMLDivElement>(null);
+  const openMenu = () =>
+    row.current
+      ?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')
+      ?.click();
+  const openManagement = (manage: "rename" | "settings") =>
+    onOpen(
+      `${roomConversationRoute(room.id)}&${new URLSearchParams({ manage })}`,
+    );
+  return (
+    <div
+      ref={row}
+      className="room-conversation-item"
+      title={i18n.t("panels:manageNamedConversation", { name: room.name })}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        openMenu();
+      }}
+      onKeyDown={(event) => {
+        if (
+          event.key === "ContextMenu" ||
+          (event.shiftKey && event.key === "F10")
+        ) {
+          event.preventDefault();
+          openMenu();
+        }
+      }}
+    >
+      <button
+        type="button"
+        className="room-conversation-row"
+        aria-label={`Open ${group.displayKind} ${room.name}`}
+        aria-current={selected ? "page" : undefined}
+        title={room.name}
+        onClick={() => onOpen(roomConversationRoute(room.id))}
+      >
+        <Icon name={group.icon} size={14} />
+        <span className="room-conversation-label">
+          <strong>{room.name}</strong>
+          <small>
+            {room.messagePreview ||
+              (room.assistant
+                ? i18n.t("panels:personalConversation")
+                : i18n.t("panels:memberCount", { count: room.memberCount }))}
+          </small>
+        </span>
+      </button>
+      <ActionMenu
+        compact
+        label={i18n.t("panels:manageNamedConversation", { name: room.name })}
+        items={[
+          {
+            label: i18n.t(
+              room.assistant ? "panels:renamePaw" : "panels:renameConversation",
+            ),
+            onSelect: (trigger) => {
+              trigger?.focus();
+              openManagement("rename");
+            },
+          },
+          {
+            label: i18n.t("panels:conversationSettings"),
+            onSelect: (trigger) => {
+              trigger?.focus();
+              openManagement("settings");
+            },
+          },
+          ...(room.assistant
+            ? [
+                {
+                  label: i18n.t("panels:openPawWorkspace"),
+                  onSelect: () =>
+                    onOpen(`${roomConversationRoute(room.id)}&panel=open`),
+                },
+              ]
+            : []),
+        ]}
+      />
+    </div>
+  );
+}
+
+function PawWelcome({ onOpen }: { onOpen(route: string): void }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem("zenx.paw.welcome-dismissed") === "true"
+      );
+    } catch {
+      return false;
+    }
+  });
+  const start = () => onOpen(`${ROOM_ROUTE}?create=companion`);
+  return dismissed ? (
+    <button type="button" className="paw-setup-link" onClick={start}>
+      {i18n.t("panels:setUpPaw")}
+    </button>
+  ) : (
+    <div className="paw-welcome">
+      <strong>{i18n.t("panels:meetYourPaw")}</strong>
+      <p>{i18n.t("panels:pawWelcomeDescription")}</p>
+      <button type="button" className="primary-button" onClick={start}>
+        {i18n.t("panels:setUpPaw")}
+      </button>
+      <button
+        type="button"
+        className="quiet-button"
+        onClick={() => {
+          setDismissed(true);
+          try {
+            window.localStorage.setItem("zenx.paw.welcome-dismissed", "true");
+          } catch {
+            /* Optional presentation preference. */
+          }
+        }}
+      >
+        {i18n.t("panels:pawLater")}
+      </button>
+    </div>
   );
 }

@@ -81,6 +81,11 @@
             "enum": ["full-access", "approval-required"],
             "description": "New preparation defaults to approval-required; normal tool confirmation policy still applies."
           },
+          "inputContinuation": {
+            "type": "string",
+            "enum": ["steer", "queue"],
+            "description": "Ordinary IM input only: default soft steer or explicit native queue. Independent from Composer, Room and Trigger preferences."
+          },
           "allowUnrestrictedFullAccess": {
             "type": "boolean"
           }
@@ -120,6 +125,11 @@
             "enum": ["full-access", "approval-required"],
             "description": "New preparation defaults to approval-required; normal tool confirmation policy still applies."
           },
+          "inputContinuation": {
+            "type": "string",
+            "enum": ["steer", "queue"],
+            "description": "Ordinary IM input only: default soft steer or explicit native queue. Independent from Composer, Room and Trigger preferences."
+          },
           "allowUnrestrictedFullAccess": {
             "type": "boolean"
           }
@@ -157,6 +167,11 @@
           "permissionMode": {
             "type": "string",
             "enum": ["full-access", "approval-required"]
+          },
+          "inputContinuation": {
+            "type": "string",
+            "enum": ["steer", "queue"],
+            "description": "Ordinary IM input only: default soft steer or explicit native queue. Independent from Composer, Room and Trigger preferences."
           },
           "allowUnrestrictedFullAccess": {
             "type": "boolean"
