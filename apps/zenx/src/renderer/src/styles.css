@@ -1504,6 +1504,13 @@ button:disabled {
   height: 24px;
   padding: 4px;
 }
+@media (pointer: coarse) {
+  .thread-title-line .thread-title-rename {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+  }
+}
 .thread-title-line button:hover,
 .thread-title-line button:focus-visible {
   color: var(--text);
