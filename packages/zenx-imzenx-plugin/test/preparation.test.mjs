@@ -35,7 +35,7 @@ async function fixture(t, options = {}) {
   const executable = path.join(root, "python-fixture");
   await writeFile(
     executable,
-    `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';const probe=process.argv.includes('-I')&&!process.argv.includes('-c');const lines=readline.createInterface({input:process.stdin});const record=event=>fs.appendFileSync(${JSON.stringify(receipts)},JSON.stringify({event,pid:process.pid})+'\\n');lines.once('line',line=>{record(probe?'probe':'start');if(probe){process.stderr.write(${JSON.stringify(SECRET)});process.stdout.write(${JSON.stringify(JSON.stringify(options.probe ?? { codes, enabledChannels: ["qq"], secret: SECRET }))});process.exit(0);}else { const payload=JSON.parse(line); fs.writeFileSync(${JSON.stringify(path.join(root, "pipe-flags.json"))},JSON.stringify({receivedViaStdin:payload.IMZEN_CHANNELS_CONFIG?.qq?.client_secret===${JSON.stringify(SECRET)},secretInArgv:JSON.stringify(process.argv).includes(${JSON.stringify(SECRET)}),secretInEnvironment:JSON.stringify(process.env).includes(${JSON.stringify(SECRET)})})); process.stdout.write('{"type":"ready"}\\n');}});lines.once('close',()=>{if(!probe)record('stop');process.exit(0);});`,
+    `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';const probe=process.argv.includes('-I')&&!process.argv.includes('-c');const lines=readline.createInterface({input:process.stdin});const record=event=>fs.appendFileSync(${JSON.stringify(receipts)},JSON.stringify({event,pid:process.pid})+'\\n');lines.once('line',line=>{record(probe?'probe':'start');if(probe){process.stderr.write(${JSON.stringify(SECRET)});process.stdout.write(${JSON.stringify(JSON.stringify(options.probe ?? { codes, enabledChannels: ["qq"], secret: SECRET }))});process.exit(0);}else { const payload=JSON.parse(line); fs.appendFileSync(${JSON.stringify(path.join(root, "input-modes.jsonl"))},JSON.stringify(payload.IMZEN_INPUT_CONTINUATION)+'\\n'); fs.writeFileSync(${JSON.stringify(path.join(root, "pipe-flags.json"))},JSON.stringify({receivedViaStdin:payload.IMZEN_CHANNELS_CONFIG?.qq?.client_secret===${JSON.stringify(SECRET)},secretInArgv:JSON.stringify(process.argv).includes(${JSON.stringify(SECRET)}),secretInEnvironment:JSON.stringify(process.env).includes(${JSON.stringify(SECRET)})})); process.stdout.write('{"type":"ready"}\\n');}});lines.once('close',()=>{if(!probe)record('stop');process.exit(0);});`,
     { mode: 0o700 },
   );
   let ready = options.ready ?? true;
@@ -1050,5 +1050,82 @@ test(
       /settings changed after readiness/,
     );
     assert.equal(f.descriptorReads(), 0);
+  },
+);
+
+test(
+  "IM continuation save, acknowledgement, private bootstrap and restart stay independent",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t);
+    const modes = async () =>
+      (await readFile(path.join(f.root, "input-modes.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map(JSON.parse);
+    await invoke(f.runtime, "imzenx_configure", f.config);
+    assert.equal(
+      f.runtime.status().activeConfiguration.inputContinuation,
+      "steer",
+    );
+    assert.deepEqual(await modes(), ["steer"]);
+    const previousRevision = f.runtime.status().configurationRevision;
+    await invoke(f.runtime, "imzenx_prepare", {
+      ...f.config,
+      inputContinuation: "queue",
+    });
+    assert.equal(f.runtime.status().configuration.inputContinuation, "queue");
+    assert.equal(
+      f.runtime.status().activeConfiguration.inputContinuation,
+      "steer",
+    );
+    assert.deepEqual(await modes(), ["steer"]);
+    const saved = await f.sdk.storage.get();
+    await assert.rejects(
+      invoke(f.runtime, "imzenx_prepare", {
+        ...f.config,
+        inputContinuation: "interrupt",
+      }),
+      /inputContinuation/,
+    );
+    assert.deepEqual(await f.sdk.storage.get(), saved);
+    await assert.rejects(
+      invoke(f.runtime, "imzenx_connect", {
+        singleConsumerConfirmed: true,
+        expectedConfigurationRevision: previousRevision,
+      }),
+      /changed|stale|review/i,
+    );
+    await invoke(f.runtime, "imzenx_connect", {
+      singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
+    });
+    assert.equal(
+      f.runtime.status().activeConfiguration.inputContinuation,
+      "queue",
+    );
+    assert.deepEqual(await modes(), ["steer", "queue"]);
+    await f.runtime.close();
+    await f.runtime.start(f.sdk);
+    f.runtime.activate(Promise.resolve());
+    await waitFor(() => f.runtime.status().state === "connected");
+    assert.equal(
+      f.runtime.status().activeConfiguration.inputContinuation,
+      "queue",
+    );
+    assert.deepEqual(await modes(), ["steer", "queue", "queue"]);
+    await invoke(f.runtime, "imzenx_prepare", {
+      ...f.config,
+      inputContinuation: "steer",
+    });
+    assert.equal(
+      f.runtime.status().activeConfiguration.inputContinuation,
+      "queue",
+    );
+    await invoke(f.runtime, "imzenx_connect", {
+      singleConsumerConfirmed: true,
+      expectedConfigurationRevision: f.runtime.status().configurationRevision,
+    });
+    assert.deepEqual(await modes(), ["steer", "queue", "queue", "steer"]);
   },
 );

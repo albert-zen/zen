@@ -1,5 +1,9 @@
 # ARCHITECTURE
 
+- **Imported tool replay** — Canonical calls preserve inert source namespace/input-format provenance; model adapters create deterministic, past-only wire aliases and matched call/result IDs without registering tool definitions or granting execution authority.
+
+- **Selected-file conversation import** — Version-pinned external parsers live under their protocol adapter and produce bounded provider-neutral historical Items; AppServer atomically creates an idle continuable Thread with canonical source/checkpoint provenance, explicit local cwd/model/permissions, inert tool observations and no inherited execution or source authority. Imported tool outcomes may have a null exitCode only with the historical-result content type; native presentation calls them unknown. The import prefix length lets the first new local Turn load current workspace instructions. Compacted exports use their latest explicit continuation checkpoint and visibly disclose omitted earlier records.
+
 - **Concurrent Browser registry** — ZenX owns independent ephemeral Workspace and explicitly connected external Browser packages; new fixed tool namespaces never inherit legacy tool-name approvals, while backend-qualified tab/observation/target/cursor references prevent cross-backend routing without adding Thread state. External opt-in never removes the Workspace backend. Profile upgrades publish routing only at the existing Catalog transaction boundary; the app-owned Workspace port lends generation-specific opaque sessions, and retirement observes the existing Supervisor runtime drain before detaching only the retiring generation’s leases (no second lease counter or cancellation authority).
 - **ZenX reading state** — One App-owned, memory-only renderer cache retains scroll/follow intent per exact Thread and explicit disclosure choices by exact Thread/Turn/Item identity across navigation, without retaining hidden transcripts or changing execution, canonical history or Host storage.
 
@@ -10,6 +14,8 @@
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
 ## 核心概念
+
+- **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
 
 - **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
 - **IMZenX managed configuration** — Its trusted local form uses provider-declared pinned field contracts and the existing OS-encrypted vault to save write-only channel credentials; model tools see only nonsecret references/readiness, explicit connection validates a transient nonsecret reviewed-configuration revision under the runtime queue before decrypting the chosen configuration into the existing private child pipe, and explicit runtime preparation copies the locked packaged project to an IM-owned runtime directory without modifying App Resources or enrolling credentials.
@@ -1165,6 +1171,23 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 ### Always On Assistant preset
 
 An assistant Room binds one real Thread to an owned roomMention Trigger.
+Its personal display name is the existing Room name; an explicit PAW rename
+atomically updates that name, its bound member name and owned Trigger mention.
+Historical messages and canonical Thread titles remain unchanged. First-use
+setup is an inline renderer surface over existing setup/configuration APIs;
+only its optional welcome dismissal is an origin-local presentation preference.
+Conversational initialization is an explicit Host bootstrap wakeup on the owned
+Trigger. Its existing Room operation receipt records a bootstrap kind and wakeup
+ID, never a human Room message; the native Host input retains that provenance in
+the canonical Thread. Only the real Agent posts the welcome. Prepared/cancelled
+receipts use existing explicit recovery; rendering never runs the model. A restored
+connection reconciles terminal observations of known active wakeups by reading
+exact canonical Turns, without replaying input or offline watcher occurrences.
+The Host's canonical calling Thread scopes PAW name-tool updates to
+its exact binding (shared-Thread PAWs require an unambiguous active source Room);
+UI management and ordinary Room tool scope remain unchanged. Existing AGENTS.md
+stays under Core workspace instructions and file permissions, with no second
+Host identity document or bootstrap execution ledger.
 Trusted setup defaults to creating an idle Thread through the existing Host
 Project/thread-start boundary with confirmed settings; explicit existing-Thread
 binding remains available. The Room and its Trigger commit atomically in the
@@ -1215,15 +1238,28 @@ displayed list; a rejected oversized refresh leaves the previous numbers intact.
 Non-numeric queries may resolve an authoritative bounded search without publishing
 new numbers. `/new` clears selection and the next input creates a Thread.
 
-ZAS `thread/resume` owns a non-reentrant per-Thread observation barrier. The product
-client serializes its authoritative-read and explicit-resume calls through that
-same public boundary per Thread, including recovery resumes. Queued callers may
-cancel without dispatch; an admitted native request keeps its transient lock until
-its actual result or SDK-bounded timeout/reset even if its caller cancels. The
-client owns and observes those original request tasks, fences new admission before
-close, closes the SDK transport, and joins the tasks; cancellation of a close
-waiter cannot abandon this cleanup. It never caches snapshots, adds outcome
-retries, or blocks an unrelated Thread behind another Thread's read.
+IM ordinary input has an independent deployment continuation preference, default
+soft steer or explicit queue, passed only to the public SDK Gateway. The SDK owns
+durable IM admission/reply correlation while canonical queued identity and
+execution remain in the native ItemList; the consumer adds no scheduler. PAW Room
+posts, Trigger policies, Composer preferences, commands and approval replies keep
+their separate owners. Changing the deployment preference never rewrites an
+already admitted input's identity or continuation mode.
+Queue status presentation and `/queued`/`/unqueue` are product-only views over
+the SDK's original-actor/conversation-scoped controls; they do not select a Thread,
+accept native queue IDs as authority, retain a second queue, or interrupt an
+admitted Turn. Late automatic notices retain the existing foreground/PAW route
+fence, while an explicit original-scope query does not change that route.
+
+ZAS `thread/resume` owns a non-reentrant per-Thread observation barrier. The SDK
+client owns serialization for every public resume entry, including recovery;
+IMZen only adapts its authoritative reads to that public observation boundary.
+Queued callers may cancel without dispatch; an admitted native request remains
+owned until its actual result or SDK-bounded timeout/reset even if its caller
+cancels. The SDK fences new admission before close, resets transport and joins
+original tasks before propagating close cancellation. IMZen has no duplicate
+lifecycle owner, snapshot cache or outcome retry, and unrelated Threads remain
+independent.
 
 The IMZen legacy-state upgrader is a product deployment boundary: it validates a
 copy of the selected old SQLite state against authoritative native Thread/workspace

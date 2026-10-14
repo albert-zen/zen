@@ -465,8 +465,12 @@ test("live observation fences document changes and becomes unavailable on exact 
         (event as { type?: unknown }).type === "frame",
     ).length;
     cdp.emitScreencastFrame("stale", 9);
-    await waitUntil(() => cdp.count("Page.screencastFrameAck") === 1);
     await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(
+      cdp.count("Page.screencastFrameAck"),
+      0,
+      "a retired route must not receive observation acknowledgements",
+    );
     assert.equal(
       events.filter(
         (event) =>

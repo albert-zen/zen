@@ -105,6 +105,8 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   unsettledMutation?: string;
   /** Exact attachment-session dialog state; never persisted or auto-dismissed. */
   nativeDialogOpen?: boolean;
+  /** Closing this exact route stops disposable observation traffic before detach. */
+  observationClosing?: boolean;
 }
 
 interface ZenXUserBrowserDocumentExecutionFence extends UserBrowserAttachmentOwner {
@@ -2856,7 +2858,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#scheduleLiveCapture(state);
     } catch (error) {
       if (this.#screencast === state) this.#clearScreencast(state);
-      if (started && !this.#closed) {
+      if (started && this.#canSendObservation(state.sessionId)) {
         await this.#send("Page.stopScreencast", {}, state.sessionId).catch(
           () => undefined,
         );
@@ -2875,7 +2877,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const state = this.#screencast;
     if (state === undefined) return;
     this.#clearScreencast(state);
-    if (this.#closed) return;
+    if (!this.#canSendObservation(state.sessionId)) return;
     await this.#send("Page.stopScreencast", {}, state.sessionId);
   }
 
@@ -2900,7 +2902,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     queueMicrotask(() => {
       void (async () => {
         try {
-          if (!this.#closed)
+          if (this.#canSendObservation(state.sessionId))
             await this.#send("Page.stopScreencast", {}, state.sessionId);
           if (
             !subscription.active ||
@@ -2937,6 +2939,17 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (this.#screencast === state) this.#screencast = undefined;
   }
 
+  #canSendObservation(sessionId: string): boolean {
+    const epoch = this.#sessionEpochs.get(sessionId);
+    return (
+      !this.#closed &&
+      epoch !== undefined &&
+      !epoch.observationClosing &&
+      this.#targetSessions.get(epoch.targetId) === sessionId &&
+      this.#attachmentClosures.get(epoch.targetId) === epoch
+    );
+  }
+
   #receiveScreencastFrame(
     message: Record<string, unknown>,
     params: Record<string, unknown>,
@@ -2946,7 +2959,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (
       typeof cdpSessionId !== "string" ||
       typeof frameSessionId !== "number" ||
-      !Number.isSafeInteger(frameSessionId)
+      !Number.isSafeInteger(frameSessionId) ||
+      !this.#canSendObservation(cdpSessionId)
     )
       return;
     const state = this.#screencast;
@@ -3106,7 +3120,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #failScreencast(state: UserBrowserScreencastState, _error: unknown): void {
     if (this.#screencast !== state) return;
     this.#clearScreencast(state);
-    if (!this.#closed) {
+    if (this.#canSendObservation(state.sessionId)) {
       void this.#send("Page.stopScreencast", {}, state.sessionId).catch(() => {
         // The observation is already failed and detached from renderer delivery.
       });
@@ -3473,6 +3487,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       this.#reapTarget(targetId, true);
       return;
     }
+    if (closure !== undefined) closure.observationClosing = true;
+    if (this.#screencastSubscription?.targetId === targetId) {
+      this.#endScreencast(
+        "unavailable",
+        "The observed browser tab is no longer attached.",
+      );
+    }
     try {
       await this.#send(
         "Target.detachFromTarget",
@@ -3758,6 +3779,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   ): Promise<void> {
     epoch.cdpSessionId = sessionId;
     this.#sessionEpochs.set(sessionId, epoch);
+    epoch.observationClosing = true;
     try {
       await this.#send(
         "Target.detachFromTarget",
@@ -4016,7 +4038,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
     this.#pending.delete(message.id);
     if (message.sessionId !== pending.sessionId) {
-      this.#recordConnectionTaint("CDP response session did not match request");
+      this.#recordConnectionTaint(
+        `CDP response session did not match request (${pending.method})`,
+      );
       pending.reject(
         new UserBrowserCdpOutcomeUnknownError(
           pending.method,
