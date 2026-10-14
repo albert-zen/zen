@@ -277,7 +277,10 @@ export function AuxiliaryPanel({
       : []),
     ...panels.map((panel) => ({
       id: `plugin:${panel.key}`,
-      title: panel.title,
+      title:
+        panel.pluginId === "zenx-triggers"
+          ? i18n.t("panels:automations")
+          : panel.title,
       icon: panelIcon(panel.pluginId),
     })),
   ];
@@ -892,7 +895,11 @@ export function AuxiliaryPanel({
                       >
                         <Icon name={panelIcon(panel.pluginId)} />
                         <span>
-                          <strong>{panel.title}</strong>
+                          <strong>
+                            {panel.pluginId === "zenx-triggers"
+                              ? i18n.t("panels:automations")
+                              : panel.title}
+                          </strong>
                         </span>
                       </button>
                       {panel.pluginId === "zenx-subagents" && snapshot ? (

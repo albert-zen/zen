@@ -57,7 +57,11 @@ export function PluginProductPage({
   return (
     <section
       className="product-page plugin-product-page"
-      aria-label={target.title}
+      aria-label={
+        target.pluginId === "zenx-triggers"
+          ? t("panels:automations")
+          : target.title
+      }
     >
       {menus.length > 0 ? (
         <header className="page-header plugin-menu-header">

@@ -27,10 +27,10 @@ export function sidebarTriggerFacts(value: unknown): SidebarTrigger[] {
     !("triggers" in value) ||
     !Array.isArray(value.triggers)
   )
-    throw new Error("Automation facts are unavailable");
+    throw new Error("Trigger facts are unavailable");
   return value.triggers.map((entry: unknown) => {
     if (!entry || typeof entry !== "object")
-      throw new Error("Invalid automation facts");
+      throw new Error("Invalid trigger facts");
     const t = entry as Record<string, unknown>;
     if (
       typeof t.id !== "string" ||
@@ -38,7 +38,7 @@ export function sidebarTriggerFacts(value: unknown): SidebarTrigger[] {
       typeof t.kind !== "string" ||
       typeof t.active !== "boolean"
     )
-      throw new Error("Invalid automation identity");
+      throw new Error("Invalid trigger identity");
     const timer = t.timer as { nextRunAt?: unknown } | undefined;
     return {
       id: t.id,
