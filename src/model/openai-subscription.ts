@@ -212,10 +212,19 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       headers.set("x-client-request-id", sessionHint);
     }
     try {
-      return await fetchModelResponse(() => {
-        observe(accessToken);
-        return this.#fetch(this.#endpoint, { method: "POST", body, headers, signal });
-      }, signal, { allowRetries });
+      return await fetchModelResponse(
+        () => {
+          observe(accessToken);
+          return this.#fetch(this.#endpoint, {
+            method: "POST",
+            body,
+            headers,
+            signal,
+          });
+        },
+        signal,
+        { allowRetries },
+      );
     } catch {
       signal.throwIfAborted();
       throw new Error(
