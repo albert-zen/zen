@@ -6623,12 +6623,24 @@ button:disabled {
   padding: 5px;
   border-radius: 4px;
 }
-.browser-panel-target > span {
+.browser-panel-location {
   width: 100%;
+}
+.browser-panel-location > span {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 4px 9px;
   color: var(--color-text-secondary);
+}
+.browser-external-open {
+  flex-shrink: 0;
+}
+.browser-external-open:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 .browser-follow-button {
   border: 0;
@@ -8316,29 +8328,49 @@ button:disabled {
   opacity: 0.38;
   cursor: default;
 }
-.workspace-browser-location {
+.browser-url-field {
+  --browser-url-action-size: 28px;
   display: flex;
   align-items: center;
-  flex: 1;
   min-width: 0;
-  height: 30px;
-  margin-left: 5px;
+  height: calc(var(--browser-url-action-size) + 2px);
   padding-right: 2px;
   border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   background: var(--color-surface-wash);
 }
-.workspace-browser-location:focus-within {
+.browser-url-field:focus-within {
   border-color: var(--color-focus-ring);
+}
+.browser-url-field .browser-external-open {
+  flex: 0 0 var(--browser-url-action-size);
+  width: var(--browser-url-action-size);
+  height: var(--browser-url-action-size);
+  border-radius: 6px;
+  color: var(--color-text-primary);
+}
+.workspace-browser-location {
+  flex: 1;
+  margin-left: 5px;
 }
 .workspace-browser-location input {
   width: 0;
-  height: 28px;
+  height: var(--browser-url-action-size);
   padding: 4px 9px;
   border: 0;
   border-radius: 7px;
   outline: none;
   background: transparent;
+}
+
+@media (pointer: coarse), (max-width: 720px) {
+  .workspace-browser-address {
+    height: auto;
+    min-height: 57px;
+  }
+  .browser-url-field {
+    --browser-url-action-size: 44px;
+  }
 }
 
 /* Shared desktop control and feedback vocabulary. */

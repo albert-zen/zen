@@ -1,20 +1,31 @@
 import type { NativeImage } from "electron";
-import type { BrowserLiveObservationListener } from "./browser-provider.js";
+import type {
+  BrowserLiveObservationListener,
+  BrowserTabSummary,
+} from "./browser-provider.js";
 
 /** At most one in-flight capture; no files, observation ids, or browser input. */
 export function observeElectronPage(
   port: {
     capture(): Promise<NativeImage>;
     current(): number | undefined;
+    metadata?(): Pick<BrowserTabSummary, "title" | "url" | "loading">;
+    events?: {
+      on(event: string, listener: () => void): unknown;
+      removeListener(event: string, listener: () => void): unknown;
+    };
   },
   listener: BrowserLiveObservationListener,
 ): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let sequence = 0;
+  let stopMetadata = () => {};
   const stop = () => {
+    if (stopped) return;
     stopped = true;
     clearTimeout(timer);
+    stopMetadata();
   };
   const send: BrowserLiveObservationListener = (event) => {
     if (stopped) return;
@@ -29,6 +40,46 @@ export function observeElectronPage(
     status: "connecting",
     message: "Connecting to this thread's Browser page.",
   });
+  // Loading is live product state, not the last Agent tool observation.
+  const publishMetadata = () => {
+    if (stopped || !port.metadata) return;
+    if (port.current() === undefined) {
+      send({
+        type: "status",
+        status: "unavailable",
+        message: "This Browser page has closed.",
+      });
+      stop();
+      return;
+    }
+    try {
+      const { title, url, loading } = port.metadata();
+      send({ type: "metadata", title, url, loading });
+    } catch {
+      send({
+        type: "status",
+        status: "failed",
+        message: "Browser page metadata is unavailable.",
+      });
+      stop();
+    }
+  };
+  if (!stopped && port.events && port.metadata) {
+    const events = [
+      "did-start-loading",
+      "did-stop-loading",
+      "did-navigate",
+      "did-navigate-in-page",
+      "page-title-updated",
+      "destroyed",
+    ];
+    for (const event of events) port.events.on(event, publishMetadata);
+    stopMetadata = () => {
+      for (const event of events)
+        port.events!.removeListener(event, publishMetadata);
+    };
+    publishMetadata();
+  }
   const capture = async () => {
     if (stopped) return;
     const version = port.current();
