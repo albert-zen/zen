@@ -3036,9 +3036,10 @@ test("conversation header omits usage while Composer owns context indicator and 
       await act(async () => {
         await i18n.changeLanguage(language);
       });
-      const rename = titlebarSession.querySelector<HTMLButtonElement>(
-        ".thread-title-line button",
-      )!;
+      const rename: HTMLButtonElement =
+        titlebarSession.querySelector<HTMLButtonElement>(
+          ".thread-title-line button",
+        )!;
       assert.equal(rename.type, "button");
       assert.equal(rename.textContent, "");
       assert.equal(rename.title, i18n.t("shell:renameThreadTitle"));
@@ -3055,9 +3056,10 @@ test("conversation header omits usage while Composer owns context indicator and 
       await act(async () => rename.focus());
       assert.equal(document.activeElement, rename);
       await act(async () => rename.click());
-      const input = titlebarSession.querySelector<HTMLInputElement>(
-        ".thread-title-form input",
-      )!;
+      const input: HTMLInputElement =
+        titlebarSession.querySelector<HTMLInputElement>(
+          ".thread-title-form input",
+        )!;
       assert.equal(input.value, longTitle);
       assert.equal(document.activeElement, input);
       await act(async () =>
