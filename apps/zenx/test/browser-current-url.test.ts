@@ -404,6 +404,9 @@ class NativeWebContents extends EventEmitter {
     canGoForward: () => false,
   };
   readonly debugger = Object.assign(new EventEmitter(), {
+    isAttached() {
+      return true;
+    },
     attach() {},
     async sendCommand() {
       return {};
@@ -479,6 +482,9 @@ class NativeWindow extends EventEmitter {
 
 class NativeView {
   readonly webContents = new NativeWebContents();
+  getBounds() {
+    return { x: 0, y: 0, width: 100, height: 80 };
+  }
   setVisible() {}
 }
 
