@@ -45,7 +45,14 @@ export function readThreadHistory(
       : thread.items.findIndex((item) => item.id === cursor.boundary);
   if (cursor.boundary !== null && boundaryIndex < 0)
     throw new Error("History cursor boundary no longer exists");
-  const snapshot = thread.items.slice(0, boundaryIndex + 1);
+  // Recovery controls are product lifecycle facts, not public agent history.
+  // Keep the canonical cursor boundary, but omit controls from every view.
+  const snapshot = thread.items
+    .slice(0, boundaryIndex + 1)
+    .filter(
+      (item) =>
+        item.type !== "thread_deleted" && item.type !== "thread_restored",
+    );
   const items = snapshot.filter(
     (item) => options.turnId === undefined || item.turnId === options.turnId,
   );
