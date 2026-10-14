@@ -3923,6 +3923,7 @@ function AgentSurface({
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView
+            localModelDebug
             composerSendMode={composerSendMode}
             onComposerSendModeChange={onComposerSendModeChange}
             onOpenMessageLink={(target) => {

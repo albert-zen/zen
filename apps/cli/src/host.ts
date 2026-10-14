@@ -1,3 +1,4 @@
+import { ModelRequestDebugStore } from "./model-request-debug.js";
 import { SkillsService } from "./skills.js";
 import { RtkShellOutputFilter } from "../../../src/shell-output-filter.js";
 import { createModelDiagnosticWriter } from "./model-diagnostics.js";
@@ -132,6 +133,7 @@ export type ProviderFetch = typeof globalThis.fetch & {
 };
 
 export type HostedZenAppServer = ZenAppServer & {
+  readonly modelRequestDebug: ModelRequestDebugStore;
   readonly processEpoch: string;
   prepareConfiguration(
     options: ZenHostOptions,
@@ -182,12 +184,14 @@ export function createHostedAppServer(
     options,
     attachments,
   );
+  const modelRequestDebug = new ModelRequestDebugStore();
   const providerPreparation = createProviderProfiles(
     normalizedProfiles,
     attachments,
     createModelDiagnosticWriter(
       path.join(options.dataDirectory, "diagnostics"),
     ),
+    modelRequestDebug,
   );
   const preparedProfiles = providerPreparation.profiles;
   const defaultSelection = normalizeDefaultSelection(options, preparedProfiles);
@@ -310,10 +314,12 @@ export function createHostedAppServer(
     initialRevision: options.configurationRevision ?? 0,
     initialResources: providerPreparation.resources,
     attachments,
+    modelRequestDebug,
   });
   let closeTransportPromise: Promise<void> | undefined;
   const closeProviderTransport = async () => {
     closeTransportPromise ??= (async () => {
+      modelRequestDebug.control({ action: "setEnabled", enabled: false });
       const toolResults = await Promise.allSettled([toolEnvironment.close()]);
       const results = [
         ...toolResults,
@@ -332,6 +338,7 @@ export function createHostedAppServer(
     await closeTransportPromise;
   };
   return Object.assign(appServer, {
+    modelRequestDebug,
     processEpoch: configuration.processEpoch,
     prepareConfiguration: async (
       nextOptions: ZenHostOptions,
@@ -432,6 +439,7 @@ function createProviderProfiles(
   profiles: readonly NormalizedProviderProfile[],
   attachments: AttachmentStore,
   onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>,
+  modelRequestDebug: ModelRequestDebugStore,
   reusable: ReadonlyMap<string, ProviderResource> = new Map(),
 ): {
   profiles: PreparedProviderProfile[];
@@ -449,7 +457,12 @@ function createProviderProfiles(
         isDeepStrictEqual(existing.provider, profile.provider) &&
         isDeepStrictEqual(existing.transport, profile.transport)
           ? existing
-          : createProviderResource(profile, attachments, onStreamFailure);
+          : createProviderResource(
+              profile,
+              attachments,
+              onStreamFailure,
+              modelRequestDebug,
+            );
       if (resource !== existing) created.push(resource);
       resources.set(profile.providerProfileId, resource);
       output.push({
@@ -474,6 +487,7 @@ function createProviderResource(
   profile: NormalizedProviderProfile,
   attachments: AttachmentStore,
   onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>,
+  modelRequestDebug: ModelRequestDebugStore,
 ): ProviderResource {
   const fetch = createProviderFetch(profile.transport);
   let closePromise: Promise<void> | undefined;
@@ -488,7 +502,7 @@ function createProviderResource(
       providerProfileId: profile.providerProfileId,
       provider: profile.provider,
       transport: profile.transport,
-      adapter,
+      adapter: modelRequestDebug.observe(adapter),
       close: async () => {
         closePromise ??= Promise.resolve(fetch.close?.()).then(() => undefined);
         await closePromise;
@@ -516,6 +530,7 @@ class HostRuntimeConfiguration {
   readonly #appServer: ZenAppServer;
   readonly #processOptions: ZenHostOptions;
   readonly #attachments: AttachmentStore;
+  readonly #modelRequestDebug: ModelRequestDebugStore;
   readonly #onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>;
   readonly #published = new Map<
     string,
@@ -537,6 +552,7 @@ class HostRuntimeConfiguration {
     initialRevision: number;
     initialResources: Map<string, ProviderResource>;
     attachments: AttachmentStore;
+    modelRequestDebug: ModelRequestDebugStore;
   }) {
     this.#appServer = options.appServer;
     this.processEpoch = options.processEpoch;
@@ -544,6 +560,7 @@ class HostRuntimeConfiguration {
     this.#currentOptions = options.initialOptions;
     this.#currentResources = options.initialResources;
     this.#attachments = options.attachments;
+    this.#modelRequestDebug = options.modelRequestDebug;
     this.#onStreamFailure = createModelDiagnosticWriter(
       path.join(options.initialOptions.dataDirectory, "diagnostics"),
     );
@@ -581,6 +598,7 @@ class HostRuntimeConfiguration {
       normalized,
       this.#attachments,
       this.#onStreamFailure,
+      this.#modelRequestDebug,
       this.#currentResources,
     );
     try {

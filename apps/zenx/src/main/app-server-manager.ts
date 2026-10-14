@@ -1,3 +1,7 @@
+import type {
+  ModelRequestDebugCommand,
+  ModelRequestDebugResult,
+} from "../../../../apps/cli/src/model-request-debug-types.js";
 import type { ShellPanelRequest, ShellPanelResult } from "../shell-panel.js";
 import { WINDOWS_SHELL_SHUTDOWN_WAIT_MS } from "./shell-process-termination.js";
 import { fork, type ChildProcess } from "node:child_process";
@@ -170,7 +174,8 @@ export class AppServerManager {
         | "configuration/discarded"
         | "configuration/current"
         | "fleet/result"
-        | "shell-panel/result";
+        | "shell-panel/result"
+        | "model-debug/result";
       resolve(event: HostEvent): void;
       reject(error: Error): void;
     }
@@ -811,6 +816,26 @@ export class AppServerManager {
     );
   }
 
+  async modelRequestDebug(
+    input: ModelRequestDebugCommand,
+  ): Promise<ModelRequestDebugResult> {
+    return this.#sendConfigurationRequest(
+      "model-debug/result",
+      (requestId) => ({ type: "model-debug/request", requestId, input }),
+      (event) => {
+        if (
+          event.type !== "model-debug/result" ||
+          event.error !== undefined ||
+          event.result === undefined
+        )
+          throw new Error(
+            "Local model debug request failed or capture expired",
+          );
+        return event.result;
+      },
+    );
+  }
+
   async currentConfiguration(): Promise<HostConfigurationCurrent> {
     return await this.#sendConfigurationRequest(
       "configuration/current",
@@ -832,7 +857,8 @@ export class AppServerManager {
       | "configuration/discarded"
       | "configuration/current"
       | "fleet/result"
-      | "shell-panel/result",
+      | "shell-panel/result"
+      | "model-debug/result",
     command: (requestId: string) => HostCommand,
     read: (event: HostEvent) => T,
     onTimeout?: (requestId: string) => void,
@@ -1454,6 +1480,7 @@ export class AppServerManager {
       }
       if (
         hostEvent?.type === "shell-panel/result" ||
+        hostEvent?.type === "model-debug/result" ||
         hostEvent?.type === "fleet/result" ||
         hostEvent?.type === "configuration/prepared" ||
         hostEvent?.type === "configuration/published" ||
