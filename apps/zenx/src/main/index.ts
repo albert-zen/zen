@@ -1,10 +1,6 @@
 import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
-import {
-  deliverAssistantInput,
-  deliverAssistantWakeup,
-} from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
@@ -547,16 +543,6 @@ async function bootstrapZenX(): Promise<void> {
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
       fleet: fleetSettingsService.router,
       appServer: selfControlPort,
-      // Agent messages supplement ongoing work by default.
-      sendPreference: async () => {
-        const profile = (await settingsService!.publicSettings()).profile;
-        // Preserve an explicit user-selected send preference.
-        if (!profile.composerSendModeExplicit) return "soft";
-        return profile.composerSendMode === "soft" ||
-          profile.composerSendMode === "hard"
-          ? profile.composerSendMode
-          : "queue";
-      },
       workflows: {
         workflowConfiguration: async () =>
           await settingsService!.workflowConfiguration(),
@@ -826,11 +812,38 @@ async function bootstrapZenX(): Promise<void> {
           automationManager.onStatus((status) => {
             if (status.type === "ready" && status.reconnected) listener();
           }),
-        readThread: (threadId) =>
-          automationManager.request("thread/read", {
+        readThread: async (threadId) => {
+          const result = await automationManager.request("thread/read", {
             threadId,
             includeTurns: true,
-          }),
+          });
+          // CAS intentionally omits Host input. Native canonical facts are the
+          // authority for automation/Room read receipts.
+          const native = await automationManager.request("zen/thread/read", {
+            threadId,
+          });
+          for (const turn of result.thread.turns) {
+            for (const item of native.thread.items) {
+              if (item.type !== "host_message" || item.turnId !== turn.id)
+                continue;
+              turn.items.push({
+                type: "hostMessage",
+                id: item.id,
+                clientId: item.clientId,
+                source: item.source,
+                text: item.text,
+                mode: item.mode,
+                ...(item.sourceId === undefined
+                  ? {}
+                  : { sourceId: item.sourceId }),
+                ...(item.deliveryAfter === undefined
+                  ? {}
+                  : { deliveryAfter: item.deliveryAfter }),
+              });
+            }
+          }
+          return result;
+        },
         resolveRemoteThread: (device, workspace, target) =>
           fleetSettingsService!.resolveRemoteThread(device, workspace, target),
         readRemoteThread: (device, workspace, threadId, turnId) =>
@@ -848,15 +861,6 @@ async function bootstrapZenX(): Promise<void> {
             options,
             signal,
           ),
-        sendAssistant: (params, signal) =>
-          deliverAssistantInput(automationManager, params, signal),
-        sendAssistantWakeup: (params, signal) =>
-          deliverAssistantWakeup(automationManager, params, signal, {
-            requireUnarchived: true,
-          }),
-        enqueue: async (params) => {
-          await automationManager.request("turn/queue", params);
-        },
       },
       titles: titleCoordinator,
     });

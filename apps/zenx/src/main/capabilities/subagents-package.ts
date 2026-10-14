@@ -142,7 +142,6 @@ export class ZenXSubagentsCapabilityPackage implements ZenXCapabilityPackage {
         arguments: {
           target: thread.id,
           text: task,
-          messageType: "follow_up",
         },
       });
       return { threadId: thread.id, parentThreadId, thread: summary, delivery };

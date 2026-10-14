@@ -839,7 +839,7 @@ test("old ambiguous Queue is migrated once with an undo record; trustworthy choi
         composerSendMode: mode,
         ...(mode === "batch" ? { composerSendModeExplicit: false } : {}),
       });
-      assert.equal(fromPast.composerSendMode, mode);
+      assert.equal(fromPast.composerSendMode, mode === "batch" ? "soft" : mode);
       assert.equal(fromPast.composerSendModeMigration, undefined);
     }
     assert.equal(
@@ -850,6 +850,38 @@ test("old ambiguous Queue is migrated once with an undo record; trustworthy choi
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("implicit Composer modes normalize to soft without changing explicit choices", () => {
+  const { composerSendMode: _mode, ...missing } = profile;
+  assert.equal(validateHostProfile(missing).composerSendMode, "soft");
+  for (const mode of ["queue", "batch", "hard"] as const) {
+    assert.equal(
+      validateHostProfile({
+        ...profile,
+        composerSendMode: mode,
+        composerSendModeExplicit: false,
+      }).composerSendMode,
+      "soft",
+    );
+    assert.equal(
+      validateHostProfile({
+        ...profile,
+        composerSendMode: mode,
+        composerSendModeExplicit: true,
+      }).composerSendMode,
+      mode,
+    );
+  }
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        composerSendMode: "invalid",
+        composerSendModeExplicit: false,
+      }),
+    /send mode/,
+  );
 });
 
 test("compaction retention settings persist without requiring a custom prompt and reach the Host", async () => {

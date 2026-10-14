@@ -1747,10 +1747,7 @@ function AppContent() {
     if (skillDraft.skills.length > 0) {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
-      if (
-        (submission.intent === "steer" || submission.intent === "replace") &&
-        submission.expectedTurnId === null
-      )
+      if (submission.intent === "replace" && submission.expectedTurnId === null)
         throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSending"));
       const input: (
         | import("../../../../../src/item.js").UserInputPart
@@ -1765,9 +1762,12 @@ function AppContent() {
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         input,
-        mode: submission.intent,
+        ...(submission.intent === "start" || submission.intent === "steer"
+          ? {}
+          : { mode: submission.intent }),
         clientUserMessageId: submission.clientUserMessageId,
-        ...(submission.expectedTurnId === null
+        ...(submission.intent !== "replace" ||
+        submission.expectedTurnId === null
           ? {}
           : { expectedTurnId: submission.expectedTurnId }),
       });
@@ -1777,14 +1777,22 @@ function AppContent() {
       ...submission,
       text: messageText,
     });
-    if (submission.intent === "start") {
+    if (submission.intent === "start" || submission.intent === "steer") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(
           i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
-      await window.zenx.protocol.request("turn/start", {
+      await window.zenx.protocol.request("zen/turn/send", {
         threadId,
-        input,
+        input: input.map((part) =>
+          part.type === "attachment"
+            ? { type: "image" as const, attachment: part.attachment }
+            : part.type === "text"
+              ? part
+              : (() => {
+                  throw new Error(i18n.t("shell:unsupportedBatchInputPart"));
+                })(),
+        ),
         clientUserMessageId: submission.clientUserMessageId,
       });
     } else if (submission.intent === "batch-next") {
@@ -1809,19 +1817,6 @@ function AppContent() {
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
       await window.zenx.protocol.request("turn/queue", {
         threadId,
-        input,
-        clientUserMessageId: submission.clientUserMessageId,
-      });
-    } else if (submission.intent === "steer") {
-      if (submission.expectedTurnId === null)
-        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSteering"));
-      if (archivingThreadIdsRef.current.has(threadId))
-        throw new Error(
-          i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
-        );
-      await window.zenx.protocol.request("turn/steer", {
-        threadId,
-        expectedTurnId: submission.expectedTurnId,
         input,
         clientUserMessageId: submission.clientUserMessageId,
       });

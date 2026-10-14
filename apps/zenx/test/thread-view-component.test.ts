@@ -3603,3 +3603,168 @@ function openSendOptions(): void {
     new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
   );
 }
+
+test("native Agent input displays its sender separately from human input, including queued messages", () => {
+  const sender = {
+    threadId: "worker-thread",
+    threadName: "Research worker",
+    turnId: "worker-turn",
+    toolCallId: "worker-tool",
+    callId: "provider-call",
+  };
+  const inbound: ThreadItem = {
+    type: "threadMessage",
+    id: "received",
+    clientId: "agent-input",
+    sender,
+    content: [{ type: "text", text: "Worker finding", text_elements: [] }],
+  };
+  const current = {
+    ...thread([turnWithItems("completed", [inbound])]),
+    canonicalItems: [
+      {
+        type: "thread_message_queued",
+        id: "queued-agent",
+        threadId: "thread",
+        clientId: "queued-agent-input",
+        createdAt: "2026-10-13T00:00:00.000Z",
+        sender,
+        input: [{ type: "text", text: "Next finding" }],
+        deliveryMode: "batch-next",
+        messageType: "follow_up",
+      },
+    ] as CanonicalItem[],
+    queuedMessages: [
+      {
+        id: "queued-agent",
+        clientId: "queued-agent-input",
+        text: "Next finding",
+        imageCount: 0,
+        sender,
+      },
+    ],
+  };
+  const html = renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: current,
+      onDraftChange: () => {},
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+      onEditQueued: async () => {
+        throw new Error("Agent editing must not be called");
+      },
+    }),
+  );
+  const dom = new JSDOM(html);
+  try {
+    const row = dom.window.document.querySelector(".thread-message-row");
+    assert.ok(row);
+    assert.match(
+      row.querySelector(".thread-message-sender")?.textContent ?? "",
+      /Research worker/,
+    );
+    assert.match(row.textContent ?? "", /Worker finding/);
+    assert.doesNotMatch(row.textContent ?? "", /worker-thread/);
+    assert.match(
+      row.querySelector(".thread-message-sender")?.getAttribute("title") ?? "",
+      /worker-thread/,
+    );
+    assert.equal(dom.window.document.querySelector(".queue-row-edit"), null);
+    assert.ok(
+      dom.window.document.querySelectorAll(".thread-message-sender").length >=
+        2,
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("remote sender remains visibly remote without exposing raw IDs in the message label", async () => {
+  const { FleetHistory } = await import("../src/renderer/src/FleetHistory.js");
+  const local = {
+    threadId: "uuid-source",
+    threadName: "Research worker",
+    turnId: "turn",
+    toolCallId: "tool",
+    callId: "call",
+  };
+  const remote = {
+    threadId: "uuid-source",
+    threadName: "Research worker",
+    deviceId: "uuid-peer",
+    toolCallId: "tool",
+    callId: "call",
+  };
+  const inbound = (sender: typeof local | typeof remote): ThreadItem => ({
+    type: "threadMessage",
+    id: "inbound",
+    clientId: "client",
+    sender,
+    content: [{ type: "text", text: "finding", text_elements: [] }],
+  });
+  const html = renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: {
+        ...thread([
+          turnWithItems("completed", [inbound(local), inbound(remote)]),
+        ]),
+        queuedMessages: [
+          {
+            id: "pending",
+            clientId: "queued",
+            sender: remote,
+            text: "pending",
+            imageCount: 0,
+          },
+        ],
+      },
+      onDraftChange: () => {},
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    }),
+  );
+  const dom = new JSDOM(html);
+  try {
+    const labels = [
+      ...dom.window.document.querySelectorAll(".thread-message-sender"),
+    ];
+    assert.ok(labels.some((label) => label.textContent?.includes("Remote:")));
+    assert.equal(
+      labels.filter((label) => label.textContent?.includes("Remote:")).length,
+      2,
+    );
+    assert.ok(labels.every((label) => !label.textContent?.includes("uuid-")));
+    assert.ok(
+      labels
+        .filter((label) => label.textContent?.includes("Remote:"))
+        .every(
+          (label) =>
+            label.getAttribute("title")?.includes("peer-reported") &&
+            label.getAttribute("title")?.includes("uuid-peer"),
+        ),
+    );
+  } finally {
+    dom.window.close();
+  }
+  const renderFleet = (sender: typeof local | typeof remote) =>
+    renderToStaticMarkup(
+      createElement(FleetHistory, {
+        value: {
+          items: [
+            { id: "message", type: "thread_message", text: "context", sender },
+          ],
+        },
+      }),
+    );
+  const localHtml = renderFleet(local),
+    remoteHtml = renderFleet(remote);
+  assert.notEqual(localHtml, remoteHtml);
+  assert.match(remoteHtml, /Remote: Research worker/);
+  assert.match(remoteHtml, /peer-reported/);
+});

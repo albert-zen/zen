@@ -344,7 +344,7 @@
 - **ProviderTransport** — 宿主为 Provider HTTP 请求注入的显式连接策略；首版只接受
   无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
 - **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
-  唤醒条件与命中历史；每次命中以稳定幂等 key 通过 App Server 提交普通输入，Thread 完成通知使用既有 canonical queue，失败明确记录且不自动补偿。
+  唤醒条件与命中历史；每次命中以稳定幂等 key 通过 native Host wake 提交带真实来源的输入，缺省 soft steer；只有该 Trigger 显式 queue 才等待下一轮，失败明确记录且不自动补偿。
   Windows program cleanup captures ownership only while the spawned root remains live, verifies its direct parent, and admits new descendants only through a simultaneously observed matching parent generation with nondecreasing creation times; ambiguous lineage is an explicit containment failure. Previously captured descendants remain tracked after parent exit, and termination remains bound to each exact identity. Process-table snapshots do not prove exhaustive ownership of unobserved generations.
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread；读取转录使用有界分页而非把全部历史压入一次插件命令结果。
@@ -356,9 +356,9 @@
 - **ZenXAutomationServiceGenerationHealth** — Host 的可丢弃瞬时标志区分已接纳的 Room/Trigger 租约和底层仍可执行的 generation；stop 持久写失败后只有一次显式 start 能从实际磁盘重新建立能力，失败不被当作已保存事实或自动重试。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
-  新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。
+  Host 输入投影；它不是第二份权威 transcript，canonical `host_message` 与对应 queued/cancelled Items 才是输入事实，旧 `user_message` 仅兼容已存历史。
 - **ZenXTriggerAppServerPort** — ZenX Trigger 服务观察 completed Item/Turn 并发起普通
-  `turn/start` / `turn/queue` 与按需 Thread 读取所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
+  `zen/turn/wake` 与按需 native Thread 读取所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 - **ZenXPluginCatalog** — ZenX 主进程从 profile 的直接 dependencies 注册 v2 package，原子管理
@@ -1108,7 +1108,9 @@ CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
 
 Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断（请求关联、分片序号、字段类型），失败时附带最近8个接收分片（各至多8KiB，明确标记截断），保留实际响应及工具参数以支持诊断；不记录请求头或请求正文，遮盖配置的API密钥，不作为会话语义来源；诊断写入失败不得替换原始模型错误。
 
-消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。显式 batch-next 是队列Item上的投递选择，Host在下一Turn接纳固定有界FIFO批次并为每条输入分别写入带原clientId的canonical user_message；未指定选择的自动化/兼容客户端继续逐条Turn。运行中发送模式是桌面偏好，新手动Composer默认有活动Turn时 steer、无活动Turn时 start，可选下一轮合批或逐条队列；偏好不改变已入队的Item。偏好的 explicit 标记仅用于区分新手动Composer隐式 steer 与旧用户显式 steer 对自控插件的影响，不携带Thread运行时语义。Host 以临时 attemptId + queuedItemId 标识队列接纳尝试，预检或异步启动失败发出不携原始凭证/输入的 native queue_failed 通知；显式 resume 共享同一Thread首批临时 admission Promise，直到初始输入落盘或启动拒收才应答，不等待完整Turn、不自动重试，也不把该Promise存为会话权威；队列状态仅由 ItemList 决定。旧归一化Queue无法区分隐式默认与旧手选时，用户偏好层一次迁移至手动steer并记录版本、原Queue值和可见恢复/确认状态；该设置不改变已有队列Item或自动化投递。
+普通新输入默认 soft steer：有活动 Turn 时在既有 model/tool-batch 安全边界进入，不硬中断；空闲时启动接收批次。用户 Composer、Agent/self-control、Fleet、IM、每个 Trigger 与 assistant Room 各自拥有独立配置或显式投递参数，缺省语义相同但绝不相互继承设置；只有入口自己的显式 queue/follow_up 才排队。显式 start/steer/replace 控制 RPC 仍保留各自 precondition，approval/reply 控制协议不是新消息。原生 `zen/turn/send` 省略 mode 时由 Core 选择 active steer 或 idle start。
+
+消息队列仅由各来源 canonical queued 记录及同 clientId 的已交付输入/cancelled Item 推导。Core 按 FIFO 在正常完成后启动新 Turn，失败/中断暂停且可显式继续；接入端只投影队列。显式 batch-next 和 Host/Agent 的 idle 接纳使用固定有界批次，每条输入分别保留 canonical 身份与来源；历史已入队 Item 保留原投递选择。Host 以临时 attemptId + queuedItemId 标识接纳尝试，失败发出不携原始凭证/输入的 native queue_failed 通知。显式 resume 共享同 Thread 首批 admission Promise，直到初始输入落盘或拒收才应答；不等待完整 Turn、不自动重试、不另存会话权威。旧归一化 Composer Queue 无法区分隐式默认与旧手选时，一次迁移至 soft 并保留版本、原值及可见恢复/确认；可靠标记的显式 Queue 保留，迁移不改变既有队列或其它入口配置。
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
 
@@ -1200,9 +1202,9 @@ workflow. A partial failure identifies a known created Thread for explicit bindi
 and never silently starts another. Setup adds
 no Runtime, Thread authority, scheduler or journal. The reusable preset composes
 Rooms, Triggers and Fleet-enabled self-control; it has no personal Work dependency.
-Human Room posts wake the assistant; event/timer Triggers targeting its Thread
-use the same next-cycle delivery and preserve their explicit prompts and Room
-destination. New input starts idle work
+Room posts wake the assistant with their actual author represented in Host-origin context; event/timer Triggers targeting its Thread
+retain their own independent delivery mode, explicit prompts and Room destination.
+Each Trigger and assistant Room defaults to soft steering; an explicit queue applies only to that object. New input starts idle work
 or steers the active Turn for the next model cycle. Definitive pre-admission
 thread_busy/turn_not_running races re-read and retry with the same client identity;
 unknown transport outcomes never trigger an automatic mutation retry. Multiple
@@ -1275,6 +1277,31 @@ continues through the SDK's namespace, workspace fingerprint, and runtime fencin
 IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. Startup preparation and Room polling are scoped to the explicitly enabled deployment channels; disabling a channel retains its Room binding and checkpoint for a later re-enable. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
 
 - **ZenX sidebar width** — A renderer-only local preference drives the existing shell track; viewport clamping, pointer gestures and collapsed/overlay presentation are disposable layout state and never alter Thread or Host facts.
+
+### 跨 Thread Agent 消息
+
+跨 Thread 工具发送由 Host 捕获 source Thread / Turn / canonical tool_call / callId，
+写独立 `thread_message`，不伪装 `user_message`、目标自身 `agent_message` 或 Host bootstrap。
+来源是可审计的 provenance，不是新增的人类授权；模型投影和产品历史明确区分来源。
+默认与 guidance 由 Core 在目标 mutation fence 内接纳到活跃 Turn，沿 `deliveryAfter`
+等当前模型响应的完整 tool batch 结束再采样；不打断正在执行的工具或审批。
+空闲接纳与显式 follow_up 通过 `thread_message_queued` 进入既有队列投影，逐条身份
+保留，只有同类 Agent 消息做有界 FIFO 合批。手工用户 queue 不受 Agent 默认值影响。
+队列取消通过 `thread_message_cancelled` 引用原 canonical 身份；全部投递状态从同一
+ItemList 推导。初始输入接纳期间到达的 guidance 在首次 sample 前加入同一 Turn。
+失败或中断留下可观察 pending/terminal 状态，不新增自动恢复 ledger，不重试不明传输结果。
+
+Native Fleet 对端通过 `thread-message-v1` capability 协商支持此消息；接收 Host 只从
+已有认证 session 绑定 deviceId，远端 source Thread/tool ID 明确是 peer-reported，
+不能冒充本机验证的来源。旧 native Host 与不支持该 provenance 合同的 SSH Agent
+发送明确拒绝且不降级为人类消息；显式 trusted UI 的旧发送协议保持兼容。
+显式 replacement 沿既有 replacement intent 保存同一 sender，失败不重放工具副作用。
+来源可读名称是 Host 捕获的有界展示快照，不参与 identity、幂等比较或授权；远端
+来源始终可见地区分，精确 device / Thread / tool proof 放在来源详情中。
+
+- Ordinary ingress uses soft steering by default: human sends, Agent messages, Host wakeups, Triggers and Room messages join active work at the existing completed model/tool-batch boundary without aborting it; idle ingress starts a bounded batch. Each ingress owns its independent explicit queue preference; no Trigger, Room, IM or Agent inherits the Composer preference. Explicit start/steer/queue/replacement control operations retain their contracts.
+- Host wakeups reuse the native `zen/turn/wake` / canonical `host_message` contract (including bootstrap), extended with exact trigger/room source identifiers and canonical queued/cancelled Items. They are Host-authored context, never human authorization or fabricated Agent tool calls. The ItemList remains the only durable admission/queue truth, and approval replies are control protocol rather than new inputs.
+- PAW bootstrap observation validates canonical Host source and exact client/Thread/Turn receipt against the existing history origin (a Room with no originating Room message), through the same bounded native recovery barrier. The bounded Room operation log is not a recovery authority, so acknowledged operation eviction cannot erase canonical bootstrap provenance. Bootstrap and ordinary wakeups share one admission owner; reconnect or a lost acknowledgement never replays input or introduces another dispatch registry.
 
 ### Browser instance resource routing
 

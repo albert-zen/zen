@@ -61,6 +61,7 @@ import type {
   ZenXTrigger,
   AssistantWorkspace,
   UpdateAssistantWorkspaceInput,
+  WakeupDeliveryMode,
 } from "./trigger-types.js";
 
 export interface ZenXTriggerAppServerPort {
@@ -96,24 +97,17 @@ export interface ZenXTriggerAppServerPort {
     },
     signal: AbortSignal,
   ): Promise<() => void>;
-  sendAssistantWakeup?(
-    params: {
-      threadId: string;
-      clientId: string;
-      source: "bootstrap";
-      text: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<{ turnId: string }>;
-  sendAssistant?(
-    params: ClientRequestParams["turn/queue"],
-    signal?: AbortSignal,
-  ): Promise<{ turnId: string }>;
-  enqueue?(params: ClientRequestParams["turn/queue"]): Promise<void>;
   request(
-    method: "turn/start",
-    params: ClientRequestParams["turn/start"],
-  ): Promise<ClientRequestResults["turn/start"]>;
+    method: "turn/start" | "zen/turn/wake" | "zen/thread/resume",
+    params:
+      | ClientRequestParams["turn/start"]
+      | ClientRequestParams["zen/turn/wake"]
+      | ClientRequestParams["zen/thread/resume"],
+  ): Promise<
+    | ClientRequestResults["turn/start"]
+    | ClientRequestResults["zen/turn/wake"]
+    | ClientRequestResults["zen/thread/resume"]
+  >;
   onNotification(
     listener: (
       method: ServerNotificationMethod,
@@ -134,9 +128,13 @@ export interface ZenXTriggerStorePort {
 const MAX_WAKEUPS = 64;
 const MAX_TRANSIENT_TURNS = 64;
 const MAX_ITEMS_PER_TURN = 64;
+const MAX_RECOVERY_EVENTS = 256;
+const MAX_RECOVERY_BYTES = 1_048_576;
 const MAX_PROGRAM_OUTCOMES = 4;
 
 interface WakeupEvent {
+  /** Room-owned choice captured when its message and wakeup commit together. */
+  roomDeliveryMode?: WakeupDeliveryMode;
   bootstrapText?: string;
   reason: string;
   occurrenceKey: string;
@@ -190,6 +188,17 @@ interface TriggerGeneration {
   retiring: boolean;
   storeUnavailable: boolean;
   wakeupAdmission: boolean;
+  observationEpoch?: symbol;
+  recoveringThreads: Map<
+    string,
+    {
+      epoch: symbol;
+      clientIds: Set<string>;
+      events: ServerNotificationParams["zen/thread/event"][];
+      bytes: number;
+      overflow: boolean;
+    }
+  >;
   timers: Map<string, { handle: unknown; scheduledAt: number }>;
   remoteWatches: Map<string, RemoteWatch>;
   completedTurnItems: Map<string, CompletedItemBuffer>;
@@ -256,7 +265,8 @@ export class ZenXTriggerService {
       const snapshot = await this.#store.read();
       for (const entry of snapshot.history) {
         if (entry.status === "starting" || entry.status === "running") {
-          if (entry.delivery !== undefined) entry.delivery = "unknown";
+          if (entry.delivery !== undefined || entry.turnId !== null)
+            entry.delivery = "unknown";
           entry.status = "failed";
           entry.completedAt = this.#now();
           entry.error =
@@ -287,6 +297,14 @@ export class ZenXTriggerService {
       this.#notify();
       this.#rescheduleTimers(generation);
       this.#subscribeWakeups(generation);
+      // Subscription recovery is one read-only pass. A slow/offline Thread
+      // must not hold product startup or shutdown behind its RPC deadline.
+      void this.#recoverWakeups(generation).catch((error) => {
+        if (this.#isOperational(generation))
+          console.warn(
+            `Could not recover Trigger observation: ${describeError(error)}`,
+          );
+      });
     } catch (error) {
       generation.active = false;
       if (this.#generation === generation) this.#generation = null;
@@ -304,12 +322,20 @@ export class ZenXTriggerService {
     this.#subscribeWakeups(generation);
     this.#syncRemoteWatches(generation);
     this.#rescheduleTimers(generation);
+    void this.#recoverWakeups(generation).catch((error) => {
+      if (this.#isOperational(generation))
+        console.warn(
+          `Could not recover Trigger observation: ${describeError(error)}`,
+        );
+    });
   }
 
   suspendWakeups(): void {
     const generation = this.#runningGeneration();
     if (!generation.wakeupAdmission) return;
     generation.wakeupAdmission = false;
+    generation.observationEpoch = undefined;
+    generation.recoveringThreads.clear();
     generation.disposeNotifications?.();
     generation.disposeNotifications = undefined;
     this.#disposeRemoteWatches(generation);
@@ -322,30 +348,269 @@ export class ZenXTriggerService {
 
   #subscribeWakeups(generation: TriggerGeneration): void {
     if (!this.#isWakeupOperational(generation)) return;
+    const epoch = Symbol("trigger-observation");
+    generation.observationEpoch = epoch;
+    const current = () =>
+      this.#isWakeupOperational(generation) &&
+      generation.observationEpoch === epoch;
     const disposeNotifications = this.#manager.onNotification(
       (method, params) => {
-        if (!this.#isWakeupOperational(generation)) return;
-        if (method === "item/completed") {
+        if (
+          !this.#isWakeupOperational(generation) ||
+          generation.observationEpoch !== epoch
+        )
+          return;
+        if (method === "zen/thread/event") {
+          const native = params as ServerNotificationParams["zen/thread/event"];
+          const recovery = generation.recoveringThreads.get(native.threadId);
+          if (recovery?.epoch === epoch && !recovery.overflow) {
+            const event = native.event;
+            const relevant =
+              event.type === "turn_completed" ||
+              (event.type === "queue_failed" &&
+                recovery.clientIds.has(event.clientId)) ||
+              (event.type === "item_completed" &&
+                (event.item.type === "agent_message" ||
+                  ((event.item.type === "host_message" ||
+                    event.item.type === "host_message_queued" ||
+                    event.item.type === "host_message_cancelled") &&
+                    recovery.clientIds.has(event.item.clientId))));
+            if (relevant) {
+              const bytes = utf8Bytes(JSON.stringify(native));
+              if (
+                recovery.events.length === MAX_RECOVERY_EVENTS ||
+                recovery.bytes + bytes > MAX_RECOVERY_BYTES
+              ) {
+                recovery.overflow = true;
+                recovery.events = [];
+              } else {
+                recovery.bytes += bytes;
+                recovery.events.push(native);
+              }
+            }
+          }
+          if (
+            native.event.type === "item_completed" &&
+            native.event.item.type === "host_message"
+          ) {
+            const item = native.event.item;
+            const active = this.#observeHostWakeup(generation, item);
+            if (
+              !active &&
+              this.#snapshot.history.some(
+                (entry) =>
+                  entry.threadId === item.threadId &&
+                  entry.clientUserMessageId === item.clientId,
+              )
+            )
+              return; // Rejected provenance or terminal history cannot feed completion correlation.
+            if (active) {
+              void this.#mutate(generation, async (snapshot) => {
+                if (!current()) return;
+                const entry = snapshot.history.find(
+                  (entry) => entry.id === active.historyId,
+                );
+                if (
+                  entry &&
+                  (!isTerminal(entry.status) || entry.delivery === "unknown")
+                ) {
+                  entry.turnId = item.turnId;
+                  entry.status = "running";
+                  entry.completedAt = null;
+                  entry.error = null;
+                  delete entry.delivery;
+                }
+              }).catch((error: unknown) =>
+                this.#markStoreUnavailable(generation, active.historyId, error),
+              );
+            }
+            this.#handleItemCompleted(generation, {
+              threadId: item.threadId,
+              turnId: item.turnId,
+              completedAtMs: new Date(item.createdAt).getTime(),
+              item: {
+                type: "hostMessage",
+                id: item.id,
+                clientId: item.clientId,
+                source: item.source,
+                text: item.text,
+                mode: item.mode,
+                ...(item.sourceId === undefined
+                  ? {}
+                  : { sourceId: item.sourceId }),
+                ...(item.deliveryAfter === undefined
+                  ? {}
+                  : { deliveryAfter: item.deliveryAfter }),
+              },
+            });
+          } else if (
+            native.event.type === "item_completed" &&
+            native.event.item.type === "agent_message"
+          ) {
+            const item = native.event.item;
+            this.#handleItemCompleted(generation, {
+              threadId: item.threadId,
+              turnId: item.turnId,
+              completedAtMs: new Date(item.createdAt).getTime(),
+              item: {
+                type: "agentMessage",
+                id: item.id,
+                text: item.text,
+                phase: "final_answer",
+                memoryCitation: null,
+              },
+            });
+          } else if (native.event.type === "turn_completed") {
+            const event = native.event;
+            void (async () => {
+              if (
+                !this.#isPotentialTurn(generation, event.threadId, event.turnId)
+              )
+                return;
+              let read: ClientRequestResults["thread/read"] | undefined;
+              try {
+                read = await this.#manager.readThread?.(event.threadId);
+              } catch (error) {
+                // The native terminal event and buffered canonical Items remain
+                // valid even when an optional full-history read is unavailable.
+                console.warn(
+                  `Could not read completed Trigger context: ${describeError(error)}`,
+                );
+              }
+              if (!current()) return;
+              const turn = read?.thread.turns.find(
+                (turn) => turn.id === event.turnId,
+              );
+              await this.#handleTurnCompleted(
+                generation,
+                {
+                  threadId: event.threadId,
+                  turn:
+                    turn && turn.status !== "inProgress"
+                      ? turn
+                      : {
+                          id: event.turnId,
+                          status: event.status,
+                          itemsView: "full",
+                          error: null,
+                          startedAt: null,
+                          completedAt: this.#now() / 1000,
+                          durationMs: null,
+                          items:
+                            generation.completedTurnItems.get(
+                              transientTurnKey(event.threadId, event.turnId),
+                            )?.items ?? [],
+                        },
+                },
+                current,
+              );
+            })().catch((error: unknown) => {
+              if (this.#isOperational(generation))
+                console.warn(
+                  `Could not process native Trigger completion: ${describeError(error)}`,
+                );
+            });
+          } else if (
+            native.event.type === "item_completed" &&
+            native.event.item.type === "host_message_queued"
+          ) {
+            const item = native.event.item;
+            const active = this.#observeHostWakeup(generation, item);
+            if (active)
+              void this.#mutate(generation, async (snapshot) => {
+                if (!current()) return;
+                const entry = snapshot.history.find(
+                  (entry) => entry.id === active.historyId,
+                );
+                if (
+                  !entry ||
+                  entry.turnId !== null ||
+                  entry.delivery === "failed" ||
+                  entry.status === "completed"
+                )
+                  return;
+                // Only a canonical queue Item (or its RPC receipt) confirms
+                // acceptance. Unknown transport outcomes alone never do.
+                entry.delivery = "queued";
+                entry.status = "starting";
+                entry.completedAt = null;
+              }).catch((error) =>
+                this.#markStoreUnavailable(generation, active.historyId, error),
+              );
+          } else if (
+            native.event.type === "item_completed" &&
+            native.event.item.type === "host_message_cancelled"
+          ) {
+            const item = native.event.item;
+            const active = this.#observeHostWakeup(generation, item);
+            if (active)
+              void this.#failHistory(
+                generation,
+                active.historyId,
+                "Host wakeup was cancelled before admission",
+                { confirmedDeliveryFailure: true, isCurrent: current },
+              ).catch((error: unknown) =>
+                this.#markStoreUnavailable(generation, active.historyId, error),
+              );
+          } else if (
+            native.event.type === "thread_deleted_updated" &&
+            native.event.deleted
+          ) {
+            const threadId = native.event.threadId;
+            void this.#mutate(generation, async (snapshot) => {
+              if (!current()) return;
+              for (const entry of snapshot.history) {
+                if (
+                  entry.threadId === threadId &&
+                  (entry.delivery === "queued" || entry.delivery === "unknown")
+                )
+                  entry.error =
+                    entry.delivery === "queued"
+                      ? "The target Thread was deleted; its queued wakeup cannot be admitted unless the Thread is restored and resumed."
+                      : "The target Thread was deleted; delivery remains unconfirmed and no wakeup was resent.";
+              }
+            }).catch((error) =>
+              this.#markStoreUnavailable(generation, "", error),
+            );
+          } else if (native.event.type === "queue_failed") {
+            const event = native.event;
+            const observed = this.#snapshot.history.find(
+              (entry) =>
+                entry.threadId === event.threadId &&
+                entry.clientUserMessageId === event.clientId,
+            );
+            if (!observed) return;
+            // This reports one admission attempt, not removal from the Core
+            // queue. Keep observing the accepted clientId without resending.
+            void this.#mutate(generation, async (snapshot) => {
+              if (!current()) return;
+              const entry = snapshot.history.find(
+                (entry) =>
+                  entry.threadId === event.threadId &&
+                  entry.clientUserMessageId === event.clientId,
+              );
+              if (
+                !entry ||
+                entry.turnId !== null ||
+                entry.delivery === "failed" ||
+                entry.status === "completed"
+              )
+                return;
+              entry.error = bounded(event.message, MAX_ERROR_BYTES);
+            }).catch((error: unknown) => {
+              this.#markStoreUnavailable(generation, observed.id, error);
+            });
+          }
+        } else if (method === "item/completed") {
           this.#handleItemCompleted(
             generation,
             params as ServerNotificationParams["item/completed"],
           );
-        } else if (method === "zen/thread/event") {
-          const event = (params as ServerNotificationParams["zen/thread/event"])
-            .event;
-          if (event.type === "turn_completed")
-            void this.#handleNativeTurnCompleted(generation, event).catch(
-              (error: unknown) => {
-                if (this.#isOperational(generation))
-                  console.warn(
-                    `Could not read native Trigger completion: ${describeError(error)}`,
-                  );
-              },
-            );
         } else if (method === "turn/completed") {
           void this.#handleTurnCompleted(
             generation,
             params as ServerNotificationParams["turn/completed"],
+            current,
           ).catch((error: unknown) => {
             if (this.#isOperational(generation))
               console.warn(
@@ -356,14 +621,12 @@ export class ZenXTriggerService {
       },
     );
     const disposeReconnect = this.#manager.onReconnect?.(() => {
-      void this.#reconcileActiveCompletions(generation).catch(
-        (error: unknown) => {
-          if (this.#isOperational(generation))
-            console.warn(
-              `Could not reconcile Trigger completion: ${describeError(error)}`,
-            );
-        },
-      );
+      void this.#recoverWakeups(generation).catch((error: unknown) => {
+        if (this.#isOperational(generation))
+          console.warn(
+            `Could not reconcile Trigger completion: ${describeError(error)}`,
+          );
+      });
     });
     generation.disposeNotifications = () => {
       disposeNotifications();
@@ -371,98 +634,284 @@ export class ZenXTriggerService {
     };
   }
 
-  async #handleNativeTurnCompleted(
-    generation: TriggerGeneration,
-    event: { threadId: string; turnId: string },
-  ): Promise<void> {
-    // A native subscription intentionally suppresses legacy projections. Read
-    // the exact completed Turn; Host input is never converted to a user item.
-    if (!this.#isPotentialTurn(generation, event.threadId, event.turnId))
-      return;
-    try {
-      if (!this.#manager.readThread)
-        throw new Error("Native Trigger completion read is unavailable");
-      const read = await this.#manager.readThread(event.threadId);
-      if (read.thread.id !== event.threadId)
-        throw new Error("Trigger Thread identity mismatch");
-      const turn = read.thread.turns.find((entry) => entry.id === event.turnId);
-      if (!turn || turn.status === "inProgress")
-        throw new Error("Native Trigger completion is not retained");
-      await this.#handleTurnCompleted(generation, {
-        threadId: event.threadId,
-        turn,
-      });
-    } catch (error) {
-      await this.#failCompletionObservation(
-        generation,
-        event.threadId,
-        event.turnId,
-        error,
+  async #recoverWakeups(generation: TriggerGeneration): Promise<void> {
+    const epoch = generation.observationEpoch;
+    const current = () =>
+      epoch !== undefined &&
+      generation.observationEpoch === epoch &&
+      this.#isWakeupOperational(generation);
+    if (!current()) return;
+    const candidates = this.#snapshot.history.filter(
+      (entry) =>
+        entry.delivery === "unknown" ||
+        entry.delivery === "queued" ||
+        (!isTerminal(entry.status) &&
+          (entry.delivery === "pending" || entry.turnId !== null)),
+    );
+    for (const threadId of new Set(candidates.map((entry) => entry.threadId))) {
+      if (!current()) return;
+      const ids = new Set(
+        candidates
+          .filter((entry) => entry.threadId === threadId)
+          .map((entry) => entry.id),
       );
-    }
-  }
-
-  async #reconcileActiveCompletions(
-    generation: TriggerGeneration,
-  ): Promise<void> {
-    // Recover observations of already-admitted work only. Never replay input,
-    // re-run a source watcher, or adopt old history from another Host lifetime.
-    if (!this.#isOperational(generation)) return;
-    const active = [...generation.activeWakeups.values()];
-    for (const threadId of new Set(active.map((entry) => entry.threadId))) {
+      // Capture live facts before requesting the barrier: the transport may
+      // emit them synchronously after resolving the RPC, before await resumes.
+      // This selects observation only; history does not establish admission.
+      const live = {
+        epoch: epoch!,
+        clientIds: new Set(
+          candidates
+            .filter((entry) => entry.threadId === threadId)
+            .map((entry) => entry.clientUserMessageId),
+        ),
+        events: [] as ServerNotificationParams["zen/thread/event"][],
+        bytes: 0,
+        overflow: false,
+      };
+      generation.recoveringThreads.set(threadId, live);
       try {
-        if (!this.#manager.readThread)
-          throw new Error("Trigger completion read is unavailable");
-        const read = await this.#manager.readThread(threadId);
-        if (read.thread.id !== threadId)
-          throw new Error("Trigger Thread identity mismatch");
-        if (!this.#isOperational(generation)) return;
-        for (const wakeup of active.filter(
-          (entry) => entry.threadId === threadId,
-        )) {
-          const history = this.#history(wakeup.historyId);
-          if (isTerminal(history.status) || history.turnId === null) continue;
-          const turn = read.thread.turns.find(
-            (entry) => entry.id === history.turnId,
+        // Native resume is a read/subscribe barrier, not queue execution. The
+        // Core remains the only owner of admission and durable queue state.
+        const result = await this.#manager.request("zen/thread/resume", {
+          threadId,
+        });
+        if (!current()) return;
+        if (
+          !("processEpoch" in result) ||
+          result.threadId !== threadId ||
+          result.thread.id !== threadId
+        )
+          throw new Error(
+            "Native recovery did not return the requested Thread",
           );
-          if (!turn) throw new Error("Admitted Trigger Turn is not retained");
-          if (turn.status !== "inProgress")
+        if (live.overflow)
+          throw new Error(
+            "Native recovery event buffer exceeded its bound; observation is unconfirmed",
+          );
+        const events = [...result.events, ...live.events].filter(
+          (event) =>
+            event.threadId === threadId &&
+            event.processEpoch === result.processEpoch &&
+            (event.event.type === "item_completed"
+              ? event.event.item.threadId === threadId
+              : "threadId" in event.event && event.event.threadId === threadId),
+        );
+        const items = [
+          ...new Map(
+            [
+              ...result.thread.items,
+              ...events.flatMap(({ event }) =>
+                event.type === "item_completed" ? [event.item] : [],
+              ),
+            ]
+              .filter((item) => item.threadId === threadId)
+              .map((item) => [item.id, item] as const),
+          ).values(),
+        ];
+        type HostItem = Extract<
+          (typeof items)[number],
+          { type: "host_message" | "host_message_queued" }
+        >;
+        const receiptFor = (entry: TriggerHistoryEntry) => {
+          const owns = (item: HostItem) =>
+            item.clientId === entry.clientUserMessageId &&
+            item.source === this.#hostSource(entry).source &&
+            item.sourceId === this.#hostSource(entry).sourceId;
+          const queued = items.find(
+            (
+              item,
+            ): item is Extract<HostItem, { type: "host_message_queued" }> =>
+              item.type === "host_message_queued" && owns(item),
+          );
+          const admitted = items.find(
+            (item): item is Extract<HostItem, { type: "host_message" }> =>
+              item.type === "host_message" && owns(item),
+          );
+          const cancelled =
+            queued !== undefined &&
+            items.some(
+              (item) =>
+                item.type === "host_message_cancelled" &&
+                item.queuedItemId === queued.id &&
+                item.clientId === queued.clientId,
+            );
+          return { queued, admitted, cancelled };
+        };
+        const completedForTurn = (turnId: string): ThreadItem[] =>
+          items.flatMap((candidate): ThreadItem[] => {
+            if (!("turnId" in candidate) || candidate.turnId !== turnId)
+              return [];
+            if (candidate.type === "host_message")
+              return [
+                {
+                  type: "hostMessage",
+                  id: candidate.id,
+                  clientId: candidate.clientId,
+                  source: candidate.source,
+                  sourceId: candidate.sourceId,
+                  text: candidate.text,
+                  mode: candidate.mode,
+                },
+              ];
+            if (candidate.type === "agent_message")
+              return [
+                {
+                  type: "agentMessage",
+                  id: candidate.id,
+                  text: candidate.text,
+                  phase: "final_answer",
+                  memoryCitation: null,
+                },
+              ];
+            return [];
+          });
+        // Validate canonical provenance and establish observation/buffer order
+        // synchronously, before any async projection write can hide live facts.
+        for (const entry of this.#snapshot.history) {
+          if (
+            !ids.has(entry.id) ||
+            (isTerminal(entry.status) && entry.delivery !== "unknown") ||
+            entry.delivery === "failed"
+          )
+            continue;
+          const receipt = receiptFor(entry);
+          if (receipt.cancelled) continue;
+          const item = receipt.admitted ?? receipt.queued;
+          if (!item || !this.#observeHostWakeup(generation, item)) continue;
+          if (item.type === "host_message") {
+            for (const completed of completedForTurn(item.turnId))
+              this.#handleItemCompleted(generation, {
+                threadId,
+                turnId: item.turnId,
+                completedAtMs: this.#now(),
+                item: completed,
+              });
+          }
+        }
+        // Subsequent live events now use the validated observer and normal
+        // completion barrier; replaying snapshot Items later would reorder them.
+        generation.recoveringThreads.delete(threadId);
+        const observed: Array<{ historyId: string; item: HostItem }> = [];
+        const cancelled: string[] = [];
+        await this.#mutate(generation, async (snapshot) => {
+          if (!current()) return;
+          for (const entry of snapshot.history) {
+            if (
+              !ids.has(entry.id) ||
+              (isTerminal(entry.status) && entry.delivery !== "unknown") ||
+              entry.delivery === "failed"
+            )
+              continue;
+            const {
+              queued,
+              admitted,
+              cancelled: isCancelled,
+            } = receiptFor(entry);
+            if (isCancelled) {
+              entry.status = "failed";
+              entry.delivery = "failed";
+              entry.completedAt = this.#now();
+              entry.error = "Host wakeup was cancelled before admission";
+              cancelled.push(entry.id);
+            } else if (admitted) {
+              entry.turnId = admitted.turnId;
+              entry.status = "running";
+              entry.completedAt = null;
+              entry.error = null;
+              delete entry.delivery;
+              observed.push({ historyId: entry.id, item: admitted });
+            } else if (queued && entry.turnId === null) {
+              entry.status = "starting";
+              entry.delivery = "queued";
+              entry.completedAt = null;
+              const failed = events
+                .map(({ event }) => event)
+                .findLast(
+                  (event) =>
+                    event.type === "queue_failed" &&
+                    event.clientId === queued.clientId &&
+                    event.queuedItemId === queued.id,
+                );
+              entry.error =
+                failed?.type === "queue_failed"
+                  ? bounded(failed.message, MAX_ERROR_BYTES)
+                  : result.thread.archived
+                    ? "Queued wakeup remains pending in an archived Thread; unarchive and resume it to continue."
+                    : null;
+              observed.push({ historyId: entry.id, item: queued });
+            } else if (
+              entry.delivery === "unknown" ||
+              entry.delivery === "pending"
+            ) {
+              entry.status = "failed";
+              entry.delivery = "unknown";
+              entry.error =
+                "No matching canonical Host receipt was found; delivery remains unconfirmed and no wakeup was resent.";
+            }
+          }
+        });
+        if (!current()) return;
+        for (const historyId of cancelled)
+          this.#releaseActiveWakeup(generation, historyId);
+        for (const { historyId, item } of observed) {
+          if (!current()) return;
+          const active = this.#observeHostWakeup(generation, item);
+          if (!active || item.type !== "host_message") continue;
+          const completedItems = completedForTurn(item.turnId);
+          const terminal = events
+            .map(({ event }) => event)
+            .findLast(
+              (event) =>
+                event.type === "turn_completed" && event.turnId === item.turnId,
+            );
+          const status =
+            terminal?.type === "turn_completed"
+              ? terminal.status
+              : result.thread.turns.find((turn) => turn.id === item.turnId)
+                  ?.status;
+          if (status && status !== "inProgress") {
             await this.#completeTurn(
               generation,
-              history.id,
-              { threadId, turn },
-              turn.items,
+              historyId,
+              {
+                threadId,
+                turn: {
+                  id: item.turnId,
+                  status,
+                  itemsView: "full",
+                  items: completedItems,
+                  error: null,
+                  startedAt: null,
+                  completedAt: null,
+                  durationMs: null,
+                },
+              },
+              completedItems,
+              current,
             );
+          }
         }
       } catch (error) {
-        await this.#failCompletionObservation(
-          generation,
-          threadId,
-          undefined,
-          error,
-        );
+        if (!current()) return;
+        await this.#mutate(generation, async (snapshot) => {
+          if (!current()) return;
+          for (const entry of snapshot.history) {
+            if (
+              ids.has(entry.id) &&
+              entry.status !== "completed" &&
+              entry.delivery !== "failed"
+            )
+              entry.error = bounded(
+                `Could not restore canonical Host observation: ${describeError(error)}. No wakeup was resent; enable Triggers again to retry observation.`,
+                MAX_ERROR_BYTES,
+              );
+          }
+        });
+      } finally {
+        if (generation.recoveringThreads.get(threadId) === live)
+          generation.recoveringThreads.delete(threadId);
       }
-    }
-  }
-
-  async #failCompletionObservation(
-    generation: TriggerGeneration,
-    threadId: string,
-    turnId: string | undefined,
-    error: unknown,
-  ): Promise<void> {
-    if (!this.#isOperational(generation)) return;
-    for (const active of [...generation.activeWakeups.values()]) {
-      const history = this.#history(active.historyId);
-      if (
-        active.threadId === threadId &&
-        (turnId === undefined || history.turnId === turnId)
-      )
-        await this.#failHistory(
-          generation,
-          history.id,
-          `Completion could not be confirmed; inspect the working Thread. No input was replayed. ${describeError(error)}`,
-        );
     }
   }
 
@@ -480,7 +929,8 @@ export class ZenXTriggerService {
           for (const entry of snapshot.history) {
             if (isTerminal(entry.status)) continue;
             entry.status = "failed";
-            if (entry.delivery !== undefined) entry.delivery = "unknown";
+            if (entry.delivery !== undefined || entry.turnId !== null)
+              entry.delivery = "unknown";
             entry.completedAt = this.#now();
             entry.error =
               "ZenX Trigger generation retired before this wakeup reached a visible terminal result; it was not retried.";
@@ -515,6 +965,7 @@ export class ZenXTriggerService {
       for (const timer of generation.timers.values())
         this.#cancelScheduled(timer.handle);
       generation.timers.clear();
+      generation.recoveringThreads.clear();
       generation.completedTurnItems.clear();
       generation.pendingCompletedTurns.clear();
       generation.activeWakeups.clear();
@@ -829,6 +1280,19 @@ export class ZenXTriggerService {
       room.name = nextName;
     });
   }
+  async setAssistantDeliveryMode(
+    roomId: string,
+    mode: WakeupDeliveryMode,
+  ): Promise<void> {
+    const deliveryMode = validateDeliveryMode(mode);
+    const generation = this.#runningGeneration();
+    await this.#mutate(generation, async (snapshot) => {
+      const room = snapshot.rooms.find((entry) => entry.id === roomId);
+      if (!room?.assistant) throw new Error("Assistant Room was not found");
+      room.assistant.deliveryMode = deliveryMode;
+    });
+  }
+
   assistantWorkspace(roomId: string): AssistantWorkspace {
     const room = this.#snapshot.rooms.find(
       (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
@@ -1078,7 +1542,7 @@ export class ZenXTriggerService {
         throw new Error("PAW welcome operation is unavailable");
       if (operation.cancelled) throw new Error("PAW welcome was cancelled");
       if (operation.wakeupId) return { operation: structuredClone(operation) };
-      if (!generation.wakeupAdmission || !this.#manager.sendAssistantWakeup)
+      if (!generation.wakeupAdmission)
         throw new Error("PAW proactive welcome is unavailable on this Host");
       const trigger = snapshot.triggers.find(
         (entry) => entry.id === room.assistant!.triggerId && entry.active,
@@ -1242,7 +1706,9 @@ export class ZenXTriggerService {
                       ? ("unknown" as const)
                       : entry.delivery === "unknown"
                         ? ("unknown" as const)
-                        : entry.status === "failed"
+                        : entry.status === "failed" ||
+                            (entry.delivery === "queued" &&
+                              entry.error !== null)
                           ? ("failed" as const)
                           : entry.status === "completed"
                             ? ("completed" as const)
@@ -1331,7 +1797,7 @@ export class ZenXTriggerService {
           const admitted = result.thread.turns.some((turn) =>
             turn.items.some(
               (item) =>
-                item.type === "userMessage" &&
+                (item.type === "userMessage" || item.type === "hostMessage") &&
                 item.clientId !== null &&
                 clientIds.has(item.clientId),
             ),
@@ -1521,6 +1987,9 @@ export class ZenXTriggerService {
             reason: `Room #${room.name} mention from ${value.author}: ${value.text}`,
             occurrenceKey: `room:${room.id}:${value.id}`,
             sourceRoomId: room.id,
+            ...(room.assistant
+              ? { roomDeliveryMode: room.assistant.deliveryMode ?? "steer" }
+              : {}),
             sourceRoomMessageId: value.id,
             sourceRoomMessageText: [
               value.replyTo
@@ -1552,8 +2021,12 @@ export class ZenXTriggerService {
   async #handleTurnCompleted(
     generation: TriggerGeneration,
     event: ServerNotificationParams["turn/completed"],
+    isCurrent: () => boolean = () => this.#isOperational(generation),
   ): Promise<void> {
-    if (!this.#isOperational(generation)) return;
+    // Earlier canonical admission notifications may still be persisting their
+    // history projection, especially when restoring an unknown RPC outcome.
+    await this.#mutation;
+    if (!isCurrent()) return;
     const key = transientTurnKey(event.threadId, event.turn.id);
     const buffered = generation.completedTurnItems.get(key);
     const completedItems = mergeCompletedItems(
@@ -1565,11 +2038,10 @@ export class ZenXTriggerService {
         entry.threadId === event.threadId &&
         (entry.turnId === event.turn.id ||
           (entry.turnId === null &&
-            entry.replyRoomId !== null &&
             (entry.delivery === "pending" || entry.delivery === "queued") &&
             completedItems.some(
               (item) =>
-                item.type === "userMessage" &&
+                (item.type === "userMessage" || item.type === "hostMessage") &&
                 item.clientId === entry.clientUserMessageId,
             ))) &&
         (entry.status === "starting" || entry.status === "running") &&
@@ -1583,6 +2055,7 @@ export class ZenXTriggerService {
             running.id,
             event,
             completedItems,
+            isCurrent,
           );
         } catch (error) {
           if (error instanceof StaleGenerationError) return;
@@ -1603,7 +2076,7 @@ export class ZenXTriggerService {
     } else {
       this.#bufferEarlyCompletion(generation, event, completedItems);
     }
-    if (!this.#isOperational(generation)) return;
+    if (!isCurrent()) return;
     const watchers = this.#snapshot.triggers
       .filter(
         (trigger) =>
@@ -1716,8 +2189,12 @@ export class ZenXTriggerService {
       ...new Set(
         completedItems
           .filter(
-            (item): item is Extract<ThreadItem, { type: "userMessage" }> =>
-              item.type === "userMessage",
+            (
+              item,
+            ): item is Extract<
+              ThreadItem,
+              { type: "userMessage" | "hostMessage" }
+            > => item.type === "userMessage" || item.type === "hostMessage",
           )
           .map((item) => item.clientId)
           .filter((value): value is string => value !== null),
@@ -1854,13 +2331,7 @@ export class ZenXTriggerService {
       programInvocationId: null,
       programOutcome: null,
       programOutcomes: [],
-      ...((trigger.kind === "thread" ||
-        snapshot.rooms.some(
-          (room) => room.assistant?.threadId === trigger.threadId,
-        )) &&
-      (this.#manager.enqueue !== undefined ||
-        this.#manager.sendAssistant !== undefined) &&
-      trigger.program === undefined
+      ...(trigger.program === undefined
         ? { delivery: rejected ? ("failed" as const) : ("pending" as const) }
         : {}),
     };
@@ -2016,24 +2487,42 @@ export class ZenXTriggerService {
       const assistantRoom = assistantRooms.find(
         (room) => room.assistant?.triggerId === trigger.id,
       );
-      if (assistantRooms.length > 0) {
-        if (
-          wakeup.bootstrapText
-            ? !this.#manager.sendAssistantWakeup
-            : !this.#manager.sendAssistant
-        )
-          throw new Error("PAW delivery is unavailable on this Host");
-        if (this.#history(active.historyId).delivery === undefined) {
-          await this.#mutate(generation, async (snapshot) => {
-            snapshot.history.find(
-              (entry) => entry.id === active.historyId,
-            )!.delivery = "pending";
-          });
-        }
-        const bootstrapInput =
-          wakeup.bootstrapText === undefined
-            ? undefined
-            : [
+      const sourceRoom =
+        wakeup.sourceRoomId === undefined
+          ? undefined
+          : this.#snapshot.rooms.find(
+              (room) => room.id === wakeup.sourceRoomId,
+            );
+      // Room posts and independent event Triggers never inherit each other's
+      // preference, even when they target the same assistant Thread.
+      const deliveryMode =
+        wakeup.bootstrapText === undefined
+          ? (wakeup.roomDeliveryMode ?? trigger.deliveryMode)
+          : "steer";
+      if (this.#history(active.historyId).delivery === undefined) {
+        await this.#mutate(generation, async (snapshot) => {
+          const entry = snapshot.history.find(
+            (entry) => entry.id === active.historyId,
+          );
+          if (entry && !isTerminal(entry.status)) entry.delivery = "pending";
+        });
+      }
+      if (!this.#isOperational(generation)) return;
+      const result = await this.#manager.request("zen/turn/wake", {
+        threadId: trigger.threadId,
+        clientId: active.clientUserMessageId,
+        source:
+          wakeup.bootstrapText !== undefined
+            ? "bootstrap"
+            : sourceRoom === undefined
+              ? "trigger"
+              : "room",
+        ...(wakeup.bootstrapText === undefined
+          ? { sourceId: sourceRoom?.id ?? trigger.id }
+          : {}),
+        text:
+          wakeup.bootstrapText !== undefined
+            ? [
                 assistantWakeupInput(
                   trigger,
                   this.#history(active.historyId),
@@ -2045,157 +2534,53 @@ export class ZenXTriggerService {
                 ),
                 "",
                 wakeup.bootstrapText,
-              ].join("\n");
-        const result =
-          bootstrapInput !== undefined
-            ? await this.#manager.sendAssistantWakeup!(
-                {
-                  threadId: trigger.threadId,
-                  clientId: active.clientUserMessageId,
-                  source: "bootstrap",
-                  text: bootstrapInput,
-                },
-                controller.signal,
-              )
-            : await this.#manager.sendAssistant!(
-                {
-                  threadId: trigger.threadId,
-                  clientUserMessageId: active.clientUserMessageId,
-                  input: [
-                    {
-                      type: "text",
-                      text: assistantWakeupInput(
-                        trigger,
-                        this.#history(active.historyId),
-                        wakeup.projection,
-                        assistantRooms,
-                        assistantRoom,
-                        wakeup.sourceRoomMessageText,
-                      ),
-                    },
-                  ],
-                },
-                controller.signal,
-              );
-        await this.#mutate(generation, async (snapshot) => {
-          const entry = snapshot.history.find(
-            (item) => item.id === active.historyId,
-          );
-          if (entry && !isTerminal(entry.status)) {
-            entry.turnId = result.turnId;
-            entry.status = "running";
-            delete entry.delivery;
-          }
-        });
-        await this.#consumePendingCompletion(generation, active, result.turnId);
-        // Host input has no compatibility userMessage. A shared Turn may have
-        // completed and consumed its event buffer before admission returned.
-        if (
-          active.bootstrap &&
-          !isTerminal(this.#history(active.historyId).status) &&
-          this.#manager.readThread
-        ) {
-          const read = await this.#manager.readThread(trigger.threadId);
-          if (read.thread.id !== trigger.threadId)
-            throw new Error("PAW welcome Thread identity mismatch");
-          const turn = read.thread.turns.find(
-            (entry) => entry.id === result.turnId,
-          );
-          if (turn && turn.status !== "inProgress")
-            await this.#completeTurn(
-              generation,
-              active.historyId,
-              { threadId: trigger.threadId, turn },
-              turn.items,
-            );
-        }
-        return;
-      }
-      if (trigger.kind === "thread" && this.#manager.enqueue !== undefined) {
-        if (this.#history(active.historyId).delivery === undefined) {
-          await this.#mutate(generation, async (snapshot) => {
-            snapshot.history.find(
-              (entry) => entry.id === active.historyId,
-            )!.delivery = "pending";
-          });
-        }
-        await this.#manager.enqueue({
-          threadId: trigger.threadId,
-          clientUserMessageId: active.clientUserMessageId,
-          input: [
-            {
-              type: "text",
-              text: wakeupInput(
-                trigger,
-                this.#history(active.historyId),
-                wakeup.projection,
-                wakeup.sourceRoomMessageText,
-              ),
-            },
-          ],
-        });
-        await this.#mutate(generation, async (snapshot) => {
-          const entry = snapshot.history.find(
-            (candidate) => candidate.id === active.historyId,
-          )!;
-          entry.delivery = "queued";
-          entry.status = "completed";
-          entry.completedAt = this.#now();
-        });
-        this.#releaseActiveWakeup(generation, active.historyId);
-        return;
-      }
-      const result = await this.#manager.request("turn/start", {
-        threadId: trigger.threadId,
-        clientUserMessageId: active.clientUserMessageId,
-        input: [
-          {
-            type: "text",
-            text: wakeupInput(
-              trigger,
-              this.#history(active.historyId),
-              wakeup.projection,
-              wakeup.sourceRoomMessageText,
-            ),
-          },
-        ],
+              ].join("\n")
+            : assistantRooms.length > 0
+              ? assistantWakeupInput(
+                  trigger,
+                  this.#history(active.historyId),
+                  wakeup.projection,
+                  assistantRooms,
+                  assistantRoom,
+                  wakeup.sourceRoomMessageText,
+                )
+              : wakeupInput(
+                  trigger,
+                  this.#history(active.historyId),
+                  wakeup.projection,
+                  wakeup.sourceRoomMessageText,
+                ),
+        ...(deliveryMode === "queue" ? { mode: "queue" as const } : {}),
       });
       if (!this.#isOperational(generation)) return;
-      const wasStarted = await this.#mutate(generation, async (snapshot) => {
-        const history = snapshot.history.find(
-          (entry) => entry.id === active.historyId,
+      if (!("mode" in result) || (result.mode !== "queue" && !result.turnId))
+        throw new Error(
+          "Host wakeup admission is unconfirmed; inspect the Thread before retrying",
         );
-        if (history === undefined || history.status !== "starting")
-          return false;
-        const collision = snapshot.history.find(
-          (entry) =>
-            entry.id !== history.id &&
-            entry.threadId === trigger.threadId &&
-            entry.turnId === result.turn.id &&
-            (entry.status === "starting" || entry.status === "running"),
+      await this.#mutate(generation, async (snapshot) => {
+        const entry = snapshot.history.find(
+          (item) => item.id === active.historyId,
         );
-        if (collision !== undefined)
-          throw new Error("Turn identity was already owned by another wakeup");
-        history.status = "running";
-        history.turnId = result.turn.id;
-        return true;
+        if (!entry || isTerminal(entry.status)) return;
+        if (result.mode === "queue" && entry.turnId === null) {
+          // This is only a projection of the canonical queue receipt. The Core
+          // owns later admission and no Trigger retry or scheduler is created.
+          entry.delivery = "queued";
+        } else if (result.turnId) {
+          entry.turnId = result.turnId;
+          entry.status = "running";
+          delete entry.delivery;
+        }
       });
-      if (!wasStarted) return;
-      await this.#consumePendingCompletion(generation, active, result.turn.id);
+      if (result.turnId)
+        await this.#consumePendingCompletion(generation, active, result.turnId);
+      // Recover only the exact canonical receipt when a bootstrap completion
+      // raced admission acknowledgement. Never resend or infer a human input.
       if (
-        result.turn.status === "completed" ||
-        result.turn.status === "interrupted"
-      ) {
-        await this.#completeTurn(
-          generation,
-          active.historyId,
-          {
-            threadId: trigger.threadId,
-            turn: result.turn,
-          },
-          result.turn.items,
-        );
-      }
+        active.bootstrap &&
+        !isTerminal(this.#history(active.historyId).status)
+      )
+        await this.#recoverWakeups(generation);
     } catch (error) {
       if (error instanceof StaleGenerationError) return;
       if (this.#isOperational(generation)) {
@@ -2204,6 +2589,7 @@ export class ZenXTriggerService {
             generation,
             active.historyId,
             describeError(error),
+            { preserveCanonicalAdmission: true },
           );
         } catch (failureError) {
           this.#markStoreUnavailable(
@@ -2228,9 +2614,8 @@ export class ZenXTriggerService {
     if (
       pending === undefined ||
       pending.claimed ||
-      (!active.bootstrap &&
-        (pending.rejected ||
-          pending.clientUserMessageId !== active.clientUserMessageId))
+      pending.rejected ||
+      pending.clientUserMessageId !== active.clientUserMessageId
     )
       return;
     pending.claimed = true;
@@ -2253,9 +2638,11 @@ export class ZenXTriggerService {
     historyId: string,
     event: ServerNotificationParams["turn/completed"],
     completedItems: readonly ThreadItem[],
+    isCurrent: () => boolean = () => this.#isOperational(generation),
   ): Promise<void> {
     let released = false;
     await this.#mutate(generation, async (snapshot) => {
+      if (!isCurrent()) return;
       const entry = snapshot.history.find(
         (candidate) => candidate.id === historyId,
       );
@@ -2269,12 +2656,7 @@ export class ZenXTriggerService {
       entry.turnId = event.turn.id;
       entry.status = event.turn.status === "completed" ? "completed" : "failed";
       entry.completedAt = this.#now();
-      if (
-        snapshot.rooms.some(
-          (room) => room.assistant?.threadId === entry.threadId,
-        )
-      )
-        delete entry.delivery;
+      delete entry.delivery;
       entry.error =
         bounded(event.turn.error?.message ?? "", MAX_ERROR_BYTES) || null;
       if (
@@ -2292,7 +2674,13 @@ export class ZenXTriggerService {
           room !== undefined &&
           room.assistant === undefined &&
           answer?.type === "agentMessage" &&
-          answer.text.length > 0
+          answer.text.length > 0 &&
+          !room.messages.some(
+            (message) =>
+              message.kind === "agent" &&
+              message.originThreadId === entry.threadId &&
+              message.originTurnId === event.turn.id,
+          )
         ) {
           room.messages.push(
             message(
@@ -2376,15 +2764,36 @@ export class ZenXTriggerService {
     generation: TriggerGeneration,
     historyId: string,
     error: string,
+    options: {
+      confirmedDeliveryFailure?: boolean;
+      preserveCanonicalAdmission?: boolean;
+      isCurrent?: () => boolean;
+    } = {},
   ): Promise<void> {
     let released = false;
     await this.#mutate(generation, async (snapshot) => {
+      if (options.isCurrent && !options.isCurrent()) return;
       const entry = snapshot.history.find(
         (candidate) => candidate.id === historyId,
       );
-      if (entry === undefined || isTerminal(entry.status)) return;
+      if (
+        entry === undefined ||
+        (isTerminal(entry.status) &&
+          !(options.confirmedDeliveryFailure && entry.delivery === "unknown"))
+      )
+        return;
+      if (
+        options.preserveCanonicalAdmission &&
+        (entry.delivery === "queued" || entry.turnId !== null)
+      ) {
+        if (entry.delivery === "queued")
+          entry.error = bounded(error, MAX_ERROR_BYTES);
+        return;
+      }
       entry.status = "failed";
-      if (entry.delivery === "pending") entry.delivery = "unknown";
+      if (options.confirmedDeliveryFailure) entry.delivery = "failed";
+      else if (entry.delivery === "pending") entry.delivery = "unknown";
+      else if (entry.delivery === "queued") entry.delivery = "failed";
       entry.completedAt = this.#now();
       entry.error = bounded(error, MAX_ERROR_BYTES);
       released = true;
@@ -2688,6 +3097,79 @@ export class ZenXTriggerService {
     }
   }
 
+  #hostSource(entry: TriggerHistoryEntry): {
+    source: "bootstrap" | "trigger" | "room";
+    sourceId?: string;
+  } {
+    // The canonical Host receipt owns provenance. Existing history only
+    // correlates the origin: a bootstrap targets a Room without originating
+    // from a Room message; ordinary Room sends always record both identities.
+    // Never infer this from the bounded, evictable Room operation log.
+    const bootstrap =
+      entry.sourceRoomId !== null && entry.sourceRoomMessageId === null;
+    return bootstrap
+      ? { source: "bootstrap" }
+      : {
+          source: entry.sourceRoomId === null ? "trigger" : "room",
+          sourceId: entry.sourceRoomId ?? entry.triggerId,
+        };
+  }
+
+  #observeHostWakeup(
+    generation: TriggerGeneration,
+    item: {
+      threadId: string;
+      clientId: string;
+      source?: "bootstrap" | "trigger" | "room";
+      sourceId?: string;
+    },
+  ): ActiveWakeup | undefined {
+    const entry = this.#snapshot.history.find(
+      (entry) =>
+        entry.threadId === item.threadId &&
+        entry.clientUserMessageId === item.clientId,
+    );
+    if (
+      !entry ||
+      entry.delivery === "failed" ||
+      (isTerminal(entry.status) && entry.delivery !== "unknown")
+    )
+      return undefined;
+    // Host admission/queue records carry provenance; cancellation carries
+    // only the already-known queue identity. A reused clientId from another
+    // Host source must never acquire this history's reply route.
+    if (
+      item.source !== undefined &&
+      (item.source !== this.#hostSource(entry).source ||
+        item.sourceId !== this.#hostSource(entry).sourceId)
+    )
+      return undefined;
+    const existing = generation.activeWakeups.get(item.clientId);
+    if (existing) return existing;
+    // Recover only observation of this exact canonical identity, including
+    // after a service restart or a lost RPC reply. Never dispatch from history.
+    const active: ActiveWakeup = {
+      ...(item.source === "bootstrap" ? { bootstrap: true as const } : {}),
+      historyId: entry.id,
+      threadId: entry.threadId,
+      clientUserMessageId: item.clientId,
+      generationId: generation.id,
+      trigger: this.#snapshot.triggers.find(
+        (trigger) => trigger.id === entry.triggerId,
+      ) ?? {
+        id: entry.triggerId,
+        threadId: entry.threadId,
+        kind: entry.kind,
+        label: "",
+        prompt: entry.prompt,
+        createdAt: entry.startedAt,
+        active: false,
+      },
+    };
+    generation.activeWakeups.set(item.clientId, active);
+    return active;
+  }
+
   #releaseActiveWakeup(generation: TriggerGeneration, historyId: string): void {
     for (const [clientUserMessageId, active] of generation.activeWakeups) {
       if (active.historyId === historyId)
@@ -2725,6 +3207,7 @@ function newGeneration(wakeupAdmission = true): TriggerGeneration {
     retiring: false,
     storeUnavailable: false,
     wakeupAdmission,
+    recoveringThreads: new Map(),
     timers: new Map(),
     remoteWatches: new Map(),
     completedTurnItems: new Map(),
@@ -2786,6 +3269,9 @@ function triggerFromInput(
     prompt: required(input.prompt, "prompt", MAX_TRIGGER_PROMPT_BYTES),
     createdAt,
     active,
+    ...(input.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: validateDeliveryMode(input.deliveryMode) }),
     ...(programFromInput(input) === undefined
       ? {}
       : { program: programFromInput(input) }),
@@ -3197,7 +3683,11 @@ function wakeupInput(
     trigger.prompt,
     ...(completeRoomMessage === undefined
       ? []
-      : ["", "Current user message (complete):", completeRoomMessage]),
+      : [
+          "",
+          "Current Room message (complete; preserve the author and kind shown in source context):",
+          completeRoomMessage,
+        ]),
     ...(projection === undefined
       ? []
       : [
@@ -3365,4 +3855,10 @@ function roomQuote(room: ZenXRoom, messageId: string) {
     author: source.author,
     text: bounded(source.text, 1000),
   };
+}
+
+function validateDeliveryMode(value: unknown): WakeupDeliveryMode {
+  if (value !== "steer" && value !== "queue")
+    throw new Error("deliveryMode must be steer or queue");
+  return value;
 }

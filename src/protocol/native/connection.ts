@@ -23,9 +23,10 @@ import {
   NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
   NATIVE_QUEUE_EDIT_METHOD,
+  NATIVE_THREAD_MESSAGE_METHOD,
+  NATIVE_TURN_WAKE_METHOD,
   type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
-  NATIVE_TURN_WAKE_METHOD,
   type NativeTurnSendResult,
 } from "./wire.js";
 
@@ -85,6 +86,174 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (message.method === NATIVE_TURN_WAKE_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId.trim() ||
+          typeof params.clientId !== "string" ||
+          typeof params.text !== "string" ||
+          !["bootstrap", "trigger", "room"].includes(params.source as string) ||
+          (params.sourceId !== undefined &&
+            typeof params.sourceId !== "string") ||
+          (params.mode !== undefined &&
+            !["start", "steer", "queue"].includes(params.mode as string)) ||
+          (params.expectedTurnId !== undefined &&
+            (typeof params.expectedTurnId !== "string" ||
+              !params.expectedTurnId.trim())) ||
+          (params.requireUnarchived !== undefined &&
+            typeof params.requireUnarchived !== "boolean") ||
+          Object.keys(params).some(
+            (key) =>
+              ![
+                "threadId",
+                "clientId",
+                "text",
+                "source",
+                "sourceId",
+                "mode",
+                "expectedTurnId",
+                "requireUnarchived",
+              ].includes(key),
+          )
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Invalid Host wakeup input",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Host wakeup is unavailable",
+          );
+        this.#subscriptions.add(params.threadId);
+        const result = await this.#appServer.wakeTurn(
+          params.threadId,
+          {
+            clientId: params.clientId,
+            text: params.text,
+            source: params.source as "bootstrap" | "trigger" | "room",
+            ...(params.sourceId === undefined
+              ? {}
+              : { sourceId: params.sourceId }),
+          },
+          {
+            ...(params.mode === undefined
+              ? {}
+              : { mode: params.mode as "start" | "steer" | "queue" }),
+            ...(params.expectedTurnId === undefined
+              ? {}
+              : { expectedTurnId: params.expectedTurnId }),
+            ...(params.requireUnarchived === undefined
+              ? {}
+              : { requireUnarchived: params.requireUnarchived }),
+            ...(this.#requestApproval === undefined
+              ? {}
+              : { requestApproval: this.#requestApproval }),
+          },
+        );
+        this.#send({ id: message.id, result });
+      } catch (error) {
+        this.#send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message: error instanceof Error ? error.message : String(error),
+            ...(error instanceof AppServerError
+              ? { data: { zenCode: error.code } }
+              : {}),
+          },
+        });
+      }
+      return;
+    }
+    if (message.method === NATIVE_THREAD_MESSAGE_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !this.#appServer ||
+          !isRecord(params) ||
+          Object.keys(params).some(
+            (key) =>
+              ![
+                "threadId",
+                "sourceThreadId",
+                "sourceToolCallId",
+                "sourceCallId",
+                "text",
+                "messageType",
+              ].includes(key),
+          ) ||
+          ![
+            params.threadId,
+            params.sourceThreadId,
+            params.sourceToolCallId,
+            params.sourceCallId,
+            params.text,
+          ].every(
+            (value) => typeof value === "string" && value.trim().length > 0,
+          ) ||
+          (params.messageType !== undefined &&
+            !["guidance", "follow_up", "replacement"].includes(
+              String(params.messageType),
+            ))
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread message requires Host-captured source identity, target and text",
+          );
+        this.#subscriptions.add(params.threadId as string);
+        const result = await this.#appServer.sendThreadMessage(
+          params.threadId as string,
+          {
+            sender: {
+              threadId: params.sourceThreadId as string,
+              toolCallId: params.sourceToolCallId as string,
+              callId: params.sourceCallId as string,
+            },
+            text: params.text as string,
+            ...(params.messageType === undefined
+              ? {}
+              : {
+                  messageType: params.messageType as
+                    "guidance" | "follow_up" | "replacement",
+                }),
+          },
+          this.#requestApproval === undefined
+            ? {}
+            : { requestApproval: this.#requestApproval },
+        );
+        this.#send({ id: message.id, result });
+      } catch (error) {
+        this.#send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message: error instanceof Error ? error.message : String(error),
+            ...(error instanceof AppServerError
+              ? { data: { zenCode: error.code } }
+              : {}),
+          },
+        });
+      }
+      return;
+    }
     if (
       message.method === "zen/thread/import/preview" ||
       message.method === "zen/thread/import"
@@ -425,88 +594,6 @@ export class NativeConnection {
       }
       return;
     }
-    if (message.method === NATIVE_TURN_WAKE_METHOD) {
-      if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
-          id: message.id,
-          error: { code: -32600, message: "Not initialized" },
-        });
-        return;
-      }
-      try {
-        const params = message.params;
-        if (
-          !isRecord(params) ||
-          typeof params.threadId !== "string" ||
-          !params.threadId.trim() ||
-          typeof params.clientId !== "string" ||
-          !params.clientId.trim() ||
-          typeof params.text !== "string" ||
-          !params.text.trim() ||
-          params.source !== "bootstrap" ||
-          (params.mode !== "start" && params.mode !== "steer") ||
-          (params.mode === "steer" &&
-            (typeof params.expectedTurnId !== "string" ||
-              !params.expectedTurnId.trim())) ||
-          (params.requireUnarchived !== undefined &&
-            typeof params.requireUnarchived !== "boolean")
-        )
-          throw new AppServerError(
-            "invalid_request",
-            "Host bootstrap input, client ID and start/steer mode are required",
-          );
-        if (this.#appServer === undefined)
-          throw new AppServerError(
-            "unavailable",
-            "Native Host wakeup is unavailable",
-          );
-        this.#subscriptions.add(params.threadId);
-        const turn = await this.#appServer.wakeTurn(
-          params.threadId,
-          {
-            clientId: params.clientId,
-            text: params.text,
-            source: "bootstrap",
-          },
-          {
-            mode: params.mode,
-            ...(params.mode === "steer"
-              ? { expectedTurnId: params.expectedTurnId as string }
-              : {}),
-            ...(params.requireUnarchived === undefined
-              ? {}
-              : { requireUnarchived: params.requireUnarchived }),
-            ...(this.#requestApproval === undefined
-              ? {}
-              : { requestApproval: this.#requestApproval }),
-          },
-        );
-        void turn.done.catch(() => undefined);
-        if (!this.#closed)
-          this.#send({
-            id: message.id,
-            result: { turnId: turn.id, mode: turn.mode },
-          });
-      } catch (error) {
-        if (!this.#closed)
-          this.#send({
-            id: message.id,
-            error:
-              error instanceof AppServerError
-                ? {
-                    code: -32602,
-                    message: error.message,
-                    data: { zenCode: error.code },
-                  }
-                : {
-                    code: -32603,
-                    message:
-                      "Host wakeup outcome is unconfirmed. Read the Thread or retry the same client ID before sending another wakeup.",
-                  },
-          });
-      }
-      return;
-    }
     if (
       message.method === "zen/turn/send" ||
       message.method === NATIVE_TURN_SEND_UNARCHIVED_METHOD
@@ -555,7 +642,15 @@ export class NativeConnection {
         };
         this.#subscriptions.add(params.threadId);
         let result: NativeTurnSendResult = {};
-        if (params.mode === "queue" || params.mode === "batch-next") {
+        if (params.mode === undefined) {
+          const turn = await this.#appServer.sendMessage(
+            params.threadId,
+            input,
+            options,
+          );
+          result = { turnId: turn.id };
+          void turn.done.catch(() => undefined);
+        } else if (params.mode === "queue" || params.mode === "batch-next") {
           result = {
             admission: await this.#appServer.queueMessage(
               params.threadId,

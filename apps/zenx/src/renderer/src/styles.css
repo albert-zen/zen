@@ -1,3 +1,4 @@
+@import "./host-message.css";
 @import "./session-import.css";
 @import "./queued-message-editor.css";
 @import "./approval-request.css";
@@ -10017,4 +10018,22 @@ button:disabled {
   .trace-row .mini-spinner {
     animation: none;
   }
+}
+
+/* Inbound Agent and Host provenance is distinct from human-authored input. */
+.thread-message-row,
+.host-message-row {
+  align-items: flex-start;
+  padding-left: 0;
+  padding-right: 10%;
+  gap: 4px;
+}
+.thread-message-sender {
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.thread-message-row .user-bubble,
+.host-message-row .user-bubble {
+  border-radius: 5px 15px 15px 15px;
 }

@@ -139,6 +139,46 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
       });
       assert.equal(sent.accepted, true);
       assert.ok(sent.turnId);
+      const liveSources: any[] = [];
+      mobile.subscribe("isolated-test", "w", (event) =>
+        liveSources.push(event),
+      );
+      for (const source of ["room", "trigger"] as const) {
+        await host.wakeTurn(id, {
+          clientId: `android-${source}-wake`,
+          source,
+          sourceId: `${source}-private-id`,
+          text: `Actual ${source} wake from Host`,
+        });
+        const deadline = Date.now() + 3000;
+        while (
+          !liveSources.some(
+            (event) =>
+              event.type === "snapshot" &&
+              event.items[id]?.some(
+                (item: any) =>
+                  item.role === "host_message" &&
+                  item.text === `Actual ${source} wake from Host`,
+              ),
+          )
+        ) {
+          if (Date.now() > deadline)
+            throw Error("Mobile did not receive canonical Host input");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+      assert.equal(
+        liveSources.some((event) => event.type === "offline"),
+        false,
+      );
+      const recoveredSources = (
+        await mobile.read("isolated-test", "w", id)
+      ).filter((item) => item.role === "host_message");
+      assert.deepEqual(
+        recoveredSources.map((item) => item.sourceLabel),
+        ["Room", "Trigger"],
+      );
+      assert.ok(recoveredSources.every((item) => item.sourceDetails));
       const second = new NodeSocket(server.url, {
         ca: cert,
         headers: {

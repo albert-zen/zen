@@ -92,6 +92,10 @@ export function createZenXRoomsProfileLoader(
         requireUi();
         return domain.createAssistantRoom(input);
       },
+      setAssistantDeliveryMode: (id: string, mode: "steer" | "queue") => {
+        requireUi();
+        return domain.setAssistantDeliveryMode(id, mode);
+      },
       setAssistantReplies: (id: string, enabled: boolean) => {
         requireUi();
         return domain.setAssistantReplies(id, enabled);

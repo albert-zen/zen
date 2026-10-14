@@ -1528,3 +1528,59 @@ test("structured unknown backend errors never claim confirmed mobile send reject
     f.transport.disconnect();
   }
 });
+
+test("Host fragments preserve source across recovery and invalid provenance never becomes human input", async () => {
+  for (const malformed of [
+    undefined,
+    { source: "user" },
+    { sourceId: "different-trigger" },
+  ]) {
+    const item = {
+      id: "host",
+      threadId: "t",
+      turnId: "turn1",
+      createdAt: "now",
+      type: "host_message",
+      source: "trigger",
+      sourceId: "private-trigger",
+      mode: "steer",
+    };
+    const s = setup((request) =>
+      request.method === REMOTE_METHODS.resume
+        ? {
+            ...response(request),
+            entries: [
+              {
+                kind: "text",
+                item,
+                offset: 0,
+                text: "first ",
+                complete: false,
+              },
+              {
+                kind: "text",
+                item: { ...item, ...malformed },
+                offset: 6,
+                text: "second",
+                complete: true,
+              },
+            ],
+          }
+        : response(request),
+    );
+    await s.transport.pair(host.id, "code");
+    await s.transport.snapshot(host.id, "w");
+    if (malformed)
+      await assert.rejects(
+        s.transport.read(host.id, "w", "t"),
+        /source|provenance|public Item/,
+      );
+    else {
+      const result = await s.transport.read(host.id, "w", "t");
+      assert.equal(result[0]?.text, "first second");
+      assert.equal(result[0]?.role, "host_message");
+      assert.equal((result[0] as any)?.sourceLabel, "Trigger");
+    }
+    s.transport.disconnect();
+  }
+});

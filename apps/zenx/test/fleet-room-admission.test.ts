@@ -260,10 +260,7 @@ test(
     const f = await fixture(t);
     const trigger = new ZenXTriggerService(
       {
-        request: async () => {
-          throw new Error("unexpected request");
-        },
-        sendAssistant: async () => ({ turnId: "assistant-turn" }),
+        request: async () => ({ mode: "steer", turnId: "assistant-turn" }),
         onNotification: () => () => {},
       } as any,
       new ZenXTriggerStore(path.join(f.directory, "rooms.json")),

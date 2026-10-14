@@ -32,10 +32,7 @@ type Notification =
       type: "snapshot";
       threads: { id: string; title: string; status: string }[];
       turns: Record<string, { id: string; status: string }[]>;
-      items: Record<
-        string,
-        { id: string; role: string; text: string; status: string }[]
-      >;
+      items: Record<string, import("./session.mjs").Item[]>;
     };
 const secureKey = (hostId: string) =>
   `zenx-host-${hostId.replace(/[^a-zA-Z0-9-]/gu, "_").slice(0, 80)}`;
@@ -44,7 +41,99 @@ const mapItem = (item: RemoteItemView) => ({
   role: item.type,
   text: item.text ?? "",
   status: item.type.startsWith("turn_") ? "recorded" : "completed",
+  ...(item.type === "host_message"
+    ? {
+        sourceLabel:
+          item.source === "room"
+            ? "Room"
+            : item.source === "trigger"
+              ? "Trigger"
+              : "Host",
+        sourceDetails: JSON.stringify({
+          source: item.source,
+          sourceId: item.sourceId,
+        }),
+      }
+    : item.type === "thread_message"
+      ? {
+          sourceLabel: `Remote agent: ${item.sender?.threadName ?? "another agent"}`,
+          sourceDetails: JSON.stringify({
+            sender: item.sender,
+            verification:
+              "The remote Host reports this source; it is not local user authorization.",
+          }),
+        }
+      : {}),
 });
+
+/** One public-input boundary for both recovery pages and buffered live events. */
+function validatePublicItem(item: RemoteItemView, threadId: string): void {
+  if (
+    !item ||
+    typeof item.id !== "string" ||
+    !item.id ||
+    item.threadId !== threadId ||
+    ![
+      "user_message",
+      "agent_message",
+      "host_message",
+      "thread_message",
+      "turn_started",
+      "turn_completed",
+      "turn_aborted",
+    ].includes(item.type) ||
+    (item.text !== undefined && typeof item.text !== "string")
+  )
+    throw Error("Invalid remote public Item");
+  if (
+    item.type === "host_message" &&
+    (!["bootstrap", "trigger", "room"].includes(item.source ?? "") ||
+      !["start", "steer"].includes(item.mode ?? "") ||
+      (item.source !== "bootstrap" &&
+        (typeof item.sourceId !== "string" || !item.sourceId.trim())) ||
+      (item.sourceId !== undefined &&
+        (typeof item.sourceId !== "string" || !item.sourceId.trim())))
+  )
+    throw Error("Invalid remote Host source provenance");
+  if (item.type === "thread_message") {
+    const sender = item.sender;
+    if (
+      !sender ||
+      typeof sender !== "object" ||
+      ![sender.threadId, sender.toolCallId, sender.callId].every(
+        (value) => typeof value === "string" && value.trim().length > 0,
+      ) ||
+      (sender.deviceId === undefined
+        ? typeof sender.turnId !== "string" || !sender.turnId.trim()
+        : typeof sender.deviceId !== "string" ||
+          !sender.deviceId.trim() ||
+          sender.turnId !== undefined) ||
+      (sender.threadName !== undefined &&
+        (typeof sender.threadName !== "string" ||
+          !sender.threadName.trim() ||
+          sender.threadName.length > 512))
+    )
+      throw Error("Invalid remote Agent source provenance");
+  }
+}
+function fragmentIdentity(item: RemoteItemView): string {
+  return JSON.stringify([
+    item.id,
+    item.threadId,
+    item.turnId,
+    item.type,
+    item.createdAt,
+    item.source,
+    item.sourceId,
+    item.mode,
+    item.sender?.threadId,
+    item.sender?.turnId,
+    item.sender?.toolCallId,
+    item.sender?.callId,
+    item.sender?.deviceId,
+    item.sender?.threadName,
+  ]);
+}
 const mapThreads = (threads: RemoteThreadSummary[]) =>
   threads.map((t) => ({
     id: t.threadId,
@@ -622,24 +711,8 @@ export class RemoteHostTransport {
       )
     )
       throw Error("Invalid remote Turn status");
-    if (e.event.type === "item_completed") {
-      const item = e.event.item;
-      if (
-        !item ||
-        typeof item.id !== "string" ||
-        !item.id ||
-        item.threadId !== e.threadId ||
-        ![
-          "user_message",
-          "agent_message",
-          "turn_started",
-          "turn_completed",
-          "turn_aborted",
-        ].includes(item.type) ||
-        (item.text !== undefined && typeof item.text !== "string")
-      )
-        throw Error("Invalid remote public Item event");
-    }
+    if (e.event.type === "item_completed")
+      validatePublicItem(e.event.item, e.threadId);
     if (!this.activeThread || e.threadId !== this.activeThread) return;
     if (this.recovering) {
       // The Host has its own bounded barrier. Never treat a partial page set as synced.
@@ -686,20 +759,26 @@ export class RemoteHostTransport {
     this.eventBuffer = [];
     const items = new Map<string, ReturnType<typeof mapItem>>();
     const turns = new Map<string, string>();
-    let fragment: { id: string; text: string } | null = null;
+    let fragment: { id: string; text: string; identity: string } | null = null;
     const append = (entry: RemoteRecoveryEntry) => {
+      validatePublicItem(entry.item, threadId);
       if (entry.kind === "item") {
         if (fragment) throw Error("Incomplete Host text fragment");
         items.set(entry.item.id, mapItem(entry.item));
         if (entry.turn) turns.set(entry.turn.id, entry.turn.status);
         return;
       }
-      if (fragment && fragment.id !== entry.item.id)
-        throw Error("Fragment changed item");
+      if (
+        fragment &&
+        (fragment.id !== entry.item.id ||
+          fragment.identity !== fragmentIdentity(entry.item))
+      )
+        throw Error("Fragment changed item provenance");
       if (entry.offset !== (fragment?.text.length ?? 0))
         throw Error("Non-contiguous Host text fragment");
       fragment = {
         id: entry.item.id,
+        identity: fragmentIdentity(entry.item),
         text: (fragment?.text ?? "") + entry.text,
       };
       if (entry.complete) {

@@ -218,7 +218,9 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 | Idle     | Empty     | Send disabled      |
 
 - 不拆成常驻 Stop、Steer 和 Send 三个按钮。
-- 运行中有草稿时，primary action 与 Enter 使用现有全局发送偏好：Steer now 保留当前 Turn 并追加指导；Next turn 将排队消息一起交给下一轮；Each turn 让每条排队消息各自占用一轮；Interrupt & Send 中断当前路径后开始新轮。偏好未另行选择时沿用既有 soft steer 默认；UI 不改变已排队消息的分组或交付语义。
+- 运行中有草稿时，primary action 与 Enter 使用 Composer 自己的发送偏好：Steer now 保留当前 Turn 并追加指导；Next turn 将排队消息一起交给下一轮；Each turn 让每条排队消息各自占用一轮；Interrupt & Send 中断当前路径后开始新轮。偏好未另行选择时沿用既有 soft steer 默认；UI 不改变已排队消息的分组或交付语义。
+- 普通消息的缺省投递均为 soft steer；Composer、每个 Trigger、assistant Room、IM 与 Agent 入口的配置独立，不继承 Composer 的 queue/interrupt 选择。Composer 的普通发送交给 native Core 在接纳时选 active steer / idle start，状态竞态不把普通输入静默改成下一轮 queue。
+- Trigger/Room 输入以独立 Host 来源展示，不呈现成人类消息；来源的精确 ID 放详情。Host 与 Agent 排队输入可取消，不提供仅人类输入支持的 Edit；人类 queue 的编辑能力保持。
 - 第一层只显示既有 primary orb，不新增常驻展开按钮。orb 位于 Composer 最右侧，与右下圆角保持既有关系；hover 与 keyboard focus 打开同一个主题化非模态面板。primary 点击始终直接发送或中断，面板顶部只出现一次当前动作与后果说明，运行中其他动作只显示真实 modifier-Enter shortcut，不发明 modifier-click 或新的发送行为。
 - primary orb 保持 44px hit target 与既有较小可见圆。触摸点击直接执行当前 Send / Stop，不拦截为展开，也不添加常驻触摸选项按钮。面板内所有动作的 hit target 至少 44px 高。
 - 面板不冒充 tooltip 或纯 ARIA menu：它包含可聚焦的命令与已有全局偏好 Select，使用 nonmodal dialog。Arrow Up/Down 从 orb 进入面板，Tab 按普通控件顺序导航；primary disabled 时同一命中区域保留键盘可达性以编辑偏好。Escape 关闭并把面板拥有的焦点还给 orb（disabled 时为同位置的焦点区），普通 hover/focus 不抢焦点。真实 hover bridge 与短离开延迟覆盖 pointer gap；在面板内聚焦后保持可用，outside interaction 或 Escape 可关闭。Turn/context 变化丢弃旧动作，保留草稿；持续 hover 可以显示新的当前动作，但不得保留或执行旧 Turn 的动作。

@@ -38,7 +38,11 @@ export interface RoomOperation {
 }
 
 export interface Room {
-  assistant?: { threadId: string; triggerId: string };
+  assistant?: {
+    threadId: string;
+    triggerId: string;
+    deliveryMode?: "steer" | "queue";
+  };
   id: string;
   name: string;
   members: RoomMember[];
@@ -115,6 +119,10 @@ export interface ZenXRoomsTrustedService {
   createAssistantRoom?(
     input: CreateAssistantRoomInput | { name: string; members: RoomMember[] },
   ): Promise<Room>;
+  setAssistantDeliveryMode?(
+    roomId: string,
+    mode: "steer" | "queue",
+  ): Promise<void>;
   setAssistantReplies?(roomId: string, enabled: boolean): Promise<void>;
   createRoom(input: { name: string; members: RoomMember[] }): Promise<Room>;
   renameRoom(roomId: string, name: string): Promise<void>;
@@ -496,6 +504,19 @@ export function createZenXTrustedPlugin(
             operationId: string(args, "operationId", MAX_ID_BYTES),
             target: selected,
           });
+        }
+        case "zenx_rooms_assistant_delivery": {
+          if (uiInput === null || !service.setAssistantDeliveryMode)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["roomId", "deliveryMode"]);
+          const mode = args["deliveryMode"];
+          if (mode !== "steer" && mode !== "queue")
+            throw new Error("deliveryMode must be steer or queue");
+          await service.setAssistantDeliveryMode(
+            string(args, "roomId", MAX_ID_BYTES),
+            mode,
+          );
+          return { updated: true };
         }
         case "zenx_rooms_assistant_replies":
           if (uiInput === null || !service.setAssistantReplies)

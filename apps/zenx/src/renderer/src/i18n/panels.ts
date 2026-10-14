@@ -1,4 +1,8 @@
 export const en = {
+  wakeupDelivery: "This Trigger’s message delivery",
+  roomMessageDelivery: "This Room’s message delivery",
+  wakeupSteer: "Steer active work (default)",
+  wakeupQueue: "Queue for the next Turn",
   shellTitle: "Terminal",
   shellChooser: "Manage shared Shell sessions and open your own terminal",
   shellLocalHost: "This thread · This device",
@@ -884,6 +888,10 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  wakeupDelivery: "此 Trigger 的消息投递",
+  roomMessageDelivery: "此聊天室的消息投递",
+  wakeupSteer: "补充到当前工作（默认）",
+  wakeupQueue: "排队到下一轮",
   shellTitle: "终端",
   shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
   shellLocalHost: "当前线程 · 本机",

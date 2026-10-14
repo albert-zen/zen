@@ -359,9 +359,17 @@ export function validateHostProfile(
     value.composerSendMode === "queue" &&
     value.composerSendModeExplicit !== true &&
     migration === undefined;
-  const composerSendMode = ambiguousLegacyQueue
-    ? "soft"
-    : (value.composerSendMode ?? "soft");
+  if (
+    value.composerSendMode !== undefined &&
+    !["batch", "queue", "soft", "hard"].includes(
+      value.composerSendMode as string,
+    )
+  )
+    throw new Error("Invalid composer send mode");
+  const composerSendMode =
+    ambiguousLegacyQueue || value.composerSendModeExplicit === false
+      ? "soft"
+      : (value.composerSendMode ?? "soft");
   const composerSendModeMigration = ambiguousLegacyQueue
     ? {
         version: 1 as const,

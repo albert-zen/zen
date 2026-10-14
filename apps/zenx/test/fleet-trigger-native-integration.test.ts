@@ -15,7 +15,6 @@ import {
   ZenXRoomsCapabilityPackage,
   ZenXTriggersCapabilityPackage,
 } from "../src/main/capabilities/automation-control-package.js";
-import { deliverAssistantInput } from "../src/main/assistant-preset.js";
 import type { ZenXTrigger } from "../src/main/trigger-types.js";
 
 async function until(check: () => boolean, maximum = 10_000) {
@@ -143,8 +142,6 @@ test(
           onNotification: (listener) => manager.onNotification(listener),
           readThread: (threadId) =>
             manager.request("thread/read", { threadId, includeTurns: true }),
-          sendAssistant: (params, signal) =>
-            deliverAssistantInput(manager, params, signal),
           resolveRemoteThread: (device, workspace, target) =>
             fleet.resolveRemoteThread(device, workspace, target),
           readRemoteThread: (device, workspace, threadId, turnId) =>
@@ -216,17 +213,14 @@ test(
           .triggers.find((trigger) => trigger.id === watch.id)?.active,
         false,
       );
-      const local = await manager.request("thread/read", {
+      const local = await manager.request("zen/thread/read", {
         threadId: assistant.id,
-        includeTurns: true,
       });
-      const inputs = local.thread.turns
-        .flatMap((value) => value.items)
-        .filter(
-          (item) =>
-            item.type === "userMessage" &&
-            item.clientId === history.clientUserMessageId,
-        );
+      const inputs = local.thread.items.filter(
+        (item) =>
+          item.type === "host_message" &&
+          item.clientId === history.clientUserMessageId,
+      );
       assert.equal(inputs.length, 1);
       assert.match(JSON.stringify(inputs), /Source device: source/u);
       assert.match(JSON.stringify(inputs), new RegExp(turn.id, "u"));

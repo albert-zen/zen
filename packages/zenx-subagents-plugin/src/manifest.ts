@@ -87,7 +87,7 @@ export const subagentsManifest = {
     {
       name: "zenx_subagents_send",
       description:
-        "Send text to a Thread using the standard queue, guidance, or replacement behavior.",
+        "Send agent text to a Thread. Defaults to prompt guidance in active work; explicit follow_up batches next work, and replacement interrupts current work.",
       inputSchema: {
         type: "object",
         properties: {
@@ -104,7 +104,7 @@ export const subagentsManifest = {
             type: "string",
             enum: ["follow_up", "guidance", "replacement"],
             description:
-              "follow_up: do this after current work; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to use the saved ZenX send preference.",
+              "follow_up: batch this with next work after the current Turn; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to deliver agent guidance promptly to active work, independent of the manual Composer preference.",
           },
           text: {
             type: "string",

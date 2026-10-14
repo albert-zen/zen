@@ -17,6 +17,7 @@ test("assistant view reads without starting work, pauses future replies explicit
   Object.assign(window, { zenx: { threads: { list: async () => [] } } });
   dom.window.HTMLElement.prototype.scrollTo = () => {};
   let enabled = true;
+  let deliveryMode: "steer" | "queue" | undefined;
   let roomName = "My assistant";
   let releaseRename: (() => void) | undefined;
   let deferRename = false;
@@ -32,7 +33,11 @@ test("assistant view reads without starting work, pauses future replies explicit
                 id: "room",
                 name: roomName,
                 members: [{ name: "Chief", threadId: "chief" }],
-                assistant: { threadId: "chief", triggerId: "trigger" },
+                assistant: {
+                  threadId: "chief",
+                  triggerId: "trigger",
+                  deliveryMode,
+                },
                 assistantRepliesEnabled: enabled,
                 messages: [],
                 createdAt: 0,
@@ -46,6 +51,10 @@ test("assistant view reads without starting work, pauses future replies explicit
             });
           roomName = input.name;
           return { renamed: true };
+        }
+        if (id === "assistant-delivery") {
+          deliveryMode = input.deliveryMode;
+          return { updated: true };
         }
         if (id === "assistant-replies") {
           enabled = input.enabled;
@@ -189,6 +198,49 @@ test("assistant view reads without starting work, pauses future replies explicit
           '[aria-label="Conversation settings"]',
         ) as HTMLButtonElement
       ).click(),
+    );
+    const delivery = document.querySelector<HTMLButtonElement>(
+      '[aria-label="This Room’s message delivery"]',
+    )!;
+    assert.equal(delivery.dataset.value, "steer");
+    await act(async () => {
+      delivery.focus();
+      delivery.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    const queue = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((entry) => entry.dataset.value === "queue")!;
+    assert.ok(queue);
+    await act(async () => {
+      queue.focus();
+      queue.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    assert.deepEqual(
+      calls.filter((entry) => entry.id === "assistant-delivery"),
+      [
+        {
+          id: "assistant-delivery",
+          input: { roomId: "room", deliveryMode: "queue" },
+        },
+      ],
+    );
+    assert.equal(
+      enabled,
+      true,
+      "changing delivery does not pause or resume the Room",
+    );
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="This Room’s message delivery"]',
+      )?.dataset.value,
+      "queue",
     );
     const pause = [...document.querySelectorAll("button")].find(
       (x) => x.textContent === "Pause PAW",

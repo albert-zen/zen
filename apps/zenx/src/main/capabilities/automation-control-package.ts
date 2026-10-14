@@ -149,6 +149,12 @@ const triggerProperties = {
     description:
       "Notification target: full ID, unique short ID, or exact title. On creation defaults to the calling Thread.",
   },
+  deliveryMode: {
+    type: "string",
+    enum: ["steer", "queue"],
+    description:
+      "This Trigger only. Omit for soft steer during active work; queue explicitly waits for the next Turn. Independent of Composer and Room preferences.",
+  },
   kind: { type: "string", enum: ["timer", "thread", "roomMention", "signal"] },
   label: { type: "string", maxLength: MAX_TRIGGER_LABEL_BYTES },
   prompt: { type: "string", maxLength: MAX_TRIGGER_PROMPT_BYTES },
@@ -786,6 +792,9 @@ function readSafeTrigger(trigger: ZenXTrigger): unknown {
   const common = {
     id: trigger.id,
     definitionRevision: trigger.definitionRevision ?? 0,
+    ...(trigger.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: trigger.deliveryMode }),
     threadId: trigger.threadId,
     label: trigger.label,
     prompt: trigger.prompt,
@@ -974,10 +983,19 @@ function tool(
 }
 
 function triggerInput(args: Record<string, unknown>): CreateTriggerInput {
+  if (
+    args.deliveryMode !== undefined &&
+    args.deliveryMode !== "steer" &&
+    args.deliveryMode !== "queue"
+  )
+    throw new Error("deliveryMode must be steer or queue");
   const common = {
     threadId: string(args, "threadId", MAX_ID_BYTES),
     label: string(args, "label", MAX_TRIGGER_LABEL_BYTES),
     prompt: string(args, "prompt", MAX_TRIGGER_PROMPT_BYTES),
+    ...(args.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: args.deliveryMode as "steer" | "queue" }),
     ...programInput(args),
   };
   const kind = string(args, "kind", MAX_ID_BYTES);

@@ -1,3 +1,4 @@
+import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
 import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
 import {
@@ -357,6 +358,7 @@ function ThreadViewContent({
   const editableQueue = new Map(
     nativeQueue.flatMap((item) => {
       if (
+        item.type !== "user_message_queued" ||
         !thread?.queuedMessages?.some(
           (message) =>
             message.id === item.id && message.clientId === item.clientId,
@@ -2133,14 +2135,28 @@ function TurnBlock({
       toggle?.scrollIntoView?.({ block: "nearest" });
     });
   };
-  const renderUserItem = (
-    item: Extract<ThreadItem, { type: "userMessage" }>,
+  const renderInputItem = (
+    item: Extract<
+      ThreadItem,
+      { type: "userMessage" | "threadMessage" | "hostMessage" }
+    >,
   ) => {
     const wakeup = wakeups.find(
-      (entry) => entry.clientUserMessageId === item.clientId,
+      (entry) =>
+        entry.clientUserMessageId === item.clientId &&
+        (item.type === "userMessage" ||
+          (item.type === "hostMessage" &&
+            (item.source === "trigger"
+              ? entry.triggerId === item.sourceId
+              : item.source === "room" &&
+                entry.sourceRoomId === item.sourceId))),
     );
+    if (item.type === "hostMessage")
+      return (
+        <WakeupCard key={item.id} item={item} entry={wakeup} turn={turn} />
+      );
     return wakeup === undefined ? (
-      <UserMessage
+      <InputMessage
         attachments={attachments[item.id] ?? []}
         item={item}
         key={item.id}
@@ -2158,7 +2174,7 @@ function TurnBlock({
       className={`turn ${turn.status}`}
       aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
     >
-      {projection.userItems.map(renderUserItem)}
+      {projection.inputItems.map(renderInputItem)}
       {complete ? (
         <button
           className="turn-toggle"
@@ -2189,8 +2205,8 @@ function TurnBlock({
       {!complete || expanded ? (
         <div className="turn-history" id={historyId}>
           {projection.history.map((node) =>
-            node.kind === "user" ? (
-              renderUserItem(node.item)
+            node.kind === "input" ? (
+              renderInputItem(node.item)
             ) : (
               <DisplayNode
                 key={node.kind === "agent" ? node.item.id : node.id}
@@ -2217,10 +2233,10 @@ function TurnBlock({
       {complete && !expanded
         ? projection.history
             .filter(
-              (node): node is Extract<TurnDisplayNode, { kind: "user" }> =>
-                node.kind === "user",
+              (node): node is Extract<TurnDisplayNode, { kind: "input" }> =>
+                node.kind === "input",
             )
-            .map((node) => renderUserItem(node.item))
+            .map((node) => renderInputItem(node.item))
         : null}
       {complete && projection.finalItem !== null ? (
         <div className="turn-final">
@@ -2563,7 +2579,7 @@ function DisplayNode({
   pluginSnapshot,
   pluginUiRegistry,
 }: {
-  node: Exclude<TurnDisplayNode, { kind: "user" }>;
+  node: Exclude<TurnDisplayNode, { kind: "input" }>;
   observations: TraceObservationIndex;
   approvals: readonly ApprovalCardState[];
   turn: Turn;
@@ -3059,14 +3075,14 @@ function reasoningContentText(
   return item.content.join("\n");
 }
 
-function UserMessage({
+function InputMessage({
   item,
   attachments,
   turn,
   onOpenImage,
   onReadAttachment,
 }: {
-  item: Extract<ThreadItem, { type: "userMessage" }>;
+  item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>;
   attachments: readonly AttachmentRef[];
   turn: Turn;
   onOpenImage(
@@ -3078,7 +3094,29 @@ function UserMessage({
 }) {
   const text = item.content.map((content) => content.text).join("\n");
   return (
-    <article className="user-row">
+    <article
+      className={
+        item.type === "threadMessage"
+          ? "user-row thread-message-row"
+          : "user-row"
+      }
+    >
+      {item.type === "threadMessage" ? (
+        <small
+          className="thread-message-sender"
+          title={`${item.sender.deviceId === undefined ? "" : `${i18n.t("shell:threadMessageRemoteDetails")}\n`}${JSON.stringify(item.sender)}`}
+        >
+          {i18n.t(
+            item.sender.deviceId === undefined
+              ? "shell:threadMessageFrom"
+              : "shell:remoteThreadMessageFrom",
+            {
+              name:
+                item.sender.threadName ?? i18n.t("shell:threadMessageUnnamed"),
+            },
+          )}
+        </small>
+      ) : null}
       {attachments.length === 0 ? null : (
         <div
           className="message-images"
@@ -3102,8 +3140,16 @@ function UserMessage({
       )}
       <MessageActions
         className="user-message-actions"
-        copyLabel={i18n.t("shell:copyUserMessage")}
-        copiedLabel={i18n.t("shell:copiedUserMessage")}
+        copyLabel={i18n.t(
+          item.type === "threadMessage"
+            ? "shell:copyThreadMessage"
+            : "shell:copyUserMessage",
+        )}
+        copiedLabel={i18n.t(
+          item.type === "threadMessage"
+            ? "shell:copiedThreadMessage"
+            : "shell:copiedUserMessage",
+        )}
         text={text}
         turn={turn}
       />
@@ -3238,7 +3284,37 @@ function MessageActions({
   );
 }
 
-function WakeupCard({ entry }: { entry: TriggerHistoryEntry }) {
+function WakeupCard(
+  props:
+    | { entry: TriggerHistoryEntry }
+    | {
+        item: Extract<ThreadItem, { type: "hostMessage" }>;
+        entry?: TriggerHistoryEntry;
+        turn: Turn;
+      },
+) {
+  if ("item" in props) {
+    const { item, entry, turn } = props;
+    return (
+      <article className="wakeup-card host-message-row">
+        <HostMessageContent
+          source={item.source}
+          sourceId={item.sourceId}
+          text={item.text}
+          prompt={entry?.prompt}
+          copyAction={false}
+        />
+        <MessageActions
+          className="host-message-actions"
+          copyLabel={i18n.t("shell:copyHostMessage")}
+          copiedLabel={i18n.t("shell:copiedHostMessage")}
+          text={item.text}
+          turn={turn}
+        />
+      </article>
+    );
+  }
+  const { entry } = props;
   return (
     <article className={`wakeup-card ${entry.status}`}>
       <header>
