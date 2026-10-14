@@ -360,6 +360,11 @@
               }
             },
             "additionalProperties": false
+          },
+          "deliveryMode": {
+            "type": "string",
+            "enum": ["steer", "queue"],
+            "description": "This Trigger only. Omit for soft steer during active work; queue explicitly waits for the next Turn. Independent of Composer and Room preferences."
           }
         },
         "required": ["kind", "label", "prompt"],
@@ -542,6 +547,11 @@
               }
             },
             "additionalProperties": false
+          },
+          "deliveryMode": {
+            "type": "string",
+            "enum": ["steer", "queue"],
+            "description": "This Trigger only. Omit for soft steer during active work; queue explicitly waits for the next Turn. Independent of Composer and Room preferences."
           }
         },
         "required": ["id", "threadId", "kind", "label", "prompt"],

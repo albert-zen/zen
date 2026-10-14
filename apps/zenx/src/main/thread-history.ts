@@ -162,7 +162,7 @@ function previewItem(item: CanonicalItem): Record<string, unknown> {
   const raw = JSON.stringify(projected);
   const truncated = raw.length > 500;
   const text =
-    item.type === "agent_message"
+    item.type === "agent_message" || item.type === "host_message"
       ? item.text
       : item.type === "tool_result"
         ? item.output
@@ -171,6 +171,13 @@ function previewItem(item: CanonicalItem): Record<string, unknown> {
     ...(text === undefined
       ? {}
       : { text: text.slice(0, 500), textTruncated: text.length > 500 }),
+    ...(item.type === "host_message"
+      ? {
+          source: item.source,
+          ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+          mode: item.mode,
+        }
+      : {}),
     itemId: item.id,
     type: item.type,
     turnId: item.turnId ?? null,

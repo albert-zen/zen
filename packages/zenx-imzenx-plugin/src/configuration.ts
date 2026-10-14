@@ -8,6 +8,7 @@ export interface Configuration {
   sharedFilesystemRoot?: string;
   permissionMode: "full-access" | "approval-required";
   allowUnrestrictedFullAccess: boolean;
+  inputContinuation: "steer" | "queue";
 }
 
 export function configuration(
@@ -24,6 +25,7 @@ export function configuration(
     "sharedFilesystemRoot",
     "permissionMode",
     "allowUnrestrictedFullAccess",
+    "inputContinuation",
   ]);
   if (Object.keys(input).some((key) => !fields.has(key)))
     throw new Error("IMZenX accepts only nonsecret connection settings");
@@ -46,6 +48,12 @@ export function configuration(
   const unrestricted = input["allowUnrestrictedFullAccess"] ?? false;
   if (typeof unrestricted !== "boolean")
     throw new Error("allowUnrestrictedFullAccess must be boolean");
+  const inputContinuation =
+    input["inputContinuation"] === undefined
+      ? "steer"
+      : input["inputContinuation"];
+  if (inputContinuation !== "steer" && inputContinuation !== "queue")
+    throw new Error("Invalid inputContinuation");
   return {
     pythonExecutable: absolute("pythonExecutable"),
     channelsConfigFile: absolute("channelsConfigFile"),
@@ -56,5 +64,6 @@ export function configuration(
       : { sharedFilesystemRoot: absolute("sharedFilesystemRoot") }),
     permissionMode,
     allowUnrestrictedFullAccess: unrestricted,
+    inputContinuation,
   };
 }

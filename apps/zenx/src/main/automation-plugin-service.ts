@@ -994,6 +994,11 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       members: [{ name: member.name, threadId: target.threadId }],
     });
   }
+  async setAssistantDeliveryMode(roomId: string, mode: "steer" | "queue") {
+    if (!this.roomsAvailable())
+      throw new Error("Rooms are disabled or unavailable");
+    return await this.#service.setAssistantDeliveryMode(roomId, mode);
+  }
   async setAssistantReplies(roomId: string, enabled: boolean) {
     if (!this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID))
       throw new Error("Triggers are disabled");

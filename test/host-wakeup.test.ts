@@ -91,6 +91,32 @@ function createServer(
   });
 }
 
+async function waitForInputTerminal(
+  server: ZenAppServer,
+  threadId: string,
+  clientId: string,
+  inputType: "host_message" | "user_message" = "host_message",
+) {
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const snapshot = await server.readThread(threadId);
+    const input = snapshot.items.find(
+      (item) => item.type === inputType && item.clientId === clientId,
+    );
+    if (input?.type === "host_message" || input?.type === "user_message") {
+      const terminal = snapshot.items.find(
+        (item) =>
+          (item.type === "turn_completed" || item.type === "turn_aborted") &&
+          item.turnId === input.turnId,
+      );
+      if (terminal) return { snapshot, input, terminal };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(
+    `${inputType} ${clientId} did not reach a canonical terminal fact`,
+  );
+}
+
 test("bootstrap persists only honest Host input, snapshots AGENTS and deduplicates concurrent/restarted admission", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "zen-bootstrap-"));
   try {
@@ -107,25 +133,58 @@ test("bootstrap persists only honest Host input, snapshots AGENTS and deduplicat
         expectedTurnId: "stale-turn",
       }),
     ]);
-    assert.equal(first.id, concurrent.id);
-    assert.equal(concurrent.mode, "start");
-    await first.done;
-    let snapshot = await server.readThread(thread.id);
+    const completed = await waitForInputTerminal(
+      server,
+      thread.id,
+      bootstrap.clientId,
+    );
+    let snapshot = completed.snapshot;
+    assert(completed.terminal.type === "turn_completed");
+    assert.equal(completed.terminal.status, "completed");
+    assert.deepEqual(first, { turnId: completed.input.turnId, mode: "start" });
+    // A concurrent retry can observe the durable queue receipt before admission.
+    if (concurrent.queued) {
+      assert.deepEqual(concurrent, { mode: "queue", queued: true });
+    } else {
+      assert.deepEqual(concurrent, first);
+    }
+    const readback = await server.wakeTurn(thread.id, bootstrap, {
+      mode: "steer",
+      expectedTurnId: "stale-turn",
+    });
+    assert.deepEqual(readback, first);
+    assert.deepEqual(
+      (await server.readThread(thread.id)).items,
+      snapshot.items,
+    );
     assert.deepEqual(
       snapshot.items.map((item) => item.type),
       [
         "thread_metadata",
+        "host_message_queued",
         "turn_started",
         "host_message",
         "agent_message",
         "turn_completed",
       ],
     );
+    const queued = snapshot.items.find(
+      (item) => item.type === "host_message_queued",
+    )!;
+    assert.equal(queued.sender, "host");
+    assert.equal(queued.source, "bootstrap");
+    assert.equal(queued.clientId, bootstrap.clientId);
+    assert.equal(queued.text, bootstrap.text);
+    assert.equal(queued.intent, "steer");
+    assert.equal(queued.deliveryMode, "batch-next");
+    assert.deepEqual(queued.input, [{ type: "text", text: bootstrap.text }]);
+    assert.deepEqual(decodeCanonicalItem(queued), queued);
+    assert.equal(projectCompletedItem(queued), null);
     const host = snapshot.items.find((item) => item.type === "host_message")!;
     assert.equal(host.sender, "host");
     assert.equal(host.source, "bootstrap");
     assert.equal(host.clientId, bootstrap.clientId);
-    assert.equal(host.turnId, first.id);
+    assert.equal(host.turnId, first.turnId);
     assert.deepEqual(decodeCanonicalItem(host), host);
     assert.equal(projectCompletedItem(host), null);
     assert(
@@ -136,7 +195,7 @@ test("bootstrap persists only honest Host input, snapshots AGENTS and deduplicat
     assert.match(JSON.stringify(requests), /BOOTSTRAP_REPOSITORY_RULES/u);
     assert.match(
       JSON.stringify(requests),
-      /Host bootstrap wakeup.*not a message from the human user/u,
+      /Host wakeup\. Source: bootstrap.*not a human message or new authorization/u,
     );
     assert.equal(requests.length, 1);
     await writeFile(path.join(cwd, "AGENTS.md"), "LATER_RULES");
@@ -145,9 +204,11 @@ test("bootstrap persists only honest Host input, snapshots AGENTS and deduplicat
       mode: "steer",
       expectedTurnId: "another-turn",
     });
-    assert.equal(replay.id, first.id);
-    assert.equal(replay.mode, "start");
-    await replay.done;
+    assert.deepEqual(replay, first);
+    assert.deepEqual(
+      (await restarted.readThread(thread.id)).items,
+      snapshot.items,
+    );
     assert.equal(requests.length, 1);
     await assert.rejects(
       restarted.wakeTurn(
@@ -208,12 +269,12 @@ test("Host steer at a streamed final response forces another sample, preserving 
       mode: "steer",
       expectedTurnId: first.id,
     });
-    assert.equal(steered.id, first.id);
+    assert.equal(steered.turnId, first.id);
     assert.equal(steered.mode, "steer");
     const retry = await server.wakeTurn(thread.id, bootstrap, {
       mode: "start",
     });
-    assert.equal(retry.id, first.id);
+    assert.equal(retry.turnId, first.id);
     assert.equal(retry.mode, "steer");
     await server.queueMessage(thread.id, "Human follow-up", "human-queued");
   } finally {
@@ -222,7 +283,15 @@ test("Host steer at a streamed final response forces another sample, preserving 
   await first.done;
   // Wait on the canonical queue admission/completion instead of a wall-clock delay.
   await server.resumeQueue(thread.id);
-  const snapshot = await server.readThread(thread.id);
+  const completed = await waitForInputTerminal(
+    server,
+    thread.id,
+    "human-queued",
+    "user_message",
+  );
+  const snapshot = completed.snapshot;
+  assert(completed.terminal.type === "turn_completed");
+  assert.equal(completed.terminal.status, "completed");
   const host = snapshot.items.find((item) => item.type === "host_message")!;
   assert(host.deliveryAfter);
   assert.equal(
@@ -236,14 +305,18 @@ test("Host steer at a streamed final response forces another sample, preserving 
   assert.equal(snapshot.turns.length, 2);
   assert.equal(samples.length, 3);
   assert.equal(samples[1]!.at(-1)?.role, "user");
-  assert.match(JSON.stringify(samples[1]!.at(-1)), /Host bootstrap wakeup/u);
+  assert.match(
+    JSON.stringify(samples[1]!.at(-1)),
+    /Host wakeup\. Source: bootstrap/u,
+  );
   const projected = compileModelMessages(snapshot.items);
   const streamedIndex = projected.findIndex(
     (message) => "text" in message && message.text === "Already streaming",
   );
   const hostIndex = projected.findIndex(
     (message) =>
-      "text" in message && message.text?.includes("Host bootstrap wakeup"),
+      "text" in message &&
+      message.text?.includes("Host wakeup. Source: bootstrap"),
   );
   assert(hostIndex > streamedIndex);
 });
@@ -283,6 +356,14 @@ test("stale, terminal, interrupted and archived Host admissions fail without a r
   await server.setThreadArchived(thread.id, false);
   const active = await server.startTurn(thread.id, "Human message");
   await entered.promise;
+  await assert.rejects(
+    server.wakeTurn(thread.id, bootstrap, {
+      mode: "steer",
+      expectedTurnId: "another-turn",
+    }),
+    (error) =>
+      error instanceof AppServerError && error.code === "turn_not_running",
+  );
   const interrupt = server.interruptTurn(thread.id, active.id);
   try {
     await assert.rejects(
@@ -307,9 +388,54 @@ test("stale, terminal, interrupted and archived Host admissions fail without a r
   );
   assert(
     !(await server.readThread(thread.id)).items.some(
-      (item) => item.type === "host_message",
+      (item) =>
+        item.type === "host_message" || item.type === "host_message_queued",
     ),
   );
+});
+
+test("explicit Host steer requires expectedTurnId before idle or busy admission", async (t) => {
+  for (const state of ["idle", "busy"] as const) {
+    await t.test(state, async () => {
+      const entered = deferred();
+      const release = deferred();
+      const server = createServer({
+        adapter: {
+          provider: "bootstrap-explicit-steer",
+          async *stream(): AsyncIterable<ModelEvent> {
+            entered.resolve();
+            await release.promise;
+            yield { type: "text_delta", delta: "done" };
+          },
+        },
+      });
+      const thread = await server.startThread();
+      const active =
+        state === "busy"
+          ? await server.startTurn(thread.id, "Real human input")
+          : undefined;
+      if (active) await entered.promise;
+      const before = await server.readThread(thread.id);
+      try {
+        await assert.rejects(
+          server.wakeTurn(thread.id, bootstrap, { mode: "steer" }),
+          (error) =>
+            error instanceof AppServerError && error.code === "invalid_request",
+        );
+        assert.deepEqual(
+          (await server.readThread(thread.id)).items,
+          before.items,
+        );
+      } finally {
+        release.resolve();
+        if (active) await active.done;
+        const after = await server.readThread(thread.id);
+        if (after.items.some((item) => item.type === "host_message")) {
+          await waitForInputTerminal(server, thread.id, bootstrap.clientId);
+        }
+      }
+    });
+  }
 });
 
 test("native wake carries canonical Host provenance and rejects invalid source; CAS has no fabricated user projection", async () => {
@@ -347,7 +473,14 @@ test("native wake carries canonical Host provenance and rejects invalid source; 
       params: { ...bootstrap, threadId: thread.id, mode: "start" },
     });
     const turn = await server.wakeTurn(thread.id, bootstrap, { mode: "start" });
-    await turn.done;
+    const completed = await waitForInputTerminal(
+      server,
+      thread.id,
+      bootstrap.clientId,
+    );
+    assert.deepEqual(turn, { turnId: completed.input.turnId, mode: "start" });
+    assert(completed.terminal.type === "turn_completed");
+    assert.equal(completed.terminal.status, "completed");
     const native = await projection.read(thread.id);
     assert.equal(
       native.items.filter((item) => item.type === "host_message").length,
@@ -362,11 +495,11 @@ test("native wake carries canonical Host provenance and rejects invalid source; 
           JSON.stringify(message).includes('"sender":"host"'),
       ),
     );
-    assert(
-      sent.some(
-        (message) => "id" in message && message.id === 3 && "result" in message,
-      ),
+    const reply = sent.find(
+      (message) => "id" in message && message.id === 3 && "result" in message,
     );
+    assert(reply && "result" in reply);
+    assert.deepEqual(reply.result, turn);
   } finally {
     connection.close();
     projection.close();
@@ -386,13 +519,29 @@ test("canonical Host decoding rejects missing or false attribution", () => {
   };
   for (const change of [
     { sender: "user" },
+    { sender: undefined },
     { source: "user" },
+    { source: undefined },
+    { source: "trigger" },
+    { source: "room" },
+    { sourceId: "" },
     { clientId: "" },
+    { clientId: undefined },
     { turnId: undefined },
     { mode: "queue" },
-    { deliveryAfter: "model-response" },
+    { mode: undefined },
+    { deliveryAfter: "" },
   ])
     assert.throws(() => decodeCanonicalItem({ ...item, ...change }));
+  for (const source of ["bootstrap", "trigger", "room"] as const) {
+    const valid = {
+      ...item,
+      source,
+      sourceId: `${source}-source`,
+      deliveryAfter: "model-response",
+    };
+    assert.deepEqual(decodeCanonicalItem(valid), valid);
+  }
 });
 
 test("assistant wakeup delivery retries only definitive admission races, using stable Host input", async () => {
@@ -487,8 +636,28 @@ test("restart after bootstrap receipt preserves interrupted status without repla
     const duplicate = await restarted.wakeTurn(thread.id, bootstrap, {
       mode: "start",
     });
-    await duplicate.done;
-    assert.equal(duplicate.id, active.id);
+    assert.ok(active.turnId);
+    assert.deepEqual(duplicate, active);
+    assert.equal(recovered.turns[0]?.id, active.turnId);
+    assert(
+      recovered.items.some(
+        (item) => item.type === "turn_started" && item.turnId === active.turnId,
+      ),
+    );
+    assert(
+      recovered.items.some(
+        (item) =>
+          item.type === "host_message" &&
+          item.turnId === active.turnId &&
+          item.clientId === bootstrap.clientId,
+      ),
+    );
+    assert(
+      !recovered.items.some(
+        (item) =>
+          item.type === "turn_completed" || item.type === "turn_aborted",
+      ),
+    );
     assert.equal(requests.length, 0);
     const after = await restarted.readThread(thread.id);
     assert.deepEqual(after.items, recovered.items);
@@ -499,7 +668,13 @@ test("restart after bootstrap receipt preserves interrupted status without repla
     );
   } finally {
     release.resolve();
-    await active.done;
+    const completed = await waitForInputTerminal(
+      original,
+      thread.id,
+      bootstrap.clientId,
+    );
+    assert(completed.terminal.type === "turn_completed");
+    assert.equal(completed.terminal.status, "completed");
   }
 });
 
@@ -550,7 +725,10 @@ test("Host steer received during a tool batch is projected after that batch's re
   assert.equal(requests.length, 2);
   const sample = requests[1]!;
   assert.equal(sample.at(-2)?.role, "tool");
-  assert.match(JSON.stringify(sample.at(-1)), /Host bootstrap wakeup/u);
+  assert.match(
+    JSON.stringify(sample.at(-1)),
+    /Host wakeup\. Source: bootstrap/u,
+  );
   assert.equal(
     (await server.readThread(thread.id)).items.filter(
       (item) => item.type === "user_message",

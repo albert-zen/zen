@@ -91,9 +91,17 @@ interface SidebarProps {
     targetThreadId: string,
     placement: SidebarOrderPlacement,
   ): Promise<void>;
+  /** Reordering inside the Pinned section permutes the pinnedThreadIds
+   * preference itself; it never touches Project or Thread ordering. */
+  onReorderPinnedThread?(
+    sourceThreadId: string,
+    targetThreadId: string,
+    placement: SidebarOrderPlacement,
+  ): Promise<void>;
   onNewThread(workspace?: string): void;
   newThreadDisabled?: boolean;
   onAddProject(): void;
+  onImportSession?(): void;
   onRemoveProject(workspace: string): void;
   onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
@@ -131,9 +139,11 @@ export function Sidebar({
   onChangeProjectPinned,
   onReorderProject,
   onReorderThread,
+  onReorderPinnedThread,
   onNewThread,
   newThreadDisabled = false,
   onAddProject,
+  onImportSession,
   onRemoveProject,
   onEditProject,
   onSetDefaultProject,
@@ -609,6 +619,17 @@ export function Sidebar({
                     : i18n.t("shell:compact")}
                 </span>
               </button>
+              {onImportSession && (
+                <button
+                  className="sidebar-inline-action"
+                  type="button"
+                  aria-label={i18n.t("shell:importSession")}
+                  title={i18n.t("shell:importSession")}
+                  onClick={onImportSession}
+                >
+                  <Icon name="arrow-down" size={14} />
+                </button>
+              )}
               {mode === "projects" ? (
                 <button
                   className="sidebar-inline-action"
@@ -683,6 +704,9 @@ export function Sidebar({
                   onRenameThread={onRenameThread}
                   onForkThread={onForkThread}
                   onSelectThread={onSelectThread}
+                  onReorderPinnedThread={onReorderPinnedThread}
+                  onSidebarOrderError={reportSidebarOrderError}
+                  onSidebarOrderAttempt={clearSidebarOrderError}
                   pendingApprovalThreadIds={pendingApprovalThreadIds}
                   selectedThreadId={selectedThreadId}
                   threads={pinnedThreads}
@@ -886,6 +910,9 @@ function PinnedThreadsView({
   onRenameThread,
   onForkThread,
   onSelectThread,
+  onReorderPinnedThread,
+  onSidebarOrderError,
+  onSidebarOrderAttempt,
   pendingApprovalThreadIds,
   selectedThreadId,
   threads,
@@ -897,11 +924,28 @@ function PinnedThreadsView({
   onRenameThread(threadId: string, title: string): Promise<void>;
   onForkThread(threadId: string): Promise<void>;
   onSelectThread(threadId: string): void;
+  onReorderPinnedThread?: SidebarProps["onReorderPinnedThread"];
+  onSidebarOrderError?: (error: unknown, retry: () => Promise<void>) => void;
+  onSidebarOrderAttempt?: () => void;
   pendingApprovalThreadIds: ReadonlySet<string>;
   selectedThreadId: string | null;
   threads: readonly NativeThreadSummary[];
   watchingThreadIds: ReadonlySet<string>;
 }) {
+  // The Pinned section reorders the pinnedThreadIds preference by dragging
+  // rows onto each other, mirroring per-Project Thread sorting semantics.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{
+    targetId: string;
+    placement: SidebarOrderPlacement;
+  } | null>(null);
+  const dragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanup.current?.(), []);
+  const clearDrag = () => {
+    dragCleanup.current = null;
+    setDraggingId(null);
+    setDrop(null);
+  };
   return (
     <section
       className="pinned-thread-group"
@@ -910,7 +954,7 @@ function PinnedThreadsView({
       <h2 id="sidebar-pinned-heading" tabIndex={-1}>
         {i18n.t("shell:pinned")}
       </h2>
-      {threads.map((thread) => (
+      {threads.map((thread, threadIndex) => (
         <ThreadRow
           hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
           key={thread.threadId}
@@ -924,6 +968,96 @@ function PinnedThreadsView({
           selected={thread.threadId === selectedThreadId}
           thread={thread}
           watching={watchingThreadIds.has(thread.threadId)}
+          reorder={
+            onReorderPinnedThread === undefined
+              ? undefined
+              : {
+                  controlId: sidebarOrderControlId("thread", thread.threadId),
+                  dragging: draggingId === thread.threadId,
+                  placement:
+                    drop?.targetId === thread.threadId
+                      ? drop.placement
+                      : undefined,
+                  onDragLeave: (event) => {
+                    if (
+                      !(event.relatedTarget instanceof Node) ||
+                      !event.currentTarget.contains(event.relatedTarget)
+                    )
+                      setDrop(null);
+                  },
+                  onDragStart: (event) => {
+                    dragCleanup.current?.();
+                    setDraggingId(thread.threadId);
+                    setDrop(null);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", thread.threadId);
+                    dragCleanup.current = startSidebarDrag(
+                      event.currentTarget,
+                      event.dataTransfer,
+                      threadTitle(thread),
+                      "thread",
+                      event,
+                      clearDrag,
+                    );
+                  },
+                  onDragEnd: clearDrag,
+                  onDragOver: (event) => {
+                    if (draggingId === null || draggingId === thread.threadId)
+                      return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    event.stopPropagation();
+                    setDrop({
+                      targetId: thread.threadId,
+                      placement: dropPlacement(event),
+                    });
+                  },
+                  onDrop: (event) => {
+                    const sourceThreadId = draggingId;
+                    clearDrag();
+                    if (
+                      sourceThreadId === null ||
+                      sourceThreadId === thread.threadId
+                    )
+                      return;
+                    event.preventDefault();
+                    const placement = dropPlacement(event);
+                    void reorderAndRestoreFocus(
+                      sidebarOrderControlId("thread", sourceThreadId),
+                      () =>
+                        onReorderPinnedThread(
+                          sourceThreadId,
+                          thread.threadId,
+                          placement,
+                        ),
+                      onSidebarOrderAttempt,
+                      onSidebarOrderError,
+                    );
+                  },
+                  onKeyDown: (event) => {
+                    if (!event.altKey) return;
+                    const target =
+                      event.key === "ArrowUp"
+                        ? threads[threadIndex - 1]
+                        : event.key === "ArrowDown"
+                          ? threads[threadIndex + 1]
+                          : undefined;
+                    if (target === undefined) return;
+                    event.preventDefault();
+                    void reorderAndRestoreFocus(
+                      sidebarOrderControlId("thread", thread.threadId),
+                      () =>
+                        onReorderPinnedThread(
+                          thread.threadId,
+                          target.threadId,
+                          event.key === "ArrowUp" ? "before" : "after",
+                        ),
+                      onSidebarOrderAttempt,
+                      onSidebarOrderError,
+                    );
+                  },
+                }
+          }
         />
       ))}
     </section>
@@ -1117,14 +1251,10 @@ function ProjectsView({
                 )
                   return;
                 event.preventDefault();
+                const placement = projectDropPlacement(event);
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("project", sourceKey),
-                  () =>
-                    onReorderProject(
-                      sourceKey,
-                      group.key,
-                      projectDropPlacement(event),
-                    ),
+                  () => onReorderProject(sourceKey, group.key, placement),
                   onSidebarOrderAttempt,
                   onSidebarOrderError,
                 );
@@ -1215,6 +1345,7 @@ function ProjectsView({
                 )
                   return;
                 event.preventDefault();
+                const placement = dropPlacement(event);
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("thread", source.threadId),
                   () =>
@@ -1223,7 +1354,7 @@ function ProjectsView({
                       source.threadId,
                       group.key,
                       targetThreadId,
-                      dropPlacement(event),
+                      placement,
                     ),
                   onSidebarOrderAttempt,
                   onSidebarOrderError,

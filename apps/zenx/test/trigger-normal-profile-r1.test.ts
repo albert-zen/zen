@@ -64,9 +64,6 @@ test(
         appServer: {
           request: (method, params) => manager.request(method, params),
           onNotification: (fn) => manager.onNotification(fn),
-          enqueue: async (params) => {
-            await manager.request("turn/queue", params);
-          },
         },
         threadTargets: {
           projectProjection: projection,
@@ -228,13 +225,13 @@ test(
         threadId: target.threadId,
         includeTurns: true,
       });
-      const canonical = read.thread.turns
-        .flatMap((turn) => turn.items)
-        .filter(
-          (item) =>
-            item.type === "userMessage" &&
-            item.clientId === entry.clientUserMessageId,
-        );
+      const canonical = (
+        await manager.request("zen/thread/read", { threadId: target.threadId })
+      ).thread.items.filter(
+        (item) =>
+          item.type === "host_message" &&
+          item.clientId === entry.clientUserMessageId,
+      );
       assert.equal(canonical.length, 1);
       console.log(
         "canonical",
@@ -365,9 +362,6 @@ test(
         appServer: {
           request: (method, params) => manager.request(method, params),
           onNotification: (fn) => manager.onNotification(fn),
-          enqueue: async (params) => {
-            await manager.request("turn/queue", params);
-          },
         },
         threadTargets: {
           projectProjection: projection,

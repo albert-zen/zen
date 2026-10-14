@@ -59,7 +59,7 @@ test("Room reply selection binds exact target, sends text separately, and reacti
     await act(async () => root.render(React.createElement(RoomsPage, { sdk })));
     await act(async () => {
       [...document.querySelectorAll("button")]
-        .find((b) => b.textContent === "Reply")!
+        .find((b) => b.getAttribute("aria-label") === "Reply")!
         .click();
     });
     assert.match(
@@ -85,6 +85,13 @@ test("Room reply selection binds exact target, sends text separately, and reacti
     assert.equal(prepared.input.text, "My reply");
     assert.equal(document.querySelector(".room-reply-draft"), null);
     await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '.room-message-action-toolbar [aria-label="React"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
       [...document.querySelectorAll("button")]
         .find((button) => button.getAttribute("aria-label") === "React 👍")!
         .click(),
@@ -95,14 +102,14 @@ test("Room reply selection binds exact target, sends text separately, and reacti
       emoji: "👍",
     });
     assert.equal(
-      [...document.querySelectorAll("button")]
-        .find((button) => button.getAttribute("aria-label") === "React 👍")!
+      document
+        .querySelector(".room-message-reaction-chip")!
         .getAttribute("aria-pressed"),
       "true",
     );
     await act(async () =>
-      [...document.querySelectorAll("button")]
-        .find((button) => button.getAttribute("aria-label") === "React 👍")!
+      document
+        .querySelector<HTMLButtonElement>(".room-message-reaction-chip")!
         .click(),
     );
     assert.equal(

@@ -1,10 +1,6 @@
 import { validateShellPanelRequest } from "../shell-panel.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
-import {
-  deliverAssistantInput,
-  deliverAssistantWakeup,
-} from "./assistant-preset.js";
 import { FleetSettingsService } from "./fleet-settings.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
@@ -547,16 +543,6 @@ async function bootstrapZenX(): Promise<void> {
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
       fleet: fleetSettingsService.router,
       appServer: selfControlPort,
-      // Agent messages supplement ongoing work by default.
-      sendPreference: async () => {
-        const profile = (await settingsService!.publicSettings()).profile;
-        // Preserve an explicit user-selected send preference.
-        if (!profile.composerSendModeExplicit) return "soft";
-        return profile.composerSendMode === "soft" ||
-          profile.composerSendMode === "hard"
-          ? profile.composerSendMode
-          : "queue";
-      },
       workflows: {
         workflowConfiguration: async () =>
           await settingsService!.workflowConfiguration(),
@@ -826,11 +812,38 @@ async function bootstrapZenX(): Promise<void> {
           automationManager.onStatus((status) => {
             if (status.type === "ready" && status.reconnected) listener();
           }),
-        readThread: (threadId) =>
-          automationManager.request("thread/read", {
+        readThread: async (threadId) => {
+          const result = await automationManager.request("thread/read", {
             threadId,
             includeTurns: true,
-          }),
+          });
+          // CAS intentionally omits Host input. Native canonical facts are the
+          // authority for automation/Room read receipts.
+          const native = await automationManager.request("zen/thread/read", {
+            threadId,
+          });
+          for (const turn of result.thread.turns) {
+            for (const item of native.thread.items) {
+              if (item.type !== "host_message" || item.turnId !== turn.id)
+                continue;
+              turn.items.push({
+                type: "hostMessage",
+                id: item.id,
+                clientId: item.clientId,
+                source: item.source,
+                text: item.text,
+                mode: item.mode,
+                ...(item.sourceId === undefined
+                  ? {}
+                  : { sourceId: item.sourceId }),
+                ...(item.deliveryAfter === undefined
+                  ? {}
+                  : { deliveryAfter: item.deliveryAfter }),
+              });
+            }
+          }
+          return result;
+        },
         resolveRemoteThread: (device, workspace, target) =>
           fleetSettingsService!.resolveRemoteThread(device, workspace, target),
         readRemoteThread: (device, workspace, threadId, turnId) =>
@@ -848,15 +861,6 @@ async function bootstrapZenX(): Promise<void> {
             options,
             signal,
           ),
-        sendAssistant: (params, signal) =>
-          deliverAssistantInput(automationManager, params, signal),
-        sendAssistantWakeup: (params, signal) =>
-          deliverAssistantWakeup(automationManager, params, signal, {
-            requireUnarchived: true,
-          }),
-        enqueue: async (params) => {
-          await automationManager.request("turn/queue", params);
-        },
       },
       titles: titleCoordinator,
     });
@@ -972,6 +976,21 @@ async function bootstrapZenX(): Promise<void> {
     await settingsService!.reconcileConfiguration();
   };
   await attachConfigurationControl();
+  // An unconfigured OpenAI subscription catalog adopts the account's current
+  // models once, then belongs to the user. This runs after the configuration
+  // control is attached so the persisted catalog publishes to the live Host
+  // instead of waiting for the next restart. It never blocks startup on the
+  // network; failures keep the built-in presets and retry on next launch or
+  // login.
+  void settingsService!
+    .autoConfigureSubscriptionModels()
+    .then(async (configured) => {
+      if (!configured) return;
+      const value = await settingsService!.publicSettings();
+      for (const window of BrowserWindow.getAllWindows())
+        window.webContents.send(ipcChannels.settingsChanged, value);
+    })
+    .catch(() => undefined);
   ipcMain.handle(ipcChannels.settingsSafeRestart, async () => {
     const manager = appServerManager;
     if (!manager || manager.status.type !== "ready")
@@ -2093,6 +2112,9 @@ function installSettingsIpc(
         }
       },
     );
+    // First login is the earliest moment the account's real model catalog is
+    // discoverable; adopt it once when the user has not configured models.
+    await settings.autoConfigureSubscriptionModels().catch(() => false);
     return await settings.publicSettings();
   });
   ipcMain.handle(
@@ -2178,6 +2200,33 @@ function installCapabilityIpc(
   const computerLive = new ComputerLiveObservationIpcBridge(
     capabilities,
     ipcChannels.computerLiveEvent,
+  );
+  ipcMain.handle(
+    ipcChannels.browserOpenExternal,
+    async (event, threadId: unknown, targetId: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const rendererUrl =
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href;
+      if (
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+            mainFrame: event.senderFrame === event.sender.mainFrame,
+            url: event.senderFrame?.url ?? "",
+          },
+          rendererUrl,
+        ) ||
+        typeof threadId !== "string" ||
+        typeof targetId !== "string"
+      )
+        throw new Error(
+          "Browser external opening requires the trusted ZenX window",
+        );
+      await browserLive.openExternal(event.sender, threadId, targetId, (url) =>
+        shell.openExternal(url),
+      );
+    },
   );
   ipcMain.handle(
     ipcChannels.browserLiveSubscribe,

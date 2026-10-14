@@ -141,7 +141,8 @@ export async function deliverAssistantWakeup(
           "Host wakeup outcome is unconfirmed; read the Thread before retrying",
         );
       return {
-        ...result,
+        turnId: result.turnId,
+        mode: result.mode,
         ...(result.mode === "steer" ? { expectedTurnId: result.turnId } : {}),
       };
     } catch (error) {

@@ -28,6 +28,8 @@ never changes historical Items or silently injects mutable context.
 - React sets one of six emoji for the current actor; select it again to remove it. Agent attribution comes from the calling Thread, never tool arguments. Reactions do not start Turns.
 - Direct Thread messages and Room messages remain separate. Only an explicit Room post appears in the Room.
 
+Assistant Room messages default to soft steer during active work and start normally when idle. The Room management panel can explicitly choose next-Turn queueing for that Room alone. This preference does not change independent Triggers, other Rooms or the manual Thread Composer. Room wakeups retain Host provenance and original Room author/kind; delivery and read receipts follow canonical Host input admission.
+
 ## PAW first conversation
 
 Explicit creation starts a Host-authored bootstrap wakeup with a durable Room

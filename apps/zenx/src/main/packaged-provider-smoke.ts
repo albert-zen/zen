@@ -63,8 +63,8 @@ void app.whenReady().then(async () => {
         diagnostic.status === "selected",
     );
     assert.ok(
-      browser.backend,
-      `bundled Browser provider unavailable: ${JSON.stringify(browser.diagnostics)}`,
+      browser.backend && browserDiagnostic,
+      `bundled Playwright provider unavailable: ${JSON.stringify(browser.diagnostics)}`,
     );
     assert.equal(browserDiagnostic?.version, "0.1.18");
     assert.equal(browserDiagnostic?.integrity, "verified");
