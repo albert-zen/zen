@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React from "react";
+import { isShellNonzeroResult } from "./tool-presentation.js";
 
 import type { CommandItem } from "../../protocol-client/index.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
@@ -83,6 +84,9 @@ export function ToolResultFallback({ item }: { item: CommandItem }) {
       className="tool-result-fallback"
       aria-label={i18n.t("panels:toolResult")}
     >
+      {isShellNonzeroResult(item) ? (
+        <p className="shell-nonzero-note">{i18n.t("shell:shellNonzeroHint")}</p>
+      ) : null}
       {json === null ? null : <pre>{json}</pre>}
       {item.aggregatedOutput ? <pre>{item.aggregatedOutput}</pre> : null}
       {item.exitCode === null ? null : (

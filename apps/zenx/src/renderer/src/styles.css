@@ -2061,6 +2061,10 @@ button:disabled {
 .tool-status.completed {
   color: var(--good);
 }
+.tool-status.shell-nonzero,
+.shell-nonzero-note {
+  color: var(--warn);
+}
 .tool-status.failed,
 .tool-status.declined {
   color: var(--danger);
@@ -9867,6 +9871,7 @@ button:disabled {
 .trace-counts .trace-failed {
   color: var(--danger);
 }
+.trace-counts .trace-nonzero,
 .trace-counts .trace-pending {
   color: var(--warn);
 }
