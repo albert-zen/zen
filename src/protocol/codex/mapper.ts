@@ -330,6 +330,7 @@ export function projectCompletedItem(
     case "thread_instruction":
     case "thread_deleted":
     case "thread_restored":
+    case "host_message":
     case "thread_metadata":
     case "tool_result":
     case "turn_aborted":

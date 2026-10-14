@@ -1,3 +1,4 @@
+import { assertPawRenameScope } from "../room-identity.js";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import type { ThreadCandidate } from "../thread-target.js";
 import type {
@@ -501,6 +502,12 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
           members: members(args.members),
         });
       case "zenx_rooms_rename":
+        if (uiInput === null)
+          assertPawRenameScope(
+            this.#port.snapshot(),
+            string(args, "roomId", MAX_ID_BYTES),
+            invocation.threadId,
+          );
         await this.#port.renameRoom(
           string(args, "roomId", MAX_ID_BYTES),
           string(args, "name", MAX_ROOM_NAME_BYTES),

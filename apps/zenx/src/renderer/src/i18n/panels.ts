@@ -151,7 +151,7 @@ export const en = {
   imClearCredential: "Clear {{field}}",
   imEnabledChannels: "Enabled channels: {{channels}}",
   pawWorkingConversationDisclosure:
-    "PAW creates its own working conversation in your Project. You can also choose an existing conversation. Creating PAW doesn't run the model; new messages wake it up.",
+    "PAW creates its own working conversation in your Project. You can also choose an existing conversation. Creating and saying hello runs the configured model for its welcome; your later messages continue the conversation.",
   pawNewWorkingConversation: "Create a new conversation",
   pawExistingWorkingConversation: "Use an existing conversation",
   pawExistingConversation: "Existing conversation",
@@ -391,6 +391,49 @@ export const en = {
     "Replies paused. Messages are saved only; resuming does not replay them.",
   sending2: "Sending…",
   send: "Send",
+  manageNamedConversation: "Manage {{name}}",
+  renamePaw: "Rename PAW",
+  openPawWorkspace: "Open workspace",
+  setUpPaw: "Set up your PAW",
+  meetYourPaw: "A personal agent, just for you",
+  pawWelcomeDescription:
+    "Start a conversation, then choose a name and way of working together.",
+  pawLater: "Later",
+  pawAdvancedSetup: "Advanced setup",
+  pawOpenInstructions: "Open workspace AGENTS.md",
+  pawInstructionsBoundary:
+    "This edits the existing AGENTS.md inside this working directory, using the shared file editor and its save/conflict checks. Core reads repository-root AGENTS.md when a new Thread first receives input; if this directory is below that root, use a root-directory conversation to manage it. Missing files are not created automatically.",
+  pawIntroductionPreview: "PAW welcome",
+  pawStartTitle: "Meet your PAW",
+  pawStartHelp:
+    "Create your PAW and it will welcome you. You can choose its name together or start working right away.",
+  pawCreateAndGreet: "Create and say hello",
+  pawIntroductionRequest:
+    "Your PAW will introduce itself and ask what you’d like to call it. This runs your configured model.",
+  pawIntroductionFailed:
+    "Your PAW was created, but its introduction could not be confirmed. Check this conversation's delivery before retrying.",
+  pawEmptyChat:
+    "Your PAW is ready. Ask for an introduction, or just send a message to start working. You can change its name and work instructions later from settings.",
+  pawStartIntroduction: "Start introduction",
+  pawCancelWelcome: "Cancel welcome",
+  pawWelcomeAlreadyStarted:
+    "The PAW welcome has already started; cancelling this receipt cannot stop it.",
+  pawWelcomeStarting: "Your PAW is getting ready to say hello…",
+  pawWelcomeNoMessage:
+    "The welcome has no confirmed reply. You can check the working conversation, or send your own message here.",
+  pawWorkInstructions: "Working directory & instructions",
+  pawWorkInstructionsHelp:
+    "Open the working conversation to inspect its directory and existing AGENTS.md. File edits keep the same workspace permissions; renaming your PAW does not move the directory.",
+  pawNameStep: "What should we call your PAW?",
+  pawNameHelp:
+    "This is how your personal agent appears in conversations. You can change it anytime from its sidebar menu.",
+  pawNext: "Continue",
+  pawBack: "Back",
+  pawCapabilities: "Capabilities & setup details",
+  pawSetupStep: "Choose a place to work",
+  pawSetupHelp:
+    "Review the project and existing settings before creating your PAW. Nothing runs until you send a message.",
+  pawRetrySetup: "Retry setup checks",
   createPaw: "Create PAW",
   createRoom: "Create Room",
   newPawConversation: "New PAW conversation",
@@ -975,7 +1018,7 @@ export const zhCN = {
   imClearCredential: "清除 {{field}}",
   imEnabledChannels: "启用的渠道：{{channels}}",
   pawWorkingConversationDisclosure:
-    "PAW 默认在项目中创建自己的工作会话，也可以选择已有会话。创建 PAW 不运行模型；新消息会唤醒它。",
+    "PAW 默认在项目中创建自己的工作会话，也可以选择已有会话。创建并打招呼会调用已配置的模型，之后可直接发消息继续对话。",
   pawNewWorkingConversation: "创建新会话",
   pawExistingWorkingConversation: "使用已有会话",
   pawExistingConversation: "已有会话",
@@ -1187,6 +1230,45 @@ export const zhCN = {
     "回复已暂停。消息仅会保存；恢复后不会重放。",
   sending2: "发送中…",
   send: "发送",
+  manageNamedConversation: "管理 {{name}}",
+  renamePaw: "给 PAW 改名",
+  openPawWorkspace: "打开工作空间",
+  setUpPaw: "设置你的 PAW",
+  meetYourPaw: "你的个人 Agent",
+  pawWelcomeDescription: "先开始对话，再一起决定名字和工作方式。",
+  pawLater: "稍后再说",
+  pawAdvancedSetup: "高级设置",
+  pawOpenInstructions: "打开工作目录 AGENTS.md",
+  pawInstructionsBoundary:
+    "这里通过共享文件编辑器修改当前工作目录内已有的 AGENTS.md，沿用保存与冲突检查。Core 在新会话首次收到输入时读取仓库根目录 AGENTS.md；如果当前目录位于仓库内层，请在根目录会话中管理。不会自动创建缺失文件。",
+  pawIntroductionPreview: "PAW 欢迎",
+  pawStartTitle: "认识你的 PAW",
+  pawStartHelp:
+    "创建后，PAW 会主动和你打招呼。你们可以一起决定名字，也可以直接开始工作。",
+  pawCreateAndGreet: "创建并打个招呼",
+  pawIntroductionRequest:
+    "PAW 会主动介绍自己，问问你想怎么称呼它。这会调用已配置的模型。",
+  pawIntroductionFailed:
+    "PAW 已创建，但尚无法确认欢迎请求的结果。请先检查本对话的投递状态，再重试。",
+  pawEmptyChat:
+    "PAW 已就绪。可以让它介绍自己，也可以直接发消息开始工作。以后仍可从设置修改名字和工作说明。",
+  pawStartIntroduction: "开始介绍",
+  pawCancelWelcome: "取消欢迎",
+  pawWelcomeAlreadyStarted: "PAW 已开始欢迎，取消这条回执不能停止运行。",
+  pawWelcomeStarting: "PAW 正准备和你打招呼…",
+  pawWelcomeNoMessage:
+    "尚无已确认的欢迎回复。你可以查看工作会话，也可以直接在这里发消息。",
+  pawWorkInstructions: "工作目录与说明",
+  pawWorkInstructionsHelp:
+    "打开工作会话，查看目录与已有的 AGENTS.md。文件编辑仍遵循原有工作目录权限；给 PAW 改名不会移动目录。",
+  pawNameStep: "给你的 PAW 起个名字",
+  pawNameHelp: "这个名字会显示在对话中。以后可以从侧栏菜单随时修改。",
+  pawNext: "继续",
+  pawBack: "返回",
+  pawCapabilities: "能力与设置详情",
+  pawSetupStep: "选择工作位置",
+  pawSetupHelp: "创建前确认项目和已有设置。发送消息后才开始工作。",
+  pawRetrySetup: "重试准备检查",
   createPaw: "创建 PAW",
   createRoom: "创建房间",
   newPawConversation: "新建 PAW 会话",

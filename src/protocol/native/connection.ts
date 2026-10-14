@@ -1,3 +1,4 @@
+import { parseSessionImport, previewSessionImport } from "../session-import.js";
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
 import { AppServerError, type ZenAppServer } from "../../app-server.js";
 import type { ApprovalHandler } from "../../tool.js";
@@ -24,6 +25,7 @@ import {
   NATIVE_QUEUE_EDIT_METHOD,
   type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
+  NATIVE_TURN_WAKE_METHOD,
   type NativeTurnSendResult,
 } from "./wire.js";
 
@@ -83,6 +85,103 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (
+      message.method === "zen/thread/import/preview" ||
+      message.method === "zen/thread/import"
+    ) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.format !== "string" ||
+          typeof params.contents !== "string"
+        )
+          throw new AppServerError(
+            "invalid_import",
+            "Import format and selected file contents are required",
+          );
+        const history = parseSessionImport({
+          format: params.format,
+          contents: params.contents,
+        });
+        let result: unknown;
+        if (message.method === "zen/thread/import/preview")
+          result = previewSessionImport(history);
+        else {
+          const config = params.configuration;
+          if (
+            params.expectedSha256 !== history.source.sha256 ||
+            !isRecord(config) ||
+            typeof config.cwd !== "string" ||
+            Object.keys(config).some(
+              (key) => !["cwd", "sandbox", "selection"].includes(key),
+            ) ||
+            (config.sandbox !== undefined &&
+              !["read-only", "workspace-write", "danger-full-access"].includes(
+                String(config.sandbox),
+              ))
+          )
+            throw new AppServerError(
+              "invalid_import",
+              "Review the exact file and choose a valid local working directory and permissions",
+            );
+          if (
+            config.selection !== undefined &&
+            (!isRecord(config.selection) ||
+              typeof config.selection.providerProfileId !== "string" ||
+              typeof config.selection.modelId !== "string" ||
+              (config.selection.reasoningEffort !== undefined &&
+                config.selection.reasoningEffort !== null &&
+                typeof config.selection.reasoningEffort !== "string"))
+          )
+            throw new AppServerError(
+              "invalid_import",
+              "Invalid local provider selection",
+            );
+          if (!this.#appServer)
+            throw new AppServerError("unavailable", "Import is unavailable");
+          result = await this.#appServer.importThread(history, {
+            cwd: config.cwd,
+            ...(config.sandbox === undefined
+              ? {}
+              : {
+                  sandbox: config.sandbox as
+                    "read-only" | "workspace-write" | "danger-full-access",
+                }),
+            ...(config.selection === undefined
+              ? {}
+              : {
+                  selection:
+                    config.selection as unknown as import("../../provider-registry.js").ProviderSelectionInput,
+                }),
+          });
+        }
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: -32602,
+              message: error instanceof Error ? error.message : String(error),
+              data: {
+                zenCode:
+                  error instanceof AppServerError
+                    ? error.code
+                    : "invalid_import",
+              },
+            },
+          });
+      }
+      return;
+    }
     if (
       message.method === NATIVE_THREAD_DELETE_METHOD ||
       message.method === NATIVE_THREAD_DELETED_LIST_METHOD ||
@@ -323,6 +422,88 @@ export class NativeConnection {
                   "Queue cancellation outcome is unconfirmed. Read the Thread before retrying.",
               };
         this.#send({ id: message.id, error: reason });
+      }
+      return;
+    }
+    if (message.method === NATIVE_TURN_WAKE_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId.trim() ||
+          typeof params.clientId !== "string" ||
+          !params.clientId.trim() ||
+          typeof params.text !== "string" ||
+          !params.text.trim() ||
+          params.source !== "bootstrap" ||
+          (params.mode !== "start" && params.mode !== "steer") ||
+          (params.mode === "steer" &&
+            (typeof params.expectedTurnId !== "string" ||
+              !params.expectedTurnId.trim())) ||
+          (params.requireUnarchived !== undefined &&
+            typeof params.requireUnarchived !== "boolean")
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Host bootstrap input, client ID and start/steer mode are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Host wakeup is unavailable",
+          );
+        this.#subscriptions.add(params.threadId);
+        const turn = await this.#appServer.wakeTurn(
+          params.threadId,
+          {
+            clientId: params.clientId,
+            text: params.text,
+            source: "bootstrap",
+          },
+          {
+            mode: params.mode,
+            ...(params.mode === "steer"
+              ? { expectedTurnId: params.expectedTurnId as string }
+              : {}),
+            ...(params.requireUnarchived === undefined
+              ? {}
+              : { requireUnarchived: params.requireUnarchived }),
+            ...(this.#requestApproval === undefined
+              ? {}
+              : { requestApproval: this.#requestApproval }),
+          },
+        );
+        void turn.done.catch(() => undefined);
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            result: { turnId: turn.id, mode: turn.mode },
+          });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error:
+              error instanceof AppServerError
+                ? {
+                    code: -32602,
+                    message: error.message,
+                    data: { zenCode: error.code },
+                  }
+                : {
+                    code: -32603,
+                    message:
+                      "Host wakeup outcome is unconfirmed. Read the Thread or retry the same client ID before sending another wakeup.",
+                  },
+          });
       }
       return;
     }

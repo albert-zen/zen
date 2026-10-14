@@ -1,3 +1,4 @@
+import { historicalCallId, historicalToolName } from "./imported-history.js";
 import { fetchModelResponse } from "./request-retry.js";
 import { randomUUID } from "node:crypto";
 import type {
@@ -515,8 +516,11 @@ async function toChatMessage(
   if (message.role === "tool") {
     return {
       role: "tool",
-      tool_call_id: requiredLabel(message.callId, "tool call id"),
-      content: `Exit code: ${String(message.exitCode)}\n${message.text}`,
+      tool_call_id:
+        message.exitCode === null
+          ? historicalCallId(message.callId)
+          : requiredLabel(message.callId, "tool call id"),
+      content: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
     };
   }
 
@@ -525,10 +529,14 @@ async function toChatMessage(
       role: "assistant",
       content: message.text ?? null,
       tool_calls: message.toolCalls.map((toolCall) => ({
-        id: requiredLabel(toolCall.callId, "tool call id"),
+        id: toolCall.imported
+          ? historicalCallId(toolCall.callId)
+          : requiredLabel(toolCall.callId, "tool call id"),
         type: "function",
         function: {
-          name: requiredLabel(toolCall.name, "tool name"),
+          name: toolCall.imported
+            ? historicalToolName(toolCall)
+            : requiredLabel(toolCall.name, "tool name"),
           arguments: serializeToolArguments(toolCall.arguments),
         },
       })),
