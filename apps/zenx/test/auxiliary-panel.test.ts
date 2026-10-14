@@ -182,7 +182,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     const choose = (name: string) =>
       [
         ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types > button",
+          ".workspace-tab-types button",
         ),
       ].find((e) => e.querySelector("strong")?.textContent === name)!;
     await act(async () => choose("Attached browser").click());
@@ -437,7 +437,7 @@ for (const throughHostSdk of [false, true]) {
       const choose = (name: string) =>
         [
           ...document.querySelectorAll<HTMLButtonElement>(
-            ".workspace-tab-types > button",
+            ".workspace-tab-types button",
           ),
         ].find(
           (element) => element.querySelector("strong")?.textContent === name,

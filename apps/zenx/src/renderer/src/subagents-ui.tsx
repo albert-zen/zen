@@ -16,7 +16,7 @@ type RelatedThread = NativeThreadSummary & { parentThreadId?: string };
 
 export function registerSubagentsUi(registry: PluginUiRegistry): void {
   registry.registerTrusted("zenx/bundled/subagents-ui", {
-    "subagents-panel": SubagentsPanel,
+    "subagents-panel": SubagentsSurface,
   });
 }
 
@@ -125,10 +125,12 @@ function CreateSideChat({
   sdk,
   parent,
   onCreated,
+  compact = false,
 }: {
   sdk: PluginUiSurfaceProps["sdk"];
   parent: string;
   onCreated(): void;
+  compact?: boolean;
 }) {
   useTranslation("panels");
   const [busy, setBusy] = useState(false);
@@ -188,9 +190,11 @@ function CreateSideChat({
         onClick={() => void create()}
       >
         <Icon name="plus" />
-        <span>
-          {busy ? i18n.t("panels:creating") : i18n.t("panels:sideChat")}
-        </span>
+        {compact ? null : (
+          <span>
+            {busy ? i18n.t("panels:creating") : i18n.t("panels:sideChat")}
+          </span>
+        )}
       </button>
       {error ? (
         <p className="subagent-create-error" role="alert">
@@ -247,6 +251,23 @@ export function ThreadBreadcrumbAncestors({
       ))}
     </nav>
   );
+}
+
+function SubagentsSurface({ sdk }: PluginUiSurfaceProps) {
+  if (sdk.context.quickCreate === true) {
+    const parent =
+      typeof sdk.context.threadId === "string" ? sdk.context.threadId : "";
+    return (
+      <CreateSideChat
+        key={parent}
+        sdk={sdk}
+        parent={parent}
+        onCreated={() => {}}
+        compact
+      />
+    );
+  }
+  return <SubagentsPanel sdk={sdk} />;
 }
 
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {

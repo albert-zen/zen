@@ -109,7 +109,7 @@ async function fixture(
   const navigate = (route: string) => routes.push(route);
   const render = async (
     parent: string,
-    surface: "header" | "panel" | "breadcrumb" = "panel",
+    surface: "header" | "panel" | "breadcrumb" | "quick-create" = "panel",
     threads: readonly NativeThreadSummary[] = [],
     snapshot: ZenXPluginSnapshot = catalog.pluginSnapshot(),
     active?: boolean,
@@ -137,6 +137,7 @@ async function fixture(
                 surfaceId: "subagents-panel",
                 context: {
                   threadId: parent,
+                  quickCreate: surface === "quick-create",
                   threads,
                   ...(active === undefined ? {} : { active }),
                 },
@@ -458,5 +459,28 @@ test("a pending Side chat creation cannot navigate after its panel hides, even i
     } finally {
       await f.close();
     }
+  }
+});
+
+test("chooser quick-create reuses side-chat creation without loading the tree", async () => {
+  const f = await fixture(async () => ({ threadId: "quick-child" }));
+  try {
+    await f.render("parent", "quick-create");
+    assert.deepEqual(f.calls, []);
+    assert.equal(
+      f.dom.window.document.querySelector(".subagent-create-button span"),
+      null,
+    );
+    await f.click(f.button("New side chat"));
+    assert.deepEqual(f.calls, [
+      {
+        pluginId: "zenx-subagents",
+        commandId: "create",
+        input: { parentThreadId: "parent", mode: "side-chat" },
+      },
+    ]);
+    assert.deepEqual(f.routes, ["/threads/quick-child?view=panel"]);
+  } finally {
+    await f.close();
   }
 });

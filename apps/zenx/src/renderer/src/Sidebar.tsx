@@ -188,6 +188,21 @@ export function Sidebar({
       return "detailed";
     }
   });
+  const [showSubagents, setShowSubagents] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem("zenx-sidebar-show-subagents") === "true"
+      );
+    } catch {
+      return false;
+    }
+  });
+  const visibleThreads = threads.filter(
+    (thread) =>
+      showSubagents ||
+      !thread.parentThreadId ||
+      pinnedThreads.some((pinned) => pinned.threadId === thread.threadId),
+  );
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   useEffect(() => {
     const api = window.zenx?.settings;
@@ -577,7 +592,28 @@ export function Sidebar({
               </strong>
             )}
             <span className="sidebar-view-actions">
-              {mode === "inbox" ? <span>{threads.length}</span> : null}
+              {mode === "inbox" ? <span>{visibleThreads.length}</span> : null}
+              <button
+                className="sidebar-inline-action sidebar-subagents-toggle"
+                type="button"
+                aria-label={i18n.t("shell:showSubagentsInSidebar")}
+                title={i18n.t("shell:showSubagentsInSidebar")}
+                aria-pressed={showSubagents}
+                onClick={() => {
+                  const next = !showSubagents;
+                  setShowSubagents(next);
+                  try {
+                    window.localStorage.setItem(
+                      "zenx-sidebar-show-subagents",
+                      String(next),
+                    );
+                  } catch {
+                    // The preference remains valid for this window.
+                  }
+                }}
+              >
+                <Icon name="users" size={14} />
+              </button>
               <button
                 className="sidebar-density-toggle"
                 type="button"
@@ -676,7 +712,7 @@ export function Sidebar({
                 {i18n.t("shell:tryAgain")}
               </button>
             </div>
-          ) : mode === "inbox" && threads.length === 0 ? (
+          ) : mode === "inbox" && visibleThreads.length === 0 ? (
             <p className="sidebar-empty">
               {i18n.t("shell:conversationsAppearHere")}
             </p>
@@ -689,7 +725,7 @@ export function Sidebar({
               onForkThread={onForkThread}
               pendingApprovalThreadIds={pendingApprovalThreadIds}
               selectedThreadId={selectedThreadId}
-              threads={threads}
+              threads={visibleThreads}
               liveThread={liveThread}
               pinnedThreadIds={pinnedThreadIds}
               watchingThreadIds={watchingThreadIds}
@@ -734,7 +770,7 @@ export function Sidebar({
                   onSidebarOrderAttempt={clearSidebarOrderError}
                   pendingApprovalThreadIds={pendingApprovalThreadIds}
                   selectedThreadId={selectedThreadId}
-                  threads={threads.filter(
+                  threads={visibleThreads.filter(
                     (thread) => !pinnedThreadIds.has(thread.threadId),
                   )}
                   liveThread={liveThread}
@@ -1905,7 +1941,7 @@ function ThreadRow({
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
   const [busyAction, setBusyAction] = useState<
-    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null
+    "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
   const busyActionRef = useRef(false);
   const actionFocusRef = useRef<Element | null>(null);
@@ -2104,7 +2140,7 @@ function ThreadRow({
     </>
   );
   const runAction = async (
-    action: "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive",
+    action: "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive",
     operation: () => Promise<void>,
   ) => {
     if (busyActionRef.current) return;
@@ -2117,7 +2153,7 @@ function ThreadRow({
       if (action !== "rename" && action !== "archive" && action !== "unarchive")
         focusThreadListHeading();
       await operation();
-      if (action === "copy") focusThreadListHeading(false);
+      if (action === "fork") focusThreadListHeading(false);
       if (epoch === menuEpoch.current) closeMenu(action === "rename");
     } catch (error) {
       if (epoch !== menuEpoch.current) return;
@@ -2374,8 +2410,8 @@ function ThreadRow({
           void runAction("archive", () => onChangeThreadLifecycle(thread))
         }
         onBeginRename={beginRename}
-        onCopy={() =>
-          void runAction("copy", () => onForkThread(thread.threadId))
+        onFork={() =>
+          void runAction("fork", () => onForkThread(thread.threadId))
         }
         onCancelRename={() => setRenaming(false)}
         onRequestClose={() => closeMenu()}
@@ -2536,7 +2572,7 @@ export function ThreadItemMenu({
   renameDraft,
   onArchive,
   onBeginRename,
-  onCopy = () => undefined,
+  onFork = () => undefined,
   onCancelRename,
   onRequestClose,
   onDraftChange,
@@ -2547,7 +2583,7 @@ export function ThreadItemMenu({
   details?: ReactNode;
   archived: boolean;
   busyAction:
-    "rename" | "copy" | "pin" | "unpin" | "archive" | "unarchive" | null;
+    "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null;
   error: string | null;
   hasActiveTurn: boolean;
   labelledBy?: string;
@@ -2560,7 +2596,7 @@ export function ThreadItemMenu({
   renameDraft: string;
   onArchive(): void;
   onBeginRename(): void;
-  onCopy?(): void;
+  onFork?(): void;
   onCancelRename(): void;
   onRequestClose?(): void;
   onDraftChange(value: string): void;
@@ -2717,17 +2753,17 @@ export function ThreadItemMenu({
             type="button"
             role="menuitem"
             tabIndex={-1}
-            data-thread-action="copy"
+            data-thread-action="fork"
             disabled={busy}
             title={i18n.t(
-              "shell:copiesThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
+              "shell:forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
             )}
-            onClick={onCopy}
+            onClick={onFork}
           >
-            <Icon name="copy" />
-            {busyAction === "copy"
-              ? i18n.t("shell:copying")
-              : i18n.t("shell:copyThread")}
+            <Icon name="fork" />
+            {busyAction === "fork"
+              ? i18n.t("shell:forkingMessage")
+              : i18n.t("shell:forkThread")}
           </button>
           <button
             type="button"
