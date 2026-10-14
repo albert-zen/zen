@@ -581,3 +581,7 @@ Settled multi-tool disclosures retain the call count and the latest three action
 ### 2026-10-14: Codex conversation import in Settings
 
 Codex conversation import is available in Settings → General under Import conversations. The active-thread Sidebar has no import action. The existing preview, validation, import and open-retry dialog remains unchanged; cancelling returns to Settings and a successful import opens the imported Thread.
+
+### 2026-10-14: Message source navigation
+
+Delivered and queued Thread messages expose a compact source action using the canonical sender identity; local Trigger messages open the exact current Trigger definition. Names and message-body text never select a target. Source actions only read and navigate: they do not send, fork, execute a Trigger or change queued input. Local Thread opening validates its exact identity and availability first; archived, missing or denied targets have visible feedback. Remote sources without a verified return route remain visibly unavailable and never fall back to a same-ID local Thread. Main and side conversations retain their existing navigation roles, and a side-source action preserves the main Composer draft. Newer source clicks, navigation, hidden queue rows and explicit Trigger editor actions retire older pending selection intents. Source controls retain full-name tooltips, keyboard activation and visible focus; model provenance and tool-addressable IDs remain unchanged.

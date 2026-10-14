@@ -3777,7 +3777,7 @@ test("native Agent input displays its sender separately from human input, includ
     assert.doesNotMatch(row.textContent ?? "", /worker-thread/);
     assert.match(
       row.querySelector(".thread-message-sender")?.getAttribute("title") ?? "",
-      /worker-thread/,
+      /Research worker/,
     );
     assert.equal(dom.window.document.querySelector(".queue-row-edit"), null);
     assert.ok(
@@ -3850,10 +3850,11 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
     assert.ok(
       labels
         .filter((label) => label.textContent?.includes("Remote:"))
-        .every(
-          (label) =>
-            label.getAttribute("title")?.includes("peer-reported") &&
-            label.getAttribute("title")?.includes("uuid-peer"),
+        .every((label) =>
+          label.classList.contains("message-source-link")
+            ? label.getAttribute("title")?.includes("verified return route")
+            : label.getAttribute("title")?.includes("peer-reported") &&
+              label.getAttribute("title")?.includes("uuid-peer"),
         ),
     );
   } finally {

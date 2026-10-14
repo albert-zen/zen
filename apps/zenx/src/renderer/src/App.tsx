@@ -1,3 +1,8 @@
+import {
+  TRIGGER_SOURCE_ROUTE,
+  triggerSourceRoute,
+  type MessageSourceNavigator,
+} from "./message-source-navigation.js";
 import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
 import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
 import {
@@ -155,7 +160,7 @@ import {
 } from "./thread-view-state.js";
 import {
   ThreadView,
-  MessageForkContext,
+  ThreadViewActionsProvider,
   type MessageForkHandler,
 } from "./ThreadView.js";
 import { ThreadConversationViewport } from "./thread-conversation-viewport.js";
@@ -2415,6 +2420,58 @@ function AppContent() {
     );
   }, [page, pluginSnapshot]);
 
+  const sourceNavigationIntent = useRef(0);
+  const sourceNavigationState = useRef({ page, selectedThreadId });
+  sourceNavigationState.current = { page, selectedThreadId };
+  const openMessageSource: MessageSourceNavigator = async (target, owner) => {
+    const intent = ++sourceNavigationIntent.current;
+    const navigation = sourceNavigationState.current;
+    const epoch = selectionEpoch.current;
+    const current = () =>
+      owner.isCurrent() &&
+      sourceNavigationIntent.current === intent &&
+      selectionEpoch.current === epoch &&
+      sourceNavigationState.current.page === navigation.page &&
+      sourceNavigationState.current.selectedThreadId ===
+        navigation.selectedThreadId;
+    if (
+      !target.id ||
+      (target.kind === "thread" && target.deviceId !== undefined)
+    )
+      throw new Error(i18n.t("shell:sourceNavigationUnavailable"));
+    if (target.kind === "trigger") {
+      if (
+        !pluginSnapshot?.pages.some(
+          (entry) =>
+            entry.pluginId === "zenx-triggers" &&
+            entry.route === TRIGGER_SOURCE_ROUTE,
+        )
+      )
+        throw new Error(i18n.t("shell:sourcePluginUnavailable"));
+      if (current()) openPage(triggerSourceRoute(target.id));
+      return;
+    }
+    let result;
+    try {
+      result = await window.zenx.protocol.request("zen/thread/read", {
+        threadId: target.id,
+      });
+    } catch {
+      throw new Error(i18n.t("shell:sourceThreadUnavailable"));
+    }
+    if (!current()) return;
+    if (result.thread.id !== target.id)
+      throw new Error(i18n.t("shell:sourceThreadUnavailable"));
+    if (result.thread.archived)
+      throw new Error(i18n.t("shell:sourceThreadArchived"));
+    const panel =
+      (selectedRoom !== undefined && selectedRoom !== null) ||
+      owner.threadId !== selectedThreadIdRef.current;
+    openPage(
+      `/threads/${encodeURIComponent(target.id)}${panel ? "?view=panel" : ""}`,
+    );
+  };
+
   const renameThread = async (threadId: string, title: string) => {
     const projection = await window.zenx.titles.rename(threadId, title);
     setTitleSnapshot((current) => applyThreadTitleReceipt(current, projection));
@@ -2738,7 +2795,7 @@ function AppContent() {
   );
 
   return (
-    <MessageForkContext.Provider value={forkMessage}>
+    <ThreadViewActionsProvider fork={forkMessage} source={openMessageSource}>
       <div
         className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
         style={
@@ -3060,7 +3117,10 @@ function AppContent() {
               pluginSnapshot !== null ? (
               <ImZenXDraftContext.Provider value={imzenxDrafts}>
                 <RoomHeaderContext.Provider
-                  value={{ roomId: selectedRoomId, element: roomHeaderTarget }}
+                  value={{
+                    roomId: selectedRoomId,
+                    element: roomHeaderTarget,
+                  }}
                 >
                   <PluginProductPage
                     context={
@@ -3429,7 +3489,7 @@ function AppContent() {
           />
         ) : null}
       </div>
-    </MessageForkContext.Provider>
+    </ThreadViewActionsProvider>
   );
 }
 

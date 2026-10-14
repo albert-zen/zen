@@ -10322,3 +10322,57 @@ button:disabled {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
+
+.message-source-line {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+.message-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+.message-source-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-source-link > svg {
+  flex-shrink: 0;
+}
+.message-source-link:hover:not([aria-disabled="true"]) {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+}
+.message-source-link:focus-visible {
+  outline: 2px solid var(--color-text-secondary);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.message-source-link[aria-disabled="true"] {
+  cursor: default;
+}
+.message-source-status {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.trigger-card[data-source-trigger="selected"] {
+  outline: 2px solid var(--color-text-secondary);
+  outline-offset: 2px;
+}
