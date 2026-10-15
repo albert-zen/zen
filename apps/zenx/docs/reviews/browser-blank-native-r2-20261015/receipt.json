@@ -1,0 +1,134 @@
+{
+  "head": "d6b349df33cea6dd245fc33bc2564870f0658e46",
+  "phase": "blank-dark-return",
+  "passed": true,
+  "records": [
+    {
+      "name": "blank-light",
+      "appearance": "light",
+      "expected": 255,
+      "status": "verified",
+      "webContentsId": 2,
+      "tabId": "014f1d26-528e-465d-a124-10df4305c25e",
+      "lease": "blank-theme-stable-lease",
+      "observationId": "653abf41-5600-4d1d-a3dc-2a300b8bc22a",
+      "url": "about:blank",
+      "pixel": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "size": {
+        "width": 600,
+        "height": 400
+      }
+    },
+    {
+      "name": "blank-dark",
+      "appearance": "dark",
+      "expected": 0,
+      "status": "verified",
+      "webContentsId": 2,
+      "tabId": "014f1d26-528e-465d-a124-10df4305c25e",
+      "lease": "blank-theme-stable-lease",
+      "observationId": "55b424f0-6070-4609-923c-a5cada75b213",
+      "url": "about:blank",
+      "pixel": [
+        0,
+        0,
+        0,
+        255
+      ],
+      "size": {
+        "width": 600,
+        "height": 400
+      }
+    },
+    {
+      "name": "blank-light-return",
+      "appearance": "light",
+      "expected": 255,
+      "status": "verified",
+      "webContentsId": 2,
+      "tabId": "014f1d26-528e-465d-a124-10df4305c25e",
+      "lease": "blank-theme-stable-lease",
+      "observationId": "563b5254-601b-4f7e-9173-dd655f7fec01",
+      "url": "about:blank",
+      "pixel": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "size": {
+        "width": 600,
+        "height": 400
+      }
+    },
+    {
+      "name": "website-dark",
+      "appearance": "dark",
+      "expected": 80,
+      "status": "verified",
+      "webContentsId": 2,
+      "tabId": "014f1d26-528e-465d-a124-10df4305c25e",
+      "lease": "blank-theme-stable-lease",
+      "observationId": "fd4ff498-f3b4-47b0-a911-53516ff11e34",
+      "url": "http://127.0.0.1:49219/blank-theme-site",
+      "pixel": [
+        80,
+        80,
+        80,
+        255
+      ],
+      "size": {
+        "width": 600,
+        "height": 400
+      }
+    },
+    {
+      "name": "website-light",
+      "appearance": "light",
+      "expected": 80,
+      "status": "verified",
+      "webContentsId": 2,
+      "tabId": "014f1d26-528e-465d-a124-10df4305c25e",
+      "lease": "blank-theme-stable-lease",
+      "observationId": "35e7141a-0bf3-42d1-bf42-c8d75badac86",
+      "url": "http://127.0.0.1:49219/blank-theme-site",
+      "pixel": [
+        80,
+        80,
+        80,
+        255
+      ],
+      "size": {
+        "width": 600,
+        "height": 400
+      }
+    },
+    {
+      "name": "blank-dark-return",
+      "appearance": "dark",
+      "expected": 0,
+      "status": "verified",
+      "webContentsId": 2,
+      "tabId": "014f1d26-528e-465d-a124-10df4305c25e",
+      "lease": "blank-theme-stable-lease",
+      "observationId": "6dbfc0ea-e1c4-430d-b845-09952016c25c",
+      "url": "about:blank",
+      "pixel": [
+        0,
+        0,
+        0,
+        255
+      ],
+      "size": {
+        "width": 600,
+        "height": 400
+      }
+    }
+  ],
+  "failure": []
+}
