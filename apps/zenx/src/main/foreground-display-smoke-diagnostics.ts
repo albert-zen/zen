@@ -8,6 +8,8 @@ export type ForegroundDisplaySmokePhase =
   | "fixture-shown"
   | "fixture-focus-requested"
   | "fixture-focus-confirmed"
+  | "display-stability-start"
+  | "display-stability-confirmed"
   | "activity-requested"
   | "overlay-create"
   | "overlay-created"

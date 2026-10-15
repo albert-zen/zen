@@ -10,6 +10,7 @@ import {
   type ForegroundDisplaySmokePhase,
 } from "./foreground-display-smoke-diagnostics.js";
 import { startWindowsForegroundInputProbe } from "./windows-foreground-input-probe.js";
+import { waitForForegroundDisplayStability } from "./foreground-display-smoke-stability.js";
 
 /** Owned native fixture. It never grants product foreground-control consent. */
 export async function verifyForegroundActivityOverlay(preloadPath: string) {
@@ -92,12 +93,26 @@ async function verifyForegroundActivityCdpOverlay(
       "data:text/html,<title>ZenX foreground overlay fixture</title><input id='field' autofocus value='Focus guard'>",
     );
     mark("fixture-loaded");
+    // Share the existing focus setup budget, rather than adding another 7s.
+    const setupDeadline = performance.now() + 7_000;
     fixture.show();
     mark("fixture-shown");
     fixture.focus();
     mark("fixture-focus-requested");
-    await waitFor(() => fixture.isFocused(), "owned fixture focus");
+    await waitFor(
+      () => fixture.isFocused(),
+      "owned fixture focus",
+      setupDeadline,
+    );
     mark("fixture-focus-confirmed");
+    if (process.platform === "darwin") {
+      mark("display-stability-start");
+      await waitForForegroundDisplayStability(screen, {
+        deadline: setupDeadline,
+      });
+      mark("display-stability-confirmed");
+      assert.equal(fixture.isFocused(), true, "owned fixture lost setup focus");
+    }
     const cursorBefore = screen.getCursorScreenPoint();
     const invocation = {
       callId: "owned-overlay-fixture",
@@ -213,10 +228,10 @@ async function verifyForegroundActivityCdpOverlay(
 async function waitFor(
   predicate: () => boolean,
   description: string,
+  deadline = performance.now() + 7_000,
 ): Promise<void> {
-  const deadline = Date.now() + 7_000;
   while (!predicate()) {
-    if (Date.now() >= deadline)
+    if (performance.now() >= deadline)
       throw new Error(`Timed out waiting for ${description}`);
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
