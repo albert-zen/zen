@@ -246,6 +246,7 @@ export async function prepareLaunchPathApp(appDirectory) {
     path.join(main, "launch-path-observer.mjs"),
   );
   for (const name of [
+    "macos-launch-path-host-observation.mjs",
     "macos-launch-path-control.mjs",
     "macos-launch-path-cleanup.mjs",
   ])

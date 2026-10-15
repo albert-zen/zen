@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { observeLaunchHostShell } from "./macos-launch-path-host-observation.mjs";
 
 const config = JSON.parse(
   readFileSync(process.env.ZENX_LAUNCH_PATH_FIXTURE, "utf8"),
@@ -175,16 +176,22 @@ export async function observeHost(toolEnvironment) {
   try {
     assert(hasFixturePath(), "Real Host did not inherit recovered PATH");
     assert(noProfileSecrets(), "Real Host imported synthetic profile secrets");
+    const signal = AbortSignal.timeout(10_000);
     const prepared = toolEnvironment.prepare({
       name: "shell",
       callId: `launch-path-${config.round}-${process.pid}`,
       arguments: { command: "zenx-path-fixture", timeout_ms: 5_000 },
       task: { waitForCompletion: true },
       cwd: config.home,
-      signal: AbortSignal.timeout(10_000),
+      signal,
     });
     assert.deepEqual(prepared.owner, { kind: "builtin", id: "shell" });
-    const result = await toolEnvironment.execute(prepared);
+    const result = await observeLaunchHostShell({
+      execute: () => toolEnvironment.execute(prepared),
+      signal,
+      marker: config.marker,
+      record: (phase, facts) => receipt(`shell-${phase}-${process.pid}`, facts),
+    });
     assert.equal(
       result.exitCode,
       0,
