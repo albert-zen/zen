@@ -266,7 +266,12 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         {
           status: response.status,
           ...(requestId === undefined ? {} : { requestId }),
-          retryable: isRetryableStatus(response.status),
+          // A provider that answers 400 while reporting its own internal fault
+          // (e.g. DashScope InternalError.*) contradicts itself: the request is
+          // fine, the failure is transient.
+          retryable:
+            isRetryableStatus(response.status) ||
+            providerError.internalProviderError,
           ...(diagnosticId === undefined ? {} : { diagnosticId }),
           explicitlyRejectsImageInput:
             providerError.explicitlyRejectsImageInput,
@@ -526,6 +531,8 @@ async function readProviderError(
   message?: string;
   body: string;
   truncated: boolean;
+  /** The provider itself reports an internal fault (e.g. DashScope InternalError.*). */
+  internalProviderError: boolean;
 }> {
   let text: string;
   try {
@@ -533,17 +540,31 @@ async function readProviderError(
     // so a credential crossing the cutoff cannot escape as a nearly complete key.
     text = await response.text();
   } catch {
-    return { explicitlyRejectsImageInput: false, body: "", truncated: false };
+    return {
+      explicitlyRejectsImageInput: false,
+      body: "",
+      truncated: false,
+      internalProviderError: false,
+    };
   }
   const bounded = boundedProviderText(redactProviderText(text, apiKey), 16_384);
   const payload = { body: bounded.text, truncated: bounded.truncated };
+  const internalProviderError = /internal[ _]?error/iu.test(bounded.text);
   try {
     const body = JSON.parse(text) as unknown;
     if (typeof body !== "object" || body === null || !("error" in body))
-      return { explicitlyRejectsImageInput: false, ...payload };
+      return {
+        explicitlyRejectsImageInput: false,
+        ...payload,
+        internalProviderError,
+      };
     const error = (body as { error?: unknown }).error;
     if (typeof error !== "object" || error === null)
-      return { explicitlyRejectsImageInput: false, ...payload };
+      return {
+        explicitlyRejectsImageInput: false,
+        ...payload,
+        internalProviderError,
+      };
     const value = error as {
       code?: unknown;
       type?: unknown;
@@ -569,9 +590,14 @@ async function readProviderError(
         ),
       ...(message === undefined ? {} : { message }),
       ...payload,
+      internalProviderError,
     };
   } catch {
-    return { explicitlyRejectsImageInput: false, ...payload };
+    return {
+      explicitlyRejectsImageInput: false,
+      ...payload,
+      internalProviderError,
+    };
   }
 }
 

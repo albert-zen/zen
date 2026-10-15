@@ -1,4 +1,9 @@
 import type { ImportedToolCallOrigin } from "./thread-import.js";
+
+/** HTTP statuses the admission layer retries; sampling must not multiply them. */
+export const ADMISSION_RETRIED_HTTP_STATUSES: ReadonlySet<number> = new Set([
+  408, 429, 500, 502, 503, 504,
+]);
 import type { WorkspaceInstructionFile } from "./item.js";
 import { deduplicateMediaContent } from "./media-content.js";
 import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
@@ -191,7 +196,15 @@ export function isRetryableModelSampleError(error: unknown): boolean {
   )
     return false;
   const candidate = error as { retryable?: unknown; status?: unknown };
-  return candidate.retryable === true && candidate.status === undefined;
+  if (candidate.retryable !== true) return false;
+  // Admission-retried statuses already spent their retry budget; other HTTP
+  // failures (e.g. provider-internal 400s) never reached it and may replay.
+  if (
+    typeof candidate.status === "number" &&
+    ADMISSION_RETRIED_HTTP_STATUSES.has(candidate.status)
+  )
+    return false;
+  return true;
 }
 
 /**

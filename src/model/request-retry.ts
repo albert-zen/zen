@@ -1,5 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+import { ADMISSION_RETRIED_HTTP_STATUSES } from "../model.js";
+
 /** Request admission only: never consumes or replays a successful model stream. */
 export interface ModelRequestRetryOptions {
   /** Sampling replays own their retry budget; do not nest admission retries. */
@@ -33,7 +35,7 @@ export async function fetchModelResponse(
     }
     if (
       response !== undefined &&
-      ![408, 429, 500, 502, 503, 504].includes(response.status)
+      !ADMISSION_RETRIED_HTTP_STATUSES.has(response.status)
     )
       return response;
     if (attempt === 3 || options.allowRetries === false) {

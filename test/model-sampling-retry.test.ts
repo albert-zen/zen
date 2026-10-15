@@ -363,6 +363,45 @@ test("auth, admission exhaustion, terminal reasons, provider errors and unavaila
   }
 });
 
+test("provider-internal 400s replay at the sampling layer without nesting admission retries", async (t) => {
+  // DashScope marks transient internal validator faults as 400 InternalError.*;
+  // the request itself is fine and replays cleanly.
+  await t.test("self-reported internal 400 retries", async () => {
+    const { model, requests } = compatible((attempt) =>
+      attempt === 1
+        ? new Response(
+            JSON.stringify({
+              error: {
+                message:
+                  "<400> InternalError.Algo.InvalidParameter: The provided URL does not appear to be valid.",
+              },
+            }),
+            { status: 400 },
+          )
+        : sse(choice({ content: "recovered" }, "stop"), "[DONE]"),
+    );
+    const f = fixture(model);
+    const result = await f.run();
+    assert.equal(requests.length, 2);
+    assert.equal(result.turns[0]?.status, "completed");
+  });
+
+  await t.test("plain 400 stays terminal", async () => {
+    const { model, requests } = compatible(
+      () =>
+        new Response(
+          JSON.stringify({ error: { message: "bad request shape" } }),
+          { status: 400 },
+        ),
+    );
+    const f = fixture(model);
+    const result = await f.run();
+    assert.equal(requests.length, 1);
+    assert.deepEqual(f.waits, []);
+    assert.equal(result.turns[0]?.status, "failed");
+  });
+});
+
 test("known midstream transport failures retry; unknown read errors do not", async (t) => {
   for (const [error, expected] of [
     [new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } }), 2],
