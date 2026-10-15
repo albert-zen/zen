@@ -43,6 +43,11 @@ import {
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { FailureItem } from "../../../../../src/item.js";
+import {
+  isTurnEndItem,
+  latestTurnEnd,
+  turnEndPosition,
+} from "../../../../../src/turn-end.js";
 import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
 import type {
   NativeQueueEditParams,
@@ -570,28 +575,34 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const lastCanonicalAgentMessage = thread?.canonicalItems?.findLast(
-    (item) => item.type === "agent_message",
-  );
+  const lastCanonicalTurnEnd = latestTurnEnd(thread?.canonicalItems ?? []);
   const readMessageOrder = useMemo(
     () =>
       thread?.canonicalItems?.flatMap((item) =>
-        item.type === "agent_message" ? [item.id] : [],
+        isTurnEndItem(item) ? [item.id] : [],
       ),
     [thread?.canonicalItems],
   );
   useReadVisibleMessage({
     scope: "threads",
     conversationId: thread?.id,
-    message: lastCanonicalAgentMessage
+    message: lastCanonicalTurnEnd
       ? {
-          id: lastCanonicalAgentMessage.id,
-          createdAt: Date.parse(lastCanonicalAgentMessage.createdAt),
+          id: lastCanonicalTurnEnd.id,
+          createdAt: Date.parse(lastCanonicalTurnEnd.createdAt),
+          position: turnEndPosition(
+            thread!.canonicalItems!,
+            lastCanonicalTurnEnd,
+          ),
         }
       : undefined,
     messageOrder: readMessageOrder,
     viewport: scrollRef,
     occluder: bottomZoneRef,
+    enabled:
+      thread?.status.type !== "active" &&
+      !thread?.turns.some((turn) => turn.status === "inProgress") &&
+      thread?.turns.at(-1)?.id === lastCanonicalTurnEnd?.turnId,
   });
   const runningTurn = thread === null ? null : activeTurn(thread);
   const runKey =
@@ -1195,6 +1206,11 @@ function ThreadViewContent({
                         index={row.index}
                         key={JSON.stringify([thread?.id, row.turn.id])}
                         turn={row.turn}
+                        endItemId={
+                          lastCanonicalTurnEnd?.turnId === row.turn.id
+                            ? lastCanonicalTurnEnd.id
+                            : undefined
+                        }
                         stopping={
                           interrupting && row.turn.id === runningTurn?.id
                         }
@@ -2197,6 +2213,7 @@ function isNestedTranscriptScroll(
 
 function TurnBlock({
   turn,
+  endItemId,
   stopping,
   approvals,
   confirmedStopped,
@@ -2212,6 +2229,7 @@ function TurnBlock({
   failureDetail,
 }: {
   turn: Turn;
+  endItemId?: string | undefined;
   stopping: boolean;
   approvals: readonly ApprovalCardState[];
   confirmedStopped: boolean;
@@ -2345,6 +2363,7 @@ function TurnBlock({
     <section
       ref={sectionRef}
       className={`turn ${turn.status}`}
+      data-read-message-id={complete ? endItemId : undefined}
       aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
     >
       {projection.inputItems.map(renderInputItem)}

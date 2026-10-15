@@ -13,6 +13,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { decodeCanonicalItem } from "./item.js";
+import { isTurnEndItem, latestTurnEnd, turnEndPosition } from "./turn-end.js";
 import {
   MAX_THREAD_IMPORT_BYTES,
   MAX_THREAD_IMPORT_RECORDS,
@@ -294,7 +295,13 @@ export interface ModelCatalogUpdatedEvent {
 }
 
 export type AppServerEvent =
-  | RuntimeEvent
+  | Exclude<RuntimeEvent, { type: "item_completed" }>
+  | {
+      type: "item_completed";
+      item: CanonicalItem;
+      /** Present only for a live locally executed canonical end; matches summary.position. */
+      turnEndPosition?: number;
+    }
   | {
       type: "queue_admission_started";
       /** Missing only on events from older Hosts. */
@@ -4579,7 +4586,18 @@ export class ZenAppServer {
     const lastAgentMessage = items.findLast(
       (item) => item.type === "agent_message",
     );
+    const turnEnd = latestTurnEnd(items);
     return {
+      ...(turnEnd === undefined
+        ? {}
+        : {
+            lastTurnEnd: {
+              id: turnEnd.id,
+              turnId: turnEnd.turnId,
+              createdAt: turnEnd.createdAt,
+              position: turnEndPosition(items, turnEnd),
+            },
+          }),
       ...(lastMessage === undefined
         ? {}
         : {
@@ -4840,6 +4858,32 @@ export class ZenAppServer {
   }
 
   #emit(event: AppServerEvent): void {
+    if (event.type === "turn_completed" || event.type === "turn_started") {
+      // Live readers need the same local lifecycle evidence as a resumed
+      // snapshot. Publish the already-committed Item before its status event.
+      const lifecycle = this.#threads
+        .get(event.threadId)
+        ?.items.findLast(
+          (item) =>
+            item.turnId === event.turnId &&
+            (event.type === "turn_started"
+              ? item.type === "turn_started"
+              : isTurnEndItem(item)),
+        );
+      if (lifecycle)
+        this.#emit({
+          type: "item_completed",
+          item: lifecycle,
+          ...(isTurnEndItem(lifecycle)
+            ? {
+                turnEndPosition: turnEndPosition(
+                  this.#threads.get(event.threadId)!.items,
+                  lifecycle,
+                ),
+              }
+            : {}),
+        });
+    }
     for (const subscriber of this.#subscribers) {
       try {
         subscriber(event);

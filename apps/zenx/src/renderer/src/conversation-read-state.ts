@@ -10,10 +10,16 @@ export const CONVERSATION_READ_KEY = "zenx.conversation-read.v1";
 export interface ReadCursor {
   id: string;
   createdAt: number;
+  /** Canonical end ordinal for thread ends; Rooms keep their own order. */
+  position?: number;
 }
 export interface ConversationReadPreference {
   baseline: number;
+  /** Thread cursors now acknowledge execution ends, independently of Rooms. */
+  threadEndBaseline: number;
   threads: Record<string, ReadCursor>;
+  /** One live, not-yet-viewed canonical end per Thread; never a history snapshot. */
+  pendingThreadEnds: Record<string, ReadCursor>;
   rooms: Record<string, ReadCursor>;
 }
 type Scope = "threads" | "rooms";
@@ -26,10 +32,15 @@ function cursor(value: unknown): value is ReadCursor {
     typeof entry.id === "string" &&
     entry.id.length > 0 &&
     entry.id.length <= 512 &&
-    Number.isFinite(entry.createdAt)
+    Number.isFinite(entry.createdAt) &&
+    (entry.position === undefined ||
+      (Number.isSafeInteger(entry.position) && entry.position >= 0))
   );
 }
-function parse(raw: string | null): ConversationReadPreference | null {
+function parse(
+  raw: string | null,
+  now: number,
+): ConversationReadPreference | null {
   try {
     const value = JSON.parse(
       raw ?? "null",
@@ -44,7 +55,22 @@ function parse(raw: string | null): ConversationReadPreference | null {
       )
         return null;
     }
-    return value;
+    value.pendingThreadEnds ??= {};
+    if (
+      !value.pendingThreadEnds ||
+      typeof value.pendingThreadEnds !== "object" ||
+      Array.isArray(value.pendingThreadEnds) ||
+      !Object.values(value.pendingThreadEnds).every(
+        (entry) => cursor(entry) && entry.position !== undefined,
+      )
+    )
+      return null;
+    if (value.threadEndBaseline === undefined) {
+      // Old thread cursors identified Agent messages, not execution ends. Do
+      // not relight old history on upgrade or change Room read semantics.
+      return { ...value, threadEndBaseline: now, threads: {} };
+    }
+    return Number.isFinite(value.threadEndBaseline) ? value : null;
   } catch {
     return null;
   }
@@ -58,12 +84,18 @@ export function createConversationReadStore(
   const listeners = new Set<() => void>();
   const read = () => {
     try {
-      return parse(storage?.getItem(CONVERSATION_READ_KEY) ?? null);
+      return parse(storage?.getItem(CONVERSATION_READ_KEY) ?? null, now);
     } catch {
       return null;
     }
   };
-  let state = read() ?? { baseline: now, threads: {}, rooms: {} };
+  let state = read() ?? {
+    baseline: now,
+    threadEndBaseline: now,
+    threads: {},
+    pendingThreadEnds: {},
+    rooms: {},
+  };
   const persist = () => {
     try {
       storage?.setItem(CONVERSATION_READ_KEY, JSON.stringify(state));
@@ -74,7 +106,7 @@ export function createConversationReadStore(
       );
     }
   };
-  if (read() === null) persist();
+  persist();
   return {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => {
@@ -90,6 +122,21 @@ export function createConversationReadStore(
         listeners.forEach((listener) => listener());
       }
     },
+    observeThreadEnd: (id: string, next: ReadCursor) => {
+      if (!cursor(next) || next.position === undefined) return;
+      const latest = read() ?? state;
+      if (
+        (latest.threads[id]?.position ?? -1) >= next.position ||
+        (latest.pendingThreadEnds[id]?.position ?? -1) >= next.position
+      )
+        return;
+      state = {
+        ...latest,
+        pendingThreadEnds: { ...latest.pendingThreadEnds, [id]: next },
+      };
+      persist();
+      listeners.forEach((listener) => listener());
+    },
     advance: (
       scope: Scope,
       id: string,
@@ -99,19 +146,42 @@ export function createConversationReadStore(
       if (!cursor(next) || state[scope][id]?.id === next.id) return;
       const latest = read() ?? state;
       const previous = latest[scope][id];
-      if (
-        previous &&
-        (previous.id === next.id || previous.createdAt > next.createdAt)
-      )
-        return;
-      if (previous && previous.createdAt === next.createdAt) {
-        // Timestamps and UUIDs do not order canonical messages. A paged or
-        // older snapshot without the latest stored cursor cannot prove progress.
-        const before = messageOrder?.indexOf(previous.id) ?? -1;
-        const after = messageOrder?.indexOf(next.id) ?? -1;
-        if (before < 0 || after <= before) return;
+      if (previous) {
+        if (previous.id === next.id) return;
+        if (scope === "threads") {
+          // The host clock can move backwards. Canonical end ordinals
+          // (or explicit canonical order) are the only proof of read progress.
+          if (previous.position !== undefined && next.position !== undefined) {
+            if (next.position <= previous.position) return;
+          } else {
+            const before = messageOrder?.indexOf(previous.id) ?? -1;
+            const after = messageOrder?.indexOf(next.id) ?? -1;
+            if (before < 0 || after <= before) return;
+          }
+        } else {
+          if (previous.createdAt > next.createdAt) return;
+          if (previous.createdAt === next.createdAt) {
+            const before = messageOrder?.indexOf(previous.id) ?? -1;
+            const after = messageOrder?.indexOf(next.id) ?? -1;
+            if (before < 0 || after <= before) return;
+          }
+        }
       }
-      state = { ...latest, [scope]: { ...latest[scope], [id]: next } };
+      let pendingThreadEnds = latest.pendingThreadEnds;
+      if (
+        scope === "threads" &&
+        next.position !== undefined &&
+        pendingThreadEnds[id]?.position !== undefined &&
+        pendingThreadEnds[id]!.position! <= next.position
+      ) {
+        pendingThreadEnds = { ...pendingThreadEnds };
+        delete pendingThreadEnds[id];
+      }
+      state = {
+        ...latest,
+        pendingThreadEnds,
+        [scope]: { ...latest[scope], [id]: next },
+      };
       persist();
       listeners.forEach((listener) => listener());
     },
@@ -154,14 +224,20 @@ export function unreadThreadIds(
 ): ReadonlySet<string> {
   return new Set(
     summaries.flatMap((summary) => {
-      if (summary.status === "systemError" || !summary.lastAgentMessage)
-        return [];
-      const message = summary.lastAgentMessage;
+      if (summary.status !== "idle" || !summary.lastTurnEnd) return [];
+      const message = summary.lastTurnEnd;
       const seen = preference.threads[summary.threadId];
       const createdAt = Date.parse(message.createdAt);
-      return message.id !== seen?.id &&
+      const pending = preference.pendingThreadEnds[summary.threadId];
+      return Number.isSafeInteger(message.position) &&
+        message.position >= 0 &&
+        message.id !== seen?.id &&
         Number.isFinite(createdAt) &&
-        (seen ? createdAt >= seen.createdAt : createdAt > preference.baseline)
+        (seen
+          ? seen.position !== undefined && message.position > seen.position
+          : (pending?.id === message.id &&
+              pending.position === message.position) ||
+            createdAt >= preference.threadEndBaseline)
         ? [summary.threadId]
         : [];
     }),
@@ -283,6 +359,7 @@ export function useReadVisibleMessage({
     conversationId,
     message?.id,
     message?.createdAt,
+    message?.position,
     messageOrder,
     viewport,
     occluder,

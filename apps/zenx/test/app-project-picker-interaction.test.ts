@@ -4003,6 +4003,7 @@ async function mountApp(
           : await options.getStatus(),
       getPendingApprovals: async () => [],
       request: async (method: string, params?: unknown) => {
+        if (method === "zen/initialize") return { processEpoch: "test-host" };
         if (method === "model/list")
           return {
             data: options.models ?? [wireModel("fake", true)],
