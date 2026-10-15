@@ -10,6 +10,7 @@ import type {
 } from "../../main/trigger-types.js";
 import type { RoomConversation } from "./room-conversations.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { threadTitle } from "./thread-list.js";
 
 export interface CompanionViewState {
@@ -32,7 +33,9 @@ export function CompanionWorkspace({
   viewState,
   onViewChange,
   renderConversation,
+  onRenameThread,
 }: {
+  onRenameThread?(threadId: string, title: string): Promise<void>;
   renderConversation?(threadId: string): React.ReactNode;
   room: RoomConversation;
   threads: readonly NativeThreadSummary[];
@@ -214,6 +217,9 @@ export function CompanionWorkspace({
       </li>
     );
   };
+  const workingThread = threads.find(
+    (thread) => thread.threadId === room.assistant?.threadId,
+  );
   const facts = (
     <>
       <h3>PAW</h3>
@@ -221,6 +227,19 @@ export function CompanionWorkspace({
       <dl>
         <dt>{i18n.t("panels:workingThread")}</dt>
         <dd>
+          {workingThread && onRenameThread ? (
+            <ThreadTitleEditor
+              key={workingThread.threadId}
+              title={threadTitle(workingThread)}
+              editable={
+                !workingThread.archived &&
+                workingThread.status !== "systemError"
+              }
+              onRename={(title) =>
+                onRenameThread(workingThread.threadId, title)
+              }
+            />
+          ) : null}
           {room.assistant ? (
             <button
               type="button"

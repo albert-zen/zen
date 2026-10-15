@@ -13,7 +13,6 @@ import { projectCommandCompleted } from "../../../src/protocol/codex/mapper.js";
 import {
   commandPhase,
   commandStatus,
-  isShellNonzeroResult,
 } from "../src/renderer/src/tool-presentation.js";
 
 function project(result: ToolExecutionResult, toolName = "shell") {
@@ -80,6 +79,7 @@ test(
         1,
       ],
       ["exit 1", 1],
+      ["printf warning >&2; exit 0", 0],
       ["grep() { return 1; }; grep absent", 1],
       ["cat /definitely-missing-355 | grep absent", 1],
       ["zen_nonexistent_command_355", 127],
@@ -106,12 +106,8 @@ test(
           assert.equal(item.exitCode, code);
           assert.equal(item.status, code === 0 ? "completed" : "failed");
           assert.equal(commandPhase(item), code === 0 ? "completed" : "failed");
-          assert.equal(isShellNonzeroResult(item), code !== 0);
-          if (code !== 0)
-            assert.equal(
-              commandStatus(item),
-              "Shell returned a nonzero status",
-            );
+
+          if (code !== 0) assert.equal(commandStatus(item), "Ended");
           assert.deepEqual(
             structuredClone(result),
             before,
@@ -125,7 +121,7 @@ test(
         assert.match(spawnFailure.output, /shell spawn failed/);
         assert.equal(
           commandStatus(project(spawnFailure)),
-          "Shell returned a nonzero status",
+          "Ended",
           "no claim that a process spawned or exited",
         );
       } finally {
@@ -154,7 +150,7 @@ test(
           ),
         );
         const item = project(result, "wait");
-        assert.equal(isShellNonzeroResult(item), false);
+
         assert.equal(commandPhase(item), timeout ? "timed_out" : "failed");
       } finally {
         await env.close();
@@ -163,7 +159,7 @@ test(
   },
 );
 
-test("nonzero fallback visibly explains ambiguity and retains raw error/output and code in both languages", async () => {
+test("tool result details retain raw error/output and code without adding a nonzero warning", async () => {
   const item = project({ output: "grep: missing file", exitCode: 2 });
   try {
     for (const language of ["en", "zh-CN"]) {
@@ -171,10 +167,9 @@ test("nonzero fallback visibly explains ambiguity and retains raw error/output a
       const html = renderToStaticMarkup(
         React.createElement(ToolResultFallback, { item }),
       );
-      assert.ok(html.includes(i18n.t("shell:shellNonzeroHint")));
+      assert.doesNotMatch(html, /nonzero|shell-nonzero-note/);
       assert.match(html, /grep: missing file/);
       assert.ok(html.includes(i18n.t("panels:exitCode") + " 2"));
-      assert.match(html, /shell-nonzero-note/);
     }
   } finally {
     await i18n.changeLanguage("en");
@@ -202,7 +197,7 @@ test(
         },
       });
       const item = project(result, "wait");
-      assert.equal(isShellNonzeroResult(item), false);
+
       assert.equal(commandPhase(item), "cancelled");
       assert.equal(item.exitCode, 130);
     } finally {

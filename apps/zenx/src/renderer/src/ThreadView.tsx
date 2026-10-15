@@ -22,7 +22,6 @@ import type { SkillEntry } from "../../../../cli/src/skills.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 import {
   commandPhaseLabel,
-  commandPhase,
   toolPresentation,
   commandTitle,
 } from "./tool-presentation.js";
@@ -119,7 +118,6 @@ import {
   summarizeTraceActivity,
   observedCommandPhase,
   observedCommandStatus,
-  observedShellNonzeroResult,
   traceSummary,
   type TraceObservationIndex,
   type TraceActivity,
@@ -2098,21 +2096,6 @@ function TraceCounts({
             : ""}
         </small>
       ) : null}
-      {activity.shellNonzero > 0 ? (
-        <small
-          className="trace-nonzero"
-          title={i18n.t("shell:shellNonzeroHint")}
-        >
-          {i18n.t("shell:shellNonzeroResults", {
-            count: activity.shellNonzero,
-          })}
-        </small>
-      ) : null}
-      {activity.failed > 0 ? (
-        <small className="trace-failed">
-          {i18n.t("shell:toolFailures", { count: activity.failed })}
-        </small>
-      ) : null}
       {activity.cancelled > 0 ? (
         <small>
           {i18n.t("shell:toolCancelled", { count: activity.cancelled })}
@@ -3256,9 +3239,7 @@ function StatusMark({
   const status = observedCommandStatus(item, observations);
   if (status === i18n.t("shell:completed")) return null;
   return (
-    <small
-      className={`tool-status ${observedShellNonzeroResult(item, observations) ? "shell-nonzero" : phase === commandPhase(item) && phase !== "imported" ? item.status : phase}`}
-    >
+    <small className={`tool-status ${phase === "failed" ? "ended" : phase}`}>
       {status}
     </small>
   );

@@ -18,6 +18,8 @@ import type {
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
 import type { Thread } from "../../src/protocol-client/index.js";
+import { RoomsPage } from "../../src/renderer/src/bundled-automation-ui.js";
+import { pluginUiRegistry } from "../../src/renderer/src/PluginProductPage.js";
 import { App } from "../../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/codex/model-key.js";
@@ -28,6 +30,20 @@ document.documentElement.dataset.platform = params.get("platform") ?? "win32";
 // Slow the same production transition for inspectable intermediate-frame QA.
 if (params.has("slowMotion"))
   document.documentElement.style.setProperty("--motion-layout", "1600ms");
+const pawRooms = [
+  {
+    id: "synthetic-paw",
+    name: "Research assistant",
+    createdAt: 0,
+    messages: [],
+    assistant: { threadId: "thread-1", triggerId: "synthetic-trigger" },
+    members: [{ name: "PAW speaker", threadId: "thread-1" }],
+  },
+];
+if (params.has("paw"))
+  pluginUiRegistry.registerTrusted("synthetic-paw-ui", {
+    overview: ({ sdk }) => React.createElement(RoomsPage, { sdk }),
+  });
 let compactions = 0;
 // Controlled browser state for toolbar layout; no external site is loaded.
 let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
@@ -121,7 +137,7 @@ const zenx = {
     onNotification: () => () => undefined,
   },
   threads: {
-    list: async ({ archived }: { archived: boolean }) =>
+    list: async ({ archived = false }: { archived?: boolean } = {}) =>
       archived ? [] : [summary()],
   },
   imageAttachments: {
@@ -193,6 +209,18 @@ const zenx = {
   },
   titles: {
     get: async () => ({}),
+    rename: async (threadId: string, title: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      if (title === "error")
+        throw new Error("Synthetic rename failed. Try again.");
+      return {
+        threadId,
+        title,
+        status: "manual",
+        source: "user",
+        version: Date.now(),
+      };
+    },
     onChange: () => () => undefined,
   },
   triggers: {
@@ -203,11 +231,62 @@ const zenx = {
     get: async () => ({ capabilities: [], audit: [], providers: [] }),
     onChange: () => () => undefined,
   },
-  plugins: {
+  computerReadiness: {
     get: async () => ({
-      plugins: [{ id: "notes", enabled: true, available: true }],
+      platform: "linux",
+      accessibility: "not-applicable",
+      screenRecording: "not-applicable",
+      foregroundControlEnabled: false,
+    }),
+    probe: async () => ({
+      platform: "linux",
+      accessibility: "not-applicable",
+      screenRecording: "not-applicable",
+      foregroundControlEnabled: false,
+    }),
+    onChange: () => () => undefined,
+  },
+  plugins: {
+    executeCommand: async (plugin: string, command: string) => {
+      if (plugin === "zenx-rooms" && command === "list")
+        return { rooms: pawRooms };
+      if (plugin === "zenx-rooms" && command === "workspace")
+        return { revision: 1, matters: [], memory: [] };
+      throw new Error(
+        `Synthetic fixture does not support ${plugin}/${command}`,
+      );
+    },
+    get: async () => ({
+      plugins: [
+        { id: "notes", enabled: true, available: true },
+        ...(params.has("paw")
+          ? [
+              {
+                id: "zenx-rooms",
+                displayName: "Rooms",
+                enabled: true,
+                available: true,
+                lifecycle: "enabled",
+                contributionCount: 1,
+                version: "1",
+                source: "bundled",
+              },
+            ]
+          : []),
+      ],
       sidebar: [],
-      pages: [],
+      pages: params.has("paw")
+        ? [
+            {
+              key: "zenx-rooms:rooms",
+              pluginId: "zenx-rooms",
+              id: "rooms",
+              title: "Rooms",
+              route: "/plugins/zenx-rooms/rooms",
+              surfaceId: "overview",
+            },
+          ]
+        : [],
       panels: [
         {
           key: "notes:preview",
@@ -218,6 +297,17 @@ const zenx = {
         },
       ],
       surfaces: [
+        ...(params.has("paw")
+          ? [
+              {
+                key: "zenx-rooms:overview",
+                pluginId: "zenx-rooms",
+                id: "overview",
+                bundleId: "main",
+                exportName: "overview",
+              },
+            ]
+          : []),
         {
           key: "notes:notes",
           pluginId: "notes",
@@ -227,6 +317,18 @@ const zenx = {
         },
       ],
       bundles: [
+        ...(params.has("paw")
+          ? [
+              {
+                key: "zenx-rooms:main",
+                pluginId: "zenx-rooms",
+                id: "main",
+                apiVersion: 1,
+                kind: "trusted",
+                entry: "synthetic-paw-ui",
+              },
+            ]
+          : []),
         {
           key: "notes:ui",
           pluginId: "notes",
