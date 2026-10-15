@@ -80,7 +80,23 @@ jobs:
         run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
       - name: Exercise shell lifecycle observations on macOS
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
-      - run: npm --workspace apps/zenx run smoke:capabilities
+      - name: Exercise macOS login-shell PATH and first tool execution
+        run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
+      - name: Verify native launch observer and hung-main cleanup contracts
+        timeout-minutes: 2
+        run: node --import tsx --test --test-timeout=30000 apps/zenx/test/macos-launch-path-smoke.test.mjs apps/zenx/test/macos-launch-path-cleanup.test.mjs
+      - name: Exercise LaunchServices PATH and packaged capabilities from one build
+        env:
+          ZENX_LAUNCH_PATH_EVIDENCE: ${{ runner.temp }}/zenx-launch-path-evidence
+        run: node apps/zenx/scripts/smoke-macos-launch-path.mjs --capabilities
+      - name: Retain independent LaunchServices PATH evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-launch-path-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-launch-path-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-windows-computer-smoke:
     name: ZenX Windows WinApp adapter smoke
@@ -414,6 +430,9 @@ jobs:
           node "$fixture/node_modules/playwright/cli.js" install chromium
           browser=$(node -e "process.stdout.write(require(process.argv[1]).chromium.executablePath())" "$fixture/node_modules/playwright")
           echo "ZENX_USER_BROWSER_EXECUTABLE=$browser" >> "$GITHUB_ENV"
+      - name: Verify native idle sampling and exact dispatch guards
+        timeout-minutes: 2
+        run: node --test apps/zenx/test/browser-parallel-idle-sampling.test.mjs
       - name: Exercise Chrome foreground and background parallel input on macOS
         env:
           ZENX_PARALLEL_INPUT_ARTIFACT_DIR: ${{ runner.temp }}/zenx-parallel-input-evidence
