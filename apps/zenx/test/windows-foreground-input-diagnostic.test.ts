@@ -345,6 +345,109 @@ test("PowerShell and managed stages share one stopwatch and preserve native guar
   assert.ok(!WINDOWS_FOREGROUND_GUARD.includes("Console.Write"));
 });
 
+test("ready chain observations preserve one Evidence/serialize/write/rename and final state order", () => {
+  const ready = WINDOWS_FOREGROUND_GUARD.slice(
+    WINDOWS_FOREGROUND_GUARD.indexOf(
+      "if(state==1 && down==1 && up==1 && clock.ElapsedMilliseconds-changedAt>=150)",
+    ),
+    WINDOWS_FOREGROUND_GUARD.indexOf('else if(state==2 && Has("edge"))'),
+  );
+  const save = WINDOWS_FOREGROUND_GUARD.slice(
+    WINDOWS_FOREGROUND_GUARD.indexOf("void Save(string name,object value)"),
+    WINDOWS_FOREGROUND_GUARD.indexOf("void OnForeground("),
+  );
+  for (const [source, sequence] of [
+    [
+      ready,
+      [
+        'Stage("ready-condition-met")',
+        'var evidence=Evidence("ready")',
+        'Stage("evidence-built")',
+        'Save("ready.json",evidence)',
+        'Stage("ready-written")',
+        "state=2",
+      ],
+    ],
+    [
+      save,
+      [
+        "var serialized=Json.Serialize(value)",
+        'if(name=="ready.json") Stage("serialized")',
+        "File.WriteAllText(temp,serialized)",
+        'if(name=="ready.json") Stage("temp-written")',
+        "File.Move(temp,target)",
+      ],
+    ],
+  ] as const) {
+    let previous = -1;
+    for (const fragment of sequence) {
+      const at = source.indexOf(fragment);
+      assert.ok(at > previous, `missing/out-of-order ${fragment}`);
+      assert.equal(
+        source.indexOf(fragment, at + 1),
+        -1,
+        `duplicated ${fragment}`,
+      );
+      previous = at;
+    }
+    assert.doesNotMatch(
+      source,
+      /catch|Thread.Sleep|Task\.|DoEvents|while\s*\(/,
+    );
+  }
+  assert.equal(
+    WINDOWS_FOREGROUND_GUARD.match(/Json\.Serialize\(value\)/g)?.length,
+    1,
+  );
+  const records = [
+    "ready-condition-met",
+    "evidence-built",
+    "serialized",
+    "temp-written",
+    "ready-written",
+  ].map((phase, index) => stage(phase, index));
+  assert.deepEqual(
+    projectGuardStages(
+      records.map((value) => JSON.stringify(value)).join("\n"),
+      123,
+    ),
+    { stages: records, rejectedRecords: 0 },
+  );
+});
+
+test("a failed observer write cannot invent a later ready milestone or replace failure evidence", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "zenx-diagnostic-test-"));
+  const output = await mkdtemp(join(tmpdir(), "zenx-diagnostic-output-"));
+  try {
+    await writeFile(
+      join(directory, GUARD_STAGE_FILE),
+      JSON.stringify(stage("ready-condition-met")) +
+        '\n{"phase":"evidence-built"',
+    );
+    const diagnostic = createWindowsGuardDiagnostic(directory);
+    diagnostic.mark("report-timeout", "ready.json");
+    await diagnostic.retainFailure(output, terminal);
+    const [file] = await readdir(output);
+    const result = JSON.parse(await readFile(join(output, file!), "utf8"));
+    assert.deepEqual(result.guardStages.stages, [stage("ready-condition-met")]);
+    assert.equal(result.guardStages.rejectedRecords, 1);
+    assert.equal(result.directChildClosed, false);
+    assert.equal(result.forcedTerminationRequested, true);
+    assert.ok(
+      result.parentStages.some(
+        (record: { phase: string }) => record.phase === "report-timeout",
+      ),
+    );
+    assert.doesNotMatch(
+      JSON.stringify(result),
+      /evidence-built|serialized|temp-written|ready-written/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    await rm(output, { recursive: true, force: true });
+  }
+});
+
 test("CI uploads only failure JSON from the dedicated same-step diagnostic directory", async () => {
   const workflow = parse(
     await readFile(

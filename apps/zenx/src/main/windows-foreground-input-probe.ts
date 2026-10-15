@@ -372,7 +372,11 @@ public sealed class ZenXOverlayGuard : Form {
   bool Has(string name) { return File.Exists(Path.Combine(directory,name)); }
   void Save(string name,object value) {
     var target=Path.Combine(directory,name); var temp=target+".tmp";
-    File.WriteAllText(temp,Json.Serialize(value)); File.Move(temp,target);
+    var serialized=Json.Serialize(value);
+    if(name=="ready.json") Stage("serialized");
+    File.WriteAllText(temp,serialized);
+    if(name=="ready.json") Stage("temp-written");
+    File.Move(temp,target);
   }
   void OnForeground(IntPtr hook,uint kind,IntPtr hwnd,int obj,int child,uint thread,uint time) {
     if(sampling && hwnd!=guard) { uint pid; GetWindowThreadProcessId(hwnd,out pid); if(transitions.Count<256) transitions.Add((int)pid); else focusChanges++; }
@@ -415,7 +419,13 @@ public sealed class ZenXOverlayGuard : Form {
         InjectClick(Left+8,Top+60); Stage("self-click-injected");state=1; return;
       }
       if(state==1 && down==1 && up==1) Stage("self-click-received");
-      if(state==1 && down==1 && up==1 && clock.ElapsedMilliseconds-changedAt>=150) { Save("ready.json",Evidence("ready"));Stage("ready-written");state=2; }
+      if(state==1 && down==1 && up==1 && clock.ElapsedMilliseconds-changedAt>=150) {
+        // Fixed short observations only. A visible stage does not prove its
+        // diagnostic file write returned; observers can themselves stall.
+        Stage("ready-condition-met");
+        var evidence=Evidence("ready"); Stage("evidence-built");
+        Save("ready.json",evidence); Stage("ready-written");state=2;
+      }
       else if(state==2 && Has("edge")) { InjectClick(Left+8,Top+60); state=3; }
       else if(state==3 && down==2 && up==2 && clock.ElapsedMilliseconds-changedAt>=150) { Save("edge.json",Evidence("edge"));state=4; }
       else if(state==4 && Has("stop.json")) {
