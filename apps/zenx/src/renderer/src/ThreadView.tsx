@@ -119,7 +119,7 @@ import {
   observedCommandPhase,
   observedCommandStatus,
   traceSummary,
-  traceGroupIcon,
+  traceGroupIcons,
   type TraceObservationIndex,
   type TraceActivity,
   traceDisplayRows,
@@ -2972,7 +2972,11 @@ function TraceSequence({
           aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <Icon name={traceGroupIcon(node.items)} size={15} />
+          <span className="trace-tool-icons" aria-hidden="true">
+            {traceGroupIcons(node.items).map((name) => (
+              <Icon key={name} name={name} size={15} />
+            ))}
+          </span>
           <span
             className="trace-activity-title"
             title={traceSummary(node.items, observations)}
