@@ -77,8 +77,9 @@ createRoot(document.getElementById("root")!).render(
 );
 
 // Computed font-family is only the requested stack. The capture worker must
-// inspect the actual glyph fonts (for example CSS.getPlatformFontsForNode)
-// before recording their names here; CSS zoom does not stand in for native DPR.
+// use only available, permitted inspection tools before recording actual font
+// names here. Keep NOT INSPECTED when unavailable; do not bypass disabled tools.
+// CSS zoom does not stand in for native DPR.
 const evidence = {
   language,
   appearance: document.documentElement.dataset.appearance,
