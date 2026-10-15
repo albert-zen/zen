@@ -1,0 +1,52 @@
+{
+  "captureHead": "5d4a94273d2a357f7c27dbb72c75f5a485f5a4aa",
+  "captureTree": "e67db37cdd3f9d25f10499395e10fd3b1917305c",
+  "currentPRHead": "fa7de662945e93711bea4c09a0298c8450fc8cb6",
+  "currentPRTree": "732be4ff400b98107589ad0f78f5ceaa4c2e228f",
+  "captureDate": "2026-10-15",
+  "data": "Synthetic production App + real isolated SettingsService; synthetic create bridge only",
+  "visibleBlobComparison": {
+    "apps/zenx/src/renderer/src/App.tsx": {
+      "capture": "fb66b5aa6ecbc04ff4ad05cd48a6b78c4d218ea5",
+      "current": "ed1f401f7e7f10b5ab7d19835ed1b8ce0abcbcba"
+    },
+    "apps/zenx/src/renderer/src/subagents-ui.tsx": {
+      "capture": "78c023d856dcf32e6c0e324cd7dc45be6f029e4b",
+      "current": "78c023d856dcf32e6c0e324cd7dc45be6f029e4b"
+    },
+    "apps/zenx/src/renderer/src/subagents.css": {
+      "capture": "fa7a93f39176e7a121a65391e54f583695d3cd7f",
+      "current": "fa7a93f39176e7a121a65391e54f583695d3cd7f"
+    },
+    "apps/zenx/src/renderer/src/Sidebar.tsx": {
+      "capture": "11edccae7ce7248b3aab82af3dcc23d314d38f53",
+      "current": "11edccae7ce7248b3aab82af3dcc23d314d38f53"
+    },
+    "apps/zenx/src/renderer/src/ThreadView.tsx": {
+      "capture": "ca149eeee1a7ed7c65232c0d4a908fb770da9453",
+      "current": "0061ae066fc318076e19c5c1e602756cc38c273a"
+    }
+  },
+  "integration": "Feature delta identical; App adds upstream396 source-dialog path and ThreadView adds upstream428 recovery. Do not treat entire App/ThreadView as byte-identical.",
+  "screenshots": {
+    "03-a-shown-pinned-keyboard-light.jpg": "0d8a4d31f4ba3992005753fc11f297b0ddaa079f8e46d5684124e745c63559a8",
+    "04-shown-with-model-effort-light.jpg": "f53681c584603ad5b127fc655246a2dfa0f7b36f9feb71f6d35de1115f09c81e",
+    "06-dark-narrow-error-focus.jpg": "5691e075e35dd782569892bf78383296b80ebdc887f06e5ba2acbcd0a62461fb",
+    "07-dark-narrow-retry-shown-focus.jpg": "ae0fdb6db38e7bc54042bd1f20b7eb95c5b5a18bd1eb7d24f61370d48b899920"
+  },
+  "profileReadback": {
+    "pinnedThreadIds": [
+      "design-child",
+      "ordinary"
+    ],
+    "visibleSubagentThreadIds": [
+      "test-child"
+    ]
+  },
+  "limits": [
+    "Reload and disk readback on this source; service/browser process restart not repeated",
+    "Native touch not tested",
+    "Narrow initial sidebar pointer activation did not remain open; Enter works without forced-collapse parameter. Existing handler/Sidebar logic unchanged.",
+    "Synthetic create receipt is not native Host creation evidence"
+  ]
+}
