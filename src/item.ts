@@ -280,10 +280,24 @@ export interface MultimodalUserMessageItem extends UserMessageItemBase {
 
 export type UserMessageItem = LegacyUserMessageItem | MultimodalUserMessageItem;
 
+/** Nonsecret source identity, captured by the sending Host. */
+export interface ThreadMessageOrigin {
+  hostId: string;
+  workspaceId: string;
+}
+/** Receiver-owned snapshot of an explicit existing return route, never a grant. */
+export interface ThreadMessageReturnRoute extends ThreadMessageOrigin {
+  receiverHostId: string;
+  deviceId: string;
+  deviceKey: string;
+}
+
 /** Host-captured provenance. Neither sender identity nor authority comes from message text. */
 export interface ThreadMessageSender {
   /** Present only when the receiving Host captured an authenticated Fleet peer. */
   deviceId?: string;
+  origin?: ThreadMessageOrigin;
+  returnRoute?: ThreadMessageReturnRoute;
   threadId: string;
   /** Host-captured display snapshot only; never an identity or authorization key. */
   threadName?: string;
@@ -445,11 +459,40 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
   JsonPrimitive | { readonly [key: string]: JsonValue } | readonly JsonValue[];
 
+/** Exact canonical media occurrence, not an attachment-wide exclusion. */
+export interface RecoveryMediaOccurrence {
+  itemId: string;
+  field: "content" | "modelContent";
+  partIndex: number;
+  sha256: string;
+}
+
+/** Host-authored recovery intent; every attempt remains in the original Turn. */
+export interface TurnRecovery {
+  attempt: number;
+  sampleAttempt: number;
+  phase: "model" | "after_tools";
+  contextBoundaryItemId: string;
+  sampleId?: string;
+  fingerprint: string;
+  progressItemId?: string;
+  consecutiveFailures: number;
+  /** Exact rejection may persist; an unattributed diagnostic expires with this Turn. */
+  mediaScope?: "exact" | "diagnostic_turn";
+  /** A provider single-response output limit, not a user Turn budget. */
+  outputLimit?: true;
+  /** Redacted, bounded diagnostic excerpt of incomplete public sampleId text only. */
+  publicPartial?: string;
+  /** Actual failed-sample media withheld for diagnosis, not proven damaged. */
+  withheldMedia: RecoveryMediaOccurrence[];
+}
+
 export interface FailureItem extends ItemBase {
   type: "failure";
   turnId: string;
   code: string;
   message: string;
+  recovery?: TurnRecovery;
   /** Bounded in-turn sample replays exhausted before this failure. */
   retried?: number;
   /** Points at the persisted raw failure context in the Host diagnostics log. */
@@ -1197,6 +1240,101 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
           throw new Error("failure.retried must be a positive safe integer");
       }
       requireOptionalNonEmptyString(item.diagnosticId, `${type}.diagnosticId`);
+      if (item.recovery !== undefined) {
+        const recovery = requireRecord(item.recovery, "failure.recovery");
+        for (const field of [
+          "attempt",
+          "sampleAttempt",
+          "consecutiveFailures",
+        ] as const) {
+          requireTokenCount(recovery[field], `failure.recovery.${field}`);
+          if (
+            (recovery[field] as number) < 1 ||
+            (recovery[field] as number) > 3
+          )
+            throw new Error(`Invalid failure.recovery.${field}`);
+        }
+        if (!["model", "after_tools"].includes(String(recovery.phase)))
+          throw new Error("Invalid failure.recovery.phase");
+        if (
+          typeof recovery.fingerprint !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(recovery.fingerprint)
+        )
+          throw new Error("Invalid failure.recovery.fingerprint");
+        if (
+          Object.keys(recovery).some(
+            (key) =>
+              ![
+                "attempt",
+                "sampleAttempt",
+                "phase",
+                "contextBoundaryItemId",
+                "sampleId",
+                "fingerprint",
+                "progressItemId",
+                "consecutiveFailures",
+                "withheldMedia",
+                "mediaScope",
+                "outputLimit",
+                "publicPartial",
+              ].includes(key),
+          )
+        )
+          throw new Error("Unexpected failure.recovery field");
+        requireNonEmptyString(
+          recovery.contextBoundaryItemId,
+          "failure.recovery.contextBoundaryItemId",
+        );
+        requireOptionalNonEmptyString(
+          recovery.sampleId,
+          "failure.recovery.sampleId",
+        );
+        requireOptionalNonEmptyString(
+          recovery.progressItemId,
+          "failure.recovery.progressItemId",
+        );
+        if (
+          recovery.mediaScope !== undefined &&
+          !["exact", "diagnostic_turn"].includes(String(recovery.mediaScope))
+        )
+          throw new Error("Invalid recovery media scope");
+        if (recovery.outputLimit !== undefined && recovery.outputLimit !== true)
+          throw new Error("Invalid recovery output limit");
+        if (
+          recovery.publicPartial !== undefined &&
+          (recovery.outputLimit !== true ||
+            recovery.phase !== "model" ||
+            typeof recovery.sampleId !== "string" ||
+            typeof recovery.publicPartial !== "string" ||
+            recovery.publicPartial.length === 0 ||
+            recovery.publicPartial.length > 2048)
+        )
+          throw new Error("Invalid recovery public partial");
+        if (
+          !Array.isArray(recovery.withheldMedia) ||
+          recovery.withheldMedia.length > 1024
+        )
+          throw new Error("Invalid recovery media occurrences");
+        for (const entry of recovery.withheldMedia) {
+          const media = requireRecord(entry, "recovery media occurrence");
+          if (
+            Object.keys(media).some(
+              (key) =>
+                !["itemId", "field", "partIndex", "sha256"].includes(key),
+            )
+          )
+            throw new Error("Unexpected recovery media field");
+          requireNonEmptyString(media.itemId, "recovery media itemId");
+          if (media.field !== "content" && media.field !== "modelContent")
+            throw new Error("Invalid recovery media field");
+          requireTokenCount(media.partIndex, "recovery media partIndex");
+          if (
+            typeof media.sha256 !== "string" ||
+            !/^[a-f0-9]{64}$/u.test(media.sha256)
+          )
+            throw new Error("Invalid recovery media hash");
+        }
+      }
       break;
     default:
       return unreachableItemType(type);
@@ -1421,6 +1559,24 @@ function unreachableItemType(value: never): never {
 function validateThreadMessageSender(value: unknown, label: string): void {
   const sender = requireRecord(value, label);
   requireOptionalNonEmptyString(sender.threadName, `${label}.threadName`);
+  for (const field of ["origin", "returnRoute"] as const) {
+    if (sender[field] === undefined) continue;
+    if (sender.deviceId === undefined)
+      throw new Error("Only remote senders have remote source metadata");
+    const source = requireRecord(sender[field], `${label}.${field}`);
+    for (const key of field === "origin"
+      ? ["hostId", "workspaceId"]
+      : ["hostId", "workspaceId", "receiverHostId", "deviceId", "deviceKey"])
+      requireNonEmptyString(source[key], `${label}.${field}.${key}`);
+    if (field === "returnRoute") {
+      const origin = requireRecord(sender.origin, `${label}.origin`);
+      if (
+        origin.hostId !== source.hostId ||
+        origin.workspaceId !== source.workspaceId
+      )
+        throw new Error("Remote return route must match its source origin");
+    }
+  }
   for (const field of ["threadId", "toolCallId", "callId"])
     requireNonEmptyString(sender[field], `${label}.${field}`);
   if (sender.deviceId === undefined)

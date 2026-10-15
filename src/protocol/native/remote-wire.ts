@@ -8,16 +8,76 @@ import type {
   RemoteToolResult,
   RemoteToolStatusResult,
 } from "./remote-tool-wire.js";
+/** Nonsecret, administrator-owned mapping between two existing Fleet grants. */
+export interface RemoteMessageSourceBinding {
+  inboundDeviceId: string;
+  hostId: string;
+  workspaceId: string;
+  deviceId: string;
+  deviceKey: string;
+}
+export function parseRemoteMessageSourceBindings(
+  value: unknown,
+): RemoteMessageSourceBinding[] {
+  if (!Array.isArray(value) || value.length > 128)
+    throw new Error("Invalid Fleet message source bindings");
+  const seen = new Set<string>();
+  return value.map((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry))
+      throw new Error("Invalid Fleet message source binding");
+    const binding = entry as Record<string, unknown>;
+    if (
+      Object.keys(binding).some(
+        (key) =>
+          ![
+            "inboundDeviceId",
+            "hostId",
+            "workspaceId",
+            "deviceId",
+            "deviceKey",
+          ].includes(key),
+      ) ||
+      ![
+        binding.inboundDeviceId,
+        binding.hostId,
+        binding.workspaceId,
+        binding.deviceId,
+      ].every(
+        (v) =>
+          typeof v === "string" &&
+          v.trim().length > 0 &&
+          v.length <= 512 &&
+          !/[\x00-\x1f\x7f]/u.test(v),
+      ) ||
+      typeof binding.deviceKey !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(binding.deviceKey) ||
+      binding.deviceId === "local"
+    )
+      throw new Error("Invalid Fleet message source binding");
+    const identity = JSON.stringify([
+      binding.inboundDeviceId,
+      binding.hostId,
+      binding.workspaceId,
+    ]);
+    if (seen.has(identity))
+      throw new Error("Duplicate Fleet message source binding");
+    seen.add(identity);
+    return { ...binding } as unknown as RemoteMessageSourceBinding;
+  });
+}
+
 /** Pure native ZAS mobile wire types: safe to import as types in React Native. */
 export const REMOTE_HOST_VERSION = 1;
 /** send admission checks archival under the canonical Core mutation lock. */
 export const REMOTE_UNARCHIVED_SEND_CAPABILITY = "send-unarchived";
 export const REMOTE_THREAD_MESSAGE_CAPABILITY = "thread-message-v1";
+export const REMOTE_MESSAGE_ORIGIN_CAPABILITY = "thread-message-origin-v1";
 export const REMOTE_METHODS = {
   hello: "zen/remote/hello",
   models: "zen/remote/models",
   rooms: "zen/remote/rooms",
   roomsRead: "zen/remote/rooms/read",
+  triggerRead: "zen/remote/trigger/read",
   roomsPost: "zen/remote/rooms/post",
   roomEvent: "zen/remote/room/event",
   workspaces: "zen/remote/workspaces",
@@ -68,7 +128,7 @@ export interface RemoteSend {
   /** Host-captured tool invocation, attributed to the authenticated peer at receipt. */
   sender?: Pick<
     import("../../item.js").ThreadMessageSender,
-    "threadId" | "toolCallId" | "callId"
+    "threadId" | "toolCallId" | "callId" | "threadName" | "origin"
   >;
 }
 export interface RemoteItemView {
@@ -146,6 +206,7 @@ export type RemoteErrorCode =
   | "wrong_workspace"
   | "scope_refreshing"
   | "thread_not_found"
+  | "trigger_unavailable"
   | "thread_busy"
   | "stale_turn"
   | "idempotency_conflict"
@@ -170,6 +231,7 @@ export function isConfirmedRemoteRejection(code: unknown): boolean {
       "wrong_workspace",
       "scope_refreshing",
       "thread_not_found",
+      "trigger_unavailable",
       "thread_busy",
       "stale_turn",
       "idempotency_conflict",
@@ -246,6 +308,11 @@ export interface RemoteRequestParams {
   [REMOTE_METHODS.models]: Record<string, never>;
   [REMOTE_METHODS.rooms]: { workspaceId: string };
   [REMOTE_METHODS.roomsRead]: { workspaceId: string; roomId: string };
+  [REMOTE_METHODS.triggerRead]: {
+    workspaceId: string;
+    triggerId: string;
+    threadId: string;
+  };
   [REMOTE_METHODS.roomsPost]: {
     workspaceId: string;
     roomId: string;
@@ -280,6 +347,7 @@ export interface RemoteResponseResults {
   [REMOTE_METHODS.models]: { models: readonly RemoteModelView[] };
   [REMOTE_METHODS.rooms]: { rooms: RemoteRoomSummary[] };
   [REMOTE_METHODS.roomsRead]: RemoteRoomView;
+  [REMOTE_METHODS.triggerRead]: { trigger: Record<string, unknown> };
   [REMOTE_METHODS.roomsPost]: RemoteRoomPostResult;
   [REMOTE_METHODS.hello]: {
     version: number;

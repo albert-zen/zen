@@ -20,6 +20,8 @@ export interface BrowserThreadRequest {
   threadId: string;
   targetId?: string;
   frames: boolean;
+  /** Separate catalog/activity lane; never grants frame or external-open authority. */
+  catalog?: true;
 }
 export type BrowserThreadEvent =
   | Exclude<BrowserLiveObservationEvent, { type: "metadata" }>

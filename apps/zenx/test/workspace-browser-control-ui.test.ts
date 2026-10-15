@@ -36,9 +36,15 @@ const tab = (changes = {}): WorkspaceBrowserTab => ({
 });
 async function withPanel(
   run: (h: {
-    render(changes?: object, threadId?: string, open?: boolean): Promise<void>;
+    render(
+      changes?: object,
+      threadId?: string,
+      open?: boolean,
+      presentationId?: string,
+    ): Promise<void>;
     button(label: string): HTMLButtonElement;
     calls: unknown[][];
+    mounts: Record<string, unknown>[];
     pending: ReturnType<typeof deferred>[];
     unmount(): Promise<void>;
   }) => Promise<void>,
@@ -57,12 +63,15 @@ async function withPanel(
     },
   });
   const calls: unknown[][] = [];
+  const mounts: Record<string, unknown>[] = [];
   const pending: ReturnType<typeof deferred>[] = [];
   Object.defineProperty(dom.window, "zenx", {
     value: {
       workspaceBrowser: {
         onFocusAddress: () => () => {},
-        mount: async () => {},
+        mount: async (request: Record<string, unknown>) => {
+          mounts.push(request);
+        },
         command: (...args: unknown[]) => {
           calls.push(args);
           const work = deferred();
@@ -80,13 +89,19 @@ async function withPanel(
       mounted = false;
     }
   };
-  const render = async (changes = {}, threadId = "thread-a", open = true) => {
+  const render = async (
+    changes = {},
+    threadId = "thread-a",
+    open = true,
+    presentationId?: string,
+  ) => {
     await act(async () =>
       root.render(
         React.createElement(WorkspaceBrowserPanel, {
           threadId,
           tab: tab(changes),
           open,
+          presentationId,
         }),
       ),
     );
@@ -97,6 +112,7 @@ async function withPanel(
     await run({
       render,
       calls,
+      mounts,
       pending,
       unmount,
       button: (label) => {
@@ -336,5 +352,61 @@ test("unknown outcome keeps a reserved toolbar status slot when cleared", async 
     assert.equal(document.querySelector(".browser-outcome-status"), status);
     assert.equal(status.getAttribute("data-unknown"), "false");
     assert.equal(status.textContent, "");
+  });
+});
+
+test("blank viewport distinguishes websites, loading and errors; theme updates retain native lease", async () => {
+  await withPanel(async ({ render, mounts }) => {
+    const viewport = () =>
+      document.querySelector(".workspace-browser-viewport")!;
+    await render({ url: "about:blank", loading: false });
+    assert.equal(viewport().getAttribute("data-blank"), "true");
+    const lease = mounts.at(-1)!.lease;
+    await act(async () => {
+      document.documentElement.dataset.appearance = "dark";
+    });
+    assert.equal(mounts.at(-1)!.appearance, "dark");
+    assert.equal(mounts.at(-1)!.lease, lease);
+    await act(async () => {
+      document.documentElement.dataset.appearance = "light";
+    });
+    assert.equal(mounts.at(-1)!.appearance, "light");
+    assert.equal(mounts.at(-1)!.lease, lease);
+    for (const changes of [
+      { url: "about:blank", loading: true },
+      { url: "about:blank", error: "Navigation failed" },
+      { url: "https://example.test/", loading: false },
+    ]) {
+      await render(changes);
+      assert.equal(viewport().hasAttribute("data-blank"), false);
+    }
+  });
+});
+
+test("presentation acknowledgement and appearance updates share one native lease", async () => {
+  await withPanel(async ({ render, mounts }) => {
+    const viewport = document.querySelector(".workspace-browser-viewport")!;
+    viewport.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 640, height: 480 }) as DOMRect;
+    await render({ url: "about:blank" }, "thread-a", true, "presentation-a");
+    const acknowledged = mounts.at(-1)!;
+    assert.equal(acknowledged.presentationId, "presentation-a");
+    assert.ok(acknowledged.bounds);
+    await act(async () => {
+      document.documentElement.dataset.appearance = "dark";
+    });
+    const themed = mounts.at(-1)!;
+    assert.equal(themed.lease, acknowledged.lease);
+    assert.equal(themed.appearance, "dark");
+    assert.equal(
+      themed.presentationId,
+      undefined,
+      "acknowledged token must not be replayed by theme changes",
+    );
+    assert.deepEqual(themed.bounds, acknowledged.bounds);
+    await render({ url: "about:blank" }, "thread-a", true, "presentation-b");
+    assert.equal(mounts.at(-1)!.lease, acknowledged.lease);
+    assert.equal(mounts.at(-1)!.presentationId, "presentation-b");
+    assert.equal(mounts.at(-1)!.appearance, "dark");
   });
 });

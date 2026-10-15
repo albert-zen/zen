@@ -517,6 +517,20 @@ function attach(
           case "zen/remote/models":
             result = { models: access.models(deviceId, token) };
             break;
+          case "zen/remote/trigger/read":
+            if (
+              Object.keys(p).some(
+                (key) =>
+                  !["workspaceId", "triggerId", "threadId"].includes(key),
+              )
+            )
+              throw new RemoteHostError("invalid_request");
+            result = await access.roomRequest(deviceId, token, "trigger", {
+              workspaceId: str("workspaceId"),
+              triggerId: str("triggerId"),
+              threadId: str("threadId"),
+            });
+            break;
           case "zen/remote/rooms":
           case "zen/remote/rooms/read":
           case "zen/remote/rooms/post": {
@@ -848,7 +862,13 @@ function attach(
                       if (
                         Object.keys(source).some(
                           (key) =>
-                            !["threadId", "toolCallId", "callId"].includes(key),
+                            ![
+                              "threadId",
+                              "toolCallId",
+                              "callId",
+                              "threadName",
+                              "origin",
+                            ].includes(key),
                         ) ||
                         ![
                           source.threadId,
@@ -862,7 +882,42 @@ function attach(
                         )
                       )
                         throw new RemoteHostError("invalid_request");
+                      if (
+                        source.threadName !== undefined &&
+                        (typeof source.threadName !== "string" ||
+                          !source.threadName ||
+                          source.threadName.length > 512)
+                      )
+                        throw new RemoteHostError("invalid_request");
+                      let origin:
+                        import("../../item.js").ThreadMessageOrigin | undefined;
+                      if (source.origin !== undefined) {
+                        const value = source.origin as Record<string, unknown>;
+                        if (
+                          !value ||
+                          typeof value !== "object" ||
+                          Array.isArray(value) ||
+                          Object.keys(value).some(
+                            (key) => !["hostId", "workspaceId"].includes(key),
+                          ) ||
+                          ![value.hostId, value.workspaceId].every(
+                            (v) =>
+                              typeof v === "string" &&
+                              v.length > 0 &&
+                              v.length <= 512,
+                          )
+                        )
+                          throw new RemoteHostError("invalid_request");
+                        origin = {
+                          hostId: value.hostId as string,
+                          workspaceId: value.workspaceId as string,
+                        };
+                      }
                       return {
+                        ...(origin ? { origin } : {}),
+                        ...(source.threadName === undefined
+                          ? {}
+                          : { threadName: source.threadName as string }),
                         threadId: source.threadId as string,
                         toolCallId: source.toolCallId as string,
                         callId: source.callId as string,

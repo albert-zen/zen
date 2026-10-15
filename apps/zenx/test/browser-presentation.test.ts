@@ -1,6 +1,8 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
+import { BrowserLiveObservationIpcBridge } from "../src/main/browser-live-observation-ipc.js";
 import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
@@ -235,6 +237,7 @@ test("external read-only pages share the strip without merging same-URL identiti
     url: page("1").url,
     loading: false,
     mode: "live",
+    canOpenExternally: true,
   });
   let targets = [
     target("workspace:1", "workspace", "workspace"),
@@ -244,6 +247,37 @@ test("external read-only pages share the strip without merging same-URL identiti
   const listeners = new Set<(event: any) => void>();
   const requests: any[] = [];
   const commands: string[] = [];
+  const deliveries = new Map<string, (event: any) => void>();
+  const sourceRequests = new Map<(event: any) => void, any>();
+  const subscriptionRequests = new Map<string, any>();
+  class Renderer extends EventEmitter {
+    isDestroyed() {
+      return false;
+    }
+    send(_channel: string, envelope: any) {
+      deliveries.get(envelope.subscriptionId)?.(envelope.event);
+    }
+  }
+  const renderer = new Renderer();
+  const source = {
+    readBrowserTargetUrl: async () => page("1").url,
+    observeBrowserLive(request: any, listener: (event: any) => void) {
+      requests.push(request);
+      listeners.add(listener);
+      sourceRequests.set(listener, request);
+      listener({ type: "targets", targets, selectedId: request.targetId });
+      listener({ type: "status", status: "live", message: "" });
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  const catalogBridge = new BrowserLiveObservationIpcBridge(
+    source,
+    "catalog",
+    true,
+  );
+  const frameBridge = new BrowserLiveObservationIpcBridge(source, "frame");
   (dom.window as any).zenx = {
     plugins: {},
     workspaceBrowser: {
@@ -257,16 +291,19 @@ test("external read-only pages share the strip without merging same-URL identiti
     },
     browserObservation: {
       subscribe: (request: any, listener: (event: any) => void) => {
-        requests.push(request);
-        listeners.add(listener);
-        listener({ type: "targets", targets, selectedId: request.targetId });
+        const id = crypto.randomUUID();
+        const bridge = request.catalog ? catalogBridge : frameBridge;
+        deliveries.set(id, listener);
+        subscriptionRequests.set(id, request);
+        bridge.subscribe(renderer, id, request);
         return () => {
-          listeners.delete(listener);
+          deliveries.delete(id);
+          bridge.unsubscribe(renderer, id);
         };
       },
     },
   };
-  const snapshot = {
+  let snapshot = {
     plugins: [{ id: "browser", enabled: true, available: true }],
     panels: [],
   } as any;
@@ -298,12 +335,108 @@ test("external read-only pages share the strip without merging same-URL identiti
     assert.equal(requests.at(-1).targetId, "connection-a:1");
     assert.equal(requests.at(-1).frames, true);
     assert.equal(
+      listeners.size,
+      2,
+      "real IPC keeps catalog and selected frame live together",
+    );
+    snapshot = { ...snapshot };
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.equal(listeners.size, 2);
+    assert.ok(
+      [...listeners].some(
+        (listener) => sourceRequests.get(listener).catalog === true,
+      ),
+    );
+    assert.ok(
+      [...listeners].some(
+        (listener) =>
+          sourceRequests.get(listener).targetId === "connection-a:1",
+      ),
+      "catalog refresh leaves a live exact-target frame lane " +
+        JSON.stringify(
+          [...listeners].map((listener) => sourceRequests.get(listener)),
+        ),
+    );
+    assert.equal(
       document.querySelectorAll("select").length,
       0,
       "fixed external target has no second target picker",
     );
+    const oldFrameCallback = [...listeners].find(
+      (listener) => sourceRequests.get(listener).targetId === "connection-a:1",
+    )!;
+    const oldFrameId = [...deliveries.keys()].find(
+      (id) => subscriptionRequests.get(id).targetId === "connection-a:1",
+    )!;
     await act(async () => external[1]!.click());
     assert.equal(requests.at(-1).targetId, "connection-b:1");
+    await act(async () =>
+      oldFrameCallback({
+        type: "status",
+        status: "unavailable",
+        message: "stale frame",
+      }),
+    );
+    frameBridge.unsubscribe(renderer, oldFrameId);
+    const opened: string[] = [];
+    await frameBridge.openExternal(
+      renderer,
+      "presentation-ui-external",
+      "connection-b:1",
+      async (url) => {
+        opened.push(url);
+      },
+    );
+    assert.deepEqual(opened, [page("1").url]);
+    await assert.rejects(
+      frameBridge.openExternal(
+        renderer,
+        "presentation-ui-external",
+        "connection-a:1",
+        async () => {},
+      ),
+      /not current/,
+    );
+    await assert.rejects(
+      catalogBridge.openExternal(
+        renderer,
+        "presentation-ui-external",
+        "connection-b:1",
+        async () => {},
+      ),
+      /not current/,
+    );
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "hidden",
+      });
+      document.dispatchEvent(new dom.window.Event("visibilitychange"));
+    });
+    assert.equal(
+      listeners.size,
+      1,
+      "hidden window retains only the catalog lane",
+    );
+    await assert.rejects(
+      frameBridge.openExternal(
+        renderer,
+        "presentation-ui-external",
+        "connection-b:1",
+        async () => {},
+      ),
+      /not current/,
+    );
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      document.dispatchEvent(new dom.window.Event("visibilitychange"));
+    });
+    assert.equal(listeners.size, 2);
+    assert.equal(requests.at(-1).targetId, "connection-b:1");
+    assert.equal(requests.at(-1).frames, true);
     await act(async () => {
       targets = [];
       for (const listener of [...listeners])
@@ -323,12 +456,37 @@ test("external read-only pages share the strip without merging same-URL identiti
         .click(),
     );
     assert.equal(tabs().length, 2);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Close tab Same page · External · read-only"]',
+        )!
+        .click(),
+    );
+    assert.equal(tabs().length, 1);
+    assert.equal(
+      listeners.size,
+      1,
+      "closing the final peer retires every frame subscription",
+    );
+    await assert.rejects(
+      frameBridge.openExternal(
+        renderer,
+        "presentation-ui-external",
+        "connection-b:1",
+        async () => {},
+      ),
+      /not current/,
+    );
     assert.ok(
       !commands.includes("close"),
       "dismissing an external view never closes a real browser target",
     );
   } finally {
     await act(async () => root.unmount());
+    catalogBridge.close();
+    frameBridge.close();
+    assert.equal(listeners.size, 0);
     dom.window.close();
     delete (globalThis as any).ResizeObserver;
   }

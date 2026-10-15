@@ -1556,6 +1556,10 @@ export class ZenAppServer {
     input: ThreadMessageInput,
     authenticatedDeviceId: string,
     clientId: string,
+    provenance?: Pick<
+      ThreadMessageSender,
+      "origin" | "returnRoute" | "threadName"
+    >,
   ): Promise<ThreadMessageReceipt> {
     if (
       !authenticatedDeviceId ||
@@ -1581,6 +1585,7 @@ export class ZenAppServer {
       threadId,
       structuredClone(input),
       {
+        ...structuredClone(provenance),
         deviceId: authenticatedDeviceId,
         threadId: input.sender.threadId,
         toolCallId: input.sender.toolCallId,
@@ -3154,6 +3159,17 @@ export class ZenAppServer {
                 signal: controller.signal,
                 commit: async (item) => {
                   await this.#withThreadMutation(threadId, async () => {
+                    if (
+                      item.type === "failure" &&
+                      item.recovery !== undefined
+                    ) {
+                      controller.signal.throwIfAborted();
+                      if (this.#activeTurns.get(threadId)?.turnId !== turnId)
+                        throw new AppServerError(
+                          "turn_not_running",
+                          "Recovery no longer owns the active Turn",
+                        );
+                    }
                     await this.#commit(thread, item);
                     if (
                       (item.type === "user_message" ||
@@ -5090,6 +5106,10 @@ function remapForkItems(
     if (item.type === "context_compaction" && item.provenance === "agentic") {
       localIds.add(item.sourceModelResponseId);
     }
+    if (item.type === "failure" && item.recovery?.sampleId !== undefined) {
+      // A failed sample may never have emitted a persisted response Item.
+      localIds.add(item.recovery.sampleId);
+    }
   }
   const ids = new Map([...localIds].map((id) => [id, idFactory()] as const));
   const remap = (id: string): string => ids.get(id) ?? id;
@@ -5120,6 +5140,18 @@ function remapForkItems(
       copied.modelResponseId !== undefined
     ) {
       copied.modelResponseId = remap(copied.modelResponseId);
+    }
+    if (copied.type === "failure" && copied.recovery !== undefined) {
+      const recovery = copied.recovery;
+      recovery.contextBoundaryItemId = remap(recovery.contextBoundaryItemId);
+      if (recovery.progressItemId !== undefined)
+        recovery.progressItemId = remap(recovery.progressItemId);
+      if (recovery.sampleId !== undefined)
+        recovery.sampleId = remap(recovery.sampleId);
+      recovery.withheldMedia = recovery.withheldMedia.map((occurrence) => ({
+        ...occurrence,
+        itemId: remap(occurrence.itemId),
+      }));
     }
     if (copied.type === "context_compaction") {
       copied.coveredThroughItemId = remap(copied.coveredThroughItemId);

@@ -327,6 +327,12 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   fleet: {
+    sourceHistory: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "sourceHistory", input),
+    triggerSource: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "triggerSource", input),
+    messageSource: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "messageSource", input),
     catalog: (id: string) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "catalog", id),
     listThreads: (input: unknown) =>
@@ -557,6 +563,15 @@ contextBridge.exposeInMainWorld("zenx", {
       request: BrowserThreadRequest,
       listener: (event: BrowserThreadEvent) => void,
     ): (() => void) => {
+      const eventChannel = request.catalog
+        ? ipcChannels.browserCatalogEvent
+        : ipcChannels.browserLiveEvent;
+      const subscribeChannel = request.catalog
+        ? ipcChannels.browserCatalogSubscribe
+        : ipcChannels.browserLiveSubscribe;
+      const unsubscribeChannel = request.catalog
+        ? ipcChannels.browserCatalogUnsubscribe
+        : ipcChannels.browserLiveUnsubscribe;
       let active = true;
       const subscriptionId = crypto.randomUUID();
       const wrapped = (
@@ -566,9 +581,9 @@ contextBridge.exposeInMainWorld("zenx", {
         if (active && value.subscriptionId === subscriptionId)
           listener(value.event);
       };
-      ipcRenderer.on(ipcChannels.browserLiveEvent, wrapped);
+      ipcRenderer.on(eventChannel, wrapped);
       void ipcRenderer
-        .invoke(ipcChannels.browserLiveSubscribe, subscriptionId, request)
+        .invoke(subscribeChannel, subscriptionId, request)
         .catch(() => {
           if (active) {
             listener({
@@ -581,11 +596,8 @@ contextBridge.exposeInMainWorld("zenx", {
       return () => {
         if (!active) return;
         active = false;
-        ipcRenderer.off(ipcChannels.browserLiveEvent, wrapped);
-        void ipcRenderer.invoke(
-          ipcChannels.browserLiveUnsubscribe,
-          subscriptionId,
-        );
+        ipcRenderer.off(eventChannel, wrapped);
+        void ipcRenderer.invoke(unsubscribeChannel, subscriptionId);
       };
     },
   },

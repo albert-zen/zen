@@ -94,12 +94,16 @@ export async function resolveCodeMedia(
 export function projectModelMessages(
   messages: readonly ModelMessage[],
   inputModalities?: readonly string[] | null,
+  onMediaProjected?: (source: object, projected: object) => void,
 ): ModelMessage[] {
   const supported = new Set(inputModalities ?? ["text"]);
   const project = (content: UserInput): UserInput =>
     deduplicateMediaContent(content).map((part) => {
-      if (part.type === "text" || supported.has(part.type))
-        return structuredClone(part);
+      if (part.type === "text" || supported.has(part.type)) {
+        const projected = structuredClone(part);
+        if (part.type !== "text") onMediaProjected?.(part, projected);
+        return projected;
+      }
       return { type: "text", text: mediaReceipt(part.type, part.attachment) };
     });
   return messages.map((message) => {

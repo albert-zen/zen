@@ -2,11 +2,23 @@ import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-in
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rm } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rm,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { app, BrowserWindow, screen, type WebContentsView } from "electron";
+import {
+  app,
+  BrowserWindow,
+  nativeImage,
+  screen,
+  type WebContentsView,
+} from "electron";
 
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -83,6 +95,12 @@ const slowRequestStarted = new Promise<void>((resolve) => {
 });
 const fixture = createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
+  if (request.url === "/blank-theme-site") {
+    response.end(
+      "<!doctype html><title>Website appearance fixture</title><style>html,body{margin:0;width:100%;height:100%;background:rgb(80,80,80)}</style>",
+    );
+    return;
+  }
   if (request.url === "/input") {
     response.end(`<!doctype html><title>Targeted input fixture</title><style>body{margin:0;min-height:2200px}canvas{position:absolute;left:10px;top:100px;background:#adc}form{position:absolute;left:10px;top:200px}#file{position:absolute;left:10px;top:300px}</style>
       <output id="result">No canvas click</output><p id="focus">Focus none</p>
@@ -290,6 +308,7 @@ void app.whenReady().then(async () => {
   });
   try {
     const port = await listen();
+    await assertBlankThemePixels(port);
     const url = `http://127.0.0.1:${String(port)}/shared`;
     owner = new BrowserWindow({ show: false, width: 900, height: 700 });
     const ownerShow = () => traceShared("owner-show");
@@ -1636,4 +1655,142 @@ async function assertStableControlLayout(): Promise<void> {
     await i18n.changeLanguage("en");
     layout.destroy();
   }
+}
+
+/** Actual Electron pixels, independent of the renderer-only visual fixture. */
+async function assertBlankThemePixels(port: number): Promise<void> {
+  let view: WebContentsView | undefined;
+  const browser = createElectronWorkspaceBrowser({
+    onCreateView: (value) => {
+      view = value;
+    },
+  });
+  const owner = new BrowserWindow({ show: false, width: 640, height: 480 });
+  const evidence = process.env.ZENX_BROWSER_BLANK_ARTIFACT_DIR;
+  const records: Record<string, unknown>[] = [];
+  const failures: unknown[] = [];
+  let phase = "setup";
+  let passed = false;
+  try {
+    await owner.loadURL("about:blank");
+    browser.bindThreadSession("blank-theme-session", "blank-theme-thread");
+    const tab = await browser.open("blank-theme-session", "about:blank");
+    assert.ok(view);
+    const contentsId = view.webContents.id;
+    const lease = "blank-theme-stable-lease";
+    owner.showInactive();
+    const sample = async (
+      name: string,
+      appearance: "light" | "dark",
+      expected: number,
+    ) => {
+      phase = name;
+      const record: Record<string, unknown> = {
+        name,
+        appearance,
+        expected,
+        status: "mounting",
+        webContentsId: contentsId,
+        tabId: tab.tabId,
+        lease,
+      };
+      records.push(record);
+      browser.mount(owner.webContents, {
+        threadId: "blank-theme-thread",
+        tabId: tab.tabId,
+        lease,
+        appearance,
+        bounds: { x: 0, y: 0, width: 600, height: 400 },
+      });
+      assert.equal(view!.webContents.id, contentsId);
+      assert.ok(owner.contentView.children.includes(view!));
+      // Use the real product inspection path: it causally requests a fresh
+      // compositor surface before its one capturePage call. A frame subscription
+      // can initially deliver an old surface and is not a freshness witness.
+      record.status = "inspecting";
+      const inspection = await browser.inspect(
+        "blank-theme-session",
+        tab.tabId,
+      );
+      assert.equal(inspection.tabId, tab.tabId);
+      assert.equal(view!.webContents.id, contentsId);
+      assert.ok(owner.contentView.children.includes(view!));
+      const png = readFileSync(inspection.screenshot.artifactPath);
+      const image = nativeImage.createFromBuffer(png);
+      record.status = "captured";
+      record.observationId = inspection.observationId;
+      record.url = view!.webContents.getURL();
+      assert.equal(image.isEmpty(), false);
+      const size = image.getSize();
+      const bitmap = image.toBitmap();
+      const offset =
+        (Math.floor(size.height / 2) * size.width +
+          Math.floor(size.width / 2)) *
+        4;
+      const pixel = [...bitmap.subarray(offset, offset + 4)];
+      if (evidence) {
+        mkdirSync(evidence, { recursive: true });
+        writeFileSync(path.join(evidence, `${name}.png`), png);
+      }
+      Object.assign(record, { pixel, size });
+      assert.deepEqual(pixel, [expected, expected, expected, 255], name);
+      record.status = "verified";
+    };
+    await sample("blank-light", "light", 255);
+    await sample("blank-dark", "dark", 0);
+    await sample("blank-light-return", "light", 255);
+    await browser.navigate(
+      "blank-theme-session",
+      tab.tabId,
+      `http://127.0.0.1:${port}/blank-theme-site`,
+    );
+    await sample("website-dark", "dark", 80);
+    await sample("website-light", "light", 80);
+    await browser.navigate("blank-theme-session", tab.tabId, "about:blank");
+    await sample("blank-dark-return", "dark", 0);
+    passed = true;
+    console.log("Native blank appearance pixels", JSON.stringify(records));
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    try {
+      if (evidence) {
+        mkdirSync(evidence, { recursive: true });
+        writeFileSync(
+          path.join(evidence, "receipt.json"),
+          JSON.stringify(
+            {
+              head: process.env.GITHUB_SHA ?? null,
+              phase,
+              passed,
+              records,
+              failure: failures.map((error) =>
+                error instanceof Error ? error.message : String(error),
+              ),
+            },
+            null,
+            2,
+          ),
+        );
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await browser.shutdown();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      owner.destroy();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(
+      failures,
+      "Native blank appearance verification or cleanup failed",
+    );
 }

@@ -90,6 +90,81 @@ export class Thread {
     ) {
       throw new Error(`Turn ${item.turnId} already has a terminal Item`);
     }
+    if (item.type === "failure" && item.recovery !== undefined) {
+      const recovery = item.recovery;
+      const previous = this.#items.filter(
+        (existing) =>
+          existing.type === "failure" &&
+          existing.turnId === item.turnId &&
+          existing.recovery !== undefined,
+      );
+      const boundary = this.#items.findIndex(
+        (existing) => existing.id === recovery.contextBoundaryItemId,
+      );
+      if (
+        recovery.attempt !== previous.length + 1 ||
+        recovery.attempt > 3 ||
+        boundary < 0 ||
+        recovery.sampleAttempt < 2 ||
+        recovery.sampleAttempt > 3 ||
+        this.#items.some(
+          (existing) =>
+            existing.turnId === item.turnId &&
+            (existing.type === "turn_completed" ||
+              existing.type === "turn_aborted"),
+        )
+      )
+        throw new Error("Invalid recovery attempt or context boundary");
+      if (recovery.publicPartial !== undefined) {
+        const sourceIndex = this.#items.findIndex(
+          (existing) => existing.id === recovery.sampleId,
+        );
+        const source = this.#items[sourceIndex];
+        if (
+          sourceIndex <= boundary ||
+          source?.type !== "agent_message" ||
+          source.turnId !== item.turnId ||
+          source.incomplete !== true ||
+          ("contentVisibility" in source &&
+            source.contentVisibility !== "public")
+        )
+          throw new Error(
+            "Recovery draft must reference this failed sample public incomplete message",
+          );
+      }
+      const seen = new Set<string>();
+      for (const occurrence of recovery.withheldMedia) {
+        const index = this.#items.findIndex(
+          (existing) => existing.id === occurrence.itemId,
+        );
+        const source = this.#items[index];
+        const content =
+          source?.type === "user_message" && occurrence.field === "content"
+            ? source.content
+            : source?.type === "tool_result" &&
+                occurrence.field === "modelContent"
+              ? source.modelContent
+              : undefined;
+        const part = content?.[occurrence.partIndex];
+        const key = JSON.stringify([
+          occurrence.itemId,
+          occurrence.field,
+          occurrence.partIndex,
+        ]);
+        if (
+          index < 0 ||
+          index > boundary ||
+          part === undefined ||
+          part.type === "text" ||
+          part.attachment.sha256 !== occurrence.sha256 ||
+          seen.has(key)
+        )
+          throw new Error(
+            "Recovery media must reference an exact earlier canonical occurrence",
+          );
+        seen.add(key);
+      }
+    }
     if (item.type === "model_usage") {
       validateModelUsage(item);
     }

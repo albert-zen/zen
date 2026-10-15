@@ -19,6 +19,9 @@ Open `/apps/zenx/test/fixtures/agent-runtime-visual.html` with these query optio
   Scenes 10/11 deliberately read the same synthetic filename repeatedly: the
   summary counts operations and must never advertise multiple files. They use
   the production ThreadView and existing styles, not recreated UI markup.
+  Scene 11 starts with one shared terminal glyph. Append a running call and then
+  a browser call with the fixture controls to check the fixed icon slot during
+  a one-to-two-glyph update, preserving the disclosure and Composer draft.
 - `mode=queue`, `scene=0..9`: two inputs, one input, long text and images, many
   inputs, delivery failure, idle continuation, approval coexistence, hidden-row failure,
   six real local test images, and an unavailable-image scene.

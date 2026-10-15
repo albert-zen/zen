@@ -265,11 +265,12 @@ test("mounting during an Agent action fences its outcome while an unchanged moun
       inspection.observationId,
       inspection.targets[0]!.targetId,
     );
-    const mount = () =>
+    const mount = (appearance: "light" | "dark" = "light") =>
       fixture.browser.mount(fixture.sender as never, {
         threadId: "thread-a",
         tabId,
         lease: "lease-a",
+        appearance,
         bounds: { x: 0, y: 0, width: 640, height: 480 },
       });
     mount();
@@ -277,7 +278,7 @@ test("mounting during an Agent action fences its outcome while an unchanged moun
     await assert.rejects(acting, /outcome is unknown/u);
 
     inspection = await fixture.browser.inspect("agent-session", tabId);
-    mount();
+    mount("dark");
     web.debuggerApi.defaultValue = { ok: true };
     await fixture.browser.click(
       "agent-session",
@@ -1189,6 +1190,10 @@ class FakeWebContents extends EventEmitter {
 }
 
 class FakeView {
+  backgroundColor = "#ffffff";
+  setBackgroundColor(color: string) {
+    this.backgroundColor = color;
+  }
   readonly webContents = new FakeWebContents();
   #bounds = { x: 0, y: 0, width: 0, height: 0 };
   setVisible() {
@@ -2143,6 +2148,84 @@ test("concurrent operations join the same pending presentation before either cap
       results.every((result) => result.automaticPresentation === "shown"),
     );
     assert.equal(f.views.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("blank browser native background follows appearance without recoloring websites, loading or errors", async () => {
+  const f = await sharedFixture();
+  try {
+    const [tab] = f.browser.command(f.sender as never, "thread-a", "new");
+    await new Promise((resolve) => setImmediate(resolve));
+    const view = f.views[0]!;
+    const mount = (appearance: string) =>
+      f.browser.mount(f.sender as never, {
+        threadId: "thread-a",
+        tabId: tab!.id,
+        lease: "theme",
+        appearance,
+        bounds: { x: 0, y: 0, width: 640, height: 480 },
+      });
+    mount("dark");
+    assert.equal(view.backgroundColor, "#000000");
+    mount("light");
+    assert.equal(view.backgroundColor, "#ffffff");
+    mount("dark");
+    view.webContents.finishLoad("https://example.test/");
+    assert.equal(
+      view.backgroundColor,
+      "#ffffff",
+      "real page keeps native default background",
+    );
+    view.webContents.finishLoad("about:blank");
+    assert.equal(view.backgroundColor, "#000000");
+    view.webContents.isLoading = () => true;
+    view.webContents.emit("did-start-loading");
+    assert.equal(view.backgroundColor, "#ffffff", "loading is not blank");
+    view.webContents.isLoading = () => false;
+    view.webContents.emit("did-stop-loading");
+    assert.equal(view.backgroundColor, "#000000");
+    view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+    assert.equal(view.backgroundColor, "#ffffff", "error is not blank");
+  } finally {
+    await f.close();
+  }
+});
+
+test("same-lease presentation and theme changes retain the captured observation", async () => {
+  const f = await presentationFixture();
+  try {
+    const view = f.views[0]!;
+    view.webContents.debuggerApi.defaultValue = actionInspection;
+    const request = {
+      threadId: "thread-a",
+      tabId: f.tab.id,
+      lease: "combined",
+      bounds: { x: 10, y: 20, width: 640, height: 480 },
+    };
+    f.browser.mount(f.sender as never, { ...request, appearance: "light" });
+    const capturing = f.browser.inspect("presentation-session", f.tab.id);
+    assert.equal(f.requests.length, 1);
+    f.browser.mount(f.sender as never, {
+      ...request,
+      appearance: "dark",
+      presentationId: f.requests[0]!.requestId,
+    });
+    assert.equal(view.backgroundColor, "#000000");
+    const observation = await capturing;
+    assert.equal(observation.automaticPresentation, "shown");
+    f.browser.mount(f.sender as never, { ...request, appearance: "light" });
+    assert.equal(view.backgroundColor, "#ffffff");
+    view.webContents.debuggerApi.defaultValue = { ok: true };
+    await f.browser.click(
+      "presentation-session",
+      f.tab.id,
+      observation.observationId,
+      observation.targets[0]!.targetId,
+    );
+    assert.equal(f.views.length, 1);
+    assert.equal(f.requests.length, 1);
   } finally {
     await f.close();
   }

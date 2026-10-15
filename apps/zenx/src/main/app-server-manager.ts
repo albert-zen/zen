@@ -692,13 +692,13 @@ export class AppServerManager {
 
   #remoteRooms:
     | ((
-        operation: "list" | "read" | "post",
+        operation: "list" | "read" | "post" | "trigger",
         params: Extract<HostEvent, { type: "fleet/room-request" }>["params"],
       ) => Promise<unknown>)
     | undefined;
   setRemoteRoomsHandler(
     handler: (
-      operation: "list" | "read" | "post",
+      operation: "list" | "read" | "post" | "trigger",
       params: Extract<HostEvent, { type: "fleet/room-request" }>["params"],
     ) => Promise<unknown>,
   ): void {

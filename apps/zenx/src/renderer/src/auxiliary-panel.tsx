@@ -534,7 +534,7 @@ export function AuxiliaryPanel({
     if (!browser || !threadId || !window.zenx.browserObservation) return;
     let alive = true;
     const stop = window.zenx.browserObservation.subscribe(
-      { threadId, frames: false },
+      { threadId, frames: false, catalog: true },
       (event) => {
         if (!alive || event.type !== "targets") return;
         // Preserve exact observer/backend/connection identity, never match URLs.

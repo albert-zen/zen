@@ -90,6 +90,9 @@ export function BrowserThreadPanel({
     setTargets([]);
     setSelectedId(undefined);
     setStatus({ status: "idle", message: "" });
+    // Fixed peer panes share one frame IPC lane. Hidden peers must not replace
+    // the selected pane's subscription; their metadata lives in the catalog.
+    if (fixedTargetId !== undefined && (!open || !visible)) return;
     const receive = (event: BrowserThreadEvent) => {
       if (!active) return;
       if (event.type === "targets") {

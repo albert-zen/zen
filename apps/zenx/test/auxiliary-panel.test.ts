@@ -208,6 +208,8 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
         .click(),
     );
     assert.equal(requests.at(-1)?.frames, true);
+    const subscriptionsBeforeSwitch = requests.length;
+    const stoppedBeforeSwitch = stopped;
     const tab = (name: string) =>
       [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
         (e) => e.querySelector("span")?.textContent === name,
@@ -218,8 +220,12 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
         .click(),
     );
     await act(async () => choose("File").click());
-    assert.equal(requests.at(-1)?.frames, false);
-    assert.ok(stopped > 0);
+    assert.equal(
+      requests.length,
+      subscriptionsBeforeSwitch,
+      "hidden fixed pane must not replace another frame subscriber",
+    );
+    assert.ok(stopped > stoppedBeforeSwitch);
     await act(async () =>
       [
         ...document.querySelectorAll<HTMLButtonElement>('[role="treeitem"]'),

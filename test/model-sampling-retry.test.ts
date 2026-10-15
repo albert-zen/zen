@@ -244,7 +244,9 @@ test("malformed parallel tools retry before any dispatch, preserve incomplete tr
     outputTokens: 12,
   });
   assert.equal(
-    result.items.some((item) => item.type === "failure"),
+    result.items.some(
+      (item) => item.type === "failure" && item.recovery === undefined,
+    ),
     false,
   );
 });
@@ -271,12 +273,14 @@ test("default three samples exhaust explicitly with separate incomplete trace an
   assert.equal(f.executions(), 0);
   assert.equal(result.turns[0]?.status, "failed");
   assert.equal(
-    result.items.filter((item) => item.type === "failure").length,
+    result.items.filter(
+      (item) => item.type === "failure" && item.recovery === undefined,
+    ).length,
     1,
   );
   assert.match(
-    result.items.find((item) => item.type === "failure")!.message,
-    /incomplete tool call/u,
+    result.items.findLast((item) => item.type === "failure")!.message,
+    /invalid or incomplete tool call/u,
   );
   assert.equal(
     result.items.filter((item) => item.type === "model_usage").length,
@@ -307,16 +311,16 @@ test("sampling retries do not nest HTTP admission retries", async () => {
   );
   const f = fixture(model);
   const result = await f.run();
-  assert.equal(requests.length, 2);
-  assert.deepEqual(f.waits, [1000]);
+  assert.equal(requests.length, 3);
+  assert.deepEqual(f.waits, [1000, 2000]);
   assert.equal(result.turns[0]?.status, "failed");
   assert.match(
-    result.items.find((item) => item.type === "failure")!.message,
-    /HTTP 503/u,
+    result.items.findLast((item) => item.type === "failure")!.message,
+    /HTTP status: 503/u,
   );
 });
 
-test("auth, admission exhaustion, terminal reasons, provider errors and unavailable tools are not sampling retries", async (t) => {
+test("unexpected errors get bounded feedback; cooldown, model token limits and safety remain terminal", async (t) => {
   for (const [name, response] of [
     ["authentication", () => new Response(null, { status: 401 })],
     [
@@ -355,19 +359,20 @@ test("auth, admission exhaustion, terminal reasons, provider errors and unavaila
       const { model, requests } = compatible(response);
       const f = fixture(model);
       const result = await f.run();
-      assert.equal(requests.length, 1);
-      assert.deepEqual(f.waits, []);
+      const blocked = ["cooldown", "content filter"].includes(name);
+      assert.equal(requests.length, blocked ? 1 : 3);
+      assert.deepEqual(f.waits, blocked ? [] : [1000, 2000]);
       assert.equal(f.executions(), 0);
       assert.equal(result.turns[0]?.status, "failed");
     });
   }
 });
 
-test("known midstream transport failures retry; unknown read errors do not", async (t) => {
+test("unexpected midstream errors recover; explicit abort does not", async (t) => {
   for (const [error, expected] of [
     [new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } }), 2],
     [new TypeError("timeout", { cause: { code: "UND_ERR_BODY_TIMEOUT" } }), 2],
-    [new Error("unknown reader failure"), 1],
+    [new Error("unknown reader failure"), 2],
     [new DOMException("aborted", "AbortError"), 1],
   ] as const) {
     await t.test(error.message, async () => {
@@ -467,7 +472,18 @@ test("interrupt during backoff preserves trace and prevents another attempt", as
   const after = await f.server.readThread(thread.id);
   assert.equal(requests.length, 1);
   assert.equal(after.turns[0]?.status, "interrupted");
-  assert.equal(after.items.filter((item) => item.type === "failure").length, 0);
+  assert.equal(
+    after.items.filter(
+      (item) => item.type === "failure" && item.recovery === undefined,
+    ).length,
+    0,
+  );
+  assert.equal(
+    after.items.filter(
+      (item) => item.type === "failure" && item.recovery !== undefined,
+    ).length,
+    1,
+  );
   assert.equal(
     after.items.filter((item) => item.type === "model_usage").length,
     1,

@@ -1,14 +1,17 @@
+import { readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FleetRouter,
+  fleetDeviceKey,
   parseFleetConfig,
   readFleetConfig,
   type FleetConfig,
   type FleetDevice,
   type FleetTransport,
   type NativeFleetDevice,
+  type FleetSourceFence,
 } from "./fleet.js";
 import { NativeFleetClient } from "./fleet-native.js";
 import {
@@ -59,6 +62,7 @@ export class FleetSettingsService {
   #restoredManager: AppServerManager | undefined;
   #restoredHosting: string | undefined;
   #scopeGeneration = 0;
+  #sourceGeneration = 0;
   #error: string | undefined;
   readonly #observations = new Set<FleetObservation>();
   readonly #checks = new Map<string, { identity: string; check: FleetCheck }>();
@@ -96,6 +100,33 @@ export class FleetSettingsService {
       () => readFleetConfig(this.file),
       options.sshTransport,
       this.native,
+      async (invocation) => {
+        const hostId = await this.#existingIdentity();
+        const config = await this.config();
+        if (!hostId || !config.hosting?.enabled || !invocation.threadId)
+          return undefined;
+        const { thread } = await this.options
+          .manager()
+          .request("zen/thread/read", { threadId: invocation.threadId });
+        const call = thread.items.find(
+          (item) =>
+            item.type === "tool_call" &&
+            item.id === invocation.canonicalToolCallId &&
+            item.callId === invocation.callId,
+        );
+        if (!call)
+          throw new Error(
+            "Fleet source does not match the canonical tool call",
+          );
+        const workspace = (await this.#workspaceAllowlist()).find(
+          (value) => value.cwd === thread.cwd,
+        );
+        if (!workspace) return undefined;
+        return {
+          origin: { hostId, workspaceId: workspace.id },
+          ...(thread.name ? { threadName: thread.name.slice(0, 512) } : {}),
+        };
+      },
     );
   }
   #relayKey(endpoint: string): string {
@@ -382,6 +413,19 @@ export class FleetSettingsService {
       hostId: await this.#identity(),
       grantFile: path.join(this.options.directory, "fleet-device-grants.json"),
       workspaces,
+      ...(config.messageSources
+        ? {
+            messageSources: config.messageSources.filter((binding) =>
+              config.devices.some(
+                (peer) =>
+                  peer.transport === "https" &&
+                  peer.id === binding.deviceId &&
+                  peer.hostId === binding.hostId &&
+                  fleetDeviceKey(peer) === binding.deviceKey,
+              ),
+            ),
+          }
+        : {}),
     };
   }
   async #failClosed(
@@ -454,7 +498,8 @@ export class FleetSettingsService {
         !forceConfigure &&
         manager === this.#restoredManager &&
         epoch === this.#restoredEpoch &&
-        JSON.stringify(config.hosting) === this.#restoredHosting
+        JSON.stringify([config.hosting, config.messageSources]) ===
+          this.#restoredHosting
       ) {
         this.#assertCurrentScope(manager, epoch, scopeGeneration);
         await manager.fleetControl("workspaces", workspaces);
@@ -467,7 +512,10 @@ export class FleetSettingsService {
       await this.#assertCurrentHost(manager, epoch, config, scopeGeneration);
       this.#restoredManager = manager;
       this.#restoredEpoch = epoch;
-      this.#restoredHosting = JSON.stringify(config.hosting);
+      this.#restoredHosting = JSON.stringify([
+        config.hosting,
+        config.messageSources,
+      ]);
       this.#error = undefined;
     } catch (error) {
       await this.#failClosed(
@@ -479,6 +527,7 @@ export class FleetSettingsService {
     }
   }
   async restore() {
+    ++this.#sourceGeneration;
     return await this.#queue(async () => {
       try {
         await this.#synchronizeHost(await this.config());
@@ -502,6 +551,7 @@ export class FleetSettingsService {
     return result;
   }
   async save(input: unknown, expectedRevision?: number) {
+    ++this.#sourceGeneration;
     return await this.#queue(async () => {
       const current = await this.config();
       if (
@@ -528,11 +578,91 @@ export class FleetSettingsService {
           registrationToken,
         );
       }
+      for (const binding of config.messageSources ?? []) {
+        if (
+          current.messageSources?.some(
+            (entry) => JSON.stringify(entry) === JSON.stringify(binding),
+          )
+        )
+          continue;
+        const peer = config.devices.find(
+          (entry) => entry.id === binding.deviceId,
+        );
+        if (
+          !peer ||
+          peer.transport !== "https" ||
+          peer.hostId !== binding.hostId ||
+          fleetDeviceKey(peer) !== binding.deviceKey
+        )
+          throw new Error(
+            "Return binding requires the exact existing HTTPS peer/key",
+          );
+        const bindingManager = this.options.manager();
+        const bindingHostId = await this.#existingIdentity();
+        const host = (await bindingManager.fleetControl("status")) as {
+          enabled?: boolean;
+          hostId?: string;
+          clients?: Array<{
+            deviceId: string;
+            revoked: boolean;
+            access?: string;
+          }>;
+        };
+        if (
+          !host.enabled ||
+          !bindingHostId ||
+          host.hostId !== bindingHostId ||
+          !host.clients?.some(
+            (entry) =>
+              entry.deviceId === binding.inboundDeviceId &&
+              !entry.revoked &&
+              entry.access === "control",
+          )
+        )
+          throw new Error(
+            "Return binding requires an existing active inbound grant",
+          );
+        const result = (await this.native.invoke(
+          peer,
+          {
+            version: 1,
+            name: "zenx_projects_list",
+            callId: randomUUID(),
+            arguments: { limit: 100 },
+          },
+          AbortSignal.timeout(10000),
+        )) as { projects?: Array<{ id: string }> };
+        if (!result.projects?.some((entry) => entry.id === binding.workspaceId))
+          throw new Error(
+            "Return binding workspace is not available through the existing grant",
+          );
+        const currentHost = (await bindingManager.fleetControl(
+          "status",
+        )) as typeof host;
+        if (
+          this.options.manager() !== bindingManager ||
+          currentHost.hostId !== bindingHostId ||
+          !currentHost.enabled ||
+          !currentHost.clients?.some(
+            (entry) =>
+              entry.deviceId === binding.inboundDeviceId &&
+              !entry.revoked &&
+              entry.access === "control",
+          )
+        )
+          throw new Error(
+            "Incoming grant changed while validating its return binding",
+          );
+      }
       config.revision = (current.revision ?? 0) + 1;
       await this.#write(config);
       this.#invalidateObservations(config);
       if (
         JSON.stringify(current.hosting) !== JSON.stringify(config.hosting) ||
+        JSON.stringify(current.messageSources) !==
+          JSON.stringify(config.messageSources) ||
+        (!!config.messageSources?.length &&
+          JSON.stringify(current.devices) !== JSON.stringify(config.devices)) ||
         this.#error !== undefined ||
         registrationToken !== undefined
       ) {
@@ -550,6 +680,7 @@ export class FleetSettingsService {
     });
   }
   async pair(input: unknown) {
+    ++this.#sourceGeneration;
     return await this.#queue(async () => {
       const data = input as Record<string, unknown>;
       if (
@@ -603,6 +734,7 @@ export class FleetSettingsService {
     });
   }
   async remove(id: string) {
+    ++this.#sourceGeneration;
     return await this.#queue(async () => {
       const config = await this.config();
       const peer = config.devices.find((d) => d.id === id);
@@ -690,6 +822,263 @@ export class FleetSettingsService {
       },
       input.expectedDeviceKey,
     );
+  }
+  /** Short-lived authority fence. No credentials or snapshots leave this process. */
+  #sourceFence(manager: AppServerManager) {
+    const generation = this.#sourceGeneration;
+    const scope = this.#scopeGeneration;
+    const epoch = manager.processEpoch;
+    const fingerprint = () => {
+      const hash = createHash("sha256");
+      for (const file of [
+        this.file,
+        "fleet-host-id",
+        "fleet-device-grants.json",
+        "fleet-vault.json",
+      ]) {
+        const absolute = path.isAbsolute(file)
+          ? file
+          : path.join(this.options.directory, file);
+        try {
+          const stat = statSync(absolute, { bigint: true });
+          if (!stat.isFile() || stat.size > 4n * 1024n * 1024n)
+            throw new Error("Invalid Fleet source authority file");
+          hash.update(
+            JSON.stringify([
+              absolute,
+              String(stat.ino),
+              String(stat.size),
+              String(stat.mtimeNs),
+              String(stat.ctimeNs),
+            ]),
+          );
+          hash.update(readFileSync(absolute));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          hash.update(absolute + ":missing");
+        }
+      }
+      return hash.digest("hex");
+    };
+    const captured = fingerprint();
+    return () => {
+      if (
+        this.options.manager() !== manager ||
+        manager.processEpoch !== epoch ||
+        this.#sourceGeneration !== generation ||
+        this.#scopeGeneration !== scope ||
+        fingerprint() !== captured
+      )
+        throw new Error(
+          "Fleet source authorization changed during this operation; no stale result or unsent reply was released",
+        );
+    };
+  }
+  /** Exact canonical receipt lookup. Caller-supplied names/routes never choose a peer. */
+  async messageSource(
+    input: FleetMessageSourceRequest,
+    reply?: import("../../../../src/tool.js").ToolInvocation,
+  ): Promise<FleetMessageSourceView | unknown> {
+    if (
+      !input ||
+      typeof input.threadId !== "string" ||
+      !input.threadId ||
+      typeof input.itemId !== "string" ||
+      !input.itemId
+    )
+      throw new Error(
+        "Exact receiving Thread and message Item IDs are required",
+      );
+    if (
+      reply &&
+      (reply.trustedPluginUi === true ||
+        !reply.threadId ||
+        !reply.canonicalToolCallId ||
+        !reply.callId)
+    )
+      throw new Error(
+        "Source replies require a canonical Agent tool call; human-message fallback is not supported",
+      );
+    const manager = this.options.manager();
+    const assertUnchanged = this.#sourceFence(manager);
+    const { thread } = await manager.request("zen/thread/read", {
+      threadId: input.threadId,
+    });
+    assertUnchanged();
+    const message = thread.items.find((item) => item.id === input.itemId);
+    if (
+      !message ||
+      (message.type !== "thread_message" &&
+        message.type !== "thread_message_queued") ||
+      !message.sender.deviceId ||
+      !message.sender.returnRoute
+    )
+      throw new Error(
+        "This remote message has no verified return binding. Configure its existing inbound grant and outbound HTTPS peer; no local fallback was attempted.",
+      );
+    const sender = message.sender;
+    const route = sender.returnRoute!;
+    let authorization: string | undefined;
+    const assertCurrent = async () => {
+      assertUnchanged();
+      const config = await this.config();
+      const hostId = await this.#existingIdentity();
+      if (
+        this.options.manager() !== manager ||
+        hostId !== route.receiverHostId ||
+        !config.hosting?.enabled ||
+        !config.messageSources?.some(
+          (entry) =>
+            entry.inboundDeviceId === sender.deviceId &&
+            entry.hostId === route.hostId &&
+            entry.workspaceId === route.workspaceId &&
+            entry.deviceId === route.deviceId &&
+            entry.deviceKey === route.deviceKey,
+        )
+      )
+        throw new Error(
+          "The message return binding is missing or changed. Review it in Fleet settings; the source was not retargeted.",
+        );
+      const peer = config.devices.find((entry) => entry.id === route.deviceId);
+      if (
+        !peer ||
+        peer.transport !== "https" ||
+        peer.hostId !== route.hostId ||
+        fleetDeviceKey(peer) !== route.deviceKey
+      )
+        throw new Error(
+          "The message source machine was removed or reconfigured; the source was not retargeted.",
+        );
+      const status = structuredClone(await manager.fleetControl("status")) as {
+        enabled?: boolean;
+        hostId?: string;
+        clients?: Array<{
+          deviceId: string;
+          revoked: boolean;
+          access?: string;
+          workspaceIds?: readonly string[] | null;
+        }>;
+      };
+      const receiverWorkspace = (await this.#workspaceAllowlist()).find(
+        (entry) => entry.cwd === thread.cwd,
+      )?.id;
+      const currentStatus = await manager.fleetControl("status");
+      // Compare across workspace resolution, then synchronously fence every
+      // local authority/credential and Host epoch after the final await.
+      assertUnchanged();
+      const statusKey = JSON.stringify(status);
+      if (
+        JSON.stringify(currentStatus) !== statusKey ||
+        (authorization !== undefined && authorization !== statusKey)
+      )
+        throw new Error(
+          "Fleet source inbound authorization changed during validation",
+        );
+      authorization = statusKey;
+      if (
+        !receiverWorkspace ||
+        config.hosting?.access !== "control" ||
+        !status.enabled ||
+        status.hostId !== route.receiverHostId ||
+        !status.clients?.some(
+          (entry) =>
+            entry.deviceId === sender.deviceId &&
+            !entry.revoked &&
+            entry.access === "control" &&
+            (entry.workspaceIds === null ||
+              entry.workspaceIds?.includes(receiverWorkspace)),
+        )
+      )
+        throw new Error("The source's inbound grant is unavailable or revoked");
+      return peer;
+    };
+    await assertCurrent();
+    const locator = {
+      deviceId: route.deviceId,
+      deviceKey: route.deviceKey,
+      hostId: route.hostId,
+      workspace: route.workspaceId,
+      threadId: sender.threadId,
+    };
+    const history = await this.invoke(
+      {
+        device: route.deviceId,
+        expectedDeviceKey: route.deviceKey,
+        name: "zenx_threads_read",
+        arguments: {
+          workspace: route.workspaceId,
+          threadId: sender.threadId,
+          granularity: "items",
+          maxItemsPerTurn: 25,
+        },
+      },
+      reply?.signal,
+    );
+    const value = (history as { result?: Record<string, unknown> }).result;
+    if (
+      !value ||
+      value.status === "not_found" ||
+      value.status === "ambiguous" ||
+      value.threadId !== sender.threadId
+    )
+      throw new Error(
+        "The exact source Thread is missing, archived or inaccessible; no name or local fallback was attempted.",
+      );
+    const peer = await assertCurrent();
+    if (reply) {
+      if (peer.access !== "control")
+        throw new Error(
+          "The existing return grant is read-only; a human must explicitly configure control before replying",
+        );
+      return await this.router.invoke(
+        route.deviceId,
+        {
+          ...reply,
+          name: "zenx_threads_send",
+          arguments: {
+            workspace: route.workspaceId,
+            threadId: sender.threadId,
+            text: reply.arguments.text,
+            messageType: reply.arguments.messageType ?? "guidance",
+          },
+        },
+        route.deviceKey,
+        { revalidate: assertCurrent, assertUnchanged },
+      );
+    }
+    assertUnchanged();
+    return {
+      receipt: { ...input },
+      locator,
+      history: value,
+    } satisfies FleetMessageSourceView;
+  }
+  sourceTargetFence(
+    receipt: FleetMessageSourceRequest,
+    locator: import("./fleet-product.js").FleetThreadLocator,
+  ): FleetSourceFence {
+    const assertUnchanged = this.#sourceFence(this.options.manager());
+    return {
+      assertUnchanged,
+      revalidate: async () => {
+        assertUnchanged();
+        await this.assertMessageSourceTarget(receipt, locator);
+        assertUnchanged();
+      },
+    };
+  }
+  async assertMessageSourceTarget(
+    receipt: FleetMessageSourceRequest,
+    locator: import("./fleet-product.js").FleetThreadLocator,
+  ) {
+    const source = (await this.messageSource(
+      receipt,
+    )) as FleetMessageSourceView;
+    for (const key of ["deviceId", "deviceKey", "hostId", "workspace"] as const)
+      if (!locator || locator[key] !== source.locator[key])
+        throw new Error(
+          "Source navigation must stay on its verified Host and workspace",
+        );
   }
   async hostPair() {
     return await this.options.manager().fleetControl("pair");
@@ -779,6 +1168,7 @@ export class FleetSettingsService {
     });
   }
   async revoke(deviceId: string) {
+    ++this.#sourceGeneration;
     if (typeof deviceId !== "string" || !deviceId)
       throw new Error("Device required");
     return await this.options.manager().fleetControl("revoke", deviceId);
@@ -1142,4 +1532,14 @@ function fleetTurnPreview(
   ]
     .join("\n")
     .slice(0, 6000);
+}
+
+export interface FleetMessageSourceRequest {
+  threadId: string;
+  itemId: string;
+}
+export interface FleetMessageSourceView {
+  receipt: FleetMessageSourceRequest;
+  locator: import("./fleet-product.js").FleetThreadLocator;
+  history: Record<string, unknown>;
 }

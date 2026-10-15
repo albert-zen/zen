@@ -552,6 +552,11 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
     return this.#service.onChange(listener);
   }
+  triggersAvailable(): boolean {
+    return (
+      this.#serviceRunning && this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID)
+    );
+  }
   roomsAvailable(): boolean {
     return this.#serviceRunning && this.#active.has(ZENX_ROOMS_CAPABILITY_ID);
   }

@@ -28,6 +28,65 @@ const { requestContextCompaction } =
 
 const noop = async () => undefined;
 
+test("native recovery keeps one live Turn until completion and terminal failure uses final details", async () => {
+  const { recoveryScenario } =
+    await import("./fixtures/loop-recovery-scenario.js");
+  await withDom(async (root) => {
+    for (const phase of [
+      "running",
+      "recovering",
+      "continuing",
+      "completed",
+      "failed",
+      "stopped",
+    ] as const) {
+      const view = recoveryScenario(phase);
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: view,
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+      const section = requiredElement(".turn");
+      assert.equal(document.querySelectorAll(".turn").length, 1);
+      assert.equal(
+        section.classList.contains("inProgress"),
+        ["running", "recovering", "continuing"].includes(phase),
+      );
+      if (["running", "recovering", "continuing"].includes(phase)) {
+        assert.equal(document.querySelector(".turn-outcome"), null);
+        assert.equal(document.querySelector(".turn-final"), null);
+      }
+      if (phase === "completed") {
+        assert.equal(document.querySelector(".turn-outcome"), null);
+        assert.match(
+          requiredElement(".turn-final").textContent ?? "",
+          /没有重复执行/,
+        );
+      }
+      if (phase === "failed") {
+        const text = requiredElement(".turn-outcome").textContent ?? "";
+        assert.match(text, /bounded recovery budget/);
+        assert.match(text, /Auto-retried 2 times/);
+      }
+      if (phase === "stopped") {
+        assert.equal(section.classList.contains("interrupted"), true);
+        assert.doesNotMatch(
+          requiredElement(".turn-outcome").textContent ?? "",
+          /transport failed unexpectedly/,
+        );
+      }
+    }
+  });
+});
+
 test("new-thread execution context can sit beneath input while existing conversations keep their context before it", () => {
   for (const position of ["before", "after"] as const) {
     const html = renderToStaticMarkup(

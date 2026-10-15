@@ -112,6 +112,7 @@ declare global {
           tabId?: string;
           lease: string;
           presentationId?: string;
+          appearance?: "light" | "dark";
           bounds?: { x: number; y: number; width: number; height: number };
         }): Promise<void>;
         presentationContext(request: {

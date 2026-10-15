@@ -1,3 +1,4 @@
+import { FleetMessageSourceSettings } from "./FleetMessageSourceSettings.js";
 import { i18n } from "./i18n.js";
 import { useTranslation } from "react-i18next";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -41,7 +42,12 @@ type Hosting = {
 /** Public configuration only. Peer tokens and TLS key contents stay in main. */
 export interface FleetSettingsSnapshot {
   revision: number;
-  config: { version: 1; devices: Device[]; hosting?: Hosting };
+  config: {
+    version: 1;
+    devices: Device[];
+    hosting?: Hosting;
+    messageSources?: import("../../../../../src/protocol/native/remote-host.js").RemoteMessageSourceBinding[];
+  };
   devices?: Array<{
     id: string;
     key?: string;
@@ -1909,6 +1915,12 @@ export function FleetSettings() {
               </div>
             ))
           )}
+          <FleetMessageSourceSettings
+            snapshot={snapshot}
+            api={api}
+            disabled={disabled}
+            onSaved={refresh}
+          />
           {revoking ? (
             <div role="alertdialog" aria-labelledby="fleet-revoke-title">
               <h3 id="fleet-revoke-title">

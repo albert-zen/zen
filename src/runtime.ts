@@ -1,5 +1,15 @@
+import {
+  MAX_TURN_RECOVERY_SAMPLES,
+  recoveryIsBlocked,
+  recoveryDelay,
+  recoveryDiagnostic,
+  sampledMediaOccurrences,
+  mediaRequestRejected,
+  isOutputLimit,
+  recoveryPublicPartial,
+} from "./loop-recovery.js";
 import type { WorkspaceInstructionFile } from "./item.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { codeExecutionOptions } from "./code-options.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
@@ -30,6 +40,7 @@ import type {
   ThreadMessageItem,
   HostMessageItem,
   InitialInputMessage,
+  RecoveryMediaOccurrence,
 } from "./item.js";
 import {
   AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
@@ -44,7 +55,6 @@ import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
 import {
   compileModelMessages,
   compileWorkspaceInstructionMessages,
-  isRetryableModelSampleError,
   type ModelAdapter,
   type ModelMessage,
   type ModelTool,
@@ -193,6 +203,16 @@ interface ModelSampleResult {
 export const DEFAULT_MAX_CONCURRENT_TOOL_BODIES = 8;
 
 /** Bounded in-turn replay of side-effect-free model samples. */
+interface FailedModelSample {
+  error: unknown;
+  withheldMedia?: RecoveryMediaOccurrence[];
+  mediaScope?: "exact" | "diagnostic_turn";
+  outputLimit?: true;
+  publicPartial?: string;
+  sampleId?: string;
+  contextBoundaryItemId?: string;
+}
+
 export const DEFAULT_SAMPLE_RETRY_MAX_ATTEMPTS = 3;
 const DEFAULT_SAMPLE_RETRY_BASE_DELAY_MS = 1000;
 
@@ -393,9 +413,11 @@ export class AgentRuntime {
       initialInputCommitted = true;
       options.initialInputCommitted?.();
 
+      let nextSampleAttempt = 1;
       for (let round = 0; ; round += 1) {
         options.signal.throwIfAborted();
-        const result = await this.#runModel(turnId, options);
+        const result = await this.#runModel(turnId, options, nextSampleAttempt);
+        nextSampleAttempt = 1;
         if (result.toolCalls.length === 0) {
           const agentItem: AgentMessageItem = {
             id: result.itemId,
@@ -461,13 +483,35 @@ export class AgentRuntime {
           options,
           scheduler,
         );
-        await options.afterToolBatch?.({
-          inputTokens: result.inputTokens,
-          agenticCompaction: result.toolCalls.some(
-            (toolCall) =>
-              toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-          ),
-        });
+        try {
+          await options.afterToolBatch?.({
+            inputTokens: result.inputTokens,
+            agenticCompaction: result.toolCalls.some(
+              (toolCall) =>
+                toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+            ),
+          });
+        } catch (error) {
+          // The batch has settled and its actual results are already canonical.
+          // Resume at sampling, never at the old batch or initial user input.
+          if (
+            this.#sampleRetryMaxAttempts <= 1 ||
+            !(await this.#recordRecovery(
+              turnId,
+              options,
+              error,
+              2,
+              [],
+              "after_tools",
+            ))
+          )
+            throw error;
+          await this.#sampleRetrySleep(
+            Math.max(this.#sampleRetryBaseDelayMs, recoveryDelay(error)),
+            options.signal,
+          );
+          nextSampleAttempt = 2;
+        }
       }
     } catch (error) {
       if (!initialInputCommitted) throw error;
@@ -512,7 +556,18 @@ export class AgentRuntime {
           error instanceof UnsupportedSandboxError
             ? "unsupported_sandbox"
             : "runtime_error",
-        message: describeError(error),
+        message: options.thread.items.some(
+          (item) =>
+            item.type === "failure" &&
+            item.turnId === turnId &&
+            item.recovery !== undefined,
+        )
+          ? recoveryDiagnostic(
+              error instanceof SampleRetriesExhaustedError
+                ? error.cause
+                : error,
+            )
+          : describeError(error),
         ...(error instanceof SampleRetriesExhaustedError
           ? { retried: error.retried }
           : {}),
@@ -539,55 +594,145 @@ export class AgentRuntime {
     }
   }
 
-  /**
-   * Replays retryable sample failures in place. A failed sample is
-   * side-effect-free — Tools run only after a complete sample returns — and
-   * each attempt commits its own partial/usage Items, so the journal stays
-   * append-only and derivable. Exhausted or non-retryable failures surface
-   * unchanged.
-   */
+  /** Every repair is recorded before sampling and consumes the existing episode budget. */
   async #runModel(
     turnId: string,
     options: RunTurnOptions,
+    firstAttempt = 1,
   ): Promise<ModelSampleResult> {
-    const maxAttempts = this.#sampleRetryMaxAttempts;
-    for (let attempt = 1; ; attempt += 1) {
+    for (let attempt = firstAttempt; ; attempt++) {
       options.signal.throwIfAborted();
-      const result = await this.#runModelOnce(turnId, options, attempt);
+      let result: ModelSampleResult | FailedModelSample;
+      try {
+        result = await this.#runModelOnce(turnId, options, attempt);
+      } catch (error) {
+        if (error instanceof ThreadJournalAppendOutcomeUnknownError)
+          throw error;
+        result = { error };
+      }
       if (!("error" in result)) return result;
       options.signal.throwIfAborted();
+      // Control outcomes keep their identity even after an earlier repair.
+      if (recoveryIsBlocked(result.error) || isAbortError(result.error))
+        throw result.error;
       if (
-        attempt >= maxAttempts ||
-        !isRetryableModelSampleError(result.error)
+        attempt >= Math.min(3, this.#sampleRetryMaxAttempts) ||
+        !(await this.#recordRecovery(
+          turnId,
+          options,
+          result.error,
+          attempt + 1,
+          result.withheldMedia,
+          "model",
+          result,
+        ))
       ) {
-        if (
-          attempt > 1 &&
-          result.error instanceof Error &&
-          isRetryableModelSampleError(result.error)
-        ) {
+        if (attempt > 1 && result.error instanceof Error)
           throw new SampleRetriesExhaustedError(result.error, attempt - 1);
-        }
         throw result.error;
       }
-      const delayMs = Math.round(
-        Math.min(this.#sampleRetryBaseDelayMs * 2 ** (attempt - 1), 30_000) *
-          (1 + this.#sampleRetryRandom()),
+      const delayMs = Math.max(
+        recoveryDelay(result.error),
+        Math.round(
+          Math.min(this.#sampleRetryBaseDelayMs * 2 ** (attempt - 1), 30_000) *
+            (1 + this.#sampleRetryRandom()),
+        ),
       );
-      console.warn("Model sample retry", {
-        attempt: attempt + 1,
-        maxAttempts,
-        delayMs,
-        reason: describeError(result.error),
-      });
       await this.#sampleRetrySleep(delayMs, options.signal);
     }
+  }
+
+  async #recordRecovery(
+    turnId: string,
+    options: RunTurnOptions,
+    error: unknown,
+    sampleAttempt: number,
+    withheldMedia: RecoveryMediaOccurrence[] = [],
+    phase: "model" | "after_tools" = "model",
+    sample?: FailedModelSample,
+  ): Promise<boolean> {
+    if (
+      recoveryIsBlocked(error) ||
+      error instanceof ThreadJournalAppendOutcomeUnknownError ||
+      error instanceof UnsupportedSandboxError ||
+      isAbortError(error)
+    )
+      return false;
+    options.signal.throwIfAborted();
+    const prior = options.thread.items.filter(
+      (item): item is FailureItem =>
+        item.type === "failure" &&
+        item.turnId === turnId &&
+        item.recovery !== undefined,
+    );
+    if (
+      prior.length >= MAX_TURN_RECOVERY_SAMPLES ||
+      options.thread.items.some(
+        (item) =>
+          item.turnId === turnId &&
+          (item.type === "turn_completed" || item.type === "turn_aborted"),
+      )
+    )
+      return false;
+    const progressItemId = options.thread.items.findLast(
+      (item) =>
+        item.turnId === turnId &&
+        item.type === "tool_result" &&
+        item.executionStatus === "completed" &&
+        item.contentType !== TOOL_TASK_CONTENT_TYPE,
+    )?.id;
+    const fingerprint = createHash("sha256")
+      .update(recoveryDiagnostic(error))
+      .digest("hex");
+    const previous = prior.at(-1)?.recovery;
+    const consecutiveFailures =
+      previous?.fingerprint === fingerprint &&
+      previous.progressItemId === progressItemId
+        ? previous.consecutiveFailures + 1
+        : 1;
+    if (consecutiveFailures > 2 || withheldMedia.length > 1024) return false;
+    const contextBoundaryItemId =
+      sample?.contextBoundaryItemId ?? options.thread.items.at(-1)?.id;
+    if (contextBoundaryItemId === undefined) return false;
+    const failure: FailureItem = {
+      id: this.#id(),
+      threadId: options.thread.id,
+      turnId,
+      createdAt: this.#now(),
+      type: "failure",
+      code: "loop_recovery",
+      message: recoveryDiagnostic(error),
+      recovery: {
+        attempt: prior.length + 1,
+        sampleAttempt,
+        phase,
+        contextBoundaryItemId,
+        ...(sample?.sampleId === undefined
+          ? {}
+          : { sampleId: sample.sampleId }),
+        fingerprint,
+        ...(sample?.outputLimit === true ? { outputLimit: true as const } : {}),
+        ...(sample?.publicPartial === undefined
+          ? {}
+          : { publicPartial: sample.publicPartial }),
+        ...(progressItemId === undefined ? {} : { progressItemId }),
+        consecutiveFailures,
+        withheldMedia,
+        ...(sample?.mediaScope === undefined
+          ? {}
+          : { mediaScope: sample.mediaScope }),
+      },
+    };
+    await this.#completeItem(failure, options);
+    options.signal.throwIfAborted();
+    return true;
   }
 
   async #runModelOnce(
     turnId: string,
     options: RunTurnOptions,
     sampleAttempt: number,
-  ): Promise<ModelSampleResult | { error: unknown }> {
+  ): Promise<ModelSampleResult | FailedModelSample> {
     const itemId = this.#id();
     let started = false;
     let text = "";
@@ -600,7 +745,9 @@ export class AgentRuntime {
       ReasoningItem,
       { reasoningContent: string }
     >[] = [];
-    let failure: { error: unknown } | undefined;
+    let failure: FailedModelSample | undefined;
+    let observedModelOutput = false;
+    const mediaOrigins = new WeakMap<object, object>();
     const reasoningItems = new Map<string, string>();
     const reasoningDeltas = new Map<
       string,
@@ -671,6 +818,7 @@ export class AgentRuntime {
         messages: projectModelMessages(
           messages,
           options.configuration.inputModalities,
+          (source, projected) => mediaOrigins.set(projected, source),
         ),
         tools: presentation.modelTools.map((definition) =>
           structuredClone(definition),
@@ -687,6 +835,7 @@ export class AgentRuntime {
           sampleAttempt,
         },
       })) {
+        observedModelOutput = true;
         if (event.type === "text_delta") {
           if (!started) {
             started = true;
@@ -796,7 +945,44 @@ export class AgentRuntime {
       }
     } catch (error) {
       if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
-      failure = { error };
+      const publicPartial = recoveryPublicPartial(error, text);
+      failure = {
+        error,
+        ...(isOutputLimit(error) ? { outputLimit: true as const } : {}),
+        ...(publicPartial ? { publicPartial } : {}),
+        sampleId: itemId,
+        contextBoundaryItemId,
+        ...(!observedModelOutput && mediaRequestRejected(error)
+          ? (() => {
+              const parts = (
+                error as {
+                  recoveryRejectedMediaParts?: readonly object[];
+                } | null
+              )?.recoveryRejectedMediaParts;
+              const originals = parts?.flatMap((part) =>
+                mediaOrigins.has(part) ? [mediaOrigins.get(part)!] : [],
+              );
+              const exact = originals?.length
+                ? sampledMediaOccurrences(
+                    options.thread.items,
+                    messages,
+                    options.configuration.inputModalities,
+                    originals,
+                  )
+                : [];
+              return exact.length > 0
+                ? { withheldMedia: exact, mediaScope: "exact" as const }
+                : {
+                    withheldMedia: sampledMediaOccurrences(
+                      options.thread.items,
+                      messages,
+                      options.configuration.inputModalities,
+                    ),
+                    mediaScope: "diagnostic_turn" as const,
+                  };
+            })()
+          : {}),
+      };
     }
     // All canonical writes are outside the sample-error boundary: preparation
     // and persistence failures cannot become a replayable model failure.
@@ -1810,7 +1996,7 @@ function readCommand(toolCall: {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
+  return error instanceof Error && error.name === "AbortError";
 }
 
 /** Internal marker: a retryable sample failure that exhausted its replay budget. */

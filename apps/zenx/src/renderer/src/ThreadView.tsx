@@ -125,7 +125,7 @@ import {
   observedCommandPhase,
   observedCommandStatus,
   traceSummary,
-  traceGroupIcon,
+  traceGroupIcons,
   type TraceObservationIndex,
   type TraceActivity,
   traceDisplayRows,
@@ -1227,9 +1227,10 @@ function ThreadViewContent({
                           ) ?? false
                         }
                         failureDetail={
-                          thread?.canonicalItems?.find(
+                          thread?.canonicalItems?.findLast(
                             (item): item is FailureItem =>
                               item.type === "failure" &&
+                              item.recovery === undefined &&
                               item.turnId === row.turn.id,
                           ) ?? null
                         }
@@ -3058,7 +3059,11 @@ function TraceSequence({
           aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <Icon name={traceGroupIcon(node.items)} size={15} />
+          <span className="trace-tool-icons" aria-hidden="true">
+            {traceGroupIcons(node.items).map((name) => (
+              <Icon key={name} name={name} size={15} />
+            ))}
+          </span>
           <span
             className="trace-activity-title"
             title={traceSummary(node.items, observations)}
@@ -3474,7 +3479,11 @@ function InputMessage({
             id: item.sender.threadId,
             ...(item.sender.deviceId === undefined
               ? {}
-              : { deviceId: item.sender.deviceId }),
+              : {
+                  deviceId: item.sender.deviceId,
+                  itemId: item.id,
+                  returnBound: item.sender.returnRoute !== undefined,
+                }),
           }}
           label={i18n.t(
             item.sender.deviceId === undefined

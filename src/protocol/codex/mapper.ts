@@ -262,7 +262,7 @@ export function projectTurn(
     );
   const failure = [...turn.items]
     .reverse()
-    .find((item) => item.type === "failure");
+    .find((item) => item.type === "failure" && item.recovery === undefined);
   const startedAt = started === undefined ? null : seconds(started.createdAt);
   const completedAt =
     terminal === undefined ? null : seconds(terminal.createdAt);

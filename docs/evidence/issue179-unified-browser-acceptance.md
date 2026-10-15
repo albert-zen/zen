@@ -50,3 +50,31 @@ switch/collapse suppresses following until explicit Follow; no Turn reset is
 claimed. Connected external targets are exact-identity read-only peer tabs, retain
 disconnected identities, and respect dismissal across unrelated plugin refreshes.
 Automatic Host-operation presentation for connected external targets remains open.
+
+## Subsequent integration and validation history
+
+PR #431 initial head `a55956005d624c75e7bf34501aedc52f29ba3715` has the same
+tree as local fixture head `ccf6993cb8e5b1ad568018f14a9dca827ce0fe71`.
+CI run `38775748120`, native provider job `116562808722`, passed and explicitly
+reported the presentation ACK/WebContents/profile/login/form and stable viewport
+checks. This is Host/native-boundary evidence, not full renderer/native E2E.
+That run was not all green: Windows packaged smoke failed with
+`provider_error_inspect_element_com_h80131505`; ZenX checks failed the theme-source
+policy because the new activity CSS contained raw fallback colors. The fallback
+was removed in favor of the existing `--accent` token; theme-source-policy is now
+part of the focused UI validation command. Neither original failure is erased.
+
+The next integration retains #425's blank-page appearance/token/native-pixel
+coverage and adds Host and renderer tests combining appearance changes with
+presentation acknowledgement on the same mount lease. Current main's separately
+reviewed changes are retained. Previously captured synthetic screenshots retain
+their original commit labels and do not establish this new integrated revision.
+
+Actual IPC ownership is tested with production AuxiliaryPanel/BrowserThreadPanel
+and real BrowserLiveObservationIpcBridge instances: the catalog uses its own
+read-only lane, and only the visible fixed peer owns the frame lane. Tests cover
+multiple peers, snapshot refresh, stale callbacks/unsubscribe on A→B, window hide
+and restore, final peer close, and exact visible frame-only external-open
+authority. Hidden fixed peers do not replace a frame subscription with a
+metadata-only subscription. Standalone BrowserThreadPanel behavior is unchanged.
+Connected external automatic operation following remains open under #179.
