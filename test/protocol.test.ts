@@ -19,7 +19,7 @@ import {
   responseResult,
 } from "../src/protocol/codex/client.js";
 import { CodexConnection } from "../src/protocol/codex/connection.js";
-import { encodeModelKey } from "../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../src/protocol/model-key.js";
 import {
   projectCommandCompleted,
   projectCommandStarted,

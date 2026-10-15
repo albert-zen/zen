@@ -95,7 +95,10 @@
 - **Child Thread** — Core 在创建普通 Thread 时将不可变 `parentThreadId` 与初始历史原子保存，原生 AppServer 按同目录 fresh/fork/side-chat 创建并投影关系；普通 Copy 不继承亲缘关系，父线程归档不联动子线程，不增加委派任务或调度状态。 ZenX 并排工作区按目标 Thread ID 保留多个会话 Tab；打开集合、排序和选择只属 renderer-local UI 状态，不新增 Thread 或执行语义。
 - **Side chat snapshot** — Side chat creation snapshots the parent’s full canonical ItemList into an ordinary child Thread, appends canonical snapshot-only tool/Turn/queue closures and one standalone `thread_instruction`, and never starts execution or changes the parent. Snapshot-only tool receipts explicitly report `executed:false`; sampling places these observations at their original call-batch closure before compaction selection, without rewriting the stored source history. `thread_instruction` is a persisted model-visible instruction without a Turn; it projects through the existing user-role instruction channel and survives compaction.
 - **Thread Instruction** — `thread_instruction` is a canonical standalone instruction with no Turn ID; native journal validation, context projection and compaction preserve it, while legacy CAS projection does not invent a Turn for it.
+- **Child creation selection** — 子线程可在创建时覆盖 Provider/model/effort；fresh 将选择写入初始 metadata，fork/side-chat 在保留历史选择的复制前缀后追加普通配置 Item，并随初始 journal 原子发布。省略时保留原有继承语义；显式设置走原生 configured 创建入口，使旧 Host 明确拒绝而不忽略选择。
+- **Zen model key** — 共享协议 codec 以稳定 opaque key 标识 Provider/model，并拒绝有歧义的裸 model ID；native 与 CAS adapter 复用身份解析，能力校验与 effort 归一化仍由 App Server/ProviderRegistry 拥有。
 - **Subagents Plugin** — 默认内置且可停用的第一方 package 经同一 Plugin Catalog 注册子线程工具及右栏树，导航打开 Host 的普通对话视图；停用撤销工具与入口，Thread 历史及亲缘关系仍由 Core 持有。
+- **Subagent creation form** — Renderer-local model and effort choices consume the Host model catalog through a shared React context; the native configured-create method validates and commits the selection before publication, without any UI-owned settings authority.
 - **Thread Conversation Viewport** — Host Renderer 为每个打开的 Thread 从原生恢复快照与实时事件派生易失视图，消息提交显式绑定目标 Thread，主区与右栏复用同一 ThreadView 和按 Thread 隔离的草稿；切换布局不创建线程或复制会话权威。
 - **Turn** — 一次交换：从一条用户输入开始、到 agent 完成响应为止追加的那段连续 Item。
 - **AgentRuntime** — Zen 拥有的 provider-neutral agent loop：从 ItemList 编译上下文 → 调用模型 → 通过 Tool Environment 执行工具，并把 canonical `tool_call` / `tool_result` 在内的一切事实追加为 Item。
@@ -182,7 +185,8 @@
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **TurnSortAt** — 原生 Thread summary 从本地 `turn_started` 的最新时间（fork 后的 Turn；没有则本线程创建时间）推导默认列表排序键，独立于 updatedAt，可随 journal 重建。
 - **SidebarThreadInformation** — 既有 host-local ThreadSummary / Project 投影与已 admit Trigger 插件显式声明的 sidebar-facts 窄只读命令组成的可丢弃 renderer 投影，在 Host 序列化前只取绑定/调度白名单字段；由 Catalog 每次真实 activation 的易失 admissionId 隔离替换回执，不因无关 catalog 通知重读，不拥有 scheduler 或 Thread 状态。
-- **ZenXConversationReadPreference** — Renderer 在本机 app origin 保存初装时间与已看见的 canonical 消息 ID/时间游标；Thread 的最后 user/agent 消息由既有 summary 扫描投影，Room 的未读数字由既有 list 在权威消息数组上按本机游标计数（只计 Agent，human 为本机用户，system 不计），仅前台有焦点且消息末尾实际进入阅读范围才推进，不发外部已读回执、不持久化消息镜像、不新增轮询。
+- **CanonicalTurnEndProjection** — Thread 的结束事实只取最后 fork 边界（无 fork 时为 imported history 边界）后本地最新 `turn_started` 对应的 canonical `turn_completed` / `turn_aborted`，复制历史与 synthetic closure 不算本地执行；summary 投影 `lastTurnEnd` 的原 Item ID、Turn ID、时间与 canonical 终态序号，已读推进按序号而非墙钟（所有 canonical 终态含复制闭合保留固定序号槽，但只有本地执行可提示；compaction 不截断 journal）。AppServer 在既有开始/结束状态事件之前发布同一已提交生命周期 Item 的 `item_completed`，实时、恢复与重建共享同一身份，不从消息文本、兼容 phase 或临时 interrupted 状态猜测。
+- **ZenXConversationReadPreference** — Renderer 在本机 app origin 保存初装时间与已看见的 canonical 游标；Thread 绿点仅表示最新执行结束尚未查看，运行时抑制提示，前台有焦点且已结束 Turn 尾部实际进入阅读范围才推进终态 ID；当前连接 native initialize epoch 校验后的实时终态通知携带相同终态序号，UI 每线程最多保留一个待查看终态 ID/序号；native resume 屏障转交的重叠 events 经请求 Thread、epoch、watermark 校验后沿用同一观察器，绝不从 snapshot.items 制造新通知，按序号合并/清理避免时钟回拨与旧回执丢失提示。旧 Agent 消息游标以一次性 Thread 终态基线迁移以免旧历史重新点亮，旧服务无终态字段时静默。Room 未读数字仍由既有 list 在权威消息数组上按独立消息游标计数（只计 Agent，human 为本机用户，system 不计），只有消息末尾实际可见才推进；不发外部已读回执、不持久化消息镜像、不新增轮询。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
   ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
   `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。

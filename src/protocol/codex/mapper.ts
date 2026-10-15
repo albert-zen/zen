@@ -15,7 +15,7 @@ import type {
 import { previewFromUserMessage, textFromUserMessage } from "../../item.js";
 import type { DerivedTurn } from "../../thread.js";
 import type { NativeThreadSummary } from "../../thread-summary.js";
-import { encodeModelKey } from "./model-key.js";
+import { encodeModelKey } from "../model-key.js";
 
 export interface CodexThread {
   id: string;

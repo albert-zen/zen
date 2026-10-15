@@ -8,6 +8,7 @@ import {
   type RequestId,
 } from "../../../../src/protocol/codex/wire.js";
 import { readBearerTokenFile } from "./auth.js";
+import type { NativeProjectedThreadEvent } from "../../../../src/protocol/native/recovery.js";
 import type {
   ClientInfo,
   ClientRequestMethod,
@@ -439,9 +440,42 @@ export class ZenXProtocolClient {
       if (this.#manualClose) return;
       try {
         await this.#openAndInitialize();
-        await this.#restoreSubscriptions();
+        const socket = this.#socket;
+        const generation = this.#connectionGeneration;
+        const recovered = await this.#restoreSubscriptions();
+        if (
+          socket !== this.#socket ||
+          generation !== this.#connectionGeneration
+        )
+          throw new Error("Connection changed during subscription recovery");
         this.#ready = true;
         this.#emitStatus({ type: "ready", reconnected: true });
+        // Resume's barrier transfers overlap events in its response instead of
+        // notifying them. Publish those same events after ready arms consumers;
+        // their epoch/watermark fences deduplicate snapshots and notifications.
+        for (const event of recovered) {
+          if (
+            socket !== this.#socket ||
+            generation !== this.#connectionGeneration
+          )
+            break;
+          for (const handler of this.#notificationHandlers.get(
+            "zen/thread/event",
+          ) ?? []) {
+            if (
+              socket !== this.#socket ||
+              generation !== this.#connectionGeneration
+            )
+              break;
+            // Do not keep the reconnect task alive across consumer awaits: a
+            // later socket close must be free to start its own reconnect.
+            try {
+              void Promise.resolve(handler(event)).catch(() => undefined);
+            } catch {
+              /* Consumer failures cannot replay a successful connection. */
+            }
+          }
+        }
         return;
       } catch (error) {
         lastError = asError(error);
@@ -456,13 +490,24 @@ export class ZenXProtocolClient {
     this.close();
   }
 
-  async #restoreSubscriptions(): Promise<void> {
+  async #restoreSubscriptions(): Promise<NativeProjectedThreadEvent[]> {
+    const recovered: NativeProjectedThreadEvent[] = [];
     for (const threadId of this.#subscribedThreads) {
       try {
         const result = await this.#rawRequest("zen/thread/resume", {
           threadId,
         });
         this.#nativeSubscriptions.add(threadId);
+        if (result.threadId === threadId && result.thread.id === threadId) {
+          recovered.push(
+            ...result.events.filter(
+              (event) =>
+                event.threadId === threadId &&
+                event.processEpoch === result.processEpoch &&
+                event.watermark <= result.watermark,
+            ),
+          );
+        }
         this.#emitStatus({
           type: "resubscribed",
           threadId,
@@ -477,6 +522,7 @@ export class ZenXProtocolClient {
         });
       }
     }
+    return recovered;
   }
 
   #recordSubscription<M extends ClientRequestMethod>(
