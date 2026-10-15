@@ -26,6 +26,10 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
 import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
+import {
+  diagnoseOwnedBrowserStartup,
+  startupDiagnosticMacNative,
+} from "./browser-startup-diagnostic.js";
 import type {
   BrowserInspection,
   ZenXBrowserBackend,
@@ -64,6 +68,9 @@ interface NativeState {
   drift: boolean;
   sentinelValue?: string;
   sentinelFocused?: boolean;
+  axCalls?: number;
+  axTotalMs?: number;
+  axMaxMs?: number;
 }
 interface Target {
   id: string;
@@ -863,6 +870,19 @@ function traceOwnedCdpTransport(
 }
 
 async function main(): Promise<void> {
+  const startupDiagnostic = process.argv.includes("--diagnose-startup");
+  const startupAxSampling = process.env.ZENX_STARTUP_AX_SAMPLING;
+  if (
+    startupDiagnostic &&
+    (process.platform !== "darwin" ||
+      !["1", "true"].includes(process.env.CI ?? "") ||
+      !process.env.ZENX_USER_BROWSER_EXECUTABLE ||
+      !["title", "pid-only"].includes(startupAxSampling ?? ""))
+  ) {
+    throw new Error(
+      "Startup diagnostic requires the explicit owned Chrome executable on macOS CI",
+    );
+  }
   if (process.argv.includes("--help")) {
     console.log(
       "Run on an interactive macOS/Windows desktop: node --import tsx apps/zenx/src/main/browser-parallel-input-smoke.ts\nSet ZENX_USER_BROWSER_EXECUTABLE to an existing browser; ZENX_REQUIRE_OS_INPUT=1 requires real OS input. No permissions are requested or changed. Temporary owned windows are activated during fixture setup.",
@@ -909,7 +929,7 @@ async function main(): Promise<void> {
     const origin = `http://127.0.0.1:${address.port}`;
     const executable = await findExecutable();
     phase = "startup-native-compile";
-    native = await startNative(directory);
+    native = await startNative(directory, startupDiagnostic);
     const nativeReady = await withDeadline(
       native.ready,
       15_000,
@@ -1002,7 +1022,10 @@ async function main(): Promise<void> {
         ))
           ? true
           : undefined;
-      } catch {
+      } catch (error) {
+        // An unknown diagnostic command outcome is a stopping condition, even
+        // during fixture readiness. Never replay it or proceed to focus setup.
+        if (startupDiagnostic) throw error;
         return undefined;
       } // Read-only readiness may race initial navigation.
     }, "user fixture document");
@@ -1021,7 +1044,71 @@ async function main(): Promise<void> {
       pid: ownedBrowserPid,
       hwnd: nativeBrowser.hwnd,
       title: userTitle,
+      diagnosticPidOnly: startupDiagnostic && startupAxSampling === "pid-only",
     });
+    if (startupDiagnostic) {
+      phase = "isolated-startup-diagnostic";
+      if (!nativeReady.axTrusted) {
+        phase = "not-run-ax-untrusted";
+        throw new Error(
+          "The AX comparison requires existing Accessibility trust",
+        );
+      }
+      if (version.Browser !== "Chrome/153.0.8010.12") {
+        phase = "not-run-browser-version-mismatch";
+        throw new Error(
+          "Startup diagnostic requires the pinned Chrome fixture",
+        );
+      }
+      // Deliberately bypass the production backend. Production setup budgets
+      // and compensation stay unchanged. Each diagnostic stage has its original
+      // two-second outcome deadline; unknown never authorizes the next stage.
+      const diagnosis = await diagnoseOwnedBrowserStartup({
+        browserSocketUrl: version.webSocketDebuggerUrl,
+        listOwnedTargets: async () => await getJson("json/list"),
+        throughIsolatedWorld: true,
+        ownedPageUrl: `${origin}/agent`,
+      });
+      const front = await native.call("snapshot");
+      const report = {
+        ...diagnosis,
+        status: "diagnostic-only",
+        platform: process.platform,
+        browser: version.Browser,
+        disposableProfile: true,
+        osPermissionRequested: false,
+        nativeForegroundDrift: front.drift,
+        fixtureOutcome: front.drift ? "foreground-drift" : "no-observed-drift",
+        nativeAxTrusted: front.axTrusted,
+        nativeSamples: front.samples,
+        axSampling: startupAxSampling,
+        axCalls: front.axCalls,
+        axTotalMs: front.axTotalMs,
+        axMaxMs: front.axMaxMs,
+      };
+      console.log(JSON.stringify(report, null, 2));
+      if (process.env.ZENX_PARALLEL_INPUT_ARTIFACT_DIR) {
+        await mkdir(process.env.ZENX_PARALLEL_INPUT_ARTIFACT_DIR, {
+          recursive: true,
+        });
+        await writeFile(
+          path.join(
+            process.env.ZENX_PARALLEL_INPUT_ARTIFACT_DIR,
+            "browser-startup-diagnostic.json",
+          ),
+          JSON.stringify(report, null, 2),
+        );
+      }
+      if (
+        front.drift ||
+        diagnosis.cleanup !== "success" ||
+        ["setup-failed", "session-route-mismatch", "transport-closed"].includes(
+          diagnosis.classification,
+        )
+      )
+        process.exitCode = 1;
+      return; // A late reply is never permission to run provider/native input.
+    }
     phase = "startup-connect-provider";
     connection = await connectUserBrowserCdp(endpoint);
     await connection.backend.listTabs(sessionId);
@@ -1483,6 +1570,23 @@ async function main(): Promise<void> {
       );
     }
   } catch (error) {
+    if (startupDiagnostic) {
+      console.error(
+        JSON.stringify({
+          experiment: "isolated-owned-startup-replica",
+          productionAcceptance: false,
+          classification:
+            phase === "not-run-browser-version-mismatch"
+              ? "not-run-browser-version-mismatch"
+              : phase === "not-run-ax-untrusted"
+                ? "not-run-ax-untrusted"
+                : "fixture-setup-or-cleanup-failed",
+          phase,
+        }),
+      );
+      // Avoid printing endpoint URLs, native error content, or fixture text.
+      throw new Error("Owned startup diagnostic did not complete");
+    }
     console.error(
       JSON.stringify({
         status: "failed",
@@ -1594,7 +1698,10 @@ async function stopOwnedChild(child: ChildProcess): Promise<void> {
   if (child.exitCode === null && child.signalCode === null)
     child.kill("SIGKILL");
 }
-async function startNative(directory: string): Promise<Native> {
+async function startNative(
+  directory: string,
+  diagnostic = false,
+): Promise<Native> {
   if (process.platform === "darwin") {
     // Read-only discovery first. Missing tools is a blocker, never an install prompt.
     // Cold xcrun lookup can exceed five seconds on a fresh hosted runner. All
@@ -1629,7 +1736,10 @@ async function startNative(directory: string): Promise<Native> {
     assert.ok(path.isAbsolute(sdk), "macOS SDK must be an absolute path");
     const source = path.join(directory, "Native.swift"),
       binary = path.join(directory, "native-fixture");
-    await writeFile(source, MAC_NATIVE);
+    await writeFile(
+      source,
+      diagnostic ? startupDiagnosticMacNative(MAC_NATIVE) : MAC_NATIVE,
+    );
     await runFile(
       compiler,
       [
