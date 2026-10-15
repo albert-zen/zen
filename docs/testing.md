@@ -98,3 +98,21 @@ Linux pass cannot stand in for a Windows or macOS smoke, and a single faster run
 is not a promised CI speedup. Do not remove assertions or introduce retries,
 blanket timeout increases, or broad heap increases to make a failing baseline
 appear green.
+
+## macOS parallel-input consumption
+
+The owned browser smoke's native event submission and Chromium's DOM/AX value
+projections are asynchronous. A successful key submission is not a receipt that
+both projections already contain the whole batch. Before the next macOS native
+batch, and after the last one, a single two-second read-only barrier observes the
+exact text issued so far. Only prefixes between the previously confirmed text
+and that exact expectation can remain pending. Unexpected values, owner/focus
+changes, cancellation, or an unsettled deadline still fail; no key is retried.
+The native helper retains its immediate exact-value and per-event owner guards.
+
+`nativeSettlementReads` records the barrier reads for each smoke layer. It is
+zero outside macOS foreground native input. The pure boundary tests simulate
+delayed projection, wrong values, timeout, cancellation and guard failure; the
+ordinary macOS CI smoke must separately compile the Swift helper and exercise
+actual OS input. This is fixture-consumption synchronization, not a product input
+fix or evidence that intermittent CDP startup latency is resolved.

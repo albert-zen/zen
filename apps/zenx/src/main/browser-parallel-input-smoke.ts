@@ -64,6 +64,7 @@ interface NativeState {
   drift: boolean;
   sentinelValue?: string;
   sentinelFocused?: boolean;
+  focusedValueState?: "matched" | "pending" | "invalid";
 }
 interface Target {
   id: string;
@@ -250,6 +251,44 @@ ${agent ? "document.querySelector('canvas').onclick=e=>{if(!e.isTrusted)throw Er
 </script>`;
 }
 const stateScript = `({value:document.querySelector('input').value,focus:document.activeElement?.id||'',hasFocus:document.hasFocus(),visibility:document.visibilityState,...window.fixture})`;
+
+/** Observe consumption of already-issued fixture input; never dispatch/replay it. */
+async function settleMacFixtureInput(options: {
+  previousValue: string;
+  expectedValue: string;
+  read(): Promise<{
+    domValue: string;
+    nativeValueState: NativeState["focusedValueState"];
+  }>;
+  signal: AbortSignal;
+}): Promise<number> {
+  const deadline = performance.now() + 2_000;
+  let reads = 0;
+  for (;;) {
+    options.signal.throwIfAborted();
+    assert(performance.now() < deadline, "Native fixture input did not settle");
+    const { domValue, nativeValueState } = await withDeadline(
+      options.read(),
+      deadline - performance.now(),
+      "Native fixture input settlement",
+    );
+    reads++;
+    options.signal.throwIfAborted();
+    assert(performance.now() < deadline, "Native fixture input did not settle");
+    assert(
+      domValue.startsWith(options.previousValue) &&
+        options.expectedValue.startsWith(domValue),
+      "Already-issued native input changed the exact user fixture value",
+    );
+    assert(
+      nativeValueState === "matched" || nativeValueState === "pending",
+      "Native focused value is not a prefix of the exact issued input",
+    );
+    if (domValue === options.expectedValue && nativeValueState === "matched")
+      return reads;
+    await delay(20);
+  }
+}
 
 /** Served only by the disposable local smoke servers, before any tracker exists. */
 export function targetedInputContractPage(requestUrl: string): string {
@@ -1226,6 +1265,36 @@ async function main(): Promise<void> {
         let produced = "";
         let batchesWhileAgentRunning = 0;
         const controller = new AbortController();
+        let previousNativeValue = "";
+        let nativeSettlementReads = 0;
+        const settleNativeInput = async (): Promise<void> => {
+          if (
+            process.platform !== "darwin" ||
+            layer !== "real-os-input" ||
+            scenario !== "chrome-foreground"
+          )
+            return;
+          const expectedValue = userStart.value + produced;
+          nativeSettlementReads += await settleMacFixtureInput({
+            previousValue: previousNativeValue,
+            expectedValue,
+            signal: controller.signal,
+            read: async () => {
+              const { userState } = await guard();
+              controller.signal.throwIfAborted();
+              const observed = await native!.call("focusedValue", {
+                previousValue: previousNativeValue,
+                expectedValue,
+              });
+              assert.equal(observed.drift, false, "Native foreground drifted");
+              return {
+                domValue: userState.value,
+                nativeValueState: observed.focusedValueState,
+              };
+            },
+          });
+          previousNativeValue = expectedValue;
+        };
         const agentTask = (async () => {
           try {
             for (let iteration = 0; iteration < 3; iteration++) {
@@ -1316,8 +1385,22 @@ async function main(): Promise<void> {
           try {
             let sequence = 0;
             while (!finished) {
+              // DOM and Chromium's native AX projection consume OS events
+              // asynchronously. Require both to reflect only our exact issued
+              // prefix before another batch, then retain the native type guard.
+              await settleNativeInput();
               const { userState } = await guard();
               if (finished) break;
+              if (
+                process.platform === "darwin" &&
+                layer === "real-os-input" &&
+                scenario === "chrome-foreground"
+              )
+                assert.equal(
+                  userState.value,
+                  userStart.value + produced,
+                  "Settled native input changed before the next batch",
+                );
               const text = `U${sequence++}X`;
               if (layer === "cdp-data-isolation")
                 await userRpc!.send("Input.insertText", { text });
@@ -1348,6 +1431,7 @@ async function main(): Promise<void> {
         const results = await Promise.allSettled([agentTask, userTask]);
         for (const result of results)
           if (result.status === "rejected") throw result.reason;
+        await settleNativeInput();
         await delay(100); // Drain only already-issued native events; never replay.
         const { front, userState, agentState } = await guard();
         assert.ok(
@@ -1399,6 +1483,7 @@ async function main(): Promise<void> {
           frontmostPid: front.pid,
           frontmostHwnd: front.hwnd,
           nativeSamples: front.samples,
+          nativeSettlementReads,
           userTarget: user.id,
           agentTarget: opened.tabId,
           userActiveElement: userState.focus,
@@ -1722,6 +1807,29 @@ func process(_ request: [String:Any]) {
   case "guard":
     expectedPid = pid_t(request["pid"] as? Int ?? 0); expectedTitle = request["title"] as? String ?? ""
     drift = false; samples = 0
+  case "focusedValue":
+    // Read-only consumption barrier. A stale prefix is pending, not permission
+    // to type. The existing exact-value check still runs immediately in type.
+    guard AXIsProcessTrusted(), expectedPid != 0, expectedPid != getpid(), !drift, owns(),
+          let expectedValue = request["expectedValue"] as? String,
+          let previousValue = request["previousValue"] as? String else {
+      emit(id,[:],"Owned focused-value guard rejected observation"); return
+    }
+    var element: CFTypeRef?; var value: CFTypeRef?
+    let focusedStatus = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(expectedPid), kAXFocusedUIElementAttribute as CFString, &element)
+    var valueStatus: AXError? = nil
+    if focusedStatus == .success, let element {
+      valueStatus = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value)
+    }
+    var disposition = "invalid"
+    if focusedStatus == .success, valueStatus == .success, let observed = value as? String {
+      if observed == expectedValue { disposition = "matched" }
+      else if observed.hasPrefix(previousValue) && expectedValue.hasPrefix(observed) { disposition = "pending" }
+    }
+    var result = state()
+    guard !drift, owns() else { emit(id,[:],"Foreground changed during focused-value observation"); return }
+    result["focusedValueState"] = disposition
+    emit(id,result); return
   case "type":
     guard AXIsProcessTrusted() else { emit(id,[:],"OS input unverified: AXIsProcessTrusted is false; no permission requested"); return }
     guard expectedPid != 0, !drift, owns(), let text = request["text"] as? String, text.count <= 32 else { emit(id,[:],"Owned foreground guard rejected input"); return }
