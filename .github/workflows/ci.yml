@@ -53,7 +53,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm --workspace apps/zenx run check
+      - name: Check ZenX with bounded execution-order evidence
+        env:
+          ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
+        run: npm --workspace apps/zenx run check:observed
+      - name: Retain partial ZenX execution-order evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-test-execution-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-test-execution.ndjson
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-capability-smoke:
     name: ZenX packaged capability smoke
