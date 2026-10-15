@@ -12,9 +12,13 @@ node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5175
 
 Open `/apps/zenx/test/fixtures/agent-runtime-visual.html` with these query options:
 
-- `mode=runtime` (default), `scene=0..9`: concurrent work, native wait, approval,
+- `mode=runtime` (default), `scene=0..11`: concurrent work, native wait, approval,
   cancellation requested, cancellation unconfirmed, canonical stop with partial
-  output, failure, completed answer, recovered history, and wait with parallel work.
+  output, failure, completed answer, recovered history, wait with parallel work,
+  action-set summaries with named unknown tools (10), and nested code/command calls (11).
+  Scenes 10/11 deliberately read the same synthetic filename repeatedly: the
+  summary counts operations and must never advertise multiple files. They use
+  the production ThreadView and existing styles, not recreated UI markup.
 - `mode=queue`, `scene=0..9`: two inputs, one input, long text and images, many
   inputs, delivery failure, idle continuation, approval coexistence, hidden-row failure,
   six real local test images, and an unavailable-image scene.

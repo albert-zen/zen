@@ -53,6 +53,8 @@ const runtimeScenes = [
   "已完成",
   "恢复后的历史",
   "等待与并行运行",
+  "动作集合与未知插件",
+  "同类调用与嵌套代码",
 ];
 const partial = runtimeMessage(
   "partial-result",
@@ -129,6 +131,52 @@ function scenario(scene: number) {
       ...items,
       runtimeWait("wait", "task-one"),
       runtimeTask("parallel", "task-two", "running"),
+    ]);
+  if (scene === 10)
+    return runtimeThread([
+      ...runtimeIntro,
+      ...["read-one", "read-two", "read-three"].map((id) =>
+        runtimeCommand(id, "cat same-synthetic-file.txt"),
+      ),
+      browser,
+      { ...runtimeCommand("image", "view_image"), toolName: "view_image" },
+      {
+        ...runtimeCommand("plugin", "acme_read_synthetic_record"),
+        toolName: "acme_read_synthetic_record",
+      },
+      runtimeMessage(
+        "between-groups",
+        "这些是合成调用次数；同一个文件被读取三次，不代表三个文件。",
+      ),
+      {
+        ...runtimeCommand("send", "zenx_threads_send"),
+        toolName: "zenx_threads_send",
+      },
+      {
+        ...runtimeCommand("rename", "zenx_threads_rename"),
+        toolName: "zenx_threads_rename",
+      },
+    ]);
+  if (scene === 11)
+    return runtimeThread([
+      ...runtimeIntro,
+      {
+        ...runtimeCommand("code", "run_code"),
+        toolName: "run_code",
+        callId: "fixture-parent",
+        toolArguments: {
+          description: "检查合成数据",
+          code: "await tools.shell({ command: 'echo fixture' })",
+        },
+      },
+      {
+        ...runtimeCommand("child", "echo fixture", "failed"),
+        callId: "fixture-child",
+        parentCallId: "fixture-parent",
+        exitCode: 1,
+      },
+      runtimeCommand("command-two", "cat same-synthetic-file.txt"),
+      runtimeCommand("command-three", "cat same-synthetic-file.txt"),
     ]);
   return runtimeThread([
     ...items,
