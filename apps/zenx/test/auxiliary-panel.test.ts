@@ -98,8 +98,25 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
   let savingText = "";
   (dom.window as any).zenx = {
     browserObservation: {
-      subscribe(request: any) {
+      subscribe(request: any, listener: (event: any) => void) {
         requests.push(request);
+        listener({
+          type: "targets",
+          selectedId: "connected:fixture",
+          targets: [
+            {
+              id: "connected:fixture",
+              backendId: "connected",
+              connectionId: "fixture",
+              sessionId: "session",
+              tabId: "page",
+              title: "Connected page",
+              url: "https://example.test",
+              mode: "live",
+              loading: false,
+            },
+          ],
+        });
         return () => {
           stopped++;
         };
@@ -185,7 +202,11 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
           ".workspace-tab-types button",
         ),
       ].find((e) => e.querySelector("strong")?.textContent === name)!;
-    await act(async () => choose("Attached browser").click());
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+        .find((tab) => tab.textContent?.startsWith("Connected page"))!
+        .click(),
+    );
     assert.equal(requests.at(-1)?.frames, true);
     const tab = (name: string) =>
       [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(

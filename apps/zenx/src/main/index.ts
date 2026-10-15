@@ -1364,6 +1364,16 @@ function installProtocolIpc(
       url: unknown,
     ) => workspaceBrowser.command(event.sender, threadId, command, tabId, url),
   );
+  ipcMain.handle(
+    ipcChannels.workspaceBrowserPresentationContext,
+    (event, request: unknown) =>
+      workspaceBrowser.presentationContext(event.sender, request),
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceBrowserDeclinePresentation,
+    (event, requestId: unknown) =>
+      workspaceBrowser.declinePresentation(event.sender, requestId),
+  );
   ipcMain.handle(ipcChannels.workspaceBrowserMount, (event, request: unknown) =>
     workspaceBrowser.mount(event.sender, request),
   );

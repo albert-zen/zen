@@ -127,6 +127,26 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
     mount: async (request: unknown) =>
       await ipcRenderer.invoke(ipcChannels.workspaceBrowserMount, request),
+    presentationContext: (request: unknown) =>
+      ipcRenderer.invoke(
+        ipcChannels.workspaceBrowserPresentationContext,
+        request,
+      ),
+    declinePresentation: (requestId: string) =>
+      ipcRenderer.invoke(
+        ipcChannels.workspaceBrowserDeclinePresentation,
+        requestId,
+      ),
+    onPresentation: (listener: (value: unknown) => void) => {
+      const receive = (_event: Electron.IpcRendererEvent, value: unknown) =>
+        listener(value);
+      ipcRenderer.on(ipcChannels.workspaceBrowserPresentation, receive);
+      return () =>
+        ipcRenderer.removeListener(
+          ipcChannels.workspaceBrowserPresentation,
+          receive,
+        );
+    },
     onChanged: (listener: (value: unknown) => void) => {
       const receive = (_event: Electron.IpcRendererEvent, value: unknown) =>
         listener(value);

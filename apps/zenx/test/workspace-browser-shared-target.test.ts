@@ -1988,3 +1988,162 @@ for (const change of ["navigation", "control", "session", "mount"] as const) {
     }
   });
 }
+
+async function presentationFixture() {
+  const f = await sharedFixture();
+  const tab = f.browser.command(f.sender as never, "thread-a", "new")[0]!;
+  await new Promise((resolve) => setImmediate(resolve));
+  f.browser.bindThreadSession("presentation-session", "thread-a");
+  f.browser.presentationContext(f.sender as never, {
+    threadId: "thread-a",
+    lease: "context-a",
+  });
+  const requests: import("../src/main/workspace-browser.js").WorkspaceBrowserPresentation[] =
+    [];
+  (f.sender as any).send = (channel: string, request: any) => {
+    if (channel === "zenx:workspace-browser:presentation")
+      requests.push(request);
+  };
+  const mount = (request = requests.at(-1)!) =>
+    f.browser.mount(f.sender as never, {
+      threadId: "thread-a",
+      tabId: tab.id,
+      lease: "presentation-view",
+      presentationId: request.requestId,
+      bounds: { x: 10, y: 20, width: 640, height: 480 },
+    });
+  return { ...f, tab, requests, mount };
+}
+
+test("automatic presentation mounts the existing page before capture without expiring its observation", async () => {
+  const f = await presentationFixture();
+  try {
+    const web = f.views[0]!.webContents;
+    web.debuggerApi.defaultValue = actionInspection;
+    const before = web.debuggerApi.evaluations;
+    const capture = f.browser.inspect("presentation-session", f.tab.id);
+    assert.equal(f.requests.length, 1);
+    assert.equal(web.debuggerApi.evaluations, before);
+    assert.equal(f.requests[0]!.tab.id, f.tab.id);
+    f.mount();
+    const observation = await capture;
+    assert.equal(observation.automaticPresentation, "shown");
+    web.debuggerApi.defaultValue = { ok: true };
+    await f.browser.click(
+      "presentation-session",
+      f.tab.id,
+      observation.observationId,
+      observation.targets[0]!.targetId,
+    );
+    assert.equal(
+      f.views.length,
+      1,
+      "never recreate an authenticated page by URL",
+    );
+    assert.equal(
+      f.requests.length,
+      1,
+      "results and subsequent actions cannot reclaim selection",
+    );
+    assert.equal(
+      f.browser.command(f.sender as never, "thread-a", "list")[0]!
+        .agentInspectionsInFlight,
+      0,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("presentation deadline permits bounded background inspection and rejects delayed native mounting", async () => {
+  const f = await presentationFixture();
+  try {
+    const observation = await f.browser.inspect(
+      "presentation-session",
+      f.tab.id,
+    );
+    assert.ok(observation.observationId);
+    assert.equal(observation.automaticPresentation, "not-shown");
+    assert.throws(() => f.mount(), /automatic display expired/);
+    await f.browser.inspect("presentation-session", f.tab.id);
+    assert.equal(f.requests.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("cancelling a pending presentation prevents capture and leaves its page intact", async () => {
+  const f = await presentationFixture();
+  try {
+    const controller = new AbortController();
+    const capture = f.browser.inspect(
+      "presentation-session",
+      f.tab.id,
+      controller.signal,
+    );
+    controller.abort(new Error("cancel pending display"));
+    await assert.rejects(capture, /cancel pending display/);
+    assert.throws(() => f.mount(), /automatic display expired/);
+    assert.equal(f.views[0]!.webContents.debuggerApi.evaluations, 0);
+    assert.equal(
+      (await f.browser.listTabs("presentation-session"))[0]!.tabId,
+      f.tab.id,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("a replaced session cannot mount or inspect through its old presentation epoch", async () => {
+  const f = await presentationFixture();
+  try {
+    const capture = f.browser.inspect("presentation-session", f.tab.id);
+    const old = f.requests[0]!;
+    f.browser.closeSession("presentation-session");
+    f.browser.bindThreadSession("presentation-session", "thread-a");
+    await assert.rejects(capture, /session or target changed/);
+    const next = f.browser.inspect("presentation-session", f.tab.id);
+    assert.notEqual(f.requests[1]!.sessionEpoch, old.sessionEpoch);
+    assert.throws(() => f.mount(old), /automatic display expired/);
+    f.mount();
+    await next;
+  } finally {
+    await f.close();
+  }
+});
+
+test("Thread navigation retires a pending reveal without switching the main conversation", async () => {
+  const f = await presentationFixture();
+  try {
+    const capture = f.browser.inspect("presentation-session", f.tab.id);
+    f.browser.presentationContext(f.sender as never, {
+      threadId: "thread-b",
+      lease: "context-b",
+    });
+    // An older effect cleanup must not retire the newer Thread context.
+    f.browser.presentationContext(f.sender as never, { lease: "context-a" });
+    await capture;
+    assert.throws(() => f.mount(), /automatic display expired/);
+    assert.equal(f.views.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("concurrent operations join the same pending presentation before either captures", async () => {
+  const f = await presentationFixture();
+  try {
+    const first = f.browser.inspect("presentation-session", f.tab.id);
+    const second = f.browser.inspect("presentation-session", f.tab.id);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.views[0]!.webContents.debuggerApi.evaluations, 0);
+    f.mount();
+    const results = await Promise.all([first, second]);
+    assert.ok(
+      results.every((result) => result.automaticPresentation === "shown"),
+    );
+    assert.equal(f.views.length, 1);
+  } finally {
+    await f.close();
+  }
+});

@@ -320,3 +320,21 @@ test("native smoke layout probe resolves the current permission UI in every stat
     dom.window.close();
   }
 });
+
+test("unknown outcome keeps a reserved toolbar status slot when cleared", async () => {
+  await withPanel(async ({ render }) => {
+    await render({ agentActionOutcomeUnknown: true });
+    const status = document.querySelector(".browser-outcome-status")!;
+    assert.equal(status.parentElement?.className, "workspace-browser-address");
+    assert.equal(status.getAttribute("data-unknown"), "true");
+    assert.equal(
+      status.textContent,
+      i18n.t("panels:browserActionOutcomeUnknown"),
+    );
+    assert.equal(document.querySelector("p[role=status]"), null);
+    await render({ agentActionOutcomeUnknown: false });
+    assert.equal(document.querySelector(".browser-outcome-status"), status);
+    assert.equal(status.getAttribute("data-unknown"), "false");
+    assert.equal(status.textContent, "");
+  });
+});

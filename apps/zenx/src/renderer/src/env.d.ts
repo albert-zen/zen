@@ -111,8 +111,19 @@ declare global {
           threadId: string;
           tabId?: string;
           lease: string;
+          presentationId?: string;
           bounds?: { x: number; y: number; width: number; height: number };
         }): Promise<void>;
+        presentationContext(request: {
+          threadId?: string;
+          lease: string;
+        }): Promise<void>;
+        declinePresentation(requestId: string): Promise<void>;
+        onPresentation(
+          listener: (
+            value: import("../../main/workspace-browser.js").WorkspaceBrowserPresentation,
+          ) => void,
+        ): () => void;
         onChanged(
           listener: (value: {
             threadId: string;
