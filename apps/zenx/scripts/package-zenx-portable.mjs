@@ -1,4 +1,5 @@
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
+import { readSourceProvenance, writeBuildInfo } from "./build-info.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -47,6 +48,7 @@ async function packageZenX(arguments_) {
     await mkdir(runsRoot, { recursive: true, mode: 0o700 });
     const staging = await mkdtemp(path.join(runsRoot, "package-"));
     try {
+      const sourceBefore = await readSourceProvenance(root);
       const buildSnapshot = await createBuildSnapshot(staging);
       const resources = path.join(staging, "resources");
       const appDir = path.join(staging, "app");
@@ -84,6 +86,11 @@ async function packageZenX(arguments_) {
       const macOsSigningConfiguration = await resolveMacOsSigningConfiguration({
         platform: process.platform,
       });
+      const icon = await createApplicationIconSnapshot(
+        staging,
+        applicationIconForPlatform(process.platform, target),
+      );
+      let buildInfo;
       const { packager } = await import("@electron/packager");
       const packaged = await packager({
         dir: appDir,
@@ -98,9 +105,7 @@ async function packageZenX(arguments_) {
           target,
           macOsSigningConfiguration,
         ),
-        ...(applicationIconForPlatform(process.platform, target) === undefined
-          ? {}
-          : { icon: applicationIconForPlatform(process.platform, target) }),
+        ...(icon === undefined ? {} : { icon }),
         afterCopy: [
           async ({ buildPath }) => {
             if (hasRtk)
@@ -151,6 +156,18 @@ async function packageZenX(arguments_) {
                 ),
               });
             }
+            // Finish the private app snapshot after all source-backed copies and
+            // helper compilation, before Electron packager signs its resources.
+            buildInfo = await writeBuildInfo({
+              appDirectory: buildPath,
+              version: zenxPackage.version,
+              target,
+              platform: process.platform,
+              arch: process.arch,
+              manifestSha256: assembly.manifestSha256,
+              sourceBefore,
+              sourceAfter: await readSourceProvenance(root),
+            });
           },
         ],
         asar: false,
@@ -194,6 +211,7 @@ async function packageZenX(arguments_) {
             executable,
             target,
             version: zenxPackage.version,
+            buildInfo,
             manifestDigest: assembly.manifestSha256,
             releaseSizeBytes: assembly.releaseSizeBytes,
           },
@@ -205,6 +223,16 @@ async function packageZenX(arguments_) {
       await rm(staging, { recursive: true, force: true });
     }
   });
+}
+
+// Packager reads the icon after afterCopy; freeze it before the source cutoff.
+export async function createApplicationIconSnapshot(stagingDirectory, icon) {
+  if (icon === undefined) return undefined;
+  const directory = path.join(stagingDirectory, "icon");
+  await mkdir(directory, { recursive: true });
+  const destination = path.join(directory, path.basename(icon));
+  await cp(icon, destination);
+  return destination;
 }
 
 export function applicationIconForPlatform(platform, target = "app") {

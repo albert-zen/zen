@@ -439,6 +439,7 @@
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
 - Windows packaged UIA smoke 的文件观察 helper 仅在既有观察期限内重读 owned fixture 的 ENOENT/EBUSY，不重放 UIA 动作；文本匹配与文件可读性共用同一观察期限。
 - **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并在完整 staging 后发布稳定产物；Windows 上仅对 staging 发布 rename 的 EPERM 做有界退避，每次失败先回滚旧产物，跨等待以 no-follow 目录身份核对源与目标、异常即失败且保留可恢复备份；目录身份预检不构成抵抗非合作写者在检查与 rename 间竞态的 OS 级原子保证；它不复制 release pipeline。
+- **ZenXBuildInfo** — portable packaging 在签名前的私有 app snapshot 写入确定性版本、Git commit/exact tags、clean/dirty/unknown 来源状态、目标平台与 provider manifest digest；它只是诊断元数据，不是签名证明、可复现构建承诺或第二份运行时权威。
 - **ZenXMacLocalSigningProfile** — macOS portable packaging 可从 host-local `signing.json` 读取稳定自签名证书指纹，并以无 Apple Team ID 的空 entitlements、非 hardened-runtime 参数统一签署 app、Electron nested code 与原生 helper；显式环境变量优先，配置或签名错误 fail closed，证书与私钥不进入仓库、Core 或 ItemList。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 profile-managed Plugin Runtime 暴露 Project/Thread 自控工具，
   只从 workspace 与 canonical Thread 投影派生结果，并经进程内可替换的 typed App Server request port 执行操作，
