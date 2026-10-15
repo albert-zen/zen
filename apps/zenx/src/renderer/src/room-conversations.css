@@ -105,8 +105,14 @@
   color: var(--color-surface-main);
   font-size: 10px;
   font-weight: 650;
-  line-height: 18px;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
+}
+.room-unread-value {
+  /* Center the numeral's cap box, without the font's asymmetric leading. */
+  display: block;
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
 }
 @media (forced-colors: active) {
   .room-unread-count {

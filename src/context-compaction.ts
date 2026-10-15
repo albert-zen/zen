@@ -1093,6 +1093,35 @@ export function originalItemListReference(
 ): string {
   return `zen-thread://${encodeURIComponent(threadId)}/items?through=${encodeURIComponent(cutoffId)}`;
 }
+export function originalHistoryBoundary(
+  items: readonly CanonicalItem[],
+  throughItemId: string,
+): number {
+  const boundary = items.findIndex((item) => item.id === throughItemId);
+  if (
+    boundary < 0 ||
+    !items.some(
+      (item, index) =>
+        index > boundary &&
+        item.type === "context_compaction" &&
+        item.coveredThroughItemId === throughItemId &&
+        item.includeOriginalReference === true,
+    )
+  ) {
+    throw new Error(
+      "Original ItemList reference is not enabled for this boundary",
+    );
+  }
+  return boundary;
+}
+
+export function originalItemListReferenceText(
+  threadId: string,
+  throughItemId: string,
+): string {
+  return `\n[Original ItemList: ${originalItemListReference(threadId, throughItemId)}; logical reference, not a filesystem path. Read only through an available authorized history reader; do not infer hidden content]`;
+}
+
 export function compactionSummaryText(item: ContextCompactionItem): string {
-  return `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${item.summary}${item.includeOriginalReference !== true ? "" : `\n[Original ItemList: ${originalItemListReference(item.threadId, item.coveredThroughItemId)}; use authorized thread/original/read, do not infer hidden content]`}`;
+  return `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${item.summary}${item.includeOriginalReference !== true ? "" : originalItemListReferenceText(item.threadId, item.coveredThroughItemId)}`;
 }

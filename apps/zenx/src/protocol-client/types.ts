@@ -217,6 +217,7 @@ export interface ClientRequestParams {
     model: string;
     effort?: string;
   };
+  "zen/thread/original/read": import("../../../../src/protocol/native/wire.js").NativeOriginalHistoryParams;
   "thread/original/read": {
     threadId: string;
     throughItemId: string;
@@ -310,6 +311,7 @@ export interface ClientRequestResults {
   "thread/unarchive": { thread: Thread };
   "thread/permissions/update": Record<string, never>;
   "thread/settings/update": Record<string, never>;
+  "zen/thread/original/read": import("../../../../src/protocol/native/wire.js").NativeOriginalHistoryResult;
   "thread/original/read": {
     items: Thread["turns"][number]["items"];
     nextBeforeItemId: string | null;

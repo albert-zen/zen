@@ -204,7 +204,7 @@
     },
     {
       "name": "zenx_threads_read",
-      "description": "Read public Item projections of history. Default: latest turns; cursor reads older pages. Choose items or agent_messages, optionally within turnId. Choose item plus itemId for public_item_json chunks; concatenate content using nextCursor. Structured opaque values expose only identity and public summary at every depth. Public reasoning and tool output text are preserved. Previews are excerpts, never generated summaries.",
+      "description": "Read public Item projections of history. Default: latest turns; cursor reads older pages. Choose items or agent_messages, optionally within turnId. Choose item plus itemId for public_item_json chunks; concatenate content using nextCursor. Structured opaque values expose only identity and public summary at every depth. Public reasoning and tool output text are preserved. Previews are excerpts, never generated summaries. For a zen-thread://THREAD/items?through=ITEM compaction reference, use exact threadId=THREAD and throughItemId=ITEM (URL-decode both). This reads only that enabled original prefix; default granularity becomes items. Keep throughItemId on every page and item chunk request. An unavailable or disabled reference is an error, not permission to infer omitted history.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -246,6 +246,10 @@
           "device": {
             "type": "string",
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
+          },
+          "throughItemId": {
+            "type": "string",
+            "description": "Exact enabled compaction cutoff from the logical original-history reference. Requires threadId; supports items or item, cursor and maxItemsPerTurn."
           }
         },
         "additionalProperties": false,
