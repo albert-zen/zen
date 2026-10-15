@@ -72,6 +72,45 @@ PowerShell timestamp stringification losing fractional seconds; the final run
 above used the corrected UTC DateTime conversion. Neither a single successful run
 nor these two samples establishes a universal timing guarantee.
 
+## Presented renderer evidence
+
+The current run at head `5a2256c4349d177acaf4571a9402e68f1fe79ec7`
+([artifact 11981327517](https://github.com/albert-zen/zen/actions/runs/38750698525/artifacts/11981327517))
+passed native HWND/Host checks but its final `renderer-loaded.png` is a uniform
+1024×720 canvas (`#e8eaf1`). That receipt does **not** establish visible final UI.
+The original evidence remains retained; the earlier `#root` child-count check
+proved DOM mounting, not presentation.
+
+Success acceptance now observes the existing window's real presentation frames
+through Electron `beginFrameSubscription(false, ...)`, retaining the original
+30-second renderer deadline. The fixture requires the real app shell and both
+visible, unobscured New Thread/Settings text labels in the current `index.html`.
+Their direct text-node Range bounds exclude icons, shortcut hints and button
+backgrounds. The labels' computed visibility, opacity, text color/fill and font
+must permit visible text; each text crop needs contrast across at least eight
+pixels in multiple rows and columns, not isolated icon pixels. Contrast counts
+are relative to the crop's dominant color, never its first pixel: an isolated
+bright or dark corner must not invert background pixels into text evidence.
+Captured light/dark UI label pixels are retained only as unit-test samples;
+they are not Windows acceptance evidence for this PR.
+
+A ready DOM observation precedes the candidate presentation. Another observation
+must match its text geometry/style, app-shell bounds, viewport and DPR exactly;
+any presentation arriving during that query invalidates the older candidate.
+Navigation or loading changes fail closed. Read-only baseline polling stays
+inside the original deadline and does not request paint. The fixture saves the
+verified frame directly, never a later recapture. The event contains only fixed
+selector/text-presence/contrast/pixel-count and image-size facts; no DOM text is
+recorded. The first rejected nonempty frame may be retained for diagnosis.
+Navigation, renderer/window loss, bitmap errors, timeout and subscription cleanup
+failure all fail closed. The harness independently requires the presentation
+receipt. No product source, show/focus behavior, timing target or deadline changes.
+
+DOM geometry and pixel contrast are bounded acceptance checks, not OCR or proof of
+what a physical monitor displayed. The new native screenshot still requires
+visual review. [Electron presentation-frame documentation](https://github.com/electron/electron/blob/v43.2.0/docs/api/web-contents.md#contentsbeginframesubscriptiononlydirty-callback)
+distinguishes presentation events from navigation/load completion.
+
 ## What is exercised
 
 - Copy the ordinary portable artifact to a new temporary directory. AST-check

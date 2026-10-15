@@ -5,7 +5,7 @@ $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($HarnessPath, [ref] $tokens, [ref] $parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 # Load only the real harness helpers. Never execute its package or process launcher.
-foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime")) {
+foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime", "Assert-RendererPresentation")) {
   $functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true))
   if ($functions.Count -ne 1) { throw "Missing unique helper $name" }
   . ([scriptblock]::Create($functions[0].Extent.Text))
@@ -37,6 +37,25 @@ foreach ($event in @(
   Assert-True ($actual.Ticks -eq $expected.Ticks) "Event timestamp lost fractional milliseconds"
   Assert-True ($actual.AddSeconds(3).Ticks - $expected.Ticks -eq 30000000) "Gate deadline must retain a full three seconds"
 }
+$presentation = @{ source = "frame-subscription"; width = 1024; height = 720; controls = @(
+  @{ selector = ".new-thread-action"; textPresent = $true; contrast = 100; contrastingPixels = 20 },
+  @{ selector = ".settings-nav-row"; textPresent = $true; contrast = 100; contrastingPixels = 20 }
+) }
+Assert-RendererPresentation @{ presentation = $presentation }
+Assert-Throws { Assert-RendererPresentation @{} } "accepted presentation"
+$presentation.width = 0
+Assert-Throws { Assert-RendererPresentation @{ presentation = $presentation } } "accepted presentation"
+$presentation.width = 1024
+$presentation.controls[0].contrast = 0
+Assert-Throws { Assert-RendererPresentation @{ presentation = $presentation } } "visible text/pixel"
+$presentation.controls[0].contrast = 100
+$presentation.controls[0].contrastingPixels = 1
+Assert-Throws { Assert-RendererPresentation @{ presentation = $presentation } } "visible text/pixel"
+$presentation.controls[0].contrastingPixels = 20
+$presentation.controls[0].textPresent = $false
+Assert-Throws { Assert-RendererPresentation @{ presentation = $presentation } } "visible text/pixel"
+$presentation.controls = @()
+Assert-Throws { Assert-RendererPresentation @{ presentation = $presentation } } "missing product controls"
 Assert-SoleVisibleWindow 123 ([IntPtr]::new(42))
 [StartupWindows]::Handles = [long[]]@()
 Assert-Throws { Assert-SoleVisibleWindow 123 ([IntPtr]::new(42)) } "sole, visible"

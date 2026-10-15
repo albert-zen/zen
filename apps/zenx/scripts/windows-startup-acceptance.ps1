@@ -63,6 +63,16 @@ function Assert-SoleVisibleWindow($ProcessId, [IntPtr] $Handle) {
     throw "Expected the original sole, visible, non-minimized physical window"
   }
 }
+function Assert-RendererPresentation($Result) {
+  $proof = $Result.presentation
+  if ($null -eq $proof -or $proof.source -ne "frame-subscription" -or $proof.width -le 0 -or $proof.height -le 0) { throw "Renderer has no accepted presentation frame" }
+  $selectors = @(".new-thread-action", ".settings-nav-row")
+  if (@($proof.controls).Count -ne $selectors.Count) { throw "Renderer presentation is missing product controls" }
+  for ($index = 0; $index -lt $selectors.Count; $index++) {
+    $control = $proof.controls[$index]
+    if ($control.selector -ne $selectors[$index] -or $control.textPresent -ne $true -or $control.contrast -lt 24 -or $control.contrastingPixels -lt 8) { throw "Renderer product control has no visible text/pixel evidence" }
+  }
+}
 function Stop-Fixture($Process, $Directory) {
   if ($null -eq $Process -or $Process.HasExited) { return }
   $errors = @()
@@ -197,6 +207,7 @@ public static class StartupWindows {
       Assert-SoleVisibleWindow $primary.Id $hwnd
       if ($result.hwnd -ne $sample.hwnd -or $result.windowsCreated -ne 1 -or ![StartupWindows]::IsWindowVisible($hwnd)) { throw "Completion did not retain the same visible physical window" }
       if ($mode -eq "success" -and $result.hostStatus -ne "ready") { throw "Real Host startup was not ready: $($result.hostStatus)" }
+      if ($mode -eq "success") { Assert-RendererPresentation $result }
       if ($mode -eq "failure" -and ($result.role -ne "alert" -or !$result.text.Contains("Synthetic startup acceptance failure <inert> & visible"))) { throw "Actual bootstrap failure is not visible as inert error text" }
       $sample.result = $result
       $sample.passed = $true
