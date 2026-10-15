@@ -58,14 +58,14 @@ test("group summary does not claim unfinished tools have been used", () => {
     traceSummary([reasoning("r", ""), pending]),
     "Run command · requested",
   );
-  assert.equal(traceSummary([pending, done]), "Run command");
+  assert.equal(traceSummary([pending, done]), "Run command · requested");
   assert.equal(traceSummary([done]), "Inspected page");
   const yielded = {
     ...done,
     contentType: "application/vnd.zen.tool-task+json",
     structuredContent: { task_id: "test-task", status: "running" },
   };
-  assert.equal(traceSummary([pending, yielded]), "Inspect page");
+  assert.equal(traceSummary([pending, yielded]), "Inspect page · running");
 });
 
 test("thread send and rename summaries report successful actions without redundant completion or target-work claims", () => {
@@ -81,11 +81,11 @@ test("thread send and rename summaries report successful actions without redunda
   assert.equal(traceSummary([renamed]), "Renamed thread");
   assert.equal(
     traceSummary([sent, renamed]),
-    "2 tool calls · Renamed thread · Sent message",
+    "Send message ×1 · Rename thread ×1",
   );
   assert.equal(
     traceSummary([sent, { ...renamed, status: "failed" }]),
-    "2 tool calls · Rename thread · ended · Sent message",
+    "Send message ×1 · Rename thread ×1",
   );
 });
 
@@ -332,16 +332,13 @@ test("failed turns retain prior text and reasoning as history alongside the erro
   assert.equal(projection.terminalFallback, "invalid tool call id");
 });
 
-test("collapsed trace counts all calls without hiding earlier failures", () => {
+test("collapsed trace groups action calls without implying successful outcomes", () => {
   const items = ["one", "two", "three", "four"].map((value) => ({
     ...command(value, `echo ${value}`),
     toolName: "shell",
     toolArguments: { command: `echo ${value}` },
   }));
-  assert.equal(
-    traceSummary([reasoning("r", ""), ...items]),
-    "4 tool calls · Ran · echo four · Ran · echo three · Ran · echo two",
-  );
+  assert.equal(traceSummary([reasoning("r", ""), ...items]), "Run command ×4");
   const activity = summarizeTraceActivity([
     { ...items[0]!, status: "failed" },
     ...items.slice(1),
