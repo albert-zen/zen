@@ -159,3 +159,23 @@ ownership stubs, then compiles the full AppKit helper and performs ordinary real
 input acceptance. A pass still requires the foreground native layer to report
 `passed` with positive `nativeSettlementReads`; a skipped layer or one green
 workflow cannot close every intermittent startup problem.
+
+### Background fixture data mutation versus real input
+
+The one-shot macOS focus comparison in
+[run 38707398146](https://github.com/albert-zen/zen/actions/runs/38707398146)
+used two fresh owned profiles with Chrome 153.0.8010.12. An isolated inactive-tab
+screenshot left page focus histories and native sentinel ownership unchanged.
+One fixture `Input.insertText` changed the user renderer's focus false → true and
+history `blur` → `blur, focus`, while the native sentinel remained focused. This
+reproduced the fixture's own side effect, not an OS focus change caused by capture.
+It is evidence for that version/execution, not a universal browser guarantee.
+
+The behind-sentinel `fixture-data-mutation` layer therefore appends only to the
+exact owned user fixture input value, without calling focus, dispatching events
+or sending CDP input. It reports `mutatedCharacters`, not `typedCharacters`.
+Concurrent agent screenshot/pointer/keyboard operations and every ownership,
+visibility and focus-history guard remain unchanged. The foreground
+`cdp-data-isolation` layer still uses `Input.insertText`; both foreground and
+behind-sentinel `real-os-input` layers still send guarded native events and verify
+their exact destination/value. DOM data mutation is not native typing evidence.

@@ -189,7 +189,15 @@ const cycle = ts.transpileModule(
   `async function runCycle() { return ${userTask.initializer.getText(ast)}; }`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText;
-function cycleFixture({ settleError, value = "USER", focus = true } = {}) {
+function cycleFixture({
+  settleError,
+  guardError,
+  value = "USER",
+  focus = true,
+  layer = "real-os-input",
+  scenario = "chrome-foreground",
+  mutationError,
+} = {}) {
   const calls = [];
   const controller = new AbortController();
   const context = {
@@ -198,8 +206,8 @@ function cycleFixture({ settleError, value = "USER", focus = true } = {}) {
     finished: false,
     produced: "",
     batchesWhileAgentRunning: 0,
-    layer: "real-os-input",
-    scenario: "chrome-foreground",
+    layer,
+    scenario,
     userStart: { value: "USER" },
     controller,
     settleNativeInput: async () => {
@@ -208,7 +216,27 @@ function cycleFixture({ settleError, value = "USER", focus = true } = {}) {
     },
     guard: async () => {
       calls.push("guard");
+      if (guardError) throw guardError;
       return { userState: { value, hasFocus: focus } };
+    },
+    userRpc: {
+      send: async (method, params) => {
+        calls.push({ method, params: JSON.parse(JSON.stringify(params)) });
+        context.finished = true;
+      },
+      evaluate: async (expression) => {
+        calls.push("owned DOM mutation");
+        if (mutationError) throw mutationError;
+        runInNewContext(expression, {
+          document: {
+            querySelector(selector) {
+              assert.equal(selector, "#user-input");
+              return input;
+            },
+          },
+        });
+        context.finished = true;
+      },
     },
     native: {
       call: async (method, params) => {
@@ -218,8 +246,17 @@ function cycleFixture({ settleError, value = "USER", focus = true } = {}) {
     },
     delay: async () => calls.push("delay"),
   };
+  const input = {
+    value,
+    focus() {
+      throw new Error("Background mutation must not focus");
+    },
+    dispatchEvent() {
+      throw new Error("Background mutation must not synthesize input events");
+    },
+  };
   const run = runInNewContext(`${cycle}; runCycle`, context);
-  return { run, calls, controller, context };
+  return { run, calls, controller, context, input };
 }
 
 test("actual native loop observes first and dispatches one exact batch only once", async () => {
@@ -254,3 +291,163 @@ for (const options of [{ value: "changed" }, { focus: false }]) {
     assert.equal(f.controller.signal.aborted, true);
   });
 }
+
+test("actual background data layer mutates only owned DOM without CDP or native input", async () => {
+  const f = cycleFixture({
+    layer: "fixture-data-mutation",
+    scenario: "chrome-behind-sentinel",
+    focus: false,
+  });
+  await f.run();
+  assert.deepEqual(f.calls, ["settle", "guard", "owned DOM mutation", "delay"]);
+  assert.equal(f.input.value, "USERU0X");
+  assert.equal(f.context.produced, "U0X");
+});
+
+test("actual foreground CDP data layer still sends Input.insertText", async () => {
+  const f = cycleFixture({ layer: "cdp-data-isolation" });
+  await f.run();
+  assert.deepEqual(f.calls, [
+    "settle",
+    "guard",
+    { method: "Input.insertText", params: { text: "U0X" } },
+    "delay",
+  ]);
+  assert.equal(f.input.value, "USER");
+});
+
+test("actual background real OS layer still types only into the guarded sentinel", async () => {
+  const f = cycleFixture({
+    layer: "real-os-input",
+    scenario: "chrome-behind-sentinel",
+    focus: false,
+  });
+  await f.run();
+  assert.deepEqual(f.calls, [
+    "settle",
+    "guard",
+    { method: "type", params: { text: "U0X" } },
+    "delay",
+  ]);
+  assert.equal(f.input.value, "USER");
+});
+
+for (const errorKind of ["guard", "mutation", "wrong-value"])
+  test(`background ${errorKind} failure stops without fallback input or replay`, async () => {
+    const f = cycleFixture({
+      layer: "fixture-data-mutation",
+      scenario: "chrome-behind-sentinel",
+      ...(errorKind === "guard"
+        ? { guardError: new Error("focus history changed") }
+        : errorKind === "mutation"
+          ? { mutationError: new Error("mutation outcome unknown") }
+          : { value: "OTHER" }),
+    });
+    await assert.rejects(f.run());
+    assert.equal(f.controller.signal.aborted, true);
+    assert.equal(f.context.produced, "");
+    assert(!f.calls.some((call) => typeof call === "object"));
+    assert.equal(
+      f.calls.filter((call) => call === "owned DOM mutation").length,
+      errorKind === "guard" ? 0 : 1,
+    );
+  });
+
+test("actual layer selection and report distinguish data mutation from typing", () => {
+  let layers, report;
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "layers")
+      layers = node.initializer;
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(ast) === "reports.push" &&
+      node.arguments[0]?.getText(ast).includes("nativeSettlementReads,")
+    )
+      report = node.arguments[0];
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert(layers && report);
+  const expression = ts.transpileModule(
+    `const result = ${layers.getText(ast)};`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  for (const scenario of ["chrome-foreground", "chrome-behind-sentinel"]) {
+    const actual = Array.from(
+      runInNewContext(`${expression}; result`, { scenario }),
+    );
+    assert.deepEqual(actual, [
+      scenario === "chrome-foreground"
+        ? "cdp-data-isolation"
+        : "fixture-data-mutation",
+      "real-os-input",
+    ]);
+  }
+  const count = report.properties.find(ts.isSpreadAssignment);
+  assert(count);
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(
+        runInNewContext(`(${count.expression.getText(ast)})`, {
+          layer: "fixture-data-mutation",
+          produced: "U0X",
+        }),
+      ),
+    ),
+    { mutatedCharacters: 3 },
+  );
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(
+        runInNewContext(`(${count.expression.getText(ast)})`, {
+          layer: "real-os-input",
+          produced: "U0X",
+        }),
+      ),
+    ),
+    { typedCharacters: 3 },
+  );
+});
+
+test("actual behind-sentinel guard still rejects a returned focus excursion", async () => {
+  let guard;
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(ast) === "guard" &&
+      node.initializer?.getText(ast).includes("userState.focusEvents")
+    )
+      guard = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert(guard);
+  const before = {
+    focus: "user-input",
+    hasFocus: false,
+    visibility: "visible",
+    focusEvents: ["blur"],
+    visibilityEvents: [],
+  };
+  const userState = structuredClone(before);
+  const agent = { visibility: "hidden", visibilityEvents: [] };
+  const executable = ts.transpileModule(
+    `const guard = ${guard.getText(ast)};`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const run = runInNewContext(`${executable}; guard`, {
+    assert,
+    process: { platform: "darwin" },
+    scenario: "chrome-behind-sentinel",
+    expectedPid: 7,
+    stateScript: "owned state",
+    userBefore: before,
+    agentBefore: structuredClone(agent),
+    native: { call: async () => ({ pid: 7, drift: false }) },
+    userRpc: { evaluate: async () => userState },
+    agentRpc: { evaluate: async () => agent },
+  });
+  await run();
+  userState.focusEvents.push("focus", "blur");
+  await assert.rejects(run(), /User window focus changed/);
+});

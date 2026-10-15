@@ -1264,7 +1264,11 @@ async function main(): Promise<void> {
         );
         return { front, userState, agentState };
       };
-      for (const layer of ["cdp-data-isolation", "real-os-input"] as const) {
+      const layers =
+        scenario === "chrome-behind-sentinel"
+          ? (["fixture-data-mutation", "real-os-input"] as const)
+          : (["cdp-data-isolation", "real-os-input"] as const);
+      for (const layer of layers) {
         phase = `${scenario}:${layer}`;
         const canType = process.platform === "win32" || nativeReady.axTrusted;
         if (layer === "real-os-input" && !canType) {
@@ -1429,7 +1433,19 @@ async function main(): Promise<void> {
                   "Settled native input changed before the next batch",
                 );
               const text = `U${sequence++}X`;
-              if (layer === "cdp-data-isolation")
+              if (layer === "fixture-data-mutation") {
+                // Input.insertText focuses Chrome's renderer even while the OS
+                // sentinel stays foreground. This layer tests data isolation,
+                // not typing; mutate only the exact owned fixture value without
+                // focus/events. The separate real-os-input layer still types
+                // into the native sentinel under the unchanged ownership guard.
+                await userRpc!.evaluate(`(() => {
+                  const input = document.querySelector('#user-input');
+                  if (input.value !== ${JSON.stringify(userStart.value + produced)})
+                    throw new Error('Owned fixture value changed before mutation');
+                  input.value += ${JSON.stringify(text)};
+                })()`);
+              } else if (layer === "cdp-data-isolation")
                 await userRpc!.send("Input.insertText", { text });
               else {
                 if (scenario === "chrome-foreground")
@@ -1463,7 +1479,7 @@ async function main(): Promise<void> {
         const { front, userState, agentState } = await guard();
         assert.ok(
           batchesWhileAgentRunning > 0,
-          "No concurrent user-input batch was observed",
+          "No concurrent fixture activity batch was observed",
         );
         assert.equal(agentState.clicks - agentStart.clicks, 3);
         assert.deepEqual(
@@ -1506,7 +1522,9 @@ async function main(): Promise<void> {
           layer,
           status: "passed",
           batchesWhileAgentRunning,
-          typedCharacters: produced.length,
+          ...(layer === "fixture-data-mutation"
+            ? { mutatedCharacters: produced.length }
+            : { typedCharacters: produced.length }),
           frontmostPid: front.pid,
           frontmostHwnd: front.hwnd,
           nativeSamples: front.samples,
