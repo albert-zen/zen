@@ -4,7 +4,6 @@ import type { ThreadItem } from "../src/protocol-client/index.js";
 import {
   commandPhase,
   commandStatus,
-  isShellNonzeroResult,
   commandSummary,
   commandTitle,
   toolPresentation,
@@ -86,7 +85,7 @@ test("thread failures and active phases remain visible without past-tense succes
   assert.equal(commandSummary(requested), "Send message · requested");
   assert.equal(
     commandSummary({ ...send, status: "failed" }),
-    "Send message · failed",
+    "Send message · ended",
   );
   assert.equal(
     commandSummary({ ...send, status: "declined" }),
@@ -100,7 +99,7 @@ test("thread failures and active phases remain visible without past-tense succes
     ["cancellation_unconfirmed", "cancellation unconfirmed"],
     ["cancelled", "cancelled"],
     ["timed_out", "timed out"],
-    ["failed", "failed"],
+    ["failed", "ended"],
   ] as const) {
     assert.equal(
       commandSummary({
@@ -179,137 +178,49 @@ test("concurrent browser tools use readable backend labels without execution ali
   assert.equal(toolPresentation("browser_connected_unknown").category, "Tool");
 });
 
-test("shell nonzero presentation never claims success or infers grep semantics", () => {
-  for (const exitCode of [1, 2, 125, 127, 128, 130, 143]) {
-    for (const output of [
-      "",
-      "grep: missing file",
-      "spawn /bin/sh ENOENT",
-      "[output truncated]",
-    ]) {
-      const item = {
-        ...command("shell"),
-        status: "failed" as const,
-        exitCode,
-        aggregatedOutput: output,
-      };
-      const before = structuredClone(item);
-      assert.equal(isShellNonzeroResult(item), true);
-      assert.equal(commandStatus(item), "Shell returned a nonzero status");
-      assert.equal(commandPhase(item), "failed");
-      assert.deepEqual(item, before);
+test("ended tool labels preserve raw phases and never infer success from output or exit code", () => {
+  for (const toolName of ["shell", "wait", "unknown_tool", "run_code"]) {
+    for (const exitCode of [null, 0, 1, 2, 127, 130]) {
+      for (const output of ["", "warning on stderr", "spawn /bin/sh ENOENT"]) {
+        const item = {
+          ...command(toolName),
+          status: "failed" as const,
+          exitCode,
+          aggregatedOutput: output,
+        };
+        const before = structuredClone(item);
+        assert.equal(commandStatus(item), "Ended");
+        assert.equal(commandPhase(item), "failed");
+        assert.deepEqual(item, before);
+      }
     }
-  }
-  for (const toolName of [
-    "unknown_tool",
-    "run_code",
-    "my_shell",
-    "zenx_shell",
-  ]) {
-    assert.equal(
-      isShellNonzeroResult({
-        ...command(toolName),
-        status: "failed",
-        exitCode: 1,
-        command: "grep absent file",
-      }),
-      false,
-    );
-  }
-  for (const exitCode of [null, 0]) {
-    assert.equal(
-      isShellNonzeroResult({ ...command("shell"), status: "failed", exitCode }),
-      false,
-    );
-  }
-  for (const status of ["completed", "inProgress", "declined"] as const) {
-    assert.equal(
-      isShellNonzeroResult({ ...command("shell"), status, exitCode: 1 }),
-      false,
-    );
   }
 });
 
-test("shell receipts keep lifecycle failures distinct from nonzero results", () => {
-  const base = {
-    ...command("wait"),
-    status: "failed" as const,
-    exitCode: 1,
-    contentType: "application/vnd.zen.tool-task+json",
-    structuredContent: {
-      task_id: "shell-task",
-      tool_name: "shell",
-      status: "failed",
-      exit_code: 1,
-      foreground: "exited",
-      stdio: "eof",
-      foreground_exit_code: 1,
-      foreground_signal: null,
-    },
-  };
-  assert.equal(isShellNonzeroResult(base), true);
-  assert.equal(commandStatus(base), "Shell returned a nonzero status");
-  assert.equal(commandPhase(base), "failed");
-  for (const status of [
-    "timed_out",
-    "cancelled",
-    "cancellation_unconfirmed",
-    "running",
-    "queued",
-  ]) {
-    assert.equal(
-      isShellNonzeroResult({
-        ...base,
-        structuredContent: { ...base.structuredContent, status },
-      }),
-      false,
-    );
-  }
-  for (const patch of [
-    { foreground_signal: "SIGTERM" },
-    { foreground_exit_code: null },
-    { foreground_exit_code: 2 },
-    { stdio: "open" },
-    { foreground: "running" },
-    { exit_code: 2 },
-    { tool_name: "other" },
-  ]) {
-    assert.equal(
-      isShellNonzeroResult({
-        ...base,
-        structuredContent: { ...base.structuredContent, ...patch },
-      }),
-      false,
-    );
-  }
-  const remote = {
-    ...base,
-    structuredContent: {
-      task_id: "remote-task",
-      tool_name: "shell",
-      status: "failed",
-      exit_code: 1,
-    },
-  };
-  assert.equal(
-    isShellNonzeroResult(remote),
-    true,
-    "remote receipt cannot prove process lifecycle",
-  );
-  assert.equal(
-    isShellNonzeroResult({
-      ...remote,
-      structuredContent: { status: "failed", tool_name: "shell", exit_code: 1 },
-    }),
-    false,
-  );
-  assert.equal(
-    isShellNonzeroResult({
-      ...command("shell"),
-      status: "failed",
+test("specific lifecycle facts remain distinct from a generic ended label", () => {
+  for (const [status, label] of [
+    ["timed_out", "Timed out"],
+    ["cancelled", "Cancelled"],
+    ["cancellation_unconfirmed", "Cancellation unconfirmed"],
+    ["running", "Waiting"],
+    ["queued", "Queued"],
+  ] as const) {
+    const item = {
+      ...command("wait"),
+      status: "failed" as const,
       exitCode: 1,
-      contentType: "zen.imported-tool-result.v1",
-    }),
-    false,
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: {
+        task_id: "shell-task",
+        tool_name: "shell",
+        status,
+        exit_code: 1,
+      },
+    };
+    assert.equal(commandStatus(item), label);
+  }
+  assert.equal(
+    commandStatus({ ...command("shell"), status: "declined" }),
+    "Declined",
   );
 });

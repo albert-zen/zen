@@ -59,7 +59,10 @@ import type {
   QueuedCancellationTarget,
 } from "../../../../../src/app-server.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
-import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
+import type {
+  NativeThreadSummary,
+  ThreadSummary,
+} from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   AppServerHostStatus,
@@ -138,6 +141,7 @@ import {
 } from "./plugin-contributions.js";
 import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
+import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { Sidebar, ThreadDebugMenuContext } from "./Sidebar.js";
 import {
   derivePinnedThreads,
@@ -1050,7 +1054,7 @@ function AppContent() {
     if (!preserveNavigation) {
       setDebugThreadId(debugMode ? threadId : null);
       setPage("agent");
-      setSidebarOpen(false);
+      if (!debugMode) setSidebarOpen(false);
     }
     setSelectedThreadId(threadId);
     setThreadDetail(cached?.thread ?? null);
@@ -1089,6 +1093,20 @@ function AppContent() {
       );
       threadProjectionCacheRef.current.set(threadId, projected);
       setThreadDetail(projected.thread);
+      // Direct navigation from a PAW can precede the list projection. The
+      // recovered Thread still owns its title and rename entry in that gap.
+      setOptimisticSummary({
+        ...optimisticThreadSummary(
+          {
+            thread: projected.thread,
+            ...nativeSettingsSnapshot(result.thread),
+          },
+          projected.thread.preview,
+        ),
+        archived: result.thread.archived,
+        parentThreadId: result.thread.parentThreadId,
+        status: projected.thread.status.type === "active" ? "active" : "idle",
+      });
       if (
         projected.thread.id === threadId &&
         projected.thread.canonicalItems !== undefined
@@ -1586,13 +1604,20 @@ function AppContent() {
       : { ...summary, name: titleSnapshot[summary.threadId]!.title },
   );
   const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
-  const selectedSummary =
+  const selectedBaseSummary =
     [...activeSummaries, ...archivedSummaries].find(
       (summary) => summary.threadId === selectedThreadId,
     ) ??
     (optimisticSummary?.threadId === selectedThreadId
       ? optimisticSummary
       : null);
+  const selectedSummary =
+    selectedBaseSummary && titleSnapshot[selectedBaseSummary.threadId]
+      ? {
+          ...selectedBaseSummary,
+          name: titleSnapshot[selectedBaseSummary.threadId]!.title,
+        }
+      : selectedBaseSummary;
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
   const genericPluginTarget =
@@ -2832,7 +2857,7 @@ function AppContent() {
           selectedSummary !== null ? (
             <ConversationTitleBar
               onOpenSidebar={openSidebar}
-              threads={[...threadSummaries, ...archivedThreadSummaries]}
+              threads={[...activeSummaries, ...archivedSummaries]}
               onNavigate={openPage}
               onRename={renameSelectedThread}
               onOpenSource={(threadId) => void resumeThread(threadId)}
@@ -2927,7 +2952,9 @@ function AppContent() {
             threadId: page === "agent" ? debugThreadId : null,
             toggle: (threadId) => {
               if (page === "agent" && debugThreadId === threadId)
-                exitDebugMode();
+                setDebugThreadId(null);
+              else if (page === "agent" && selectedThreadId === threadId)
+                setDebugThreadId(threadId);
               else void resumeThread(threadId, false, false, true);
             },
           }}
@@ -3191,7 +3218,7 @@ function AppContent() {
                       registry={pluginUiRegistry}
                       snapshot={pluginSnapshot}
                       threadId={selectedThreadId}
-                      threads={[...threadSummaries, ...archivedThreadSummaries]}
+                      threads={[...activeSummaries, ...archivedSummaries]}
                       navigate={openPage}
                     />
                   ) : null
@@ -3356,6 +3383,7 @@ function AppContent() {
               <CompanionWorkspace
                 key={selectedRoom.id}
                 room={selectedRoom}
+                onRenameThread={renameThread}
                 renderConversation={renderSideConversation}
                 viewState={
                   roomWorkspaceStates[selectedRoom.id] ?? {
@@ -3392,7 +3420,7 @@ function AppContent() {
             selectedThreadId === threadDetail.id ? (
               <AuxiliaryPanel
                 threadContext={{
-                  threads: [...threadSummaries, ...archivedThreadSummaries],
+                  threads: [...activeSummaries, ...archivedSummaries],
                 }}
                 conversation={
                   conversationPanels[threadDetail.id]
@@ -3400,8 +3428,8 @@ function AppContent() {
                         threadId: conversationPanels[threadDetail.id]!,
                         title: (() => {
                           const summary = [
-                            ...threadSummaries,
-                            ...archivedThreadSummaries,
+                            ...activeSummaries,
+                            ...archivedSummaries,
                           ].find(
                             (entry) =>
                               entry.threadId ===
@@ -4565,82 +4593,6 @@ function EmptyState({
   );
 }
 
-function ThreadTitleEditor({
-  editable,
-  title,
-  projection,
-  onRename,
-  onRetry,
-}: {
-  editable: boolean;
-  title: string;
-  projection: ThreadTitleProjection | undefined;
-  onRename(title: string): Promise<void>;
-  onRetry(): Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!editing) setDraft(title);
-  }, [editing, title]);
-  if (editing) {
-    return (
-      <form
-        className="thread-title-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setBusy(true);
-          setError(null);
-          void onRename(draft)
-            .then(() => setEditing(false))
-            .catch((reason: unknown) => setError(describeError(reason)))
-            .finally(() => setBusy(false));
-        }}
-      >
-        <input
-          autoFocus
-          aria-label={i18n.t("shell:threadTitle")}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-        />
-        <button type="submit" disabled={busy || !draft.trim()}>
-          {i18n.t("shell:save")}
-        </button>
-        <button type="button" onClick={() => setEditing(false)}>
-          {i18n.t("shell:cancel")}
-        </button>
-        {error ? <small role="alert">{error}</small> : null}
-      </form>
-    );
-  }
-  return (
-    <div className="thread-title-line">
-      <strong title={title}>{title}</strong>
-      {editable ? (
-        <button
-          type="button"
-          className="thread-title-rename"
-          aria-label={i18n.t("shell:renameThreadTitle")}
-          title={i18n.t("shell:renameThreadTitle")}
-          onClick={() => setEditing(true)}
-        >
-          <Icon name="compose" size={16} />
-        </button>
-      ) : null}
-      {editable && projection?.status === "generating" ? (
-        <small>{i18n.t("shell:generatingTitle")}</small>
-      ) : null}
-      {editable && projection?.status === "failed" ? (
-        <button type="button" onClick={() => void onRetry()}>
-          {i18n.t("shell:retryTitle")}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -4736,7 +4688,7 @@ export function optimisticThreadSummary(
     sandbox: import("../../protocol-client/types.js").FileSandboxPolicy;
   },
   preview: string,
-): NativeThreadSummary {
+): ThreadSummary {
   const draft = parseSkillDraft(preview);
   return {
     threadId: result.thread.id,
