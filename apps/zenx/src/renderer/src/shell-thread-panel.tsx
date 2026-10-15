@@ -467,6 +467,8 @@ function ShellTerminal({
       const applyTheme = () => {
         if (!term || disposed) return;
         const computed = window.getComputedStyle(document.documentElement);
+        terminalDocument.documentElement.style.colorScheme =
+          computed.colorScheme;
         const color = (name: string) => computed.getPropertyValue(name).trim();
         const background = color("--color-surface-control");
         terminalDocument.documentElement.style.setProperty(

@@ -372,6 +372,10 @@ test("terminal panel fills its flex host instead of keeping intrinsic width", as
     source,
     /\.xterm \.xterm-viewport\{background-color:var\(--color-surface-control\)\}/,
   );
+  assert.match(
+    source,
+    /terminalDocument\.documentElement\.style\.colorScheme\s*=\s*computed\.colorScheme/,
+  );
 });
 
 test("ended session labels stay neutral while exit code and specific timeout facts remain", async () => {
