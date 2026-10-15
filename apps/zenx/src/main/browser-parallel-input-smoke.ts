@@ -54,6 +54,7 @@ interface PageState {
   submissions: string[];
   trustedKeys: number;
   visibilityEvents: string[];
+  focusEvents: string[];
 }
 interface NativeState {
   pid: number;
@@ -61,9 +62,12 @@ interface NativeState {
   title?: string;
   axTrusted: boolean;
   samples: number;
+  titleSamples?: number;
+  idleTitleCooldownMs?: number;
   drift: boolean;
   sentinelValue?: string;
   sentinelFocused?: boolean;
+  focusedValueState?: "matched" | "pending" | "invalid";
 }
 interface Target {
   id: string;
@@ -243,13 +247,52 @@ function page(kind: "user" | "agent"): string {
 <style>body{margin:0;background:#f6f8fc;font:18px system-ui}input{position:absolute;left:20px;top:120px;width:250px;height:40px;font:18px system-ui}canvas{position:absolute;left:20px;top:20px;background:#acf}button{position:absolute;left:300px;top:125px}</style>
 ${agent ? '<canvas id="agent-canvas" width="200" height="60" tabindex="0"></canvas><form id="form"><input id="agent-input" aria-label="Agent input"><button>Submit</button></form>' : '<input id="user-input" aria-label="User input" autocomplete="off">'}
 <script>
-window.fixture={clicks:0,submissions:[],trustedKeys:0,visibilityEvents:[]};
+window.fixture={clicks:0,submissions:[],trustedKeys:0,visibilityEvents:[],focusEvents:[]};
 document.addEventListener('keydown',e=>{if(e.isTrusted)fixture.trustedKeys++});
 document.addEventListener('visibilitychange',()=>fixture.visibilityEvents.push(document.visibilityState));
+for(const type of ['focus','blur'])window.addEventListener(type,event=>{if(event.target===window)fixture.focusEvents.push(type)});
 ${agent ? "document.querySelector('canvas').onclick=e=>{if(!e.isTrusted)throw Error('untrusted pointer');fixture.clicks++;e.currentTarget.focus()};document.querySelector('#form').onsubmit=e=>{e.preventDefault();fixture.submissions.push(document.querySelector('input').value)};" : ""}
 </script>`;
 }
 const stateScript = `({value:document.querySelector('input').value,focus:document.activeElement?.id||'',hasFocus:document.hasFocus(),visibility:document.visibilityState,...window.fixture})`;
+
+/** Observe consumption of already-issued fixture input; never dispatch/replay it. */
+async function settleMacFixtureInput(options: {
+  previousValue: string;
+  expectedValue: string;
+  read(): Promise<{
+    domValue: string;
+    nativeValueState: NativeState["focusedValueState"];
+  }>;
+  signal: AbortSignal;
+}): Promise<number> {
+  const deadline = performance.now() + 2_000;
+  let reads = 0;
+  for (;;) {
+    options.signal.throwIfAborted();
+    assert(performance.now() < deadline, "Native fixture input did not settle");
+    const { domValue, nativeValueState } = await withDeadline(
+      options.read(),
+      deadline - performance.now(),
+      "Native fixture input settlement",
+    );
+    reads++;
+    options.signal.throwIfAborted();
+    assert(performance.now() < deadline, "Native fixture input did not settle");
+    assert(
+      domValue.startsWith(options.previousValue) &&
+        options.expectedValue.startsWith(domValue),
+      "Already-issued native input changed the exact user fixture value",
+    );
+    assert(
+      nativeValueState === "matched" || nativeValueState === "pending",
+      "Native focused value is not a prefix of the exact issued input",
+    );
+    if (domValue === options.expectedValue && nativeValueState === "matched")
+      return reads;
+    await delay(20);
+  }
+}
 
 /** Served only by the disposable local smoke servers, before any tracker exists. */
 export function targetedInputContractPage(requestUrl: string): string {
@@ -1022,11 +1065,15 @@ async function main(): Promise<void> {
       hwnd: nativeBrowser.hwnd,
       title: userTitle,
     });
+    // Setup may focus/activate the owned window. Freeze its event history before
+    // any provider work, and verify it before the scenario loop resets the guard.
+    const beforeOpen = await userRpc.evaluate<PageState>(stateScript);
+    assert.equal(beforeOpen.focus, "user-input");
+    assert.equal(beforeOpen.hasFocus, true);
+    assert.equal(beforeOpen.visibility, "visible");
     phase = "startup-connect-provider";
     connection = await connectUserBrowserCdp(endpoint);
     await connection.backend.listTabs(sessionId);
-    const beforeOpen = await userRpc.evaluate<PageState>(stateScript);
-    assert.equal(beforeOpen.focus, "user-input");
     phase = "startup-open-agent";
     const opened = await connection.backend.open(sessionId, `${origin}/agent`);
     const agent = await poll(
@@ -1080,9 +1127,23 @@ async function main(): Promise<void> {
       "hidden",
       "backend.open must create an inactive Agent tab",
     );
+    const afterOpen = await userRpc.evaluate<PageState>(stateScript);
+    assert.equal(afterOpen.focus, "user-input");
     assert.equal(
-      (await userRpc.evaluate<PageState>(stateScript)).focus,
-      "user-input",
+      afterOpen.hasFocus,
+      true,
+      "User browser lost keyboard focus during provider startup",
+    );
+    assert.equal(afterOpen.visibility, "visible");
+    assert.deepEqual(
+      afterOpen.focusEvents,
+      beforeOpen.focusEvents,
+      "User window focus changed during provider startup",
+    );
+    assert.deepEqual(
+      afterOpen.visibilityEvents,
+      beforeOpen.visibilityEvents,
+      "User tab visibility changed during provider startup",
     );
     assert.equal(
       (await native.call("snapshot")).drift,
@@ -1196,9 +1257,18 @@ async function main(): Promise<void> {
           agentBefore.visibilityEvents,
           "Agent tab briefly gained visibility",
         );
+        assert.deepEqual(
+          userState.focusEvents,
+          userBefore.focusEvents,
+          "User window focus changed, even if it later returned",
+        );
         return { front, userState, agentState };
       };
-      for (const layer of ["cdp-data-isolation", "real-os-input"] as const) {
+      const layers =
+        scenario === "chrome-behind-sentinel"
+          ? (["fixture-data-mutation", "real-os-input"] as const)
+          : (["cdp-data-isolation", "real-os-input"] as const);
+      for (const layer of layers) {
         phase = `${scenario}:${layer}`;
         const canType = process.platform === "win32" || nativeReady.axTrusted;
         if (layer === "real-os-input" && !canType) {
@@ -1226,6 +1296,36 @@ async function main(): Promise<void> {
         let produced = "";
         let batchesWhileAgentRunning = 0;
         const controller = new AbortController();
+        let previousNativeValue = "";
+        let nativeSettlementReads = 0;
+        const settleNativeInput = async (): Promise<void> => {
+          if (
+            process.platform !== "darwin" ||
+            layer !== "real-os-input" ||
+            scenario !== "chrome-foreground"
+          )
+            return;
+          const expectedValue = userStart.value + produced;
+          nativeSettlementReads += await settleMacFixtureInput({
+            previousValue: previousNativeValue,
+            expectedValue,
+            signal: controller.signal,
+            read: async () => {
+              const { userState } = await guard();
+              controller.signal.throwIfAborted();
+              const observed = await native!.call("focusedValue", {
+                previousValue: previousNativeValue,
+                expectedValue,
+              });
+              assert.equal(observed.drift, false, "Native foreground drifted");
+              return {
+                domValue: userState.value,
+                nativeValueState: observed.focusedValueState,
+              };
+            },
+          });
+          previousNativeValue = expectedValue;
+        };
         const agentTask = (async () => {
           try {
             for (let iteration = 0; iteration < 3; iteration++) {
@@ -1316,10 +1416,36 @@ async function main(): Promise<void> {
           try {
             let sequence = 0;
             while (!finished) {
+              // DOM and Chromium's native AX projection consume OS events
+              // asynchronously. Require both to reflect only our exact issued
+              // prefix before another batch, then retain the native type guard.
+              await settleNativeInput();
               const { userState } = await guard();
               if (finished) break;
+              if (
+                process.platform === "darwin" &&
+                layer === "real-os-input" &&
+                scenario === "chrome-foreground"
+              )
+                assert.equal(
+                  userState.value,
+                  userStart.value + produced,
+                  "Settled native input changed before the next batch",
+                );
               const text = `U${sequence++}X`;
-              if (layer === "cdp-data-isolation")
+              if (layer === "fixture-data-mutation") {
+                // Input.insertText focuses Chrome's renderer even while the OS
+                // sentinel stays foreground. This layer tests data isolation,
+                // not typing; mutate only the exact owned fixture value without
+                // focus/events. The separate real-os-input layer still types
+                // into the native sentinel under the unchanged ownership guard.
+                await userRpc!.evaluate(`(() => {
+                  const input = document.querySelector('#user-input');
+                  if (input.value !== ${JSON.stringify(userStart.value + produced)})
+                    throw new Error('Owned fixture value changed before mutation');
+                  input.value += ${JSON.stringify(text)};
+                })()`);
+              } else if (layer === "cdp-data-isolation")
                 await userRpc!.send("Input.insertText", { text });
               else {
                 if (scenario === "chrome-foreground")
@@ -1348,11 +1474,12 @@ async function main(): Promise<void> {
         const results = await Promise.allSettled([agentTask, userTask]);
         for (const result of results)
           if (result.status === "rejected") throw result.reason;
+        await settleNativeInput();
         await delay(100); // Drain only already-issued native events; never replay.
         const { front, userState, agentState } = await guard();
         assert.ok(
           batchesWhileAgentRunning > 0,
-          "No concurrent user-input batch was observed",
+          "No concurrent fixture activity batch was observed",
         );
         assert.equal(agentState.clicks - agentStart.clicks, 3);
         assert.deepEqual(
@@ -1395,10 +1522,15 @@ async function main(): Promise<void> {
           layer,
           status: "passed",
           batchesWhileAgentRunning,
-          typedCharacters: produced.length,
+          ...(layer === "fixture-data-mutation"
+            ? { mutatedCharacters: produced.length }
+            : { typedCharacters: produced.length }),
           frontmostPid: front.pid,
           frontmostHwnd: front.hwnd,
           nativeSamples: front.samples,
+          nativeTitleSamples: front.titleSamples,
+          nativeIdleTitleCooldownMs: front.idleTitleCooldownMs,
+          nativeSettlementReads,
           userTarget: user.id,
           agentTarget: opened.tabId,
           userActiveElement: userState.focus,
@@ -1669,28 +1801,62 @@ var expectedPid: pid_t = 0
 var expectedTitle = ""
 var drift = false
 var samples = 0
+// AX title reads synchronously ask Chrome to service accessibility. Keep cheap
+// PID/sentinel observations at 10ms, but leave a quiet interval after each full
+// idle read completes. Dispatch/snapshot/value guards never use this cooldown.
+let idleTitleCooldown = 0.25
+var nextIdleTitleSampleAt = 0.0
+var titleSamples = 0
+var guardEpoch = 0
+var activationObserver: NSObjectProtocol? = nil
 var sentinel: NSWindow? = nil
 var field: NSTextField? = nil
 func currentPid() -> pid_t { NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1 }
 func titleFor(_ pid: pid_t) -> String {
+  titleSamples += 1
   var window: CFTypeRef?
   guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as CFString, &window) == .success, let window else { return "" }
   var title: CFTypeRef?
   guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &title) == .success else { return "" }
   return title as? String ?? ""
 }
-func owns() -> Bool {
+func owns(checkTitle: Bool = true) -> Bool {
   if expectedPid == 0 { return true }
   guard currentPid() == expectedPid else { return false }
   if expectedPid == getpid() { return sentinel?.isKeyWindow == true && field?.currentEditor() != nil }
+  if !checkTitle { return true }
   return !AXIsProcessTrusted() || titleFor(expectedPid).contains(expectedTitle)
 }
-func sample() {
-  if expectedPid != 0 { samples += 1; if !owns() { drift = true } }
+func sample(checkTitle: Bool = true) {
+  if expectedPid != 0 {
+    samples += 1
+    if !owns(checkTitle: checkTitle) { drift = true }
+    if checkTitle { nextIdleTitleSampleAt = ProcessInfo.processInfo.systemUptime + idleTitleCooldown }
+  }
+}
+func sampleIdle() {
+  sample(checkTitle: ProcessInfo.processInfo.systemUptime >= nextIdleTitleSampleAt)
+}
+func resetGuard(_ pid: pid_t = 0, _ title: String = "") {
+  guardEpoch += 1
+  if let previous = activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(previous) }
+  activationObserver = nil
+  expectedPid = pid; expectedTitle = title
+  drift = false; samples = 0; nextIdleTitleSampleAt = 0; titleSamples = 0
+  if pid == 0 { return }
+  let epoch = guardEpoch
+  activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didActivateApplicationNotification,object:nil,queue:.main) { notification in
+    // Ignore a callback already queued by a retired guard. Within this epoch,
+    // use the historical owner even if foreground has since returned.
+    guard guardEpoch == epoch, expectedPid != 0 else { return }
+    if let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, activated.processIdentifier != expectedPid { drift = true }
+    sample()
+  }
 }
 func state() -> [String:Any] {
   sample()
   return ["pid":Int(currentPid()),"axTrusted":AXIsProcessTrusted(),"samples":samples,"drift":drift,
+          "titleSamples":titleSamples,"idleTitleCooldownMs":idleTitleCooldown * 1000,
           "sentinelValue":field?.stringValue ?? "", "sentinelFocused":sentinel?.isKeyWindow == true && field?.currentEditor() != nil]
 }
 func emit(_ id: Int, _ result: [String:Any] = [:], _ error: String? = nil) {
@@ -1701,13 +1867,13 @@ func process(_ request: [String:Any]) {
   let id = request["id"] as? Int ?? -1
   let method = request["method"] as? String ?? ""
   switch method {
-  case "clear": expectedPid = 0; drift = false; samples = 0
+  case "clear": resetGuard()
   case "activateBrowser":
-    expectedPid = 0
+    resetGuard()
     guard let pid = request["pid"] as? Int, let target = NSRunningApplication(processIdentifier:pid_t(pid)) else { emit(id,[:],"Owned browser process unavailable"); return }
     target.activate(options:[.activateAllWindows,.activateIgnoringOtherApps])
   case "sentinel":
-    expectedPid = 0
+    resetGuard()
     app.setActivationPolicy(.regular)
     if sentinel == nil {
       sentinel = NSWindow(contentRect:NSRect(x:20,y:20,width:360,height:140), styleMask:[.titled,.closable], backing:.buffered,defer:false)
@@ -1720,8 +1886,30 @@ func process(_ request: [String:Any]) {
     sentinel!.makeFirstResponder(field!)
     app.activate(ignoringOtherApps:true)
   case "guard":
-    expectedPid = pid_t(request["pid"] as? Int ?? 0); expectedTitle = request["title"] as? String ?? ""
-    drift = false; samples = 0
+    resetGuard(pid_t(request["pid"] as? Int ?? 0), request["title"] as? String ?? "")
+  case "focusedValue":
+    // Read-only consumption barrier. A stale prefix is pending, not permission
+    // to type. The existing exact-value check still runs immediately in type.
+    guard AXIsProcessTrusted(), expectedPid != 0, expectedPid != getpid(), !drift, owns(),
+          let expectedValue = request["expectedValue"] as? String,
+          let previousValue = request["previousValue"] as? String else {
+      emit(id,[:],"Owned focused-value guard rejected observation"); return
+    }
+    var element: CFTypeRef?; var value: CFTypeRef?
+    let focusedStatus = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(expectedPid), kAXFocusedUIElementAttribute as CFString, &element)
+    var valueStatus: AXError? = nil
+    if focusedStatus == .success, let element {
+      valueStatus = AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value)
+    }
+    var disposition = "invalid"
+    if focusedStatus == .success, valueStatus == .success, let observed = value as? String {
+      if observed == expectedValue { disposition = "matched" }
+      else if observed.hasPrefix(previousValue) && expectedValue.hasPrefix(observed) { disposition = "pending" }
+    }
+    var result = state()
+    guard !drift, owns() else { emit(id,[:],"Foreground changed during focused-value observation"); return }
+    result["focusedValueState"] = disposition
+    emit(id,result); return
   case "type":
     guard AXIsProcessTrusted() else { emit(id,[:],"OS input unverified: AXIsProcessTrusted is false; no permission requested"); return }
     guard expectedPid != 0, !drift, owns(), let text = request["text"] as? String, text.count <= 32 else { emit(id,[:],"Owned foreground guard rejected input"); return }
@@ -1763,8 +1951,7 @@ func process(_ request: [String:Any]) {
   }
   emit(id,state())
 }
-let timer = Timer.scheduledTimer(withTimeInterval:0.01,repeats:true) { _ in sample() }
-let observer = NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didActivateApplicationNotification,object:nil,queue:.main) { _ in sample() }
+let timer = Timer.scheduledTimer(withTimeInterval:0.01,repeats:true) { _ in sampleIdle() }
 emit(0,["pid":Int(getpid()),"axTrusted":AXIsProcessTrusted(),"samples":0,"drift":false])
 DispatchQueue.global().async {
   while let line = readLine() {
