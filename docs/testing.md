@@ -116,3 +116,46 @@ delayed projection, wrong values, timeout, cancellation and guard failure; the
 ordinary macOS CI smoke must separately compile the Swift helper and exercise
 actual OS input. This is fixture-consumption synchronization, not a product input
 fix or evidence that intermittent CDP startup latency is resolved.
+
+## Bounded macOS idle Accessibility sampling
+
+The native parallel-input witness formerly made synchronous focused-window/title
+AX requests on every 10ms timer tick. These requests run on the separate Swift
+helper's main run loop, not the Node event loop. A single diagnostic pair on
+2026-10-15 observed a 314.9ms AX read, a late Page.enable reply at 2168.5ms, a
+1.5ms browser probe and a 1497.4ms renderer probe. This supports investigating AX
+service contention; it does not prove all CDP timeouts share that cause. The
+PID-only comparison stopped at a conservative frame-URL check before isolated
+world creation, so it is not a complete controlled startup acceptance result.
+
+Keep the cheap foreground PID/sentinel checks on the 10ms timer. Idle title reads
+have a fixed 250ms quiet interval measured from completion, limiting idle AX work
+to at most four reads per second without catch-up. Synchronous main-run-loop
+execution already serializes these calls; no queued/concurrent worker is added.
+While a synchronous AX read is running, that helper's timer and activation
+callbacks can be delayed too; a 10ms timer is not a guaranteed 100Hz observation.
+The interval bounds observer load, not a CDP deadline. Snapshots, value settlement
+and every native event still perform the full uncached owner/title check. Their
+mandatory reads are not throttled. The existing exact value check is unchanged.
+`nativeTitleSamples` and `nativeIdleTitleCooldownMs` disclose the witness policy.
+
+Sampling alone cannot establish that no very short ownership excursion occurred.
+The fixture therefore retains window focus/blur history as well as its existing
+visibility history. A same-PID window switch that returns to the original window
+still fails the next comparison. Native activation notifications latch the PID
+carried by the historical event even if foreground has returned. The callback is
+bound to its guard epoch: explicit guard/reset removes the old observer and
+invalidates already-queued callbacks; cooling down or returning focus never
+clears drift. Normal setup completes before the history baseline is recorded.
+The startup baseline precedes the first provider connect/list/open operation;
+startup exit compares both histories before any scenario clear/reset. This
+prevents a returned startup excursion from becoming the next valid baseline.
+This adds no refocus, input replay, permission request or timeout relaxation.
+
+Local deterministic slow-read models and source contracts verify load bounds and
+unchanged dispatch guards; they are not native AX measurements. The macOS job
+also compiles the actual Swift sampling/epoch functions with controlled clock and
+ownership stubs, then compiles the full AppKit helper and performs ordinary real
+input acceptance. A pass still requires the foreground native layer to report
+`passed` with positive `nativeSettlementReads`; a skipped layer or one green
+workflow cannot close every intermittent startup problem.
