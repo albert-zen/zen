@@ -1341,3 +1341,7 @@ Browser coordinate click and named-key input are transient, observation-bound CD
 The embedded Agent debugger reads canonicalItems directly in append order, reusing message and tool presentation without creating a second trace authority; opt-in local transport observations are a separate actual-requests tab.
 
 ZenX CI aggregate 的被动 test:dequeue reporter 只在共享字节预算内增量记录测试位置、名称和接收时钟，区分以文件路径命名的 file wrapper 与 case；Node 22 的并发后续文件 case 事件仍可能缓冲，最后一条记录不等于最后执行位置，原 TAP、测试选择、执行限制与 check 顺序不变，诊断不可用或缺少结束记录不代表测试成功，runner 丢失时 artifact 上传不保证完成。
+
+- The disposable parallel-input fixture may inject a synchronous CDP diagnostic observer that retains bounded anonymous request/timer/receive summaries through existing cleanup; it has no transport authority, never changes unknown outcomes, and is absent by default in the production provider.
+
+The first exact trusted browser inspection may claim once the unused portion of its attachment epoch's original 10-second initialization deadline when more than the ordinary 2 seconds remain; the claim is consumed before dispatch and never transferred across document/owner fences, while all other command budgets, unknown-outcome settlement and no-replay rules remain unchanged.

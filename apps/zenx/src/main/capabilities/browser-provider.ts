@@ -2179,8 +2179,18 @@ export const browserInspectScript = `(() => {
     registry.current.set(identity, element);
     return identity;
   };
+  // Reuse only the live style object during this inspection, never its values.
+  const styles = new WeakMap();
+  const styleFor = (element) => {
+    let style = styles.get(element);
+    if (style === undefined) {
+      style = getComputedStyle(element);
+      styles.set(element, style);
+    }
+    return style;
+  };
   const visible = (element) => {
-    const style = getComputedStyle(element);
+    const style = styleFor(element);
     const rect = element.getBoundingClientRect();
     return !element.hidden && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth;
   };
@@ -2192,7 +2202,7 @@ export const browserInspectScript = `(() => {
     if (!(element instanceof HTMLInputElement)) return false;
     return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(element.type.toLowerCase());
   };
-  const clickable = (element) => getComputedStyle(element).pointerEvents !== "none" && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && element.matches("a[href],button,input:not([type=hidden]),select,[role=button],[tabindex]");
+  const clickable = (element) => styleFor(element).pointerEvents !== "none" && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && element.matches("a[href],button,input:not([type=hidden]),select,[role=button],[tabindex]");
   const selector = (element) => {
     if (element.id) return "#" + CSS.escape(element.id);
     const parts = [];
