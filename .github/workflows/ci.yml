@@ -82,7 +82,21 @@ jobs:
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - name: Exercise macOS login-shell PATH and first tool execution
         run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
-      - run: npm --workspace apps/zenx run smoke:capabilities
+      - name: Verify native launch observer and hung-main cleanup contracts
+        timeout-minutes: 2
+        run: node --import tsx --test --test-timeout=30000 apps/zenx/test/macos-launch-path-smoke.test.mjs apps/zenx/test/macos-launch-path-cleanup.test.mjs
+      - name: Exercise LaunchServices PATH and packaged capabilities from one build
+        env:
+          ZENX_LAUNCH_PATH_EVIDENCE: ${{ runner.temp }}/zenx-launch-path-evidence
+        run: node apps/zenx/scripts/smoke-macos-launch-path.mjs --capabilities
+      - name: Retain independent LaunchServices PATH evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-launch-path-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-launch-path-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-windows-computer-smoke:
     name: ZenX Windows WinApp adapter smoke

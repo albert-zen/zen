@@ -15,7 +15,7 @@
 
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
-- **ZenX login-shell PATH** — After opening the static startup window, a bounded, cancellable macOS GUI-startup probe captures only the login shell’s framed PATH before Host initialization; a pipe-held supervisor pins the owned process group until cleanup, including helpers surviving login-shell exit, without persistent state. PATH semantics are preserved, failure retains the inherited environment, and the existing tool-environment whitelist remains the disclosure boundary.
+- **ZenX login-shell PATH** — After opening the static startup window, a bounded, cancellable macOS GUI-startup probe captures only the login shell’s framed PATH before Host initialization; a pipe-held supervisor pins the owned process group until cleanup, including helpers surviving login-shell exit, without persistent state. PATH semantics are preserved, failure retains the inherited environment, and the existing tool-environment whitelist remains the disclosure boundary. Native CI observes the same bootstrap and Host tool composition through fail-closed pre-sign instrumentation in an isolated acceptance app; a fixture-only authenticated worker can terminate only its own process when the main loop hangs, while unconfirmed or abnormal shutdown retains evidence and blocks later smoke work. Normal packaging and production runtime gain no observer hook.
 
 ## 核心概念
 

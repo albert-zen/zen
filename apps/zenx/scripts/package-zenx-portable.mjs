@@ -35,7 +35,15 @@ export const MACOS_CODESIGN_MODE_ENV = "ZENX_CODESIGN_MODE";
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
-async function packageZenX(arguments_) {
+// Internal acceptance callers can stage observers before signing, and share one
+// immutable build snapshot. The CLI never supplies these options.
+export async function packageZenX(arguments_, options = {}) {
+  if (
+    options.prepareApp !== undefined &&
+    (!arguments_.includes("--app") || options.artifactDirectory === undefined)
+  ) {
+    throw new Error("An app observer requires an isolated artifact directory");
+  }
   const downstreamArguments = downstreamAssemblyArguments(
     arguments_,
     process.platform,
@@ -43,11 +51,12 @@ async function packageZenX(arguments_) {
   const target = arguments_.includes("--app") ? "app" : "smoke";
   const productName = target === "app" ? "ZenX" : "ZenXProviderSmoke";
   const targetDirectory = `${productName}-${process.platform}-${process.arch}`;
-  await withPackagingTargetLock(packagedRoot, targetDirectory, async () => {
+  return withPackagingTargetLock(packagedRoot, targetDirectory, async () => {
     await mkdir(runsRoot, { recursive: true, mode: 0o700 });
     const staging = await mkdtemp(path.join(runsRoot, "package-"));
     try {
-      const buildSnapshot = await createBuildSnapshot(staging);
+      const buildSnapshot =
+        options.buildDirectory ?? (await createBuildSnapshot(staging));
       const resources = path.join(staging, "resources");
       const appDir = path.join(staging, "app");
       const stagedArtifacts = path.join(staging, "artifact");
@@ -81,6 +90,7 @@ async function packageZenX(arguments_) {
         path.join(appDir, "package.json"),
         `${JSON.stringify(packageManifest(target, zenxPackage), null, 2)}\n`,
       );
+      await options.prepareApp?.(appDir);
       const macOsSigningConfiguration = await resolveMacOsSigningConfiguration({
         platform: process.platform,
       });
@@ -163,7 +173,10 @@ async function packageZenX(arguments_) {
       if (target === "smoke") {
         await runExecutable(executablePath(packaged[0], target));
       }
-      const finalArtifact = path.join(artifactRoot, targetDirectory);
+      const finalArtifact = path.join(
+        options.artifactDirectory ?? artifactRoot,
+        targetDirectory,
+      );
       let publishedArtifact;
       try {
         publishedArtifact = await publishPackagedArtifact(
@@ -187,20 +200,16 @@ async function packageZenX(arguments_) {
         throw error;
       }
       const executable = executablePath(publishedArtifact, target);
-      console.log(
-        JSON.stringify(
-          {
-            packagedArtifact: publishedArtifact,
-            executable,
-            target,
-            version: zenxPackage.version,
-            manifestDigest: assembly.manifestSha256,
-            releaseSizeBytes: assembly.releaseSizeBytes,
-          },
-          null,
-          2,
-        ),
-      );
+      const result = {
+        packagedArtifact: publishedArtifact,
+        executable,
+        target,
+        version: zenxPackage.version,
+        manifestDigest: assembly.manifestSha256,
+        releaseSizeBytes: assembly.releaseSizeBytes,
+      };
+      console.log(JSON.stringify(result, null, 2));
+      return result;
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
