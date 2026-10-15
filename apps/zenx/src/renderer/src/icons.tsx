@@ -15,6 +15,7 @@ export type IconName =
   | "book"
   | "computer"
   | "compress"
+  | "collapse-folders"
   | "expand"
   | "external-link"
   | "maximize"
@@ -139,6 +140,9 @@ const paths: Record<IconName, ReactNode> = {
       <path d="m2.5 2.5 3.75 3.75M3 6.25h3.25V3" />
       <path d="m13.5 13.5-3.75-3.75M13 9.75H9.75V13" />
     </>
+  ),
+  "collapse-folders": (
+    <path d="m4.7 2.7 3.3 3.3 3.3-3.3M4.7 13.3 8 10l3.3 3.3" />
   ),
   compress: <path d="M2 1v4h4M14 1v4h-4M2 15v-4h4M14 15v-4h-4M5 8h6" />,
   chip: (

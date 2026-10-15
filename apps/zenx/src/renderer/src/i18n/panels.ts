@@ -1,4 +1,31 @@
 export const en = {
+  findInFile: "Find in file",
+  previousMatch: "Previous match",
+  nextMatch: "Next match",
+  closeFileSearch: "Close find",
+  fileSearchNoMatches: "No matches",
+  fileSearchMatchCount: "{{current}} of {{total}}",
+  refreshFileList: "Refresh file list",
+  hideFileNavigation: "Hide file navigation",
+  showFileNavigation: "Show file navigation",
+  resizeFileNavigation: "Resize file navigation",
+  workspaceFileSearchScope: "Workspace files · ⌘ / Ctrl P",
+  searchWorkspaceFiles: "Search workspace files",
+  searchFilesByNameOrPath: "Find files…",
+  clearFileSearch: "Clear file search",
+  workspaceSearchResults: "Workspace results",
+  collapseFileFolders: "Collapse folders",
+  searchingWorkspaceFiles: "Searching workspace…",
+  noMatchingWorkspaceFiles:
+    "No matching files. Try another name or a relative path.",
+  fileTreeTruncated:
+    "Some files are hidden by the display limit. Collapse folders or search by path.",
+  workspaceFileSearchHint:
+    "Search all workspace folders. Git metadata, common dependency folders and symlinks are excluded from search.",
+  largeFileHighlightingDisabled:
+    "Large file: syntax highlighting is disabled to keep editing responsive.",
+  openEnteredFilePath: "Open entered path",
+
   unreadMessages: "{{count}} unread messages",
   wakeupDelivery: "This Trigger’s message delivery",
   roomMessageDelivery: "This Room’s message delivery",
@@ -890,6 +917,30 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  findInFile: "在文件中查找",
+  previousMatch: "上一个匹配",
+  nextMatch: "下一个匹配",
+  closeFileSearch: "关闭查找",
+  fileSearchNoMatches: "无匹配结果",
+  fileSearchMatchCount: "{{current}} / {{total}}",
+  refreshFileList: "刷新文件列表",
+  hideFileNavigation: "收起文件导航",
+  showFileNavigation: "显示文件导航",
+  resizeFileNavigation: "调整文件导航大小",
+  workspaceFileSearchScope: "工作区文件 · ⌘ / Ctrl P",
+  searchWorkspaceFiles: "搜索工作区文件",
+  searchFilesByNameOrPath: "搜索文件…",
+  clearFileSearch: "清除文件搜索",
+  workspaceSearchResults: "工作区搜索结果",
+  collapseFileFolders: "折叠文件夹",
+  searchingWorkspaceFiles: "正在搜索工作区…",
+  noMatchingWorkspaceFiles: "未找到匹配文件，请尝试其他名称或相对路径。",
+  fileTreeTruncated: "部分文件因显示数量限制被隐藏，请折叠文件夹或按路径搜索。",
+  workspaceFileSearchHint:
+    "搜索整个工作区。搜索会跳过 Git 元数据、常见依赖目录和符号链接。",
+  largeFileHighlightingDisabled: "文件较大，已关闭语法高亮以保持编辑流畅。",
+  openEnteredFilePath: "打开输入的路径",
+
   unreadMessages: "{{count}} 条未读消息",
   wakeupDelivery: "此 触发器 的消息投递",
   roomMessageDelivery: "此聊天室的消息投递",

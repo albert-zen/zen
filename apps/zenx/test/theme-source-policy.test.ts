@@ -18,6 +18,8 @@ const dynamicProductTokens = new Set([
   "--zenx-brand-asset",
   "--bottom-zone-height",
   "--auxiliary-width", // AuxiliaryPanel owns user-resized width.
+  "--file-navigation-width", // AuxiliaryPanel owns the user-resized file split.
+  "--file-navigation-height", // The same split stacks vertically in narrow panes.
   "--browser-panel-width", // BrowserThreadPanel owns user-resized width.
   "--radix-popover-content-available-height", // Radix owns viewport collision measurements.
   "--radix-popover-content-transform-origin",

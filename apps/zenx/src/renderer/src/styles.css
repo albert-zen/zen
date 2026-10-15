@@ -1,3 +1,4 @@
+@import "./workspace-files.css";
 @import "./host-message.css";
 @import "./session-import.css";
 @import "./queued-message-editor.css";
@@ -7636,9 +7637,6 @@ button:disabled {
   padding: 7px 9px;
   font: inherit;
   font-size: 12px;
-}
-.file-editor {
-  height: max(260px, calc(100vh - 380px));
 }
 .file-breadcrumbs button:disabled {
   opacity: 1;
