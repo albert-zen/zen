@@ -53,7 +53,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm --workspace apps/zenx run check
+      - name: Check ZenX with bounded execution-order evidence
+        env:
+          ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
+        run: npm --workspace apps/zenx run check:observed
+      - name: Retain partial ZenX execution-order evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-test-execution-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-test-execution.ndjson
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-capability-smoke:
     name: ZenX packaged capability smoke
@@ -80,7 +91,23 @@ jobs:
         run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
       - name: Exercise shell lifecycle observations on macOS
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
-      - run: npm --workspace apps/zenx run smoke:capabilities
+      - name: Exercise macOS login-shell PATH and first tool execution
+        run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
+      - name: Verify native launch observer and hung-main cleanup contracts
+        timeout-minutes: 2
+        run: node --import tsx --test --test-timeout=30000 apps/zenx/test/macos-launch-path-smoke.test.mjs apps/zenx/test/macos-launch-path-cleanup.test.mjs
+      - name: Exercise LaunchServices PATH and packaged capabilities from one build
+        env:
+          ZENX_LAUNCH_PATH_EVIDENCE: ${{ runner.temp }}/zenx-launch-path-evidence
+        run: node apps/zenx/scripts/smoke-macos-launch-path.mjs --capabilities
+      - name: Retain independent LaunchServices PATH evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-launch-path-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-launch-path-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
   zenx-windows-computer-smoke:
     name: ZenX Windows WinApp adapter smoke
@@ -160,10 +187,21 @@ jobs:
         run: |
           npm run build --workspace @zenx/plugin-sdk
           node --import tsx --test --test-name-pattern="publishes a complete|publishing retries|exhausted EPERM|non-EPERM publication|missing source|publish rejects|rollback failure|publish preserves backup|Windows publishes|concurrent packaging" apps/zenx/test/package-zenx-portable.test.mjs
+      - name: Validate the same-build Windows smoke guard assembly
+        run: node --import tsx --test --test-timeout=120000 apps/zenx/test/windows-smoke-guard-build.test.mjs
       - name: Package and diagnose Windows smoke publication
         env:
           ZENX_PACKAGE_DIAG: "1"
+          ZENX_NATIVE_GUARD_DIAGNOSTICS_DIR: ${{ runner.temp }}/zenx-native-guard-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
         run: npm --workspace apps/zenx run smoke:packaged -- --downstream "${{ runner.temp }}/zenx-winapp-downstream" --downstream-sha256 "${{ steps.build-downstream.outputs.provenance-sha256 }}"
+      - name: Retain only this run's sanitized native guard failure receipts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-native-guard-diagnostic-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-native-guard-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}/*.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Confirm packaged smoke left no shared build output
         shell: pwsh
         run: |
