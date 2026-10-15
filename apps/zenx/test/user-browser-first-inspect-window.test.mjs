@@ -245,23 +245,24 @@ test("first exact inspection borrows only original remaining time, including pri
       r.method === "Runtime.enable"
         ? 3_000
         : r.method === "Page.createIsolatedWorld"
-          ? 1_000
+          ? 3_000
           : r.method === "Page.getFrameTree"
             ? 500
             : 0,
   });
   const { result, request } = await start(f);
-  assert.equal(request.timer.ms, 4_500);
+  assert.equal(request.timer.ms, 2_500);
   assert.equal(request.timer.due, 10_100);
   assert.equal(f.client.testEpoch().setupDeadline, 10_100);
-  f.advance(3_728);
+  f.advance(1_728);
   f.complete(request);
   assert.deepEqual((await result).value, value);
   assert.equal(f.main().length, 1);
-  for (const r of f.sends.filter((r) =>
-    ["Page.getFrameTree", "Page.createIsolatedWorld"].includes(r.method),
-  ))
+  for (const r of f.sends.filter((r) => r.method === "Page.getFrameTree"))
     assert.equal(r.timer.ms, 2_000, r.method);
+  const world = f.sends.find((r) => r.method === "Page.createIsolatedWorld");
+  assert.equal(world.timer.ms, 6_000);
+  assert.equal(world.timer.due, 10_100);
   assert.equal(
     f.sends.find((r) => r.params.expression === "void 0").timer.ms,
     2_000,
@@ -294,6 +295,12 @@ test("cached attachment and concurrent first inspections can claim only once", a
   assert.equal(
     f.sends.filter((r) => r.method === "Target.attachToTarget").length,
     1,
+  );
+  assert.deepEqual(
+    f.sends
+      .filter((r) => r.method === "Page.createIsolatedWorld")
+      .map((r) => r.timer.ms),
+    [10_000, 2_000],
   );
   f.main().forEach(f.complete);
   await Promise.all([first, second]);
@@ -446,6 +453,8 @@ test("arbitrary evaluate, input snapshot, input dispatch and cleanup keep existi
           "Input.dispatchMouseEvent",
           "Input.dispatchKeyEvent",
           "Page.navigate",
+          "Page.createIsolatedWorld",
+          "Page.getFrameTree",
         ].includes(r.method),
       )
       .every((r) => r.timer.ms === 2_000),
@@ -618,3 +627,205 @@ test("ordinary evaluation protocol error keeps its existing classification witho
   );
   assert.equal(f.timers.size, 0);
 });
+
+async function startWorld(f, signal) {
+  const result = f.inspect(signal);
+  void result.catch(() => undefined);
+  await until(() =>
+    f.sends.some((r) => r.method === "Page.createIsolatedWorld"),
+  );
+  return {
+    result,
+    request: f.sends.find((r) => r.method === "Page.createIsolatedWorld"),
+  };
+}
+
+for (const elapsed of [10_000, 10_001]) {
+  for (const response of ["success", "error"]) {
+    test(`world ${response} reply at ${elapsed}ms cannot beat overdue original timer`, async () => {
+      const f = fixture({
+        hold: (r) => r.method === "Page.createIsolatedWorld",
+      });
+      const { result, request } = await startWorld(f);
+      assert.equal(request.timer.due, 10_100);
+      f.advance(elapsed);
+      if (response === "success") f.reply(request, { executionContextId: 42 });
+      else f.protocolError(request);
+      await assert.rejects(
+        result,
+        (error) =>
+          error instanceof UserBrowserCdpOutcomeUnknownError &&
+          /original attachment inspection deadline elapsed/.test(error.message),
+      );
+      assert.equal(f.main().length, 0);
+      assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+      assert.equal(f.timers.size, 0);
+    });
+  }
+}
+
+test("on-time world protocol rejection stays known despite late continuation", async () => {
+  const f = fixture({ hold: (r) => r.method === "Page.createIsolatedWorld" });
+  const { result, request } = await startWorld(f);
+  f.advance(9_999);
+  f.protocolError(request);
+  f.advance(2);
+  await assert.rejects(
+    result,
+    (error) =>
+      !(error instanceof UserBrowserCdpOutcomeUnknownError) &&
+      /Execution context was destroyed/.test(error.message),
+  );
+  assert.equal(f.main().length, 0);
+});
+
+test("setup and world leave less than ordinary budget without a fresh 2s fallback", async () => {
+  const f = fixture({
+    delay: (r) =>
+      r.method === "Page.enable"
+        ? 2_200
+        : r.method === "Runtime.enable"
+          ? 1_500
+          : r.method === "Page.createIsolatedWorld"
+            ? 5_000
+            : 0,
+  });
+  const { result, request } = await start(f);
+  const world = f.sends.find((r) => r.method === "Page.createIsolatedWorld");
+  assert.equal(world.timer.ms, 6_300);
+  assert.equal(world.timer.due, 10_100);
+  assert.equal(request.timer.ms, 1_300);
+  assert.equal(request.timer.due, 10_100);
+  f.complete(request);
+  await result;
+});
+
+for (const phase of ["initial-frame", "before-world", "after-world"]) {
+  test(`${phase} preflight exhausting claim prevents subsequent dispatch`, async () => {
+    let frames = 0;
+    const delayedFrame = {
+      "initial-frame": 1,
+      "before-world": 2,
+      "after-world": 3,
+    }[phase];
+    const f = fixture({
+      delay: (r) =>
+        r.method === "Page.getFrameTree" && ++frames === delayedFrame
+          ? 10_000
+          : 0,
+    });
+    await assert.rejects(
+      f.inspect(),
+      (error) =>
+        !(error instanceof UserBrowserCdpOutcomeUnknownError) &&
+        /deadline elapsed before dispatch/.test(error.message),
+    );
+    assert.equal(f.main().length, 0);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      phase === "after-world" ? 1 : 0,
+    );
+    assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+    const next = await start(f);
+    assert.equal(next.request.timer.ms, 2_000);
+    f.complete(next.request);
+    await next.result;
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").at(-1)
+        .timer.ms,
+      2_000,
+    );
+  });
+}
+
+for (const failure of ["timeout", "abort", "document"]) {
+  test(`world ${failure} consumes the one claim and never replays`, async () => {
+    let holdWorld = true;
+    const f = fixture({
+      hold: (r) => holdWorld && r.method === "Page.createIsolatedWorld",
+    });
+    const controller = new AbortController();
+    const { result, request } = await startWorld(f, controller.signal);
+    if (failure === "timeout") f.fire(request.timer);
+    if (failure === "abort") controller.abort(new Error("cancel world"));
+    if (failure === "document") {
+      f.event("Runtime.executionContextsCleared");
+      f.reply(request, { executionContextId: 42 });
+    }
+    await assert.rejects(
+      result,
+      failure === "document"
+        ? UserBrowserDocumentChangedBeforeDispatchError
+        : UserBrowserCdpOutcomeUnknownError,
+    );
+    assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+    assert.equal(f.main().length, 0);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      1,
+    );
+    if (failure !== "document") f.reply(request, { executionContextId: 42 });
+    holdWorld = false;
+    const next = await start(f);
+    assert.equal(next.request.timer.ms, 2_000);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").at(-1)
+        .timer.ms,
+      2_000,
+    );
+    f.complete(next.request);
+    await next.result;
+  });
+}
+
+for (const failure of ["abort", "document", "deadline"]) {
+  test(`world predispatch ${failure} rejects without sending or reclaiming`, async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    f.hook((event) => {
+      if (
+        event.kind !== "timer-armed" ||
+        event.method !== "Page.createIsolatedWorld"
+      )
+        return;
+      f.hook(undefined);
+      if (failure === "abort")
+        controller.abort(new Error("abort before world"));
+      if (failure === "document") f.event("Runtime.executionContextsCleared");
+      if (failure === "deadline") f.advance(10_001);
+    });
+    await assert.rejects(
+      f.inspect(controller.signal),
+      (error) =>
+        !(error instanceof UserBrowserCdpOutcomeUnknownError) &&
+        /abort before world|document changed|deadline elapsed before dispatch/.test(
+          error.message,
+        ),
+    );
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      0,
+    );
+    assert.equal(f.main().length, 0);
+    assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+    const next = await start(f);
+    assert.equal(next.request.timer.ms, 2_000);
+    f.complete(next.request);
+    await next.result;
+  });
+}
+
+for (const invalidation of ["context", "detach"]) {
+  test(`world ${invalidation} invalidation cannot publish through its claimed fence`, async () => {
+    const f = fixture({ hold: (r) => r.method === "Page.createIsolatedWorld" });
+    const { result, request } = await startWorld(f);
+    const oldEpoch = f.client.testEpoch();
+    if (invalidation === "context")
+      f.event("Runtime.executionContextDestroyed", { executionContextId: 42 });
+    else await f.client.detachTarget("target-1", owner);
+    f.reply(request, { executionContextId: 42 });
+    await assert.rejects(result, UserBrowserDocumentChangedBeforeDispatchError);
+    assert.equal(oldEpoch.firstInspectClaimed, true);
+    assert.equal(f.main().length, 0);
+  });
+}

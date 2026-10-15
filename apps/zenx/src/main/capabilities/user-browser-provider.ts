@@ -2474,10 +2474,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     onDispatched?: () => void,
   ): Promise<{ value: unknown; documentIdentity: string }> {
     throwIfAborted(signal);
-    const before = await this.#executionDocument(targetId, owner, signal);
-    // Claim synchronously, before any identity/abort/dispatch rejection. A failed
-    // attempt cannot lend this epoch's window to a retry or another document.
-    const inspectDeadline = this.#claimFirstInspectDeadline(before, expression);
+    const before = await this.#executionDocument(
+      targetId,
+      owner,
+      signal,
+      expression === browserInspectScript,
+    );
+    const inspectDeadline = before.inspectDeadline;
     if (
       expectedDocumentIdentity !== undefined &&
       before.identity !== expectedDocumentIdentity
@@ -3210,7 +3213,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const epoch = fence.attachmentEpoch;
     if (epoch.firstInspectClaimed) return undefined;
     epoch.firstInspectClaimed = true;
-    this.#assertDocumentFence(fence, true);
+    this.#assertDocumentFence(fence, false);
     // A first inspection made after initialization still has its ordinary 2s.
     // This policy only lends unused startup time; it never shortens that budget.
     return epoch.setupDeadline - performance.now() >
@@ -3296,10 +3299,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     targetId: string,
     owner: UserBrowserAttachmentOwner,
     signal?: AbortSignal,
+    firstInspect = false,
   ): Promise<
     ZenXUserBrowserDocumentExecutionFence & {
       identity: string;
       executionContextId: number;
+      inspectDeadline?: number;
     }
   > {
     const sessionId = await this.#attach(targetId, owner, signal);
@@ -3325,10 +3330,23 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       loaderId: "",
       url: "",
     };
+    // Claim before any asynchronous document preflight, so world failure,
+    // cancellation and invalidation all consume this epoch's one allowance.
+    const inspectDeadline = firstInspect
+      ? this.#claimFirstInspectDeadline(fence, browserInspectScript)
+      : undefined;
+    const assertInspectDeadline = () => {
+      if (inspectDeadline !== undefined && performance.now() >= inspectDeadline)
+        throw new Error(
+          "Attachment inspection deadline elapsed before dispatch",
+        );
+    };
+    assertInspectDeadline();
     const response = asRecord(
       await this.#send("Page.getFrameTree", {}, sessionId, signal),
     );
     this.#assertDocumentFence(fence, false);
+    assertInspectDeadline();
     const frame = asRecord(asRecord(response?.frameTree)?.frame);
     if (
       frame === undefined ||
@@ -3368,8 +3386,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       pendingIsolatedContexts: state.pendingIsolatedContexts,
       isolatedExecutionContextId: state.isolatedExecutionContextId,
     });
+    assertInspectDeadline();
     await this.#documentBarrier(fence, signal);
     this.#assertDocumentFence(fence, false);
+    assertInspectDeadline();
     const world = asRecord(
       await this.#send(
         "Page.createIsolatedWorld",
@@ -3380,8 +3400,23 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         },
         sessionId,
         signal,
+        USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
+        undefined,
+        undefined,
+        inspectDeadline === undefined
+          ? undefined
+          : () => this.#assertDocumentFence(fence, false),
+        undefined,
+        inspectDeadline,
       ),
     );
+    // A successful reply must not beat an overdue absolute timer. Unlike an
+    // expired preflight, this world command has already been dispatched.
+    if (inspectDeadline !== undefined && performance.now() >= inspectDeadline)
+      throw new UserBrowserCdpOutcomeUnknownError(
+        "Page.createIsolatedWorld",
+        "original attachment inspection deadline elapsed",
+      );
     this.#assertDocumentFence(fence, false);
     if (typeof world?.executionContextId !== "number") {
       throw new Error("User browser CDP execution context is invalid");
@@ -3434,7 +3469,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       settledContextState.invalidExecutionContextIds.clear();
     }
     this.#assertDocumentFence(fence, true);
+    assertInspectDeadline();
     return {
+      inspectDeadline,
       identity: this.#documentFenceIdentity({
         ...fence,
         executionContextId: world.executionContextId,
