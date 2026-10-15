@@ -446,6 +446,7 @@ ThreadView
 - Terminal 打开当前真实 Thread 的本机 Shell 会话管理首页，显示同一 ToolTaskManager 中 Agent 命令与人工交互终端的稳定 task ID、来源、cwd 和实际状态；不跨 Thread 聚合同目录进程，不建立第二套执行注册表。远端 Fleet 会话不映射成本机会话，不静默降级。
 - New terminal 是明确的人工执行操作，在 Thread 的 canonical cwd 创建真实 PTY；仅在既有 Full Access 且 Shell 未被拒绝时可用，归档或受限策略不被自动修改。启动本机交互 Shell 可能读取其正常 startup files。人工拥有输入，Agent 通过同一 Shell 系统的 shell_sessions / wait 观察，不向人工终端交错输入；Agent 取消等待不会终止人工终端。
 - 打开、隐藏、关闭 Terminal view 或返回会话列表都不停止进程。Stop process 是独立确认动作，显示请求取消、取消未确认或已停止的真实结果；进程树覆盖取决于平台，不猜测存活子进程。输出只作为不可信终端数据渲染，不解释为 HTML、权限或 Agent 指令。
+- Terminal 面板占满工作区 Tab 的可用宽高，标题由 Tab 提供，不再重复大标题。会话选择、状态、新建与停止集中在紧凑工具栏；cwd 单行截断，完整命令、来源与 ID 按需展开。终端自身使用剩余空间，随可见容器宽高重新 fit 并发送有界 PTY 尺寸；隐藏或零尺寸时不测量。输入归属和关闭不停止提示持续可见，详情展开、新建与停止确认不改变原来的会话生命周期。粗指针设备保留至少 44px 控件命中区域。普通失败会话用中性“已结束”展示，退出码与终端原始输出仍可查，超时、停止和观察未知继续显示具体事实。
 - 终端保留有界 scrollback，截断明确提示；隐藏时暂停观察，保留当前位置，Jump to latest 才恢复底部。人工终端由 Shell 退出、显式 Stop 或 Host 退出结束，不继承 Agent 命令的执行期限；现有 Agent deadline 与共享容量控制不变，不自动恢复进程。会话 ID 与详细资源限制位于按需详情，不占据主要列表；关闭面板会继续运行的提示保持可见。已完成会话短时保留只读；详情见 [Shell 运行时与安全边界](../../../docs/shared-shell.md)。
 - 当前范围不含新建/删除/重命名文件及异步 Inbox 回答回流。
 
