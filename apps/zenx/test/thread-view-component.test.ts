@@ -2977,7 +2977,7 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
       ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
       ["wait", "cancelled", "Cancelled"],
       ["wait", "timed_out", "Timed out"],
-      ["wait", "failed", "Failed"],
+      ["wait", "failed", "Ended"],
       ["wait", "completed", "Waited"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
@@ -3995,7 +3995,7 @@ test("singleton activity highlight follows actual receipt and turn lifetime", ()
   }
 });
 
-test("shell nonzero stays a visible warning separate from other tool failures", () => {
+test("tool results use neutral ended labels without failure or nonzero rollups", () => {
   const base = commandItem("shell-nonzero", "grep absent file");
   assert.equal(base.type, "commandExecution");
   if (base.type !== "commandExecution") return;
@@ -4018,26 +4018,23 @@ test("shell nonzero stays a visible warning separate from other tool failures", 
   );
   try {
     const doc = dom.window.document;
-    assert.match(
-      doc.querySelector(".trace-counts .trace-nonzero")?.textContent ?? "",
-      /1 nonzero Shell result/,
-    );
-    assert.match(
-      doc.querySelector(".trace-counts .trace-failed")?.textContent ?? "",
-      /1 tool failed/,
+    assert.equal(doc.querySelector(".trace-nonzero, .trace-failed"), null);
+    assert.doesNotMatch(
+      doc.querySelector(".trace-toggle")?.textContent ?? "",
+      /failed|nonzero/i,
     );
     const singleton = new JSDOM(
       renderTurns([turnWithItems("inProgress", [shell])]),
     );
     try {
       assert.match(
-        singleton.window.document.querySelector(".tool-status.shell-nonzero")
+        singleton.window.document.querySelector(".tool-status.ended")
           ?.textContent ?? "",
-        /Shell returned a nonzero status/,
+        /Ended/,
       );
       assert.equal(
         singleton.window.document.querySelector(
-          ".tool-status.shell-nonzero.completed",
+          ".tool-status.failed, .tool-status.shell-nonzero",
         ),
         null,
       );
@@ -4049,7 +4046,7 @@ test("shell nonzero stays a visible warning separate from other tool failures", 
   }
 });
 
-test("earlier shell rows inherit the terminal nonzero warning across separated trace groups", () => {
+test("earlier shell rows inherit neutral settlement across separated trace groups", () => {
   const base = commandItem("early-shell", "grep absent file");
   assert.equal(base.type, "commandExecution");
   if (base.type !== "commandExecution") return;
@@ -4090,8 +4087,8 @@ test("earlier shell rows inherit the terminal nonzero warning across separated t
     const marks = [...dom.window.document.querySelectorAll(".tool-status")];
     assert.equal(marks.length, 2);
     for (const mark of marks) {
-      assert.equal(mark.textContent, "Shell returned a nonzero status");
-      assert.equal(mark.className, "tool-status shell-nonzero");
+      assert.equal(mark.textContent, "Ended");
+      assert.equal(mark.className, "tool-status ended");
     }
   } finally {
     dom.window.close();
