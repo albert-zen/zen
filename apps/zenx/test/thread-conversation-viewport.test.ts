@@ -76,6 +76,7 @@ async function harness(
     ): Promise<void>;
     states: Map<string, ComposerState>;
     sent: { id: string; text: string }[];
+    recoveries: string[];
   }) => Promise<void>,
 ) {
   const previous = { window: globalThis.window, document: globalThis.document };
@@ -129,6 +130,7 @@ async function harness(
   const root = createRoot(document.getElementById("root")!);
   const states = new Map<string, ComposerState>();
   const sent: { id: string; text: string }[] = [];
+  const recoveries: string[] = [];
   const serverStatus = { type: "ready" as const, reconnected: false };
   let shown: string[] = [];
   function draw() {
@@ -140,6 +142,10 @@ async function harness(
           React.createElement(ThreadConversationViewport, {
             key: index,
             threadId: id,
+            onRecovery: (threadId, snapshot) => {
+              assert.equal(snapshot.threadId, threadId);
+              recoveries.push(threadId);
+            },
             composer: states.get(id) ?? emptyComposerState(),
             readComposer: () => states.get(id) ?? emptyComposerState(),
             updateComposer: (change) => {
@@ -169,6 +175,7 @@ async function harness(
     await run({
       states,
       sent,
+      recoveries,
       render: async (ids) => {
         shown = ids;
         await act(async () => draw());
@@ -213,6 +220,11 @@ test("late resume from a previously selected child cannot replace the current vi
       "draft b",
     );
     await h.resolve("a");
+    assert.deepEqual(
+      h.recoveries,
+      ["b"],
+      "only the current PAW resume reaches the App observer",
+    );
     assert.equal(document.querySelector("textarea")?.id, "side-composer-b");
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("textarea")?.value,
