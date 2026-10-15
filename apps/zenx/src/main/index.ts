@@ -1983,6 +1983,15 @@ function installSettingsIpc(
     },
   );
   ipcMain.handle(
+    ipcChannels.subagentThreadSidebarVisibleSet,
+    async (_event, threadId: unknown, visible: unknown) => {
+      if (typeof threadId !== "string" || typeof visible !== "boolean")
+        throw new Error("Invalid Subagent Thread Sidebar visibility");
+      await settings.setSubagentThreadSidebarVisible(threadId, visible);
+      return await settings.publicSettings();
+    },
+  );
+  ipcMain.handle(
     ipcChannels.sidebarOrderSet,
     async (_event, order: unknown) => {
       await settings.setSidebarOrder(order as ZenXSidebarOrder);

@@ -17,11 +17,23 @@ $report = @{ environment = @{ os = [Environment]::OSVersion.VersionString; runne
 $oldEnvironment = @{}
 
 function Write-Json($Path, $Value) { [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 12), $utf8) }
+function Open-SharedTextReader($Path) {
+  # ReadAllText defaults to FileShare.Read and can block the live Node append
+  # writer on Windows. Observation must permit writes without retrying them.
+  $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+  try { return [IO.StreamReader]::new($stream) }
+  catch { $stream.Dispose(); throw }
+}
+function Read-SharedText($Path) {
+  $reader = Open-SharedTextReader $Path
+  try { return $reader.ReadToEnd() }
+  finally { $reader.Dispose() }
+}
 function Read-Events($Directory, $ProcessId) {
   $file = Join-Path $Directory "events-$ProcessId.jsonl"
   if (!(Test-Path -LiteralPath $file)) { return @() }
   # Ignore only an incomplete final append; every completed line must parse.
-  $raw = [IO.File]::ReadAllText($file)
+  $raw = Read-SharedText $file
   $lines = $raw.Split("`n")
   for ($i = 0; $i -lt $lines.Length - 1; $i++) {
     if ($lines[$i].Trim()) { $lines[$i] | ConvertFrom-Json }
@@ -61,7 +73,7 @@ function Write-FixtureDiagnostics($Directory, $Process) {
     try {
       $file = Join-Path $Directory $name
       if (!(Test-Path -LiteralPath $file -PathType Leaf)) { continue }
-      $text = [IO.File]::ReadAllText($file)
+      $text = Read-SharedText $file
       if ($text.Length -gt 32768) { $text = "[last 32768 characters]`n" + $text.Substring($text.Length - 32768) }
       Write-Host "--- Startup failure diagnostics: $name"
       Write-Host $text

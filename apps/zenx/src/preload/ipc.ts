@@ -61,6 +61,8 @@ export const ipcChannels = {
   workspaceDefault: "zenx:settings:workspace-default",
   workspaceUse: "zenx:settings:workspace-use",
   pinnedThreadsSet: "zenx:settings:pinned-threads-set",
+  subagentThreadSidebarVisibleSet:
+    "zenx:settings:subagent-thread-sidebar-visible-set",
   sidebarOrderSet: "zenx:settings:sidebar-order-set",
   directorySnapshot: "zenx:directory:snapshot",
   directoryList: "zenx:directory:list",

@@ -137,6 +137,7 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
         threadId: id,
         text: "test from Android client",
       });
+      const priorTurnsDeadline = Date.now() + 3000;
       assert.equal(sent.accepted, true);
       assert.ok(sent.turnId);
       const liveSources: any[] = [];
@@ -246,6 +247,46 @@ test("Android client transport pairs over trusted TLS, shares Host authority wit
       const projected: any[] = [];
       mobile.subscribe("isolated-test", "w", (event) => projected.push(event));
       await mobile.read("isolated-test", "w", id);
+      // A source snapshot proves delivery, not that its Turn has finished.
+      const priorItems = (await host.readThread(id)).items;
+      const priorTurnIds = new Set<string>([sent.turnId]);
+      for (const source of ["room", "trigger"] as const) {
+        const message = priorItems.find(
+          (item) =>
+            item.type === "host_message" &&
+            item.clientId === `android-${source}-wake`,
+        );
+        assert.ok(message?.type === "host_message");
+        priorTurnIds.add(message.turnId);
+      }
+      while (true) {
+        const items = (await host.readThread(id)).items;
+        const failed = items.find(
+          (item) =>
+            item.turnId !== undefined &&
+            priorTurnIds.has(item.turnId) &&
+            (item.type === "failure" ||
+              item.type === "turn_aborted" ||
+              (item.type === "turn_completed" && item.status !== "completed")),
+        );
+        assert.equal(failed, undefined, JSON.stringify(failed));
+        if (
+          [...priorTurnIds].every((turnId) =>
+            items.some(
+              (item) =>
+                item.type === "turn_completed" &&
+                item.turnId === turnId &&
+                item.status === "completed",
+            ),
+          )
+        )
+          break;
+        assert.ok(
+          Date.now() < priorTurnsDeadline,
+          `Prior Turns did not complete within 3000ms: ${[...priorTurnIds].join(", ")}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       workspaceAllowed = false;
       await (
         await host.startTurn(id, "private-during-scope-loss")

@@ -36,6 +36,12 @@ export const SubagentCreationModelsContext = createContext<{
   error: string | null;
 }>({ models: [], error: null });
 
+/** Trusted shell preference only; plugin commands and canonical Threads stay unchanged. */
+export const ChildThreadSidebarContext = createContext<{
+  visibleSubagentThreadIds: readonly string[];
+  setVisible(threadId: string, visible: boolean): Promise<void>;
+} | null>(null);
+
 type RelatedThread = NativeThreadSummary & { parentThreadId?: string };
 
 export function registerSubagentsUi(registry: PluginUiRegistry): void {
@@ -399,6 +405,72 @@ function SubagentsSurface({ sdk }: PluginUiSurfaceProps) {
   return <SubagentsPanel sdk={sdk} />;
 }
 
+function SubagentSidebarVisibility({
+  thread,
+}: {
+  thread: NativeThreadSummary;
+}) {
+  useTranslation("shell");
+  const sidebar = useContext(ChildThreadSidebarContext);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inflight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  if (sidebar === null) return null;
+  const visible = sidebar.visibleSubagentThreadIds.includes(thread.threadId);
+  const change = async () => {
+    if (inflight.current) return;
+    inflight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await sidebar.setVisible(thread.threadId, !visible);
+    } catch (cause) {
+      if (mounted.current) setError(message(cause));
+    } finally {
+      inflight.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  };
+  return (
+    <div className="subagent-sidebar-control">
+      <button
+        type="button"
+        role="switch"
+        className="subagent-sidebar-visibility"
+        aria-checked={visible}
+        aria-label={i18n.t("shell:showSubagentInSidebar", {
+          title: threadTitle(thread),
+        })}
+        title={i18n.t(
+          visible ? "shell:hideFromSidebar" : "shell:showInSidebar",
+        )}
+        aria-busy={busy}
+        // Keep keyboard focus while saving; the synchronous inflight lock
+        // rejects repeated pointer and keyboard activation without disabling DOM focus.
+        aria-disabled={busy}
+        onClick={() => void change()}
+      >
+        <Icon name="panel-left" />
+        <span>
+          {i18n.t(visible ? "shell:sidebarShown" : "shell:sidebarHidden")}
+        </span>
+      </button>
+      {error ? (
+        <p className="subagent-sidebar-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
   useTranslation("panels");
   const { parent, all, error, refresh } = useRelatedThreads(sdk);
@@ -418,27 +490,32 @@ function SubagentsPanel({ sdk }: PluginUiSurfaceProps) {
       <ul className="subagent-tree">
         {children.map((child) => (
           <li key={child.threadId}>
-            <button
-              type="button"
-              className="subagent-tree-row"
-              onClick={() =>
-                sdk.navigation.navigate(
-                  `/threads/${encodeURIComponent(child.threadId)}?view=panel`,
-                )
-              }
-            >
-              <Icon name="users" />
-              <span className="subagent-tree-title">{threadTitle(child)}</span>
-              <span className="subagent-tree-status">
-                {child.archived
-                  ? i18n.t("panels:archivedStatus")
-                  : child.status === "active"
-                    ? i18n.t("shell:working")
-                    : child.status === "systemError"
-                      ? i18n.t("panels:unavailable")
-                      : i18n.t("panels:idleStatus")}
-              </span>
-            </button>
+            <div className="subagent-tree-entry">
+              <button
+                type="button"
+                className="subagent-tree-row"
+                onClick={() =>
+                  sdk.navigation.navigate(
+                    `/threads/${encodeURIComponent(child.threadId)}?view=panel`,
+                  )
+                }
+              >
+                <Icon name="users" />
+                <span className="subagent-tree-title">
+                  {threadTitle(child)}
+                </span>
+                <span className="subagent-tree-status">
+                  {child.archived
+                    ? i18n.t("panels:archivedStatus")
+                    : child.status === "active"
+                      ? i18n.t("shell:working")
+                      : child.status === "systemError"
+                        ? i18n.t("panels:unavailable")
+                        : i18n.t("panels:idleStatus")}
+                </span>
+              </button>
+              <SubagentSidebarVisibility thread={child} />
+            </div>
             {visited.size < 32
               ? render(child.threadId, new Set([...visited, child.threadId]))
               : null}

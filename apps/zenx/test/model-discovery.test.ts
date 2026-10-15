@@ -656,6 +656,7 @@ test("all known Provider presets create with profile-scoped keys and discover Un
       lastUsedWorkspace: null,
       approvalPolicy: "never",
       pinnedThreadIds: [],
+      visibleSubagentThreadIds: [],
       sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     });
     const service = new ZenXSettingsService({
@@ -1135,6 +1136,7 @@ function subscriptionProfile(): ZenXHostProfile {
     lastUsedWorkspace: null,
     approvalPolicy: "never",
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   };
 }
@@ -1167,6 +1169,7 @@ function compatibleProfile(
     lastUsedWorkspace: null,
     approvalPolicy: "never",
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   };
 }

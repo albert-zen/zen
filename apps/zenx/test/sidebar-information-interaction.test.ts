@@ -527,9 +527,17 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
       typeof Sidebar
     >["threads"];
     await render();
+    assert.equal(
+      document.querySelector('[data-thread-id="child"]'),
+      null,
+      "pinning does not change a hidden child's sidebar visibility",
+    );
+    assert.ok(unread.has("child"), "pinning preserves the hidden unseen end");
+    props.visibleSubagentThreadIds = ["child"];
+    await render();
     assert.ok(
       dot("child"),
-      "pinning a hidden child reveals its original unseen end",
+      "explicitly showing the child reveals its original unseen end",
     );
     assert.ok(dot("b"));
   } finally {

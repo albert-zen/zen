@@ -99,6 +99,8 @@ export interface ZenXHostProfile {
   /** Omitted means the built-in title prompt. */
   titlePrompt?: string;
   pinnedThreadIds: string[];
+  /** Explicit Sidebar visibility for child Threads, independent of Pins. */
+  visibleSubagentThreadIds: string[];
   sidebarOrder: ZenXSidebarOrder;
 }
 
@@ -466,7 +468,14 @@ export function validateHostProfile(
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
     ...(workflowCommands.length === 0 ? {} : { workflowCommands }),
     ...(titlePrompt === undefined ? {} : { titlePrompt }),
-    pinnedThreadIds: normalizePinnedThreadIds(value.pinnedThreadIds),
+    pinnedThreadIds: normalizeThreadPreferenceIds(
+      value.pinnedThreadIds,
+      "pinned Thread",
+    ),
+    visibleSubagentThreadIds: normalizeThreadPreferenceIds(
+      value.visibleSubagentThreadIds,
+      "visible Subagent Thread",
+    ),
     sidebarOrder: normalizeSidebarOrder(value.sidebarOrder),
   };
 }
@@ -1089,18 +1098,18 @@ function normalizeOrderIdentifier(
   return identifier;
 }
 
-function normalizePinnedThreadIds(value: unknown): string[] {
+function normalizeThreadPreferenceIds(value: unknown, label: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 4_096)
-    throw new Error("ZenX pinned Thread list is invalid");
+    throw new Error(`ZenX ${label} list is invalid`);
   return [
     ...new Set(
       value.map((entry) => {
         if (typeof entry !== "string")
-          throw new Error("ZenX pinned Thread id is invalid");
+          throw new Error(`ZenX ${label} id is invalid`);
         const threadId = entry.trim();
         if (threadId.length === 0 || threadId.length > 512)
-          throw new Error("ZenX pinned Thread id is invalid");
+          throw new Error(`ZenX ${label} id is invalid`);
         return threadId;
       }),
     ),

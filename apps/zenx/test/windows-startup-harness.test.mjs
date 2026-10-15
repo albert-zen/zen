@@ -103,3 +103,45 @@ test(
     assert.match(result, /Startup harness helper checks passed/u);
   },
 );
+
+test("startup event readers share live writes and retain strict complete-line parsing", () => {
+  const harness = readFileSync(
+    new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.match(harness, /\[IO\.FileShare\]::ReadWrite/u);
+  assert.doesNotMatch(harness, /\[IO\.File\]::ReadAllText/u);
+  assert.match(harness, /finally \{ \$reader\.Dispose\(\) \}/u);
+  assert.match(harness, /\$raw = Read-SharedText \$file/u);
+  assert.match(harness, /\$text = Read-SharedText \$file/u);
+  assert.match(harness, /\$i -lt \$lines\.Length - 1/u);
+  assert.match(harness, /\$lines\[\$i\] \| ConvertFrom-Json/u);
+});
+
+test(
+  "Windows event reader permits real Node appends without accepting malformed complete lines",
+  { skip: process.platform !== "win32" ? "Windows file-sharing check" : false },
+  () => {
+    const result = execFileSync(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-File",
+        fileURLToPath(
+          new URL(
+            "./fixtures/startup-acceptance/check-event-reader.ps1",
+            import.meta.url,
+          ),
+        ),
+        "-HarnessPath",
+        fileURLToPath(
+          new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
+        ),
+        "-NodeExecutable",
+        process.execPath,
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    );
+    assert.match(result, /Startup event reader sharing checks passed/u);
+  },
+);

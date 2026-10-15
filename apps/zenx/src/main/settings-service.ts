@@ -1733,6 +1733,37 @@ export class ZenXSettingsService {
     });
   }
 
+  async setSubagentThreadSidebarVisible(
+    threadId: string,
+    visible: boolean,
+  ): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      if (
+        typeof threadId !== "string" ||
+        threadId.trim().length === 0 ||
+        threadId.trim().length > 512 ||
+        typeof visible !== "boolean"
+      )
+        throw new Error("Invalid Subagent Thread Sidebar visibility");
+      const id = threadId.trim();
+      const current = this.#requireProfile();
+      if (current.visibleSubagentThreadIds.includes(id) === visible) return;
+      const next = validateHostProfile(
+        {
+          ...current,
+          visibleSubagentThreadIds: visible
+            ? [...current.visibleSubagentThreadIds, id]
+            : current.visibleSubagentThreadIds.filter(
+                (candidate) => candidate !== id,
+              ),
+        },
+        this.#projectPlatform,
+      );
+      await this.#persistProfile(next);
+      this.#profile = next;
+    });
+  }
+
   async setSidebarOrder(order: ZenXSidebarOrder): Promise<void> {
     await this.#queueProfileOperation(async () => {
       const current = this.#requireProfile();
@@ -2420,6 +2451,7 @@ function profileFromLegacy(
       ? {}
       : { contextCompaction: config.contextCompaction }),
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   });
 }

@@ -42,6 +42,18 @@ export const EMPTY_SIDEBAR_ORDER: ZenXSidebarOrder = {
   threadIdsByProject: {},
 };
 
+/** Child visibility is a separate Host-profile preference, never inferred from Pin. */
+export function deriveSidebarThreads(
+  threads: readonly NativeThreadSummary[],
+  visibleSubagentThreadIds: readonly string[],
+): NativeThreadSummary[] {
+  const visible = new Set(visibleSubagentThreadIds);
+  return threads.filter(
+    (thread) =>
+      thread.parentThreadId === undefined || visible.has(thread.threadId),
+  );
+}
+
 export function derivePinnedThreads(
   threads: readonly NativeThreadSummary[],
   pinnedThreadIds: readonly string[],
