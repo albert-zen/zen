@@ -659,3 +659,7 @@ Triggers use the existing clock artwork throughout navigation, workspace tabs an
 ### 2026-10-15: Side chat creation settings
 
 The Subagents panel keeps one-click inherited side-chat creation and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Creation still starts no Turn. The workspace launcher plus remains the inherited one-click action.
+
+### 2026-10-15: Machine picker and generation throughput
+
+The Run on machine picker has room for device names independently of its compact trigger and remains within the viewport. Final-message hover shows output tokens per second for that completed Turn; context usage shows the weighted session rate over completed Turns with matched usage and exact canonical millisecond duration. Idle time between Turns is excluded, while tool and waiting time within each Turn remain included. This is end-to-end Turn throughput, not Provider decode speed. Missing telemetry or duration is Unknown.
