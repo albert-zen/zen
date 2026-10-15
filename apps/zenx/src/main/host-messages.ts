@@ -172,12 +172,14 @@ export type HostEvent =
   | {
       type: "fleet/room-request";
       requestId: string;
-      operation: "list" | "read" | "post";
+      operation: "list" | "read" | "post" | "trigger";
       params: {
         workspaceId: string;
         workspaceCwd: string;
         deviceId: string;
         roomId?: string;
+        triggerId?: string;
+        threadId?: string;
         text?: string;
         clientId?: string;
       };
@@ -454,7 +456,7 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     const params = fleet.params as Record<string, unknown> | undefined;
     return (
       typeof fleet.requestId === "string" &&
-      ["list", "read", "post"].includes(fleet.operation as string) &&
+      ["list", "read", "post", "trigger"].includes(fleet.operation as string) &&
       !!params &&
       typeof params === "object" &&
       !Array.isArray(params) &&
@@ -462,6 +464,9 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
       typeof params.workspaceCwd === "string" &&
       typeof params.deviceId === "string" &&
       (params.roomId === undefined || typeof params.roomId === "string") &&
+      (params.triggerId === undefined ||
+        typeof params.triggerId === "string") &&
+      (params.threadId === undefined || typeof params.threadId === "string") &&
       (params.text === undefined || typeof params.text === "string") &&
       (params.clientId === undefined || typeof params.clientId === "string")
     );

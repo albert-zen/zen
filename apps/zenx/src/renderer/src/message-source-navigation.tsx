@@ -11,7 +11,13 @@ import { Icon } from "./icons.js";
 
 /** Canonical provenance, never a route or identity parsed from message text. */
 export type MessageSourceTarget =
-  | { kind: "thread"; id: string; deviceId?: string }
+  | {
+      kind: "thread";
+      id: string;
+      deviceId?: string;
+      itemId?: string;
+      returnBound?: boolean;
+    }
   | { kind: "trigger"; id: string };
 export type MessageSourceNavigator = (
   target: MessageSourceTarget,
@@ -61,7 +67,9 @@ export function MessageSourceLink({
     setError(null);
   }, [identity]);
   const reason =
-    target.kind === "thread" && target.deviceId !== undefined
+    target.kind === "thread" &&
+    target.deviceId !== undefined &&
+    !target.returnBound
       ? t("sourceRemoteUnavailable")
       : !target.id
         ? t("sourceTargetMissing")

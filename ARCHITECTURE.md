@@ -1,6 +1,8 @@
 # ARCHITECTURE
 
-- **Message source navigation** — Renderer-only source intents use canonical Thread sender / Host Trigger IDs and existing App routes; local Thread reads validate exact identity and availability before navigation, while unverified Fleet return routes fail closed and Trigger routes select only the exact current Host definition. No message text, display name, new execution or model-provenance rewrite participates.
+- **Fleet message return binding** — A receiver-owned, nonsecret configuration binds an already authenticated inbound grant and exact source Host/workspace to an already configured outbound HTTPS device/key; canonical messages retain that receipt, and source read/reply revalidates the current binding, both existing grants and exact Thread without creating credentials, granting authority or falling back locally. Each operation carries an ephemeral local authorization fence over configuration/grant/credential file generations, Host epoch and workspace generation through every await and the final native socket write; no durable lease or new permission is created.
+
+- **Message source navigation** — Source intents use canonical Thread sender / Host Trigger IDs; local reads validate exact identity before existing App navigation, while verified Fleet receipts open an independent read-only, cursor-paged source view on their pinned Host/workspace. Remote Trigger reads disclose only that Host’s exact current public definition, excluding program commands/environment values. Unverified routes fail closed; names/message text never select targets, and navigation creates no execution or human authority.
 
 - **Imported tool replay** — Canonical calls preserve inert source namespace/input-format provenance; model adapters create deterministic, past-only wire aliases and matched call/result IDs without registering tool definitions or granting execution authority.
 

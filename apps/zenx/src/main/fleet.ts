@@ -1,3 +1,4 @@
+import { parseRemoteMessageSourceBindings } from "../../../../src/protocol/native/remote-wire.js";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
@@ -75,12 +76,19 @@ export interface FleetConfig {
   devices: FleetDevice[];
   hosting?: FleetHostingConfig;
   revision?: number;
+  messageSources?: import("../../../../src/protocol/native/remote-host.js").RemoteMessageSourceBinding[];
+}
+/** Ephemeral local-only receipt authority; never serialized to a peer or model. */
+export interface FleetSourceFence {
+  revalidate(): Promise<unknown>;
+  assertUnchanged(): void;
 }
 export interface NativeFleetPort {
   invoke(
     device: NativeFleetDevice,
     request: FleetRequest,
     signal: AbortSignal,
+    sourceFence?: FleetSourceFence,
   ): Promise<unknown>;
 }
 export interface FleetRequest {
@@ -90,12 +98,17 @@ export interface FleetRequest {
   callId: string;
   canonicalToolCallId?: string;
   threadId?: string;
+  source?: {
+    origin: import("../../../../src/item.js").ThreadMessageOrigin;
+    threadName?: string;
+  };
 }
 export const fleetReadTools = new Set([
   "zenx_projects_list",
   "zenx_models_list",
   "zenx_threads_list",
   "zenx_threads_read",
+  "zenx_fleet_trigger_read",
   "zenx_threads_status",
   "zenx_self_control_threads_wait",
 ]);
@@ -160,7 +173,13 @@ const fleetTlsPath = (value: unknown, enabled: boolean): value is string =>
 export function parseFleetConfig(value: unknown): FleetConfig {
   if (
     !fleetRecord(value) ||
-    !fleetKeys(value, ["version", "devices", "hosting", "revision"]) ||
+    !fleetKeys(value, [
+      "version",
+      "devices",
+      "hosting",
+      "revision",
+      "messageSources",
+    ]) ||
     value.version !== 1 ||
     !Array.isArray(value.devices) ||
     value.devices.length > 64 ||
@@ -282,6 +301,8 @@ export function parseFleetConfig(value: unknown): FleetConfig {
         );
     }
   }
+  if (value.messageSources !== undefined)
+    parseRemoteMessageSourceBindings(value.messageSources);
   const result = {
     ...structuredClone(value),
     devices,
@@ -306,6 +327,9 @@ export class FleetRouter {
     readonly config: () => Promise<FleetConfig>,
     readonly transport: FleetTransport = sshFleetTransport,
     readonly native?: NativeFleetPort,
+    readonly messageSource?: (
+      invocation: ToolInvocation,
+    ) => Promise<FleetRequest["source"]>,
   ) {}
   async devices(snapshot?: FleetConfig): Promise<FleetDeviceDiscovery[]> {
     const config = snapshot ?? (await this.config());
@@ -344,6 +368,7 @@ export class FleetRouter {
     deviceId: string,
     invocation: ToolInvocation,
     expectedDeviceKey?: string,
+    sourceFence?: FleetSourceFence,
   ): Promise<unknown> {
     invocation.signal.throwIfAborted();
     const device = (await this.config()).devices.find(
@@ -353,6 +378,13 @@ export class FleetRouter {
     if (expectedDeviceKey && fleetDeviceKey(device) !== expectedDeviceKey)
       throw new Error(
         "Fleet machine changed before request admission; no operation was sent or locally substituted. Reopen the target catalog.",
+      );
+    if (
+      invocation.name === "zenx_fleet_trigger_read" &&
+      device.transport !== "https"
+    )
+      throw new Error(
+        "Remote Trigger sources require the native HTTPS Host; no SSH or local fallback is supported",
       );
     if (invocation.name === "zenx_fleet_shell") {
       if (device.transport !== "https")
@@ -398,12 +430,35 @@ export class FleetRouter {
         ? { threadId: invocation.threadId }
         : {}),
     };
+    if (
+      request.name === "zenx_threads_send" &&
+      request.threadId &&
+      request.canonicalToolCallId &&
+      this.messageSource
+    ) {
+      const source = await this.messageSource(invocation);
+      if (source) request.source = source;
+    }
     if (request.name === "zenx_threads_send" && args.messageType === undefined)
       request.arguments.messageType = "guidance";
+    const current = (await this.config()).devices.find(
+      (entry) => entry.id === device.id,
+    );
+    if (!current || fleetDeviceKey(current) !== fleetDeviceKey(device))
+      throw new Error(
+        "Fleet machine changed before dispatch; no operation was sent or locally substituted",
+      );
+    await sourceFence?.revalidate();
+    sourceFence?.assertUnchanged();
     invocation.signal.throwIfAborted();
     const result =
       device.transport === "https"
-        ? await this.#native().invoke(device, request, invocation.signal)
+        ? await this.#native().invoke(
+            device,
+            request,
+            invocation.signal,
+            sourceFence,
+          )
         : await this.transport(device, request, invocation.signal);
     return { device: deviceId, result };
   }

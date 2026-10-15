@@ -91,3 +91,63 @@ test("Fleet Rooms hides other workspaces and binds idempotent operation to devic
     /stale/,
   );
 });
+
+test("remote Trigger settings are exact, workspace-scoped, read-only and exclude program secrets", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "fleet-trigger-source-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const cwd = await realpath(dir);
+  let available = true;
+  let archived = false;
+  let trigger: any = {
+    id: "source-trigger",
+    threadId: "owner-thread",
+    kind: "signal",
+    label: "Same label",
+    prompt: "Actual source settings",
+    active: true,
+    signal: { name: "go" },
+    program: {
+      action: { command: "PRIVATE_COMMAND", env: { SECRET: "PRIVATE_VALUE" } },
+    },
+  };
+  const service = {
+    triggersAvailable: () => available,
+    snapshot: () => ({
+      triggers: trigger
+        ? [trigger, { ...trigger, id: "same-label-other" }]
+        : [],
+    }),
+  } as unknown as ZenXBundledAutomationPluginService;
+  const manager = {
+    request: async () => ({ thread: { cwd, archived } }),
+  } as unknown as AppServerManager;
+  const handler = createFleetRoomsHandler(manager, () => service);
+  const request = {
+    workspaceId: "workspace",
+    workspaceCwd: cwd,
+    deviceId: "inbound",
+    triggerId: "source-trigger",
+    threadId: "owner-thread",
+  };
+  const result: any = await handler("trigger", request);
+  assert.equal(result.trigger.id, "source-trigger");
+  assert.equal(result.trigger.prompt, "Actual source settings");
+  assert.equal(result.trigger.programConfigured, true);
+  assert.ok(!JSON.stringify(result).includes("PRIVATE"));
+  await assert.rejects(
+    handler("trigger", { ...request, threadId: "same-id-local-thread" }),
+    /exact Trigger/,
+  );
+  await assert.rejects(
+    handler("trigger", { ...request, workspaceCwd: "/wrong" }),
+    /authorized workspace/,
+  );
+  archived = true;
+  await assert.rejects(handler("trigger", request), /authorized workspace/);
+  archived = false;
+  available = false;
+  await assert.rejects(handler("trigger", request), /unavailable/);
+  available = true;
+  trigger = null;
+  await assert.rejects(handler("trigger", request), /exact Trigger/);
+});

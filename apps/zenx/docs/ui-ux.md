@@ -645,3 +645,7 @@ Items remains the default debugger tab in canonical order. Tool call arguments,
 tool result content and tool images start collapsed and mount only after an
 explicit disclosure. Exact Item JSON and the existing full-content controls stay
 available; debug mode does not add conversation copy/fork actions.
+
+### Verified remote message sources
+
+Remote source actions read the canonical receiving message's explicit return binding and open a read-only, bounded source dialog naming the exact Host, workspace and Thread. They preserve local main/side selection and Composer drafts. Nested source navigation stays on that pinned Host/workspace; unbound cross-host sources remain unavailable. Trigger source settings are read on the viewed Host by exact Trigger and owner Thread IDs, never the local Trigger editor. Removed, revoked, changed and offline sources keep explicit errors; close, newer navigation and newer source actions retire old results. The dialog keeps keyboard/focus handling and reachable 44px controls at narrow widths.

@@ -653,6 +653,48 @@ test("canonical sender validation and queue projection preserve origin boundarie
     deliveryMode: "batch-next" as const,
     messageType: "guidance" as const,
   };
+  const origin = { hostId: "source-host", workspaceId: "source-workspace" };
+  const returnRoute = {
+    ...origin,
+    receiverHostId: "receiver-host",
+    deviceId: "outbound-peer",
+    deviceKey: "a".repeat(64),
+  };
+  const remote = {
+    ...queued,
+    sender: {
+      ...queued.sender,
+      turnId: undefined,
+      deviceId: "inbound-peer",
+      origin,
+      returnRoute,
+    },
+  };
+  assert.deepEqual(decodeCanonicalItem(remote), remote);
+  assert.throws(
+    () =>
+      decodeCanonicalItem({ ...queued, sender: { ...queued.sender, origin } }),
+    /Only remote/,
+  );
+  assert.throws(
+    () =>
+      decodeCanonicalItem({
+        ...remote,
+        sender: {
+          ...remote.sender,
+          returnRoute: { ...returnRoute, workspaceId: "other-workspace" },
+        },
+      }),
+    /must match/,
+  );
+  assert.throws(
+    () =>
+      decodeCanonicalItem({
+        ...remote,
+        sender: { ...remote.sender, origin: undefined },
+      }),
+    /origin/,
+  );
   const cancel = {
     type: "user_message_queue_cancelled" as const,
     id: "cancel",
