@@ -1,0 +1,48 @@
+{
+  "captureHead": "5d4a94273d2a357f7c27dbb72c75f5a485f5a4aa",
+  "captureTree": "e67db37cdd3f9d25f10499395e10fd3b1917305c",
+  "viewport": {
+    "width": 390,
+    "height": 680
+  },
+  "fixture": "External responsive wrapper, no narrow query. Production App synthetic welcome, no Thread selected; data ready for minutes.",
+  "interaction": "One CUA locator click, then later one native cloud desktop click at the same screenshot-derived location. No forced click or injected events. Enter separately succeeds.",
+  "button": {
+    "ariaLabel": "Open sidebar",
+    "rect": {
+      "x": 8,
+      "y": 52,
+      "width": 44,
+      "height": 44
+    },
+    "css": {
+      "display": "grid",
+      "visibility": "visible",
+      "opacity": "1"
+    }
+  },
+  "readonlyHitTest": {
+    "point": {
+      "x": 30,
+      "y": 74
+    },
+    "tag": "DIV",
+    "class": "window-titlebar-drag",
+    "closestButton": null
+  },
+  "pointerFinal": {
+    "shellClass": "app-shell",
+    "sidebarRect": {
+      "x": -291.72,
+      "right": -5.72,
+      "width": 286
+    },
+    "ariaHidden": null,
+    "inert": false
+  },
+  "keyboardFinal": {
+    "shellClass": "app-shell sidebar-open",
+    "sidebarAX": "Projects, ordinary pinned Thread, B and Workspace planning visible"
+  },
+  "interpretation": "Observed hit-test obstruction. Did not observe sidebar opening then closing. Root cause and regression scope to be investigated separately; do not attribute to per-subagent visibility without evidence."
+}
