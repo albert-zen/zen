@@ -496,7 +496,7 @@ Creating PAW defaults to a new idle working Thread in a configured Project, with
 
 The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Triggers and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
 
-Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
+Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. The PAW Overview displays its exact working Thread title with inline rename through the existing Host title authority; this never renames the PAW or its speaker. Direct working-Thread navigation retains title editing while the Thread-list projection catches up after successful recovery. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
 
 Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Triggers tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
 
@@ -589,7 +589,7 @@ Delivered and queued Thread messages expose a compact source action using the ca
 
 ### 2026-10-14: Opt-in Thread debug mode
 
-Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an unchecked-by-default option in the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode never enables Host request capture; that remains a separate explicit control with unchanged safety boundaries.
+Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an off-by-default switch in the last row of the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. The same panel stays open and anchored, with its toggle and keyboard focus in place so a second click exits debug mode. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode never enables Host request capture; that remains a separate explicit control with unchanged safety boundaries.
 
 ### 2026-10-14: Compact request inspection
 
@@ -613,3 +613,18 @@ preserves the exact retained page text and can scroll horizontally inside the
 code block. Identity, dispatch caveats, byte counts and source-attachment metadata
 are available on demand. Projection, truncation and redaction are independent
 visible flags, so simultaneous anomalies are never collapsed into one status.
+
+### 2026-10-15: Stable Thread menu editing and compact Items
+
+The Thread information title and Rename action edit the title inline in their
+existing panel. Metadata and action rows stay in place; no replacement popover or
+modal opens. Enter saves, Escape cancels only the edit, and successful save or
+cancel returns focus to the initiating title/action without closing the panel.
+Outside interaction or navigation dismisses the panel and retires its draft; a
+late save receipt cannot close a newer editor or reclaim focus moved elsewhere.
+Failures retain the draft and show an explicit local error.
+
+Items remains the default debugger tab in canonical order. Tool call arguments,
+tool result content and tool images start collapsed and mount only after an
+explicit disclosure. Exact Item JSON and the existing full-content controls stay
+available; debug mode does not add conversation copy/fork actions.

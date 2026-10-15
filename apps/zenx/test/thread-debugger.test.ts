@@ -162,6 +162,25 @@ test("tool results use inert shared fallback; opaque reasoning and hostile strin
       ),
     );
     assert.equal(document.querySelectorAll("script").length, 0);
+    assert.equal(document.querySelector(".tool-result-fallback"), null);
+    assert.equal(document.querySelector(".thread-debug-tool pre"), null);
+    const disclosures = [
+      ...document.querySelectorAll<HTMLDetailsElement>(
+        ".thread-debug-tool-content",
+      ),
+    ];
+    assert.equal(disclosures.length, 2);
+    assert.ok(disclosures.every((details) => !details.open));
+    await act(async () => {
+      for (const details of disclosures) {
+        details.open = true;
+        details.dispatchEvent(new window.Event("toggle"));
+      }
+    });
+    assert.match(
+      document.querySelector(".thread-debug-tool pre")!.textContent!,
+      /echo test/,
+    );
     assert.ok(
       document
         .querySelector(".tool-result-fallback")

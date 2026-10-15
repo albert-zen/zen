@@ -206,3 +206,33 @@ function summary(archived: boolean): NativeThreadSummary {
     status: "idle",
   };
 }
+
+test("debug stays last and uses a quiet toggle instead of a checkmark", () => {
+  const html = renderToStaticMarkup(
+    createElement(ThreadItemMenu, {
+      archived: false,
+      busyAction: null,
+      error: null,
+      hasActiveTurn: false,
+      open: true,
+      pinned: false,
+      renaming: false,
+      renameDraft: "Synthetic",
+      debugging: true,
+      onToggleDebug: noop,
+      onArchive: noop,
+      onBeginRename: noop,
+      onCancelRename: noop,
+      onDraftChange: noop,
+      onPin: noop,
+      onRename: noop,
+      onUnarchive: noop,
+    }),
+  );
+  assert.deepEqual(
+    [...html.matchAll(/data-thread-action="([^"]+)"/g)].map((m) => m[1]),
+    ["rename", "fork", "pin", "archive", "debug"],
+  );
+  assert.match(html, /class="thread-debug-menu-switch"/);
+  assert.doesNotMatch(html, /✓/);
+});

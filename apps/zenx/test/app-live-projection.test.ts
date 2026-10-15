@@ -3,6 +3,11 @@ import "./dom-primitives.js";
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ZenXThreadTitleCoordinator } from "../src/main/thread-title-coordinator.js";
+import { ZenXThreadTitleStore } from "../src/main/thread-title-store.js";
 
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -1291,6 +1296,7 @@ test("App message requests survive acknowledgements, repeated clicks, and Thread
 });
 
 interface MountOptions {
+  titles?: typeof window.zenx.titles;
   readFile?(threadId: string, path: string): Promise<never>;
   pluginSnapshot?: ZenXPluginSnapshot;
   executeCommand?(
@@ -1437,7 +1443,7 @@ async function mountApp(options: MountOptions) {
         },
       }),
     },
-    titles: {
+    titles: options.titles ?? {
       get: async () => ({}),
       onChange: () => () => undefined,
     },
@@ -2186,7 +2192,15 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
     )!;
     assert.equal(toggle.getAttribute("role"), "menuitemcheckbox");
     assert.equal(toggle.getAttribute("aria-checked"), "false");
-    await act(async () => toggle.click());
+    const panel = toggle.closest(".thread-item-menu");
+    assert.equal(
+      panel?.querySelector("[data-thread-action]:last-of-type"),
+      toggle,
+    );
+    await act(async () => {
+      toggle.focus();
+      toggle.click();
+    });
     await waitFor(() => document.querySelector(".thread-debugger"));
     assert.deepEqual(
       requests.filter((r) => r.method === "zen/thread/resume").at(-1)?.params,
@@ -2197,7 +2211,8 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
         .length,
       2,
     );
-    await click("#thread-menu-trigger-thread-2");
+    assert.equal(document.querySelector(".thread-item-menu"), panel);
+    assert.equal(document.activeElement, toggle);
     assert.equal(
       document
         .querySelector('[data-thread-action="debug"]')
@@ -2209,10 +2224,19 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     });
-    assert.equal(document.activeElement?.id, "thread-composer");
-    await click("#thread-menu-trigger-thread-2");
+    assert.equal(
+      document.activeElement,
+      toggle,
+      "toggle off keeps focus in the same place",
+    );
+    assert.equal(document.querySelector(".thread-item-menu"), panel);
     await click('[data-thread-action="debug"]');
     await waitFor(() => document.querySelector(".thread-debugger"));
+    await act(async () =>
+      toggle.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
     await click(".thread-debug-exit");
     assert.equal(document.querySelector(".thread-debugger"), null);
     assert.equal(document.querySelector(".thread-view-switch"), null);
@@ -2228,3 +2252,221 @@ test("Sidebar debug mode targets its exact Thread, defaults off, exits, and neve
     await harness.unmount();
   }
 });
+
+for (const listed of [false, true]) {
+  test(`PAW working Thread can be renamed ${listed ? "inside its workspace" : "after recovery before list discovery"}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "paw-thread-title-"));
+    const store = new ZenXThreadTitleStore(join(directory, "titles.json"));
+    const mirrors: Array<{ threadId: string; title: string }> = [];
+    const coordinator = new ZenXThreadTitleCoordinator({
+      store,
+      inference: {
+        generate: async () => {
+          throw Error("No inference expected");
+        },
+      },
+      titleModel: () => "unused",
+      setNativeName: async (threadId, title) => {
+        mirrors.push({ threadId, title });
+      },
+    });
+    await coordinator.initialize();
+    const workingId = "paw-working-thread";
+    const room = {
+      id: "paw-one",
+      name: "Personal assistant",
+      createdAt: 0,
+      messages: [],
+      assistant: { threadId: workingId, triggerId: "paw-trigger" },
+      members: [{ name: "PAW speaker", threadId: workingId }],
+    };
+    const dispose = pluginUiRegistry.registerTrusted("paw-thread-title-test", {
+      overview: ({ sdk }) => createElement(RoomsPage, { sdk }),
+    });
+    const snapshot = {
+      plugins: [
+        {
+          id: "zenx-rooms",
+          displayName: "Rooms",
+          enabled: true,
+          available: true,
+          lifecycle: "enabled",
+          contributionCount: 1,
+          version: "1",
+          source: "bundled",
+        },
+      ],
+      pages: [
+        {
+          key: "zenx-rooms:rooms",
+          pluginId: "zenx-rooms",
+          id: "rooms",
+          title: "Rooms",
+          route: "/plugins/zenx-rooms/rooms",
+          surfaceId: "overview",
+        },
+      ],
+      bundles: [
+        {
+          key: "zenx-rooms:main",
+          pluginId: "zenx-rooms",
+          id: "main",
+          apiVersion: 1,
+          kind: "trusted",
+          entry: "paw-thread-title-test",
+        },
+      ],
+      surfaces: [
+        {
+          key: "zenx-rooms:overview",
+          pluginId: "zenx-rooms",
+          id: "overview",
+          bundleId: "main",
+          exportName: "overview",
+        },
+      ],
+      sidebar: [],
+      subroutes: [],
+      settings: [],
+      panels: [],
+      commands: [],
+      menus: [],
+    } as ZenXPluginSnapshot;
+    let rejectOnce = true;
+    const calls: string[] = [];
+    const harness = await mountApp({
+      pluginSnapshot: snapshot,
+      threads: async (archived) =>
+        archived || !listed ? [] : [summary(workingId, "Working conversation")],
+      request: async (method, params) => {
+        assert.equal(method, "zen/thread/resume");
+        assert.deepEqual(params, { threadId: workingId });
+        return resumed({ ...thread(workingId), name: "Working conversation" });
+      },
+      titles: {
+        get: async () => coordinator.snapshot(),
+        onChange: (listener) => coordinator.onChange(listener),
+        rename: async (id, title) => {
+          calls.push(id);
+          if (rejectOnce) {
+            rejectOnce = false;
+            throw Error("Synthetic Host title save failed");
+          }
+          return await coordinator.rename(id, title);
+        },
+        observe: async () => undefined,
+        retry: async () => {
+          throw Error("No title retry expected");
+        },
+      },
+      executeCommand: async (plugin, command) => {
+        assert.equal(plugin, "zenx-rooms");
+        if (command === "list") return { rooms: [room] };
+        if (command === "workspace")
+          return { revision: 1, matters: [], memory: [] };
+        throw Error(`Unexpected Room mutation: ${command}`);
+      },
+    });
+    try {
+      const paw = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Open PAW Personal assistant"]',
+        ),
+      );
+      await act(async () => paw.click());
+      const workspace = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".room-title-actions-host #thread-browser-toggle",
+        ),
+      );
+      await act(async () => workspace.click());
+      if (!listed) {
+        const openThread = await waitFor(() =>
+          [
+            ...document.querySelectorAll<HTMLButtonElement>(
+              ".companion-content button",
+            ),
+          ].find((button) => button.textContent === "Open working Thread"),
+        );
+        await act(async () => openThread.click());
+      }
+      const scope = listed ? ".companion-content" : ".workspace-header";
+      const rename = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          `${scope} .thread-title-rename`,
+        ),
+      );
+      await act(async () => rename.click());
+      const input = document.querySelector<HTMLInputElement>(
+        `${scope} .thread-title-form input`,
+      )!;
+      const reactProps = (el: any) =>
+        el[Object.keys(el).find((key) => key.startsWith("__reactProps"))!];
+      await act(async () =>
+        reactProps(input).onChange({ target: { value: "Research planner" } }),
+      );
+      const submit = () =>
+        input.form!.dispatchEvent(
+          new window.Event("submit", { bubbles: true, cancelable: true }),
+        );
+      await act(async () => {
+        submit();
+      });
+      assert.equal(input.value, "Research planner");
+      assert.match(
+        document.body.textContent!,
+        /Synthetic Host title save failed/,
+      );
+      await act(async () => {
+        submit();
+        submit();
+      });
+      await waitFor(
+        () =>
+          document.querySelector(`${scope} .thread-title-line strong`)
+            ?.textContent === "Research planner",
+      );
+      assert.deepEqual(calls, [workingId, workingId]);
+      assert.equal(
+        coordinator.snapshot()[workingId]?.title,
+        "Research planner",
+      );
+      assert.equal(
+        JSON.parse(await readFile(join(directory, "titles.json"), "utf8"))[
+          workingId
+        ]?.title,
+        "Research planner",
+      );
+      assert.equal(room.name, "Personal assistant");
+      assert.equal(room.members[0]!.name, "PAW speaker");
+      if (listed) {
+        assert.match(
+          document.querySelector(".thread-row")?.textContent ?? "",
+          /Research planner/,
+        );
+        const openThread = [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            ".companion-content button",
+          ),
+        ].find((button) => button.textContent === "Open working Thread")!;
+        await act(async () => openThread.click());
+        await waitFor(
+          () =>
+            document.querySelector(
+              ".workspace-header .thread-title-line strong",
+            )?.textContent === "Research planner",
+        );
+      }
+      await coordinator.stop();
+      assert.deepEqual(mirrors.at(-1), {
+        threadId: workingId,
+        title: "Research planner",
+      });
+    } finally {
+      await harness.unmount();
+      dispose();
+      await coordinator.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}

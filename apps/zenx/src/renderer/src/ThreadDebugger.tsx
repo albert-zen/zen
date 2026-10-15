@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   contentFromUserMessage,
@@ -145,23 +145,38 @@ export function ThreadDebugger(props: Props) {
                       </span>
                       <strong>{item.type}</strong>
                     </header>
-                    <ItemContent item={item} calls={calls} {...props} />
-                    {props.onReadAttachment ? (
-                      <div className="message-images">
-                        {itemImages(item).map((attachment, n) => (
-                          <AttachmentImage
-                            key={`${attachment.sha256}-${n}`}
-                            attachment={attachment}
-                            name={`${item.type} ${n + 1}`}
-                            onReadAttachment={props.onReadAttachment!}
-                            onOpen={(attachment, name, trigger) =>
-                              setPreview({ attachment, name, trigger })
-                            }
-                            lazy
-                          />
-                        ))}
-                      </div>
-                    ) : null}
+                    {item.type === "tool_call" ||
+                    item.type === "tool_result" ? (
+                      <ToolDisclosure
+                        label={
+                          item.type === "tool_call"
+                            ? item.name
+                            : (calls.get(
+                                JSON.stringify([item.turnId, item.callId]),
+                              )?.name ?? item.callId)
+                        }
+                      >
+                        <ItemContent item={item} calls={calls} {...props} />
+                        <ItemImages
+                          item={item}
+                          onReadAttachment={props.onReadAttachment}
+                          onOpen={(attachment, name, trigger) =>
+                            setPreview({ attachment, name, trigger })
+                          }
+                        />
+                      </ToolDisclosure>
+                    ) : (
+                      <>
+                        <ItemContent item={item} calls={calls} {...props} />
+                        <ItemImages
+                          item={item}
+                          onReadAttachment={props.onReadAttachment}
+                          onOpen={(attachment, name, trigger) =>
+                            setPreview({ attachment, name, trigger })
+                          }
+                        />
+                      </>
+                    )}
                     <ItemJson item={item} label={t("debugJson")} />
                   </article>
                 ))}
@@ -179,6 +194,54 @@ export function ThreadDebugger(props: Props) {
       </ThreadImagesContext.Provider>
     </MessageLinkContext.Provider>
   );
+}
+
+function ToolDisclosure({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="thread-debug-tool-content"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>{label}</summary>
+      {open ? children : null}
+    </details>
+  );
+}
+
+function ItemImages({
+  item,
+  onReadAttachment,
+  onOpen,
+}: {
+  item: CanonicalItem;
+  onReadAttachment?: Props["onReadAttachment"];
+  onOpen(
+    attachment: AttachmentRef,
+    name: string,
+    trigger: HTMLButtonElement,
+  ): void;
+}) {
+  return onReadAttachment ? (
+    <div className="message-images">
+      {itemImages(item).map((attachment, n) => (
+        <AttachmentImage
+          key={`${attachment.sha256}-${n}`}
+          attachment={attachment}
+          name={`${item.type} ${n + 1}`}
+          onReadAttachment={onReadAttachment}
+          onOpen={onOpen}
+          lazy
+        />
+      ))}
+    </div>
+  ) : null;
 }
 
 function ItemContent({
