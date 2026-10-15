@@ -29,6 +29,7 @@ export const ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION =
 type SelfControlRequestMethod = Extract<
   ClientRequestMethod,
   | "zen/thread/read"
+  | "zen/thread/original/read"
   | "zen/thread/create-child"
   | "zen/thread/create-child-configured"
   | "zen/turn/send-unarchived"
@@ -288,7 +289,7 @@ const manifest: ZenXPluginManifestV2 = {
     {
       name: "zenx_threads_read",
       description:
-        "Read public Item projections of history. Default: latest turns; cursor reads older pages. Choose items or agent_messages, optionally within turnId. Choose item plus itemId for public_item_json chunks; concatenate content using nextCursor. Structured opaque values expose only identity and public summary at every depth. Public reasoning and tool output text are preserved. Previews are excerpts, never generated summaries.",
+        "Read public Item projections of history. Default: latest turns; cursor reads older pages. Choose items or agent_messages, optionally within turnId. Choose item plus itemId for public_item_json chunks; concatenate content using nextCursor. Structured opaque values expose only identity and public summary at every depth. Public reasoning and tool output text are preserved. Previews are excerpts, never generated summaries. For a zen-thread://THREAD/items?through=ITEM compaction reference, use exact threadId=THREAD and throughItemId=ITEM (URL-decode both). This reads only that enabled original prefix; default granularity becomes items. Keep throughItemId on every page and item chunk request. An unavailable or disabled reference is an error, not permission to infer omitted history.",
       inputSchema: {
         type: "object",
         properties: {
@@ -296,6 +297,11 @@ const manifest: ZenXPluginManifestV2 = {
           granularity: {
             type: "string",
             enum: ["turns", "items", "agent_messages", "item"],
+          },
+          throughItemId: {
+            type: "string",
+            description:
+              "Exact enabled compaction cutoff from the logical original-history reference. Requires threadId; supports items or item, cursor and maxItemsPerTurn.",
           },
           turnId: { type: "string" },
           itemId: { type: "string" },
@@ -607,6 +613,14 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     args: Record<string, unknown>,
     invocation: ToolInvocation,
   ): Promise<unknown> {
+    if (
+      name === "zenx_threads_read" &&
+      args.throughItemId !== undefined &&
+      args.threadId === undefined
+    )
+      throw new Error(
+        "Original history reads require the exact threadId from the reference",
+      );
     let requireActive = false;
     if (
       [
@@ -1001,6 +1015,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   ): Promise<unknown> {
     assertOnly(args, [
       "threadId",
+      "throughItemId",
       "maxTurns",
       "maxItemsPerTurn",
       "granularity",
@@ -1009,6 +1024,34 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       "cursor",
     ]);
     const threadId = requiredString(args.threadId, "threadId");
+    if (args.throughItemId !== undefined) {
+      if (args.turnId !== undefined || args.maxTurns !== undefined)
+        throw new Error(
+          "Original history reads do not accept turnId or maxTurns",
+        );
+      const throughItemId = requiredString(args.throughItemId, "throughItemId");
+      const granularity =
+        optionalEnum(args.granularity, "granularity", [
+          "items",
+          "item",
+        ] as const) ?? "items";
+      const itemId = optionalString(args.itemId, "itemId");
+      const cursor = optionalString(args.cursor, "cursor");
+      if (requireActive) await this.#assertActiveThread(threadId);
+      return await this.#appServer.request("zen/thread/original/read", {
+        threadId,
+        throughItemId,
+        granularity,
+        ...(itemId === undefined ? {} : { itemId }),
+        ...(cursor === undefined ? {} : { cursor }),
+        limit: boundedInteger(
+          args.maxItemsPerTurn,
+          "maxItemsPerTurn",
+          DEFAULT_READ_ITEMS,
+          MAX_READ_ITEMS,
+        ),
+      });
+    }
     const granularity =
       optionalEnum(args.granularity, "granularity", [
         "turns",

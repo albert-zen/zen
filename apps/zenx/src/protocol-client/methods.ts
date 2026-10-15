@@ -35,6 +35,7 @@ export const clientRequestMethods = [
   "thread/unsubscribe",
   "thread/compact",
   "thread/original/read",
+  "zen/thread/original/read",
   "turn/start",
   "turn/steer",
   "turn/queue",

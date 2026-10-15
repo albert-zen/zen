@@ -514,7 +514,9 @@ function ConversationRow({
               count: room.unreadCount,
             })}
           >
-            {room.unreadCount > 99 ? "99+" : room.unreadCount}
+            <span className="room-unread-value">
+              {room.unreadCount > 99 ? "99+" : room.unreadCount}
+            </span>
           </span>
         ) : null}
       </button>

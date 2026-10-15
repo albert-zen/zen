@@ -29,3 +29,5 @@ to Triggers, not a self-control wait API.
 Use zenx_models_list for model IDs and reasoning efforts; choose them on creation
 or with zenx_threads_configure. Creation accepts a configured project name/path or
 cwd. Project names and paths are discoverable via zenx_projects_list.
+
+For a compaction locator `zen-thread://THREAD/items?through=ITEM`, URL-decode its Thread and cutoff IDs and call `zenx_threads_read` with `threadId`, `throughItemId`, and optional `granularity: "items"` / `cursor`. Read an Item completely with `granularity: "item"`, `itemId` and the same cutoff; concatenate its `public_item_json` chunks using `nextCursor`. Every cursor stays bound to that reference. Missing/disabled references fail explicitly. This is a public view of the original journal, not a filesystem path; opaque provider payloads are not exposed.
