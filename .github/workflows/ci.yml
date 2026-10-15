@@ -138,6 +138,10 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 1
         run: node --import tsx --test --test-timeout=40000 apps/zenx/test/shell-pty-native-cleanup.test.ts
+      - name: One-shot Windows USERPROFILE semantics (#429)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.head_ref == 'diagnostic/windows-userprofile-semantics-20261015' && github.run_attempt == 1 }}
+        timeout-minutes: 1
+        run: node --import tsx apps/zenx/scripts/windows-userprofile-semantics.ts
       - name: Exercise shell lifecycle observations on Windows
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
       - name: Exercise trigger process containment on Windows

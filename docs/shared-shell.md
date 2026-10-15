@@ -208,3 +208,24 @@ arbitrary user module configurations are not covered by this timing assertion.
 - [PowerShell module paths](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath):
   Windows PowerShell reconstructs its module paths when the variable is absent;
   inheriting a PowerShell 7 module path is not a compatibility fix.
+
+## One-shot USERPROFILE semantics investigation (#429)
+
+[Issue #429](https://github.com/albert-zen/zen/issues/429) retains the recurring
+20-second default-shell prompt failure; its cause is unresolved. A branch-only,
+first-attempt diagnostic follows the original Windows Shell acceptance and native
+cleanup. It never substitutes for either result or changes their deadlines.
+
+The query uses Windows PowerShell 5.1 with identical noninteractive/no-profile
+flags in both arms. A has the existing sanitized fixture environment; B adds only
+the runner's existing USERPROFILE. PSModulePath stays absent; APPDATA and
+LOCALAPPDATA are not varied. The only retained output is validated version and
+presence/existence/equality booleans for HOME, USERPROFILE and the known user-profile
+folder. No paths, profile/history contents, raw errors or environment dump are
+published. Queries have separate 20-second execution and five-second exact-child
+close bounds. No retry, prewarming or persistent probe is introduced.
+
+A corrected HOME relationship is evidence of environment compatibility only,
+not the interactive startup timeout's cause. Equal relationships end this
+hypothesis; missing baseline, invalid/unsupported output, timeout or uncertain
+cleanup are inconclusive and stop it. Windows native execution is pending.
