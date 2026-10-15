@@ -105,7 +105,7 @@ export function MessageSourceLink({
         onClick={() => void run()}
       >
         <Icon
-          name={target.kind === "trigger" ? "trigger" : "thread"}
+          name={target.kind === "trigger" ? "trigger" : "conversation"}
           size={12}
         />
         <span>{label}</span>

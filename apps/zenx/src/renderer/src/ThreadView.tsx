@@ -119,6 +119,7 @@ import {
   observedCommandPhase,
   observedCommandStatus,
   traceSummary,
+  traceGroupIcon,
   type TraceObservationIndex,
   type TraceActivity,
   traceDisplayRows,
@@ -2089,17 +2090,6 @@ function TraceCounts({
 }) {
   return (
     <span className="trace-counts">
-      {!terminal && activity.total > 0 ? (
-        <small>
-          {activity.categories
-            .slice(0, 2)
-            .map(({ label, count }) => `${label} ${count}`)
-            .join(" · ")}
-          {activity.categories.length > 2
-            ? ` +${activity.categories.length - 2}`
-            : ""}
-        </small>
-      ) : null}
       {activity.cancelled > 0 ? (
         <small>
           {i18n.t("shell:toolCancelled", { count: activity.cancelled })}
@@ -2118,11 +2108,13 @@ function RunningTurnLabel({
   activity,
   stopping,
   approval,
+  activityRepresented,
 }: {
   startedAt: number | null;
   activity: TraceActivity;
   stopping: boolean;
   approval: boolean;
+  activityRepresented: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -2147,8 +2139,14 @@ function RunningTurnLabel({
             ? i18n.t("shell:awaitingToolResult")
             : commandPhaseLabel(phase);
   const busy = phase === "running" || phase === "thinking" || phase === "idle";
+  const compact =
+    activityRepresented && (phase === "running" || phase === "thinking");
   return (
-    <div className="turn-running-label" data-phase={phase}>
+    <div
+      className="turn-running-label"
+      data-phase={phase}
+      data-compact={compact}
+    >
       <Icon
         name={
           phase === "approval"
@@ -2159,8 +2157,13 @@ function RunningTurnLabel({
         }
         size={14}
       />
-      <span role="status" aria-live="polite" aria-atomic="true">
-        <ActivityText active={busy}>{label}</ActivityText>
+      <span
+        className={compact ? "sr-only" : undefined}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <ActivityText active={busy && !compact}>{label}</ActivityText>
       </span>
       {startedAt === null ? null : (
         <span className="turn-duration" aria-hidden="true">
@@ -2377,6 +2380,9 @@ function TurnBlock({
           activity={activity}
           stopping={stopping}
           approval={approvals.length > 0}
+          activityRepresented={projection.history.some(
+            (node) => node.kind === "traceItem" || node.kind === "traceGroup",
+          )}
         />
       )}
       {!complete || expanded ? (
@@ -3031,25 +3037,22 @@ function TraceSequence({
           aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <Icon
-            name={(() => {
-              const command = node.items.findLast(
-                (item) => item.type === "commandExecution",
-              );
-              return command?.type === "commandExecution"
-                ? toolPresentation(command.toolName ?? command.command).icon
-                : "reasoning";
-            })()}
-            size={15}
-          />
-          <span className="trace-activity-title">
+          <Icon name={traceGroupIcon(node.items)} size={15} />
+          <span
+            className="trace-activity-title"
+            title={traceSummary(node.items, observations)}
+          >
             <ActivityText active={busy}>
               {traceSummary(node.items, observations)}
             </ActivityText>
           </span>
           <TraceCounts activity={activity} />
           <small className="sr-only">
-            {i18n.t("shell:executionItems", { count: node.items.length })}
+            <span>{i18n.t("shell:toolCalls", { count: activity.total })}</span>
+            {" · "}
+            <span>
+              {i18n.t("shell:executionItems", { count: node.items.length })}
+            </span>
           </small>
           <Icon name="chevron-down" size={13} />
         </button>

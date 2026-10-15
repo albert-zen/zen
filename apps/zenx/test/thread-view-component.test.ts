@@ -3856,6 +3856,14 @@ test("native Agent input displays its sender separately from human input, includ
       /Research worker/,
     );
     assert.equal(dom.window.document.querySelector(".queue-row-edit"), null);
+    for (const source of dom.window.document.querySelectorAll(
+      ".message-source-link",
+    )) {
+      assert.equal(
+        source.querySelector("svg")?.getAttribute("data-icon"),
+        "conversation",
+      );
+    }
     assert.ok(
       dom.window.document.querySelectorAll(".thread-message-sender").length >=
         2,
@@ -3923,6 +3931,14 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
       2,
     );
     assert.ok(labels.every((label) => !label.textContent?.includes("uuid-")));
+    for (const label of labels.filter((label) =>
+      label.classList.contains("message-source-link"),
+    )) {
+      assert.equal(
+        label.querySelector("svg")?.getAttribute("data-icon"),
+        "conversation",
+      );
+    }
     assert.ok(
       labels
         .filter((label) => label.textContent?.includes("Remote:"))

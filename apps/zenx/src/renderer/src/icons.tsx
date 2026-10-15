@@ -67,6 +67,14 @@ type IconProps = SVGProps<SVGSVGElement> & {
   size?: number;
 };
 
+// Trigger is a public plugin icon key; keep it as an alias of the shared clock.
+const clockArtwork = (
+  <>
+    <circle cx="8" cy="8" r="5.7" />
+    <path d="M8 4.5V8l2.5 1.5" />
+  </>
+);
+
 const paths: Record<IconName, ReactNode> = {
   fork: (
     <>
@@ -158,12 +166,7 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   check: <path d="m2.4 8.4 3.4 3.4 7.8-7.8" />,
-  clock: (
-    <>
-      <circle cx="8" cy="8" r="5.7" />
-      <path d="M8 4.5V8l2.5 1.5" />
-    </>
-  ),
+  clock: clockArtwork,
   "chevron-down": <path d="m3.6 6 4.4 4.4L12.4 6" />,
   "chevron-left": <path d="m10 3.6-4.4 4.4 4.4 4.4" />,
   "chevron-right": <path d="m6 3.6 4.4 4.4L6 12.4" />,
@@ -299,7 +302,7 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="3" cy="12.5" r=".2" />
     </>
   ),
-  trigger: <path d="M8.8 1.6 3.4 9h3.4l-.9 5.4L11.3 7H7.9l.9-5.4Z" />,
+  trigger: clockArtwork,
   stop: <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1.5" />,
   send: <path d="m3 8 5-5 5 5M8 3v10" />,
   terminal: (

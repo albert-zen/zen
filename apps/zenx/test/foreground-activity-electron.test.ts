@@ -17,6 +17,7 @@ import {
   ForegroundActivity,
   type ForegroundActivitySnapshot,
 } from "../src/main/foreground-activity.js";
+import { observeForegroundDisplaySmoke } from "../src/main/foreground-display-smoke-diagnostics.js";
 import {
   ComputerZenXCapabilityPackage,
   type ZenXComputerBackend,
@@ -397,6 +398,9 @@ for (const event of [
         (error) => activity.unavailable(error),
         phase !== "pending paint",
       );
+      const diagnostics = observeForegroundDisplaySmoke(
+        f.screen as unknown as Screen,
+      );
       activity = new ForegroundActivity({
         presenter: f.presenter,
         agentName: () => "Fixture",
@@ -430,7 +434,7 @@ for (const event of [
             ? [display(1)]
             : [display(1, -100), display(2)],
       );
-      f.screen.emit(event);
+      f.screen.emit(event, {}, display(1, -100), ["workArea"]);
       assert.equal(
         activity.snapshot.activities[0]?.stopping,
         true,
@@ -444,6 +448,10 @@ for (const event of [
       await rejected;
       assert.equal(dispatched, false);
       activity.close();
+      const diagnostic = diagnostics.close();
+      assert(diagnostic.records.some((record) => record.kind === event));
+      assert.equal(diagnostic.diagnosticErrors, 0);
+      assert.equal(f.screen.listenerCount(event), 0);
     });
   }
   test(`${event} during native work cancels but keeps the owner until actual settlement`, async () => {
