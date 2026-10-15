@@ -860,3 +860,61 @@ test("native recovery preserves the immediate fork source and copy creation time
   assert.equal(original.forkedFromId, null);
   assert.equal(original.createdAt, 10);
 });
+
+test("throughput uses identical canonical millisecond windows during recovery and live completion", async () => {
+  const { nativeRecoveryForThread } =
+    await import("./native-recovery-fixture.js");
+  const recovery = nativeRecoveryForThread(
+    thread([turn("turn-1", "completed", [agentItem("answer", "Done")])]),
+  );
+  const start = recovery.thread.items.find(
+    (item) => item.type === "turn_started",
+  )!;
+  const end = recovery.thread.items.find(
+    (item) => item.type === "turn_completed",
+  )!;
+  start.createdAt = "2026-10-15T00:00:00.125Z";
+  end.createdAt = "2026-10-15T00:00:00.375Z";
+  const recovered = projectNativeRecovery(recovery);
+  assert.equal(recovered.turns[0]?.durationMs, 250);
+  const live = applyNativeThreadEvent(
+    {
+      ...recovered,
+      turns: [
+        {
+          ...recovered.turns[0]!,
+          status: "inProgress",
+          completedAt: null,
+          durationMs: null,
+        },
+      ],
+    },
+    {
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "completed",
+    },
+    99999,
+  );
+  assert.equal(
+    live.turns[0]?.durationMs,
+    250,
+    "receipt wall clock never changes throughput",
+  );
+  const missing = applyNativeThreadEvent(
+    thread([turn("turn-1", "inProgress")]),
+    {
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "completed",
+    },
+    11,
+  );
+  assert.equal(
+    missing.turns[0]?.durationMs,
+    null,
+    "unknown canonical timing never guesses from rounded seconds",
+  );
+});

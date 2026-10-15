@@ -645,3 +645,7 @@ Items remains the default debugger tab in canonical order. Tool call arguments,
 tool result content and tool images start collapsed and mount only after an
 explicit disclosure. Exact Item JSON and the existing full-content controls stay
 available; debug mode does not add conversation copy/fork actions.
+
+### 2026-10-15: Machine picker and generation throughput
+
+The Run on machine picker has room for device names independently of its compact trigger and remains within the viewport. Final-message hover shows output tokens per second for that completed Turn; context usage shows the weighted session rate over completed Turns with matched usage and exact canonical millisecond duration. Idle time between Turns is excluded, while tool and waiting time within each Turn remain included. This is end-to-end Turn throughput, not Provider decode speed. Missing telemetry or duration is Unknown.

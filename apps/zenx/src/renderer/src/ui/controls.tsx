@@ -69,6 +69,7 @@ export function Select({
   children,
   disabled,
   className = "",
+  popoverClassName = "",
   ...props
 }: Omit<
   ComponentProps<typeof SelectPrimitive.Trigger>,
@@ -77,6 +78,8 @@ export function Select({
   value: string | number;
   onValueChange(value: string): void;
   children: ReactNode;
+  /** Optional class for the portaled dropdown, e.g. a wider machine picker. */
+  popoverClassName?: string;
 }) {
   useTranslation("panels");
   const items = choices(children);
@@ -107,7 +110,9 @@ export function Select({
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
-          className="ui-select-popover"
+          className={`ui-select-popover${
+            popoverClassName.length > 0 ? ` ${popoverClassName}` : ""
+          }`}
           position="popper"
           sideOffset={5}
           collisionPadding={10}
