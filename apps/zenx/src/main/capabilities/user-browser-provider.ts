@@ -1,3 +1,7 @@
+import {
+  type CdpDiagnosticConnection,
+  type UserBrowserCdpDiagnosticObserver,
+} from "./user-browser-cdp-diagnostics.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -2049,6 +2053,8 @@ export async function connectUserBrowserCdp(
     authorization?: string;
     /** Host-selected bridge instance route, never accepted from tool arguments. */
     connectionPath?: string;
+    /** Synchronous passive observer; only disposable fixtures inject it. */
+    cdpDiagnosticObserver?: UserBrowserCdpDiagnosticObserver;
     liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
     onInputCaptureDiagnostic?: (
       value: UserBrowserInputCaptureDiagnostic,
@@ -2153,6 +2159,7 @@ export function validateUserBrowserVersion(
 
 class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   readonly #socket: WebSocket;
+  readonly #diagnostics?: CdpDiagnosticConnection;
   readonly #httpBase: URL;
   readonly #authorization?: string;
   readonly #liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
@@ -2222,16 +2229,22 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     httpBase: URL,
     authorization?: string,
     liveFrameImageDecoder?: UserBrowserLiveImageDecoder,
+    cdpDiagnosticObserver?: UserBrowserCdpDiagnosticObserver,
   ) {
     this.#socket = socket;
+    this.#diagnostics = cdpDiagnosticObserver?.connect();
     this.#httpBase = httpBase;
     this.#authorization = authorization;
     this.#liveFrameImageDecoder = liveFrameImageDecoder;
     socket.on("message", (data) => this.#receive(data.toString()));
-    socket.on("close", () =>
-      this.#failAll(new Error("User browser CDP connection closed")),
-    );
-    socket.on("error", (error) => this.#failAll(error));
+    socket.on("close", () => {
+      this.#diagnostics?.event("socket-close");
+      this.#failAll(new Error("User browser CDP connection closed"));
+    });
+    socket.on("error", (error) => {
+      this.#diagnostics?.event("socket-error");
+      this.#failAll(error);
+    });
   }
 
   static async connect(
@@ -2240,6 +2253,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     signal?: AbortSignal,
     options: {
       authorization?: string;
+      cdpDiagnosticObserver?: UserBrowserCdpDiagnosticObserver;
       liveFrameImageDecoder?: UserBrowserLiveImageDecoder;
     } = {},
   ): Promise<JsonRpcUserBrowserCdpClient> {
@@ -2274,6 +2288,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       httpBase,
       options.authorization,
       options.liveFrameImageDecoder,
+      options.cdpDiagnosticObserver,
     );
     try {
       await client.#send("Target.setDiscoverTargets", { discover: true });
@@ -3555,6 +3570,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   }
 
   async close(): Promise<void> {
+    this.#diagnostics?.event("client-close");
     if (this.#closing) {
       this.#throwIfAttachmentTainted();
       return;
@@ -3903,6 +3919,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         if (timeout !== undefined) clearTimeout(timeout);
       };
       const abort = () => {
+        this.#diagnostics?.event("abort", id, dispatched);
         this.#pending.delete(id);
         finish();
         if (dispatched && onLateResponse !== undefined) {
@@ -3958,8 +3975,16 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         },
       };
       this.#pending.set(id, pending);
+      const timerArmedAt = this.#diagnostics?.observer.now();
       timeout = setTimeout(() => {
+        const timeoutFiredAt = this.#diagnostics?.observer.now();
         if (!this.#pending.delete(id)) return;
+        this.#diagnostics?.event(
+          "timeout-fired",
+          id,
+          dispatched,
+          timeoutFiredAt,
+        );
         finish();
         reject(
           new UserBrowserCdpOutcomeUnknownError(
@@ -3976,6 +4001,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           );
         }
       }, outcomeTimeoutMs);
+      if (timerArmedAt !== undefined)
+        this.#diagnostics?.armed(
+          id,
+          method,
+          sessionId,
+          outcomeTimeoutMs,
+          timerArmedAt,
+        );
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted === true) {
         abort();
@@ -3983,6 +4016,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       }
       try {
         beforeDispatch?.();
+        this.#diagnostics?.event("dispatch-attempt", id, dispatched);
         this.#socket.send(
           JSON.stringify({
             id,
@@ -3993,8 +4027,10 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         );
         dispatched = true;
         pending.dispatched = true;
+        this.#diagnostics?.event("dispatch-accepted", id, dispatched);
         onDispatched?.();
       } catch (error) {
+        this.#diagnostics?.event("dispatch-throw", id, dispatched);
         this.#pending.delete(id);
         finish();
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -4029,14 +4065,21 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   }
 
   #receive(raw: string): void {
+    const receivedAt = this.#diagnostics?.observer.now();
     let message: Record<string, unknown> | undefined;
     try {
       message = asRecord(JSON.parse(raw));
     } catch {
+      if (receivedAt !== undefined)
+        this.#diagnostics?.malformed("invalid-json", receivedAt);
       this.#failAll(new Error("User browser CDP returned invalid JSON"));
       return;
     }
-    if (message === undefined) return;
+    if (message === undefined) {
+      if (receivedAt !== undefined)
+        this.#diagnostics?.malformed("non-object", receivedAt);
+      return;
+    }
     if (typeof message.id !== "number") {
       this.#receiveEvent(message);
       return;
@@ -4044,13 +4087,36 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const pending = this.#pending.get(message.id);
     if (pending === undefined) {
       const late = this.#lateResponses.get(message.id);
-      if (late === undefined) return;
+      if (late === undefined) {
+        if (receivedAt !== undefined)
+          this.#diagnostics?.receive(
+            message.id,
+            message.sessionId,
+            "ignored-no-pending",
+            receivedAt,
+          );
+        return;
+      }
       if (message.sessionId !== late.sessionId) {
+        if (receivedAt !== undefined)
+          this.#diagnostics?.receive(
+            message.id,
+            message.sessionId,
+            "late-session-mismatch",
+            receivedAt,
+          );
         this.#recordConnectionTaint(
           "late CDP response session did not match request",
         );
         return;
       }
+      if (receivedAt !== undefined)
+        this.#diagnostics?.receive(
+          message.id,
+          message.sessionId,
+          "retained-late",
+          receivedAt,
+        );
       clearTimeout(late.expires);
       this.#lateResponses.delete(message.id);
       void late
@@ -4064,6 +4130,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
     this.#pending.delete(message.id);
     if (message.sessionId !== pending.sessionId) {
+      if (receivedAt !== undefined)
+        this.#diagnostics?.receive(
+          message.id,
+          message.sessionId,
+          "session-mismatch",
+          receivedAt,
+        );
       this.#recordConnectionTaint(
         `CDP response session did not match request (${pending.method})`,
       );
@@ -4076,6 +4149,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       return;
     }
     const error = asRecord(message.error);
+    if (receivedAt !== undefined)
+      this.#diagnostics?.receive(
+        message.id,
+        message.sessionId,
+        error === undefined ? "pending-match" : "protocol-error",
+        receivedAt,
+      );
     if (error !== undefined) {
       pending.reject(
         new Error(
@@ -4331,6 +4411,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             pending.method === "Runtime.enable")
         ) {
           this.#pending.delete(id);
+          this.#diagnostics?.event("attachment-ended", id, pending.dispatched);
           pending.reject(
             new UserBrowserCdpOutcomeUnknownError(
               pending.method,
@@ -4434,6 +4515,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   }
 
   #failAll(error: Error): void {
+    this.#diagnostics?.event("fail-all");
     this.#providerRevision += 1;
     this.#closed = true;
     this.#endScreencast(
