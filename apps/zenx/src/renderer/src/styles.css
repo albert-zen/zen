@@ -9837,6 +9837,9 @@ button:disabled {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+.turn-running-label[data-compact="true"] > svg {
+  display: none;
+}
 .trace-group,
 .trace-singleton {
   container-type: inline-size;
