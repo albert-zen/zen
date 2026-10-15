@@ -1,6 +1,8 @@
 // CI-only, passive execution-order evidence. TAP remains the result reporter.
 import { openSync, readSync, writeSync, closeSync } from "node:fs";
 import path from "node:path";
+import { getHeapStatistics } from "node:v8";
+import { isMainThread } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
 export const EXECUTION_TRACE_LIMITS = Object.freeze({
@@ -16,6 +18,17 @@ export const RESOURCE_TRACE_LIMITS = Object.freeze({
   records: 32,
   combinedBytes: 32 * 1024,
 });
+export const COMPLETION_TRACE_LIMITS = Object.freeze({
+  combinedBytes: 256 * 1024,
+  records: 512,
+  recordBytes: 512,
+});
+export const PROCESS_TRACE_LIMITS = Object.freeze({
+  combinedBytes: 16 * 1024,
+  records: 32,
+  recordBytes: 256,
+});
+
 const RESOURCE_PATHS = Object.freeze({
   meminfo: "/proc/meminfo",
   v2: "/sys/fs/cgroup/cgroup.controllers",
@@ -176,6 +189,12 @@ export function createExecutionTrace({
   resourceObservation = false,
   resourceRead = readBoundedSystemFile,
   resourcePlatform = process.platform,
+  completionObservation = false,
+  processObservation = false,
+  rss = () => process.memoryUsage.rss(),
+  heap = getHeapStatistics,
+  reporterPid = process.pid,
+  reporterMainThread = isMainThread,
 }) {
   let descriptor;
   let fileAvailable = false;
@@ -189,6 +208,11 @@ export function createExecutionTrace({
   let allocatedBytes = 0;
   let resourceBytes = 0;
   const started = monotonic();
+  const fileStarts = new Map();
+  const extra = {
+    completion: { limits: COMPLETION_TRACE_LIMITS, bytes: 0, records: 0 },
+    process: { limits: PROCESS_TRACE_LIMITS, bytes: 0, records: 0 },
+  };
 
   function writeAll(fd, buffer) {
     let offset = 0;
@@ -208,18 +232,32 @@ export function createExecutionTrace({
     const buffer = Buffer.from(`${JSON.stringify(value)}\n`);
     // One shared budget counts both sinks, even when one is unavailable.
     const bytes = buffer.length * 2;
+    const supplemental = typeof resource === "string" ? extra[resource] : null;
+    if (supplemental) {
+      if (
+        buffer.length > supplemental.limits.recordBytes ||
+        supplemental.records >= supplemental.limits.records ||
+        supplemental.bytes + bytes > supplemental.limits.combinedBytes
+      )
+        return false;
+      supplemental.bytes += bytes;
+      supplemental.records += 1;
+    }
     const ceiling =
       EXECUTION_TRACE_LIMITS.combinedBytes -
       (final ? 0 : EXECUTION_TRACE_LIMITS.finalBytes);
     if (
-      buffer.length > EXECUTION_TRACE_LIMITS.recordBytes ||
-      (resource
-        ? resourceBytes + bytes > RESOURCE_TRACE_LIMITS.combinedBytes
-        : allocatedBytes + bytes > ceiling)
+      !supplemental &&
+      (buffer.length > EXECUTION_TRACE_LIMITS.recordBytes ||
+        (resource
+          ? resourceBytes + bytes > RESOURCE_TRACE_LIMITS.combinedBytes
+          : allocatedBytes + bytes > ceiling))
     )
       return false;
-    if (resource) resourceBytes += bytes;
-    else allocatedBytes += bytes;
+    if (!supplemental) {
+      if (resource) resourceBytes += bytes;
+      else allocatedBytes += bytes;
+    }
     if (fileAvailable) {
       try {
         writeAll(descriptor, buffer);
@@ -267,6 +305,66 @@ export function createExecutionTrace({
   });
   reportUnavailable();
 
+  const safeNumber = (value) =>
+    Number.isSafeInteger(value) && value >= 0 ? value : null;
+  function observeProcess(resource) {
+    const budget = extra.process;
+    if (
+      !processObservation ||
+      budget.records >= budget.limits.records ||
+      budget.bytes + 2 * budget.limits.recordBytes > budget.limits.combinedBytes
+    )
+      return;
+    let rssBytes = null,
+      stats;
+    try {
+      rssBytes = safeNumber(rss());
+    } catch {}
+    try {
+      stats = heap();
+    } catch {}
+    emit(
+      {
+        kind: "process",
+        elapsedMs: resource.elapsedMs,
+        pid: safeNumber(reporterPid),
+        mainThread: reporterMainThread ? 1 : 0,
+        rssBytes,
+        heapUsed: safeNumber(stats?.used_heap_size),
+        heapTotal: safeNumber(stats?.total_heap_size),
+        heapLimit: safeNumber(stats?.heap_size_limit),
+      },
+      false,
+      "process",
+    );
+  }
+
+  function observeCompletion(data) {
+    const relative = relativeLocation(root, cwd, data?.file);
+    if (
+      !relative ||
+      data.nesting !== 0 ||
+      data.line !== 1 ||
+      data.column !== 1 ||
+      relativeLocation(root, cwd, data.name) !== relative
+    )
+      return;
+    const start = fileStarts.get(relative);
+    if (!start || start.closed) return;
+    start.closed = true;
+    emit(
+      {
+        kind: "file-complete",
+        file: relative,
+        startSequence: start.sequence,
+        elapsedMs: Math.round((monotonic() - started) * 1000) / 1000,
+        utc: utc(),
+      },
+      false,
+      "completion",
+    );
+  }
+
   const observeResource = resourceObservation
     ? createResourceObservation({
         platform: resourcePlatform,
@@ -277,13 +375,30 @@ export function createExecutionTrace({
         canEmit: () =>
           resourceBytes + 2 * EXECUTION_TRACE_LIMITS.recordBytes <=
           RESOURCE_TRACE_LIMITS.combinedBytes,
-        emit: (value) => emit(value, false, true),
+        emit: (value) => {
+          const emitted = emit(value, false, true);
+          if (emitted) {
+            try {
+              observeProcess(value);
+            } catch {}
+          }
+          return emitted;
+        },
       })
     : undefined;
 
   return {
     observe(event) {
-      if (stopped || event.type !== "test:dequeue") return;
+      if (stopped) return;
+      if (event.type === "test:complete") {
+        if (completionObservation && !truncated) {
+          try {
+            observeCompletion(event.data);
+          } catch {}
+        }
+        return;
+      }
+      if (event.type !== "test:dequeue") return;
       if (truncated) {
         dropped = increment(dropped);
         return;
@@ -319,7 +434,21 @@ export function createExecutionTrace({
       if (recorded >= EXECUTION_TRACE_LIMITS.records || !emit(value)) {
         dropped = increment(dropped);
         exhaust();
-      } else recorded += 1;
+      } else {
+        recorded += 1;
+        if (
+          completionObservation &&
+          fileDequeue &&
+          data.nesting === 0 &&
+          data.line === 1 &&
+          data.column === 1 &&
+          projectedFile === relative
+        ) {
+          if (fileStarts.has(relative)) fileStarts.set(relative, null);
+          else if (fileStarts.size < COMPLETION_TRACE_LIMITS.records)
+            fileStarts.set(relative, { sequence: recorded, closed: false });
+        }
+      }
       reportUnavailable();
       // Resource IO is gated by time and a separate budget, after dequeue output.
       try {
@@ -367,7 +496,13 @@ export default async function* executionReporter(source) {
   let trace;
   const file = process.env.ZENX_TEST_EXECUTION_TRACE_FILE;
   try {
-    if (file) trace = createExecutionTrace({ file, resourceObservation: true });
+    if (file)
+      trace = createExecutionTrace({
+        file,
+        resourceObservation: true,
+        completionObservation: true,
+        processObservation: true,
+      });
     for await (const event of source) {
       try {
         trace?.observe(event);

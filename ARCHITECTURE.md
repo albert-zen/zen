@@ -1379,3 +1379,5 @@ does not imply delivery or permit client-side cancel/resend. This is a one-messa
 action; it does not rewrite any ingress preference or an explicitly queued sibling.
 
 ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按单调钟至少间隔 15 秒读取固定 host-visible 内存与 visible-cgroup-root v2 数值；它不是 job/child 内存归因，不探索成员或挂载路径，无 timer/进程/信号修改，独立双 sink 32 KiB/32 样本上限不占用原 4 MiB trace 预算，缺值为 null，停事件或预算耗尽后最后样本会陈旧。
+
+ZenX CI 被动诊断另以独立硬预算记录 Node 22 file-wrapper 的 execution-ordered complete 与已记录 dequeue 配对窗口，以及同一 15 秒资源机会的 reporter 整进程 RSS/当前 isolate heap；它不读取后代进程，不改变默认并发、测试或退出语义，窗口是 reporter 收到 wrapper 完成的时间而非任意 child case 的输出时间。
