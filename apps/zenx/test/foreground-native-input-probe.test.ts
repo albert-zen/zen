@@ -1,6 +1,26 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WINDOWS_FOREGROUND_GUARD_SOURCE } from "../src/main/windows-foreground-input-probe.js";
 import { validateNativeProbeReport } from "../src/main/windows-foreground-input-probe.js";
+
+// Only the injected Node children consume these fake bytes. The production
+// source/assembly checks still run before every child in this handshake suite.
+const assemblyDirectory = await mkdtemp(join(tmpdir(), "zenx-test-assembly-"));
+const assemblyBytes = Buffer.from("synthetic-node-child-assembly");
+const assemblyPath = join(assemblyDirectory, "guard.dll");
+await writeFile(assemblyPath, assemblyBytes);
+after(() => rm(assemblyDirectory, { recursive: true, force: true }));
+const assembly = {
+  path: assemblyPath,
+  sourceSha256: createHash("sha256")
+    .update(WINDOWS_FOREGROUND_GUARD_SOURCE)
+    .digest("hex"),
+  assemblySha256: createHash("sha256").update(assemblyBytes).digest("hex"),
+};
 
 const report = () => ({
   kind: "windows-os-routed-input" as const,
@@ -124,6 +144,7 @@ test("owned subprocess handshake verifies identity, atomic Stop command and true
   let directory = "";
   const probe = await startWindowsForegroundInputProbe({
     platform: "win32",
+    assembly,
     spawnGuard(_script, location) {
       directory = location;
       const child = spawn(process.execPath, ["-e", childSource, location], {
@@ -160,6 +181,7 @@ test("a report from a different PID is rejected and the owned child is still joi
   await assert.rejects(
     startWindowsForegroundInputProbe({
       platform: "win32",
+      assembly,
       spawnGuard(_script, location) {
         const child = spawn(
           process.execPath,
@@ -187,6 +209,7 @@ for (const mode of ["exit42", "signal", "errorfile"]) {
     let childClosed = false;
     const probe = await startWindowsForegroundInputProbe({
       platform: "win32",
+      assembly,
       spawnGuard(_script, location) {
         directory = location;
         const child = spawn(
@@ -228,6 +251,7 @@ test("startup failure and terminal cleanup failure both remain in the causal rep
     await assert.rejects(
       startWindowsForegroundInputProbe({
         platform: "win32",
+        assembly,
         spawnGuard(_script, location) {
           directory = location;
           return spawn(
@@ -277,6 +301,7 @@ test("Escape client handshake retains the exact guard identity through final set
     await import("../src/main/windows-foreground-input-probe.js");
   const probe = await startWindowsForegroundInputProbe({
     platform: "win32",
+    assembly,
     spawnGuard(_script, location) {
       return spawn(process.execPath, ["-e", childSource, location], {
         stdio: ["ignore", "ignore", "pipe"],
