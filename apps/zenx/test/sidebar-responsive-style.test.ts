@@ -17,9 +17,14 @@ test("Thread rows reserve factual status space and reveal actions over a surface
     /background: linear-gradient\(\s*to right,\s*transparent,[^;]*var\(--thread-row-surface\) 32px\s*\);/u,
   );
   assert.match(styles, /@media \(hover: none\), \(pointer: coarse\)/u);
-  const touchStyles = styles.slice(
-    styles.lastIndexOf("@media (hover: none), (pointer: coarse)"),
-  );
+  // Other controls have their own coarse-pointer blocks; inspect the block
+  // containing Thread actions rather than relying on its position in the file.
+  const touchStyles = [
+    ...styles.matchAll(
+      /@media \(hover: none\), \(pointer: coarse\)\s*\{(?:[^{}]|\{[^{}]*\})*\}/gu,
+    ),
+  ].find(([block]) => block.includes(".thread-menu-trigger"))?.[0];
+  assert.ok(touchStyles, "Thread actions retain their coarse-pointer rules");
   assert.match(
     touchStyles,
     /\.thread-menu-trigger\s*\{[^}]*width: 44px;[^}]*height: 44px;[^}]*pointer-events: auto;/u,

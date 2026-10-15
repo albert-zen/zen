@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ThreadItem } from "../src/protocol-client/index.js";
 import {
   commandPhase,
+  commandStatus,
   commandSummary,
   commandTitle,
   toolPresentation,
@@ -84,7 +85,7 @@ test("thread failures and active phases remain visible without past-tense succes
   assert.equal(commandSummary(requested), "Send message · requested");
   assert.equal(
     commandSummary({ ...send, status: "failed" }),
-    "Send message · failed",
+    "Send message · ended",
   );
   assert.equal(
     commandSummary({ ...send, status: "declined" }),
@@ -98,7 +99,7 @@ test("thread failures and active phases remain visible without past-tense succes
     ["cancellation_unconfirmed", "cancellation unconfirmed"],
     ["cancelled", "cancelled"],
     ["timed_out", "timed out"],
-    ["failed", "failed"],
+    ["failed", "ended"],
   ] as const) {
     assert.equal(
       commandSummary({
@@ -175,4 +176,51 @@ test("concurrent browser tools use readable backend labels without execution ali
     "Inspected page",
   );
   assert.equal(toolPresentation("browser_connected_unknown").category, "Tool");
+});
+
+test("ended tool labels preserve raw phases and never infer success from output or exit code", () => {
+  for (const toolName of ["shell", "wait", "unknown_tool", "run_code"]) {
+    for (const exitCode of [null, 0, 1, 2, 127, 130]) {
+      for (const output of ["", "warning on stderr", "spawn /bin/sh ENOENT"]) {
+        const item = {
+          ...command(toolName),
+          status: "failed" as const,
+          exitCode,
+          aggregatedOutput: output,
+        };
+        const before = structuredClone(item);
+        assert.equal(commandStatus(item), "Ended");
+        assert.equal(commandPhase(item), "failed");
+        assert.deepEqual(item, before);
+      }
+    }
+  }
+});
+
+test("specific lifecycle facts remain distinct from a generic ended label", () => {
+  for (const [status, label] of [
+    ["timed_out", "Timed out"],
+    ["cancelled", "Cancelled"],
+    ["cancellation_unconfirmed", "Cancellation unconfirmed"],
+    ["running", "Waiting"],
+    ["queued", "Queued"],
+  ] as const) {
+    const item = {
+      ...command("wait"),
+      status: "failed" as const,
+      exitCode: 1,
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: {
+        task_id: "shell-task",
+        tool_name: "shell",
+        status,
+        exit_code: 1,
+      },
+    };
+    assert.equal(commandStatus(item), label);
+  }
+  assert.equal(
+    commandStatus({ ...command("shell"), status: "declined" }),
+    "Declined",
+  );
 });

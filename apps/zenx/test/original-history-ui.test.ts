@@ -167,6 +167,80 @@ test("compaction's visible original-history entry pages exact Items and reads fu
   });
 });
 
+test("AppServer user-message content is readable before opening original Item JSON", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { createHostedAppServer } =
+    await import("../../../apps/cli/src/host.js");
+  const directory = await mkdtemp(join(tmpdir(), "zen-original-user-ui-"));
+  const app = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: directory,
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+  });
+  const content = [
+    { type: "text" as const, text: "PUBLIC ORIGINAL USER TEXT SENTINEL" },
+    { type: "text" as const, text: "Second original line 世界" },
+  ];
+  const expected = content.map((part) => part.text).join("\n");
+  try {
+    const created = await app.startThread();
+    await (
+      await app.startTurn(created.id, content)
+    ).done;
+    await app.compactThread(created.id);
+    const stored = await app.readThread(created.id);
+    const compacted = stored.items.findLast(
+      (item) => item.type === "context_compaction",
+    );
+    assert(compacted?.type === "context_compaction");
+    const userMessage = stored.items.find(
+      (item) => item.type === "user_message",
+    );
+    assert(userMessage?.type === "user_message");
+    assert.deepEqual(userMessage.content, content);
+    const journalBefore = JSON.stringify(stored.items);
+    await withRuntimeDom(async (h) => {
+      installReader(async ({ threadId, ...options }) => {
+        assert.equal(threadId, created.id);
+        return readOriginalThreadHistory(stored, options);
+      });
+      await h.render(thread(compacted));
+      await h.click(".original-history-open");
+      const userRow = [
+        ...document.querySelectorAll(".original-history-items > li"),
+      ].find((row) => row.querySelector("strong")?.textContent === "User");
+      assert(userRow);
+      assert.equal(
+        userRow.querySelector(".original-history-body")?.textContent,
+        expected,
+      );
+      assert.equal(
+        userRow.querySelector(".original-history-item-detail"),
+        null,
+      );
+      await act(async () =>
+        userRow.querySelector<HTMLButtonElement>("button")!.click(),
+      );
+      assert.deepEqual(
+        JSON.parse(
+          userRow.querySelector(".original-history-item-detail pre")!
+            .textContent!,
+        ),
+        userMessage,
+      );
+    });
+    assert.equal(JSON.stringify(stored.items), journalBefore);
+  } finally {
+    await app.closeProviderTransport();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("disabled and legacy references cannot fetch, failure is retryable, and late reads cannot reopen after close or navigation", async () => {
   await withRuntimeDom(async (h) => {
     let calls = 0;

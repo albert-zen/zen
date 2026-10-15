@@ -25,6 +25,12 @@ import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
 
+function panelIcon(pluginId: string): IconName {
+  if (pluginId === "zenx-subagents") return "users";
+  if (pluginId === "zenx-triggers") return "trigger";
+  return "layers";
+}
+
 interface ContentTab {
   id: string;
   title: string;
@@ -61,11 +67,11 @@ type AuxiliaryPanelProps = {
   customTabs?: readonly AuxiliaryCustomTab[];
   contextControl?: React.ReactNode;
   threadContext?: Readonly<Record<string, unknown>>;
-  conversation?: {
+  conversations?: readonly {
     threadId: string;
     title: string;
     render(threadId: string): React.ReactNode;
-  };
+  }[];
   messageLinkRequest?: {
     id: number;
     kind: "file" | "browser";
@@ -110,7 +116,7 @@ export function AuxiliaryPanel({
   messageLinkRequest,
   onMessageLinkRequestHandled,
   threadContext,
-  conversation,
+  conversations = [],
 }: AuxiliaryPanelProps) {
   useTranslation("panels");
   const roomContext =
@@ -134,6 +140,10 @@ export function AuxiliaryPanel({
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
+  const fileBody = useRef<HTMLDivElement>(null);
+  const [fileNavigationWidth, setFileNavigationWidth] = useState(192);
+  const [fileNavigationHeight, setFileNavigationHeight] = useState(180);
+  const [fileSplit, setFileSplit] = useState({ stacked: false, max: 360 });
   useLayoutEffect(() => {
     if (!panel.current || !onWidthChange) return;
     const measure = () =>
@@ -183,6 +193,7 @@ export function AuxiliaryPanel({
   }, [open]);
   const [choosing, setChoosing] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
+  const [fileNavigationOpen, setFileNavigationOpen] = useState(true);
   const [browserTabs, setBrowserTabs] = useState<WorkspaceBrowserTab[]>([]);
   const [browserListThread, setBrowserListThread] = useState<string>();
   const [error, setError] = useState("");
@@ -227,15 +238,11 @@ export function AuxiliaryPanel({
         ]
       : []),
     ...customTabs.map((tab) => ({ ...tab, id: `custom:${tab.id}` })),
-    ...(conversation && threadId !== undefined
-      ? [
-          {
-            id: `thread:${conversation.threadId}`,
-            title: conversation.title,
-            icon: "users" as const,
-          },
-        ]
-      : []),
+    ...(threadId !== undefined ? conversations : []).map((conversation) => ({
+      id: `thread:${conversation.threadId}`,
+      title: conversation.title,
+      icon: "users" as const,
+    })),
     ...files.map(([, draft]) => ({
       id: `file:${draft.base.path}`,
       title: draft.base.path.split("/").at(-1)!,
@@ -271,8 +278,11 @@ export function AuxiliaryPanel({
       : []),
     ...panels.map((panel) => ({
       id: `plugin:${panel.key}`,
-      title: panel.title,
-      icon: "layers" as const,
+      title:
+        panel.pluginId === "zenx-triggers"
+          ? i18n.t("panels:automations")
+          : panel.title,
+      icon: panelIcon(panel.pluginId),
     })),
   ];
   const available = new Map(candidates.map((tab) => [tab.id, tab]));
@@ -335,6 +345,51 @@ export function AuxiliaryPanel({
     threadIdRef.current === owner &&
     resourceEpoch.current === epoch;
   const showChooser = choosing || tabs.length === 0;
+  const fileSurface =
+    (!showChooser && active?.startsWith("file:")) ||
+    (showChooser && pickingFile);
+  const fileNavigationVisible =
+    fileSurface && (fileNavigationOpen || pickingFile);
+  useLayoutEffect(() => {
+    const body = fileBody.current;
+    if (!body || !open || !fileNavigationVisible || pickingFile) return;
+    const measure = () => {
+      const bounds = body.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const stacked = getComputedStyle(body).flexDirection === "column";
+      const max = stacked
+        ? Math.max(100, Math.min(300, bounds.height - 160))
+        : Math.max(140, Math.min(360, bounds.width - 240));
+      setFileSplit((current) =>
+        current.stacked === stacked && current.max === max
+          ? current
+          : { stacked, max },
+      );
+    };
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(body);
+    measure();
+    return () => observer?.disconnect();
+  }, [open, expanded, fileNavigationVisible, pickingFile]);
+  const fileNavigationMinimum = fileSplit.stacked ? 100 : 140;
+  const fileNavigationSize = Math.min(
+    fileSplit.max,
+    Math.max(
+      fileNavigationMinimum,
+      fileSplit.stacked ? fileNavigationHeight : fileNavigationWidth,
+    ),
+  );
+  const resizeFileNavigation = (value: number) => {
+    const clamped = Math.max(
+      fileNavigationMinimum,
+      Math.min(fileSplit.max, value),
+    );
+    if (fileSplit.stacked) setFileNavigationHeight(clamped);
+    else setFileNavigationWidth(clamped);
+  };
   const select = (id: string, focusTab = false) => {
     selectionEpoch.current += 1;
     pendingTabFocus.current = focusTab ? id : null;
@@ -435,6 +490,7 @@ export function AuxiliaryPanel({
     setError("");
     if (id === "file") {
       setPickingFile(true);
+      setFileNavigationOpen(true);
       setChoosing(true);
       return;
     }
@@ -595,6 +651,25 @@ export function AuxiliaryPanel({
       aria-label={i18n.t("panels:sidePanelFor", { title })}
       style={{ "--auxiliary-width": `${width}px` } as React.CSSProperties}
       onKeyDown={(event) => {
+        if (
+          fileSurface &&
+          (event.ctrlKey || event.metaKey) &&
+          !event.altKey &&
+          !event.shiftKey &&
+          event.key.toLowerCase() === "p" &&
+          !event.nativeEvent.isComposing &&
+          event.nativeEvent.keyCode !== 229
+        ) {
+          event.preventDefault();
+          setFileNavigationOpen(true);
+          requestAnimationFrame(() => {
+            const input = panel.current?.querySelector<HTMLInputElement>(
+              '.workspace-file-navigation input[type="search"]',
+            );
+            input?.focus();
+            input?.select();
+          });
+        }
         if (event.key === "Escape" && !event.defaultPrevented) {
           event.preventDefault();
           if (choosing) {
@@ -647,6 +722,28 @@ export function AuxiliaryPanel({
         }}
       />
       <header className="auxiliary-heading">
+        {fileSurface ? (
+          <button
+            type="button"
+            className="icon-button workspace-navigation-toggle"
+            aria-label={i18n.t(
+              fileNavigationVisible
+                ? "panels:hideFileNavigation"
+                : "panels:showFileNavigation",
+            )}
+            title={i18n.t(
+              fileNavigationVisible
+                ? "panels:hideFileNavigation"
+                : "panels:showFileNavigation",
+            )}
+            aria-pressed={Boolean(fileNavigationVisible)}
+            aria-controls="workspace-file-navigation"
+            disabled={pickingFile}
+            onClick={() => setFileNavigationOpen((value) => !value)}
+          >
+            <Icon name="folder" />
+          </button>
+        ) : null}
         <div className="workspace-tab-rail">
           <div
             ref={tabRail}
@@ -779,224 +876,366 @@ export function AuxiliaryPanel({
               : error}
         </p>
       ) : null}
-      {showChooser ? (
-        <div className="auxiliary-content workspace-new-tab">
-          {pickingFile ? (
-            threadId !== undefined ? (
-              <WorkspaceFilePicker
-                threadId={threadId}
-                onOpen={openFile}
-                onBack={() => {
-                  selectionEpoch.current += 1;
-                  setPickingFile(false);
-                }}
-              />
-            ) : null
-          ) : (
-            <div
-              className="workspace-tab-types"
-              aria-label={i18n.t("panels:newTabType")}
-            >
-              <header>
-                <h3>
-                  {roomContext
-                    ? i18n.t("panels:openBesideThisRoom")
-                    : i18n.t("panels:openBesideThisConversation")}
-                </h3>
-                <p>
-                  {roomContext
-                    ? roomContext.resourceThread
-                      ? i18n.t("panels:conversationResourcesUse", {
-                          name: roomContext.resourceThread.title,
-                        })
-                      : i18n.t("panels:chooseARoomMemberToEnableConversation")
-                    : i18n.t(
-                        "panels:filesPagesAndObservationsShareThisWorkspace",
-                      )}
-                </p>
-              </header>
-              {customTabs.map((tab) => (
-                <button
-                  type="button"
-                  key={`custom:${tab.id}`}
-                  onClick={() => void add(`custom:${tab.id}`)}
+      <div
+        ref={fileBody}
+        className="auxiliary-body"
+        style={
+          {
+            "--file-navigation-width": `${fileSplit.stacked ? fileNavigationWidth : fileNavigationSize}px`,
+            "--file-navigation-height": `${fileSplit.stacked ? fileNavigationSize : fileNavigationHeight}px`,
+          } as React.CSSProperties
+        }
+        data-files={Boolean(fileSurface)}
+        data-picking={showChooser && pickingFile}
+      >
+        {threadId !== undefined && (files.length > 0 || pickingFile) ? (
+          <nav
+            id="workspace-file-navigation"
+            className="workspace-file-navigation"
+            aria-label={i18n.t("panels:workspaceFiles")}
+            hidden={!fileNavigationVisible}
+          >
+            <WorkspaceFilePicker
+              threadId={threadId}
+              workspacePath={workspacePath}
+              selectedPath={
+                active?.startsWith("file:") ? active.slice(5) : undefined
+              }
+              navigation={!pickingFile}
+              onOpen={openFile}
+              onBack={() => {
+                selectionEpoch.current += 1;
+                setPickingFile(false);
+              }}
+            />
+          </nav>
+        ) : null}
+        {threadId !== undefined && files.length > 0 ? (
+          <div
+            className="workspace-file-resizer"
+            role="separator"
+            aria-label={i18n.t("panels:resizeFileNavigation")}
+            title={i18n.t("panels:resizeFileNavigation")}
+            aria-controls="workspace-file-navigation"
+            aria-orientation={fileSplit.stacked ? "horizontal" : "vertical"}
+            aria-valuemin={fileNavigationMinimum}
+            aria-valuemax={fileSplit.max}
+            aria-valuenow={fileNavigationSize}
+            hidden={!fileNavigationVisible || pickingFile}
+            tabIndex={0}
+            onKeyDown={(event) => {
+              const decrease = fileSplit.stacked ? "ArrowUp" : "ArrowLeft";
+              const increase = fileSplit.stacked ? "ArrowDown" : "ArrowRight";
+              const next =
+                event.key === "Home"
+                  ? fileNavigationMinimum
+                  : event.key === "End"
+                    ? fileSplit.max
+                    : event.key === decrease
+                      ? fileNavigationSize - 20
+                      : event.key === increase
+                        ? fileNavigationSize + 20
+                        : undefined;
+              if (next === undefined) return;
+              event.preventDefault();
+              event.stopPropagation();
+              resizeFileNavigation(next);
+            }}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.currentTarget.focus();
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                return;
+              const bounds = fileBody.current?.getBoundingClientRect();
+              if (bounds)
+                resizeFileNavigation(
+                  fileSplit.stacked
+                    ? event.clientY - bounds.top
+                    : event.clientX - bounds.left,
+                );
+            }}
+            onPointerUp={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId))
+                event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+            onPointerCancel={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId))
+                event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+          />
+        ) : null}
+        <div className="auxiliary-views" hidden={showChooser && pickingFile}>
+          {showChooser ? (
+            <div className="auxiliary-content workspace-new-tab">
+              {pickingFile ? null : (
+                <div
+                  className="workspace-tab-types"
+                  aria-label={i18n.t("panels:newTabType")}
                 >
-                  <Icon name={tab.icon} />
-                  <span>
-                    <strong>{tab.title}</strong>
-                  </span>
-                </button>
-              ))}
-              {threadId !== undefined ? (
-                <>
-                  <button type="button" onClick={() => void add("terminal")}>
-                    <Icon name="terminal" />
-                    <span>
-                      <strong>{i18n.t("panels:shellTitle")}</strong>
-                      <small>{i18n.t("panels:shellChooser")}</small>
-                    </span>
-                  </button>
-                  <button type="button" onClick={() => void add("file")}>
-                    <Icon name="file" />
-                    <span>
-                      <strong>{i18n.t("panels:file")}</strong>
-                      <small>{i18n.t("panels:readOrEditAFileInThis")}</small>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void add("browser")}
-                  >
-                    <Icon name="browser" />
-                    <span>
-                      <strong>{i18n.t("panels:browser")}</strong>
-                      <small>
-                        {i18n.t("panels:browseASharedPageWithTheAgent")}
-                      </small>
-                    </span>
-                  </button>
-                  {computer ? (
-                    <button type="button" onClick={() => void add("computer")}>
-                      <Icon name="computer" />
-                      <span>
-                        <strong>{i18n.t("panels:computer")}</strong>
-                        <small>
-                          {i18n.t("panels:observeTheAgentSDesktopActivity")}
-                        </small>
-                      </span>
-                    </button>
-                  ) : null}
-                  {browser ? (
-                    <button type="button" onClick={() => void add("attached")}>
-                      <Icon name="browser" />
-                      <span>
-                        <strong>{i18n.t("panels:attachedBrowser")}</strong>
-                        <small>
-                          {i18n.t("panels:inspectConnectedBrowserActivity")}
-                        </small>
-                      </span>
-                    </button>
-                  ) : null}
-                  {panels.map((panel) => (
+                  <header>
+                    <h3>
+                      {roomContext
+                        ? i18n.t("panels:openBesideThisRoom")
+                        : i18n.t("panels:openBesideThisConversation")}
+                    </h3>
+                    <p>
+                      {roomContext
+                        ? roomContext.resourceThread
+                          ? i18n.t("panels:conversationResourcesUse", {
+                              name: roomContext.resourceThread.title,
+                            })
+                          : i18n.t(
+                              "panels:chooseARoomMemberToEnableConversation",
+                            )
+                        : i18n.t(
+                            "panels:filesPagesAndObservationsShareThisWorkspace",
+                          )}
+                    </p>
+                  </header>
+                  {customTabs.map((tab) => (
                     <button
                       type="button"
-                      key={panel.key}
-                      onClick={() => void add(`plugin:${panel.key}`)}
+                      key={`custom:${tab.id}`}
+                      onClick={() => void add(`custom:${tab.id}`)}
                     >
-                      <Icon name="layers" />
+                      <Icon name={tab.icon} />
                       <span>
-                        <strong>{panel.title}</strong>
+                        <strong>{tab.title}</strong>
                       </span>
                     </button>
                   ))}
-                </>
-              ) : null}
+                  {threadId !== undefined ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void add("terminal")}
+                      >
+                        <Icon name="terminal" />
+                        <span>
+                          <strong>{i18n.t("panels:shellTitle")}</strong>
+                          <small>{i18n.t("panels:shellChooser")}</small>
+                        </span>
+                      </button>
+                      <button type="button" onClick={() => void add("file")}>
+                        <Icon name="file" />
+                        <span>
+                          <strong>{i18n.t("panels:file")}</strong>
+                          <small>
+                            {i18n.t("panels:readOrEditAFileInThis")}
+                          </small>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void add("browser")}
+                      >
+                        <Icon name="browser" />
+                        <span>
+                          <strong>{i18n.t("panels:browser")}</strong>
+                          <small>
+                            {i18n.t("panels:browseASharedPageWithTheAgent")}
+                          </small>
+                        </span>
+                      </button>
+                      {computer ? (
+                        <button
+                          type="button"
+                          onClick={() => void add("computer")}
+                        >
+                          <Icon name="computer" />
+                          <span>
+                            <strong>{i18n.t("panels:computer")}</strong>
+                            <small>
+                              {i18n.t("panels:observeTheAgentSDesktopActivity")}
+                            </small>
+                          </span>
+                        </button>
+                      ) : null}
+                      {browser ? (
+                        <button
+                          type="button"
+                          onClick={() => void add("attached")}
+                        >
+                          <Icon name="browser" />
+                          <span>
+                            <strong>{i18n.t("panels:attachedBrowser")}</strong>
+                            <small>
+                              {i18n.t("panels:inspectConnectedBrowserActivity")}
+                            </small>
+                          </span>
+                        </button>
+                      ) : null}
+                      {panels.map((panel) => (
+                        <div
+                          className="workspace-plugin-choice"
+                          key={panel.key}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => void add(`plugin:${panel.key}`)}
+                          >
+                            <Icon name={panelIcon(panel.pluginId)} />
+                            <span>
+                              <strong>
+                                {panel.pluginId === "zenx-triggers"
+                                  ? i18n.t("panels:automations")
+                                  : panel.title}
+                              </strong>
+                              {panel.pluginId === "zenx-subagents" ? (
+                                <small>
+                                  {i18n.t(
+                                    "panels:subagentsWorkspaceDescription",
+                                  )}
+                                </small>
+                              ) : panel.pluginId === "zenx-triggers" ? (
+                                <small>
+                                  {i18n.t(
+                                    "panels:triggersWorkspaceDescription",
+                                  )}
+                                </small>
+                              ) : null}
+                            </span>
+                          </button>
+                          {panel.pluginId === "zenx-subagents" && snapshot ? (
+                            <GenericPluginUiHost
+                              registry={pluginUiRegistry}
+                              snapshot={snapshot}
+                              pluginId={panel.pluginId}
+                              surfaceId={panel.surfaceId}
+                              context={{
+                                threadId,
+                                quickCreate: true,
+                                active: open === true,
+                              }}
+                              theme={theme}
+                              executeCommand={
+                                window.zenx.plugins.executeCommand
+                              }
+                              readHandle={window.zenx.plugins.readHandle}
+                              navigate={navigate}
+                            />
+                          ) : null}
+                        </div>
+                      ))}
+                    </>
+                  ) : null}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      ) : null}
-      {tabs.map((tab) => {
-        const visible = !showChooser && active === tab.id;
-        const panel = panels.find((value) => `plugin:${value.key}` === tab.id);
-        return (
-          <div
-            className="auxiliary-content"
-            key={tab.id}
-            role="tabpanel"
-            id={`aux-content-${tab.id}`}
-            aria-labelledby={`aux-tab-${tab.id}`}
-            hidden={!visible}
-          >
-            {conversation &&
-            threadId !== undefined &&
-            tab.id === `thread:${conversation.threadId}` &&
-            open &&
-            visible ? (
-              <div className="auxiliary-conversation">
-                <header className="auxiliary-conversation-heading">
-                  <span>{conversation.title}</span>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={i18n.t("panels:openConversationFullScreen")}
-                    title={i18n.t("panels:openConversationFullScreen")}
-                    onClick={() =>
-                      navigate?.(
-                        `/threads/${encodeURIComponent(conversation.threadId)}`,
-                      )
-                    }
-                  >
-                    <Icon name="expand" />
-                  </button>
-                </header>
-                {conversation.render(conversation.threadId)}
+          ) : null}
+          {tabs.map((tab) => {
+            const visible = !showChooser && active === tab.id;
+            const panel = panels.find(
+              (value) => `plugin:${value.key}` === tab.id,
+            );
+            const conversation = conversations.find(
+              (value) => `thread:${value.threadId}` === tab.id,
+            );
+            return (
+              <div
+                className="auxiliary-content"
+                key={tab.id}
+                role="tabpanel"
+                id={`aux-content-${tab.id}`}
+                aria-labelledby={`aux-tab-${tab.id}`}
+                hidden={!visible}
+              >
+                {conversation &&
+                threadId !== undefined &&
+                tab.id === `thread:${conversation.threadId}` &&
+                open &&
+                visible ? (
+                  <div className="auxiliary-conversation">
+                    <header className="auxiliary-conversation-heading">
+                      <span>{conversation.title}</span>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={i18n.t("panels:openConversationFullScreen")}
+                        title={i18n.t("panels:openConversationFullScreen")}
+                        onClick={() =>
+                          navigate?.(
+                            `/threads/${encodeURIComponent(conversation.threadId)}`,
+                          )
+                        }
+                      >
+                        <Icon name="expand" />
+                      </button>
+                    </header>
+                    {conversation.render(conversation.threadId)}
+                  </div>
+                ) : null}
+                {tab.render ? tab.render() : null}
+                {tab.path && threadId !== undefined ? (
+                  <WorkspaceFilesPanel
+                    threadId={threadId}
+                    drafts={drafts}
+                    workspacePath={workspacePath}
+                    initialPath={tab.path}
+                    standalone
+                  />
+                ) : null}
+                {tab.browser && threadId !== undefined && visible ? (
+                  <WorkspaceBrowserPanel
+                    threadId={threadId}
+                    tab={tab.browser}
+                    open={open === true}
+                  />
+                ) : null}
+                {tab.id === "terminal" && threadId !== undefined ? (
+                  <ShellThreadPanel
+                    key={threadId}
+                    threadId={threadId}
+                    active={open === true && visible}
+                  />
+                ) : null}
+                {tab.id === "computer" && threadId !== undefined ? (
+                  <ComputerThreadPanel
+                    threadId={threadId}
+                    active={open === true && visible}
+                  />
+                ) : null}
+                {tab.id === "attached" && threadId !== undefined ? (
+                  <BrowserThreadPanel
+                    threadId={threadId}
+                    title={title}
+                    embedded
+                    open={open === true && visible}
+                    onOpenChange={onOpenChange}
+                    providerRevision={snapshot}
+                  />
+                ) : null}
+                {panel && snapshot && threadId !== undefined ? (
+                  <GenericPluginUiHost
+                    key={panel.key}
+                    className="auxiliary-plugin"
+                    registry={pluginUiRegistry}
+                    snapshot={snapshot}
+                    pluginId={panel.pluginId}
+                    surfaceId={panel.surfaceId}
+                    context={{
+                      ...threadContext,
+                      active: open === true && visible,
+                      route: roomContext ? "room" : "agent",
+                      threadId,
+                      ...(roomContext ? { roomId: roomContext.roomId } : {}),
+                    }}
+                    theme={theme}
+                    executeCommand={window.zenx.plugins.executeCommand}
+                    readHandle={window.zenx.plugins.readHandle}
+                    navigate={navigate}
+                  />
+                ) : null}
               </div>
-            ) : null}
-            {tab.render ? tab.render() : null}
-            {tab.path && threadId !== undefined ? (
-              <WorkspaceFilesPanel
-                threadId={threadId}
-                drafts={drafts}
-                workspacePath={workspacePath}
-                initialPath={tab.path}
-                standalone
-              />
-            ) : null}
-            {tab.browser && threadId !== undefined && visible ? (
-              <WorkspaceBrowserPanel
-                threadId={threadId}
-                tab={tab.browser}
-                open={open === true}
-              />
-            ) : null}
-            {tab.id === "terminal" && threadId !== undefined ? (
-              <ShellThreadPanel
-                key={threadId}
-                threadId={threadId}
-                active={open === true && visible}
-              />
-            ) : null}
-            {tab.id === "computer" && threadId !== undefined ? (
-              <ComputerThreadPanel
-                threadId={threadId}
-                active={open === true && visible}
-              />
-            ) : null}
-            {tab.id === "attached" && threadId !== undefined ? (
-              <BrowserThreadPanel
-                threadId={threadId}
-                title={title}
-                embedded
-                open={open === true && visible}
-                onOpenChange={onOpenChange}
-                providerRevision={snapshot}
-              />
-            ) : null}
-            {panel && snapshot && threadId !== undefined ? (
-              <GenericPluginUiHost
-                key={panel.key}
-                className="auxiliary-plugin"
-                registry={pluginUiRegistry}
-                snapshot={snapshot}
-                pluginId={panel.pluginId}
-                surfaceId={panel.surfaceId}
-                context={{
-                  ...threadContext,
-                  active: open === true && visible,
-                  route: roomContext ? "room" : "agent",
-                  threadId,
-                  ...(roomContext ? { roomId: roomContext.roomId } : {}),
-                }}
-                theme={theme}
-                executeCommand={window.zenx.plugins.executeCommand}
-                readHandle={window.zenx.plugins.readHandle}
-                navigate={navigate}
-              />
-            ) : null}
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      </div>
     </aside>
   );
 }

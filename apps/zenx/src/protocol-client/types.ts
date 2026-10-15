@@ -4,6 +4,10 @@ import type {
   CodexThreadItem,
   CodexTurn,
 } from "../../../../src/protocol/codex/mapper.js";
+import type {
+  NativeForkThreadParams,
+  NativeForkThreadResult,
+} from "../../../../src/protocol/native/wire.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { CanonicalItem } from "../../../../src/item.js";
 import type {
@@ -181,6 +185,7 @@ export interface ClientRequestParams {
   "skills/list": { cwds: string[] };
   "model/list": { cursor?: null };
   "thread/start": ThreadConfigurationParams;
+  "zen/thread/fork": NativeForkThreadParams;
   "thread/fork": {
     sourceThreadId: string;
     through: { type: "latest-complete" };
@@ -282,6 +287,7 @@ export interface ClientRequestResults {
   };
   "model/list": { data: ModelSummary[]; nextCursor: null };
   "thread/start": { thread: Thread } & ThreadSettingsSnapshot;
+  "zen/thread/fork": NativeForkThreadResult;
   "thread/fork": { thread: Thread } & ThreadSettingsSnapshot;
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;

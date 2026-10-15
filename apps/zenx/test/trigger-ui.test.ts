@@ -158,9 +158,9 @@ test("thread panel displays empty-state creation scoped to Thread; global page h
   const rail = renderToStaticMarkup(createElement(TriggersPanel, { sdk }));
   assert.match(rail, /Thread triggers/);
   assert.match(rail, /New trigger/);
-  assert.match(rail, /All automations/);
+  assert.match(rail, /All triggers/);
   const global = renderToStaticMarkup(createElement(TriggersPage, { sdk }));
-  assert.match(global, /Automations/);
+  assert.match(global, /Triggers/);
   assert.match(global, /New trigger/);
 });
 

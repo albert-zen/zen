@@ -4,7 +4,10 @@ import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import { emptyComposerState } from "../../src/renderer/src/composer-state.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
-import { readOriginalThreadHistory } from "../../../../src/thread-history.js";
+import {
+  readOriginalThreadHistory,
+  type OriginalHistoryOptions,
+} from "../../../../src/thread-history.js";
 import type { ThreadSnapshot } from "../../../../src/app-server.js";
 import type {
   CanonicalItem,
@@ -16,35 +19,36 @@ import "../../src/renderer/src/styles.css";
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 await i18n.changeLanguage("zh-CN");
-const original = [
+const originalBase = {
+  threadId: "synthetic-thread",
+  turnId: "turn-1",
+  createdAt: "2026-10-14T06:00:00Z",
+};
+const original: CanonicalItem[] = [
   {
+    ...originalBase,
     id: "user-1",
     type: "user_message",
-    input: [
+    content: [
       { type: "text", text: "请把压缩后的原始历史入口接通，并保留所有原文。" },
     ],
   },
   {
+    ...originalBase,
     id: "tool-result-2",
     type: "tool_result",
     output:
       "Synthetic test output\n206 tests passed. Original tool text remains unchanged.",
     callId: "call-2",
-    toolCallId: "tool-call-2",
-    name: "fixture_test",
     exitCode: 0,
   },
   {
+    ...originalBase,
     id: "assistant-3",
     type: "agent_message",
     text: "模型读取与界面入口已接通。下一步检查窄屏和分页。",
   },
-].map((item) => ({
-  ...item,
-  threadId: "synthetic-thread",
-  turnId: "turn-1",
-  createdAt: "2026-10-14T06:00:00Z",
-})) as CanonicalItem[];
+];
 const item: ContextCompactionItem = {
   id: "compact-4",
   type: "context_compaction",
@@ -69,12 +73,12 @@ const snapshot = {
 Object.assign(window, {
   zenx: {
     protocol: {
-      request: async (_method: string, request: Record<string, unknown>) => {
+      request: async (
+        _method: string,
+        request: OriginalHistoryOptions & { threadId: string },
+      ) => {
         const { threadId: _threadId, ...options } = request;
-        return readOriginalThreadHistory(
-          snapshot,
-          options as Parameters<typeof readOriginalThreadHistory>[1],
-        );
+        return readOriginalThreadHistory(snapshot, options);
       },
     },
   },

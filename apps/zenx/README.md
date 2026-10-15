@@ -286,6 +286,45 @@ Packaging does not migrate, delete, or redirect either profile. Pass
 `--user-data-dir=<new-path>` when you deliberately need an isolated profile for
 testing; never point that option at an existing browser or ZenX profile.
 
+### Embedded browser storage and restart behavior
+
+Workspace browser tabs use the shared persistent Electron partition
+`persist:zenx-workspace-browser`. Its on-disk location is
+`<Electron userData>/Partitions/zenx-workspace-browser`; Electron's `sessionData`
+root defaults to `userData`. For example, the portable Windows app stores this
+under `%APPDATA%\\zenx\\Partitions\\zenx-workspace-browser`, and portable macOS
+uses `~/Library/Application Support/zenx/Partitions/zenx-workspace-browser`.
+Linux uses `$XDG_CONFIG_HOME/zenx/Partitions/zenx-workspace-browser` (normally
+`~/.config/zenx/Partitions/zenx-workspace-browser`). `ZENX_DATA_DIR` and `~/.zen`
+select Zen runtime data, not this Electron browser profile.
+
+A subsequent launch with the same app identity and data root reuses that
+profile; moving/updating the portable executable does not itself change the
+root. Development and portable builds have the separate identities described
+above. No profile migration or cross-profile credential copying is performed.
+
+Persistent cookies and localStorage can survive a normal quit/relaunch.
+Session-only cookies expire with the browser session; sessionStorage is tied
+to its page. Website expiry, logout, revocation, and server-side session rules
+still apply, so disk persistence cannot promise permanent login. Detaching a
+Thread browser session does not clear the shared profile. Closing a tab loses
+that page's sessionStorage; the profile remains available to other/new tabs.
+The open tab directory and control ownership are currently in memory, so a
+relaunch does not restore tabs or replay previous page actions.
+
+This describes the visible Workspace backend. Explicit `ZENX_BROWSER_MODE=isolated`
+automation uses separate disposable provider sessions; it is not the Workspace
+profile. A connected external browser keeps its own existing profile in place.
+
+Run `npm --workspace apps/zenx run smoke:workspace-browser-persistence` on an
+interactive desktop to check the actual Workspace factory in independent
+Electron processes. It creates a new temporary profile and a loopback-only
+synthetic login page, verifies cookie/localStorage reuse, page/session teardown
+boundaries and fresh-process behavior, then removes only that fixture profile.
+It never reads existing user cookies or serializes login credentials. This
+smoke does not constitute a packaged-app update, crash-recovery, or real-site
+login acceptance test.
+
 ## External App Server clients
 
 While ZenX is running, its app-owned Host publishes

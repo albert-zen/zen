@@ -12,6 +12,7 @@ export const clientRequestMethods = [
   "model/list",
   "thread/start",
   "thread/fork",
+  "zen/thread/fork",
   "thread/resume",
   "zen/thread/resume",
   "zen/thread/read",

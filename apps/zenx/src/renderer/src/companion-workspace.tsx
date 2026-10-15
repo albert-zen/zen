@@ -10,13 +10,14 @@ import type {
 } from "../../main/trigger-types.js";
 import type { RoomConversation } from "./room-conversations.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { threadTitle } from "./thread-list.js";
 
 export interface CompanionViewState {
   selected: string;
   tabs: string[];
   member: string;
-  conversationThreadId?: string;
+  conversationThreadIds?: string[];
 }
 
 export function CompanionWorkspace({
@@ -32,7 +33,9 @@ export function CompanionWorkspace({
   viewState,
   onViewChange,
   renderConversation,
+  onRenameThread,
 }: {
+  onRenameThread?(threadId: string, title: string): Promise<void>;
   renderConversation?(threadId: string): React.ReactNode;
   room: RoomConversation;
   threads: readonly NativeThreadSummary[];
@@ -214,6 +217,9 @@ export function CompanionWorkspace({
       </li>
     );
   };
+  const workingThread = threads.find(
+    (thread) => thread.threadId === room.assistant?.threadId,
+  );
   const facts = (
     <>
       <h3>PAW</h3>
@@ -221,6 +227,19 @@ export function CompanionWorkspace({
       <dl>
         <dt>{i18n.t("panels:workingThread")}</dt>
         <dd>
+          {workingThread && onRenameThread ? (
+            <ThreadTitleEditor
+              key={workingThread.threadId}
+              title={threadTitle(workingThread)}
+              editable={
+                !workingThread.archived &&
+                workingThread.status !== "systemError"
+              }
+              onRename={(title) =>
+                onRenameThread(workingThread.threadId, title)
+              }
+            />
+          ) : null}
           {room.assistant ? (
             <button
               type="button"
@@ -515,19 +534,21 @@ export function CompanionWorkspace({
   ];
   return (
     <AuxiliaryPanel
-      conversation={
-        view.conversationThreadId && renderConversation
-          ? {
-              threadId: view.conversationThreadId,
-              title: (() => {
-                const t = threads.find(
-                  (t) => t.threadId === view.conversationThreadId,
-                );
-                return t ? threadTitle(t) : i18n.t("panels:conversation");
-              })(),
-              render: renderConversation,
-            }
-          : undefined
+      conversations={
+        renderConversation
+          ? (view.conversationThreadIds ?? []).map((threadId) => {
+              const thread = threads.find(
+                (value) => value.threadId === threadId,
+              );
+              return {
+                threadId,
+                title: thread
+                  ? threadTitle(thread)
+                  : i18n.t("panels:conversation"),
+                render: renderConversation,
+              };
+            })
+          : []
       }
       fileDrafts={fileDrafts}
       messageLinkRequest={

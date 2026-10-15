@@ -216,6 +216,62 @@ test("original-history references, limits and cursors fail closed across threads
   );
 });
 
+test("user previews read public canonical content while preserving legacy text and opaque boundaries", () => {
+  const messages = [
+    {
+      ...base,
+      id: "legacy",
+      type: "user_message",
+      turnId: "turn",
+      text: "Legacy original",
+    },
+    {
+      ...base,
+      id: "public",
+      type: "user_message",
+      turnId: "turn",
+      content: [
+        { type: "text", text: "First original" },
+        { type: "text", text: "Second original" },
+      ],
+    },
+    {
+      ...base,
+      id: "opaque-user",
+      type: "user_message",
+      turnId: "turn",
+      contentVisibility: "opaque",
+      content: [{ type: "text", text: "TOP LEVEL PRIVATE" }],
+    },
+    {
+      ...base,
+      id: "nested-user",
+      type: "user_message",
+      turnId: "turn",
+      content: [
+        { type: "text", text: "Public content" },
+        { type: "text", contentVisibility: "opaque", text: "NESTED PRIVATE" },
+      ],
+    },
+  ] as unknown as CanonicalItem[];
+  const stored = {
+    ...snapshot,
+    items: [...messages, { ...compact, coveredThroughItemId: "nested-user" }],
+  };
+  const before = JSON.stringify(stored);
+  const page = readOriginalThreadHistory(stored, {
+    throughItemId: "nested-user",
+  });
+  assert.equal(page.granularity, "items");
+  if (page.granularity !== "items") throw new Error();
+  assert.equal(page.items[0]?.text, "Legacy original");
+  assert.equal(page.items[1]?.text, "First original\nSecond original");
+  assert.equal(page.items[2]?.text, undefined);
+  assert.equal(page.items[3]?.text, "Public content\n");
+  assert.doesNotMatch(JSON.stringify(page), /TOP LEVEL PRIVATE|NESTED PRIVATE/);
+  assert.equal(JSON.stringify(stored), before);
+});
+
 test("an original reference survives journal reload without changing its prefix", async () => {
   const { mkdtemp, rm } = await import("node:fs/promises");
   const os = await import("node:os");

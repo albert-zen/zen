@@ -195,8 +195,8 @@ function previewItem(
       ? visible.text
       : typeof visible.output === "string"
         ? visible.output
-        : item.type === "user_message" && Array.isArray(visible.input)
-          ? textFromUserInput(visible.input as import("./item.js").UserInput)
+        : item.type === "user_message" && Array.isArray(visible.content)
+          ? textFromUserInput(visible.content as import("./item.js").UserInput)
           : item.type === "reasoning" && typeof visible.summary === "string"
             ? visible.summary
             : item.type === "reasoning" &&

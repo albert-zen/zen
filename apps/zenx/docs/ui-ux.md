@@ -135,8 +135,8 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 
 ### 4.1 Thread row 与管理菜单
 
-- Thread 标题用满除真实状态以外的可用宽度。绑定的 Trigger 用时钟表示，运行用明确 spinner；时钟位于 spinner 左侧，未读 Agent 回复用独立的小点。详细密度保留 Working 文字，reduced-motion 使用静态进度图形与可读状态。管理三点只在 hover / keyboard focus / 菜单打开时显示，渐变表面覆盖标题尾部，不永久空留操作栏；无 hover 的触屏保留可见的 44px 操作入口。 时钟、进度与三点使用相同 16px 图形画布和等距槽位；尾部遮罩覆盖会话行整高，左缘圆弧配柔和渐变、右缘沿行圆角，不露出上沿文字。
-- Hover / row keyboard focus 打开右侧非模态详情；不抢焦点，浮层可跨间隙进入并点击，Arrow Right 进入完整名称，Escape 关闭并还焦点。完整名称按钮直接进入原有 Thread rename；触屏三点内提供同样完整信息。详情显示已知 Project、机器、最近 canonical 消息时间以及绑定 Trigger 的最早有效未来时间；过期、读取失败或缺失投影明确不可用，不从 updatedAt 推断消息时间，不从 timer interval 私算下次运行。只有事件型 Trigger 显示符合条件时触发，全部暂停显示已暂停。
+- Thread 标题用满除真实状态以外的可用宽度。仅有活跃的 Trigger 时用时钟表示，运行用明确 spinner；时钟位于 spinner 左侧，未读 Agent 回复用独立的小点。详细密度不在模型名旁重复显示 Working 文字；运行图标保留可访问的 Running 标签，审批文字仍可见。reduced-motion 使用静态进度图形与可读状态。管理三点只在 hover / keyboard focus / 菜单打开时显示，渐变表面覆盖标题尾部，不永久空留操作栏；无 hover 的触屏保留可见的 44px 操作入口。 时钟、进度与三点使用相同 16px 图形画布和等距槽位；尾部遮罩覆盖会话行整高，左缘圆弧配柔和渐变、右缘沿行圆角，不露出上沿文字。
+- Hover / row keyboard focus 打开右侧非模态详情；不抢焦点，浮层可跨间隙进入并点击，Arrow Right 进入完整名称，Escape 关闭并还焦点。完整名称按钮直接进入原有 Thread rename；触屏三点内提供同样完整信息。详情显示已知 Project、机器、最近 canonical 消息时间以及活跃 Trigger 的最早有效未来时间和活跃数量；过期、读取失败或缺失投影明确不可用，不从 updatedAt 推断消息时间，不从 timer interval 私算下次运行。只有事件型 Trigger 显示符合条件时触发，不虚构时间；无活跃 Trigger（包括全部暂停、已完成或插件禁用）时隐藏时钟与下次触发行。用户可见名称统一为英文 Trigger / Triggers、中文触发器，保留既有协议与存储标识。
 - Thread 与 PAW/Room 名称保持各自对象身份。改名使用原有权威命令，Enter 保存、IME Enter 不提交、Escape 取消；保存中防重复、失败保留草稿并显示错误，晚到回执不能关闭新编辑器、改变新选择或抢走焦点。
 
 - Thread management menu 存在于每个 Thread row，触发器使用正常重量的 horizontal ellipsis。
@@ -191,7 +191,7 @@ Trace sequence projection 按 Item 顺序生成：
 
 Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
-Tool 状态统一投影为 `queued / running / success / failed / cancelled / approval_required`。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。
+Tool 展示动作、执行进度和中性的已结束状态；超时、取消、拒绝、审批与取消未确认保留具体事实标签，不另设通用失败标签或计数。状态更新同一个稳定 Item，不创建重复 row；原始结果、输出与退出码保留在详情，长 payload 在摘要截断，在详情内换行或局部滚动。
 
 `run_code` outer command 与 nested `tools.*` command 仍属于同一 trace sequence。展开后，UI
 只根据 ZAS protocol projection 携带的 canonical `callId / parentCallId` 缩进实际 child；不得从
@@ -337,6 +337,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Sidebar 的 Plugin spaces 位于**整个 Projects group 之前**。Plugin contribution 不能插入 Projects header 与 Project/Thread list 之间，也不能把这个 group 拆成两段。
 - 人类使用插件页面、settings、panel、command/menu 或普通领域 action 不创建 Turn；只有标为 **Run Agent** 的显式动作才调用 AppServer 并产生普通 canonical Turn。
 - Plugin 生命周期只有 `installed`、`enabled`、`uninstalled`。Disable 撤销 active UI/tools 但保留安装；Uninstall 撤销 runtime/UI/tool 注册并默认保留 data。Bundled plugin 也可卸载和重装；删除 data 必须是独立动作。
+- 工具调用摘要展示动作、进度与中性的“已结束”，不汇总工具失败或 Shell 非零计数。原始输出、stderr、退出码与结构化结果保留在调用详情中；超时、取消、拒绝和结果未确认保留专门事实标签。此为展示层选择，不改模型、canonical 结果或安全行为，也不根据 stderr 有无判断成败。
 - Result renderer 只读取既有 `ToolResultItem` 上的可选 structured content；它缺失、disabled 或 uninstalled 时使用 text/JSON fallback。历史模型文本、reasoning、tool call/result 与 title trace 保持原样，不能为 renderer 或能力变化扫描、脱敏或重写。
 
 ### 6.2 Experiment / guidance / TBD
@@ -437,6 +438,14 @@ ThreadView
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
 - 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
+- 文件选择器提供按需展开的文件树，以及覆盖当前 Thread 精确 cwd 的文件名/相对路径搜索；搜索不会退化成当前已展开目录的过滤。文件名是主标签，搜索结果的父路径单独显示，完整路径保留在 tooltip 和文件头。方向键导航树、左右展开/折叠，Enter 打开，Escape 清除搜索；输入法组合期间不提交。返回、切换 Thread、更新查询和刷新后，旧读取不能回填。显式“打开输入的路径”保留已知相对路径入口，仍经同一 Host 校验。
+- 目录沿用每次 2,000 项限制，树最多显示 2,000 行；搜索沿用 80 结果、10,000 扫描项、32 层与 500 ms 检查预算，并明确提示部分结果；它不保证文件系统调用的硬超时。搜索跳过依赖目录、Git 元数据和符号链接，不建立索引或读取文件内容。清除搜索恢复已展开目录；刷新重新读取。
+- 非 Markdown 文本使用带行号的轻量 CodeMirror 编辑器；JavaScript/TypeScript/JSX/TSX、JSON、CSS、HTML/SVG 与 Go 使用 CodeMirror 语言解析器，未知语言保留纯文本。超过 100,000 字符时关闭解析并提示，1 MiB 的读写上限不变。源码始终作为文本，不执行 HTML/脚本；磁盘冲突预览只读。编辑与撤销保留 BOM 和未修改区域的混合换行，磁盘替换清空旧撤销历史。
+- 文件 Tab 旁保留同一份 Renderer 文件导航；切换文件或暂时收起导航不重置目录展开和搜索。选中的文件自动展开祖先并以当前文件样式标记。宽右栏采用目录/编辑器并排布局；小于 500px 的右栏上下排列。分隔条可拖动，或聚焦后用对应方向键、Home/End 调整目录大小，并限制范围以保留编辑空间；宽窄布局分别保留窗口内的调整值。工具栏文件夹按钮可收起目录。编辑器填满剩余高度，由内部滚动区访问长文件与长行，不用固定视口减值计算文件高度。导航不是新的顶层 Files 分类，不替代每个文件原有的内容 Tab。
+- 文件内部查找独立于文件名搜索：文件头查找按钮或 Ctrl/Cmd+F 打开当前编辑器内的 Find，字面文本匹配显示高亮和计数，Enter/Shift+Enter 或上/下按钮导航，Esc 关闭并返回编辑器。查找不会修改源文本、触发保存、重置撤销或原有选择；导航匹配时才移动选择。Markdown 查找期间暂时展示源文本，确保隐藏的标记和链接地址也可定位，关闭后恢复连续预览。IME 组合输入期间不把 Enter/Esc 当成导航/关闭。查找状态只在当前文件视图内保留。
+- 文件树操作合并为一行：刷新文件列表、文件搜索、折叠文件夹；折叠使用专门的上下内收箭头而非上下文压缩图标。可访问名称与 hover tooltip 明确区分含义；刷新仅重读目录/搜索结果，不覆盖编辑草稿。折叠仅关闭已展开目录，不递归遍历或展开整个工作区。此行参照 [T3 FileBrowserPanel](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/files/FileBrowserPanel.tsx) 的紧凑操作排列；不引入文件系统监听或自动刷新。
+- 视觉参照在本轮补充实际查看的 [T3 Code 官方完整应用截图](https://t3.codes/_astro/app-desktop.BOCg1ktw.webp)（[官网](https://t3.codes/)）：会话与右侧代码表面平级并排、紧凑路径/操作行、无浮动卡片外壳。文件导航沿用 ZenX 的辅助侧栏、图标和颜色 token；这是设计借鉴，不是 T3 完整界面复刻。验收截图使用真实 Sidebar、ThreadView、AuxiliaryPanel 与合成数据，不能冒充运行中的真实项目。
+- 参考官方源码与文档：[Codex file search](https://github.com/openai/codex/tree/main/codex-rs/file-search) 的工作区文件发现与路径匹配，[T3 Code file tree](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/chat/ChangedFilesTree.tsx) 的目录缩进/折叠，以及 [T3 Code file preview](https://github.com/pingdotgg/t3code/blob/main/docs/user/composer.md#attached-files) 的带语法高亮预览。采用这些交互方向，不导入其权限范围或状态模型。
 - 插件 `contributions.panels` 按 order 排列在加号选择器中，打开后与文件、浏览器并列。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
 - 插件通过 Host SDK `ui.panels.open({ panelId, threadId })` 请求展示自己声明的 panel。请求只改变易失 UI 选择，不切换当前 Thread，不创建 Turn；给后台 Thread 的请求在用户选择该 Thread 时展示。没有窗口或 panel 不可用时明确报错；成功表示已分发给窗口，不代表用户已看到或确认内容。
 - Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
@@ -445,6 +454,7 @@ ThreadView
 - Terminal 打开当前真实 Thread 的本机 Shell 会话管理首页，显示同一 ToolTaskManager 中 Agent 命令与人工交互终端的稳定 task ID、来源、cwd 和实际状态；不跨 Thread 聚合同目录进程，不建立第二套执行注册表。远端 Fleet 会话不映射成本机会话，不静默降级。
 - New terminal 是明确的人工执行操作，在 Thread 的 canonical cwd 创建真实 PTY；仅在既有 Full Access 且 Shell 未被拒绝时可用，归档或受限策略不被自动修改。启动本机交互 Shell 可能读取其正常 startup files。人工拥有输入，Agent 通过同一 Shell 系统的 shell_sessions / wait 观察，不向人工终端交错输入；Agent 取消等待不会终止人工终端。
 - 打开、隐藏、关闭 Terminal view 或返回会话列表都不停止进程。Stop process 是独立确认动作，显示请求取消、取消未确认或已停止的真实结果；进程树覆盖取决于平台，不猜测存活子进程。输出只作为不可信终端数据渲染，不解释为 HTML、权限或 Agent 指令。
+- Terminal 面板占满工作区 Tab 的可用宽高，标题由 Tab 提供，不再重复大标题。会话选择、状态、新建与停止集中在紧凑工具栏；cwd 单行截断，完整命令、来源与 ID 按需展开。终端自身使用剩余空间，随可见容器宽高重新 fit 并发送有界 PTY 尺寸；隐藏或零尺寸时不测量。输入归属和关闭不停止提示持续可见，详情展开、新建与停止确认不改变原来的会话生命周期。粗指针设备保留至少 44px 控件命中区域。普通失败会话用中性“已结束”展示，退出码与终端原始输出仍可查，超时、停止和观察未知继续显示具体事实。
 - 终端保留有界 scrollback，截断明确提示；隐藏时暂停观察，保留当前位置，Jump to latest 才恢复底部。人工终端由 Shell 退出、显式 Stop 或 Host 退出结束，不继承 Agent 命令的执行期限；现有 Agent deadline 与共享容量控制不变，不自动恢复进程。会话 ID 与详细资源限制位于按需详情，不占据主要列表；关闭面板会继续运行的提示保持可见。已完成会话短时保留只读；详情见 [Shell 运行时与安全边界](../../../docs/shared-shell.md)。
 - 当前范围不含新建/删除/重命名文件及异步 Inbox 回答回流。
 
@@ -464,7 +474,7 @@ ThreadView
 - 普通 Room 输入 `@` 弹出可搜索的成员候选；上下方向键选择、Enter/Tab 确认、Escape 关闭，选择不会同时发送消息，中文输入法确认与长按 Enter 不触发重复提交。成员选择保留 literal `@name` 及前后文本，与 Host 的 mention 匹配规则一致。Always On Assistant 不要求 `@`，新消息仍在现有下一周期 steering 路径接入。
 - Thread 的文件、线程、工作流和 Room 的成员候选共享 viewport-anchored portal 呈现，避开 Composer 底部滚动容器的裁剪；候选保持编辑器焦点，窗口变化后重新定位，不复制数据或执行语义。
 - Room 的次级导航沿用平面行与中性选中态，正文与输入框沿同一阅读列对齐。用户消息使用右侧轻量气泡，Agent 消息保持自然排版和可辨认的作者；消息原文不做删改。时刻简写可通过 title 查看完整日期，来源 Thread/Turn 与消息 ID 只在消息 More 菜单的技术详情中保留，不常驻显示。
-- Room 的设置与未确定投递状态保持可见且可操作。自动化卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
+- Room 的设置与未确定投递状态保持可见且可操作。触发器卡片的完整指令默认折叠，展开后可读；这些都是呈现调整，不改变 Trigger 配置、运行、恢复或授权。
 - Room 的标题与重命名、工作区、设置操作共享应用外壳中的同一标题行，正文上方不再另起操作栏；保留原生窗口控件和拖动区域边界。自动回复未启用时，只在现有设置入口显示轻量状态提示，具体成员数量和配置入口收进会话设置，不额外占用常驻状态栏或标题空间。“未启用”不擅自区分未配置、暂停或 Host 全局关闭。展开和查看设置不启用 Trigger，也不重放消息。投递失败和结果待确认仍独立可见、可操作。
 - Room 向上滚动到历史边缘时自动分批读取，保留当前可见消息的位置；首次打开不自动扫全量历史，读取失败停止并提供明确重试。迟到响应不改变新的房间，实时消息和分页使用消息 ID 对齐。界面只展示 Host 当前保留的历史（现有上限 256 条），到达边界不冒充永久完整档案。
 - Room 消息头只显示一个发送者名称和时间，不叠加 Agent、成员、Thread、PAW 或来源未知标签。优先保留消息记录的有效作者名；通用 Agent 名仅可由记录的来源 Thread 匹配真实成员或明确的会话名称，没有来源时使用中性的“未知成员”，不从正文 @提及反推作者。点击名字按需展示来源会话和当前关联 PAW 的导航，关联关系不改写历史身份；原始 message/thread/turn/operation IDs 只在 More 菜单的技术详情中出现。
@@ -473,7 +483,7 @@ ThreadView
 - Linux 与 Windows 的工作区入口避让原生最小化、最大化和关闭按钮，不能将打开面板的点击交给原生关闭区域。
 
 - Room 的自动回复设置按明确成员导航到现有 Room mention Trigger 编辑器；路由参数只表达临时 UI 意图，成员和目标从最新 Host Room / Thread 投影验证，显式 Save 才写入定义，不修改权限、不重放旧消息。Cancel / Back 返回原 Room，不把离开表单当作取消已提交的 Host 请求。Member conversation 选项以标题和短工作区 / 可区分短 ID 呈现，完整身份仍可搜索、查看并由无障碍名称读取。
-- Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用自动化编辑器保留原有完整选择能力。
+- Room 发起的自动回复设置以只读摘要显示精确 Room、成员与执行 Thread，只要求填写名称和回复指令并显式保存；不在这个固定目标流程显示类型切换或新建 Thread 控件。成员名中的 `|` 属于名字本身，不能被条件串的分隔符截断。通用触发器编辑器保留原有完整选择能力。
 
 本轮视觉和交互校准参考 [DeepSeek Harness 的输入候选组件](https://github.com/deepseek-ai/deepseek-harness/tree/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-input-trigger)、[T3 Code 的 ComposerCommandMenu](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/ComposerCommandMenu.tsx) 与 [Linear 的 UI refresh](https://linear.app/changelog/2026-03-12-ui-refresh)。这些是参考材料，不替代本文的产品语义，也不引入它们的运行模型或样式框架。
 
@@ -493,11 +503,11 @@ Reference decisions (official documentation checked 2026-10-12): [OpenClaw boots
 
 Creating PAW defaults to a new idle working Thread in a configured Project, with the current Host model and permissions previewed before the explicit Create action. The Host creation itself creates no Turn; the explicit “Create and say hello” UI action then admits a Host-origin bootstrap wakeup. The working Thread records a canonical host_message and no fabricated user_message. Binding an existing available Thread is a separate, explicit alternative. Cancel before submission creates nothing; dismissing an already submitted form does not undo accepted Host work or replace a newer navigation. Confirmed creation remains confirmed if the subsequent list refresh fails. An uncertain Thread start or preset-save failure is visible with inspection/binding guidance, and the same setup operation cannot silently start another Thread.
 
-The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Automations and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
+The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Triggers and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
 
-Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
+Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. The PAW Overview displays its exact working Thread title with inline rename through the existing Host title authority; this never renames the PAW or its speaker. Direct working-Thread navigation retains title editing while the Thread-list projection catches up after successful recovery. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
 
-Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Automations tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
+Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Triggers tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
 
 ## 2026-10-02：持续适用的 UI 修改与验收原则
 
@@ -573,3 +583,69 @@ Reuse the shared switch visual and native hover title; the stable accessible lab
 ### Original history after compaction
 
 Each compaction with an enabled original reference offers “View original history” directly on its event. The inline reader shows the logical locator and exact canonical cutoff, pages the existing public journal projection, and offers explicit full-Item chunk reads. Disabled or legacy references have no lookup action; unavailable targets and failures remain visible with an explicit retry. Closing, changing compaction or navigating away discards pending display results without changing the journal or current conversation.
+
+### Message-level Fork
+
+Only the terminal Agent response exposes Copy and Fork in its hover/focus action row. Intermediate commentary, tool-adjacent replies, and in-progress responses never expose this action row, even when their canonical Items are durable. The existing terminal-response selection remains authoritative (the final completed reply, or the last non-empty reply on a failed/interrupted Turn). Fork appears directly after Copy when that response has a durable canonical Item. The action binds the source Thread and exact canonical Agent Item ID; streaming-only messages cannot be fork boundaries. It uses the native Core fork with the inclusive prefix, never later Items, historical tool replay or an automatic new Turn. The original Thread is unchanged. Pending repeated clicks share one request across viewport remounts; errors remain visible and retryable. Success opens the new Thread unless newer navigation or a newer fork action superseded that intent. Touch/no-hover actions remain visible with 44px targets and keyboard focus is explicit. The thread-level action uses the same Fork icon and localized Fork label while retaining its latest-complete-Turn boundary and the same working directory. Shared Fork artwork stays within the 16×16 icon viewBox, including all three endpoint strokes.
+
+### 2026-10-14: Compact activity context
+
+Settled multi-tool disclosures retain the call count and the latest three action summaries, newest first, rather than reducing their title to the count alone. Cancellation counts remain explicit; generic failure and nonzero-result counts are omitted, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
+
+### 2026-10-14: Codex conversation import in Settings
+
+Codex conversation import is available in Settings → General under Import conversations. The active-thread Sidebar has no import action. The existing preview, validation, import and open-retry dialog remains unchanged; cancelling returns to Settings and a successful import opens the imported Thread.
+
+### 2026-10-14: Message source navigation
+
+Delivered and queued Thread messages expose a compact source action using the canonical sender identity; local Trigger messages open the exact current Trigger definition. Names and message-body text never select a target. Source actions only read and navigate: they do not send, fork, execute a Trigger or change queued input. Local Thread opening validates its exact identity and availability first; archived, missing or denied targets have visible feedback. Remote sources without a verified return route remain visibly unavailable and never fall back to a same-ID local Thread. Main and side conversations retain their existing navigation roles, and a side-source action preserves the main Composer draft. Newer source clicks, navigation, hidden queue rows and explicit Trigger editor actions retire older pending selection intents. Source controls retain full-name tooltips, keyboard activation and visible focus; model provenance and tool-addressable IDs remain unchanged.
+
+### 2026-10-14: Opt-in Thread debug mode
+
+Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an off-by-default switch in the last row of the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. The same panel stays open and anchored, with its toggle and keyboard focus in place so a second click exits debug mode. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode never enables Host request capture; that remains a separate explicit control with unchanged safety boundaries.
+
+### 2026-10-14: Compact request inspection
+
+Items remains the default canonical-history view. Actual requests is a separate,
+local-owned Host observation surface. Its embedded UI has one capture controls
+row, without repeating the debugger title or a permanent privacy footer. The
+critical device-wide/private-content, RAM-only, close-keeps-capturing and
+disable-clears disclosure is visible before capture can be enabled; full scope
+and retention remain available from the privacy control. Navigation, section
+selection and closing debug mode never enable or disable capture implicitly.
+
+The request inspector uses the width of its actual container, including when a
+workspace is open or the page is zoomed. Above 720px it shows a 240px request index
+alongside detail. At 720px or below it shows the list or the selected detail, with
+Back restoring the same search, selection, list scroll and keyboard focus. It
+never reserves a horizontal request-card strip above a narrow payload. Compact
+section and Tree/Raw controls use quiet selected backgrounds, without underlines.
+
+The detail has one vertical scrolling owner. Ordinary Tree strings wrap; Raw
+preserves the exact retained page text and can scroll horizontally inside the
+code block. Identity, dispatch caveats, byte counts and source-attachment metadata
+are available on demand. Projection, truncation and redaction are independent
+visible flags, so simultaneous anomalies are never collapsed into one status.
+
+### 2026-10-15: Workspace launcher rows
+
+Subagents and Triggers use the same horizontal launcher surface and title/description hierarchy as Terminal, File and Browser, with concise localized descriptions and their distinct icons. Subagents keeps its independent quick-create action as a small circular plus inside the same row; the primary row opens the existing list, while the plus creates a side chat without starting a Turn. Touch/coarse-pointer use retains a 44px action target.
+
+### 2026-10-15: Multiple side conversation tabs
+
+A Thread or Room workspace can keep several side conversations open at once. Each tab is identified by its target Thread ID, independently of its title or category; opening an existing target selects that tab, and opening another target preserves its siblings. Closing a tab changes only that workspace's tab order and selection, without closing or archiving the Thread. Main navigation retains each workspace's open tabs and selected target, while the existing App-owned draft and reading caches retain each Thread's local state. File and Browser tabs retain their existing path/tab-ID identity; a plugin's manager panel remains one contribution rather than becoming a generic multi-instance runtime.
+
+### 2026-10-15: Stable Thread menu editing and compact Items
+
+The Thread information title and Rename action edit the title inline in their
+existing panel. Metadata and action rows stay in place; no replacement popover or
+modal opens. Enter saves, Escape cancels only the edit, and successful save or
+cancel returns focus to the initiating title/action without closing the panel.
+Outside interaction or navigation dismisses the panel and retires its draft; a
+late save receipt cannot close a newer editor or reclaim focus moved elsewhere.
+Failures retain the draft and show an explicit local error.
+
+Items remains the default debugger tab in canonical order. Tool call arguments,
+tool result content and tool images start collapsed and mount only after an
+explicit disclosure. Exact Item JSON and the existing full-content controls stay
+available; debug mode does not add conversation copy/fork actions.

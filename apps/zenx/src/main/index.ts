@@ -1,3 +1,4 @@
+import { validateModelRequestDebugCommand } from "../../../../apps/cli/src/model-request-debug.js";
 import { ForegroundActivity } from "./foreground-activity.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
 import {
@@ -380,6 +381,13 @@ async function bootstrapZenX(): Promise<void> {
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
   );
   const skills = new SkillsService(zenDataDirectory);
+  ipcMain.handle(ipcChannels.modelRequestDebug, (_event, input: unknown) => {
+    if (appServerManager === undefined)
+      throw new Error("Local Host unavailable");
+    return appServerManager.modelRequestDebug(
+      validateModelRequestDebugCommand(input),
+    );
+  });
   ipcMain.handle(ipcChannels.skillsList, () => skills.list());
   ipcMain.handle(ipcChannels.skillsImport, (_event, directory: unknown) => {
     if (typeof directory !== "string")

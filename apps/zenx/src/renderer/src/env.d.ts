@@ -68,6 +68,13 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      modelRequestDebug?: {
+        request(
+          input: import("../../../../cli/src/model-request-debug-types.js").ModelRequestDebugCommand,
+        ): Promise<
+          import("../../../../cli/src/model-request-debug-types.js").ModelRequestDebugResult
+        >;
+      };
       shellPanel?: import("../../shell-panel.js").ShellPanelBridge;
       imzenx: {
         inspect(): Promise<ImZenXSetupView>;

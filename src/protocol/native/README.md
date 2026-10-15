@@ -60,3 +60,31 @@ remote-host workspace grant or a CAS 0.146.0 claim.
 The older `thread/original/read` retains its legacy CAS display-item shape;
 clients needing faithful public tool results and canonical identities use this
 native reader.
+
+## Exact-message Thread copies
+
+`zen/thread/fork` accepts `{ sourceThreadId, through, workspace }` and returns
+`{ thread: ThreadSnapshot }` with canonical Item identities. It requires an
+initialized connection and an available AppServer. `workspace` is exactly
+`{ type: "same-directory" }`; `through` is either `{ type: "latest-complete" }`
+or `{ type: "item", itemId }`.
+
+An exact Item boundary must identify a persisted `agent_message` in that source
+Thread. Streaming-only identities, missing Items and identities from another
+Thread return `fork_boundary_unavailable`; malformed requests and non-Agent
+Items return `invalid_request`, via `error.data.zenCode`. Renaming a Thread or
+appending later history does not change an existing canonical Item's identity.
+
+The exact prefix includes the selected message and excludes every later source
+Item, including the rest of its Turn. The new Thread atomically stores remapped
+history, `thread_forked` provenance with the exact source boundary, and canonical
+snapshot-only closures for copied unfinished tools, Turns and queued inputs.
+These closures report no transferred execution; they do not claim that the
+source Turn finished successfully. Pending replacement intents remain historical
+behind the fork provenance. A copy neither invokes a model nor replays tools nor
+starts a new Turn. It is idle and ready for explicit new input, including after
+journal reload, while the source remains untouched and may continue running.
+
+The pinned CAS adapter's `thread/fork` retains only its existing
+`latest-complete` request. It rejects exact Item selection; the native method's
+canonical result and exact-boundary semantics are not CAS compatibility claims.

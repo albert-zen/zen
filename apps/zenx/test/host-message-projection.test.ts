@@ -276,9 +276,11 @@ test("Host messages render compact source labels, private IDs only in details, w
           : ["宿主", "触发器", "房间"],
       );
       assert.ok(rows.every((row) => !row.textContent!.includes("private-")));
-      assert.match(
-        rows[1]!.querySelector(".host-message-source")!.getAttribute("title")!,
-        /private-trigger-id/,
+      assert.ok(
+        rows[1]!
+          .querySelector(".host-message-source")!
+          .getAttribute("title")!
+          .includes(i18n.t("shell:sourceNavigationUnavailable")),
       );
       assert.ok(
         rows.every((row) =>
