@@ -224,3 +224,101 @@ for (const existingInstructions of [false, true]) {
     }
   });
 }
+
+test("Room workspace keeps same-category conversations independently identified", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.assign(window, {
+    zenx: {
+      plugins: {
+        executeCommand: async () => ({ revision: 0, matters: [], memory: [] }),
+      },
+    },
+  });
+  const routes: string[] = [];
+  const threads = ["assistant", "child/a", "child/b"].map((threadId) => ({
+    threadId,
+    name: "Same title",
+    status: "idle",
+    archived: false,
+    createdAt: "2026-10-15T03:00:00Z",
+    updatedAt: "2026-10-15T03:00:00Z",
+    preview: "",
+    currentMetadata: {
+      cwd: "/project",
+      provider: "fake",
+      model: "fake",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  }));
+  function Harness() {
+    const [viewState, onViewChange] = React.useState({
+      selected: "thread:child/a",
+      tabs: ["thread:child/a", "thread:child/b"],
+      member: "assistant",
+      conversationThreadIds: ["child/a", "child/b"],
+    });
+    return React.createElement(CompanionWorkspace, {
+      room: {
+        id: "room",
+        name: "Synthetic room",
+        members: [{ name: "Assistant", threadId: "assistant" }],
+        memberCount: 1,
+        messagePreview: null,
+      },
+      threads: threads as any,
+      snapshot: { plugins: [], panels: [] } as any,
+      section: "",
+      fileDrafts: new WorkspaceFileDrafts(),
+      onWidthChange() {},
+      onClose() {},
+      navigate: (route) => routes.push(route),
+      viewState,
+      onViewChange: onViewChange as any,
+      renderConversation: (id) =>
+        React.createElement("p", { "data-thread-id": id }, id),
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    const tab = (id: string) =>
+      document.getElementById(`aux-tab-thread:${id}`) as HTMLButtonElement;
+    assert.ok(tab("child/a"));
+    assert.ok(tab("child/b"));
+    await act(async () => tab("child/b").click());
+    assert.equal(
+      document
+        .querySelector("[data-thread-id]")
+        ?.getAttribute("data-thread-id"),
+      "child/b",
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Open conversation full screen"]',
+        )!
+        .click(),
+    );
+    assert.deepEqual(routes, ["/threads/child%2Fb"]);
+    await act(async () =>
+      tab("child/a")
+        .parentElement!.querySelector<HTMLButtonElement>(
+          ".workspace-tab-close",
+        )!
+        .click(),
+    );
+    assert.equal(tab("child/a"), null);
+    assert.equal(tab("child/b").getAttribute("aria-selected"), "true");
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

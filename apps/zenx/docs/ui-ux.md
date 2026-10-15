@@ -617,3 +617,7 @@ visible flags, so simultaneous anomalies are never collapsed into one status.
 ### 2026-10-15: Workspace launcher rows
 
 Subagents and Triggers use the same horizontal launcher surface and title/description hierarchy as Terminal, File and Browser, with concise localized descriptions and their distinct icons. Subagents keeps its independent quick-create action as a small circular plus inside the same row; the primary row opens the existing list, while the plus creates a side chat without starting a Turn. Touch/coarse-pointer use retains a 44px action target.
+
+### 2026-10-15: Multiple side conversation tabs
+
+A Thread or Room workspace can keep several side conversations open at once. Each tab is identified by its target Thread ID, independently of its title or category; opening an existing target selects that tab, and opening another target preserves its siblings. Closing a tab changes only that workspace's tab order and selection, without closing or archiving the Thread. Main navigation retains each workspace's open tabs and selected target, while the existing App-owned draft and reading caches retain each Thread's local state. File and Browser tabs retain their existing path/tab-ID identity; a plugin's manager panel remains one contribution rather than becoming a generic multi-instance runtime.

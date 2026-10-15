@@ -5841,3 +5841,156 @@ for (const visibility of ["keep", "hide", "reopen"] as const) {
     }
   });
 }
+
+test("side conversations keep distinct tabs, drafts and selection across close, reopen and main navigation", async () => {
+  const children = ["child-a", "child-b"].map((id) => ({
+    ...summary(false, id, "Same child title"),
+    parentThreadId: "thread-1",
+  }));
+  const harness = await mountThreadApp({
+    projectsGet: async () => ({
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "other-parent", "child-a", "child-b"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    }),
+    threads: async (archived) =>
+      archived
+        ? []
+        : [
+            summary(false),
+            summary(false, "other-parent", "Other parent"),
+            ...children,
+          ],
+    request: async (method, params) => {
+      const id = (params as { threadId: string }).threadId;
+      if (method === "zen/thread/resume")
+        return resumed({ ...liveThread(), id });
+      throw new Error(method);
+    },
+    plugins: {
+      get: async () => messageSourcePlugins(),
+      executeCommand: async (_plugin, command) => {
+        if (command === "list") return { threads: children };
+        throw new Error(command);
+      },
+    },
+  });
+  const tab = (id: string) =>
+    document.getElementById(`aux-tab-${id}`) as HTMLButtonElement;
+  const sideComposer = (id: string) =>
+    waitFor(
+      () =>
+        document.getElementById(
+          `side-composer-${id}`,
+        ) as HTMLTextAreaElement | null,
+    );
+  const click = async (button: HTMLElement) => {
+    assert.ok(button);
+    await act(async () => button.click());
+  };
+  const openChild = async (index: number) => {
+    await click(tab("plugin:zenx-subagents:subagents"));
+    const row = await waitFor(
+      () =>
+        document.querySelectorAll<HTMLButtonElement>(".subagent-tree-row")[
+          index
+        ],
+    );
+    await click(row);
+  };
+  try {
+    await click(
+      await waitFor(() =>
+        [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+          (node) => node.textContent?.includes("Thread one"),
+        ),
+      ),
+    );
+    await setTextareaValue(
+      await waitFor(() =>
+        document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+      ),
+      "Keep parent draft",
+    );
+    await click(
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Open side panel"]',
+      )!,
+    );
+    await click(
+      await waitFor(() =>
+        [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            ".workspace-tab-types button",
+          ),
+        ].find(
+          (node) => node.querySelector("strong")?.textContent === "Subagents",
+        ),
+      ),
+    );
+    const rows = await waitFor(() => {
+      const rows =
+        document.querySelectorAll<HTMLButtonElement>(".subagent-tree-row");
+      return rows.length === 2 ? rows : null;
+    });
+    await click(rows[0]!);
+    await setTextareaValue(await sideComposer("child-a"), "Draft A");
+    await openChild(1);
+    await setTextareaValue(await sideComposer("child-b"), "Draft B");
+    assert.ok(
+      tab("thread:child-a"),
+      "Opening B must retain the existing A instance",
+    );
+    assert.ok(tab("thread:child-b"));
+    assert.equal(tab("thread:child-b").getAttribute("aria-selected"), "true");
+    await click(tab("thread:child-a"));
+    assert.equal((await sideComposer("child-a")).value, "Draft A");
+    await click(
+      tab("thread:child-b").parentElement!.querySelector<HTMLButtonElement>(
+        ".workspace-tab-close",
+      )!,
+    );
+    assert.equal(tab("thread:child-b"), null);
+    assert.equal(tab("thread:child-a").getAttribute("aria-selected"), "true");
+    await openChild(1);
+    assert.equal((await sideComposer("child-b")).value, "Draft B");
+    await openChild(1);
+    assert.equal(
+      document.querySelectorAll('[id="aux-tab-thread:child-b"]').length,
+      1,
+    );
+    assert.equal((await sideComposer("child-b")).value, "Draft B");
+    const other = [
+      ...document.querySelectorAll<HTMLButtonElement>(".sidebar .thread-row"),
+    ].find((node) => node.textContent?.includes("Other parent"))!;
+    await click(other);
+    await waitFor(() => document.querySelector("#thread-composer"));
+    const parent = [
+      ...document.querySelectorAll<HTMLButtonElement>(".sidebar .thread-row"),
+    ].find((node) => node.textContent?.includes("Thread one"))!;
+    await click(parent);
+    assert.equal((await sideComposer("child-b")).value, "Draft B");
+    assert.ok(tab("thread:child-a"));
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
+      "Keep parent draft",
+    );
+    await click(
+      tab("thread:child-b").parentElement!.querySelector<HTMLButtonElement>(
+        ".workspace-tab-close",
+      )!,
+    );
+    assert.equal(tab("thread:child-a").getAttribute("aria-selected"), "true");
+    assert.equal((await sideComposer("child-a")).value, "Draft A");
+  } finally {
+    await unmountApp(harness);
+  }
+});
