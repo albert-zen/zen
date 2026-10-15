@@ -430,12 +430,12 @@ test("execution reporter leaves incremental evidence after its exact owned runne
   assert(!rows.some((row) => row.kind === "end"));
 });
 
-test("observed aggregate keeps the original suite globs, constraints and check order", async () => {
+test("observed aggregate bounds file concurrency without changing coverage or check order", async () => {
   const { scripts } = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
   const added =
-    " --test-reporter=tap --test-reporter=./scripts/test-execution-reporter.mjs --test-reporter-destination=stdout --test-reporter-destination=stderr";
+    " --test-concurrency=2 --test-reporter=tap --test-reporter=./scripts/test-execution-reporter.mjs --test-reporter-destination=stdout --test-reporter-destination=stderr";
   assert.equal(
     scripts["test:prepared:observed"].replace(added, ""),
     scripts["test:prepared"],
@@ -449,7 +449,39 @@ test("observed aggregate keeps the original suite globs, constraints and check o
   );
   assert.doesNotMatch(
     scripts["test:prepared:observed"],
-    /NODE_OPTIONS|test-concurrency|test-timeout/u,
+    /NODE_OPTIONS|test-timeout|test-isolation|test-only|test-name-pattern|test-skip-pattern|test-shard|test-force-exit/u,
+  );
+  const original = "tsx --test test/**/*.test.ts test/**/*.test.mjs";
+  assert.equal(scripts.test, original);
+  assert.equal(scripts["test:prepared"], original);
+  // Exact argv equality rejects duplicate overrides, filters or missing globs.
+  assert.deepEqual(scripts["test:prepared:observed"].split(" "), [
+    "tsx",
+    "--test",
+    "--test-concurrency=2",
+    "--test-reporter=tap",
+    "--test-reporter=./scripts/test-execution-reporter.mjs",
+    "--test-reporter-destination=stdout",
+    "--test-reporter-destination=stderr",
+    "test/**/*.test.ts",
+    "test/**/*.test.mjs",
+  ]);
+  const workflow = await readFile(
+    path.join(root, ".github/workflows/ci.yml"),
+    "utf8",
+  );
+  const aggregateJob = workflow
+    .split("\n  zenx:\n")[1]
+    ?.split(/\n  [a-z][a-z-]*:\n/u)[0];
+  assert(aggregateJob, "the original aggregate job must still exist");
+  assert.match(aggregateJob, /timeout-minutes: 20\n/u);
+  assert.match(
+    aggregateJob,
+    /run: npm --workspace apps\/zenx run check:observed\n/u,
+  );
+  assert.doesNotMatch(
+    aggregateJob,
+    /continue-on-error|test-timeout|test-skip|test-only|test-name-pattern|NODE_OPTIONS/u,
   );
   const source = await readFile(
     new URL("../scripts/test-execution-reporter.mjs", import.meta.url),

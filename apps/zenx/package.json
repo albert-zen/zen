@@ -40,7 +40,7 @@
     "typecheck:prepared": "tsc -p tsconfig.node.json --noEmit --pretty false && tsc -p tsconfig.web.json --noEmit --pretty false",
     "postinstall": "node ./scripts/prepare-shell-pty.mjs",
     "smoke:browser-parallel-input": "tsx src/main/browser-parallel-input-smoke.ts",
-    "test:prepared:observed": "tsx --test --test-reporter=tap --test-reporter=./scripts/test-execution-reporter.mjs --test-reporter-destination=stdout --test-reporter-destination=stderr test/**/*.test.ts test/**/*.test.mjs",
+    "test:prepared:observed": "tsx --test --test-concurrency=2 --test-reporter=tap --test-reporter=./scripts/test-execution-reporter.mjs --test-reporter-destination=stdout --test-reporter-destination=stderr test/**/*.test.ts test/**/*.test.mjs",
     "check:observed": "npm run brand:check && npm run prepare:first-party-plugins && npm run typecheck:prepared && npm run test:prepared:observed && npm run build:prepared"
   },
   "dependencies": {

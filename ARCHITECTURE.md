@@ -1353,7 +1353,7 @@ Browser coordinate click and named-key input are transient, observation-bound CD
 
 The embedded Agent debugger reads canonicalItems directly in append order, reusing message and tool presentation without creating a second trace authority; opt-in local transport observations are a separate actual-requests tab.
 
-ZenX CI aggregate 的被动 test:dequeue reporter 只在共享字节预算内增量记录测试位置、名称和接收时钟，区分以文件路径命名的 file wrapper 与 case；Node 22 的并发后续文件 case 事件仍可能缓冲，最后一条记录不等于最后执行位置，原 TAP、测试选择、执行限制与 check 顺序不变，诊断不可用或缺少结束记录不代表测试成功，runner 丢失时 artifact 上传不保证完成。
+ZenX CI aggregate 的被动 test:dequeue reporter 只在共享字节预算内增量记录测试位置、名称和接收时钟，区分以文件路径命名的 file wrapper 与 case；Node 22 的并发后续文件 case 事件仍可能缓冲，最后一条记录不等于最后执行位置，原 TAP、测试选择、超时限制与 check 顺序不变，诊断不可用或缺少结束记录不代表测试成功，runner 丢失时 artifact 上传不保证完成。
 
 - The disposable parallel-input fixture may inject a synchronous CDP diagnostic observer that retains bounded anonymous request/timer/receive summaries through existing cleanup; it has no transport authority, never changes unknown outcomes, and is absent by default in the production provider.
 
@@ -1379,3 +1379,5 @@ does not imply delivery or permit client-side cancel/resend. This is a one-messa
 action; it does not rewrite any ingress preference or an explicitly queued sibling.
 
 ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按单调钟至少间隔 15 秒读取固定 host-visible 内存与 visible-cgroup-root v2 数值；它不是 job/child 内存归因，不探索成员或挂载路径，无 timer/进程/信号修改，独立双 sink 32 KiB/32 样本上限不占用原 4 MiB trace 预算，缺值为 null，停事件或预算耗尽后最后样本会陈旧。
+
+ZenX CI observed aggregate 将文件级并发显式限制为 2，作为实际内存压力证据后的单变量资源约束验收；普通 test/test:prepared 入口保持默认，所有测试、断言、进程隔离及原 20 分钟 job 限制不变，不等同于证明 OOM 根因。
