@@ -427,6 +427,9 @@ jobs:
           node "$fixture/node_modules/playwright/cli.js" install chromium
           browser=$(node -e "process.stdout.write(require(process.argv[1]).chromium.executablePath())" "$fixture/node_modules/playwright")
           echo "ZENX_USER_BROWSER_EXECUTABLE=$browser" >> "$GITHUB_ENV"
+      - name: Verify native idle sampling and exact dispatch guards
+        timeout-minutes: 2
+        run: node --test apps/zenx/test/browser-parallel-idle-sampling.test.mjs
       - name: Exercise Chrome foreground and background parallel input on macOS
         env:
           ZENX_PARALLEL_INPUT_ARTIFACT_DIR: ${{ runner.temp }}/zenx-parallel-input-evidence
