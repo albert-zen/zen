@@ -128,3 +128,11 @@ export interface NativeThreadDeletedListResult {
 export interface NativeThreadRestoreResult {
   thread: ThreadSnapshot;
 }
+
+export const NATIVE_THREAD_ORIGINAL_READ_METHOD = "zen/thread/original/read";
+export type NativeOriginalHistoryParams =
+  import("../../thread-history.js").OriginalHistoryOptions & {
+    threadId: string;
+  };
+export type NativeOriginalHistoryResult =
+  import("../../thread-history.js").OriginalHistoryPage;
