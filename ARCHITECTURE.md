@@ -47,6 +47,11 @@
 - **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。共享工具 ownership identity 定义于无 runtime 依赖的纯类型模块，原生 wire 的 TypeScript import graph 不进入 Node/Host 工具实现。
 - **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
 
+- **同 Turn 智能恢复** — 活着的 Host 在 journal 健康、没有停止/审批/安全控制且工具调用已结算的边界，将有界、不可信诊断与恢复预算记录为 canonical failure.recovery，再由同一 Provider/model 继续采样；每 Turn 最多三次恢复采样、每个采样 episode 最多原三次尝试，已有采样重试计入预算，恢复不重启 HTTP admission 重试、不自动重放旧工具批次或新建 Turn；这不承诺所有独立工具的全局 exactly-once。HTTP 与 SSE 共用显式安全身份 fence，HTTP Retry-After 传递至恢复等待，超过两分钟冷却直接终止；Abort 保持原控制语义。明确 provider 单次 length/max_output_tokens 在同一预算内允许模型缩短或分步；诊断只可绑定 sampleId 引用本次 incomplete public agent_message 的先凭证脱敏、再有界的草稿摘录，既非完整 assistant 回放也非工具调用授权，reasoning/opaque 不进入摘录；现有 maxToolRounds/stop/context 限额优先，不宣称实现不存在的 Turn 累计 token 总预算。
+- **恢复诊断的客户端投影** — 原 canonical failure.recovery 保留在原始历史、fork 与重载中；native 实时事件、快照和 Codex 投影都不将它当作终态 turn.error。真正的最终失败仍带错误及重试详情，ThreadView 的终态详情只取最后一个非恢复 failure；恢复过程中维持同一 Turn 的运行状态，不提前显示完成。共享恢复上下文投影保持浏览器可用；诊断指纹哈希仅由 Host Runtime 计算，不向 renderer 引入 Node builtin。
+- **恢复媒体投影** — 只有明确媒体拒绝才可暂扣：adapter 在实际编码位置记录媒体来源，跨能力投影的克隆以请求内映射绑定原 occurrence，provider 参数可精确反向定位时仅排除该材料；failure.recovery 仅绑定失败采样实际包含的 itemId / content 字段 / partIndex / attachment hash occurrence；后续上下文明确标注这些原材料未读取，原 Item 和附件不变，新 occurrence 不继承屏蔽，无法精确归因的文本诊断记录完整暂扣集合且不声称材料损坏，暂扣仅到该 Turn 终态；网络等无关错误不扣材料。该投影先于压缩与 nested-media lifting 从完整 ItemList 推导，不建立第二份会话状态；恢复控制记录不挤占 recent-items 会话保留名额，但其诊断文本仍计入预算且可逐出；媒体投影规则从完整历史计算，不因压缩丢失。fork/side chat 重映所有恢复本地引用，公开原始历史保留已脱敏恢复事实并遵循既有 opaque 边界。
+- **恢复观察边界** — 未知工具副作用不等于模型不能继续；已有 ownership fence 与原 handle 下的非消费 status / shell read 可以核查事实，wait 必须沿用原单观察者或 Fleet ACK 语义，不清 fence、不重发 mutation；journal outcome unknown、失去 owner、显式 stop 或 Host crash 保护性停止，不自动跨进程续跑。
+
 - **ZenX Provider Logo 资源** — Host 将用户选择的有界位图复制为受管的内容寻址资源，Provider profile 只保存资源引用并向 Renderer 投影可显示图片；缺失或损坏时展示默认标识，不进入 Thread ItemList。
 
 - **ZenX 输入选择器** — Renderer 从 Host 有界 cwd 文件搜索与完整 Native Thread summaries 派生候选，将选择保存在易失草稿引用标签并在既有发送入口展开为明确定位文本；引用不自动读取内容、注入历史或改变线程执行配置。

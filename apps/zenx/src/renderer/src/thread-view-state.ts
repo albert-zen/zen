@@ -241,6 +241,9 @@ export function applyNativeThreadEvent(
   if (event.type === "item_completed") {
     if (event.item.type === "context_compaction") return thread;
     if (event.item.type === "failure") {
+      // Repair diagnostics remain canonical context, not a terminal Turn error.
+      // A replayed repair must not overwrite a later real terminal failure.
+      if (event.item.recovery !== undefined) return thread;
       // Failure Items project to null as ThreadItems; surface them through the
       // turn error immediately instead of waiting for the next snapshot read.
       const failure = event.item;
@@ -600,7 +603,7 @@ function projectNativeThread(
         );
       const failure = [...turn.items]
         .reverse()
-        .find((item) => item.type === "failure");
+        .find((item) => item.type === "failure" && item.recovery === undefined);
       const startedAt =
         started === undefined ? null : seconds(started.createdAt);
       const completedAt =
