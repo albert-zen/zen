@@ -577,6 +577,33 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
   try {
     await act(async () => root.render(React.createElement(Harness)));
     const navigation = document.getElementById("workspace-file-navigation")!;
+    const navigationToggle = document.querySelector<HTMLButtonElement>(
+      ".workspace-navigation-toggle",
+    )!;
+    const checkNavigationToggle = (label: string, pressed: boolean) => {
+      assert.equal(
+        navigationToggle.querySelector("svg")?.getAttribute("data-icon"),
+        "folder",
+      );
+      assert.equal(navigationToggle.getAttribute("aria-label"), label);
+      assert.equal(navigationToggle.title, label);
+      assert.equal(
+        navigationToggle.getAttribute("aria-pressed"),
+        String(pressed),
+      );
+      assert.equal(
+        navigationToggle.getAttribute("aria-controls"),
+        navigation.id,
+      );
+    };
+    checkNavigationToggle("Hide file navigation", true);
+    assert.equal(
+      document
+        .getElementById("aux-tab-file:src/a.ts")
+        ?.querySelector("svg")
+        ?.getAttribute("data-icon"),
+      "file",
+    );
     const search = navigation.querySelector('input[type="search"]')!;
     const separator = document.querySelector<HTMLElement>(
       '[role="separator"][aria-label="Resize file navigation"]',
@@ -651,6 +678,7 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
       ).click(),
     );
     assert.equal(navigation.hidden, true);
+    checkNavigationToggle("Show file navigation", false);
     assert.equal(separator.hidden, true);
     await act(async () =>
       (
@@ -660,6 +688,7 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
       ).click(),
     );
     assert.equal(navigation.hidden, false);
+    checkNavigationToggle("Hide file navigation", true);
     assert.equal(separator.hidden, false);
     assert.equal(navigation.querySelector('input[type="search"]'), search);
     await act(async () =>
