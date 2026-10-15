@@ -246,6 +246,31 @@ test("mobile sidebar opening clears a persisted desktop collapse", async () => {
   assert.doesNotMatch(app, /onOpenSidebar=\{\(\) => setSidebarOpen\(true\)\}/u);
 });
 
+test("non-mac narrow startup opener clears the second native titlebar row", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const narrowBlocks = [
+    ...styles.matchAll(
+      /@media \(max-width: 720px\)\s*\{(?:[^{}]|\{[^{}]*\})*\}/gu,
+    ),
+  ];
+  assert.ok(
+    narrowBlocks.some(([block]) =>
+      /:root:is\(\[data-platform="linux"\], \[data-platform="win32"\]\)\s+\.new-thread-draft-mobile\s*\{\s*top: calc\(var\(--native-titlebar-height\) \+ 8px\);\s*\}/u.test(
+        block,
+      ),
+    ),
+    "the absolute opener must include the surface's native titlebar inset",
+  );
+  assert.match(
+    styles,
+    /\.new-thread-draft-mobile\s*\{[^}]*top: 8px;/u,
+    "macOS retains the original opener offset",
+  );
+});
+
 test("200% text zoom keeps Settings copy and Appearance controls reflowable", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
