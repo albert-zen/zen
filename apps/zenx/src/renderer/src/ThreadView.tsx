@@ -51,6 +51,8 @@ import {
 } from "../../../../../src/turn-end.js";
 import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
 import type {
+  NativeQueueSteerParams,
+  NativeQueueSteerResult,
   NativeQueueEditParams,
   NativeQueueEditResult,
 } from "../../../../../src/protocol/native/wire.js";
@@ -191,6 +193,9 @@ interface ThreadViewProps {
     message: string;
   } | null;
   onResumeQueue?(): Promise<void>;
+  onSteerQueued?(
+    params: NativeQueueSteerParams,
+  ): Promise<NativeQueueSteerResult>;
   queueEditStore?: QueueEditStore;
   onEditQueued?(params: NativeQueueEditParams): Promise<NativeQueueEditResult>;
   onImportQueueImages?(files: readonly File[]): Promise<ComposerDraftImage[]>;
@@ -338,6 +343,7 @@ function ThreadViewContent({
   onComposerSendModeChange,
   queueFailure: suppliedQueueFailure = null,
   onResumeQueue,
+  onSteerQueued,
   onCancelQueued,
   onEditQueued,
   queueEditStore,
@@ -418,6 +424,13 @@ function ThreadViewContent({
   currentQueueFailureRef.current = queueFailure;
   const cancelLocks = useRef(new Map<string, Set<string>>());
   const resumeLocks = useRef(new Set<string>());
+  const steerLocks = useRef(new Map<string, Set<string>>());
+  const [queueSteerError, setQueueSteerError] = useState<{
+    threadId: string;
+    queuedItemId: string;
+    revision: number;
+    message: string;
+  } | null>(null);
   const editLocks = useRef(new Set<string>());
   const editOwner = useRef(Symbol("queue editor viewport"));
   const [localEditStore] = useState(createQueueEditStore);
@@ -906,6 +919,47 @@ function ThreadViewContent({
       invalidateQueue((n) => n + 1);
     }
   };
+  const steerQueued = async (message: {
+    id: string;
+    clientId: string;
+    revision?: number;
+  }) => {
+    if (
+      !thread ||
+      !onSteerQueued ||
+      composerDisabled ||
+      currentThreadRef.current !== thread.id ||
+      cancelLocks.current.has(thread.id) ||
+      resumeLocks.current.has(thread.id) ||
+      editLocks.current.has(thread.id) ||
+      editStore.isPending(thread.id) ||
+      steerLocks.current.has(thread.id)
+    )
+      return;
+    const threadId = thread.id;
+    steerLocks.current.set(threadId, new Set([message.id]));
+    setQueueSteerError(null);
+    invalidateQueue((n) => n + 1);
+    try {
+      await onSteerQueued({
+        threadId,
+        queuedItemId: message.id,
+        clientId: message.clientId,
+        expectedRevision: message.revision ?? 0,
+      });
+    } catch (error) {
+      if (currentThreadRef.current === threadId)
+        setQueueSteerError({
+          threadId,
+          queuedItemId: message.id,
+          revision: message.revision ?? 0,
+          message: describeError(error),
+        });
+    } finally {
+      steerLocks.current.delete(threadId);
+      invalidateQueue((n) => n + 1);
+    }
+  };
   const cancelQueued = async (targets: readonly QueuedCancellationTarget[]) => {
     if (
       thread === null ||
@@ -913,6 +967,7 @@ function ThreadViewContent({
       composerDisabled ||
       currentThreadRef.current !== thread.id ||
       targets.length === 0 ||
+      steerLocks.current.has(thread.id) ||
       cancelLocks.current.has(thread.id) ||
       resumeLocks.current.has(thread.id) ||
       editLocks.current.has(thread.id) ||
@@ -954,6 +1009,7 @@ function ThreadViewContent({
       composerDisabled ||
       runningTurn !== null ||
       currentThreadRef.current !== thread.id ||
+      steerLocks.current.has(thread.id) ||
       resumeLocks.current.has(thread.id) ||
       cancelLocks.current.has(thread.id) ||
       editLocks.current.has(thread.id) ||
@@ -1328,9 +1384,22 @@ function ThreadViewContent({
                 },
               });
             }}
+            running={runningTurn !== null}
+            steeringIds={steerLocks.current.get(thread.id)}
+            onSteer={
+              onSteerQueued ? (message) => void steerQueued(message) : undefined
+            }
+            steerError={
+              queueSteerError?.threadId === thread.id ? queueSteerError : null
+            }
             queueFailure={queueFailure}
             pendingIds={cancelLocks.current.get(thread.id)}
-            busy={cancelingQueue || editingQueue || composerDisabled}
+            busy={
+              cancelingQueue ||
+              editingQueue ||
+              steerLocks.current.has(thread.id) ||
+              composerDisabled
+            }
             editableIds={new Set(editableQueue.keys())}
             editingIds={
               new Set(
@@ -1359,6 +1428,7 @@ function ThreadViewContent({
                       currentThreadRef.current !== thread.id ||
                       (!inspectingPending &&
                         (composerDisabled ||
+                          steerLocks.current.has(thread.id) ||
                           cancelingQueue ||
                           resumingQueue ||
                           editStore.isPending(thread.id))) ||

@@ -20,7 +20,11 @@ export function registerProtocolRequestIpc(
       try {
         result = await manager.request(method, params as never);
       } catch (error) {
-        if (method !== "zen/thread/queue/edit") throw error;
+        if (
+          method !== "zen/thread/queue/edit" &&
+          method !== "zen/thread/queue/steer"
+        )
+          throw error;
         const rejection = queueEditIpcRejection(error);
         if (rejection !== undefined) return rejection;
         // Neither raw Host errors nor custom Error fields survive this boundary.

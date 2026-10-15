@@ -1,3 +1,4 @@
+import { requestQueuedSteer } from "./queue-steer-request.js";
 import { i18n } from "./i18n.js";
 import React, { useEffect, useRef, useState } from "react";
 import type {
@@ -432,6 +433,13 @@ export function ThreadConversationViewport({
         }
         onRespondToApproval={respondToApproval}
         queueEditStore={queueEditStore}
+        onSteerQueued={(params) => {
+          const epoch = generation.current;
+          return requestQueuedSteer(params, () => {
+            if (generation.current === epoch && params.threadId === threadId)
+              reload();
+          });
+        }}
         onEditQueued={(params) => {
           const epoch = generation.current;
           return requestQueuedEdit(params, () => {

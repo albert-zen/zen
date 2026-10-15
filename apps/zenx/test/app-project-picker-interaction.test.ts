@@ -1926,7 +1926,7 @@ for (const committed of [true, false] as const) {
       } else {
         assert.match(
           document.querySelector(".queue-shelf")?.textContent ?? "",
-          /Pending send · 1/u,
+          /After this turn · 1/u,
         );
         await waitFor(() =>
           (
@@ -2450,7 +2450,7 @@ test("native queue admission failure belongs to its queued Item and latest attem
     assert.equal(document.querySelector(".queue-row-error"), null);
     assert.match(
       document.querySelector(".queue-shelf")?.textContent ?? "",
-      /Pending send · 1/u,
+      /After this turn · 1/u,
     );
   } finally {
     await unmountApp(harness);
@@ -2618,7 +2618,7 @@ for (const path of [
       if (path !== "rpc")
         assert.match(
           document.querySelector(".queue-shelf")?.textContent ?? "",
-          /Pending send · 1/u,
+          /After this turn · 1/u,
         );
       assert.equal(document.querySelector(".composer-error"), null);
     } finally {

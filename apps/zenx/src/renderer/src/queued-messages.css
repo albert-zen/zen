@@ -6,11 +6,13 @@
   display: flex;
   flex-direction: column;
   margin: 6px auto -1px;
+  width: calc(100% - 16px);
+  max-width: calc(var(--conversation-width) - 16px);
   /* Keep the layout footprint, but read as a quiet shelf above the input. */
-  border: 1px solid transparent;
-  border-top-color: var(--color-border-subtle);
-  border-radius: 0;
-  background: var(--color-surface-main);
+  border: 1px solid var(--color-border-subtle);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: var(--color-surface-inset);
   box-shadow: none;
   color: var(--color-text-secondary);
   font-size: var(--font-size-caption);
@@ -33,8 +35,8 @@
   flex: 0 0 auto;
   justify-content: space-between;
   gap: 4px;
-  min-height: 44px;
-  padding: 0 8px;
+  min-height: 36px;
+  padding: 0 6px;
 }
 
 .queue-shelf button {
@@ -259,6 +261,7 @@
   align-items: flex-start;
 }
 
+.queue-row-steer,
 .queue-row-edit,
 .queue-row-cancel {
   display: inline-flex;
@@ -418,5 +421,42 @@
   .queue-row-edit,
   .queue-row-cancel {
     opacity: 1 !important;
+  }
+}
+
+.queue-row-steer {
+  color: var(--color-text-primary) !important;
+}
+.queue-row-steer:disabled {
+  color: var(--color-text-disabled) !important;
+}
+.queue-row-steer.is-pending {
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+.queue-shelf-toggle {
+  min-height: 36px;
+  font-size: var(--font-size-caption);
+}
+.queue-shelf .queue-preview {
+  font-size: var(--font-size-caption);
+  padding-block: 8px;
+}
+.queue-shelf .thread-message-sender {
+  display: inline;
+  color: var(--color-text-muted);
+}
+.queue-row-main {
+  align-items: center;
+}
+@media (max-width: 480px) {
+  .queue-shelf {
+    width: calc(100% - 8px);
+  }
+  .queue-row-main {
+    gap: 0;
+  }
+  .queue-row-actions {
+    gap: 0;
   }
 }
