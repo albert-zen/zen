@@ -1,0 +1,125 @@
+{
+  "base": "067576f9f437c875851d686053be4d3cd76a6389",
+  "feature": "3b510e5a8103df59912b7a54ce4ca7362caa56ba",
+  "main": "350002fdcbdfc3866ffb6c7a2821b7d0e647272f",
+  "integrated": "d770dd4b1ca1d16d21d9b113cee3b8490d071b0c",
+  "tree": "e3cbe4b59af8b7ef9040fe7ac7da24bbadfa0049",
+  "identicalFeaturePathSet": true,
+  "files": [
+    {
+      "path": "ARCHITECTURE.md",
+      "alsoChangedUpstream": true,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ThreadView.tsx",
+      "alsoChangedUpstream": true,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/thread-view-state.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "apps/zenx/test/fixtures/loop-recovery-scenario.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "apps/zenx/test/fixtures/loop-recovery-visual.html",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "apps/zenx/test/fixtures/loop-recovery-visual.tsx",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "apps/zenx/test/loop-recovery-view.test.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "apps/zenx/test/thread-view-component.test.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/app-server.ts",
+      "alsoChangedUpstream": true,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/context-compaction.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/item.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/loop-recovery.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/model-content.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/model.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/model/openai-compatible.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/model/openai-subscription.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/model/request-retry.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/protocol/codex/connection.ts",
+      "alsoChangedUpstream": true,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/protocol/codex/mapper.ts",
+      "alsoChangedUpstream": true,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/runtime.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "src/thread.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "test/agent-loop-recovery.test.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    },
+    {
+      "path": "test/model-sampling-retry.test.ts",
+      "alsoChangedUpstream": false,
+      "identicalAddedRemovedLines": true
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "captureCommit": "3b510e5a8103df59912b7a54ce4ca7362caa56ba",
+  "captureTree": "5397f181b6c61d36dcec60cd81808e379de60348",
+  "integratedCommit": "d770dd4b1ca1d16d21d9b113cee3b8490d071b0c",
+  "integratedTree": "e3cbe4b59af8b7ef9040fe7ac7da24bbadfa0049",
+  "files": [
+    {
+      "path": "apps/zenx/test/fixtures/loop-recovery-scenario.ts",
+      "captureBlob": "f76919c498e88e72f1f354e71627ab6067d2ed9b",
+      "integratedBlob": "f76919c498e88e72f1f354e71627ab6067d2ed9b",
+      "identical": true
+    },
+    {
+      "path": "apps/zenx/test/fixtures/loop-recovery-visual.html",
+      "captureBlob": "8acb980500d9a5e95e6176a1159398cf95e87995",
+      "integratedBlob": "8acb980500d9a5e95e6176a1159398cf95e87995",
+      "identical": true
+    },
+    {
+      "path": "apps/zenx/test/fixtures/loop-recovery-visual.tsx",
+      "captureBlob": "b15554663edf8a887724a9ed8d4dc0a3a23c17e0",
+      "integratedBlob": "b15554663edf8a887724a9ed8d4dc0a3a23c17e0",
+      "identical": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/thread-view-state.ts",
+      "captureBlob": "eaeb13e52197d3b53a969ec109da84bc0392e735",
+      "integratedBlob": "eaeb13e52197d3b53a969ec109da84bc0392e735",
+      "identical": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/ThreadView.tsx",
+      "captureBlob": "01622cd7e9ea51885ae8240122dc2f7707caf90d",
+      "integratedBlob": "23c0fe0391163f300986c4145cd010678fae279a",
+      "identical": false
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/turn-projection.ts",
+      "captureBlob": "3a13c18f2f782b97f703ec3b697b1fce6058105c",
+      "integratedBlob": "3a13c18f2f782b97f703ec3b697b1fce6058105c",
+      "identical": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/styles.css",
+      "captureBlob": "158134361437a058384cc75914053338cc8dae72",
+      "integratedBlob": "158134361437a058384cc75914053338cc8dae72",
+      "identical": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/theme.css",
+      "captureBlob": "c78edfe0640fe76d6f6dee42d6738fd8c3f0b988",
+      "integratedBlob": "c78edfe0640fe76d6f6dee42d6738fd8c3f0b988",
+      "identical": true
+    }
+  ],
+  "warning": "ThreadView is NOT byte-identical: upstream #397 changes turn-end read tracking and data-read-message-id. Fixture/native projection/error-detail rendering/styles unchanged; do not claim entire component same-blob."
+}
