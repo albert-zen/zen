@@ -54,6 +54,7 @@ it does not instantiate the Host registry or Electron IPC bridge. Keep the
 visible SYNTHETIC RENDERER PREVIEW label in every capture.
 
 Suggested states (both light/dark, wide and narrow where useful):
+
 1. Start with Workspace selected; click “Start synthetic external activity”.
    Confirm the ordinary External reference tab becomes selected and shows activity.
 2. Click “Finish synthetic external activity”; confirm activity settles.

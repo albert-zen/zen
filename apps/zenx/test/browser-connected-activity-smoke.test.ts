@@ -107,3 +107,71 @@ test("CI helper detaches its session on inspection failure without closing calle
   assert.equal(detached, true);
   assert.equal(closed, false);
 });
+
+test("CI helper records only known pre-dispatch inspection attempts; unknown never retries", async () => {
+  const {
+    UserBrowserDocumentChangedBeforeDispatchError,
+    UserBrowserCdpOutcomeUnknownError,
+  } = await import("../src/main/capabilities/user-browser-provider.js");
+  for (const known of [true, false]) {
+    let opens = 0,
+      inspections = 0,
+      detaches = 0;
+    const backend = {
+      open: async (sessionId: string) => {
+        opens++;
+        return {
+          sessionId,
+          tabId: "new",
+          title: "Fixture",
+          url: "https://example.test",
+          loading: false,
+        };
+      },
+      inspect: async () => {
+        inspections++;
+        if (inspections === 1)
+          throw known
+            ? new UserBrowserDocumentChangedBeforeDispatchError(
+                "pending lifecycle",
+              )
+            : new UserBrowserCdpOutcomeUnknownError(
+                "Runtime.evaluate",
+                "timeout",
+              );
+        return {
+          title: "Fixture",
+          url: "https://example.test",
+          visibleText: "Fixture",
+          targets: [],
+        };
+      },
+      closeSession: async () => {
+        detaches++;
+        return 1;
+      },
+      close: async () => {
+        throw new Error("must not close caller connection");
+      },
+    } as unknown as ZenXBrowserBackend;
+    const retryKnown = async <T>(operation: () => Promise<T>): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!(error instanceof UserBrowserDocumentChangedBeforeDispatchError))
+          throw error;
+        return await operation();
+      }
+    };
+    const run = smokeConnectedActivity(
+      backend,
+      "https://example.test",
+      retryKnown,
+    );
+    if (known) await run;
+    else await assert.rejects(run, UserBrowserCdpOutcomeUnknownError);
+    assert.equal(opens, 1, "open is never replayed");
+    assert.equal(inspections, known ? 2 : 1);
+    assert.equal(detaches, 1);
+  }
+});

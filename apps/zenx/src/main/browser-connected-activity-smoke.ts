@@ -1,3 +1,4 @@
+import { UserBrowserDocumentChangedBeforeDispatchError } from "./capabilities/user-browser-provider.js";
 import assert from "node:assert/strict";
 import { BrowserBackendRegistry } from "./capabilities/browser-backend-registry.js";
 import type { ZenXBrowserBackend } from "./capabilities/browser-provider.js";
@@ -11,6 +12,9 @@ import {
 export async function smokeConnectedActivity(
   backend: ZenXBrowserBackend,
   fixtureUrl: string,
+  inspectUntilStable: <T>(operation: () => Promise<T>) => Promise<T> = (
+    operation,
+  ) => operation(),
 ): Promise<void> {
   // The caller owns the existing CI browser connection and its teardown.
   const borrowed = new Proxy(backend, {
@@ -39,10 +43,14 @@ export async function smokeConnectedActivity(
     removeListener() {},
   };
   const threadId = "ci-connected-activity";
-  const invoke = (name: string, args: Record<string, unknown> = {}) =>
+  const invoke = (
+    name: string,
+    args: Record<string, unknown> = {},
+    callId = `ci-${name}`,
+  ) =>
     registry.invoke(`browser_connected_${name}`, {
       name,
-      callId: `ci-${name}`,
+      callId,
       canonicalToolCallId: `ci-canonical-${name}`,
       threadId,
       arguments: { sessionId: "ci-activity", ...args },
@@ -73,22 +81,48 @@ export async function smokeConnectedActivity(
         value.backendId === "connected" && value.id === opened[0]!.targetId,
     );
     assert.ok(target, "Host-owned real connected target must be catalogued");
-    const result = await invoke("inspect", { tabId: target.tabId });
-    assert.ok(result);
-    const activities = events.flatMap(({ event }) =>
-      event.type === "activity" && event.callId === "ci-inspect" ? [event] : [],
-    );
-    assert.deepEqual(
-      activities.map((event) => event.phase),
-      ["started", "completed"],
-    );
-    assert.ok(activities[0]!.operationSequence > 0);
-    for (const event of activities) {
-      assert.equal(event.targetId, target.id);
-      assert.equal(event.threadId, threadId);
-      assert.equal(event.operationId, activities[0]!.operationId);
-      assert.equal(event.operationSequence, activities[0]!.operationSequence);
-      assert.equal(event.sessionEpoch, activities[0]!.sessionEpoch);
+    const attempts: Array<{ callId: string; knownPreDispatch: boolean }> = [];
+    await inspectUntilStable(async () => {
+      const attempt = {
+        callId: `ci-inspect-${attempts.length + 1}`,
+        knownPreDispatch: false,
+      };
+      attempts.push(attempt);
+      try {
+        return await invoke("inspect", { tabId: target.tabId }, attempt.callId);
+      } catch (error) {
+        // Only the caller's existing bounded pre-dispatch lifecycle policy may
+        // retry inspection. Unknown/timeout/abort/foreign identity are propagated.
+        attempt.knownPreDispatch =
+          error instanceof UserBrowserDocumentChangedBeforeDispatchError;
+        throw error;
+      }
+    });
+    let previousSequence = 0;
+    const operationIds = new Set<string>();
+    for (const [index, attempt] of attempts.entries()) {
+      const activities = events.flatMap(({ event }) =>
+        event.type === "activity" && event.callId === attempt.callId
+          ? [event]
+          : [],
+      );
+      const final = index === attempts.length - 1;
+      assert.equal(attempt.knownPreDispatch, !final);
+      assert.deepEqual(
+        activities.map((event) => event.phase),
+        ["started", final ? "completed" : "failed"],
+      );
+      assert.ok(activities[0]!.operationSequence > previousSequence);
+      previousSequence = activities[0]!.operationSequence;
+      assert.ok(!operationIds.has(activities[0]!.operationId));
+      operationIds.add(activities[0]!.operationId);
+      for (const event of activities) {
+        assert.equal(event.targetId, target.id);
+        assert.equal(event.threadId, threadId);
+        assert.equal(event.operationId, activities[0]!.operationId);
+        assert.equal(event.operationSequence, activities[0]!.operationSequence);
+        assert.equal(event.sessionEpoch, opened[0]!.sessionEpoch);
+      }
     }
     assert.ok(
       !events.some(({ event }) => event.type === "frame"),
@@ -99,8 +133,12 @@ export async function smokeConnectedActivity(
         check: "connected-activity-host-catalog",
         provider: "caller-supplied-provider",
         transport: "instrumented-renderer-sink",
-        phases: activities.map((event) => event.phase),
-        operationSequence: activities[0]!.operationSequence,
+        attempts: attempts.length,
+        knownPreDispatchFailures: attempts.filter(
+          (attempt) => attempt.knownPreDispatch,
+        ).length,
+        phases: ["started", "completed"],
+        operationSequence: previousSequence,
       }),
     );
   } finally {

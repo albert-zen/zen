@@ -442,6 +442,7 @@ try {
   await smokeConnectedActivity(
     backend,
     `http://127.0.0.1:${String(port)}/opened`,
+    retryDocumentInspection,
   );
   assert.equal(
     foregroundWindowHandle(),
