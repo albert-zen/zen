@@ -517,14 +517,13 @@ function traceAction(item: CommandItem): {
   };
 }
 
-export function traceGroupIcon(items: readonly ThreadItem[]): IconName {
-  const actions = items.flatMap((item) =>
-    item.type === "commandExecution" ? [traceAction(item)] : [],
+export function traceGroupIcons(items: readonly ThreadItem[]): IconName[] {
+  const icons = items.flatMap((item) =>
+    item.type === "commandExecution" ? [traceAction(item).icon] : [],
   );
-  if (actions.length === 0) return "reasoning";
-  return actions.every((action) => action.key === actions[0]!.key)
-    ? actions[0]!.icon
-    : "list-detail";
+  // Reuse real capability glyphs (including their existing unknown fallback),
+  // in first-seen order. A bounded set stays stable as more calls arrive.
+  return icons.length === 0 ? ["reasoning"] : [...new Set(icons)].slice(0, 2);
 }
 
 export function commandLabel(command: string): string {
