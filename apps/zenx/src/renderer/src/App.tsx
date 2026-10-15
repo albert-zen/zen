@@ -652,7 +652,7 @@ function AppContent() {
   const [projectListLoaded, setProjectListLoaded] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [conversationPanels, setConversationPanels] = useState<
-    Record<string, string>
+    Record<string, string[]>
   >({});
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -2399,7 +2399,13 @@ function AppContent() {
               }),
               ...(target.searchParams.get("view") === "panel"
                 ? {
-                    conversationThreadId: threadId,
+                    conversationThreadIds: [
+                      ...new Set([
+                        ...(current[selectedRoom.id]?.conversationThreadIds ??
+                          []),
+                        threadId,
+                      ]),
+                    ],
                     selected: `thread:${threadId}`,
                   }
                 : { selected: `plugin:${requestedPanel}` }),
@@ -2415,7 +2421,10 @@ function AppContent() {
         owner !== null &&
         threadId !== owner
       ) {
-        setConversationPanels((current) => ({ ...current, [owner]: threadId }));
+        setConversationPanels((current) => ({
+          ...current,
+          [owner]: [...new Set([...(current[owner] ?? []), threadId])],
+        }));
         setBrowserPanels((current) => ({ ...current, [owner]: true }));
         setPanelTabs((current) => ({
           ...current,
@@ -3422,27 +3431,21 @@ function AppContent() {
                 threadContext={{
                   threads: [...activeSummaries, ...archivedSummaries],
                 }}
-                conversation={
-                  conversationPanels[threadDetail.id]
-                    ? {
-                        threadId: conversationPanels[threadDetail.id]!,
-                        title: (() => {
-                          const summary = [
-                            ...activeSummaries,
-                            ...archivedSummaries,
-                          ].find(
-                            (entry) =>
-                              entry.threadId ===
-                              conversationPanels[threadDetail.id],
-                          );
-                          return summary
-                            ? threadTitle(summary)
-                            : i18n.t("shell:conversation");
-                        })(),
-                        render: renderSideConversation,
-                      }
-                    : undefined
-                }
+                conversations={(conversationPanels[threadDetail.id] ?? []).map(
+                  (threadId) => {
+                    const summary = [
+                      ...activeSummaries,
+                      ...archivedSummaries,
+                    ].find((entry) => entry.threadId === threadId);
+                    return {
+                      threadId,
+                      title: summary
+                        ? threadTitle(summary)
+                        : i18n.t("shell:conversation"),
+                      render: renderSideConversation,
+                    };
+                  },
+                )}
                 messageLinkRequest={
                   messageLinkRequest?.threadId === threadDetail.id
                     ? messageLinkRequest

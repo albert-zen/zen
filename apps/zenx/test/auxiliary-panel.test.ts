@@ -839,3 +839,84 @@ test("back during a pending file read resets the persistent navigator without ad
     await f.close();
   }
 });
+
+test("persistent file tree and drafts coexist with multiple same-title conversation tabs", async () => {
+  const f = r4Fixture({
+    list: async () => ({
+      path: ".",
+      entries: [{ name: "main.go", path: "main.go", kind: "file" }],
+      truncated: false,
+    }),
+  });
+  const drafts = new WorkspaceFileDrafts();
+  drafts.set(fileDraftKey("t", "main.go"), {
+    base: { path: "main.go", text: "package main", revision: "r" },
+    text: "package main // retained draft",
+  });
+  function Harness() {
+    const [selectedTab, onSelectTab] = useState("file:main.go");
+    return React.createElement(
+      React.Fragment,
+      null,
+      ...["child-a", "child-b"].map((id) =>
+        React.createElement(
+          "button",
+          {
+            key: id,
+            id: `open-${id}`,
+            onClick: () => onSelectTab(`thread:${id}`),
+          },
+          id,
+        ),
+      ),
+      React.createElement(AuxiliaryPanel, {
+        threadId: "t",
+        title: "T",
+        open: true,
+        onOpenChange: () => {},
+        snapshot: null,
+        selectedTab,
+        onSelectTab,
+        fileDrafts: drafts,
+        conversations: ["child-a", "child-b"].map((threadId) => ({
+          threadId,
+          title: "Same title",
+          render: (id: string) =>
+            React.createElement("div", { "data-child": id }, id),
+        })),
+      }),
+    );
+  }
+  try {
+    await f.render(React.createElement(Harness));
+    const nav = document.querySelector<HTMLElement>(
+      ".workspace-file-navigation",
+    )!;
+    assert.equal(nav.hidden, false);
+    await r4Click("#open-child-a");
+    await r4Click("#open-child-b");
+    assert.ok(document.getElementById("aux-tab-thread:child-a"));
+    assert.ok(document.getElementById("aux-tab-thread:child-b"));
+    assert.equal(
+      nav.hidden,
+      true,
+      "the tree must not steal space from conversation or terminal surfaces",
+    );
+    assert.equal(
+      document.querySelector('[data-child="child-b"]')?.textContent,
+      "child-b",
+    );
+    await act(async () =>
+      document.getElementById("aux-tab-file:main.go")!.click(),
+    );
+    assert.equal(nav.hidden, false);
+    assert.match(
+      document.querySelector('[role="tabpanel"]:not([hidden])')!.textContent!,
+      /retained draft/,
+    );
+    assert.ok(document.getElementById("aux-tab-thread:child-a"));
+    assert.ok(document.getElementById("aux-tab-thread:child-b"));
+  } finally {
+    await f.close();
+  }
+});

@@ -12,6 +12,7 @@ import { workspaceLauncherSnapshot } from "../workspace-launcher-snapshot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
+import type { ThreadTitleSnapshot } from "../../src/main/thread-title-types.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App } from "../../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
@@ -30,12 +31,23 @@ let compactions = 0;
 let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
   [];
 
+const sideConversations = [
+  { ...summary("design-child", "Design review"), parentThreadId: "thread-1" },
+  { ...summary("test-child", "Test coverage"), parentThreadId: "thread-1" },
+];
+const fixtureTitles: ThreadTitleSnapshot = {};
+let titleVersion = 0;
 const options = {
-  request: async (method: string) => {
+  request: async (method: string, request?: unknown) => {
     if (method === "zen/thread/resume") {
+      const threadId =
+        (request as { threadId?: string } | undefined)?.threadId ?? "thread-1";
       const recovery = resumed(
         threadWithMessage(
-          "已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。\n\n### 下一步\n\n- 统一浏览器和文件工作区\n- 在同一页面与 Agent 协作\n- 查看上下文压缩结果",
+          threadId === "thread-1"
+            ? "已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。\n\n### 下一步\n\n- 统一浏览器和文件工作区\n- 在同一页面与 Agent 协作\n- 查看上下文压缩结果"
+            : `Synthetic ${sideConversations.find((entry) => entry.threadId === threadId)?.name ?? "side chat"}. This conversation has its own draft and reading state.`,
+          threadId,
         ),
       );
       if (compactions)
@@ -122,7 +134,7 @@ const zenx = {
     getPendingApprovals: async () => [],
     request: async (method: string, params?: unknown) => {
       if (method === "model/list") return { data: [model()], nextCursor: null };
-      return await options.request(method);
+      return await options.request(method, params);
     },
     respondToApproval: async () => undefined,
     onApprovalRequest: () => () => undefined,
@@ -132,7 +144,12 @@ const zenx = {
   },
   threads: {
     list: async ({ archived }: { archived: boolean }) =>
-      archived ? [] : [summary()],
+      archived
+        ? []
+        : [
+            summary(),
+            ...(params.has("conversationTabs") ? sideConversations : []),
+          ],
   },
   imageAttachments: {
     pick: async () => [],
@@ -160,7 +177,12 @@ const zenx = {
           workspace: "/work/zen",
           configured: true,
           isDefault: true,
-          threadIds: ["thread-1"],
+          threadIds: [
+            "thread-1",
+            ...(params.has("conversationTabs")
+              ? sideConversations.map((entry) => entry.threadId)
+              : []),
+          ],
         },
       ],
       unavailableThreadIds: [],
@@ -202,7 +224,19 @@ const zenx = {
     }),
   },
   titles: {
-    get: async () => ({}),
+    get: async () => ({ ...fixtureTitles }),
+    rename: async (threadId: string, title: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const projection = {
+        threadId,
+        title,
+        status: "manual" as const,
+        source: "user" as const,
+        version: ++titleVersion,
+      };
+      fixtureTitles[threadId] = projection;
+      return projection;
+    },
     onChange: () => () => undefined,
   },
   triggers: {
@@ -261,12 +295,15 @@ Object.assign(zenx, {
   workspaceFiles: syntheticWorkspaceFiles,
 });
 // Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
-if (params.has("launchers")) {
+if (params.has("launchers") || params.has("conversationTabs")) {
   Object.assign(zenx.plugins, {
     get: async () => workspaceLauncherSnapshot,
     executeCommand: async (pluginId: string, command: string) => {
       if (pluginId === "zenx-subagents") {
-        if (command === "list") return { threads: [] };
+        if (command === "list")
+          return {
+            threads: params.has("conversationTabs") ? sideConversations : [],
+          };
         if (command === "create") return { threadId: "synthetic-side-chat" };
       }
       if (pluginId === "zenx-triggers") {
@@ -361,9 +398,9 @@ function runningTurn(): Thread["turns"][number] {
   };
 }
 
-function threadWithMessage(text: string): Thread {
+function threadWithMessage(text: string, threadId = "thread-1"): Thread {
   return {
-    ...thread(),
+    ...thread(threadId),
     turns: [
       {
         ...runningTurn(),
