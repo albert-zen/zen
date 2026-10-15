@@ -169,6 +169,7 @@ export interface ClientRequestParams {
   "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportParams;
   "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
+  "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
@@ -271,6 +272,7 @@ export interface ClientRequestResults {
     status: "imported" | "already_imported";
   };
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
+  "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;

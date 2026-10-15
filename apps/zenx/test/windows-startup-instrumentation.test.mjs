@@ -151,6 +151,7 @@ async function loadObserverFixture(windows = []) {
     process,
     URL,
     AbortSignal,
+    setImmediate,
     setInterval: () => ({ unref() {} }),
     setTimeout(callback, milliseconds) {
       const timer = setTimeout(() => {
@@ -182,6 +183,29 @@ async function loadObserverFixture(windows = []) {
   exports.observe();
   return { app, records, writes, EventEmitter, exports, timers };
 }
+
+test("second-instance receipt is immediate while window identity remains deferred", async () => {
+  const windows = [];
+  const { app, records } = await loadObserverFixture(windows);
+  app.on("second-instance", () => {
+    assert.equal(records.at(-1)?.type, "second-instance-received");
+    assert.equal(
+      records.some((record) => record.type === "second-instance"),
+      false,
+    );
+    windows.push({ id: 7, getNativeWindowHandle: () => Buffer.alloc(8) });
+  });
+  app.emit("second-instance");
+  await new Promise((resolve) => setImmediate(resolve));
+  const settled = records.find((record) => record.type === "second-instance");
+  assert.equal(settled?.windows.length, 1);
+  assert.equal(settled.windows[0].id, 7);
+  assert.equal(
+    records.filter((record) => record.type === "second-instance-received")
+      .length,
+    1,
+  );
+});
 
 test("fixture records Electron 43 console-message details from the first argument", async () => {
   const { app, records, EventEmitter } = await loadObserverFixture();

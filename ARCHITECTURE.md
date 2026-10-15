@@ -1356,3 +1356,16 @@ ZenX CI aggregate 的被动 test:dequeue reporter 只在共享字节预算内增
 - The disposable parallel-input fixture may inject a synchronous CDP diagnostic observer that retains bounded anonymous request/timer/receive summaries through existing cleanup; it has no transport authority, never changes unknown outcomes, and is absent by default in the production provider.
 
 The first exact trusted browser inspection may reserve the unused portion of its attachment epoch's original 10-second initialization deadline when more than the ordinary 2 seconds remain. The synchronous reservation is exclusive; only its holder may return it after a known document-change rejection before isolated-world dispatch, while the same owner, epoch and live target remain current and the operation is not aborted. Returning the reservation preserves the originally granted absolute deadline, even when fewer than 2 seconds remain or it has expired; no fresh ordinary budget is substituted. World dispatch irrevocably consumes the reservation, as do aborts, unknown outcomes, ownership/epoch changes and other failures. This permits an existing caller's explicit lifecycle-stabilization attempt to reclaim unused time; it adds no automatic retry or replay. Only the reserved inspection’s isolated-world creation and main evaluation share that absolute deadline, including intervening preflight time. Frame commands, barriers, post-evaluation verification, nested probes and every other document-preflight caller retain their ordinary budgets; the entire inspection is not a strict 10-second wall-time operation. Late dispatched world replies remain unknown. Unknown-outcome settlement and no-replay rules remain unchanged.
+
+### Queued input promotion
+
+`zen/thread/queue/steer` promotes an existing canonical queued identity and expected
+revision under the Thread mutation lock: it commits the exact pending input to an
+active Turn at the next safe point, or starts that selected input when idle using
+the existing queue admission reservation. It never cancels/recreates the message.
+The original queued Item, client identity, source/provenance, attachments and
+creation timestamp remain unchanged; the delivered Item records its own actual
+admission timestamp. Concurrent drain/edit/cancel operations share the same fence,
+and retries/reload read the existing canonical delivery receipt. Transport failure
+does not imply delivery or permit client-side cancel/resend. This is a one-message
+action; it does not rewrite any ingress preference or an explicitly queued sibling.

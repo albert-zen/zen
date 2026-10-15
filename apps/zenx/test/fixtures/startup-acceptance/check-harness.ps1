@@ -5,7 +5,7 @@ $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($HarnessPath, [ref] $tokens, [ref] $parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 # Load only the real harness helpers. Never execute its package or process launcher.
-foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime", "Assert-RendererPresentation")) {
+foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime", "Get-OwnedProcessState", "Assert-RendererPresentation")) {
   $functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true))
   if ($functions.Count -ne 1) { throw "Missing unique helper $name" }
   . ([scriptblock]::Create($functions[0].Extent.Text))
@@ -25,6 +25,20 @@ function Assert-Throws([scriptblock] $Action, $Pattern) {
   try { & $Action | Out-Null } catch { $caught = $_.Exception.Message }
   if ($null -eq $caught -or $caught -notmatch $Pattern) { throw "Expected $Pattern; received $caught" }
 }
+$missing = Get-OwnedProcessState $null
+Assert-True (!$missing.started -and $null -eq $missing.hasExited) "An unstarted secondary must not be reported as exited"
+$observed = [pscustomobject]@{ Id = 321; HasExited = $false; Refreshes = 0 }
+$observed | Add-Member ScriptMethod Refresh { $this.Refreshes++ }
+$observed | Add-Member ScriptProperty ExitCode { throw "A live process has no exit code" }
+$running = Get-OwnedProcessState $observed
+Assert-True ($running.started -and $running.pid -eq 321 -and !$running.hasExited -and $null -eq $running.exitCode -and !$running.ContainsKey("observationError")) "A live secondary must remain live with no exit code"
+$observed.HasExited = $true
+$observed | Add-Member ScriptProperty ExitCode { return 17 } -Force
+$exited = Get-OwnedProcessState $observed
+Assert-True ($exited.hasExited -and $exited.exitCode -eq 17 -and $observed.Refreshes -eq 2) "An exited secondary must retain its real exit code"
+$observed | Add-Member ScriptMethod Refresh { throw "Synthetic process observation failure" } -Force
+$unknown = Get-OwnedProcessState $observed
+Assert-True ($null -eq $unknown.hasExited -and $unknown.observationError -match "Synthetic process observation failure") "Observation failure must remain unknown without throwing over the scenario failure"
 # Modern ConvertFrom-Json may materialize dates; older versions leave strings.
 # Both must preserve the exact fractional timestamp used for holding bootstrap.
 $expected = [DateTimeOffset]::Parse("2026-10-12T14:59:19.846Z").UtcDateTime

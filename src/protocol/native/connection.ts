@@ -31,6 +31,7 @@ import {
   NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
   NATIVE_QUEUE_EDIT_METHOD,
+  NATIVE_QUEUE_STEER_METHOD,
   NATIVE_THREAD_MESSAGE_METHOD,
   NATIVE_TURN_WAKE_METHOD,
   type NativeQueueEditParams,
@@ -601,6 +602,66 @@ export class NativeConnection {
                 ? { data: { zenCode: error.code } }
                 : {}),
             },
+          });
+      }
+      return;
+    }
+    if (message.method === NATIVE_QUEUE_STEER_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId.trim() ||
+          typeof params.queuedItemId !== "string" ||
+          typeof params.clientId !== "string" ||
+          typeof params.expectedRevision !== "number"
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread, queue identity and expected revision are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native queue steering is unavailable",
+          );
+        this.#subscriptions.add(params.threadId);
+        const result = await this.#appServer.steerQueuedMessage(
+          params.threadId,
+          {
+            queuedItemId: params.queuedItemId,
+            clientId: params.clientId,
+            expectedRevision: params.expectedRevision,
+          },
+          this.#requestApproval === undefined
+            ? {}
+            : { requestApproval: this.#requestApproval },
+        );
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error:
+              error instanceof AppServerError
+                ? {
+                    code: -32602,
+                    message: error.message,
+                    data: { zenCode: error.code },
+                  }
+                : {
+                    code: -32603,
+                    message:
+                      "Queue steering outcome is unconfirmed. Read the Thread before retrying the same queued identity.",
+                  },
           });
       }
       return;

@@ -203,6 +203,22 @@ export const en = {
     "Use full file access for this call and its nested operations only.",
   approvalInlineCapabilityScope:
     "Remember permission for the stable {{tool}} capability, not per command or code segment.",
+  queueSteerConflict:
+    "This queued message changed. Review its latest version before sending.",
+  queueSteerNoLongerPending:
+    "This message has already started or was cancelled. Refresh the queue.",
+  queueSteerRejected:
+    "Could not send this message. Check the model, attachments and thread status before retrying.",
+  queueWaitForTurnCount: "After this turn · {{count}}",
+  queueSteerMessage: "Steer with queued message {{number}} now",
+  queueSendMessageNow: "Send queued message {{number}} now",
+  queueSteeringMessage: "Sending queued message {{number}}",
+  queueSteering: "Sending…",
+  queueSteerHint:
+    "Send now; join current work at the next safe point without interrupting",
+  queueSendNow: "Send now",
+  queueSteerUnconfirmed:
+    "Delivery could not be confirmed. Check the connection and refresh before retrying this same message.",
   queuePendingCount: "Pending send · {{count}}",
   editQueuedMessage: "Edit queued message {{number}}",
   queueEditorTitle: "Edit queued message",
@@ -1080,6 +1096,19 @@ export const zhCN = {
   approvalInlineOnceScope: "使用完整文件访问权限，仅本次调用及其嵌套操作。",
   approvalInlineCapabilityScope:
     "记住 {{tool}} 能力授权，并非逐条命令或代码片段批准。",
+  queueSteerConflict: "这条待发送消息已更新，请检查最新内容后再发送。",
+  queueSteerNoLongerPending: "这条消息已开始发送或已取消，请刷新队列。",
+  queueSteerRejected:
+    "暂时无法发送这条消息。请检查模型、附件和会话状态后重试。",
+  queueWaitForTurnCount: "等待当前轮次结束 · {{count}}",
+  queueSteerMessage: "立即用第 {{number}} 条消息引导当前执行",
+  queueSendMessageNow: "立即发送第 {{number}} 条待发送消息",
+  queueSteeringMessage: "正在发送第 {{number}} 条待发送消息",
+  queueSteering: "正在发送…",
+  queueSteerHint: "立即发送，在下一个安全节点加入当前执行（不中断）",
+  queueSendNow: "立即发送",
+  queueSteerUnconfirmed:
+    "尚未确认送达。请检查连接并刷新，再决定是否重试同一条消息。",
   queuePendingCount: "待发送 · {{count}}",
   editQueuedMessage: "编辑第 {{number}} 条待发送消息",
   queueEditorTitle: "编辑待发消息",

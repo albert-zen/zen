@@ -3,6 +3,7 @@ import {
   triggerSourceRoute,
   type MessageSourceNavigator,
 } from "./message-source-navigation.js";
+import { requestQueuedSteer } from "./queue-steer-request.js";
 import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
 import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
 import {
@@ -4140,6 +4141,11 @@ function AgentSurface({
               onCancelQueued(threadDetail.id, targets)
             }
             queueEditStore={queueEditStore}
+            onSteerQueued={(params) =>
+              requestQueuedSteer(params, () =>
+                onRecoverQueuedEdit(params.threadId),
+              )
+            }
             onEditQueued={(params) =>
               requestQueuedEdit(params, () =>
                 onRecoverQueuedEdit(params.threadId),

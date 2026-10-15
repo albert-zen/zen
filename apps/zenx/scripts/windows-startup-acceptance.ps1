@@ -45,6 +45,17 @@ function Get-EventUtcTime($Event) {
   # DateTime.Parse(DateTime) can lose milliseconds through the culture formatter.
   return ([DateTime]$Event.at).ToUniversalTime()
 }
+function Get-OwnedProcessState($Process) {
+  $state = @{ started = $null -ne $Process; pid = $null; hasExited = $null; exitCode = $null }
+  if ($null -eq $Process) { return $state }
+  try {
+    $state.pid = $Process.Id
+    $Process.Refresh()
+    $state.hasExited = $Process.HasExited
+    if ($state.hasExited) { $state.exitCode = $Process.ExitCode }
+  } catch { $state.observationError = $_.Exception.Message }
+  return $state
+}
 function Write-FixtureDiagnostics($Directory, $Process) {
   foreach ($name in @("events-$($Process.Id).jsonl", "stdout.log", "stderr.log")) {
     try {
@@ -214,6 +225,7 @@ public static class StartupWindows {
     } catch {
       $scenarioFailure = $_
       $sample.error = $_.Exception.Message
+      $sample.secondaryAtFailure = Get-OwnedProcessState $secondary
     } finally {
       $sample.cleanupErrors = @(Stop-OwnedFixtures @($secondary, $primary) $directory)
       # Windows keeps redirected output files locked until the child exits.

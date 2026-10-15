@@ -98,6 +98,7 @@ export function observe() {
     });
   });
   app.on("second-instance", () => {
+    event("second-instance-received");
     setImmediate(() =>
       event("second-instance", {
         windows: BrowserWindow.getAllWindows().map(identity),

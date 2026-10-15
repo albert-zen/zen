@@ -12,6 +12,7 @@ export interface QueuedMessagePreview {
   clientId: string;
   text: string;
   imageCount: number;
+  revision?: number;
   sender?: import("../../../../../src/item.js").ThreadMessageSender;
   hostSource?: Pick<
     import("../../../../../src/item.js").HostWakeupInput,
@@ -36,6 +37,14 @@ export interface QueuedMessagesProps {
     message: string;
   } | null;
   pendingIds?: ReadonlySet<string>;
+  steeringIds?: ReadonlySet<string>;
+  running?: boolean;
+  onSteer?(message: QueuedMessagePreview): void;
+  steerError?: {
+    queuedItemId: string;
+    revision: number;
+    message: string;
+  } | null;
   busy?: boolean;
   resuming?: boolean;
   /** Transport failure for the current resume attempt, not a row failure. */
@@ -77,6 +86,10 @@ function QueueShelf({
   onOpenImage,
   queueFailure = null,
   pendingIds,
+  steeringIds,
+  running = false,
+  onSteer,
+  steerError = null,
   busy = false,
   resuming = false,
   resumeError = null,
@@ -236,9 +249,11 @@ function QueueShelf({
           )}
           onClick={() => setOpen(!detailsOpen)}
         >
-          <Icon name="layers" size={14} />
+          <Icon name="clock" size={14} />
           <span role="status" aria-live="polite" aria-atomic="true">
-            {t("queuePendingCount", { count: messages.length })}
+            {t(running ? "queueWaitForTurnCount" : "queuePendingCount", {
+              count: messages.length,
+            })}
           </span>
           <Icon name="chevron-down" size={12} className="queue-shelf-chevron" />
         </button>
@@ -326,6 +341,15 @@ function QueueShelf({
               onReadAttachment={onReadAttachment}
               onOpenImage={onOpenImage}
               pending={pendingIds?.has(message.id) ?? false}
+              steering={steeringIds?.has(message.id) ?? false}
+              running={running}
+              onSteer={onSteer}
+              steerError={
+                steerError?.queuedItemId === message.id &&
+                steerError.revision === (message.revision ?? 0)
+                  ? steerError.message
+                  : null
+              }
               disabled={busy || resuming}
               failure={
                 queueFailure?.queuedItemId === message.id ? queueFailure : null
@@ -374,6 +398,10 @@ function QueuedMessageRow({
   onReadAttachment,
   onOpenImage,
   pending,
+  steering,
+  running,
+  onSteer,
+  steerError,
   disabled,
   failure,
   onCancel,
@@ -391,6 +419,10 @@ function QueuedMessageRow({
   onReadAttachment: QueuedMessagesProps["onReadAttachment"];
   onOpenImage: QueuedMessagesProps["onOpenImage"];
   pending: boolean;
+  steering: boolean;
+  running: boolean;
+  onSteer: QueuedMessagesProps["onSteer"];
+  steerError: string | null;
   disabled: boolean;
   failure: QueuedMessagesProps["queueFailure"];
   onCancel: QueuedMessagesProps["onCancel"];
@@ -588,6 +620,36 @@ function QueuedMessageRow({
           ) : null}
         </div>
         <div className="queue-row-actions">
+          {onSteer === undefined ? null : (
+            <button
+              type="button"
+              className={`queue-row-steer${steering ? " is-pending" : ""}`}
+              data-queue-control="steer"
+              disabled={disabled || pending || editing || steering}
+              aria-label={t(
+                steering
+                  ? "queueSteeringMessage"
+                  : running
+                    ? "queueSteerMessage"
+                    : "queueSendMessageNow",
+                { number: index + 1 },
+              )}
+              title={t(
+                steering
+                  ? "queueSteering"
+                  : running
+                    ? "queueSteerHint"
+                    : "queueSendNow",
+              )}
+              onClick={() => onSteer(message)}
+            >
+              {steering ? (
+                <span role="status">{t("queueSteering")}</span>
+              ) : (
+                <Icon name="send" size={15} />
+              )}
+            </button>
+          )}
           {onEdit === undefined ||
           message.sender !== undefined ||
           message.hostSource !== undefined ? null : (
@@ -595,7 +657,9 @@ function QueuedMessageRow({
               type="button"
               className={`queue-row-edit${editing ? " is-pending" : ""}`}
               data-queue-control="edit"
-              disabled={pending || !editable || (disabled && !editing)}
+              disabled={
+                steering || pending || !editable || (disabled && !editing)
+              }
               aria-label={
                 editing
                   ? `${t("editQueuedMessage", { number: index + 1 })}: ${t("saving")}`
@@ -629,7 +693,7 @@ function QueuedMessageRow({
               type="button"
               className={`queue-row-cancel${pending ? " is-pending" : ""}`}
               data-queue-control="cancel"
-              disabled={disabled || pending || editing}
+              disabled={disabled || pending || editing || steering}
               aria-label={
                 pending
                   ? `${t("cancelQueuedMessage", { number: index + 1 })}: ${t("queueCancelling")}`
@@ -652,6 +716,11 @@ function QueuedMessageRow({
           )}
         </div>
       </div>
+      {steerError ? (
+        <p className="queue-row-error" role="alert">
+          {steerError}
+        </p>
+      ) : null}
       {failure ? (
         <p className="queue-row-error" role="alert" tabIndex={-1}>
           {t("notDelivered", { code: failure.code })} {failure.message}
