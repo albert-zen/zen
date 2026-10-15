@@ -120,6 +120,7 @@ test("settings retain the isolated document and settle requests while another ta
             workspaces: ["/work"],
             approvalPolicy: "never",
             pinnedThreadIds: [],
+            visibleSubagentThreadIds: [],
           },
           hasApiKey: false,
           apiKeyProviderProfileIds: [],

@@ -36,6 +36,7 @@ async function fixture(t: test.TestContext, fetch: typeof globalThis.fetch) {
     lastUsedWorkspace: null,
     approvalPolicy: "never",
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   });
   let account: string | undefined = "account-a";

@@ -897,6 +897,208 @@ test("persists bounded local Thread Pins in explicit Sidebar order", async () =>
   }
 });
 
+test("persists per-child Sidebar visibility without changing Pins, order, or other settings", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-child-sidebar-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    await service.setPinnedThreadIds(["child-a", "root"]);
+    await service.setSidebarOrder({
+      pinnedProjectKeys: ["project"],
+      projectKeys: ["project"],
+      threadIdsByProject: { project: ["child-a", "root", "child-b"] },
+    });
+    const before = (await service.publicSettings()).profile;
+    assert.deepEqual(before.visibleSubagentThreadIds, []);
+
+    await service.setSubagentThreadSidebarVisible(" child-a ", true);
+    await service.setSubagentThreadSidebarVisible("child-b", true);
+    await service.setSubagentThreadSidebarVisible("child-a", false);
+    const expected = {
+      ...before,
+      revision: before.revision! + 3,
+      visibleSubagentThreadIds: ["child-b"],
+    };
+    assert.deepEqual((await service.publicSettings()).profile, expected);
+
+    await service.setSubagentThreadSidebarVisible("child-b", true);
+    await service.setSubagentThreadSidebarVisible(" child-a ", false);
+    assert.deepEqual((await service.publicSettings()).profile, expected);
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(directory, "host-profile.json"), "utf8"),
+      ),
+      expected,
+    );
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    assert.deepEqual((await restarted.publicSettings()).profile, expected);
+
+    await restarted.setSubagentThreadSidebarVisible("child-b", false);
+    const hidden = settingsFor(directory, inactiveSubscription());
+    await hidden.initialize({});
+    assert.deepEqual((await hidden.publicSettings()).profile, {
+      ...expected,
+      revision: expected.revision + 1,
+      visibleSubagentThreadIds: [],
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("serializes child Sidebar visibility with concurrent Pins, order, and settings writes", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-child-sidebar-race-"),
+  );
+  const file = path.join(directory, "host-profile.json");
+  const initial = settingsFor(directory, inactiveSubscription());
+  await initial.initialize({ ZENX_PROVIDER: "fake" });
+  const before = (await initial.publicSettings()).profile;
+  const store = new InverseCompletionProfileStore(file);
+  const service = new ZenXSettingsService({
+    userDataDirectory: directory,
+    zenDataDirectory: path.join(directory, "zen"),
+    profileStore: store,
+    subscription: inactiveSubscription(),
+    vault: new ZenXCredentialVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    ),
+  });
+  try {
+    await service.initialize({});
+    const first = service.setSubagentThreadSidebarVisible("child-a", true);
+    await store.firstWriteStarted;
+    const order = {
+      pinnedProjectKeys: ["project"],
+      projectKeys: ["project"],
+      threadIdsByProject: { project: ["child-b", "child-a"] },
+    };
+    const pending = [
+      first,
+      service.setSubagentThreadSidebarVisible("child-b", true),
+      service.setSubagentThreadSidebarVisible("child-a", false),
+      service.setPinnedThreadIds(["child-a", "root"]),
+      service.setSidebarOrder(order),
+      service.save({ ...before, approvalPolicy: "always" }),
+      service.setSubagentThreadSidebarVisible("child-b", false),
+      service.setSubagentThreadSidebarVisible("child-c", true),
+      service.setSubagentThreadSidebarVisible("child-b", true),
+    ];
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(store.writeCalls, 1);
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), before);
+    store.releaseFirstWrite();
+    await Promise.all(pending);
+
+    const expected = {
+      ...before,
+      revision: before.revision! + pending.length,
+      approvalPolicy: "always",
+      pinnedThreadIds: ["child-a", "root"],
+      sidebarOrder: order,
+      visibleSubagentThreadIds: ["child-c", "child-b"],
+    };
+    assert.deepEqual((await service.publicSettings()).profile, expected);
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), expected);
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    assert.deepEqual((await restarted.publicSettings()).profile, expected);
+  } finally {
+    store.releaseFirstWrite();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("failed child Sidebar visibility writes preserve the previous profile and allow a later retry", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-child-sidebar-failure-"),
+  );
+  const file = path.join(directory, "host-profile.json");
+  const store = new RejectingProfileStore(file);
+  const service = new ZenXSettingsService({
+    userDataDirectory: directory,
+    zenDataDirectory: path.join(directory, "zen"),
+    profileStore: store,
+    subscription: inactiveSubscription(),
+    vault: new ZenXCredentialVault(
+      path.join(directory, "credentials.vault"),
+      encryption,
+    ),
+  });
+  try {
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    await service.setPinnedThreadIds(["child-a", "root"]);
+    await service.setSubagentThreadSidebarVisible("child-a", true);
+    const before = (await service.publicSettings()).profile;
+    const persisted = await readFile(file, "utf8");
+    store.rejectWrites = true;
+
+    await assert.rejects(
+      service.setSubagentThreadSidebarVisible("child-a", false),
+      /profile write rejected/u,
+    );
+    assert.deepEqual((await service.publicSettings()).profile, before);
+    assert.equal(await readFile(file, "utf8"), persisted);
+    await assert.rejects(
+      service.setSubagentThreadSidebarVisible("child-b", true),
+      /profile write rejected/u,
+    );
+    assert.deepEqual((await service.publicSettings()).profile, before);
+    assert.equal(await readFile(file, "utf8"), persisted);
+
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({});
+    assert.deepEqual((await reloaded.publicSettings()).profile, before);
+    store.rejectWrites = false;
+    await service.setSubagentThreadSidebarVisible("child-b", true);
+    assert.deepEqual((await service.publicSettings()).profile, {
+      ...before,
+      revision: before.revision! + 1,
+      visibleSubagentThreadIds: ["child-a", "child-b"],
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects invalid per-child Sidebar visibility mutations without changing persisted settings", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-child-sidebar-invalid-"),
+  );
+  const file = path.join(directory, "host-profile.json");
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const before = (await service.publicSettings()).profile;
+    const persisted = await readFile(file, "utf8");
+    for (const [threadId, visible] of [
+      ["", true],
+      ["   ", false],
+      ["x".repeat(513), true],
+      [null, true],
+      [1, false],
+      ["child-a", "true"],
+      ["child-a", undefined],
+    ]) {
+      await assert.rejects(
+        service.setSubagentThreadSidebarVisible(
+          threadId as string,
+          visible as boolean,
+        ),
+        /Invalid Subagent Thread Sidebar visibility/u,
+      );
+      assert.deepEqual((await service.publicSettings()).profile, before);
+      assert.equal(await readFile(file, "utf8"), persisted);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("clears the OAuth concurrency guard after failure so login can retry", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-oauth-retry-"));
   let attempts = 0;
@@ -962,6 +1164,7 @@ test("title inference renews a subscription lease rejected after acquisition", a
     workspaces: [directory],
     lastUsedWorkspace: directory,
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     approvalPolicy: "never",
   });
@@ -1061,6 +1264,7 @@ test("routes subscription account operations by its configured opaque profile id
     workspaces: [],
     lastUsedWorkspace: null,
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     approvalPolicy: "never",
   });
@@ -1217,6 +1421,7 @@ test("a vault migration failure publishes no settings and succeeds on explicit r
     lastUsedWorkspace: null,
     approvalPolicy: "never",
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   };
   try {
@@ -2299,6 +2504,7 @@ function fakeProfile(model: string): ZenXHostProfile {
     workspaces: [],
     lastUsedWorkspace: null,
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     approvalPolicy: "always",
   };
@@ -2373,6 +2579,15 @@ class InverseCompletionProfileStore extends ZenXHostProfileStore {
       this.#firstWriteStarted.resolve();
       await this.#releaseFirstWrite.promise;
     }
+    await super.write(profile);
+  }
+}
+
+class RejectingProfileStore extends ZenXHostProfileStore {
+  rejectWrites = false;
+
+  override async write(profile: ZenXHostProfile): Promise<void> {
+    if (this.rejectWrites) throw new Error("profile write rejected");
     await super.write(profile);
   }
 }

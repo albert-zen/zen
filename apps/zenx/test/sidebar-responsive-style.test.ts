@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 import { SIDEBAR_DEFAULT_WIDTH } from "../src/renderer/src/sidebar-width.js";
 
 test("Thread rows reserve factual status space and reveal actions over a surface fade", async () => {
@@ -352,4 +353,53 @@ test("Room unread numbers center their cap box without font-leading bias", async
   const value = styles.match(/\.room-unread-value\s*\{[^}]*\}/u)?.[0] ?? "";
   assert.match(value, /text-box-trim: trim-both;/u);
   assert.match(value, /text-box-edge: cap alphabetic;/u);
+});
+
+test("Subagents row and per-thread visibility switch retain coarse-pointer targets and focus styling", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/subagents.css", import.meta.url),
+    "utf8",
+  );
+  const dom = new JSDOM(
+    '<style></style><div class="subagent-tree-entry"><button class="subagent-tree-row">Child</button><div class="subagent-sidebar-control"><button class="subagent-sidebar-visibility" role="switch">Hidden</button></div></div>',
+  );
+  try {
+    const style = dom.window.document.querySelector("style")!;
+    style.textContent = styles;
+    const rules = [...style.sheet!.cssRules];
+    const coarse = rules.filter(
+      (rule): rule is CSSMediaRule =>
+        rule.type === dom.window.CSSRule.MEDIA_RULE &&
+        (rule as CSSMediaRule).conditionText === "(pointer: coarse)",
+    );
+    assert.ok(coarse.length > 0);
+    // JSDOM cannot evaluate pointer media features. Expand every matching block
+    // in its original cascade position, retaining later normal-rule overrides.
+    style.textContent = rules
+      .flatMap((rule) =>
+        rule.type === dom.window.CSSRule.STYLE_RULE
+          ? [rule.cssText]
+          : coarse.includes(rule as CSSMediaRule)
+            ? [...(rule as CSSMediaRule).cssRules].map((child) => child.cssText)
+            : [],
+      )
+      .join("\n");
+    for (const selector of [
+      ".subagent-tree-row",
+      ".subagent-sidebar-visibility",
+    ]) {
+      const computed = dom.window.getComputedStyle(
+        dom.window.document.querySelector(selector)!,
+      );
+      assert.equal(computed.minHeight, "44px", selector);
+      assert.equal(computed.minWidth, "44px", selector);
+    }
+    assert.match(styles, /\.subagent-sidebar-visibility:focus-visible/);
+    assert.doesNotMatch(
+      styles,
+      /\.subagent-sidebar-visibility[^}]*opacity:\s*0[;\s]/,
+    );
+  } finally {
+    dom.window.close();
+  }
 });
