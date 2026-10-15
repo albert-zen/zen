@@ -237,6 +237,15 @@ test("paging exposes every Item exactly once and large output remains explicitly
         }),
       ),
     );
+    assert.equal(document.querySelector(".thread-debug-item pre"), null);
+    const tool = document.querySelector<HTMLDetailsElement>(
+      ".thread-debug-tool-content",
+    )!;
+    assert.equal(tool.open, false);
+    await act(async () => {
+      tool.open = true;
+      tool.dispatchEvent(new window.Event("toggle"));
+    });
     assert.equal(
       document.querySelector(".thread-debug-item pre")!.textContent!.length,
       8192,
