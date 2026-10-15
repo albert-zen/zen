@@ -73,7 +73,7 @@
 .workspace-file-tree-scroll {
   flex: 1;
   overflow: auto;
-  min-height: 80px;
+  min-height: 0;
   padding: 0 6px 6px;
 }
 .workspace-file-row {
@@ -212,7 +212,7 @@
 }
 .file-source-editor .cm-gutters {
   color: var(--color-text-secondary);
-  background: transparent;
+  background: var(--color-surface-main);
   border-right: 1px solid var(--color-border-subtle);
 }
 .file-source-editor .cm-activeLine,
@@ -267,8 +267,8 @@
 }
 .workspace-file-navigation {
   display: flex;
-  width: 192px;
-  flex: 0 0 192px;
+  width: var(--file-navigation-width, 192px);
+  flex: 0 0 var(--file-navigation-width, 192px);
   min-height: 0;
   background: var(--color-surface-wash-subtle);
   border-right: 1px solid var(--color-border-subtle);
@@ -406,7 +406,7 @@
   white-space: nowrap;
 }
 .file-source-editor {
-  height: 100%;
+  flex: 1;
   display: flex;
   flex-direction: column;
 }
@@ -439,8 +439,8 @@
   }
   .workspace-file-navigation {
     width: 100%;
-    flex: 0 1 215px;
-    min-height: 130px;
+    flex: 0 0 var(--file-navigation-height, 180px);
+    min-height: 0;
     border-right: 0;
     border-bottom: 1px solid var(--color-border-subtle);
   }
@@ -584,5 +584,61 @@
     width: 44px;
     height: 44px;
     flex-basis: 44px;
+  }
+}
+
+/* The editor owns scrolling; its height follows the pane rather than the viewport. */
+.auxiliary-content:has(> .workspace-files-panel) {
+  overflow: hidden;
+}
+.workspace-files-panel
+  .file-content:has(> :is(.file-source-editor, .markdown-live-editor)) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-files-panel
+  .file-content
+  > :not(.file-source-editor, .markdown-live-editor) {
+  flex-shrink: 0;
+}
+.workspace-files-panel .file-content > .markdown-live-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-files-panel .markdown-live-editor .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+.workspace-files-panel .markdown-live-editor .cm-scroller {
+  overflow: auto;
+}
+.workspace-files-panel .file-conflict {
+  max-height: 40%;
+  overflow: auto;
+}
+.workspace-file-resizer {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 6px;
+  margin-inline: -3px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.workspace-file-resizer:hover,
+.workspace-file-resizer:focus-visible {
+  background: var(--color-accent-soft);
+  outline: 1px solid var(--color-text-accent);
+  outline-offset: -1px;
+}
+.workspace-file-resizer[hidden] {
+  display: none;
+}
+@container auxiliary (max-width: 499px) {
+  .workspace-file-resizer {
+    margin-inline: 0;
+    margin-block: -3px;
+    cursor: row-resize;
   }
 }

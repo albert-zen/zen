@@ -162,7 +162,7 @@ test("anonymous virtual visits retain every traversal budget and nonempty identi
   assert.match(walk, /controls\.Add\(control\)/);
   assert.match(
     walk,
-    /Walk\(walker, child, depth \+ 1, controls, visited, ref nodes\)/,
+    /Walk\(walker, child, depth \+ 1, controls, visited, ref nodes, ref phase\)/,
   );
   assert.match(walk, /walker\.GetNextSiblingElement\(child\)/);
   assert.doesNotMatch(walk, /catch|continue|return/);
@@ -194,4 +194,51 @@ test("empty native/root action identities remain invalid and HWND0 stops before 
   );
   assert.equal((mutate.match(/\.Invoke\(\)/g) ?? []).length, 1);
   assert.equal((mutate.match(/\.SetValue\(/g) ?? []).length, 1);
+});
+
+test("unexpected native failures expose only a controlled phase, category, and HRESULT", () => {
+  const diagnostic = added.slice(
+    added.indexOf("private static string ProviderError("),
+    added.indexOf("private static string? Mutate("),
+  );
+  assert.match(
+    added,
+    /error is Refusal refusal \? refusal.Code : ProviderError\(error, phase\)/,
+  );
+  assert.match(diagnostic, /COMException => "com"/);
+  assert.match(diagnostic, /System.ComponentModel.Win32Exception => "win32"/);
+  assert.match(diagnostic, /_ => "other"/);
+  assert.match(
+    diagnostic,
+    /unchecked\(\(uint\)error.HResult\)\.ToString\("x8", CultureInfo.InvariantCulture\)/,
+  );
+  assert.match(
+    diagnostic,
+    /provider_error_\{phase\}_\{category\}_h\{hresult\}/,
+  );
+  assert.doesNotMatch(
+    diagnostic,
+    /\.Message|\.StackTrace|\.GetType\(|\.InnerException|\.Data|\.ToString\(\)/,
+  );
+  for (const phase of [
+    "resolve_service",
+    "read_autofocus",
+    "inspect_element",
+    "root_process_metadata",
+    "runtime_id",
+    "walk_first_child",
+    "walk_next_sibling",
+    "control_properties",
+    "control_invoke_pattern",
+    "control_value_pattern",
+  ])
+    assert.ok(added.includes(`phase = "${phase}";`), phase);
+  const assignments = [...added.matchAll(/phase = ([^;]+);/g)].map(
+    (match) => match[1],
+  );
+  assert.ok(assignments.length > 10);
+  assert.ok(
+    assignments.every((value) => /^"[a-z_]+"$/.test(value)),
+    "phases must be source-defined labels",
+  );
 });

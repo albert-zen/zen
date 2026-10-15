@@ -763,7 +763,7 @@ function projectNativeCommandStarted(
   };
 }
 
-function projectNativeCommandCompleted(
+export function projectNativeCommandCompleted(
   call: ToolCallItem,
   result: ToolResultItem,
   cwd: string,

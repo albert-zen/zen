@@ -11,11 +11,40 @@ import { WorkspaceFileDrafts } from "../../src/renderer/src/workspace-file-draft
 import { i18n } from "../../src/renderer/src/i18n.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
+import "../../src/renderer/src/shell-thread-panel.css";
+import "../../src/renderer/src/agent-readiness-notice.css";
+import "../../src/renderer/src/trigger-ui.css";
+import "../../src/renderer/src/skills.css";
+import "../../src/renderer/src/rooms-layout.css";
+import "../../src/renderer/src/room-message-actions.css";
+import "../../src/renderer/src/room-conversations.css";
+import "../../src/renderer/src/companion-workspace.css";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 void i18n.changeLanguage(params.get("lang") ?? "en");
 document.documentElement.dataset.appearance = params.get("theme") ?? "dark";
+document.documentElement.dataset.platform = params.get("platform") ?? "darwin";
 const files: Record<string, string> = {
+  "cmd/demo/main.go": [
+    "package main",
+    "",
+    'import "fmt"',
+    "",
+    "// A synthetic file for checking syntax and scrolling.",
+    "func main() {",
+    '    message := "A long line: ' + "readable source ".repeat(25) + '"',
+    "    fmt.Println(message)",
+    "}",
+    "",
+    ...Array.from(
+      { length: 240 },
+      (_, index) =>
+        `// Example line ${index + 1}: source stays editable throughout the file.`,
+    ),
+    "",
+    "// END OF SYNTHETIC FILE",
+    "",
+  ].join("\n"),
   "README.md":
     "# File search\n\nFind files across the workspace without leaving your conversation.\n\n## Keyboard shortcuts\n\n- **Ctrl / Cmd P**: find a file by name or path\n- **Ctrl / Cmd F**: find text in the current file\n\nSearch keeps your draft safe while you move between files.\n",
   "package.json": '{\n  "name": "workspace-demo",\n  "private": true\n}\n',
@@ -127,7 +156,7 @@ const summaries: NativeThreadSummary[] = [
     approvalPolicy: "on-request",
   },
 }));
-const firstPath = params.get("file") ?? "src/components/FileSearch.tsx";
+const firstPath = params.get("file") ?? "cmd/demo/main.go";
 drafts.set(JSON.stringify(["fixture", firstPath]), {
   base: { path: firstPath, text: files[firstPath]!, revision: "a".repeat(64) },
   text: files[firstPath]!,

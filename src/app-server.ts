@@ -238,7 +238,7 @@ export interface CompactThreadResult {
 
 export interface ForkThreadInput {
   sourceThreadId: string;
-  through: { type: "latest-complete" };
+  through: { type: "latest-complete" } | { type: "item"; itemId: string };
   workspace: { type: "same-directory" };
 }
 
@@ -962,10 +962,24 @@ export class ZenAppServer {
   ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("other", "thread/fork");
     try {
-      if (input.through.type !== "latest-complete") {
+      if (
+        input.through.type !== "latest-complete" &&
+        input.through.type !== "item"
+      ) {
         throw new AppServerError(
           "invalid_request",
-          "Only the latest complete Turn can be copied",
+          "Copy requires the latest complete Turn or an exact agent message Item",
+        );
+      }
+      if (
+        input.through.type === "item" &&
+        (typeof input.through.itemId !== "string" ||
+          !input.through.itemId.trim() ||
+          input.through.itemId.length > 512)
+      ) {
+        throw new AppServerError(
+          "invalid_request",
+          "An exact canonical agent message Item ID is required",
         );
       }
       if (input.workspace.type !== "same-directory") {
@@ -976,23 +990,38 @@ export class ZenAppServer {
       }
       const source = await this.#requireThread(input.sourceThreadId);
       const sourceItems = source.items;
-      const terminalIndex = findLatestClosedTurnIndex(sourceItems);
+      const itemId =
+        input.through.type === "item" ? input.through.itemId : undefined;
+      const terminalIndex =
+        itemId === undefined
+          ? findLatestClosedTurnIndex(sourceItems)
+          : sourceItems.findIndex((item) => item.id === itemId);
       if (terminalIndex < 0 && !fullContext) {
         throw new AppServerError(
           "fork_boundary_unavailable",
-          "Copy is available after the Thread has a complete Turn",
+          itemId === undefined
+            ? "Copy is available after the Thread has a complete Turn"
+            : "The selected completed agent message is unavailable in this Thread",
         );
       }
       const terminal = fullContext
         ? sourceItems.at(-1)!
         : sourceItems[terminalIndex]!;
+      if (itemId !== undefined && terminal.type !== "agent_message") {
+        throw new AppServerError(
+          "invalid_request",
+          "Only a completed canonical agent message Item can be selected",
+        );
+      }
       const sourceTurnId = terminal.turnId;
       if (sourceTurnId === undefined && !fullContext) {
         throw new Error("Closed Turn boundary is missing a Turn id");
       }
       const prefix = fullContext
         ? sourceItems
-        : forkablePrefix(sourceItems, terminalIndex);
+        : itemId === undefined
+          ? forkablePrefix(sourceItems, terminalIndex)
+          : sourceItems.slice(0, terminalIndex + 1);
       const threadId = this.#id();
       const copiedItems = remapForkItems(prefix, threadId, this.#id);
       if (parentThreadId !== undefined) {
@@ -1015,8 +1044,15 @@ export class ZenAppServer {
         ...(fullContext ? { context: "full" as const } : {}),
       };
       const thread = new Thread(threadId, [...copiedItems, forked]);
+      if (fullContext || itemId !== undefined) {
+        appendForkSnapshotClosures(
+          thread,
+          this.#id,
+          this.#now,
+          fullContext ? "side chat" : "fork",
+        );
+      }
       if (fullContext) {
-        appendSideChatSnapshotClosures(thread, this.#id, this.#now);
         thread.append({
           id: this.#id(),
           threadId,
@@ -4109,6 +4145,8 @@ export class ZenAppServer {
       options.selection.selection,
     );
     const summary = await generateContextCompactionSummary({
+      debugThreadId: options.thread.id,
+      debugBoundaryItemId: options.boundary.item.id,
       adapter: options.selection.adapter,
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
@@ -4899,11 +4937,12 @@ function forkablePrefix(
   return items.slice(0, end);
 }
 
-/** Close only the child's copied execution projection; never operate on the parent. */
-function appendSideChatSnapshotClosures(
+/** Close only copied execution projections; never operate on the source Thread. */
+function appendForkSnapshotClosures(
   thread: Thread,
   idFactory: () => string,
   now: () => string,
+  context: "side chat" | "fork",
 ): void {
   const snapshot = thread.items;
   const resultKeys = new Set(
@@ -4926,8 +4965,7 @@ function appendSideChatSnapshotClosures(
       callId: item.callId,
       contentType: SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
       structuredContent: { status: "snapshot", executed: false },
-      output:
-        "Parent tool call snapshot: no result was available when this side chat was created. This call was not executed in the side chat; the parent may still be running.",
+      output: `Source tool call snapshot: no result was included at this ${context}'s boundary. This call was not executed in the ${context}; the source may still be running.`,
       exitCode: 1,
     });
   }
@@ -4946,8 +4984,7 @@ function appendSideChatSnapshotClosures(
       turnId: item.turnId,
       createdAt: now(),
       type: "turn_aborted",
-      reason:
-        "Copied parent Turn is historical context. No execution was transferred to this side chat; the parent is unaffected.",
+      reason: `Copied source Turn is historical context. No execution was transferred to this ${context}; the source is unaffected.`,
     });
   }
   for (const queued of pendingQueuedMessages(snapshot)) {
@@ -5171,6 +5208,8 @@ function automaticCompactionThreshold(
 }
 
 async function generateContextCompactionSummary(options: {
+  debugThreadId: string;
+  debugBoundaryItemId: string;
   adapter: ModelAdapter;
   model: string;
   reasoningEffort: string | null;
@@ -5204,6 +5243,14 @@ async function generateContextCompactionSummary(options: {
         { role: "user", text: options.summaryInstruction },
       ];
       for await (const event of options.adapter.stream({
+        debugContext: {
+          threadId: options.debugThreadId,
+          purpose: "compaction",
+          turnId: null,
+          sampleId: randomUUID(),
+          contextBoundaryItemId: options.debugBoundaryItemId,
+          sampleAttempt: 1,
+        },
         model: options.model,
         reasoningEffort: options.reasoningEffort,
         messages,

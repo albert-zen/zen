@@ -1,9 +1,11 @@
+import { observeRequestBody } from "./request-observation.js";
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import {
   fetchModelResponse,
   isTransientTransportError,
 } from "./request-retry.js";
 import { randomUUID } from "node:crypto";
+import { modelUserContent } from "../model.js";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -81,6 +83,7 @@ export class OpenAiCompatibleModelError extends Error {
  */
 export class OpenAiCompatibleModel implements ModelAdapter {
   readonly provider: string;
+  readonly requestPayloadFormat = "chat-completions" as const;
 
   readonly #onStreamFailure: OpenAiCompatibleModelOptions["onStreamFailure"];
   readonly #apiKey: string;
@@ -183,11 +186,20 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       tool_choice: tools.length > 0 ? "auto" : undefined,
     });
 
+    let transportAttempt = 0;
     let response: Response;
     try {
       response = await fetchModelResponse(
-        () =>
-          this.#fetch(this.#endpoint, {
+        () => {
+          observeRequestBody(
+            request,
+            body,
+            this.requestPayloadFormat,
+            this.provider,
+            ++transportAttempt,
+            [this.#apiKey],
+          );
+          return this.#fetch(this.#endpoint, {
             method: "POST",
             signal: request.signal,
             headers: {
@@ -196,7 +208,8 @@ export class OpenAiCompatibleModel implements ModelAdapter {
               "content-type": "application/json",
             },
             body,
-          }),
+          });
+        },
         request.signal,
         { allowRetries: request.isSamplingRetry !== true },
       );
@@ -622,8 +635,11 @@ async function toChatMessage(
     };
   }
 
-  if ("content" in message) {
-    return await toChatUserContent(message.content, attachments);
+  if (
+    message.role === "user" &&
+    ("content" in message || message.userTimestamp !== undefined)
+  ) {
+    return await toChatUserContent(modelUserContent(message), attachments);
   }
 
   return { role: message.role, content: message.text };

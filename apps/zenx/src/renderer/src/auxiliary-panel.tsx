@@ -25,6 +25,12 @@ import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
 
+function panelIcon(pluginId: string): IconName {
+  if (pluginId === "zenx-subagents") return "users";
+  if (pluginId === "zenx-triggers") return "trigger";
+  return "layers";
+}
+
 interface ContentTab {
   id: string;
   title: string;
@@ -134,6 +140,10 @@ export function AuxiliaryPanel({
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
+  const fileBody = useRef<HTMLDivElement>(null);
+  const [fileNavigationWidth, setFileNavigationWidth] = useState(192);
+  const [fileNavigationHeight, setFileNavigationHeight] = useState(180);
+  const [fileSplit, setFileSplit] = useState({ stacked: false, max: 360 });
   useLayoutEffect(() => {
     if (!panel.current || !onWidthChange) return;
     const measure = () =>
@@ -272,8 +282,11 @@ export function AuxiliaryPanel({
       : []),
     ...panels.map((panel) => ({
       id: `plugin:${panel.key}`,
-      title: panel.title,
-      icon: "layers" as const,
+      title:
+        panel.pluginId === "zenx-triggers"
+          ? i18n.t("panels:automations")
+          : panel.title,
+      icon: panelIcon(panel.pluginId),
     })),
   ];
   const available = new Map(candidates.map((tab) => [tab.id, tab]));
@@ -341,6 +354,46 @@ export function AuxiliaryPanel({
     (showChooser && pickingFile);
   const fileNavigationVisible =
     fileSurface && (fileNavigationOpen || pickingFile);
+  useLayoutEffect(() => {
+    const body = fileBody.current;
+    if (!body || !open || !fileNavigationVisible || pickingFile) return;
+    const measure = () => {
+      const bounds = body.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const stacked = getComputedStyle(body).flexDirection === "column";
+      const max = stacked
+        ? Math.max(100, Math.min(300, bounds.height - 160))
+        : Math.max(140, Math.min(360, bounds.width - 240));
+      setFileSplit((current) =>
+        current.stacked === stacked && current.max === max
+          ? current
+          : { stacked, max },
+      );
+    };
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(body);
+    measure();
+    return () => observer?.disconnect();
+  }, [open, expanded, fileNavigationVisible, pickingFile]);
+  const fileNavigationMinimum = fileSplit.stacked ? 100 : 140;
+  const fileNavigationSize = Math.min(
+    fileSplit.max,
+    Math.max(
+      fileNavigationMinimum,
+      fileSplit.stacked ? fileNavigationHeight : fileNavigationWidth,
+    ),
+  );
+  const resizeFileNavigation = (value: number) => {
+    const clamped = Math.max(
+      fileNavigationMinimum,
+      Math.min(fileSplit.max, value),
+    );
+    if (fileSplit.stacked) setFileNavigationHeight(clamped);
+    else setFileNavigationWidth(clamped);
+  };
   const select = (id: string, focusTab = false) => {
     selectionEpoch.current += 1;
     pendingTabFocus.current = focusTab ? id : null;
@@ -828,7 +881,14 @@ export function AuxiliaryPanel({
         </p>
       ) : null}
       <div
+        ref={fileBody}
         className="auxiliary-body"
+        style={
+          {
+            "--file-navigation-width": `${fileSplit.stacked ? fileNavigationWidth : fileNavigationSize}px`,
+            "--file-navigation-height": `${fileSplit.stacked ? fileNavigationSize : fileNavigationHeight}px`,
+          } as React.CSSProperties
+        }
         data-files={Boolean(fileSurface)}
         data-picking={showChooser && pickingFile}
       >
@@ -853,6 +913,64 @@ export function AuxiliaryPanel({
               }}
             />
           </nav>
+        ) : null}
+        {threadId !== undefined && files.length > 0 ? (
+          <div
+            className="workspace-file-resizer"
+            role="separator"
+            aria-label={i18n.t("panels:resizeFileNavigation")}
+            title={i18n.t("panels:resizeFileNavigation")}
+            aria-controls="workspace-file-navigation"
+            aria-orientation={fileSplit.stacked ? "horizontal" : "vertical"}
+            aria-valuemin={fileNavigationMinimum}
+            aria-valuemax={fileSplit.max}
+            aria-valuenow={fileNavigationSize}
+            hidden={!fileNavigationVisible || pickingFile}
+            tabIndex={0}
+            onKeyDown={(event) => {
+              const decrease = fileSplit.stacked ? "ArrowUp" : "ArrowLeft";
+              const increase = fileSplit.stacked ? "ArrowDown" : "ArrowRight";
+              const next =
+                event.key === "Home"
+                  ? fileNavigationMinimum
+                  : event.key === "End"
+                    ? fileSplit.max
+                    : event.key === decrease
+                      ? fileNavigationSize - 20
+                      : event.key === increase
+                        ? fileNavigationSize + 20
+                        : undefined;
+              if (next === undefined) return;
+              event.preventDefault();
+              event.stopPropagation();
+              resizeFileNavigation(next);
+            }}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.currentTarget.focus();
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                return;
+              const bounds = fileBody.current?.getBoundingClientRect();
+              if (bounds)
+                resizeFileNavigation(
+                  fileSplit.stacked
+                    ? event.clientY - bounds.top
+                    : event.clientX - bounds.left,
+                );
+            }}
+            onPointerUp={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId))
+                event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+            onPointerCancel={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId))
+                event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+          />
         ) : null}
         <div className="auxiliary-views" hidden={showChooser && pickingFile}>
           {showChooser ? (
@@ -957,16 +1075,56 @@ export function AuxiliaryPanel({
                         </button>
                       ) : null}
                       {panels.map((panel) => (
-                        <button
-                          type="button"
+                        <div
+                          className="workspace-plugin-choice"
                           key={panel.key}
-                          onClick={() => void add(`plugin:${panel.key}`)}
                         >
-                          <Icon name="layers" />
-                          <span>
-                            <strong>{panel.title}</strong>
-                          </span>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => void add(`plugin:${panel.key}`)}
+                          >
+                            <Icon name={panelIcon(panel.pluginId)} />
+                            <span>
+                              <strong>
+                                {panel.pluginId === "zenx-triggers"
+                                  ? i18n.t("panels:automations")
+                                  : panel.title}
+                              </strong>
+                              {panel.pluginId === "zenx-subagents" ? (
+                                <small>
+                                  {i18n.t(
+                                    "panels:subagentsWorkspaceDescription",
+                                  )}
+                                </small>
+                              ) : panel.pluginId === "zenx-triggers" ? (
+                                <small>
+                                  {i18n.t(
+                                    "panels:triggersWorkspaceDescription",
+                                  )}
+                                </small>
+                              ) : null}
+                            </span>
+                          </button>
+                          {panel.pluginId === "zenx-subagents" && snapshot ? (
+                            <GenericPluginUiHost
+                              registry={pluginUiRegistry}
+                              snapshot={snapshot}
+                              pluginId={panel.pluginId}
+                              surfaceId={panel.surfaceId}
+                              context={{
+                                threadId,
+                                quickCreate: true,
+                                active: open === true,
+                              }}
+                              theme={theme}
+                              executeCommand={
+                                window.zenx.plugins.executeCommand
+                              }
+                              readHandle={window.zenx.plugins.readHandle}
+                              navigate={navigate}
+                            />
+                          ) : null}
+                        </div>
                       ))}
                     </>
                   ) : null}

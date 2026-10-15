@@ -1,3 +1,8 @@
+import {
+  TRIGGER_SOURCE_ROUTE,
+  triggerSourceRoute,
+  type MessageSourceNavigator,
+} from "./message-source-navigation.js";
 import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
 import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
 import {
@@ -54,7 +59,10 @@ import type {
   QueuedCancellationTarget,
 } from "../../../../../src/app-server.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
-import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
+import type {
+  NativeThreadSummary,
+  ThreadSummary,
+} from "../../../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   AppServerHostStatus,
@@ -133,7 +141,8 @@ import {
 } from "./plugin-contributions.js";
 import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
-import { Sidebar } from "./Sidebar.js";
+import { ThreadTitleEditor } from "./thread-title-editor.js";
+import { Sidebar, ThreadDebugMenuContext } from "./Sidebar.js";
 import {
   derivePinnedThreads,
   EMPTY_SIDEBAR_ORDER,
@@ -153,7 +162,11 @@ import {
   markThreadViewAwaitingRecovery,
   projectNativeRecovery,
 } from "./thread-view-state.js";
-import { ThreadView } from "./ThreadView.js";
+import {
+  ThreadView,
+  ThreadViewActionsProvider,
+  type MessageForkHandler,
+} from "./ThreadView.js";
 import { ThreadConversationViewport } from "./thread-conversation-viewport.js";
 import { requestQueuedEdit, importQueuedImages } from "./queue-edit-request.js";
 import {
@@ -419,6 +432,9 @@ function AppContent() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
+  const [debugThreadId, setDebugThreadId] = useState<string | null>(null);
+  const messageForkRequests = useRef(new Map<string, Promise<void>>());
+  const messageForkNavigation = useRef(0);
   const pendingResumeProjectionRef = useRef<{
     epoch: number;
     threadId: string;
@@ -428,6 +444,7 @@ function AppContent() {
     new Map<string, ThreadProjectionCacheEntry>(),
   );
   const invalidateThreadSelection = () => {
+    setDebugThreadId(null);
     selectionEpoch.current += 1;
     pendingResumeProjectionRef.current = null;
   };
@@ -1011,10 +1028,20 @@ function AppContent() {
       });
   };
 
+  const exitDebugMode = () => {
+    const epoch = selectionEpoch.current;
+    setDebugThreadId(null);
+    requestAnimationFrame(() => {
+      if (selectionEpoch.current === epoch)
+        document.getElementById("thread-composer")?.focus();
+    });
+  };
+
   const resumeThread = async (
     threadId: string,
     preserveNavigation = false,
     propagateFailure = false,
+    debugMode = false,
   ) => {
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
@@ -1025,8 +1052,9 @@ function AppContent() {
     const usageEpoch = ++threadUsageLoadEpoch.current;
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
+      setDebugThreadId(debugMode ? threadId : null);
       setPage("agent");
-      setSidebarOpen(false);
+      if (!debugMode) setSidebarOpen(false);
     }
     setSelectedThreadId(threadId);
     setThreadDetail(cached?.thread ?? null);
@@ -1065,6 +1093,20 @@ function AppContent() {
       );
       threadProjectionCacheRef.current.set(threadId, projected);
       setThreadDetail(projected.thread);
+      // Direct navigation from a PAW can precede the list projection. The
+      // recovered Thread still owns its title and rename entry in that gap.
+      setOptimisticSummary({
+        ...optimisticThreadSummary(
+          {
+            thread: projected.thread,
+            ...nativeSettingsSnapshot(result.thread),
+          },
+          projected.thread.preview,
+        ),
+        archived: result.thread.archived,
+        parentThreadId: result.thread.parentThreadId,
+        status: projected.thread.status.type === "active" ? "active" : "idle",
+      });
       if (
         projected.thread.id === threadId &&
         projected.thread.canonicalItems !== undefined
@@ -1116,6 +1158,7 @@ function AppContent() {
       if (selectionEpoch.current === epoch) {
         if (pendingResumeProjectionRef.current?.epoch === epoch)
           pendingResumeProjectionRef.current = null;
+        setDebugThreadId(null);
         setThreadError(describeError(error));
       }
       if (propagateFailure) throw error;
@@ -1561,13 +1604,20 @@ function AppContent() {
       : { ...summary, name: titleSnapshot[summary.threadId]!.title },
   );
   const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
-  const selectedSummary =
+  const selectedBaseSummary =
     [...activeSummaries, ...archivedSummaries].find(
       (summary) => summary.threadId === selectedThreadId,
     ) ??
     (optimisticSummary?.threadId === selectedThreadId
       ? optimisticSummary
       : null);
+  const selectedSummary =
+    selectedBaseSummary && titleSnapshot[selectedBaseSummary.threadId]
+      ? {
+          ...selectedBaseSummary,
+          name: titleSnapshot[selectedBaseSummary.threadId]!.title,
+        }
+      : selectedBaseSummary;
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
   const genericPluginTarget =
@@ -2409,6 +2459,58 @@ function AppContent() {
     );
   }, [page, pluginSnapshot]);
 
+  const sourceNavigationIntent = useRef(0);
+  const sourceNavigationState = useRef({ page, selectedThreadId });
+  sourceNavigationState.current = { page, selectedThreadId };
+  const openMessageSource: MessageSourceNavigator = async (target, owner) => {
+    const intent = ++sourceNavigationIntent.current;
+    const navigation = sourceNavigationState.current;
+    const epoch = selectionEpoch.current;
+    const current = () =>
+      owner.isCurrent() &&
+      sourceNavigationIntent.current === intent &&
+      selectionEpoch.current === epoch &&
+      sourceNavigationState.current.page === navigation.page &&
+      sourceNavigationState.current.selectedThreadId ===
+        navigation.selectedThreadId;
+    if (
+      !target.id ||
+      (target.kind === "thread" && target.deviceId !== undefined)
+    )
+      throw new Error(i18n.t("shell:sourceNavigationUnavailable"));
+    if (target.kind === "trigger") {
+      if (
+        !pluginSnapshot?.pages.some(
+          (entry) =>
+            entry.pluginId === "zenx-triggers" &&
+            entry.route === TRIGGER_SOURCE_ROUTE,
+        )
+      )
+        throw new Error(i18n.t("shell:sourcePluginUnavailable"));
+      if (current()) openPage(triggerSourceRoute(target.id));
+      return;
+    }
+    let result;
+    try {
+      result = await window.zenx.protocol.request("zen/thread/read", {
+        threadId: target.id,
+      });
+    } catch {
+      throw new Error(i18n.t("shell:sourceThreadUnavailable"));
+    }
+    if (!current()) return;
+    if (result.thread.id !== target.id)
+      throw new Error(i18n.t("shell:sourceThreadUnavailable"));
+    if (result.thread.archived)
+      throw new Error(i18n.t("shell:sourceThreadArchived"));
+    const panel =
+      (selectedRoom !== undefined && selectedRoom !== null) ||
+      owner.threadId !== selectedThreadIdRef.current;
+    openPage(
+      `/threads/${encodeURIComponent(target.id)}${panel ? "?view=panel" : ""}`,
+    );
+  };
+
   const renameThread = async (threadId: string, title: string) => {
     const projection = await window.zenx.titles.rename(threadId, title);
     setTitleSnapshot((current) => applyThreadTitleReceipt(current, projection));
@@ -2561,6 +2663,42 @@ function AppContent() {
     await resumeThread(result.thread.id);
   };
 
+  const forkMessage: MessageForkHandler = (target, owner) => {
+    const key = JSON.stringify([target.sourceThreadId, target.itemId]);
+    const pending = messageForkRequests.current.get(key);
+    if (pending !== undefined) return pending;
+    const selection = selectionEpoch.current;
+    const intent = ++messageForkNavigation.current;
+    const request = (async () => {
+      try {
+        const result = await window.zenx.protocol.request("zen/thread/fork", {
+          sourceThreadId: target.sourceThreadId,
+          through: { type: "item", itemId: target.itemId },
+          workspace: { type: "same-directory" },
+        });
+        // Refresh the existing projections independently of opening the copy.
+        // A later click/navigation owns the viewport, even if the user returns.
+        void Promise.all([loadThreadSummaries(), loadProjects()]);
+        if (
+          owner.isCurrent() &&
+          selectionEpoch.current === selection &&
+          messageForkNavigation.current === intent
+        )
+          await resumeThread(result.thread.id);
+      } catch (error) {
+        if (!owner.isVisible())
+          setRequestError(
+            i18n.t("shell:messageForkFailed", { error: describeError(error) }),
+          );
+        throw error;
+      } finally {
+        messageForkRequests.current.delete(key);
+      }
+    })();
+    messageForkRequests.current.set(key, request);
+    return request;
+  };
+
   const changeSidebarMode = (mode: SidebarMode) => {
     setSidebarMode(mode);
     try {
@@ -2696,427 +2834,446 @@ function AppContent() {
   );
 
   return (
-    <div
-      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
-      style={
-        {
-          "--workspace-panel-width": `${workspacePanelWidth}px`,
-        } as React.CSSProperties
-      }
-    >
-      <WindowTitleBar
-        mode={sidebarMode}
-        pendingApprovalCount={pendingThreadIds.size}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleInbox={() =>
-          changeSidebarMode(sidebarMode === "inbox" ? "projects" : "inbox")
+    <ThreadViewActionsProvider fork={forkMessage} source={openMessageSource}>
+      <div
+        className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
+        style={
+          {
+            "--workspace-panel-width": `${workspacePanelWidth}px`,
+          } as React.CSSProperties
         }
-        onToggleSidebar={toggleSidebarCollapsed}
       >
+        <WindowTitleBar
+          mode={sidebarMode}
+          pendingApprovalCount={pendingThreadIds.size}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleInbox={() =>
+            changeSidebarMode(sidebarMode === "inbox" ? "projects" : "inbox")
+          }
+          onToggleSidebar={toggleSidebarCollapsed}
+        >
+          {page === "agent" &&
+          newThreadDraft === null &&
+          selectedSummary !== null ? (
+            <ConversationTitleBar
+              onOpenSidebar={openSidebar}
+              threads={[...activeSummaries, ...archivedSummaries]}
+              onNavigate={openPage}
+              onRename={renameSelectedThread}
+              onOpenSource={(threadId) => void resumeThread(threadId)}
+              onRetryTitle={retrySelectedTitle}
+              selectedSummary={selectedSummary}
+              sourceSummary={activeSummaries.find(
+                (candidate) =>
+                  candidate.threadId === threadDetail?.forkedFromId,
+              )}
+              threadDetail={threadDetail}
+              titleProjection={titleProjection}
+            />
+          ) : page === "settings" ? (
+            <PageTitleBar
+              onOpenSidebar={openSidebar}
+              subtitle={i18n.t(
+                "shell:accountAppearanceModelsPluginsAndLocalHost",
+              )}
+              title={i18n.t("shell:settings")}
+            />
+          ) : genericPluginTarget !== undefined ? (
+            <PageTitleBar
+              onOpenSidebar={openSidebar}
+              subtitle={
+                selectedRoom
+                  ? selectedRoom.assistant
+                    ? "PAW"
+                    : i18n.t("shell:sharedConversation")
+                  : i18n.t("shell:providedByPlugin", {
+                      plugin: genericPluginTarget.pluginId,
+                    })
+              }
+              title={
+                selectedRoom?.name ??
+                (genericPluginTarget.pluginId === "zenx-triggers"
+                  ? i18n.t("panels:automations")
+                  : genericPluginTarget.title)
+              }
+              actions={
+                genericPluginTarget.pluginId === "zenx-rooms" &&
+                genericPluginTarget.route === ROOM_ROUTE &&
+                selectedRoomId !== null ? (
+                  <div
+                    className="room-title-actions-host"
+                    ref={setRoomHeaderTarget}
+                  />
+                ) : undefined
+              }
+            />
+          ) : null}
+        </WindowTitleBar>
         {page === "agent" &&
         newThreadDraft === null &&
-        selectedSummary !== null ? (
-          <ConversationTitleBar
-            onOpenSidebar={openSidebar}
-            threads={[...threadSummaries, ...archivedThreadSummaries]}
-            onNavigate={openPage}
-            onRename={renameSelectedThread}
-            onOpenSource={(threadId) => void resumeThread(threadId)}
-            onRetryTitle={retrySelectedTitle}
-            selectedSummary={selectedSummary}
-            sourceSummary={activeSummaries.find(
-              (candidate) => candidate.threadId === threadDetail?.forkedFromId,
-            )}
-            threadDetail={threadDetail}
-            titleProjection={titleProjection}
-          />
-        ) : page === "settings" ? (
-          <PageTitleBar
-            onOpenSidebar={openSidebar}
-            subtitle={i18n.t(
-              "shell:accountAppearanceModelsPluginsAndLocalHost",
-            )}
-            title={i18n.t("shell:settings")}
-          />
-        ) : genericPluginTarget !== undefined ? (
-          <PageTitleBar
-            onOpenSidebar={openSidebar}
-            subtitle={
-              selectedRoom
-                ? selectedRoom.assistant
-                  ? "PAW"
-                  : i18n.t("shell:sharedConversation")
-                : i18n.t("shell:providedByPlugin", {
-                    plugin: genericPluginTarget.pluginId,
-                  })
+        selectedSummary !== null &&
+        browserPanels[selectedSummary.threadId] !== true ? (
+          <button
+            id="thread-browser-toggle"
+            className="icon-button thread-panel-toggle"
+            type="button"
+            aria-label={
+              browserPanels[selectedSummary.threadId]
+                ? i18n.t("shell:closeSidePanel")
+                : i18n.t("shell:openSidePanel")
             }
-            title={selectedRoom?.name ?? genericPluginTarget.title}
-            actions={
-              genericPluginTarget.pluginId === "zenx-rooms" &&
-              genericPluginTarget.route === ROOM_ROUTE &&
-              selectedRoomId !== null ? (
-                <div
-                  className="room-title-actions-host"
-                  ref={setRoomHeaderTarget}
-                />
-              ) : undefined
+            title={
+              browserPanels[selectedSummary.threadId]
+                ? i18n.t("shell:closeSidePanel")
+                : i18n.t("shell:openSidePanel")
             }
-          />
+            aria-controls="thread-workspace-panel"
+            aria-expanded={browserPanels[selectedSummary.threadId] === true}
+            disabled={threadDetail === null}
+            onClick={() => {
+              setBrowserPanels((current) => ({
+                ...current,
+                [selectedSummary.threadId]: true,
+              }));
+              requestAnimationFrame(() =>
+                document
+                  .querySelector<HTMLButtonElement>(
+                    '#thread-workspace-panel[data-open="true"] .auxiliary-close-button',
+                  )
+                  ?.focus(),
+              );
+            }}
+          >
+            <Icon name="panel-right" />
+          </button>
         ) : null}
-      </WindowTitleBar>
-      {page === "agent" &&
-      newThreadDraft === null &&
-      selectedSummary !== null &&
-      browserPanels[selectedSummary.threadId] !== true ? (
-        <button
-          id="thread-browser-toggle"
-          className="icon-button thread-panel-toggle"
-          type="button"
-          aria-label={
-            browserPanels[selectedSummary.threadId]
-              ? i18n.t("shell:closeSidePanel")
-              : i18n.t("shell:openSidePanel")
-          }
-          title={
-            browserPanels[selectedSummary.threadId]
-              ? i18n.t("shell:closeSidePanel")
-              : i18n.t("shell:openSidePanel")
-          }
-          aria-controls="thread-workspace-panel"
-          aria-expanded={browserPanels[selectedSummary.threadId] === true}
-          disabled={threadDetail === null}
-          onClick={() => {
-            setBrowserPanels((current) => ({
-              ...current,
-              [selectedSummary.threadId]: true,
-            }));
-            requestAnimationFrame(() =>
-              document
-                .querySelector<HTMLButtonElement>(
-                  '#thread-workspace-panel[data-open="true"] .auxiliary-close-button',
-                )
-                ?.focus(),
-            );
+        <ThreadDebugMenuContext.Provider
+          value={{
+            threadId: page === "agent" ? debugThreadId : null,
+            toggle: (threadId) => {
+              if (page === "agent" && debugThreadId === threadId)
+                setDebugThreadId(null);
+              else if (page === "agent" && selectedThreadId === threadId)
+                setDebugThreadId(threadId);
+              else void resumeThread(threadId, false, false, true);
+            },
           }}
         >
-          <Icon name="panel-right" />
-        </button>
-      ) : null}
-      <Sidebar
-        triggerAdmissionId={sidebarTriggerAdmissionId(pluginSnapshot)}
-        unreadThreadIds={unreadThreads}
-        roomConversations={roomsAdmitted ? roomConversations : undefined}
-        selectedRoomId={selectedRoomId}
-        collapsed={sidebarCollapsed}
-        liveThread={threadDetail}
-        mode={sidebarMode}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        onChangeThreadLifecycle={(summary) =>
-          performThreadLifecycle(summary, true)
-        }
-        onChangeThreadPinned={changeThreadPinned}
-        onReorderProject={(sourceKey, targetKey, placement) =>
-          queueSidebarOrderMutation((current) =>
-            moveSidebarProject(
-              current,
-              projects,
-              sourceKey,
-              targetKey,
-              placement,
-            ),
-          )
-        }
-        onReorderThread={(
-          sourceProjectKey,
-          sourceThreadId,
-          targetProjectKey,
-          targetThreadId,
-          placement,
-        ) =>
-          queueSidebarOrderMutation((current) =>
-            moveSidebarThread(
-              current,
-              activeSummaries,
-              projects,
+          <Sidebar
+            triggerAdmissionId={sidebarTriggerAdmissionId(pluginSnapshot)}
+            unreadThreadIds={unreadThreads}
+            roomConversations={roomsAdmitted ? roomConversations : undefined}
+            selectedRoomId={selectedRoomId}
+            collapsed={sidebarCollapsed}
+            liveThread={threadDetail}
+            mode={sidebarMode}
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+            onChangeThreadLifecycle={(summary) =>
+              performThreadLifecycle(summary, true)
+            }
+            onChangeThreadPinned={changeThreadPinned}
+            onReorderProject={(sourceKey, targetKey, placement) =>
+              queueSidebarOrderMutation((current) =>
+                moveSidebarProject(
+                  current,
+                  projects,
+                  sourceKey,
+                  targetKey,
+                  placement,
+                ),
+              )
+            }
+            onReorderThread={(
               sourceProjectKey,
               sourceThreadId,
               targetProjectKey,
               targetThreadId,
               placement,
-            ),
-          )
-        }
-        onReorderPinnedThread={(sourceThreadId, targetThreadId, placement) =>
-          queuePinMutation((current) =>
-            movePinnedThreadIds(
-              current,
+            ) =>
+              queueSidebarOrderMutation((current) =>
+                moveSidebarThread(
+                  current,
+                  activeSummaries,
+                  projects,
+                  sourceProjectKey,
+                  sourceThreadId,
+                  targetProjectKey,
+                  targetThreadId,
+                  placement,
+                ),
+              )
+            }
+            onReorderPinnedThread={(
               sourceThreadId,
               targetThreadId,
               placement,
-            ),
-          )
-        }
-        onNewThread={(workspace) => {
-          openNewThreadDraft(workspace);
-        }}
-        onImportSession={() => {
-          setImportSessionOpen(true);
-          void loadComposerCatalog();
-        }}
-        onAddProject={() => openProjectPicker("add-project")}
-        newThreadDisabled={newThreadPending}
-        onRemoveProject={(workspace) => {
-          void window.zenx.settings
-            .removeWorkspace(workspace)
-            .then(async () => await loadProjects())
-            .catch((error: unknown) => setRequestError(describeError(error)));
-        }}
-        onEditProject={(workspace, name) => {
-          editingProjectFocusWorkspace.current = workspace;
-          setEditingProject({ workspace, name });
-        }}
-        onSetDefaultProject={(workspace) => {
-          void window.zenx.settings
-            .addWorkspace(workspace)
-            .then(
-              async () =>
-                await window.zenx.settings.setDefaultWorkspace(workspace),
-            )
-            .then(async () => await loadProjects())
-            .catch((error: unknown) => setRequestError(describeError(error)));
-        }}
-        onOpenContribution={(route) => {
-          const target = pluginSnapshot?.pages.find(
-            (candidate) => candidate.route === pluginRoutePath(route),
-          );
-          if (target?.surfaceId !== undefined) {
-            openPage(route);
-            if (target.pluginId === "zenx-rooms")
-              void roomConversations.refresh();
-          }
-        }}
-        onOpenSettings={() => openPage("settings")}
-        onRetryThreads={() => void loadThreadSummaries(true)}
-        onRenameThread={renameThread}
-        onForkThread={forkThread}
-        onSelectThread={(threadId) => void resumeThread(threadId)}
-        pendingApprovalThreadIds={pendingThreadIds}
-        pluginContributions={pluginContributions}
-        selectedPage={selectedSidebarPage}
-        selectedThreadId={page === "agent" ? selectedThreadId : null}
-        serverStatus={serverStatus}
-        projects={projects}
-        onChangeProjectPinned={(key) =>
-          queueSidebarOrderMutation((current) => ({
-            ...current,
-            pinnedProjectKeys: current.pinnedProjectKeys?.includes(key)
-              ? current.pinnedProjectKeys.filter(
-                  (candidate) => candidate !== key,
+            ) =>
+              queuePinMutation((current) =>
+                movePinnedThreadIds(
+                  current,
+                  sourceThreadId,
+                  targetThreadId,
+                  placement,
+                ),
+              )
+            }
+            onNewThread={(workspace) => {
+              openNewThreadDraft(workspace);
+            }}
+            onAddProject={() => openProjectPicker("add-project")}
+            newThreadDisabled={newThreadPending}
+            onRemoveProject={(workspace) => {
+              void window.zenx.settings
+                .removeWorkspace(workspace)
+                .then(async () => await loadProjects())
+                .catch((error: unknown) =>
+                  setRequestError(describeError(error)),
+                );
+            }}
+            onEditProject={(workspace, name) => {
+              editingProjectFocusWorkspace.current = workspace;
+              setEditingProject({ workspace, name });
+            }}
+            onSetDefaultProject={(workspace) => {
+              void window.zenx.settings
+                .addWorkspace(workspace)
+                .then(
+                  async () =>
+                    await window.zenx.settings.setDefaultWorkspace(workspace),
                 )
-              : [...(current.pinnedProjectKeys ?? []), key],
-          }))
-        }
-        sidebarOrder={sidebarOrder}
-        pinnedThreads={pinnedSummaries}
-        threadError={threadListErrors.active}
-        threadLoading={!threadListLoaded.active}
-        threads={activeSummaries}
-      />
-      <SidebarResizer
-        collapsed={sidebarCollapsed}
-        onCollapse={toggleSidebarCollapsed}
-      />
+                .then(async () => await loadProjects())
+                .catch((error: unknown) =>
+                  setRequestError(describeError(error)),
+                );
+            }}
+            onOpenContribution={(route) => {
+              const target = pluginSnapshot?.pages.find(
+                (candidate) => candidate.route === pluginRoutePath(route),
+              );
+              if (target?.surfaceId !== undefined) {
+                openPage(route);
+                if (target.pluginId === "zenx-rooms")
+                  void roomConversations.refresh();
+              }
+            }}
+            onOpenSettings={() => openPage("settings")}
+            onRetryThreads={() => void loadThreadSummaries(true)}
+            onRenameThread={renameThread}
+            onForkThread={forkThread}
+            onSelectThread={(threadId) => void resumeThread(threadId)}
+            pendingApprovalThreadIds={pendingThreadIds}
+            pluginContributions={pluginContributions}
+            selectedPage={selectedSidebarPage}
+            selectedThreadId={page === "agent" ? selectedThreadId : null}
+            serverStatus={serverStatus}
+            projects={projects}
+            onChangeProjectPinned={(key) =>
+              queueSidebarOrderMutation((current) => ({
+                ...current,
+                pinnedProjectKeys: current.pinnedProjectKeys?.includes(key)
+                  ? current.pinnedProjectKeys.filter(
+                      (candidate) => candidate !== key,
+                    )
+                  : [...(current.pinnedProjectKeys ?? []), key],
+              }))
+            }
+            sidebarOrder={sidebarOrder}
+            pinnedThreads={pinnedSummaries}
+            threadError={threadListErrors.active}
+            threadLoading={!threadListLoaded.active}
+            threads={activeSummaries}
+          />
+        </ThreadDebugMenuContext.Provider>
+        <SidebarResizer
+          collapsed={sidebarCollapsed}
+          onCollapse={toggleSidebarCollapsed}
+        />
 
-      {projectError !== null ||
-      requestError !== null ||
-      draftRecoveryNotice !== null ? (
-        <div className="app-notice" role="alert">
-          <span>
-            {draftRecoveryNotice?.message ?? projectError ?? requestError}
-          </span>
-          {draftRecoveryNotice !== null ? (
+        {projectError !== null ||
+        requestError !== null ||
+        draftRecoveryNotice !== null ? (
+          <div className="app-notice" role="alert">
+            <span>
+              {draftRecoveryNotice?.message ?? projectError ?? requestError}
+            </span>
+            {draftRecoveryNotice !== null ? (
+              <button
+                type="button"
+                onClick={() => {
+                  invalidateThreadSelection();
+                  setPage("agent");
+                  selectedThreadIdRef.current = null;
+                  setSelectedThreadId(null);
+                  setThreadDetail(null);
+                  setThreadAttachments({});
+                  setThreadUsage(undefined);
+                  setSelectedSettings(null);
+                  setThreadError(null);
+                  // Restoring over a visible welcome page keeps whatever the
+                  // user already typed there under its own Project.
+                  retainNewThreadDraftUnsentInput();
+                  confirmNewThreadDraft(draftRecoveryNotice.draft);
+                  discardRecoverableDraft();
+                }}
+              >
+                {i18n.t("shell:restoreDraft")}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => {
-                invalidateThreadSelection();
-                setPage("agent");
-                selectedThreadIdRef.current = null;
-                setSelectedThreadId(null);
-                setThreadDetail(null);
-                setThreadAttachments({});
-                setThreadUsage(undefined);
-                setSelectedSettings(null);
-                setThreadError(null);
-                // Restoring over a visible welcome page keeps whatever the
-                // user already typed there under its own Project.
-                retainNewThreadDraftUnsentInput();
-                confirmNewThreadDraft(draftRecoveryNotice.draft);
-                discardRecoverableDraft();
+                if (draftRecoveryNotice !== null) {
+                  discardRecoverableDraft();
+                  return;
+                }
+                setProjectError(null);
+                setRequestError(null);
               }}
             >
-              {i18n.t("shell:restoreDraft")}
+              {i18n.t("shell:dismiss")}
             </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              if (draftRecoveryNotice !== null) {
-                discardRecoverableDraft();
-                return;
-              }
-              setProjectError(null);
-              setRequestError(null);
-            }}
-          >
-            {i18n.t("shell:dismiss")}
-          </button>
-        </div>
-      ) : null}
+          </div>
+        ) : null}
 
-      <RoomDraftContext.Provider
-        value={{
-          drafts: roomDrafts,
-          intentRevisions: roomIntentRevisions,
-          replies: roomReplies,
-          setReplies: setRoomReplies,
-          setDrafts: setRoomDrafts,
-          revisions: roomDraftRevisions,
-        }}
-      >
-        <main className="workspace">
-          <SettingsView
-            active={page === "settings"}
-            archivedError={threadListErrors.archived}
-            archivedLoading={!threadListLoaded.archived}
-            archivedThreads={archivedSummaries}
-            deletedThreads={deletedThreadSummaries}
-            deletedError={deletedThreadError}
-            deletedLoading={deletedThreadLoading}
-            onDelete={deleteArchivedThread}
-            onRestoreDeleted={restoreDeletedThread}
-            onRetryArchived={() => {
-              void loadThreadSummaries(true);
-              void loadDeletedThreads(true);
-            }}
-            onTabChange={setSettingsTab}
-            onUnarchive={performThreadLifecycle}
-            onOpenSidebar={openSidebar}
-            tab={settingsTab}
-            pluginSnapshot={pluginSnapshot}
-            browserSettingsFocusRequest={browserSettingsFocusRequest}
-            showHeader={false}
-          />
-          {page === "settings" ? null : genericPluginTarget !== undefined &&
-            pluginSnapshot !== null ? (
-            <ImZenXDraftContext.Provider value={imzenxDrafts}>
-              <RoomHeaderContext.Provider
-                value={{ roomId: selectedRoomId, element: roomHeaderTarget }}
-              >
-                <PluginProductPage
-                  context={
-                    genericPluginTarget.pluginId === "zenx-rooms"
-                      ? { primaryNavigation: true }
-                      : undefined
-                  }
-                  snapshot={pluginSnapshot}
-                  route={page}
-                  navigate={openPage}
-                />
-              </RoomHeaderContext.Provider>
-            </ImZenXDraftContext.Provider>
-          ) : (
-            <AgentSurface
-              onRecoverQueuedEdit={(threadId) => {
-                // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
-                if (
-                  selectedThreadIdRef.current === threadId &&
-                  newThreadDraftRef.current === null
-                )
-                  void resumeThread(threadId, true);
+        <RoomDraftContext.Provider
+          value={{
+            drafts: roomDrafts,
+            intentRevisions: roomIntentRevisions,
+            replies: roomReplies,
+            setReplies: setRoomReplies,
+            setDrafts: setRoomDrafts,
+            revisions: roomDraftRevisions,
+          }}
+        >
+          <main className="workspace">
+            <SettingsView
+              active={page === "settings"}
+              onImportSession={() => {
+                setImportSessionOpen(true);
+                void loadComposerCatalog();
               }}
-              queueEditStore={queueEditStore}
-              threadHeader={
-                selectedThreadId !== null &&
-                newThreadDraft === null &&
-                pluginSnapshot !== null &&
-                (pluginSnapshot.threadHeaders?.length ?? 0) > 0 ? (
-                  <PluginThreadHeaders
-                    registry={pluginUiRegistry}
+              archivedError={threadListErrors.archived}
+              archivedLoading={!threadListLoaded.archived}
+              archivedThreads={archivedSummaries}
+              deletedThreads={deletedThreadSummaries}
+              deletedError={deletedThreadError}
+              deletedLoading={deletedThreadLoading}
+              onDelete={deleteArchivedThread}
+              onRestoreDeleted={restoreDeletedThread}
+              onRetryArchived={() => {
+                void loadThreadSummaries(true);
+                void loadDeletedThreads(true);
+              }}
+              onTabChange={setSettingsTab}
+              onUnarchive={performThreadLifecycle}
+              onOpenSidebar={openSidebar}
+              tab={settingsTab}
+              pluginSnapshot={pluginSnapshot}
+              browserSettingsFocusRequest={browserSettingsFocusRequest}
+              showHeader={false}
+            />
+            {page === "settings" ? null : genericPluginTarget !== undefined &&
+              pluginSnapshot !== null ? (
+              <ImZenXDraftContext.Provider value={imzenxDrafts}>
+                <RoomHeaderContext.Provider
+                  value={{
+                    roomId: selectedRoomId,
+                    element: roomHeaderTarget,
+                  }}
+                >
+                  <PluginProductPage
+                    context={
+                      genericPluginTarget.pluginId === "zenx-rooms"
+                        ? { primaryNavigation: true }
+                        : undefined
+                    }
                     snapshot={pluginSnapshot}
-                    threadId={selectedThreadId}
-                    threads={[...threadSummaries, ...archivedThreadSummaries]}
+                    route={page}
                     navigate={openPage}
                   />
-                ) : null
-              }
-              onOpenMessageLink={(threadId, target) => {
-                setMessageLinkRequest({
-                  ...target,
-                  id: ++messageLinkSequence.current,
-                  threadId,
-                });
-                setBrowserPanels((current) => ({
-                  ...current,
-                  [threadId]: true,
-                }));
-              }}
-              composerSendMode={composerSendMode}
-              onComposerSendModeChange={changeComposerSendMode}
-              onCancelQueued={cancelQueued}
-              composerSendModeMigration={composerSendModeMigration}
-              queueFailure={queueFailure}
-              onSettleLegacySendChoice={settleLegacySendChoice}
-              onNoticeError={setRequestError}
-              approvals={approvals}
-              pluginSnapshot={pluginSnapshot}
-              onOpenBrowserSettings={() => {
-                setSettingsTab("general");
-                setBrowserSettingsFocusRequest((value) => value + 1);
-                openPage("settings");
-              }}
-              composerStates={composerStates}
-              configuredProjects={configuredProjects}
-              newThreadDraft={newThreadDraft}
-              threadAttachments={threadAttachments}
-              threadUsage={threadUsage}
-              models={models}
-              providerProfiles={providerProfiles}
-              workflowCommands={workflowCommands}
-              modelCatalogError={modelCatalogError}
-              modelUpdateError={modelUpdateError}
-              onDraftChange={(threadId, draft) =>
-                updateComposer(threadId, (state) => editComposer(state, draft))
-              }
-              onNewThreadDraftChange={(draft) =>
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  composer: editComposer(current.composer, draft),
-                }))
-              }
-              onNewThreadModelChange={changeNewThreadModel}
-              onNewThreadReasoningChange={changeNewThreadReasoning}
-              onNewThreadProjectChange={changeNewThreadProject}
-              onAddNewThreadProject={() => openProjectPicker("new-thread")}
-              onImportImages={async (threadId, files) => {
-                const imports = await Promise.all(
-                  files.map(async (file) => ({
-                    name: file.name,
-                    mediaType: file.type,
-                    bytes: new Uint8Array(await file.arrayBuffer()),
-                  })),
-                );
-                const images =
-                  await window.zenx.imageAttachments.import(imports);
-                updateComposer(threadId, (state) =>
-                  addComposerImages(state, images),
-                );
-              }}
-              onImportNewThreadImages={async (files) => {
-                const draftId = newThreadDraftRef.current?.id;
-                if (draftId === undefined) return;
-                acquireNewThreadImageLease(draftId);
-                try {
+                </RoomHeaderContext.Provider>
+              </ImZenXDraftContext.Provider>
+            ) : (
+              <AgentSurface
+                debugMode={
+                  debugThreadId !== null && debugThreadId === selectedThreadId
+                }
+                onExitDebug={exitDebugMode}
+                onRecoverQueuedEdit={(threadId) => {
+                  // Reuse native resume's read-only snapshot/event barrier, never resumeQueue.
+                  if (
+                    selectedThreadIdRef.current === threadId &&
+                    newThreadDraftRef.current === null
+                  )
+                    void resumeThread(threadId, true);
+                }}
+                queueEditStore={queueEditStore}
+                threadHeader={
+                  selectedThreadId !== null &&
+                  newThreadDraft === null &&
+                  pluginSnapshot !== null &&
+                  (pluginSnapshot.threadHeaders?.length ?? 0) > 0 ? (
+                    <PluginThreadHeaders
+                      registry={pluginUiRegistry}
+                      snapshot={pluginSnapshot}
+                      threadId={selectedThreadId}
+                      threads={[...activeSummaries, ...archivedSummaries]}
+                      navigate={openPage}
+                    />
+                  ) : null
+                }
+                onOpenMessageLink={(threadId, target) => {
+                  setMessageLinkRequest({
+                    ...target,
+                    id: ++messageLinkSequence.current,
+                    threadId,
+                  });
+                  setBrowserPanels((current) => ({
+                    ...current,
+                    [threadId]: true,
+                  }));
+                }}
+                composerSendMode={composerSendMode}
+                onComposerSendModeChange={changeComposerSendMode}
+                onCancelQueued={cancelQueued}
+                composerSendModeMigration={composerSendModeMigration}
+                queueFailure={queueFailure}
+                onSettleLegacySendChoice={settleLegacySendChoice}
+                onNoticeError={setRequestError}
+                approvals={approvals}
+                pluginSnapshot={pluginSnapshot}
+                onOpenBrowserSettings={() => {
+                  setSettingsTab("general");
+                  setBrowserSettingsFocusRequest((value) => value + 1);
+                  openPage("settings");
+                }}
+                composerStates={composerStates}
+                configuredProjects={configuredProjects}
+                newThreadDraft={newThreadDraft}
+                threadAttachments={threadAttachments}
+                threadUsage={threadUsage}
+                models={models}
+                providerProfiles={providerProfiles}
+                workflowCommands={workflowCommands}
+                modelCatalogError={modelCatalogError}
+                modelUpdateError={modelUpdateError}
+                onDraftChange={(threadId, draft) =>
+                  updateComposer(threadId, (state) =>
+                    editComposer(state, draft),
+                  )
+                }
+                onNewThreadDraftChange={(draft) =>
+                  updateNewThreadDraft((current) => ({
+                    ...current,
+                    composer: editComposer(current.composer, draft),
+                  }))
+                }
+                onNewThreadModelChange={changeNewThreadModel}
+                onNewThreadReasoningChange={changeNewThreadReasoning}
+                onNewThreadProjectChange={changeNewThreadProject}
+                onAddNewThreadProject={() => openProjectPicker("new-thread")}
+                onImportImages={async (threadId, files) => {
                   const imports = await Promise.all(
                     files.map(async (file) => ({
                       name: file.name,
@@ -3126,257 +3283,278 @@ function AppContent() {
                   );
                   const images =
                     await window.zenx.imageAttachments.import(imports);
-                  updateNewThreadComposer(draftId, (state) =>
+                  updateComposer(threadId, (state) =>
                     addComposerImages(state, images),
                   );
-                } finally {
-                  releaseNewThreadImageLease(draftId);
-                }
-              }}
-              onPickImages={async (threadId) => {
-                const images = await window.zenx.imageAttachments.pick();
-                updateComposer(threadId, (state) =>
-                  addComposerImages(state, images),
-                );
-              }}
-              onPickNewThreadImages={async () => {
-                const draftId = newThreadDraftRef.current?.id;
-                if (draftId === undefined) return;
-                acquireNewThreadImageLease(draftId);
-                try {
+                }}
+                onImportNewThreadImages={async (files) => {
+                  const draftId = newThreadDraftRef.current?.id;
+                  if (draftId === undefined) return;
+                  acquireNewThreadImageLease(draftId);
+                  try {
+                    const imports = await Promise.all(
+                      files.map(async (file) => ({
+                        name: file.name,
+                        mediaType: file.type,
+                        bytes: new Uint8Array(await file.arrayBuffer()),
+                      })),
+                    );
+                    const images =
+                      await window.zenx.imageAttachments.import(imports);
+                    updateNewThreadComposer(draftId, (state) =>
+                      addComposerImages(state, images),
+                    );
+                  } finally {
+                    releaseNewThreadImageLease(draftId);
+                  }
+                }}
+                onPickImages={async (threadId) => {
                   const images = await window.zenx.imageAttachments.pick();
-                  updateNewThreadComposer(draftId, (state) =>
+                  updateComposer(threadId, (state) =>
                     addComposerImages(state, images),
                   );
-                } finally {
-                  releaseNewThreadImageLease(draftId);
+                }}
+                onPickNewThreadImages={async () => {
+                  const draftId = newThreadDraftRef.current?.id;
+                  if (draftId === undefined) return;
+                  acquireNewThreadImageLease(draftId);
+                  try {
+                    const images = await window.zenx.imageAttachments.pick();
+                    updateNewThreadComposer(draftId, (state) =>
+                      addComposerImages(state, images),
+                    );
+                  } finally {
+                    releaseNewThreadImageLease(draftId);
+                  }
+                }}
+                onRemoveImage={(threadId, imageId) =>
+                  updateComposer(threadId, (state) =>
+                    removeComposerImage(state, imageId),
+                  )
                 }
-              }}
-              onRemoveImage={(threadId, imageId) =>
-                updateComposer(threadId, (state) =>
-                  removeComposerImage(state, imageId),
-                )
-              }
-              onRemoveNewThreadImage={(imageId) =>
-                updateNewThreadDraft((current) => ({
-                  ...current,
-                  composer: removeComposerImage(current.composer, imageId),
-                }))
-              }
-              onReadAttachment={readAttachment}
-              onInterrupt={async (turnId) => {
-                if (threadDetail === null)
-                  throw new Error(i18n.t("shell:noThreadSelected"));
-                await window.zenx.protocol.request("turn/interrupt", {
-                  threadId: threadDetail.id,
-                  turnId,
-                });
-              }}
-              onModelChange={(model) => void changeModel(model)}
-              onPermissionChange={(mode) => void changePermission(mode)}
-              onNewThreadPermissionChange={(permissionMode) =>
-                updateNewThreadDraft((draft) => ({
-                  ...draft,
-                  permissionMode,
-                }))
-              }
-              permissionError={permissionError}
-              switchingPermission={switchingPermission}
-              onReasoningChange={(effort) => void changeReasoning(effort)}
-              onOpenSidebar={openSidebar}
-              onRespondToApproval={respondToApproval}
-              onCompact={compactFromContext}
-              onDismissCompaction={(threadId) =>
-                updateComposer(threadId, dismissCompactionFeedback)
-              }
-              onSubmit={submitComposer}
-              onSubmitNewThread={submitNewThreadDraft}
-              selectedSettings={selectedSettings}
-              selectedSummary={selectedSummary}
-              serverStatus={serverStatus}
-              switchingModel={switchingModel}
-              threadArchiving={
-                threadDetail !== null && archivingThreadIds.has(threadDetail.id)
-              }
-              threadDetail={threadDetail}
-              threadError={threadError}
-              threadLoading={threadLoading}
-            />
-          )}
-          {selectedRoom && roomPanel && pluginSnapshot ? (
-            <CompanionWorkspace
-              key={selectedRoom.id}
-              room={selectedRoom}
-              renderConversation={renderSideConversation}
-              viewState={
-                roomWorkspaceStates[selectedRoom.id] ?? {
-                  selected: `custom:${roomPanel === "open" ? "overview" : roomPanel}`,
-                  tabs: [],
-                  member: selectedRoom.assistant?.threadId ?? "",
+                onRemoveNewThreadImage={(imageId) =>
+                  updateNewThreadDraft((current) => ({
+                    ...current,
+                    composer: removeComposerImage(current.composer, imageId),
+                  }))
                 }
-              }
-              onViewChange={(update) =>
-                setRoomWorkspaceStates((current) => ({
-                  ...current,
-                  [selectedRoom.id]: update(
-                    current[selectedRoom.id] ?? {
-                      selected: `custom:${roomPanel === "open" ? "overview" : roomPanel}`,
-                      tabs: [],
-                      member: selectedRoom.assistant?.threadId ?? "",
-                    },
-                  ),
-                }))
-              }
-              fileDrafts={fileDrafts}
-              onWidthChange={setWorkspacePanelWidth}
-              threads={[...activeSummaries, ...archivedSummaries]}
-              snapshot={pluginSnapshot}
-              section={roomPanel === "open" ? "" : roomPanel}
-              sectionRequest={roomQuery.get("request") ?? undefined}
-              navigate={openPage}
-              onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
-            />
-          ) : null}
-          {page === "agent" &&
-          newThreadDraft === null &&
-          threadDetail !== null &&
-          selectedThreadId === threadDetail.id ? (
-            <AuxiliaryPanel
-              threadContext={{
-                threads: [...threadSummaries, ...archivedThreadSummaries],
-              }}
-              conversation={
-                conversationPanels[threadDetail.id]
-                  ? {
-                      threadId: conversationPanels[threadDetail.id]!,
-                      title: (() => {
-                        const summary = [
-                          ...threadSummaries,
-                          ...archivedThreadSummaries,
-                        ].find(
-                          (entry) =>
-                            entry.threadId ===
-                            conversationPanels[threadDetail.id],
-                        );
-                        return summary
-                          ? threadTitle(summary)
-                          : i18n.t("shell:conversation");
-                      })(),
-                      render: renderSideConversation,
-                    }
-                  : undefined
-              }
-              messageLinkRequest={
-                messageLinkRequest?.threadId === threadDetail.id
-                  ? messageLinkRequest
-                  : null
-              }
-              onMessageLinkRequestHandled={(id) =>
-                setMessageLinkRequest((current) =>
-                  current?.id === id ? null : current,
-                )
-              }
-              navigate={openPage}
-              onWidthChange={setWorkspacePanelWidth}
-              fileDrafts={fileDrafts}
-              workspacePath={threadDetail.cwd}
-              key={threadDetail.id}
-              threadId={threadDetail.id}
-              title={
-                selectedSummary === null
-                  ? i18n.t("shell:currentThread")
-                  : threadTitle(selectedSummary)
-              }
-              open={browserPanels[threadDetail.id]}
-              onOpenChange={(open) =>
-                setBrowserPanels((current) => ({
-                  ...current,
-                  [threadDetail.id]: open,
-                }))
-              }
-              snapshot={pluginSnapshot}
-              openedTabs={workspaceTabOrder[threadDetail.id]}
-              onTabsChange={(tabs) =>
-                setWorkspaceTabOrder((current) => ({
-                  ...current,
-                  [threadDetail.id]: tabs,
-                }))
-              }
-              selectedTab={panelTabs[threadDetail.id]}
-              onSelectTab={(tab) =>
-                setPanelTabs((current) => ({
-                  ...current,
-                  [threadDetail.id]: tab,
-                }))
-              }
-            />
-          ) : null}
-        </main>
-      </RoomDraftContext.Provider>
+                onReadAttachment={readAttachment}
+                onInterrupt={async (turnId) => {
+                  if (threadDetail === null)
+                    throw new Error(i18n.t("shell:noThreadSelected"));
+                  await window.zenx.protocol.request("turn/interrupt", {
+                    threadId: threadDetail.id,
+                    turnId,
+                  });
+                }}
+                onModelChange={(model) => void changeModel(model)}
+                onPermissionChange={(mode) => void changePermission(mode)}
+                onNewThreadPermissionChange={(permissionMode) =>
+                  updateNewThreadDraft((draft) => ({
+                    ...draft,
+                    permissionMode,
+                  }))
+                }
+                permissionError={permissionError}
+                switchingPermission={switchingPermission}
+                onReasoningChange={(effort) => void changeReasoning(effort)}
+                onOpenSidebar={openSidebar}
+                onRespondToApproval={respondToApproval}
+                onCompact={compactFromContext}
+                onDismissCompaction={(threadId) =>
+                  updateComposer(threadId, dismissCompactionFeedback)
+                }
+                onSubmit={submitComposer}
+                onSubmitNewThread={submitNewThreadDraft}
+                selectedSettings={selectedSettings}
+                selectedSummary={selectedSummary}
+                serverStatus={serverStatus}
+                switchingModel={switchingModel}
+                threadArchiving={
+                  threadDetail !== null &&
+                  archivingThreadIds.has(threadDetail.id)
+                }
+                threadDetail={threadDetail}
+                threadError={threadError}
+                threadLoading={threadLoading}
+              />
+            )}
+            {selectedRoom && roomPanel && pluginSnapshot ? (
+              <CompanionWorkspace
+                key={selectedRoom.id}
+                room={selectedRoom}
+                onRenameThread={renameThread}
+                renderConversation={renderSideConversation}
+                viewState={
+                  roomWorkspaceStates[selectedRoom.id] ?? {
+                    selected: `custom:${roomPanel === "open" ? "overview" : roomPanel}`,
+                    tabs: [],
+                    member: selectedRoom.assistant?.threadId ?? "",
+                  }
+                }
+                onViewChange={(update) =>
+                  setRoomWorkspaceStates((current) => ({
+                    ...current,
+                    [selectedRoom.id]: update(
+                      current[selectedRoom.id] ?? {
+                        selected: `custom:${roomPanel === "open" ? "overview" : roomPanel}`,
+                        tabs: [],
+                        member: selectedRoom.assistant?.threadId ?? "",
+                      },
+                    ),
+                  }))
+                }
+                fileDrafts={fileDrafts}
+                onWidthChange={setWorkspacePanelWidth}
+                threads={[...activeSummaries, ...archivedSummaries]}
+                snapshot={pluginSnapshot}
+                section={roomPanel === "open" ? "" : roomPanel}
+                sectionRequest={roomQuery.get("request") ?? undefined}
+                navigate={openPage}
+                onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
+              />
+            ) : null}
+            {page === "agent" &&
+            newThreadDraft === null &&
+            threadDetail !== null &&
+            selectedThreadId === threadDetail.id ? (
+              <AuxiliaryPanel
+                threadContext={{
+                  threads: [...activeSummaries, ...archivedSummaries],
+                }}
+                conversation={
+                  conversationPanels[threadDetail.id]
+                    ? {
+                        threadId: conversationPanels[threadDetail.id]!,
+                        title: (() => {
+                          const summary = [
+                            ...activeSummaries,
+                            ...archivedSummaries,
+                          ].find(
+                            (entry) =>
+                              entry.threadId ===
+                              conversationPanels[threadDetail.id],
+                          );
+                          return summary
+                            ? threadTitle(summary)
+                            : i18n.t("shell:conversation");
+                        })(),
+                        render: renderSideConversation,
+                      }
+                    : undefined
+                }
+                messageLinkRequest={
+                  messageLinkRequest?.threadId === threadDetail.id
+                    ? messageLinkRequest
+                    : null
+                }
+                onMessageLinkRequestHandled={(id) =>
+                  setMessageLinkRequest((current) =>
+                    current?.id === id ? null : current,
+                  )
+                }
+                navigate={openPage}
+                onWidthChange={setWorkspacePanelWidth}
+                fileDrafts={fileDrafts}
+                workspacePath={threadDetail.cwd}
+                key={threadDetail.id}
+                threadId={threadDetail.id}
+                title={
+                  selectedSummary === null
+                    ? i18n.t("shell:currentThread")
+                    : threadTitle(selectedSummary)
+                }
+                open={browserPanels[threadDetail.id]}
+                onOpenChange={(open) =>
+                  setBrowserPanels((current) => ({
+                    ...current,
+                    [threadDetail.id]: open,
+                  }))
+                }
+                snapshot={pluginSnapshot}
+                openedTabs={workspaceTabOrder[threadDetail.id]}
+                onTabsChange={(tabs) =>
+                  setWorkspaceTabOrder((current) => ({
+                    ...current,
+                    [threadDetail.id]: tabs,
+                  }))
+                }
+                selectedTab={panelTabs[threadDetail.id]}
+                onSelectTab={(tab) =>
+                  setPanelTabs((current) => ({
+                    ...current,
+                    [threadDetail.id]: tab,
+                  }))
+                }
+              />
+            ) : null}
+          </main>
+        </RoomDraftContext.Provider>
 
-      {importSessionOpen && (
-        <SessionImportDialog
-          models={models}
-          initialCwd={lastUsedWorkspace ?? ""}
-          onClose={() => setImportSessionOpen(false)}
-          onImported={async (id) => {
-            await Promise.all([loadThreadSummaries(), loadProjects()]);
-            await resumeThread(id, false, true);
-          }}
-        />
-      )}
-      {editingProject !== null ? (
-        <ProjectEditor
-          workspace={editingProject.workspace}
-          name={editingProject.name}
-          isDefault={projects.projects.some(
-            (project) =>
-              project.workspace === editingProject.workspace &&
-              project.isDefault,
-          )}
-          hostBusy={activeSummaries.some((summary) =>
-            threadHasActiveTurn(summary, threadDetail),
-          )}
-          onClose={() => {
-            const key = projectsRef.current.projects.find(
+        {importSessionOpen && (
+          <SessionImportDialog
+            models={models}
+            initialCwd={lastUsedWorkspace ?? ""}
+            onClose={() => setImportSessionOpen(false)}
+            onImported={async (id) => {
+              await Promise.all([loadThreadSummaries(), loadProjects()]);
+              await resumeThread(id, false, true);
+            }}
+          />
+        )}
+        {editingProject !== null ? (
+          <ProjectEditor
+            workspace={editingProject.workspace}
+            name={editingProject.name}
+            isDefault={projects.projects.some(
               (project) =>
-                project.workspace ===
-                (editingProjectFocusWorkspace.current ??
-                  editingProject.workspace),
-            )?.key;
-            setEditingProject(null);
-            requestAnimationFrame(() => {
-              const target =
-                document.getElementById(
-                  `project-more-trigger-${encodeURIComponent(key ?? "")}`,
-                ) ?? document.getElementById("sidebar-thread-list-heading");
-              target?.focus();
-            });
-          }}
-          onSave={async (name, folder) => {
-            await window.zenx.settings.editWorkspace(
-              editingProject.workspace,
-              name,
-              folder,
-            );
-            editingProjectFocusWorkspace.current = folder;
-            await loadProjects();
-          }}
-          onRemove={async () => {
-            await window.zenx.settings.removeWorkspace(
-              editingProject.workspace,
-            );
-            await loadProjects();
-          }}
-        />
-      ) : null}
-      {projectPickerIntent !== null ? (
-        <DirectoryPicker
-          onCancel={closeProjectPicker}
-          onSelect={(workspace) => void selectProjectDirectory(workspace)}
-        />
-      ) : null}
-    </div>
+                project.workspace === editingProject.workspace &&
+                project.isDefault,
+            )}
+            hostBusy={activeSummaries.some((summary) =>
+              threadHasActiveTurn(summary, threadDetail),
+            )}
+            onClose={() => {
+              const key = projectsRef.current.projects.find(
+                (project) =>
+                  project.workspace ===
+                  (editingProjectFocusWorkspace.current ??
+                    editingProject.workspace),
+              )?.key;
+              setEditingProject(null);
+              requestAnimationFrame(() => {
+                const target =
+                  document.getElementById(
+                    `project-more-trigger-${encodeURIComponent(key ?? "")}`,
+                  ) ?? document.getElementById("sidebar-thread-list-heading");
+                target?.focus();
+              });
+            }}
+            onSave={async (name, folder) => {
+              await window.zenx.settings.editWorkspace(
+                editingProject.workspace,
+                name,
+                folder,
+              );
+              editingProjectFocusWorkspace.current = folder;
+              await loadProjects();
+            }}
+            onRemove={async () => {
+              await window.zenx.settings.removeWorkspace(
+                editingProject.workspace,
+              );
+              await loadProjects();
+            }}
+          />
+        ) : null}
+        {projectPickerIntent !== null ? (
+          <DirectoryPicker
+            onCancel={closeProjectPicker}
+            onSelect={(workspace) => void selectProjectDirectory(workspace)}
+          />
+        ) : null}
+      </div>
+    </ThreadViewActionsProvider>
   );
 }
 
@@ -3570,6 +3748,8 @@ function PageTitleBar({
 }
 
 function AgentSurface({
+  debugMode,
+  onExitDebug,
   onRecoverQueuedEdit,
   queueEditStore,
   threadHeader,
@@ -3629,6 +3809,8 @@ function AgentSurface({
   threadError,
   threadLoading,
 }: {
+  debugMode: boolean;
+  onExitDebug(): void;
   onRecoverQueuedEdit(threadId: string): void;
   queueEditStore: QueueEditStore;
   onOpenMessageLink(
@@ -3870,6 +4052,9 @@ function AgentSurface({
       ) : selectedSummary === null || threadDetail === null ? null : (
         <>
           <ThreadView
+            localModelDebug
+            debugMode={debugMode}
+            onExitDebug={onExitDebug}
             composerSendMode={composerSendMode}
             onComposerSendModeChange={onComposerSendModeChange}
             onOpenMessageLink={(target) => {
@@ -4408,80 +4593,6 @@ function EmptyState({
   );
 }
 
-function ThreadTitleEditor({
-  editable,
-  title,
-  projection,
-  onRename,
-  onRetry,
-}: {
-  editable: boolean;
-  title: string;
-  projection: ThreadTitleProjection | undefined;
-  onRename(title: string): Promise<void>;
-  onRetry(): Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!editing) setDraft(title);
-  }, [editing, title]);
-  if (editing) {
-    return (
-      <form
-        className="thread-title-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setBusy(true);
-          setError(null);
-          void onRename(draft)
-            .then(() => setEditing(false))
-            .catch((reason: unknown) => setError(describeError(reason)))
-            .finally(() => setBusy(false));
-        }}
-      >
-        <input
-          autoFocus
-          aria-label={i18n.t("shell:threadTitle")}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-        />
-        <button type="submit" disabled={busy || !draft.trim()}>
-          {i18n.t("shell:save")}
-        </button>
-        <button type="button" onClick={() => setEditing(false)}>
-          {i18n.t("shell:cancel")}
-        </button>
-        {error ? <small role="alert">{error}</small> : null}
-      </form>
-    );
-  }
-  return (
-    <div className="thread-title-line">
-      <strong title={title}>{title}</strong>
-      {editable ? (
-        <button
-          type="button"
-          aria-label={i18n.t("shell:renameThreadTitle")}
-          onClick={() => setEditing(true)}
-        >
-          {i18n.t("shell:rename")}
-        </button>
-      ) : null}
-      {editable && projection?.status === "generating" ? (
-        <small>{i18n.t("shell:generatingTitle")}</small>
-      ) : null}
-      {editable && projection?.status === "failed" ? (
-        <button type="button" onClick={() => void onRetry()}>
-          {i18n.t("shell:retryTitle")}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -4577,7 +4688,7 @@ export function optimisticThreadSummary(
     sandbox: import("../../protocol-client/types.js").FileSandboxPolicy;
   },
   preview: string,
-): NativeThreadSummary {
+): ThreadSummary {
   const draft = parseSkillDraft(preview);
   return {
     threadId: result.thread.id,

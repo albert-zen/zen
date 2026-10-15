@@ -179,7 +179,7 @@ test("idle upward wheel within the old 80px threshold stays paused through resiz
   });
 });
 
-test("idle content resizing alone never follows the bottom", async () => {
+test("a live reader stays pinned through idle content and delayed image resizing", async () => {
   await withRuntimeDom(async (h) => {
     await withScrollLayout(async (resize) => {
       await h.render(runtimeThread([runtimeCommand("done")], "completed"));
@@ -188,8 +188,8 @@ test("idle content resizing alone never follows the bottom", async () => {
         grow();
         resize();
       });
-      assert.equal(element.scrollTop, 600);
-      assert.ok(document.querySelector(".back-live"));
+      assert.equal(element.scrollTop, 1000);
+      assert.equal(document.querySelector(".back-live"), null);
     });
   });
 });
@@ -273,11 +273,11 @@ test("live streamed growth still follows until a keyboard reader pauses it", asy
         element.scrollTop = 1400;
         element.dispatchEvent(new window.Event("scroll"));
       });
-      assert.ok(
+      assert.equal(
         document.querySelector(".back-live"),
-        "manual arrival at bottom cannot silently re-arm following",
+        null,
+        "manual arrival at bottom re-arms following",
       );
-      await h.click(".back-live");
       await act(async () => {
         grow();
         resize();
@@ -287,7 +287,7 @@ test("live streamed growth still follows until a keyboard reader pauses it", asy
   });
 });
 
-test("idle resize pauses following even through equivalent snapshot rerenders", async () => {
+test("idle resize retains following through equivalent snapshot rerenders", async () => {
   await withRuntimeDom(async (h) => {
     await withScrollLayout(async (resize) => {
       const value = runtimeThread([runtimeCommand("done")], "completed");
@@ -302,8 +302,8 @@ test("idle resize pauses following even through equivalent snapshot rerenders", 
         "fresh array identity is not a new message",
       );
       await act(async () => resize());
-      assert.equal(element.scrollTop, 600);
-      assert.ok(document.querySelector(".back-live"));
+      assert.equal(element.scrollTop, 1000);
+      assert.equal(document.querySelector(".back-live"), null);
     });
   });
 });
@@ -477,5 +477,138 @@ test("canonical image revision and thread ownership override stale media project
       "reused Item ID does not borrow another thread's reference",
     );
     assert.ok(!reads.includes(stale.sha256));
+  });
+});
+
+test("delayed scroll delivery after content growth does not release live follow", async () => {
+  await withRuntimeDom(async (h) => {
+    await withScrollLayout(async (resize) => {
+      await h.render(
+        runtimeThread([runtimeCommand("running", "call", "inProgress")]),
+      );
+      const { element, grow } = layoutScroll();
+      await act(async () => element.dispatchEvent(new window.Event("scroll")));
+      await act(async () => {
+        grow();
+        // A queued programmatic scroll event sees the new range before RO.
+        element.dispatchEvent(new window.Event("scroll"));
+        resize();
+      });
+      assert.equal(element.scrollTop, 1000);
+      assert.equal(document.querySelector(".back-live"), null);
+    });
+  });
+});
+
+test("completed response keeps following subsequent layout, but never a reader above it", async () => {
+  await withRuntimeDom(async (h) => {
+    await withScrollLayout(async (resize) => {
+      const running = runtimeThread([
+        runtimeCommand("running", "call", "inProgress"),
+      ]);
+      await h.render(running);
+      const { element, grow } = layoutScroll();
+      await h.render(runtimeThread([runtimeCommand("done")], "completed"));
+      await act(async () => {
+        grow();
+        resize();
+      });
+      assert.equal(
+        element.scrollTop,
+        1000,
+        "late final Markdown/image stays visible",
+      );
+      await act(async () => {
+        element.dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: -60, bubbles: true }),
+        );
+        element.scrollTop = 940;
+        element.dispatchEvent(new window.Event("scroll"));
+        grow();
+        resize();
+      });
+      assert.equal(element.scrollTop, 940, "late growth cannot steal a reader");
+      assert.ok(document.querySelector(".back-live"));
+      await act(async () => {
+        element.scrollTop = 1400;
+        element.dispatchEvent(new window.Event("scroll"));
+      });
+      assert.equal(document.querySelector(".back-live"), null);
+      await act(async () => {
+        grow();
+        resize();
+      });
+      assert.equal(element.scrollTop, 1800);
+    });
+  });
+});
+
+test("a downward gesture already at the floor resumes following without a scroll event", async () => {
+  await withRuntimeDom(async (h) => {
+    await withScrollLayout(async (resize) => {
+      await h.render(runtimeThread([runtimeCommand("done")], "completed"));
+      const { element, grow } = layoutScroll();
+      await act(async () => {
+        element.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "PageUp", bubbles: true }),
+        );
+      });
+      assert.equal(
+        document.querySelector(".back-live"),
+        null,
+        "no return button when already at bottom",
+      );
+      await act(async () => {
+        element.dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: 60, bubbles: true }),
+        );
+        grow();
+        resize();
+      });
+      assert.equal(element.scrollTop, 1000);
+    });
+  });
+});
+
+for (const key of ["End", "PageDown", "ArrowDown", " "]) {
+  test(`downward ${JSON.stringify(key)} at the floor keeps following without a scroll event`, async () => {
+    await withRuntimeDom(async (h) => {
+      await withScrollLayout(async (resize) => {
+        await h.render(
+          runtimeThread([runtimeCommand("running", "call", "inProgress")]),
+        );
+        const { element, grow } = layoutScroll();
+        await act(async () => {
+          element.dispatchEvent(
+            new window.KeyboardEvent("keydown", { key, bubbles: true }),
+          );
+          grow();
+          resize();
+        });
+        assert.equal(element.scrollTop, 1000);
+        assert.equal(document.querySelector(".back-live"), null);
+      });
+    });
+  });
+}
+
+test("scroll anchoring is restored for a reader above the live edge", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(runtimeThread([runtimeCommand("done")], "completed"));
+    const { element } = layoutScroll();
+    assert.equal(element.style.overflowAnchor, "none");
+    await act(async () => {
+      element.dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -80, bubbles: true }),
+      );
+      element.scrollTop = 520;
+      element.dispatchEvent(new window.Event("scroll"));
+    });
+    assert.equal(element.style.overflowAnchor, "");
+    await act(async () => {
+      element.scrollTop = 600;
+      element.dispatchEvent(new window.Event("scroll"));
+    });
+    assert.equal(element.style.overflowAnchor, "none");
   });
 });

@@ -1,3 +1,10 @@
+import { ThreadDebugger } from "./ThreadDebugger.js";
+import {
+  MessageSourceLink,
+  MessageSourceViewportContext,
+  MessageSourceNavigationContext,
+  type MessageSourceNavigator,
+} from "./message-source-navigation.js";
 import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
@@ -14,15 +21,14 @@ import { i18n } from "./i18n.js";
 import type { SkillEntry } from "../../../../cli/src/skills.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 import {
-  commandStatus,
   commandPhaseLabel,
-  commandPhase,
   toolPresentation,
   commandTitle,
 } from "./tool-presentation.js";
 import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
+  createContext,
   useEffect,
   useContext,
   useCallback,
@@ -111,6 +117,7 @@ import {
   createTraceObservationIndex,
   summarizeTraceActivity,
   observedCommandPhase,
+  observedCommandStatus,
   traceSummary,
   type TraceObservationIndex,
   type TraceActivity,
@@ -127,7 +134,44 @@ import {
   type ContextCompactionProjection,
 } from "./context-compaction-projection.js";
 
+export type MessageForkTarget = { sourceThreadId: string; itemId: string };
+export type MessageForkHandler = (
+  target: MessageForkTarget,
+  owner: { isCurrent(): boolean; isVisible(): boolean },
+) => Promise<void>;
+/** App-owned request handling is shared by main and embedded Thread viewports. */
+export const MessageForkContext = createContext<MessageForkHandler | null>(
+  null,
+);
+/** Shared App-owned actions for main and side conversation viewports. */
+export function ThreadViewActionsProvider({
+  fork,
+  source,
+  children,
+}: {
+  fork: MessageForkHandler;
+  source: MessageSourceNavigator;
+  children: ReactNode;
+}) {
+  return (
+    <MessageForkContext.Provider value={fork}>
+      <MessageSourceNavigationContext.Provider value={source}>
+        {children}
+      </MessageSourceNavigationContext.Provider>
+    </MessageForkContext.Provider>
+  );
+}
+
+const CanonicalMessageForkContext = createContext<{
+  threadId: string;
+  items: Map<string, string | undefined>;
+  isCurrent(itemId: string): boolean;
+} | null>(null);
+
 interface ThreadViewProps {
+  localModelDebug?: boolean;
+  debugMode?: boolean;
+  onExitDebug?(): void;
   composerId?: string;
   composerSendMode?: ComposerSendMode;
   onComposerSendModeChange?(mode: ComposerSendMode): Promise<void>;
@@ -197,6 +241,9 @@ interface ThreadViewProps {
 }
 
 export function ThreadView(props: ThreadViewProps) {
+  const debugging = props.thread !== null && props.debugMode === true;
+  const debuggingRef = useRef(debugging);
+  debuggingRef.current = debugging;
   const readingState = useThreadReadingState(props.thread?.id);
   const items = props.thread?.canonicalItems;
   const canonicalAttachments = useMemo(
@@ -204,16 +251,76 @@ export function ThreadView(props: ThreadViewProps) {
       items === undefined ? undefined : projectThreadAttachmentItems(items),
     [items],
   );
+  const forkSource = useMemo(
+    () =>
+      props.thread === null
+        ? null
+        : {
+            threadId: props.thread.id,
+            items: new Map(
+              (items ?? [])
+                .filter(
+                  (item) =>
+                    item.type === "agent_message" &&
+                    item.threadId === props.thread?.id,
+                )
+                .map((item) => [item.id, item.turnId]),
+            ),
+          },
+    [props.thread?.id, items],
+  );
+  const forkSourceRef = useRef(forkSource);
+  forkSourceRef.current = forkSource;
+  const mounted = useRef(true);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const forkContext =
+    forkSource === null
+      ? null
+      : {
+          ...forkSource,
+          // A Turn finishing may fold or remount its message controls. Only leaving
+          // the source viewport or losing the canonical Item invalidates ownership.
+          isCurrent: (itemId: string) =>
+            mounted.current &&
+            !debuggingRef.current &&
+            forkSourceRef.current?.threadId === forkSource.threadId &&
+            forkSourceRef.current.items.has(itemId),
+        };
   // Native history and its image placeholders commit together, even while a
   // separate media refresh/payload read is pending. A newer canonical snapshot
   // also removes old references synchronously; never merge stale Host results.
 
   return (
     <ThreadReadingContext.Provider value={readingState}>
-      <ThreadViewContent
-        {...props}
-        threadAttachments={canonicalAttachments ?? props.threadAttachments}
-      />
+      <CanonicalMessageForkContext.Provider value={forkContext}>
+        <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
+          <div className="thread-conversation-surface">
+            {debugging && props.thread && items !== undefined ? (
+              <ThreadDebugger
+                key={props.thread.id}
+                thread={props.thread}
+                items={items}
+                localModelDebug={props.localModelDebug}
+                onExit={props.onExitDebug}
+                onOpenMessageLink={props.onOpenMessageLink}
+                onReadAttachment={props.onReadAttachment}
+              />
+            ) : (
+              <ThreadViewContent
+                {...props}
+                threadAttachments={
+                  canonicalAttachments ?? props.threadAttachments
+                }
+              />
+            )}
+          </div>
+        </MessageSourceViewportContext.Provider>
+      </CanonicalMessageForkContext.Provider>
     </ThreadReadingContext.Provider>
   );
 }
@@ -459,6 +566,7 @@ function ThreadViewContent({
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(readingState.scroll?.following ?? true);
+  const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -537,7 +645,11 @@ function ThreadViewContent({
   }, [readingState]);
   const pauseFollowing = useCallback(() => {
     shouldFollowRef.current = false;
-    setAtLive(false);
+    const scroll = scrollRef.current;
+    setAtLive(
+      scroll !== null &&
+        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+    );
     saveReadingPosition();
   }, [saveReadingPosition]);
   const followBottom = useCallback(() => {
@@ -548,6 +660,8 @@ function ThreadViewContent({
       return;
     }
     scroll.scrollTop = scroll.scrollHeight;
+    observedScrollTop.current = scroll.scrollTop;
+    setAtLive(true);
     saveReadingPosition();
   }, [pauseFollowing, saveReadingPosition]);
 
@@ -585,8 +699,12 @@ function ThreadViewContent({
     if (!scroll) return;
     const saved = readingState.scroll;
     shouldFollowRef.current = saved?.following ?? true;
-    scroll.scrollTop = saved?.top ?? scroll.scrollHeight;
-    setAtLive(shouldFollowRef.current);
+    scroll.scrollTop =
+      saved?.following === false ? saved.top : scroll.scrollHeight;
+    observedScrollTop.current = scroll.scrollTop;
+    setAtLive(
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+    );
     saveReadingPosition();
   }, [readingState, saveReadingPosition]);
 
@@ -614,20 +732,21 @@ function ThreadViewContent({
     document.addEventListener("selectionchange", selection);
     return () => document.removeEventListener("selectionchange", selection);
   }, [pauseFollowing]);
-  const streamingRef = useRef(false);
-  streamingRef.current = runningTurn !== null;
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     const content = scroll?.firstElementChild;
     if (!scroll || !content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (streamingRef.current) followBottom();
-      else if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1)
-        pauseFollowing();
-      // Idle layout changes can expose a Back to live action, never activate it.
+      // Layout can settle after completion (Markdown, images, canonical fold).
+      // Follow ownership survives completion; only reader input releases it.
+      followBottom();
+      setAtLive(
+        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
+      );
     });
     observer.observe(content);
     observer.observe(scroll);
+    if (bottomZoneRef.current) observer.observe(bottomZoneRef.current);
     return () => observer.disconnect();
   }, [followBottom, pauseFollowing]);
 
@@ -987,14 +1106,23 @@ function ThreadViewContent({
     >
       <div
         className="messages"
+        style={{ overflowAnchor: atLive ? "none" : undefined }}
         ref={scrollRef}
         onWheel={(event) => {
-          if (
-            event.deltaY >= 0 ||
-            isNestedTranscriptScroll(event.target, event.currentTarget)
-          )
+          if (isNestedTranscriptScroll(event.target, event.currentTarget))
             return;
-          pauseFollowing();
+          if (event.deltaY < 0) pauseFollowing();
+          else if (
+            event.deltaY > 0 &&
+            event.currentTarget.scrollHeight -
+              event.currentTarget.scrollTop -
+              event.currentTarget.clientHeight <=
+              1 &&
+            !transcriptHasSelection(event.currentTarget)
+          ) {
+            shouldFollowRef.current = true;
+            followBottom();
+          }
         }}
         onPointerDownCapture={(event) => {
           if (!isNestedTranscriptScroll(event.target, event.currentTarget))
@@ -1002,29 +1130,43 @@ function ThreadViewContent({
         }}
         onFocusCapture={pauseFollowing}
         onKeyDownCapture={(event) => {
+          if (isNestedTranscriptScroll(event.target, event.currentTarget))
+            return;
+          const downward =
+            ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
+            !(event.key === " " && event.shiftKey);
+          const upward =
+            ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+            (event.key === " " && event.shiftKey);
+          if (!downward && !upward) return;
+          const target = event.currentTarget;
           if (
-            [
-              "ArrowUp",
-              "ArrowDown",
-              "PageUp",
-              "PageDown",
-              "Home",
-              "End",
-              " ",
-            ].includes(event.key) &&
-            !isNestedTranscriptScroll(event.target, event.currentTarget)
-          )
-            pauseFollowing();
+            downward &&
+            target.scrollHeight - target.scrollTop - target.clientHeight <= 1 &&
+            !transcriptHasSelection(target)
+          ) {
+            shouldFollowRef.current = true;
+            followBottom();
+          } else pauseFollowing();
         }}
         onScroll={(event) => {
           const target = event.currentTarget;
-          // A scroll event (including one generated by layout/anchoring) may
-          // pause following, but proximity to bottom never resumes it.
-          if (
-            transcriptHasSelection(target) ||
-            target.scrollHeight - target.scrollTop - target.clientHeight > 1
-          )
-            pauseFollowing();
+          const top = target.scrollTop;
+          const atBottom = target.scrollHeight - top - target.clientHeight <= 1;
+          // Native/programmatic scroll delivery can lag behind content growth.
+          // A changed range alone is not reader movement. Explicitly reaching
+          // the bottom restores follow intent; upward reading releases it.
+          if (transcriptHasSelection(target)) pauseFollowing();
+          else if (Math.abs(top - observedScrollTop.current) > 0.5) {
+            // Content shrinking can clamp the native offset to the new floor.
+            // That is layout, not an upward gesture or a new follow request.
+            const clamped = atBottom && observedScrollTop.current > top;
+            if (!clamped)
+              shouldFollowRef.current =
+                top > observedScrollTop.current && atBottom;
+          }
+          observedScrollTop.current = top;
+          setAtLive(atBottom);
           saveReadingPosition();
         }}
       >
@@ -1113,6 +1255,7 @@ function ThreadViewContent({
             shouldFollowRef.current = true;
             document.getSelection()?.removeAllRanges();
             scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
+            observedScrollTop.current = scroll.scrollTop;
             setAtLive(true);
             saveReadingPosition();
           }}
@@ -1479,6 +1622,7 @@ function ThreadViewContent({
                   switching={switchingModel}
                 />
               )}
+
               <ContextUsageIndicator
                 context={threadUsage?.context}
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
@@ -1950,11 +2094,6 @@ function TraceCounts({
           {activity.categories.length > 2
             ? ` +${activity.categories.length - 2}`
             : ""}
-        </small>
-      ) : null}
-      {activity.failed > 0 ? (
-        <small className="trace-failed">
-          {i18n.t("shell:toolFailures", { count: activity.failed })}
         </small>
       ) : null}
       {activity.cancelled > 0 ? (
@@ -2489,10 +2628,30 @@ export function ContextUsageIndicator({
   });
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const cancelClose = () => clearTimeout(closeTimer.current);
+  const show = () => {
+    cancelClose();
+    setOpen(true);
+  };
+  const close = () => {
+    cancelClose();
+    setOpen(false);
+  };
+  const leave = () => {
+    cancelClose();
+    // Match the send panel's grace period for imperfect pointer paths.
+    closeTimer.current = setTimeout(() => {
+      if (!rootRef.current?.contains(document.activeElement)) setOpen(false);
+    }, 200);
+  };
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) close();
     };
     document.addEventListener("mousedown", closeOutside);
     return () => document.removeEventListener("mousedown", closeOutside);
@@ -2586,18 +2745,15 @@ export function ContextUsageIndicator({
     <div
       className="context-usage-indicator"
       ref={rootRef}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={(event) => {
-        if (!event.currentTarget.contains(document.activeElement))
-          setOpen(false);
-      }}
+      onMouseEnter={show}
+      onMouseLeave={leave}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+        if (!event.currentTarget.contains(event.relatedTarget)) close();
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
-          setOpen(false);
+          close();
         }
       }}
     >
@@ -2608,8 +2764,8 @@ export function ContextUsageIndicator({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={i18n.t("shell:openContextDetails", { details: tooltip })}
-        onClick={() => setOpen(true)}
-        onFocus={() => setOpen(true)}
+        onClick={show}
+        onFocus={show}
       >
         <svg aria-hidden="true" viewBox="0 0 20 20">
           <circle className="context-usage-track" cx="10" cy="10" r={radius} />
@@ -2661,7 +2817,7 @@ export function ContextUsageIndicator({
               type="button"
               disabled={compactDisabled || onCompact === undefined}
               onClick={() => {
-                setOpen(false);
+                close();
                 void onCompact?.();
               }}
             >
@@ -2842,6 +2998,7 @@ function TraceSequence({
           onClick={toggleExpanded}
         >
           <TraceItemHeader
+            turnRunning={turn.status === "inProgress"}
             item={singleton}
             expandable
             observations={observations}
@@ -2853,6 +3010,7 @@ function TraceSequence({
       ) : (
         <div className="trace-item-static">
           <TraceItemHeader
+            turnRunning={turn.status === "inProgress"}
             item={singleton!}
             expandable={false}
             observations={observations}
@@ -2951,6 +3109,7 @@ function TraceSequence({
                           }}
                         >
                           <TraceItemHeader
+                            turnRunning={turn.status === "inProgress"}
                             item={item}
                             expandable
                             observations={observations}
@@ -2962,6 +3121,7 @@ function TraceSequence({
                       ) : (
                         <div className="trace-item-static">
                           <TraceItemHeader
+                            turnRunning={turn.status === "inProgress"}
                             item={item}
                             expandable={false}
                             observations={observations}
@@ -2994,6 +3154,7 @@ function TraceSequence({
 }
 
 function TraceItemHeader({
+  turnRunning,
   item,
   observations,
   expandable,
@@ -3003,7 +3164,14 @@ function TraceItemHeader({
   expandable: boolean;
   observations: TraceObservationIndex;
   approvalPending: boolean;
+  turnRunning: boolean;
 }) {
+  const active =
+    turnRunning &&
+    !approvalPending &&
+    (item.type === "reasoning"
+      ? item.status === "inProgress"
+      : observedCommandPhase(item, observations) === "running");
   return (
     <>
       <Icon
@@ -3019,7 +3187,9 @@ function TraceItemHeader({
           {toolPresentation(item.toolName ?? item.command).category}
         </strong>
       )}
-      <span title={traceItemLabel(item)}>{traceItemLabel(item)}</span>
+      <span title={traceItemLabel(item)}>
+        <ActivityText active={active}>{traceItemLabel(item)}</ActivityText>
+      </span>
       <span className="trace-item-status">
         {approvalPending ? (
           <small className="tool-status">
@@ -3066,15 +3236,10 @@ function StatusMark({
   }
   if (item.type !== "commandExecution") return null;
   const phase = observedCommandPhase(item, observations);
-  const status =
-    phase === commandPhase(item)
-      ? commandStatus(item)
-      : commandPhaseLabel(phase);
+  const status = observedCommandStatus(item, observations);
   if (status === i18n.t("shell:completed")) return null;
   return (
-    <small
-      className={`tool-status ${phase === "imported" ? "imported" : item.status}`}
-    >
+    <small className={`tool-status ${phase === "failed" ? "ended" : phase}`}>
       {status}
     </small>
   );
@@ -3214,11 +3379,15 @@ function InputMessage({
       }
     >
       {item.type === "threadMessage" ? (
-        <small
-          className="thread-message-sender"
-          title={`${item.sender.deviceId === undefined ? "" : `${i18n.t("shell:threadMessageRemoteDetails")}\n`}${JSON.stringify(item.sender)}`}
-        >
-          {i18n.t(
+        <MessageSourceLink
+          target={{
+            kind: "thread",
+            id: item.sender.threadId,
+            ...(item.sender.deviceId === undefined
+              ? {}
+              : { deviceId: item.sender.deviceId }),
+          }}
+          label={i18n.t(
             item.sender.deviceId === undefined
               ? "shell:threadMessageFrom"
               : "shell:remoteThreadMessageFrom",
@@ -3227,7 +3396,7 @@ function InputMessage({
                 item.sender.threadName ?? i18n.t("shell:threadMessageUnnamed"),
             },
           )}
-        </small>
+        />
       ) : null}
       {attachments.length === 0 ? null : (
         <div
@@ -3322,6 +3491,12 @@ function AgentMessage({
   turn: Turn;
   usage?: ModelUsageAggregate;
 }) {
+  const source = useContext(CanonicalMessageForkContext);
+  const onFork = useContext(MessageForkContext);
+  const forkTarget =
+    source !== null && onFork !== null && source.items.get(item.id) === turn.id
+      ? { sourceThreadId: source.threadId, itemId: item.id }
+      : undefined;
   return (
     <article className="agent-copy" data-read-message-id={item.id}>
       <Markdown text={item.text} />
@@ -3334,6 +3509,7 @@ function AgentMessage({
           text={item.text}
           turn={turn}
           usage={usage}
+          forkTarget={forkTarget}
         />
       ) : null}
     </article>
@@ -3347,6 +3523,7 @@ function MessageActions({
   text,
   turn,
   usage,
+  forkTarget,
 }: {
   className: string;
   copyLabel: string;
@@ -3354,6 +3531,7 @@ function MessageActions({
   text: string;
   turn: Turn;
   usage?: ModelUsageAggregate;
+  forkTarget?: MessageForkTarget;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -3392,7 +3570,66 @@ function MessageActions({
       >
         <Icon name={copied ? "check" : "copy"} size={14} />
       </button>
+      {forkTarget === undefined ? null : (
+        <MessageForkButton target={forkTarget} />
+      )}
     </div>
+  );
+}
+
+function MessageForkButton({ target }: { target: MessageForkTarget }) {
+  const fork = useContext(MessageForkContext);
+  const source = useContext(CanonicalMessageForkContext);
+  const busy = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const errorId = useId();
+  const run = async () => {
+    if (busy.current || fork === null) return;
+    const trigger = button.current;
+    const stillVisible = () =>
+      trigger !== null && trigger === button.current && trigger.isConnected;
+    busy.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await fork(target, {
+        isCurrent: () => source?.isCurrent(target.itemId) ?? false,
+        isVisible: stillVisible,
+      });
+    } catch (cause) {
+      if (stillVisible())
+        setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      busy.current = false;
+      if (stillVisible()) setPending(false);
+    }
+  };
+  const label = i18n.t(
+    pending ? "shell:forkingMessage" : "shell:forkFromMessage",
+  );
+  return (
+    <>
+      <button
+        ref={button}
+        className="message-fork"
+        type="button"
+        disabled={pending}
+        aria-label={label}
+        title={label}
+        aria-busy={pending}
+        aria-describedby={error === null ? undefined : errorId}
+        onClick={() => void run()}
+      >
+        <Icon name="fork" size={14} />
+      </button>
+      {error === null ? null : (
+        <span className="message-fork-error" role="alert" id={errorId}>
+          {i18n.t("shell:messageForkFailed", { error })}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -3410,6 +3647,7 @@ function WakeupCard(
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent
+          sourceNavigation
           source={item.source}
           sourceId={item.sourceId}
           text={item.text}

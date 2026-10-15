@@ -138,3 +138,60 @@ test("source preview is read-only and does not execute HTML source", async () =>
     dom.window.close();
   }
 });
+
+test("Go files highlight keywords and strings while remaining editable", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    Window: dom.window.Window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(document.getElementById("root")!);
+  let latest = "";
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(SourceEditor, {
+          path: "cmd/demo/main.go",
+          text: 'package main\r\n\r\nimport "fmt"\r\n\r\nfunc main() { fmt.Println("Hello") }\r\n',
+          onChange: (value: string) => {
+            latest = value;
+          },
+        }),
+      ),
+    );
+    const tokens = [...document.querySelectorAll(".cm-line span")].map(
+      (span) => span.textContent,
+    );
+    assert.ok(
+      tokens.includes("package"),
+      "Go package keyword has syntax styling",
+    );
+    assert.ok(
+      tokens.includes("func"),
+      "Go function keyword has syntax styling",
+    );
+    assert.ok(tokens.includes('"Hello"'), "Go strings have syntax styling");
+    const view = EditorView.findFromDOM(
+      document.querySelector<HTMLElement>(".cm-editor")!,
+    )!;
+    await act(async () =>
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "// End\n" },
+      }),
+    );
+    assert.ok(
+      latest.endsWith("// End\r\n"),
+      "Go editing preserves the original line endings",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

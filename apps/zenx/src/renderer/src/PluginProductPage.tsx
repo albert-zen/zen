@@ -57,7 +57,11 @@ export function PluginProductPage({
   return (
     <section
       className="product-page plugin-product-page"
-      aria-label={target.title}
+      aria-label={
+        target.pluginId === "zenx-triggers"
+          ? t("panels:automations")
+          : target.title
+      }
     >
       {menus.length > 0 ? (
         <header className="page-header plugin-menu-header">
@@ -103,12 +107,24 @@ export function PluginProductPage({
           className="plugin-primary-surface"
         />
         {panels.map((panel) => (
-          <aside key={panel.key} aria-label={panel.title}>
+          <aside
+            key={panel.key}
+            aria-label={
+              panel.pluginId === "zenx-triggers"
+                ? t("panels:automations")
+                : panel.title
+            }
+          >
             <PluginMenu
               snapshot={snapshot}
               pluginId={panel.pluginId}
               location="panel"
-              label={`${panel.title} commands`}
+              label={t("pluginProductPage.namedCommands", {
+                name:
+                  panel.pluginId === "zenx-triggers"
+                    ? t("panels:automations")
+                    : panel.title,
+              })}
             />
             <GenericPluginUiHost
               registry={registry}

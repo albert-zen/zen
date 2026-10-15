@@ -182,7 +182,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     const choose = (name: string) =>
       [
         ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types > button",
+          ".workspace-tab-types button",
         ),
       ].find((e) => e.querySelector("strong")?.textContent === name)!;
     await act(async () => choose("Attached browser").click());
@@ -437,7 +437,7 @@ for (const throughHostSdk of [false, true]) {
       const choose = (name: string) =>
         [
           ...document.querySelectorAll<HTMLButtonElement>(
-            ".workspace-tab-types > button",
+            ".workspace-tab-types button",
           ),
         ].find(
           (element) => element.querySelector("strong")?.textContent === name,
@@ -578,6 +578,51 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
     await act(async () => root.render(React.createElement(Harness)));
     const navigation = document.getElementById("workspace-file-navigation")!;
     const search = navigation.querySelector('input[type="search"]')!;
+    const separator = document.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="Resize file navigation"]',
+    );
+    assert.ok(
+      separator,
+      "file navigation can be resized independently of the outer panel",
+    );
+    assert.equal(separator.getAttribute("aria-orientation"), "vertical");
+    assert.equal(separator.getAttribute("aria-valuenow"), "192");
+    await act(async () =>
+      separator.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "ArrowRight",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(separator.getAttribute("aria-valuenow"), "212");
+    await act(async () =>
+      separator.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Home",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(
+      separator.getAttribute("aria-valuenow"),
+      separator.getAttribute("aria-valuemin"),
+    );
+    await act(async () =>
+      separator.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "End",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(
+      separator.getAttribute("aria-valuenow"),
+      separator.getAttribute("aria-valuemax"),
+    );
     assert.ok(
       navigation.querySelector('[data-file-path="src/b.ts"]'),
       "selected file ancestors open automatically",
@@ -606,6 +651,7 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
       ).click(),
     );
     assert.equal(navigation.hidden, true);
+    assert.equal(separator.hidden, true);
     await act(async () =>
       (
         document.querySelector(
@@ -614,6 +660,7 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
       ).click(),
     );
     assert.equal(navigation.hidden, false);
+    assert.equal(separator.hidden, false);
     assert.equal(navigation.querySelector('input[type="search"]'), search);
     await act(async () =>
       (

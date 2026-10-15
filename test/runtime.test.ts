@@ -34,6 +34,7 @@ import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import {
   FakeModel,
   compileModelMessages,
+  retryableModelSampleError,
   type ModelAdapter,
   type ModelEvent,
   type ModelMessage,
@@ -41,6 +42,7 @@ import {
   type ReasoningModelMessage,
 } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
+import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import {
   projectCompletedItem,
@@ -501,10 +503,21 @@ test("derives each turn model from append-only configuration changes", async () 
   ).done;
 
   assert.deepEqual(requestedModels, ["model-one", "model-two"]);
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requestedMessages[1], [
-    { role: "user", content: [{ type: "text", text: "first" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      userTimestamp: userTimestamps[0],
+    },
     { role: "assistant", text: "model-one" },
-    { role: "user", content: [{ type: "text", text: "second" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "second" }],
+      userTimestamp: userTimestamps[1],
+    },
   ]);
   assert.deepEqual(
     changed.items
@@ -1788,9 +1801,8 @@ test("partial model text is retained when the model ends incomplete", async () =
 });
 
 function retryableStreamError(message: string): Error {
-  // Mirrors the OpenAiCompatibleModelError stream-failure contract without
-  // importing the concrete adapter into runtime tests.
-  return Object.assign(new Error(message), { retryable: true });
+  // The shared adapter contract for transient sample failures.
+  return retryableModelSampleError(message);
 }
 
 function retryableDiagnosedStreamError(message: string): Error {
@@ -1961,6 +1973,175 @@ test("sample retries are bounded and surface the failure after exhaustion", asyn
   );
   assert.equal(partials.length, 3);
   assert(partials.every((item) => item.incomplete === true));
+});
+
+test("subscription replay discards partial calls and executes only the completed sample", async () => {
+  let attempts = 0;
+  let executions = 0;
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = `${encode({ alg: "none" })}.${encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_runtime" } })}.signature`;
+  const bodies: string[] = [];
+  const model = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: token }),
+    fetch: async (_input, init) => {
+      attempts += 1;
+      bodies.push(String(init?.body));
+      const output =
+        attempts === 3
+          ? {
+              type: "message",
+              content: [{ type: "output_text", text: "complete answer" }],
+            }
+          : {
+              type: "function_call",
+              call_id: attempts === 1 ? "abandoned" : "accepted",
+              name: "count",
+              arguments: "{}",
+            };
+      const events =
+        attempts === 1
+          ? [
+              {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { type: "message" },
+              },
+              {
+                type: "response.output_text.delta",
+                output_index: 0,
+                delta: "abandoned partial",
+              },
+              {
+                type: "response.output_item.done",
+                output_index: 1,
+                item: output,
+              },
+            ]
+          : [
+              {
+                type: "response.completed",
+                response: { status: "completed", output: [output] },
+              },
+            ];
+      return new Response(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      );
+    },
+  });
+  const tool = testToolRuntime({
+    name: "count",
+    execute: async () => {
+      executions += 1;
+      return { output: "counted", exitCode: 0 };
+    },
+  });
+  const server = createServer({
+    model,
+    runtime: new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({
+        bundles: [
+          testToolBundle({ kind: "external", id: "retry-test" }, [tool]),
+        ],
+      }),
+      sampleRetry: { maxAttempts: 3, baseDelayMs: 0 },
+    }),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "count once")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(attempts, 3);
+  assert.equal(executions, 1);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.deepEqual(
+    snapshot.items
+      .filter((item) => item.type === "tool_call")
+      .map((item) => item.callId),
+    ["accepted"],
+  );
+  assert.equal(
+    snapshot.items
+      .filter((item) => item.type === "agent_message")
+      .find((item) => item.text === "abandoned partial")?.incomplete,
+    true,
+  );
+  assert.equal(
+    bodies.slice(1).some((body) => body.includes("abandoned")),
+    false,
+  );
+});
+
+test("subscription transport credentials never reach retry logs or durable failure context", async (t) => {
+  const warnings: unknown[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => warnings.push(args));
+  let attempts = 0;
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = `${encode({ alg: "none" })}.${encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_runtime" } })}.signature`;
+  const model = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: token }),
+    fetch: async () => {
+      attempts += 1;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(
+              new TypeError(`network ${token}`, {
+                cause: { code: "UND_ERR_SOCKET" },
+              }),
+            );
+          },
+        }),
+      );
+    },
+  });
+  const server = createServer({ model, runtime: sampleRetryRuntime() });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(attempts, 3);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(
+    snapshot.items.find((item) => item.type === "failure")?.retried,
+    2,
+  );
+  assert.equal(JSON.stringify(warnings).includes(token), false);
+  assert.equal(JSON.stringify(snapshot.items).includes(token), false);
+  assert.equal(
+    JSON.stringify(compileModelMessages(snapshot.items)).includes(token),
+    false,
+  );
+});
+
+test("subscription runtime replay does not multiply HTTP admission attempts", async () => {
+  let attempts = 0;
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = `${encode({ alg: "none" })}.${encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_runtime" } })}.signature`;
+  const model = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: token }),
+    fetch: async () => {
+      attempts += 1;
+      if (attempts === 1) return new Response("data: {}\n\n");
+      return new Response("busy", { status: 503 });
+    },
+  });
+  const server = createServer({ model, runtime: sampleRetryRuntime() });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "answer")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(attempts, 2);
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.match(
+    snapshot.items.find((item) => item.type === "failure")?.message ?? "",
+    /HTTP 503/u,
+  );
 });
 
 test("non-retryable model errors are not replayed", async () => {
@@ -3022,19 +3203,25 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   await active.done;
 
   assert.equal(requests.length, 2);
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requests[1], [
     {
       role: "user",
       content: [{ type: "text", text: "initial request" }],
+      userTimestamp: userTimestamps[0],
     },
     { role: "assistant", text: "first answer" },
     {
       role: "user",
       content: [{ type: "text", text: "follow this correction" }],
+      userTimestamp: userTimestamps[1],
     },
     {
       role: "user",
       content: [{ type: "text", text: "then preserve the tests" }],
+      userTimestamp: userTimestamps[2],
     },
   ]);
   const snapshot = await server.readThread(thread.id);
@@ -3121,8 +3308,15 @@ test("soft steer waits behind a tool result and does not cancel approval", async
   await testWithin(active.done, "steered approval turn");
 
   assert.equal(requests.length, 2);
+  const userTimestamps = (await server.readThread(thread.id)).items
+    .filter((item) => item.type === "user_message")
+    .map((item) => item.createdAt);
   assert.deepEqual(requests[1], [
-    { role: "user", content: [{ type: "text", text: "use a tool" }] },
+    {
+      role: "user",
+      content: [{ type: "text", text: "use a tool" }],
+      userTimestamp: userTimestamps[0],
+    },
     {
       role: "assistant",
       toolCalls: [
@@ -3137,6 +3331,7 @@ test("soft steer waits behind a tool result and does not cancel approval", async
     {
       role: "user",
       content: [{ type: "text", text: "change the final response" }],
+      userTimestamp: userTimestamps[1],
     },
   ]);
 });

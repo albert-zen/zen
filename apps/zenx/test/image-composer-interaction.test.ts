@@ -223,15 +223,19 @@ test("Unknown image capability warns but keeps the try-send action available", a
 
 test("the Composer overlay publishes its live bottom-zone height", async () => {
   await withDom(async (_dom, root) => {
-    const observers = new Map<Element, () => void>();
+    const observers = new Map<Element, Set<() => void>>();
     class FakeResizeObserver {
       constructor(private callback: () => void) {}
       observe(element: Element): void {
-        observers.set(element, this.callback);
+        const callbacks = observers.get(element) ?? new Set<() => void>();
+        callbacks.add(this.callback);
+        observers.set(element, callbacks);
       }
       disconnect(): void {
-        for (const [element, callback] of observers)
-          if (callback === this.callback) observers.delete(element);
+        for (const [element, callbacks] of observers) {
+          callbacks.delete(this.callback);
+          if (callbacks.size === 0) observers.delete(element);
+        }
       }
     }
     Object.assign(globalThis, { ResizeObserver: FakeResizeObserver });
@@ -255,7 +259,7 @@ test("the Composer overlay publishes its live bottom-zone height", async () => {
         ({ height: 216 }) as DOMRect;
       const notify = observers.get(required<HTMLElement>(".bottom-zone"));
       assert.ok(notify);
-      await act(async () => notify());
+      await act(async () => notify.forEach((callback) => callback()));
       assert.equal(
         view.style.getPropertyValue("--bottom-zone-height"),
         "216px",
@@ -267,11 +271,11 @@ test("the Composer overlay publishes its live bottom-zone height", async () => {
       Object.defineProperty(textarea, "scrollHeight", { get: () => height });
       const resized = observers.get(textarea);
       assert.ok(resized);
-      await act(async () => resized());
+      await act(async () => resized.forEach((callback) => callback()));
       assert.equal(textarea.style.height, "100px");
       width = 480;
       height = 36;
-      await act(async () => resized());
+      await act(async () => resized.forEach((callback) => callback()));
       assert.equal(textarea.style.height, "36px");
     } finally {
       Reflect.deleteProperty(globalThis, "ResizeObserver");

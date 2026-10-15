@@ -3,6 +3,11 @@ import "./dom-primitives.js";
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ZenXThreadTitleCoordinator } from "../src/main/thread-title-coordinator.js";
+import { ZenXThreadTitleStore } from "../src/main/thread-title-store.js";
 
 import { JSDOM } from "jsdom";
 import * as React from "react";
@@ -33,6 +38,183 @@ import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
+
+test("message Fork sends the exact native Item and opens only the new Thread without a Turn", async () => {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  let resolveFork!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    resolveFork = resolve;
+  });
+  const source = threadWithMessage("boundary");
+  const copy = {
+    ...threadWithMessage("forked answer"),
+    id: "fork-1",
+    name: "Renamed source · Fork",
+  };
+  const harness = await mountApp({
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "fork-1"
+            ? copy
+            : source,
+        );
+      if (method === "zen/thread/fork") return pending;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const fork = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => {
+      fork.click();
+      fork.click();
+    });
+    assert.deepEqual(
+      requests.filter((request) => request.method === "zen/thread/fork"),
+      [
+        {
+          method: "zen/thread/fork",
+          params: {
+            sourceThreadId: "thread-1",
+            through: { type: "item", itemId: "agent-boundary" },
+            workspace: { type: "same-directory" },
+          },
+        },
+      ],
+    );
+    await act(async () =>
+      resolveFork({ thread: nativeRecoveryForThread(copy).thread }),
+    );
+    assert.deepEqual(
+      requests
+        .filter((request) => request.method === "zen/thread/resume")
+        .map((request) => request.params),
+      [{ threadId: "thread-1" }, { threadId: "fork-1" }],
+    );
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method.startsWith("turn/") ||
+          request.method === "zen/turn/send",
+      ),
+      false,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("late message Fork completion cannot replace newer navigation, including away and back", async () => {
+  let resolveFork!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    resolveFork = resolve;
+  });
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const source = threadWithMessage("boundary");
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "thread-1"
+            ? source
+            : thread("thread-2"),
+        );
+      if (method === "zen/thread/fork") return pending;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    const rows = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ];
+    await act(async () => rows[0]!.click());
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => button.click());
+    await act(async () => rows[1]!.click());
+    await act(async () => rows[0]!.click());
+    // The new viewport must share the still-pending exact action, not create another copy.
+    const remounted = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => remounted.click());
+    assert.equal(
+      requests.filter((request) => request.method === "zen/thread/fork").length,
+      1,
+    );
+    await act(async () =>
+      resolveFork({ thread: nativeRecoveryForThread(thread("fork-1")).thread }),
+    );
+    assert.equal(
+      requests.some(
+        (request) =>
+          request.method === "zen/thread/resume" &&
+          (request.params as { threadId: string }).threadId === "fork-1",
+      ),
+      false,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("message Fork exposes a stale-boundary failure and retries only after another explicit click", async () => {
+  let attempts = 0;
+  const methods: string[] = [];
+  const harness = await mountApp({
+    request: async (method) => {
+      methods.push(method);
+      if (method === "zen/thread/resume")
+        return resumed(threadWithMessage("boundary"));
+      if (method === "zen/thread/fork") {
+        attempts++;
+        throw new Error(
+          "The selected completed agent message is unavailable in this Thread",
+        );
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => button.click());
+    assert.equal(attempts, 1);
+    assert.equal(button.disabled, false);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /selected completed agent message is unavailable/,
+    );
+    assert.equal(
+      methods.filter((method) => method === "zen/thread/resume").length,
+      1,
+    );
+    await act(async () => button.click());
+    assert.equal(attempts, 2);
+    assert.equal(
+      methods.some(
+        (method) => method.startsWith("turn/") || method === "zen/turn/send",
+      ),
+      false,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
 
 test("actual App navigation restores exact thread disclosures after loading remounts", async () => {
   const a = {
@@ -1114,6 +1296,7 @@ test("App message requests survive acknowledgements, repeated clicks, and Thread
 });
 
 interface MountOptions {
+  titles?: typeof window.zenx.titles;
   readFile?(threadId: string, path: string): Promise<never>;
   pluginSnapshot?: ZenXPluginSnapshot;
   executeCommand?(
@@ -1260,7 +1443,7 @@ async function mountApp(options: MountOptions) {
         },
       }),
     },
-    titles: {
+    titles: options.titles ?? {
       get: async () => ({}),
       onChange: () => () => undefined,
     },
@@ -1875,6 +2058,415 @@ for (const interaction of ["none", "manual", "navigate"] as const) {
     } finally {
       globalThis.ResizeObserver = previous;
       await harness.unmount();
+    }
+  });
+}
+
+test("message action row appears only after the source Turn finishes, then Fork opens its exact reply", async () => {
+  let notify: NotificationListener | undefined;
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const pending = deferred<unknown>();
+  const source = threadWithMessage("boundary");
+  source.turns[0]!.status = "inProgress";
+  source.turns[0]!.completedAt = null;
+  source.turns[0]!.durationMs = null;
+  source.status = { type: "active", activeFlags: [] };
+  const harness = await mountApp({
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "fork-1"
+            ? thread("fork-1")
+            : source,
+        );
+      if (method === "zen/thread/fork") return pending.promise;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    await waitFor(() => document.querySelector(".agent-copy"));
+    assert.equal(document.querySelector(".assistant-message-actions"), null);
+    assert.equal(document.querySelector(".message-fork"), null);
+    await act(async () => {
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(1, {
+          type: "item_completed",
+          item: {
+            id: "turn-1-completed",
+            type: "turn_completed",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            createdAt: new Date(20000).toISOString(),
+            status: "completed",
+          },
+        }),
+      );
+      notify?.(
+        "zen/thread/event",
+        nativeEvent(2, {
+          type: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+        }),
+      );
+    });
+    assert.ok(
+      document.querySelector(".turn.completed"),
+      "source completed normally",
+    );
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    assert.equal(
+      document.querySelectorAll(".assistant-message-actions").length,
+      1,
+    );
+    await act(async () => {
+      button.focus();
+      button.click();
+    });
+    assert.equal(button.disabled, true);
+    assert.deepEqual(
+      requests.find((r) => r.method === "zen/thread/fork")?.params,
+      {
+        sourceThreadId: "thread-1",
+        through: { type: "item", itemId: "agent-boundary" },
+        workspace: { type: "same-directory" },
+      },
+    );
+    await act(async () =>
+      pending.resolve({
+        thread: nativeRecoveryForThread(thread("fork-1")).thread,
+      }),
+    );
+    const ids = requests
+      .filter((r) => r.method === "zen/thread/resume")
+      .map((r) => (r.params as { threadId: string }).threadId);
+    assert.ok(
+      ids.includes("fork-1"),
+      "successful fork must open when only the source Turn completed",
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("Sidebar debug mode targets its exact Thread, defaults off, exits, and never enables capture", async () => {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived ? [] : [summary(), summary("thread-2", "Thread two")],
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/thread/resume")
+        return resumed({
+          ...threadWithMessage("debug target"),
+          id: (params as { threadId: string }).threadId,
+        });
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  const click = async (selector: string) =>
+    act(async () =>
+      document.querySelector<HTMLButtonElement>(selector)!.click(),
+    );
+  try {
+    await click('[data-thread-id="thread-1"] .thread-row');
+    assert.equal(document.querySelector(".thread-view-switch"), null);
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    await click("#thread-menu-trigger-thread-2");
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[data-thread-action="debug"]',
+    )!;
+    assert.equal(toggle.getAttribute("role"), "menuitemcheckbox");
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    const panel = toggle.closest(".thread-item-menu");
+    assert.equal(
+      panel?.querySelector("[data-thread-action]:last-of-type"),
+      toggle,
+    );
+    await act(async () => {
+      toggle.focus();
+      toggle.click();
+    });
+    await waitFor(() => document.querySelector(".thread-debugger"));
+    assert.deepEqual(
+      requests.filter((r) => r.method === "zen/thread/resume").at(-1)?.params,
+      { threadId: "thread-2" },
+    );
+    assert.equal(
+      document.querySelectorAll(".thread-debug-tabs button[aria-pressed]")
+        .length,
+      2,
+    );
+    assert.equal(document.querySelector(".thread-item-menu"), panel);
+    assert.equal(document.activeElement, toggle);
+    assert.equal(
+      document
+        .querySelector('[data-thread-action="debug"]')
+        ?.getAttribute("aria-checked"),
+      "true",
+    );
+    await click('[data-thread-action="debug"]');
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+    assert.equal(
+      document.activeElement,
+      toggle,
+      "toggle off keeps focus in the same place",
+    );
+    assert.equal(document.querySelector(".thread-item-menu"), panel);
+    await click('[data-thread-action="debug"]');
+    await waitFor(() => document.querySelector(".thread-debugger"));
+    await act(async () =>
+      toggle.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    await click(".thread-debug-exit");
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    assert.equal(document.querySelector(".thread-view-switch"), null);
+    await click("#thread-menu-trigger-thread-2");
+    await click('[data-thread-action="debug"]');
+    await waitFor(() => document.querySelector(".thread-debugger"));
+    await click('[data-thread-id="thread-1"] .thread-row');
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    await click('[data-thread-id="thread-2"] .thread-row');
+    assert.equal(document.querySelector(".thread-debugger"), null);
+    assert.ok(!requests.some((r) => /capture|debug/i.test(r.method)));
+  } finally {
+    await harness.unmount();
+  }
+});
+
+for (const listed of [false, true]) {
+  test(`PAW working Thread can be renamed ${listed ? "inside its workspace" : "after recovery before list discovery"}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "paw-thread-title-"));
+    const store = new ZenXThreadTitleStore(join(directory, "titles.json"));
+    const mirrors: Array<{ threadId: string; title: string }> = [];
+    const coordinator = new ZenXThreadTitleCoordinator({
+      store,
+      inference: {
+        generate: async () => {
+          throw Error("No inference expected");
+        },
+      },
+      titleModel: () => "unused",
+      setNativeName: async (threadId, title) => {
+        mirrors.push({ threadId, title });
+      },
+    });
+    await coordinator.initialize();
+    const workingId = "paw-working-thread";
+    const room = {
+      id: "paw-one",
+      name: "Personal assistant",
+      createdAt: 0,
+      messages: [],
+      assistant: { threadId: workingId, triggerId: "paw-trigger" },
+      members: [{ name: "PAW speaker", threadId: workingId }],
+    };
+    const dispose = pluginUiRegistry.registerTrusted("paw-thread-title-test", {
+      overview: ({ sdk }) => createElement(RoomsPage, { sdk }),
+    });
+    const snapshot = {
+      plugins: [
+        {
+          id: "zenx-rooms",
+          displayName: "Rooms",
+          enabled: true,
+          available: true,
+          lifecycle: "enabled",
+          contributionCount: 1,
+          version: "1",
+          source: "bundled",
+        },
+      ],
+      pages: [
+        {
+          key: "zenx-rooms:rooms",
+          pluginId: "zenx-rooms",
+          id: "rooms",
+          title: "Rooms",
+          route: "/plugins/zenx-rooms/rooms",
+          surfaceId: "overview",
+        },
+      ],
+      bundles: [
+        {
+          key: "zenx-rooms:main",
+          pluginId: "zenx-rooms",
+          id: "main",
+          apiVersion: 1,
+          kind: "trusted",
+          entry: "paw-thread-title-test",
+        },
+      ],
+      surfaces: [
+        {
+          key: "zenx-rooms:overview",
+          pluginId: "zenx-rooms",
+          id: "overview",
+          bundleId: "main",
+          exportName: "overview",
+        },
+      ],
+      sidebar: [],
+      subroutes: [],
+      settings: [],
+      panels: [],
+      commands: [],
+      menus: [],
+    } as ZenXPluginSnapshot;
+    let rejectOnce = true;
+    const calls: string[] = [];
+    const harness = await mountApp({
+      pluginSnapshot: snapshot,
+      threads: async (archived) =>
+        archived || !listed ? [] : [summary(workingId, "Working conversation")],
+      request: async (method, params) => {
+        assert.equal(method, "zen/thread/resume");
+        assert.deepEqual(params, { threadId: workingId });
+        return resumed({ ...thread(workingId), name: "Working conversation" });
+      },
+      titles: {
+        get: async () => coordinator.snapshot(),
+        onChange: (listener) => coordinator.onChange(listener),
+        rename: async (id, title) => {
+          calls.push(id);
+          if (rejectOnce) {
+            rejectOnce = false;
+            throw Error("Synthetic Host title save failed");
+          }
+          return await coordinator.rename(id, title);
+        },
+        observe: async () => undefined,
+        retry: async () => {
+          throw Error("No title retry expected");
+        },
+      },
+      executeCommand: async (plugin, command) => {
+        assert.equal(plugin, "zenx-rooms");
+        if (command === "list") return { rooms: [room] };
+        if (command === "workspace")
+          return { revision: 1, matters: [], memory: [] };
+        throw Error(`Unexpected Room mutation: ${command}`);
+      },
+    });
+    try {
+      const paw = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Open PAW Personal assistant"]',
+        ),
+      );
+      await act(async () => paw.click());
+      const workspace = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".room-title-actions-host #thread-browser-toggle",
+        ),
+      );
+      await act(async () => workspace.click());
+      if (!listed) {
+        const openThread = await waitFor(() =>
+          [
+            ...document.querySelectorAll<HTMLButtonElement>(
+              ".companion-content button",
+            ),
+          ].find((button) => button.textContent === "Open working Thread"),
+        );
+        await act(async () => openThread.click());
+      }
+      const scope = listed ? ".companion-content" : ".workspace-header";
+      const rename = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          `${scope} .thread-title-rename`,
+        ),
+      );
+      await act(async () => rename.click());
+      const input = document.querySelector<HTMLInputElement>(
+        `${scope} .thread-title-form input`,
+      )!;
+      const reactProps = (el: any) =>
+        el[Object.keys(el).find((key) => key.startsWith("__reactProps"))!];
+      await act(async () =>
+        reactProps(input).onChange({ target: { value: "Research planner" } }),
+      );
+      const submit = () =>
+        input.form!.dispatchEvent(
+          new window.Event("submit", { bubbles: true, cancelable: true }),
+        );
+      await act(async () => {
+        submit();
+      });
+      assert.equal(input.value, "Research planner");
+      assert.match(
+        document.body.textContent!,
+        /Synthetic Host title save failed/,
+      );
+      await act(async () => {
+        submit();
+        submit();
+      });
+      await waitFor(
+        () =>
+          document.querySelector(`${scope} .thread-title-line strong`)
+            ?.textContent === "Research planner",
+      );
+      assert.deepEqual(calls, [workingId, workingId]);
+      assert.equal(
+        coordinator.snapshot()[workingId]?.title,
+        "Research planner",
+      );
+      assert.equal(
+        JSON.parse(await readFile(join(directory, "titles.json"), "utf8"))[
+          workingId
+        ]?.title,
+        "Research planner",
+      );
+      assert.equal(room.name, "Personal assistant");
+      assert.equal(room.members[0]!.name, "PAW speaker");
+      if (listed) {
+        assert.match(
+          document.querySelector(".thread-row")?.textContent ?? "",
+          /Research planner/,
+        );
+        const openThread = [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            ".companion-content button",
+          ),
+        ].find((button) => button.textContent === "Open working Thread")!;
+        await act(async () => openThread.click());
+        await waitFor(
+          () =>
+            document.querySelector(
+              ".workspace-header .thread-title-line strong",
+            )?.textContent === "Research planner",
+        );
+      }
+      await coordinator.stop();
+      assert.deepEqual(mirrors.at(-1), {
+        threadId: workingId,
+        title: "Research planner",
+      });
+    } finally {
+      await harness.unmount();
+      dispose();
+      await coordinator.stop();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 }

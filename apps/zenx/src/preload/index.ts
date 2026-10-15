@@ -1,3 +1,7 @@
+import type {
+  ModelRequestDebugCommand,
+  ModelRequestDebugResult,
+} from "../../../../apps/cli/src/model-request-debug-types.js";
 import type { ShellPanelRequest, ShellPanelResult } from "../shell-panel.js";
 import type { SubscriptionUsage } from "../main/subscription-usage.js";
 import type {
@@ -75,6 +79,12 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  modelRequestDebug: {
+    request: (
+      input: ModelRequestDebugCommand,
+    ): Promise<ModelRequestDebugResult> =>
+      ipcRenderer.invoke(ipcChannels.modelRequestDebug, input),
+  },
   shellPanel: {
     request: (input: ShellPanelRequest): Promise<ShellPanelResult> =>
       ipcRenderer.invoke(ipcChannels.shellPanelRequest, input),

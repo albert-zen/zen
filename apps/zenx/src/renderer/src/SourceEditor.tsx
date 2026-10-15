@@ -1,5 +1,6 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { css } from "@codemirror/lang-css";
+import { go } from "@codemirror/lang-go";
 import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -56,6 +57,7 @@ function sourceLanguage(path: string) {
     });
   if (/\.jsonc?$/i.test(path)) return javascript();
   if (/\.css$/i.test(path)) return css();
+  if (/\.go$/i.test(path)) return go();
   if (/\.(?:html?|svg)$/i.test(path)) return html();
   return [];
 }

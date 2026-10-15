@@ -92,6 +92,7 @@ export function SettingsView({
   onRestoreDeleted,
   onOpenSidebar,
   onRetryArchived,
+  onImportSession,
   onTabChange,
   onUnarchive,
   showHeader = true,
@@ -110,6 +111,7 @@ export function SettingsView({
   onRestoreDeleted?(thread: DeletedThreadSummary): Promise<void>;
   onOpenSidebar?(): void;
   onRetryArchived(): void;
+  onImportSession?(): void;
   onTabChange(tab: SettingsTab): void;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
   showHeader?: boolean;
@@ -513,7 +515,11 @@ export function SettingsView({
             {active && tab === "fleet" ? <FleetSettings /> : null}
             <Activity mode={active && tab === "general" ? "visible" : "hidden"}>
               <>
-                <GeneralPanel draft={draft} setDraft={setDraft} />
+                <GeneralPanel
+                  draft={draft}
+                  setDraft={setDraft}
+                  onImportSession={onImportSession}
+                />
                 <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
                 <RtkSettingsCard
                   draft={draft}
@@ -3493,9 +3499,11 @@ function AppearancePanel() {
 function GeneralPanel({
   draft,
   setDraft,
+  onImportSession,
 }: {
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
+  onImportSession?(): void;
 }) {
   const { t } = useTranslation("settings");
   const [maximumInput, setMaximumInput] = useState(
@@ -3513,6 +3521,22 @@ function GeneralPanel({
         <p>{t("settingsView.chooseHowZenxWorksWithYouAndYourProjects")}</p>
       </header>
       <LanguageSettings />
+      {onImportSession && (
+        <section className="page-card settings-card">
+          <h3>{t("settingsView.importConversations")}</h3>
+          <p className="settings-note">
+            {t("settingsView.importConversationsHelp")}
+          </p>
+          <button
+            className="secondary-button"
+            type="button"
+            aria-label={i18n.t("shell:importSession")}
+            onClick={onImportSession}
+          >
+            {i18n.t("shell:importSession")}
+          </button>
+        </section>
+      )}
       <section className="settings-card">
         <h3>{t("settingsView.interaction")}</h3>{" "}
         <label className="field">
