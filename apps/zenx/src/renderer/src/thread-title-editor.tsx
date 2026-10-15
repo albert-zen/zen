@@ -27,6 +27,27 @@ export function ThreadTitleEditor({
   const form = useRef<HTMLFormElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
+  const submittedFocus = useRef<Element | null>(null);
+  useEffect(() => {
+    if (!editing) return;
+    const outsidePointer = (event: PointerEvent) => {
+      if (!form.current?.contains(event.target as Node))
+        submittedFocus.current = null;
+    };
+    const outsideFocus = (event: FocusEvent) => {
+      if (
+        event.target !== document.body &&
+        !form.current?.contains(event.target as Node)
+      )
+        submittedFocus.current = null;
+    };
+    document.addEventListener("pointerdown", outsidePointer);
+    document.addEventListener("focusin", outsideFocus);
+    return () => {
+      document.removeEventListener("pointerdown", outsidePointer);
+      document.removeEventListener("focusin", outsideFocus);
+    };
+  }, [editing]);
   useEffect(
     () => () => {
       epoch.current += 1;
@@ -44,7 +65,14 @@ export function ThreadTitleEditor({
     }
   }, [editing]);
   const finish = () => {
-    restoreFocus.current = !!form.current?.contains(document.activeElement);
+    restoreFocus.current =
+      !!form.current &&
+      (form.current.contains(document.activeElement) ||
+        (document.activeElement === document.body &&
+          document.hasFocus() &&
+          form.current.contains(submittedFocus.current) &&
+          submittedFocus.current?.matches(":disabled") === true));
+    submittedFocus.current = null;
     epoch.current += 1;
     setEditing(false);
     setError(null);
@@ -79,6 +107,7 @@ export function ThreadTitleEditor({
           event.preventDefault();
           if (busyRef.current || composing.current || !draft.trim()) return;
           const current = epoch.current;
+          submittedFocus.current = document.activeElement;
           busyRef.current = true;
           setBusy(true);
           setError(null);

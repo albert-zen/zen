@@ -137,7 +137,7 @@ const zenx = {
     onNotification: () => () => undefined,
   },
   threads: {
-    list: async ({ archived }: { archived: boolean }) =>
+    list: async ({ archived = false }: { archived?: boolean } = {}) =>
       archived ? [] : [summary()],
   },
   imageAttachments: {

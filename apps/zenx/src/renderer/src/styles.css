@@ -1529,10 +1529,17 @@ button:disabled {
 .thread-title-form {
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
 }
+.thread-title-form > small {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
 .thread-title-form input {
-  min-width: 100px;
+  min-width: 0;
+  flex: 1 1 120px;
+  max-width: 100%;
   height: 30px;
   border: 1px solid var(--border-control);
   border-radius: 7px;
@@ -1540,6 +1547,8 @@ button:disabled {
   color: var(--text);
 }
 .thread-title-form button {
+  flex: 0 0 auto;
+  white-space: nowrap;
   border: 0;
   border-radius: 6px;
   background: var(--surface-2);

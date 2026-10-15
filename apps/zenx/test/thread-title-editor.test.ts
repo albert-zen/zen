@@ -99,3 +99,70 @@ test("working Thread title editor handles IME, Escape, late saves, and focus own
     dom.window.close();
   }
 });
+
+for (const outside of [false, true]) {
+  test(`mouse title Save ${outside ? "respects later outside interaction" : "restores the disabled submit focus owner"}`, async () => {
+    const dom = new JSDOM(
+      '<div id="root"></div><div id="outside">Outside</div>',
+      { url: "http://localhost", pretendToBeVisual: true },
+    );
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    const root = createRoot(document.getElementById("root")!);
+    let resolve!: () => void;
+    try {
+      await act(async () =>
+        root.render(
+          React.createElement(ThreadTitleEditor, {
+            editable: true,
+            title: "Working Thread",
+            onRename: () =>
+              new Promise<void>((done) => {
+                resolve = done;
+              }),
+          }),
+        ),
+      );
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".thread-title-rename")!
+          .click(),
+      );
+      const save =
+        document.querySelector<HTMLButtonElement>('[type="submit"]')!;
+      save.focus();
+      await act(async () => save.click());
+      assert.equal(save.disabled, true);
+      // Chromium drops a focused button to BODY when it becomes disabled.
+      // JSDOM does not, so model exactly that browser transition here.
+      document.body.tabIndex = -1;
+      document.body.focus();
+      assert.equal(document.activeElement?.tagName, "BODY");
+      Object.defineProperty(document, "hasFocus", {
+        value: () => true,
+        configurable: true,
+      });
+      if (outside)
+        document
+          .getElementById("outside")!
+          .dispatchEvent(
+            new dom.window.Event("pointerdown", { bubbles: true }),
+          );
+      await act(async () => resolve());
+      assert.equal(
+        document.activeElement ===
+          (outside
+            ? document.body
+            : document.querySelector(".thread-title-rename")),
+        true,
+        `unexpected focus: ${document.activeElement?.tagName}`,
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+}
