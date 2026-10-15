@@ -49,7 +49,7 @@ export class ZenXSubagentsCapabilityPackage implements ZenXCapabilityPackage {
     }
     const allowed =
       name === "zenx_subagents_create"
-        ? ["parentThreadId", "mode", "title", "task"]
+        ? ["parentThreadId", "mode", "title", "task", "model", "effort"]
         : ["parentThreadId"];
     for (const key of Object.keys(args)) {
       if (!allowed.includes(key))
@@ -102,9 +102,20 @@ export class ZenXSubagentsCapabilityPackage implements ZenXCapabilityPackage {
       args.title === undefined ? undefined : string(args.title, "title", 256);
     const task =
       args.task === undefined ? undefined : string(args.task, "task", 100000);
+    const model =
+      args.model === undefined ? undefined : string(args.model, "model");
+    const effort =
+      args.effort === undefined ? undefined : string(args.effort, "effort");
     const { thread } = await this.#appServer.request(
-      "zen/thread/create-child",
-      { parentThreadId, mode },
+      model === undefined && effort === undefined
+        ? "zen/thread/create-child"
+        : "zen/thread/create-child-configured",
+      {
+        parentThreadId,
+        mode,
+        ...(model === undefined ? {} : { model }),
+        ...(effort === undefined ? {} : { effort }),
+      },
     );
     const summary = {
       id: thread.id,

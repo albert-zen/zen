@@ -5,7 +5,7 @@ import type {
   NativeThreadRecoverySnapshot,
 } from "../../../../../src/protocol/native/recovery.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
-import { encodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../../../src/protocol/model-key.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   QueuedCancellationTarget,

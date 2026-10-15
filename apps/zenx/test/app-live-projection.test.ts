@@ -36,7 +36,7 @@ import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
 import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 

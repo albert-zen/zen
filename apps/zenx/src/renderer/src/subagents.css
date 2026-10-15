@@ -9,6 +9,10 @@
 }
 .subagent-create {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 .subagent-create-button {
   display: inline-flex;
@@ -192,4 +196,33 @@
   outline: 2px solid var(--text-accent);
   outline-offset: 4px;
   border-radius: 3px;
+}
+
+.subagent-model-options {
+  display: grid;
+  gap: 12px;
+  width: min(320px, calc(100vw - 24px));
+  padding: 14px;
+}
+.subagent-model-options label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.subagent-model-options .ui-select {
+  width: 100%;
+  min-width: 0;
+}
+.subagent-model-options small {
+  color: var(--text-2);
+}
+.subagent-model-options [role="alert"] {
+  margin: 0;
+  color: var(--color-status-danger);
+}
+@media (pointer: coarse) {
+  .subagent-create-options {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }

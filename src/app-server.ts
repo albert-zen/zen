@@ -246,6 +246,8 @@ export interface ForkThreadInput {
 export interface CreateChildThreadInput {
   parentThreadId: string;
   mode: "fresh" | "fork" | "side-chat";
+  selection?: ProviderSelectionInput;
+  reasoningEffort?: string;
 }
 
 export interface SteerTurnOptions {
@@ -896,17 +898,14 @@ export class ZenAppServer {
         },
         parent.id,
         input.mode === "side-chat",
+        input,
       );
     }
     const configuration = parent.effectiveConfiguration();
     return await this.#startThread(
       {
         cwd: configuration.cwd,
-        selection: {
-          providerProfileId: configuration.providerProfileId,
-          modelId: configuration.modelId,
-          reasoningEffort: configuration.reasoningEffort,
-        },
+        selection: this.#selectionFromInput(configuration, input),
         sandbox: configuration.sandbox,
         approvalPolicy: configuration.approvalPolicy,
       },
@@ -966,6 +965,10 @@ export class ZenAppServer {
     input: ForkThreadInput,
     parentThreadId?: string,
     fullContext = false,
+    settings: Pick<
+      CreateChildThreadInput,
+      "selection" | "reasoningEffort"
+    > = {},
   ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("other", "thread/fork");
     try {
@@ -1050,7 +1053,21 @@ export class ZenAppServer {
         workspace: "same-directory",
         ...(fullContext ? { context: "full" as const } : {}),
       };
-      const thread = new Thread(threadId, [...copiedItems, forked]);
+      const thread = new Thread(threadId, copiedItems);
+      const inherited = thread.effectiveConfiguration();
+      const selection = this.#selectionFromInput(inherited, settings);
+      if (!sameSelection(selection, inherited)) {
+        thread.append({
+          id: this.#id(),
+          threadId,
+          createdAt: this.#now(),
+          type: "thread_configuration_changed",
+          selection: { from: selectionFrom(inherited), to: selection },
+        });
+      }
+      // Keep configuration in the copied boundary's contiguous tail so a
+      // nested fork inherits it before the new provenance/instruction Items.
+      thread.append(forked);
       if (fullContext || itemId !== undefined) {
         appendForkSnapshotClosures(
           thread,
@@ -1059,6 +1076,7 @@ export class ZenAppServer {
           fullContext ? "side chat" : "fork",
         );
       }
+
       if (fullContext) {
         thread.append({
           id: this.#id(),

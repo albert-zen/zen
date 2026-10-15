@@ -1,4 +1,13 @@
 export const en = {
+  sideChatModelSettings: "Side chat model settings",
+  childModel: "Child model",
+  childReasoningEffort: "Reasoning effort",
+  inheritParentModel: "Inherit parent model",
+  inheritOrModelDefault: "Inherit or model default",
+  childSelectionBeforeCreation:
+    "Applied when the side chat is created. No task starts.",
+  childSelectionUnavailable:
+    "The selected model or effort is unavailable. Choose again before creating.",
   findInFile: "Find in file",
   previousMatch: "Previous match",
   nextMatch: "Next match",
@@ -917,6 +926,13 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  sideChatModelSettings: "侧会话模型设置",
+  childModel: "子会话模型",
+  childReasoningEffort: "推理强度",
+  inheritParentModel: "继承父会话模型",
+  inheritOrModelDefault: "继承或使用模型默认值",
+  childSelectionBeforeCreation: "创建侧会话时生效，不会启动任务。",
+  childSelectionUnavailable: "所选模型或推理强度不可用，请重新选择后创建。",
   findInFile: "在文件中查找",
   previousMatch: "上一个匹配",
   nextMatch: "下一个匹配",

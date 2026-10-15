@@ -10,7 +10,7 @@ import { i18n } from "./i18n.js";
 import {
   decodeModelKey,
   encodeModelKey,
-} from "../../../../../src/protocol/codex/model-key.js";
+} from "../../../../../src/protocol/model-key.js";
 
 export interface SelectedThreadSettings {
   threadId: string;

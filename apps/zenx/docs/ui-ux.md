@@ -655,3 +655,7 @@ available; debug mode does not add conversation copy/fork actions.
 ### 2026-10-15: Consistent interface icon semantics
 
 Triggers use the existing clock artwork throughout navigation, workspace tabs and launchers, Marketplace, and delivered or queued message sources. The public plugin icon key `trigger` remains supported as an alias of `clock`, so plugin contributions cannot reintroduce a different Trigger glyph. Settings → Plugins uses the existing plug. Thread message source actions use the existing conversation bubble, including remote/unavailable sources, while trace/list controls retain their own icons. File tabs use the file icon and the file-tree visibility toggle uses the folder icon; neither uses context-compaction artwork. These changes reuse the existing icon sizes, strokes, containers and localized labels, without altering source navigation, Trigger execution or file disclosure behavior.
+
+### 2026-10-15: Side chat creation settings
+
+The Subagents panel keeps one-click inherited side-chat creation and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Creation still starts no Turn. The workspace launcher plus remains the inherited one-click action.

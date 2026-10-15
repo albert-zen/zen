@@ -10,10 +10,7 @@ import { StaticModelCatalog } from "../src/model-catalog.js";
 import type { ModelAdapter, ModelEvent, ModelRequest } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { CodexClient, CodexClientError } from "../src/protocol/codex/client.js";
-import {
-  decodeModelKey,
-  encodeModelKey,
-} from "../src/protocol/codex/model-key.js";
+import { decodeModelKey, encodeModelKey } from "../src/protocol/model-key.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";

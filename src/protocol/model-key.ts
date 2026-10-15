@@ -1,4 +1,4 @@
-import type { ProviderSelection } from "../../provider-registry.js";
+import type { ProviderModel, ProviderSelection } from "../provider-registry.js";
 
 const PREFIX = "zen-model-v1:";
 
@@ -69,4 +69,24 @@ function decodeBase64Url(value: string): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(
     Uint8Array.from(binary, (character) => character.charCodeAt(0)),
   );
+}
+
+/** Resolve the shared model/list identity without choosing or validating effort. */
+export function resolveModelKey(
+  model: string,
+  catalog: readonly ProviderModel[],
+  fallbackProviderProfileId: string,
+): WireModelIdentity {
+  if (model.startsWith(PREFIX)) return decodeModelKey(model);
+  const matches = catalog.filter((entry) => entry.model.id === model);
+  if (matches.length > 1) {
+    throw new Error(
+      `Model id ${model} is ambiguous; use the opaque key from model/list`,
+    );
+  }
+  return {
+    providerProfileId:
+      matches[0]?.providerProfileId ?? fallbackProviderProfileId,
+    modelId: model,
+  };
 }
