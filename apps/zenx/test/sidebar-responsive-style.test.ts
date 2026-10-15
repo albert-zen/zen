@@ -367,20 +367,23 @@ test("Subagents row and per-thread visibility switch retain coarse-pointer targe
     const style = dom.window.document.querySelector("style")!;
     style.textContent = styles;
     const rules = [...style.sheet!.cssRules];
-    const coarse = rules.find(
+    const coarse = rules.filter(
       (rule): rule is CSSMediaRule =>
         rule.type === dom.window.CSSRule.MEDIA_RULE &&
         (rule as CSSMediaRule).conditionText === "(pointer: coarse)",
     );
-    assert.ok(coarse);
-    // JSDOM cannot evaluate pointer media features; append only the matched media block.
-    style.textContent =
-      rules
-        .filter((rule) => rule.type === dom.window.CSSRule.STYLE_RULE)
-        .map((rule) => rule.cssText)
-        .join("\n") +
-      "\n" +
-      [...coarse.cssRules].map((rule) => rule.cssText).join("\n");
+    assert.ok(coarse.length > 0);
+    // JSDOM cannot evaluate pointer media features. Expand every matching block
+    // in its original cascade position, retaining later normal-rule overrides.
+    style.textContent = rules
+      .flatMap((rule) =>
+        rule.type === dom.window.CSSRule.STYLE_RULE
+          ? [rule.cssText]
+          : coarse.includes(rule as CSSMediaRule)
+            ? [...(rule as CSSMediaRule).cssRules].map((child) => child.cssText)
+            : [],
+      )
+      .join("\n");
     for (const selector of [
       ".subagent-tree-row",
       ".subagent-sidebar-visibility",

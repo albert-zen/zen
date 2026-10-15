@@ -387,16 +387,16 @@ const manifest: ZenXPluginManifestV2 = {
     {
       name: "zenx_threads_send",
       description:
-        "Send a message to a Thread. By default new messages supplement active work; use follow_up to queue next work, guidance to supplement current work, or replacement to interrupt and change the task. The application handles message IDs and concurrent Turn checks.",
+        "Send a message to a Thread. Omit messageType for normal communication: soft-steer active work at the next safe point, or start when idle. Set follow_up only when the message must wait until the current Turn finishes; replacement interrupts and changes the task. The application handles message IDs and concurrent Turn checks.",
       inputSchema: {
         type: "object",
         properties: {
           ...targetProperties(),
           messageType: {
             type: "string",
-            enum: ["follow_up", "guidance", "replacement"],
+            enum: ["guidance", "follow_up", "replacement"],
             description:
-              "follow_up: batch this with next work after the current Turn; guidance: add guidance to current work; replacement: interrupt current work and do this instead. Omit to deliver agent guidance promptly to active work, independent of the manual Composer preference.",
+              "guidance (default): soft-steer current work at the next safe point; follow_up: explicitly wait until the current Turn ends; replacement: interrupt current work and do this instead. Omission uses guidance independently of the manual Composer preference.",
           },
           text: { type: "string" },
         },

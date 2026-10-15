@@ -17,11 +17,23 @@ $report = @{ environment = @{ os = [Environment]::OSVersion.VersionString; runne
 $oldEnvironment = @{}
 
 function Write-Json($Path, $Value) { [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 12), $utf8) }
+function Open-SharedTextReader($Path) {
+  # ReadAllText defaults to FileShare.Read and can block the live Node append
+  # writer on Windows. Observation must permit writes without retrying them.
+  $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+  try { return [IO.StreamReader]::new($stream) }
+  catch { $stream.Dispose(); throw }
+}
+function Read-SharedText($Path) {
+  $reader = Open-SharedTextReader $Path
+  try { return $reader.ReadToEnd() }
+  finally { $reader.Dispose() }
+}
 function Read-Events($Directory, $ProcessId) {
   $file = Join-Path $Directory "events-$ProcessId.jsonl"
   if (!(Test-Path -LiteralPath $file)) { return @() }
   # Ignore only an incomplete final append; every completed line must parse.
-  $raw = [IO.File]::ReadAllText($file)
+  $raw = Read-SharedText $file
   $lines = $raw.Split("`n")
   for ($i = 0; $i -lt $lines.Length - 1; $i++) {
     if ($lines[$i].Trim()) { $lines[$i] | ConvertFrom-Json }
@@ -45,12 +57,23 @@ function Get-EventUtcTime($Event) {
   # DateTime.Parse(DateTime) can lose milliseconds through the culture formatter.
   return ([DateTime]$Event.at).ToUniversalTime()
 }
+function Get-OwnedProcessState($Process) {
+  $state = @{ started = $null -ne $Process; pid = $null; hasExited = $null; exitCode = $null }
+  if ($null -eq $Process) { return $state }
+  try {
+    $state.pid = $Process.Id
+    $Process.Refresh()
+    $state.hasExited = $Process.HasExited
+    if ($state.hasExited) { $state.exitCode = $Process.ExitCode }
+  } catch { $state.observationError = $_.Exception.Message }
+  return $state
+}
 function Write-FixtureDiagnostics($Directory, $Process) {
   foreach ($name in @("events-$($Process.Id).jsonl", "stdout.log", "stderr.log")) {
     try {
       $file = Join-Path $Directory $name
       if (!(Test-Path -LiteralPath $file -PathType Leaf)) { continue }
-      $text = [IO.File]::ReadAllText($file)
+      $text = Read-SharedText $file
       if ($text.Length -gt 32768) { $text = "[last 32768 characters]`n" + $text.Substring($text.Length - 32768) }
       Write-Host "--- Startup failure diagnostics: $name"
       Write-Host $text
@@ -214,6 +237,7 @@ public static class StartupWindows {
     } catch {
       $scenarioFailure = $_
       $sample.error = $_.Exception.Message
+      $sample.secondaryAtFailure = Get-OwnedProcessState $secondary
     } finally {
       $sample.cleanupErrors = @(Stop-OwnedFixtures @($secondary, $primary) $directory)
       # Windows keeps redirected output files locked until the child exits.
