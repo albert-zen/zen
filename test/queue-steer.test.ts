@@ -381,33 +381,45 @@ test("in-progress initial admission is awaited outside the lock and the same ide
   );
 });
 
-test("canonical promotion receipt survives JSONL reload and does not send again", async () => {
+test("canonical promotion receipt survives JSONL reload and does not send again", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "queue-steer-"));
-  try {
-    const journal = new JsonlThreadJournal(directory);
-    const q = await paused([text("saved")], { journal });
-    const first = await q.server.steerQueuedMessage(
-      q.threadId,
-      steerTarget(q.queued[0]!),
-    );
-    const restored = createServer({
-      journal: new JsonlThreadJournal(directory),
-    });
-    const second = await restored.steerQueuedMessage(
-      q.threadId,
-      steerTarget(q.queued[0]!),
-    );
-    assert.equal(second.status, "already_started");
-    assert.equal(first.turnId, second.turnId);
-    assert.equal(
-      (await restored.readThread(q.threadId)).items.filter(
-        (item) => item.type === "user_message",
-      ).length,
-      1,
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+  let runCompleted: Promise<void> = Promise.resolve();
+  const runtime = new (class extends AgentRuntime {
+    override runTurn(options: RunTurnOptions) {
+      runCompleted = super.runTurn(options);
+      return runCompleted;
+    }
+  })({ toolEnvironment: new ToolEnvironment({ runtimes: [] }) });
+  // The receipt only confirms admission. Keep the journal until its writer
+  // settles, including failures, and report cleanup separately from assertions.
+  t.after(async () => {
+    try {
+      await runCompleted;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  const journal = new JsonlThreadJournal(directory);
+  const q = await paused([text("saved")], { journal, runtime });
+  const first = await q.server.steerQueuedMessage(
+    q.threadId,
+    steerTarget(q.queued[0]!),
+  );
+  const restored = createServer({
+    journal: new JsonlThreadJournal(directory),
+  });
+  const second = await restored.steerQueuedMessage(
+    q.threadId,
+    steerTarget(q.queued[0]!),
+  );
+  assert.equal(second.status, "already_started");
+  assert.equal(first.turnId, second.turnId);
+  assert.equal(
+    (await restored.readThread(q.threadId)).items.filter(
+      (item) => item.type === "user_message",
+    ).length,
+    1,
+  );
 });
 
 test("image validation failure leaves the original queue available without cancellation", async () => {

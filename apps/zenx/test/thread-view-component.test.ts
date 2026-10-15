@@ -1193,7 +1193,7 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
     await show();
     assert.match(
       document.querySelector('[aria-label="Message queue"]')?.textContent ?? "",
-      /Pending send · 1.*identical/u,
+      /After this turn · 1.*identical/u,
     );
     const queue = document.querySelector<HTMLElement>(
       '[aria-label="Message queue"]',
@@ -1201,7 +1201,7 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
     assert.equal(queue?.getAttribute("aria-live"), null);
     assert.equal(
       queue?.querySelector('[role="status"]')?.textContent,
-      "Pending send · 1",
+      "After this turn · 1",
     );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
@@ -1281,7 +1281,7 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
     ]);
     assert.match(
       document.querySelector(".queue-shelf")?.textContent ?? "",
-      /Pending send · 2/u,
+      /After this turn · 2/u,
     );
     await act(async () =>
       resolve({
@@ -1296,7 +1296,7 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
     );
     assert.match(
       document.querySelector(".queue-shelf")?.textContent ?? "",
-      /Pending send · 2/u,
+      /After this turn · 2/u,
     );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
@@ -1312,7 +1312,7 @@ test("mounted queue cancel waits for canonical event instead of optimistically h
     await show();
     assert.match(
       document.querySelector(".queue-shelf")?.textContent ?? "",
-      /Pending send · 1/u,
+      /After this turn · 1/u,
     );
     assert.equal(document.querySelectorAll(".queue-shelf li").length, 1);
   });
@@ -1377,7 +1377,7 @@ test("bulk queue confirmation captures IDs before a later append", async () => {
     await show();
     assert.match(
       document.querySelector(".queue-shelf")?.textContent ?? "",
-      /Pending send · 3/u,
+      /After this turn · 3/u,
     );
     await act(async () =>
       requiredButton('[role="dialog"] button:last-child').click(),
