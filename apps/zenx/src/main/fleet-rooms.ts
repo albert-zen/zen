@@ -8,10 +8,71 @@ export function createFleetRoomsHandler(
   getAutomation: () => ZenXBundledAutomationPluginService | undefined,
 ) {
   return async (
-    operation: "list" | "read" | "post",
+    operation: "list" | "read" | "post" | "trigger",
     params: Extract<HostEvent, { type: "fleet/room-request" }>["params"],
   ): Promise<unknown> => {
     const automationService = getAutomation();
+    if (operation === "trigger") {
+      if (!automationService?.triggersAvailable())
+        throw new Error("Triggers unavailable on this Host");
+      const trigger = automationService
+        .snapshot()
+        .triggers.find(
+          (entry) =>
+            entry.id === params.triggerId && entry.threadId === params.threadId,
+        );
+      if (!trigger)
+        throw new Error(
+          "The exact Trigger is missing or no longer belongs to this Thread",
+        );
+      const { thread } = await manager.request("zen/thread/read", {
+        threadId: trigger.threadId,
+      });
+      if (
+        thread.archived ||
+        (await realpath(thread.cwd)) !== params.workspaceCwd
+      )
+        throw new Error("Trigger unavailable in the authorized workspace");
+      // Re-read after async scope validation; never disclose a superseded definition.
+      const current = automationService
+        .snapshot()
+        .triggers.find((entry) => entry.id === trigger.id);
+      if (
+        !current ||
+        JSON.stringify(current) !== JSON.stringify(trigger) ||
+        !automationService.triggersAvailable()
+      )
+        throw new Error("Trigger definition changed; read its source again");
+      const {
+        id,
+        threadId,
+        kind,
+        label,
+        prompt,
+        active,
+        definitionRevision,
+        timer,
+        watch,
+        room,
+        signal,
+      } = current;
+      return {
+        trigger: {
+          id,
+          threadId,
+          kind,
+          label,
+          prompt,
+          active,
+          definitionRevision,
+          timer,
+          watch,
+          room,
+          signal,
+          programConfigured: current.program !== undefined,
+        },
+      };
+    }
     if (!automationService?.roomsAvailable())
       throw new Error("Rooms unavailable");
     const roomList = automationService

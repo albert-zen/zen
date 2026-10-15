@@ -1,6 +1,9 @@
 import { fleetDeviceKey } from "./fleet.js";
 export { fleetDeviceKey } from "./fleet.js";
-import type { FleetSettingsService } from "./fleet-settings.js";
+import type {
+  FleetSettingsService,
+  FleetMessageSourceRequest,
+} from "./fleet-settings.js";
 
 export interface FleetThreadLocator {
   deviceId: string;
@@ -209,6 +212,66 @@ export class FleetProductService {
       throw new Error(
         "The exact remote Thread is unavailable; no same-ID local Thread was opened.",
       );
+    return result;
+  }
+  async sourceHistory(input: {
+    receipt: FleetMessageSourceRequest;
+    locator: FleetThreadLocator;
+    cursor?: string;
+    itemId?: string;
+  }) {
+    const { locator } = input;
+    const fence = this.fleet.sourceTargetFence(input.receipt, locator);
+    await fence.revalidate();
+    await this.#assertLocator(locator);
+    const result = unwrap(
+      await this.fleet.invoke({
+        device: locator.deviceId,
+        expectedDeviceKey: locator.deviceKey,
+        name: "zenx_threads_read",
+        arguments: {
+          workspace: locator.workspace,
+          threadId: locator.threadId,
+          granularity: input.itemId ? "item" : "items",
+          ...(input.itemId
+            ? { itemId: text(input.itemId, "message Item") }
+            : { maxItemsPerTurn: 25 }),
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+        },
+      }),
+    );
+    await this.#assertLocator(locator);
+    if (result.threadId !== locator.threadId)
+      throw new Error("The exact remote source Thread is unavailable");
+    // A page/full Item resolved during revocation must not be disclosed.
+    await fence.revalidate();
+    fence.assertUnchanged();
+    return result;
+  }
+  async triggerSource(input: {
+    receipt: FleetMessageSourceRequest;
+    locator: FleetThreadLocator;
+    triggerId: string;
+  }) {
+    const { locator, triggerId } = input;
+    const fence = this.fleet.sourceTargetFence(input.receipt, locator);
+    await fence.revalidate();
+    await this.#assertLocator(locator);
+    const result = unwrap(
+      await this.fleet.invoke({
+        device: locator.deviceId,
+        expectedDeviceKey: locator.deviceKey,
+        name: "zenx_fleet_trigger_read",
+        arguments: {
+          workspace: locator.workspace,
+          threadId: locator.threadId,
+          triggerId: text(triggerId, "Trigger identity"),
+        },
+      }),
+    );
+    await this.#assertLocator(locator);
+    await fence.revalidate();
+    fence.assertUnchanged();
     return result;
   }
   async status(locator: FleetThreadLocator) {

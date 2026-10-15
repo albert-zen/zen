@@ -5,6 +5,36 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
 
+test("secondary failure state is captured before cleanup without replacing the original error", () => {
+  const source = readFileSync(
+    new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /function Get-OwnedProcessState\(\$Process\)/u);
+  assert.match(source, /\$state\.hasExited = \$Process\.HasExited/u);
+  assert.match(
+    source,
+    /if \(\$state\.hasExited\) \{ \$state\.exitCode = \$Process\.ExitCode \}/u,
+  );
+  assert.match(
+    source,
+    /catch \{ \$state\.observationError = \$_\.Exception\.Message \}/u,
+  );
+  assert.match(
+    source,
+    /\$sample\.error = \$_\.Exception\.Message\s+\$sample\.secondaryAtFailure = Get-OwnedProcessState \$secondary\s+\} finally \{\s+\$sample\.cleanupErrors = @\(Stop-OwnedFixtures/u,
+  );
+  assert.match(
+    source,
+    /if \(\$null -ne \$scenarioFailure\) \{ throw \$scenarioFailure \}/u,
+  );
+  assert.match(source, /\$deadline = \[DateTime\]::UtcNow\.AddSeconds\(120\)/u);
+  assert.match(
+    source,
+    /\$activation = Wait-Event \$directory \$primary "second-instance"/u,
+  );
+});
+
 test("native startup CI reuses the single downstream portable package and retains failure evidence", () => {
   const workflow = parse(
     readFileSync(

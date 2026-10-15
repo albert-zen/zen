@@ -663,3 +663,7 @@ The Subagents panel keeps one-click inherited side-chat creation and offers a co
 ### 2026-10-15: Machine picker and generation throughput
 
 The Run on machine picker has room for device names independently of its compact trigger and remains within the viewport. Final-message hover shows output tokens per second for that completed Turn; context usage shows the weighted session rate over completed Turns with matched usage and exact canonical millisecond duration. Idle time between Turns is excluded, while tool and waiting time within each Turn remain included. This is end-to-end Turn throughput, not Provider decode speed. Missing telemetry or duration is Unknown.
+
+### Verified remote message sources
+
+Remote source actions read the canonical receiving message's explicit return binding and open a read-only, bounded source dialog naming the exact Host, workspace and Thread. They preserve local main/side selection and Composer drafts. Nested source navigation stays on that pinned Host/workspace; unbound cross-host sources remain unavailable. Trigger source settings are read on the viewed Host by exact Trigger and owner Thread IDs, never the local Trigger editor. Removed, revoked, changed and offline sources keep explicit errors; close, newer navigation and newer source actions retire old results. The dialog keeps keyboard/focus handling and reachable 44px controls at narrow widths.

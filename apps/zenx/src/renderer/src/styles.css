@@ -11297,3 +11297,60 @@ button:disabled {
 .workspace-browser-viewport[data-blank="true"] {
   background: var(--color-surface-browser-blank);
 }
+
+.remote-message-source-dialog {
+  width: min(760px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+.remote-message-source-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.remote-message-source-dialog > .settings-note {
+  overflow-wrap: anywhere;
+}
+.remote-message-source-content {
+  min-height: 0;
+  overflow: auto;
+}
+.remote-message-source-content pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.remote-message-source-dialog button {
+  min-height: 44px;
+}
+
+.fleet-message-source-settings {
+  margin-block: 16px;
+}
+.fleet-message-source-settings form {
+  display: grid;
+  gap: 12px;
+}
+.fleet-message-source-settings label {
+  display: grid;
+  gap: 6px;
+}
+.fleet-message-source-settings .settings-checkbox {
+  display: flex;
+  align-items: start;
+}
+.fleet-message-source-settings .settings-note,
+.fleet-message-source-settings .settings-row {
+  overflow-wrap: anywhere;
+}
+.fleet-message-source-settings .ui-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+.fleet-message-source-settings button {
+  min-height: 44px;
+}

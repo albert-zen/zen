@@ -1346,3 +1346,75 @@ test("Escape dismisses the nested Access choice before the connection dialog", a
     await view.close();
   }
 });
+
+test("message return binding requires explicit human identity confirmation and only reuses existing grants", async () => {
+  const device = {
+    id: "return-peer",
+    label: "Synthetic source",
+    transport: "https" as const,
+    endpoint: "https://source.example:9443",
+    hostId: "source-host",
+    access: "control" as const,
+  };
+  const invocations: unknown[] = [];
+  const view = await mount(
+    {
+      invoke: async (input) => {
+        invocations.push(input);
+        return {
+          device: input.device,
+          result: {
+            projects: [{ id: "source-workspace", name: "Same display label" }],
+          },
+        };
+      },
+    },
+    [device],
+    {
+      host: {
+        enabled: true,
+        hostId: "receiver-host",
+        clients: [
+          { deviceId: "random-inbound-id", access: "control", revoked: false },
+          { deviceId: "revoked-inbound", access: "control", revoked: true },
+        ],
+      },
+    },
+  );
+  try {
+    assert.equal(view.button("Bind existing return route").disabled, true);
+    await choose("Incoming client grant", "random-inbound-id");
+    await choose("Existing return connection", "return-peer");
+    await choose("Source workspace", "source-workspace");
+    assert.equal(view.button("Bind existing return route").disabled, true);
+    const consent = [...document.querySelectorAll("label")]
+      .find((label) =>
+        label.textContent?.includes("I verified that this incoming client"),
+      )!
+      .querySelector<HTMLInputElement>("input")!;
+    await click(consent);
+    assert.equal(view.button("Bind existing return route").disabled, false);
+    await click(view.button("Bind existing return route"));
+    assert.deepEqual(view.saved[0]?.messageSources, [
+      {
+        inboundDeviceId: "random-inbound-id",
+        hostId: "source-host",
+        workspaceId: "source-workspace",
+        deviceId: "return-peer",
+        deviceKey: routeKey(device),
+      },
+    ]);
+    assert.equal(view.paired.length, 0);
+    assert.ok(invocations.length > 0);
+    assert.ok(
+      invocations.every(
+        (input: any) =>
+          input.name === "zenx_projects_list" && input.device === "return-peer",
+      ),
+    );
+    await click(view.button("Remove binding"));
+    assert.deepEqual(view.saved.at(-1)?.messageSources, []);
+  } finally {
+    await view.close();
+  }
+});

@@ -280,10 +280,24 @@ export interface MultimodalUserMessageItem extends UserMessageItemBase {
 
 export type UserMessageItem = LegacyUserMessageItem | MultimodalUserMessageItem;
 
+/** Nonsecret source identity, captured by the sending Host. */
+export interface ThreadMessageOrigin {
+  hostId: string;
+  workspaceId: string;
+}
+/** Receiver-owned snapshot of an explicit existing return route, never a grant. */
+export interface ThreadMessageReturnRoute extends ThreadMessageOrigin {
+  receiverHostId: string;
+  deviceId: string;
+  deviceKey: string;
+}
+
 /** Host-captured provenance. Neither sender identity nor authority comes from message text. */
 export interface ThreadMessageSender {
   /** Present only when the receiving Host captured an authenticated Fleet peer. */
   deviceId?: string;
+  origin?: ThreadMessageOrigin;
+  returnRoute?: ThreadMessageReturnRoute;
   threadId: string;
   /** Host-captured display snapshot only; never an identity or authorization key. */
   threadName?: string;
@@ -1421,6 +1435,24 @@ function unreachableItemType(value: never): never {
 function validateThreadMessageSender(value: unknown, label: string): void {
   const sender = requireRecord(value, label);
   requireOptionalNonEmptyString(sender.threadName, `${label}.threadName`);
+  for (const field of ["origin", "returnRoute"] as const) {
+    if (sender[field] === undefined) continue;
+    if (sender.deviceId === undefined)
+      throw new Error("Only remote senders have remote source metadata");
+    const source = requireRecord(sender[field], `${label}.${field}`);
+    for (const key of field === "origin"
+      ? ["hostId", "workspaceId"]
+      : ["hostId", "workspaceId", "receiverHostId", "deviceId", "deviceKey"])
+      requireNonEmptyString(source[key], `${label}.${field}.${key}`);
+    if (field === "returnRoute") {
+      const origin = requireRecord(sender.origin, `${label}.origin`);
+      if (
+        origin.hostId !== source.hostId ||
+        origin.workspaceId !== source.workspaceId
+      )
+        throw new Error("Remote return route must match its source origin");
+    }
+  }
   for (const field of ["threadId", "toolCallId", "callId"])
     requireNonEmptyString(sender[field], `${label}.${field}`);
   if (sender.deviceId === undefined)

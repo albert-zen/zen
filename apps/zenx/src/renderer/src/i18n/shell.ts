@@ -96,6 +96,32 @@ export const en = {
   modelDebugPage: "Characters {{start}}–{{end}} of {{total}}",
   modelDebugSelect:
     "Select a request to inspect its exact retained body and derived sections.",
+  sourceBindingTitle: "Agent message return routes",
+  sourceBindingHelp:
+    "After pairing both directions, explicitly link the incoming client to its existing HTTPS Host and exact source workspace. This creates no grant or credential. New messages capture this route; older unbound messages remain unavailable.",
+  sourceBindingInbound: "Incoming client grant",
+  sourceBindingReturn: "Existing return connection",
+  sourceBindingWorkspace: "Source workspace",
+  sourceBindingChoose: "Choose an exact identity",
+  sourceBindingConfirm:
+    "I verified that this incoming client belongs to the selected source Host and workspace. Use only the existing return grant.",
+  sourceBindingSave: "Bind existing return route",
+  sourceBindingRemove: "Remove binding",
+  sourceLoadOlder: "Load older messages",
+  sourceReadFullItem: "Read full message",
+  sourceLoadNextPart: "Load next part",
+  sourceFullProgress: "Loaded {{loaded}} of {{total}} public Item characters",
+  sourceRemoteTriggerDisclosure:
+    "Current public settings, read-only. Program commands and environment values are hidden; editing requires the owning Host's settings.",
+  sourceRemoteTitle: "Remote message source",
+  sourceRemoteTriggerTitle: "Remote Trigger settings",
+  sourceRemoteScope:
+    "Host {{host}} · Workspace {{workspace}} · Thread {{thread}}",
+  sourceRemoteReadOnly:
+    "Read-only, bounded snapshot from this exact Host. Source messages do not grant human authorization.",
+  sourceRemoteLoading: "Reading source…",
+  sourceRemoteBack: "Back to source conversation",
+  sourceRemoteTriggerId: "Trigger ID: {{id}}",
   sourceRemoteUnavailable: "This remote source has no verified return route.",
   sourceTargetMissing: "Source identity is missing.",
   sourceNavigationUnavailable: "Source navigation is unavailable here.",
@@ -971,6 +997,31 @@ export const zhCN = {
   modelDebugPage: "字符 {{start}}–{{end}} / {{total}}",
   modelDebugSelect: "选择一次请求，查看实际保留的正文及从正文提取的分区。",
 
+  sourceBindingTitle: "Agent 消息返回路径",
+  sourceBindingHelp:
+    "完成双向配对后，将入站客户端明确绑定到已有 HTTPS Host 和确切来源工作空间。此操作不创建授权或凭据。新消息会保存此路径，旧的未绑定消息仍不可跳转。",
+  sourceBindingInbound: "入站客户端授权",
+  sourceBindingReturn: "已有返回连接",
+  sourceBindingWorkspace: "来源工作空间",
+  sourceBindingChoose: "选择确切身份",
+  sourceBindingConfirm:
+    "我已核实此入站客户端属于所选来源 Host 与工作空间。只使用已有返回授权。",
+  sourceBindingSave: "绑定已有返回路径",
+  sourceBindingRemove: "移除绑定",
+  sourceLoadOlder: "加载更早消息",
+  sourceReadFullItem: "读取完整消息",
+  sourceLoadNextPart: "加载下一部分",
+  sourceFullProgress: "已加载 {{loaded}} / {{total}} 个公开 Item 字符",
+  sourceRemoteTriggerDisclosure:
+    "当前公开设置，只读。程序命令和环境变量值已隐藏；编辑需要在所属 Host 的设置中进行。",
+  sourceRemoteTitle: "远端消息来源",
+  sourceRemoteTriggerTitle: "远端触发器设置",
+  sourceRemoteScope: "Host {{host}} · 工作空间 {{workspace}} · 线程 {{thread}}",
+  sourceRemoteReadOnly:
+    "此确切 Host 的只读、有界快照。来源消息不代表用户授权。",
+  sourceRemoteLoading: "正在读取来源…",
+  sourceRemoteBack: "返回来源会话",
+  sourceRemoteTriggerId: "触发器 ID：{{id}}",
   sourceRemoteUnavailable: "此远端来源没有经过验证的返回路径。",
   sourceTargetMissing: "缺少来源身份。",
   sourceNavigationUnavailable: "此处无法打开来源。",

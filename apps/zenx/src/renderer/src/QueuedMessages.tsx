@@ -491,7 +491,11 @@ function QueuedMessageRow({
                 id: message.sender.threadId,
                 ...(message.sender.deviceId === undefined
                   ? {}
-                  : { deviceId: message.sender.deviceId }),
+                  : {
+                      deviceId: message.sender.deviceId,
+                      itemId: message.id,
+                      returnBound: message.sender.returnRoute !== undefined,
+                    }),
               }}
               label={t(
                 message.sender.deviceId === undefined
