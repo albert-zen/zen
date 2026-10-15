@@ -1,0 +1,82 @@
+{
+  "captureHead": "e850c962ce1eda61426c17f2e24e3ef058423cea",
+  "captureTree": "42f1dd8d9006f6f3de8754d014d84a3c0cac372e",
+  "baseMain": "22c18239",
+  "environment": "Cloud Chrome with actual CSS iframe viewport; synthetic platform/preload, production App/CSS and real SettingsService isolated profile",
+  "observations": [
+    {
+      "platform": "win32",
+      "viewport": 390,
+      "collapsed": true,
+      "rect": [
+        8,
+        96,
+        44,
+        44
+      ],
+      "computedTop": "52px",
+      "centerHit": "SVG path inside button aria-label Open sidebar",
+      "input": "One native cloud desktop pointer click at fresh screenshot coordinate138,354",
+      "result": "app-shell sidebar-open; sidebar x0 y88 width286 height592; only ordinary pin and parent Thread displayed, no old global visibility switch"
+    },
+    {
+      "platform": "win32",
+      "viewport": 390,
+      "input": "Close pointer then Enter on Open sidebar",
+      "result": "closed and reopened"
+    },
+    {
+      "platform": "darwin",
+      "viewport": 1148,
+      "theme": "light",
+      "result": "normal wide sidebar/composer, no old global visibility switch"
+    },
+    {
+      "platform": "darwin",
+      "viewport": 390,
+      "theme": "light",
+      "rect": [
+        8,
+        52,
+        44,
+        44
+      ],
+      "computedTop": "8px",
+      "centerHit": "Open sidebar",
+      "input": "ordinary pointer click",
+      "result": "sidebar opened"
+    }
+  ],
+  "historicalMatrix": {
+    "sourceHead": "603ed62bc2e46f6e2c831fbb7af6f264f5de2ddb",
+    "sourceTree": "56068b0ed5ebeda6d08209fe8e1a2ed1d32821cc",
+    "coverage": "win390 collapsed true/false,720/721/1148, darwin390, linux390 and selected-thread header, Enter and Close",
+    "limits": "Historical exact fix matrix; not relabeled as current-main capture. CSS patch hash/range-diff same according to author."
+  },
+  "limitations": [
+    "Platform bridge values do not establish physical Windows/macOS coverage",
+    "No native Electron drag-region or hardware touch claim",
+    "Synthetic data/create bridge; no actual Host operation claim"
+  ],
+  "images": [
+    {
+      "file": "01-current-win390-before-pointer.jpg",
+      "sha256": "8cb7224080aafb8bd62475b79efacc24765e364cc43b4dfed91af57a7314910d"
+    },
+    {
+      "file": "02-current-win390-native-pointer-open.jpg",
+      "sha256": "4e1e01aad053de3f1d4da4d9d332d1e19350057cc1afb349a75a8313b839c32f"
+    },
+    {
+      "file": "03-current-darwin1148-light.jpg",
+      "sha256": "c2dccf674bfbc40a2d58abcb530d00ca1faf2d62f2f2232a9be3c288044b3bd6"
+    },
+    {
+      "file": "04-current-darwin390-light-top.jpg",
+      "sha256": "baff212fe7681f5e260d3d25140875379794cd351898d6b8e58006f7da973984"
+    }
+  ],
+  "publishedHead": "a054b06fa5205f21b25f545f73cfb91a016504a5",
+  "publishedTree": "42f1dd8d9006f6f3de8754d014d84a3c0cac372e",
+  "mapping": "Published head and local capture e850c962 have identical full tree; only commit metadata differs."
+}
