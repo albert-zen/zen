@@ -248,3 +248,92 @@ test("a renderer observer failure cannot turn a completed Browser action into a 
   assert.equal(result.sessionId, "work");
   await package_.close();
 });
+
+test("Host activity starts before exact-target dispatch and settles without URL identity", async () => {
+  const { package_, calls } = fixture();
+  const events: any[] = [];
+  package_.observeThread({ threadId: "thread-a", frames: false }, (event) =>
+    events.push(event),
+  );
+  await package_.invoke("browser_open", invocation("thread-a"));
+  await package_.invoke("browser_open", invocation("thread-a"));
+  const activities = events.filter((event) => event.type === "activity");
+  assert.equal(activities.length, 4);
+  assert.deepEqual(
+    activities.map((event) => event.phase),
+    ["started", "completed", "started", "completed"],
+  );
+  assert.notEqual(activities[0].targetId, activities[2].targetId);
+  assert.equal(activities[0].sessionEpoch, activities[2].sessionEpoch);
+  assert.equal(activities[0].callId, "call");
+  assert.notEqual(activities[0].operationId, activities[2].operationId);
+  assert.ok(!JSON.stringify(activities).includes("https://"));
+  assert.equal(calls.length, 2);
+  await package_.close();
+});
+
+test("activity from retired sessions cannot settle into a reused public session or another Thread", async () => {
+  let resolve!: (value: unknown) => void;
+  const backend = {
+    listTabs: async (sessionId: string) => [
+      {
+        sessionId,
+        tabId: "same",
+        url: "https://example.test/",
+        title: "Page",
+        loading: false,
+      },
+    ],
+    navigate: async () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+    closeSession: async () => 1,
+    close: async () => {},
+  } as unknown as ZenXBrowserBackend;
+  const capability = new BrowserZenXCapabilityPackage(backend);
+  const events: any[] = [],
+    foreign: any[] = [];
+  capability.observeThread({ threadId: "thread-a", frames: false }, (event) =>
+    events.push(event),
+  );
+  capability.observeThread({ threadId: "thread-b", frames: false }, (event) =>
+    foreign.push(event),
+  );
+  const call = (name: string, args = {}) =>
+    capability.invoke(name, {
+      ...invocation("thread-a"),
+      arguments: { sessionId: "work", ...args },
+    });
+  await call("browser_list_tabs");
+  const oldTarget = events.findLast((event) => event.type === "targets")
+    .targets[0].id;
+  const pending = call("browser_navigate", {
+    tabId: "same",
+    url: "https://example.test/",
+  });
+  const start = events.findLast((event) => event.type === "activity");
+  assert.equal(start.phase, "started");
+  assert.equal(start.targetId, oldTarget);
+  await call("browser_close_session");
+  await call("browser_list_tabs");
+  assert.notEqual(
+    events.findLast((event) => event.type === "targets").targets[0].id,
+    oldTarget,
+  );
+  const count = events.length;
+  resolve({
+    sessionId: "old",
+    tabId: "same",
+    url: "https://example.test/",
+    title: "Late",
+    loading: false,
+  });
+  await pending;
+  assert.equal(events.length, count);
+  assert.equal(
+    foreign.some((event) => event.type === "activity"),
+    false,
+  );
+  await capability.close();
+});

@@ -1,3 +1,7 @@
+import {
+  browserOperationOrder,
+  withBrowserOperationOrder,
+} from "../src/main/capabilities/browser-operation-order.js";
 import { BrowserInputUnsupportedError } from "../src/main/capabilities/browser-targeted-input.js";
 import { BrowserBackendRegistry } from "../src/main/capabilities/browser-backend-registry.js";
 import assert from "node:assert/strict";
@@ -2026,7 +2030,16 @@ test("automatic presentation mounts the existing page before capture without exp
     const web = f.views[0]!.webContents;
     web.debuggerApi.defaultValue = actionInspection;
     const before = web.debuggerApi.evaluations;
-    const capture = f.browser.inspect("presentation-session", f.tab.id);
+    let admittedSequence = 0;
+    const capture = withBrowserOperationOrder(() => {
+      admittedSequence = browserOperationOrder();
+      return f.browser.inspect("presentation-session", f.tab.id);
+    });
+    assert.equal(
+      f.requests[0]!.operationSequence,
+      admittedSequence,
+      "Workspace presentation preserves Host operation provenance",
+    );
     assert.equal(f.requests.length, 1);
     assert.equal(web.debuggerApi.evaluations, before);
     assert.equal(f.requests[0]!.tab.id, f.tab.id);

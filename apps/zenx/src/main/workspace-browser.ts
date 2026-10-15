@@ -1,3 +1,4 @@
+import { browserOperationOrder } from "./capabilities/browser-operation-order.js";
 import {
   assertBrowserInputSnapshot,
   browserInputSnapshotScript,
@@ -73,6 +74,7 @@ export type WorkspaceBrowserCommand =
 
 export interface WorkspaceBrowserPresentation {
   requestId: string;
+  operationSequence: number;
   requestedAt: number;
   expiresAt: number;
   sessionEpoch: string;
@@ -609,6 +611,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       signal?.addEventListener("abort", finish, { once: true });
       owner.window.webContents.send(ipcChannels.workspaceBrowserPresentation, {
         requestId,
+        operationSequence: browserOperationOrder(),
         requestedAt,
         expiresAt: requestedAt + 750,
         sessionEpoch: incarnation,

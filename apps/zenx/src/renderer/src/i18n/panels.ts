@@ -1,4 +1,6 @@
 export const en = {
+  browserOperationFailed:
+    "The browser operation failed or its outcome is uncertain. Check the tool result before continuing.",
   externalReadOnly: "External · read-only",
   browserAgentWorking: "Agent is using this page",
   sideChatModelSettings: "Side chat model settings",
@@ -928,6 +930,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  browserOperationFailed: "浏览器操作失败或结果不确定。继续前请检查工具结果。",
   externalReadOnly: "外部 · 只读",
   browserAgentWorking: "Agent 正在操作此页面",
   sideChatModelSettings: "侧会话模型设置",

@@ -61,12 +61,14 @@ test("workspace presentation reuses exact tab and lease, yields to user navigati
   const mounts: any[] = [];
   const declined: string[] = [];
   const contexts: any[] = [];
+  let operationSequence = 0;
   const requests = (
     id: string,
     epoch = "epoch-a",
     requestedAt = Date.now() + 1,
   ): WorkspaceBrowserPresentation => ({
     requestId: crypto.randomUUID(),
+    operationSequence: ++operationSequence,
     sessionEpoch: epoch,
     requestedAt,
     expiresAt: requestedAt + 750,

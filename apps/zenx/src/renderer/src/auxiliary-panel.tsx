@@ -49,6 +49,24 @@ const browserFollowingByThread = new Map<
   { epoch: string; suppressed: boolean; tabId: string }
 >();
 
+const externalPresentations = new Set<string>();
+const browserOperationWatermarks = new Map<string, number>();
+function acceptBrowserOperation(threadId: string, sequence: number): boolean {
+  if (
+    !Number.isSafeInteger(sequence) ||
+    sequence < 1 ||
+    sequence < (browserOperationWatermarks.get(threadId) ?? 0)
+  )
+    return false;
+  browserOperationWatermarks.delete(threadId);
+  browserOperationWatermarks.set(threadId, sequence);
+  if (browserOperationWatermarks.size > 512)
+    browserOperationWatermarks.delete(
+      browserOperationWatermarks.keys().next().value!,
+    );
+  return true;
+}
+
 const expandedByConversation = new Map<string, boolean>();
 
 export type AuxiliaryConversationContext =
@@ -212,6 +230,9 @@ export function AuxiliaryPanel({
   const [externalTargets, setExternalTargets] = useState<BrowserThreadTarget[]>(
     [],
   );
+  const currentExternalIds = useRef(new Set<string>());
+  const dismissedExternalRef = useRef(dismissedExternal);
+  dismissedExternalRef.current = dismissedExternal;
   const [presentation, setPresentation] =
     useState<WorkspaceBrowserPresentation>();
   const automaticSelection = useRef<string | undefined>(undefined);
@@ -526,6 +547,7 @@ export function AuxiliaryPanel({
     };
   }, [threadId]);
   useEffect(() => {
+    currentExternalIds.current.clear();
     setExternalTargets([]);
     setExternalListScope(externalScope);
     setDismissedExternal([]);
@@ -536,15 +558,69 @@ export function AuxiliaryPanel({
     const stop = window.zenx.browserObservation.subscribe(
       { threadId, frames: false, catalog: true },
       (event) => {
-        if (!alive || event.type !== "targets") return;
+        if (!alive) return;
+        if (event.type === "activity") {
+          if (
+            event.phase !== "started" ||
+            event.threadId !== threadId ||
+            !acceptBrowserOperation(threadId, event.operationSequence) ||
+            !currentExternalIds.current.has(event.targetId)
+          )
+            return;
+          const prior = browserFollowingByThread.get(threadId);
+          const following =
+            prior?.epoch === event.sessionEpoch
+              ? prior
+              : {
+                  epoch: event.sessionEpoch,
+                  suppressed: prior?.suppressed ?? false,
+                  tabId: "",
+                };
+          following.tabId = `external-browser:${event.targetId}`;
+          browserFollowingByThread.set(threadId, following);
+          if (browserFollowingByThread.size > 512)
+            browserFollowingByThread.delete(
+              browserFollowingByThread.keys().next().value!,
+            );
+          setFollowRevision((value) => value + 1);
+          const key = JSON.stringify([event.sessionEpoch, event.targetId]);
+          if (externalPresentations.has(key)) return;
+          externalPresentations.add(key);
+          if (externalPresentations.size > 512)
+            externalPresentations.delete(
+              externalPresentations.values().next().value!,
+            );
+          if (
+            following.suppressed ||
+            dismissedExternalRef.current.includes(event.targetId) ||
+            document.visibilityState === "hidden" ||
+            Date.now() - event.requestedAt > 5_000 ||
+            lastBrowserIntent.current >= event.requestedAt
+          ) {
+            following.suppressed = true;
+            return;
+          }
+          automaticSelection.current = following.tabId;
+          setPresentation(undefined);
+          setChoosing(false);
+          setPickingFile(false);
+          presentationCallbacks.current.onSelectTab(following.tabId);
+          autoOpening.current = true;
+          presentationCallbacks.current.onOpenChange(true);
+          return;
+        }
+        if (event.type !== "targets") return;
         // Preserve exact observer/backend/connection identity, never match URLs.
         const external = event.targets.filter(
           (target) => target.backendId !== "workspace",
         );
+        currentExternalIds.current = new Set(
+          external.map((target) => target.id),
+        );
         setExternalTargets((previous) => [
-          ...previous.filter(
-            (old) => !external.some((next) => next.id === old.id),
-          ),
+          ...previous
+            .filter((old) => !external.some((next) => next.id === old.id))
+            .map((old) => ({ ...old, activityCount: 0 })),
           ...external,
         ]);
       },
@@ -563,16 +639,20 @@ export function AuxiliaryPanel({
     let alive = true;
     const stop = api.onPresentation((request) => {
       if (!alive || request.threadId !== threadId) return;
+      if (!acceptBrowserOperation(threadId, request.operationSequence)) {
+        void api.declinePresentation(request.requestId).catch(() => undefined);
+        return;
+      }
       const previous = browserFollowingByThread.get(threadId);
       const following =
         previous?.epoch === request.sessionEpoch
           ? previous
           : {
               epoch: request.sessionEpoch,
-              suppressed: false,
-              tabId: request.tab.id,
+              suppressed: previous?.suppressed ?? false,
+              tabId: `browser:${request.tab.id}`,
             };
-      following.tabId = request.tab.id;
+      following.tabId = `browser:${request.tab.id}`;
       browserFollowingByThread.set(threadId, following);
       if (browserFollowingByThread.size > 512)
         browserFollowingByThread.delete(
@@ -624,9 +704,16 @@ export function AuxiliaryPanel({
     : undefined;
   const followAgent = () => {
     if (!following) return;
+    if (following.tabId.startsWith("external-browser:")) {
+      const id = following.tabId.slice("external-browser:".length);
+      if (!currentExternalIds.current.has(id)) return;
+      setDismissedExternal((previous) =>
+        previous.filter((value) => value !== id),
+      );
+    }
     following.suppressed = false;
     setPresentation(undefined);
-    automaticSelection.current = `browser:${following.tabId}`;
+    automaticSelection.current = following.tabId;
     onSelectTab(automaticSelection.current);
     onOpenChange(true);
     setChoosing(false);
@@ -906,9 +993,10 @@ export function AuxiliaryPanel({
                 className="workspace-content-tab"
                 data-active={!showChooser && active === tab.id}
                 data-agent-active={Boolean(
-                  tab.browser &&
-                  (tab.browser.agentActionsInFlight > 0 ||
-                    (tab.browser.agentInspectionsInFlight ?? 0) > 0),
+                  (tab.browser &&
+                    (tab.browser.agentActionsInFlight > 0 ||
+                      (tab.browser.agentInspectionsInFlight ?? 0) > 0)) ||
+                  (tab.externalBrowser?.activityCount ?? 0) > 0,
                 )}
                 key={tab.id}
               >
@@ -1362,6 +1450,8 @@ export function AuxiliaryPanel({
                     threadId={threadId}
                     title={tab.externalBrowser.connectionLabel || title}
                     fixedTargetId={tab.externalBrowser.id}
+                    activityCount={tab.externalBrowser.activityCount}
+                    activityFailed={tab.externalBrowser.activityFailed}
                     embedded
                     open={open === true && visible}
                     onOpenChange={onOpenChange}

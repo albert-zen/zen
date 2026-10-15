@@ -54,6 +54,7 @@ let pages: WorkspaceBrowserTab[] = [
 const changes = new Set<
   (value: { threadId: string; tabs: WorkspaceBrowserTab[] }) => void
 >();
+let operationSequence = 0;
 const presentations = new Set<(value: WorkspaceBrowserPresentation) => void>();
 const calls: unknown[] = [];
 const external = {
@@ -79,6 +80,7 @@ const harness = Object.assign(window, {
         expiresAt: requestedAt + 750,
         threadId,
         sessionEpoch: "synthetic-session-epoch",
+        operationSequence: ++operationSequence,
         tab: pages[0]!,
       });
   },

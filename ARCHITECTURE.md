@@ -1359,6 +1359,12 @@ ZenX CI aggregate 的被动 test:dequeue reporter 只在共享字节预算内增
 
 The first exact trusted browser inspection may reserve the unused portion of its attachment epoch's original 10-second initialization deadline when more than the ordinary 2 seconds remain. The synchronous reservation is exclusive; only its holder may return it after a known document-change rejection before isolated-world dispatch, while the same owner, epoch and live target remain current and the operation is not aborted. Returning the reservation preserves the originally granted absolute deadline, even when fewer than 2 seconds remain or it has expired; no fresh ordinary budget is substituted. World dispatch irrevocably consumes the reservation, as do aborts, unknown outcomes, ownership/epoch changes and other failures. This permits an existing caller's explicit lifecycle-stabilization attempt to reclaim unused time; it adds no automatic retry or replay. Only the reserved inspection’s isolated-world creation and main evaluation share that absolute deadline, including intervening preflight time. Frame commands, barriers, post-evaluation verification, nested probes and every other document-preflight caller retain their ordinary budgets; the entire inspection is not a strict 10-second wall-time operation. Late dispatched world replies remain unknown. Unknown-outcome settlement and no-replay rules remain unchanged.
 
+The Browser catalog/activity IPC lane is an independent read-only renderer subscription; it cannot request frames or authorize external opening, and replacing it never retires the exact-target frame subscription.
+
+Browser operation activity is a disposable Host projection of the existing invocation, provider session incarnation and exact observer target. It travels over the read-only catalog lane with registry connection-generation fencing; it is not an operation journal, action authorization, cancellation proof or retry authority. External automatic presentation selects only a ZenX read-only peer tab and never activates or reopens the external browser page.
+
+Browser presentation ordering uses a process-local monotonic Host invocation sequence carried only through the current async call; Workspace presentation and external catalog activity share a per-Thread UI watermark, so delayed publication cannot reclaim selection or the Follow target. Per-target failure generations prevent an older successful operation from clearing a warning caused by a later failure. Neither projection creates dispatch, retry or durable execution authority.
+
 ### Queued input promotion
 
 `zen/thread/queue/steer` promotes an existing canonical queued identity and expected
@@ -1372,4 +1378,4 @@ and retries/reload read the existing canonical delivery receipt. Transport failu
 does not imply delivery or permit client-side cancel/resend. This is a one-message
 action; it does not rewrite any ingress preference or an explicitly queued sibling.
 
-The Browser catalog/activity IPC lane is an independent read-only renderer subscription; it cannot request frames or authorize external opening, and replacing it never retires the exact-target frame subscription.
+ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按单调钟至少间隔 15 秒读取固定 host-visible 内存与 visible-cgroup-root v2 数值；它不是 job/child 内存归因，不探索成员或挂载路径，无 timer/进程/信号修改，独立双 sink 32 KiB/32 样本上限不占用原 4 MiB trace 预算，缺值为 null，停事件或预算耗尽后最后样本会陈旧。

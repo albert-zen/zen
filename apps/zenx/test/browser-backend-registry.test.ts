@@ -1049,3 +1049,77 @@ test("human current-URL reads keep exact connection generation and Thread identi
     await registry.close();
   }
 });
+
+test("external activity is qualified to connection generation and late settlement cannot select a retired instance", async () => {
+  const workspace = fixture("Workspace"),
+    connected = fixture("Chrome");
+  let finish!: () => void;
+  const original = connected.backend.navigate;
+  connected.backend.navigate = async (...args) => {
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    return original(...args);
+  };
+  const connection = {
+    connectionId: "11111111-1111-4111-8111-111111111111",
+    generation: "one",
+    browser: "chrome" as const,
+    label: "Chrome",
+    state: "connected" as const,
+  };
+  let changed!: () => void;
+  const registry = new BrowserBackendRegistry(
+    workspace.backend,
+    undefined,
+    undefined,
+    {
+      connections: () => [connection],
+      connectInstance: async () => ({
+        backend: connected.backend,
+        product: "fixture",
+      }),
+      onConnectionsChanged: (callback) => {
+        changed = callback;
+        return () => {};
+      },
+    },
+  );
+  const events: BrowserThreadEvent[] = [];
+  registry.observeThread({ threadId: "thread", frames: false }, (event) =>
+    events.push(event),
+  );
+  const call = (name: string, args = {}) =>
+    registry.invoke(`browser_connected_${name}`, {
+      ...invocation({ connectionId: connection.connectionId, ...args }),
+      approvalScope: {
+        key: `browser-instance:${connection.connectionId}`,
+        label: connection.label,
+        generation: connection.generation,
+      },
+    });
+  const listed = (await call("list_tabs")) as BrowserTabSummary[];
+  const pending = call("navigate", {
+    tabId: listed[0]!.tabId,
+    url: "https://example.test/",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const activity = events.findLast((event) => event.type === "activity");
+  assert.ok(activity?.type === "activity");
+  assert.match(activity.targetId, /connected\/.*\/one:/);
+  assert.match(activity.sessionEpoch, /connected\/.*\/one:/);
+  connection.generation = "two";
+  changed();
+  const count = events.filter((event) => event.type === "activity").length;
+  finish();
+  await pending;
+  assert.equal(
+    events.filter((event) => event.type === "activity").length,
+    count,
+  );
+  assert.equal(
+    events.findLast((event) => event.type === "targets")?.targets.length,
+    0,
+  );
+  await registry.close();
+});

@@ -18,6 +18,8 @@ export function BrowserThreadPanel({
   providerRevision,
   embedded = false,
   fixedTargetId,
+  activityCount = 0,
+  activityFailed = false,
 }: {
   threadId: string;
   title: string;
@@ -26,6 +28,8 @@ export function BrowserThreadPanel({
   providerRevision: unknown;
   embedded?: boolean;
   fixedTargetId?: string;
+  activityCount?: number;
+  activityFailed?: boolean;
 }) {
   useTranslation("panels");
   const [targets, setTargets] = useState<BrowserThreadTarget[]>([]);
@@ -124,7 +128,13 @@ export function BrowserThreadPanel({
           message: "",
           capturedAt: event.capturedAt,
         });
-      } else if (live && open && visible && event.frame.sequence > sequence) {
+      } else if (
+        event.type === "frame" &&
+        live &&
+        open &&
+        visible &&
+        event.frame.sequence > sequence
+      ) {
         sequence = event.frame.sequence;
         const image = imageRef.current;
         if (image) {
@@ -207,6 +217,7 @@ export function BrowserThreadPanel({
       className={`browser-thread-panel${embedded ? " embedded" : ""}`}
       aria-label={i18n.t("panels:browserFor", { title })}
       data-expanded={expanded}
+      data-agent-active={activityCount > 0}
       style={{ "--browser-panel-width": `${width}px` } as React.CSSProperties}
     >
       <div
@@ -402,6 +413,14 @@ export function BrowserThreadPanel({
                         : i18n.t("panels:browserObservation")}
               </strong>
               <small>{statusMessage}</small>
+              {activityCount > 0 ? (
+                <small>{i18n.t("panels:browserAgentWorking")}</small>
+              ) : null}
+              {activityFailed ? (
+                <small className="browser-ui-error">
+                  {i18n.t("panels:browserOperationFailed")}
+                </small>
+              ) : null}
             </span>
           </div>
         </header>

@@ -1,3 +1,5 @@
+import { browserOperationOrder } from "./browser-operation-order.js";
+import type { ToolInvocation } from "../../../../../src/tool.js";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
@@ -8,6 +10,8 @@ import type {
 } from "./browser-provider.js";
 
 export interface BrowserThreadTarget extends BrowserTabSummary {
+  activityCount?: number;
+  activityFailed?: boolean;
   backendId?: "workspace" | "connected";
   connectionId?: string;
   connectionLabel?: string;
@@ -23,7 +27,20 @@ export interface BrowserThreadRequest {
   /** Separate catalog/activity lane; never grants frame or external-open authority. */
   catalog?: true;
 }
+export interface BrowserThreadActivity {
+  type: "activity";
+  threadId: string;
+  sessionEpoch: string;
+  operationId: string;
+  operationSequence: number;
+  callId: string;
+  canonicalToolCallId?: string;
+  targetId: string;
+  requestedAt: number;
+  phase: "started" | "completed" | "failed";
+}
 export type BrowserThreadEvent =
+  | BrowserThreadActivity
   | Exclude<BrowserLiveObservationEvent, { type: "metadata" }>
   | { type: "targets"; targets: BrowserThreadTarget[]; selectedId?: string }
   | {
@@ -44,6 +61,7 @@ interface ThreadSession {
     string,
     {
       summary: BrowserThreadTarget;
+      failureGeneration: number;
       screenshot?: BrowserScreenshotArtifact;
       capturedAt?: string;
     }
@@ -122,7 +140,10 @@ export class BrowserThreadObservation {
         if (typeof summary.tabId !== "string") continue;
         const prior = session.targets.get(summary.tabId);
         const target = {
+          failureGeneration: prior?.failureGeneration ?? 0,
           summary: {
+            activityCount: prior?.summary.activityCount,
+            activityFailed: prior?.summary.activityFailed,
             sessionId: session.sessionId,
             tabId: summary.tabId,
             title: summary.title,
@@ -151,6 +172,94 @@ export class BrowserThreadObservation {
       }
     }
     this.#notify(session.threadId);
+  }
+
+  /** Passive Host operation projection; never authorizes dispatch or replay. */
+  operation(
+    session: ThreadSession,
+    tool: string,
+    invocation: ToolInvocation,
+  ): (failed: boolean, result?: unknown) => void {
+    if (
+      ["browser_list_tabs", "browser_close", "browser_close_session"].includes(
+        tool,
+      )
+    )
+      return () => {};
+    const operationId = randomUUID();
+    const operationSequence = browserOperationOrder();
+    const requestedAt = Date.now();
+    let target =
+      typeof invocation.arguments.tabId === "string"
+        ? session.targets.get(invocation.arguments.tabId)
+        : undefined;
+    const failureGeneration = target?.failureGeneration ?? 0;
+    const current = () =>
+      !this.#closed &&
+      this.#sessions.get(session.key) === session &&
+      target !== undefined &&
+      session.targets.get(target.summary.tabId)?.summary.id ===
+        target.summary.id;
+    const emit = (phase: BrowserThreadActivity["phase"]) => {
+      if (!current()) return;
+      // publish() can replace the target value while preserving its observer ID.
+      target = session.targets.get(target!.summary.tabId)!;
+      if (phase === "failed") target.failureGeneration++;
+      target.summary = {
+        ...target.summary,
+        activityCount: Math.max(
+          0,
+          (target.summary.activityCount ?? 0) + (phase === "started" ? 1 : -1),
+        ),
+        activityFailed:
+          phase === "failed" ||
+          ((phase === "started" ||
+            target.failureGeneration !== failureGeneration) &&
+            target.summary.activityFailed === true),
+      };
+      for (const observer of [...this.#observers]) {
+        if (observer.request.threadId !== session.threadId) continue;
+        this.#sendTargetSnapshot(observer);
+        if (!this.#observers.has(observer)) continue;
+        try {
+          observer.listener({
+            type: "activity",
+            threadId: session.threadId,
+            sessionEpoch: session.providerSessionId,
+            operationId,
+            operationSequence,
+            callId: invocation.callId,
+            canonicalToolCallId: invocation.canonicalToolCallId,
+            targetId: target.summary.id,
+            requestedAt,
+            phase,
+          });
+        } catch {
+          this.#observers.delete(observer);
+          observer.generation++;
+          this.#stop(observer);
+        }
+      }
+    };
+    const started = target !== undefined;
+    if (started) emit("started");
+    let settled = false;
+    return (failed, result) => {
+      if (settled) return;
+      settled = true;
+      if (
+        !started &&
+        !failed &&
+        typeof result === "object" &&
+        result !== null &&
+        "tabId" in result &&
+        typeof result.tabId === "string"
+      ) {
+        target = session.targets.get(result.tabId);
+        emit("started");
+      }
+      emit(failed ? "failed" : "completed");
+    };
   }
 
   async readTargetUrl(threadId: string, targetId: string): Promise<string> {

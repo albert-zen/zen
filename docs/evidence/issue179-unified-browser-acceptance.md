@@ -49,7 +49,9 @@ Automatic presentation is once per Workspace session incarnation and tab. Manual
 switch/collapse suppresses following until explicit Follow; no Turn reset is
 claimed. Connected external targets are exact-identity read-only peer tabs, retain
 disconnected identities, and respect dismissal across unrelated plugin refreshes.
-Automatic Host-operation presentation for connected external targets remains open.
+Automatic Host-operation presentation for connected external targets was left open
+by the Workspace-only slice; the local follow-on below does not yet establish
+native connected-browser acceptance.
 
 ## Subsequent integration and validation history
 
@@ -77,4 +79,47 @@ multiple peers, snapshot refresh, stale callbacks/unsubscribe on A→B, window h
 and restore, final peer close, and exact visible frame-only external-open
 authority. Hidden fixed peers do not replace a frame subscription with a
 metadata-only subscription. Standalone BrowserThreadPanel behavior is unchanged.
-Connected external automatic operation following remains open under #179.
+Connected external automatic operation following remained open in that revision
+under #179.
+
+## Connected external activity follow-on (local implementation)
+
+The independent catalog IPC lane fixes the catalog/frame subscription collision:
+listing and Host activity continue while the selected exact target has its own
+frame subscription. Catalog cannot request frames or authorize external opening.
+
+Host operation begin/completion/failure events identify the existing Thread,
+provider-session incarnation, Host call/canonical tool-call IDs and observer target;
+the registry adds the current connection generation. No URL is an identity key.
+Already-known targets are announced before backend dispatch. For a newly opened
+page, there is no trustworthy target until the backend returns: presentation is
+therefore after successful identity publication, not a pre-open or mount ACK.
+External automatic presentation is a read-only ZenX peer-tab selection; it does
+not activate Chrome/Edge, reopen a URL, change OS focus or switch the main Thread.
+The underlying CDP ownership, revisions and unknown-outcome fences are unchanged.
+
+The first operation per exact session-incarnation/target can reveal its tab in the
+visible Thread. Manual switch/collapse suppresses following until explicit Follow.
+Activity clearing leaves the page visible. Failed operations show a conservative
+failure/uncertainty message, never a success indication or automatic retry.
+Disconnect clears activity while preserving the unavailable old identity; retired
+session/generation events cannot select a new same-URL target. Hidden/stale events
+are not replayed when returning to the app.
+
+Focused tests exercise real registry and IPC bridge objects with controlled
+backend dependencies, plus production React components in JSDOM. These are not
+native connected-browser E2E acceptance or screenshot evidence. Native connected
+acceptance and any synthetic UI captures remain separate, owned by the designated
+capture task. No such captures or native execution were performed for this slice.
+
+### R1 ordering regressions
+
+The original late-open and overlapping-failure repro assertions are retained in
+`browser-activity-order.test.ts` and `browser-activity-failure-order.test.ts`.
+Both failed before the fix. Presentation uses a Host-minted monotonic operation
+sequence shared across Workspace and connected activity, rather than response
+arrival time or URL. Tests resolve two opens in reverse order, cross the two
+presentation channels, and verify that stale events cannot rewrite Follow.
+An old inspection completing after a newer failed navigation retains the warning;
+a successful inspection begun after that failure can clear the presentation
+warning without changing the backend's action/unknown-outcome fences.
