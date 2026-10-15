@@ -900,6 +900,15 @@ export function AuxiliaryPanel({
                               ? i18n.t("panels:automations")
                               : panel.title}
                           </strong>
+                          {panel.pluginId === "zenx-subagents" ? (
+                            <small>
+                              {i18n.t("panels:subagentsWorkspaceDescription")}
+                            </small>
+                          ) : panel.pluginId === "zenx-triggers" ? (
+                            <small>
+                              {i18n.t("panels:triggersWorkspaceDescription")}
+                            </small>
+                          ) : null}
                         </span>
                       </button>
                       {panel.pluginId === "zenx-subagents" && snapshot ? (

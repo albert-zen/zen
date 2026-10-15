@@ -1,3 +1,13 @@
+import "../../src/renderer/src/shell-thread-panel.css";
+import "../../src/renderer/src/agent-readiness-notice.css";
+import "../../src/renderer/src/trigger-ui.css";
+import "../../src/renderer/src/skills.css";
+import "../../src/renderer/src/rooms-layout.css";
+import "../../src/renderer/src/room-message-actions.css";
+import "../../src/renderer/src/room-conversations.css";
+import "../../src/renderer/src/companion-workspace.css";
+import { i18n } from "../../src/renderer/src/i18n.js";
+import { workspaceLauncherSnapshot } from "../workspace-launcher-snapshot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
@@ -56,6 +66,19 @@ const options = {
   },
 };
 const zenx = {
+  computerReadiness: {
+    get: async () => ({
+      platform: params.get("platform") ?? "win32",
+      accessibility: "granted",
+      screenRecording: "granted",
+    }),
+  },
+  chromeBridge: {
+    get: async () => ({
+      effectiveMode: "user-session",
+      connection: { state: "connected" },
+    }),
+  },
   workspaceBrowser: {
     command: async (
       threadId: string,
@@ -269,8 +292,21 @@ Object.assign(zenx, {
     },
   },
 });
+// Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
+if (params.has("launchers")) {
+  Object.assign(zenx.plugins, {
+    get: async () => workspaceLauncherSnapshot,
+    executeCommand: async (_pluginId: string, command: string) => {
+      if (command === "list") return { threads: [] };
+      if (command === "create") return { threadId: "synthetic-side-chat" };
+      return { triggers: [], history: [], rooms: [] };
+    },
+    readHandle: async () => null,
+  });
+}
 Object.defineProperty(window, "zenx", { value: zenx });
 localStorage.setItem("zenx-sidebar-mode", "inbox");
+await i18n.changeLanguage(params.get("lang") ?? "en");
 createRoot(document.getElementById("root")!).render(<App />);
 function summary(
   threadId = "thread-1",

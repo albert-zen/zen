@@ -183,7 +183,7 @@ function CreateSideChat({
     <div className="subagent-create">
       <button
         type="button"
-        className="subagent-create-button"
+        className={`subagent-create-button${compact ? " subagent-create-button-compact" : ""}`}
         aria-label={i18n.t("panels:newSideChat")}
         title={i18n.t("panels:forkThisConversationIntoASideChat")}
         disabled={!parent || busy || !active}

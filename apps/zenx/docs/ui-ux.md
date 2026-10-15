@@ -613,3 +613,7 @@ preserves the exact retained page text and can scroll horizontally inside the
 code block. Identity, dispatch caveats, byte counts and source-attachment metadata
 are available on demand. Projection, truncation and redaction are independent
 visible flags, so simultaneous anomalies are never collapsed into one status.
+
+### 2026-10-15: Workspace launcher rows
+
+Subagents and Triggers use the same horizontal launcher surface and title/description hierarchy as Terminal, File and Browser, with concise localized descriptions and their distinct icons. Subagents keeps its independent quick-create action as a small circular plus inside the same row; the primary row opens the existing list, while the plus creates a side chat without starting a Turn. Touch/coarse-pointer use retains a 44px action target.
