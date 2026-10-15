@@ -1901,6 +1901,9 @@ function ThreadRow({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuEpoch = useRef(0);
+  const debugSelection = useRef<string | null>(null);
+  const renameOrigin = useRef<HTMLElement | null>(null);
+  const renameFocus = useRef<HTMLElement | null>(null);
   const suppressDetailsFocus = useRef(false);
   const clearDetailsTimer = () => {
     if (detailsTimer.current !== null) clearTimeout(detailsTimer.current);
@@ -1918,6 +1921,7 @@ function ThreadRow({
   };
   const leaveDetails = () => {
     clearDetailsTimer();
+    if (renaming) return;
     detailsTimer.current = setTimeout(() => {
       if (
         !detailsRef.current?.contains(document.activeElement) &&
@@ -1961,21 +1965,31 @@ function ThreadRow({
   }, [busyAction, menuError]);
   const closeMenu = (restoreFocus = true) => {
     menuEpoch.current += 1;
+    renameOrigin.current = null;
+    renameFocus.current = null;
+    debugSelection.current = null;
     const focused = document.activeElement;
     const ownsFocus =
       menuRef.current?.contains(focused) ||
+      detailsRef.current?.contains(focused) ||
       focused === menuTriggerRef.current ||
       (focused === document.body &&
         document.hasFocus() &&
         actionFocusRef.current?.matches(":disabled"));
     restoreMenuFocusRef.current = restoreFocus && !!ownsFocus;
     setMenuOpen(false);
+    setDetailsOpen(false);
     setRenaming(false);
   };
   const lastSelectionKey = useRef(information?.selectionKey);
   useLayoutEffect(() => {
     if (lastSelectionKey.current === information?.selectionKey) return;
     lastSelectionKey.current = information?.selectionKey;
+    if (debugSelection.current === information?.selectionKey) {
+      debugSelection.current = null;
+      return;
+    }
+    debugSelection.current = null;
     clearDetailsTimer();
     setDetailsOpen(false);
     closeMenu(false);
@@ -2001,14 +2015,14 @@ function ThreadRow({
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [menuOpen]);
   useEffect(() => {
-    if (!menuOpen || renaming) return;
+    if (!menuOpen || renaming || renameOrigin.current) return;
     const items = enabledMenuItems(menuRef.current);
     const item =
       initialMenuFocusRef.current === "last" ? items.at(-1) : items.at(0);
     item?.focus();
-  }, [menuOpen, renaming]);
+  }, [menuOpen]);
   useLayoutEffect(() => {
-    if (menuOpen || !restoreMenuFocusRef.current) return;
+    if (menuOpen || detailsOpen || !restoreMenuFocusRef.current) return;
     restoreMenuFocusRef.current = false;
     // Reveal the focus-within action rail via its row before focusing an
     // ellipsis invoker. Full-name details keep their row as the return target.
@@ -2018,7 +2032,7 @@ function ThreadRow({
     (row ?? menuTriggerRef.current)?.focus({ preventScroll: true });
     if (menuFocusOrigin.current === "trigger")
       menuTriggerRef.current?.focus({ preventScroll: true });
-  }, [menuOpen]);
+  }, [menuOpen, detailsOpen]);
 
   useEffect(() => {
     if (!detailsOpen) return;
@@ -2027,7 +2041,7 @@ function ThreadRow({
         !rowRef.current?.contains(event.target as Node) &&
         !detailsRef.current?.contains(event.target as Node)
       )
-        setDetailsOpen(false);
+        closeMenu(false);
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
@@ -2041,20 +2055,42 @@ function ThreadRow({
     Number(boundTriggers.length > 0) +
     Number(hasActiveTurn || pendingApproval || watching) +
     Number(unread);
-  const beginRename = () => {
+  const finishRename = () => {
+    const input = (menuRef.current ?? detailsRef.current)?.querySelector(
+      "input",
+    );
+    const ownsFocus =
+      input?.form?.contains(document.activeElement) ||
+      (document.activeElement === document.body &&
+        actionFocusRef.current?.matches(":disabled"));
+    menuEpoch.current += 1;
+    setRenaming(false);
+    setMenuError(null);
+    renameFocus.current = ownsFocus ? renameOrigin.current : null;
+    renameOrigin.current = null;
+  };
+  useLayoutEffect(() => {
+    if (renaming || !renameFocus.current) return;
+    const origin = renameFocus.current;
+    renameFocus.current = null;
+    if (origin.isConnected) origin.focus({ preventScroll: true });
+  }, [renaming]);
+  const beginRename = (origin?: HTMLElement) => {
+    if (busyActionRef.current || renaming) return;
     clearDetailsTimer();
-    setDetailsOpen(false);
+    renameOrigin.current = origin ?? (document.activeElement as HTMLElement);
     menuEpoch.current += 1;
     setMenuError(null);
     setRenameDraft(threadTitle(thread));
     setRenaming(true);
-    setMenuOpen(true);
+    if (!detailsOpen) setMenuOpen(true);
   };
   const project = information?.projects.projects.find((p) =>
     p.threadIds.includes(thread.threadId),
   );
-  const detailsContents = (
+  const detailsContents = (titleEditor: ReactNode) => (
     <ThreadInformation
+      titleEditor={titleEditor}
       thread={thread}
       projectName={project?.name ?? threadProject(thread)}
       projectPath={
@@ -2063,9 +2099,9 @@ function ThreadRow({
       }
       triggers={boundTriggers}
       triggerStatus={information?.triggers.status ?? "unavailable"}
-      onRename={() => {
-        menuFocusOrigin.current = "row";
-        beginRename();
+      onRename={(origin) => {
+        if (!menuOpen) menuFocusOrigin.current = "row";
+        beginRename(origin);
       }}
     />
   );
@@ -2156,7 +2192,10 @@ function ThreadRow({
         focusThreadListHeading();
       await operation();
       if (action === "fork") focusThreadListHeading(false);
-      if (epoch === menuEpoch.current) closeMenu(action === "rename");
+      if (epoch === menuEpoch.current) {
+        if (action === "rename") finishRename();
+        else closeMenu(false);
+      }
     } catch (error) {
       if (epoch !== menuEpoch.current) return;
       setMenuError(error instanceof Error ? error.message : String(error));
@@ -2367,39 +2406,17 @@ function ThreadRow({
           <Icon name="more" size={16} />
         </button>
       </span>
-      {detailsOpen && !menuOpen ? (
-        <SidebarMenuPopover
-          anchorRef={rowRef}
-          menuRef={detailsRef}
-          className="thread-information"
-          role="dialog"
-          aria-label={i18n.t("shell:threadDetails")}
-          onPointerEnter={clearDetailsTimer}
-          onPointerLeave={leaveDetails}
-          onFocus={clearDetailsTimer}
-          onBlur={leaveDetails}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              clearDetailsTimer();
-              setDetailsOpen(false);
-              suppressDetailsFocus.current = true;
-              rowRef.current
-                ?.querySelector<HTMLButtonElement>(".thread-row")
-                ?.focus();
-            }
-          }}
-        >
-          {detailsContents}
-        </SidebarMenuPopover>
-      ) : null}
       <ThreadItemMenu
+        informationOnly={!menuOpen}
+        onPointerEnter={clearDetailsTimer}
+        onPointerLeave={leaveDetails}
+        onFocus={clearDetailsTimer}
+        onBlur={leaveDetails}
         debugging={debugMenu?.threadId === thread.threadId}
         onToggleDebug={
           debugMenu
             ? () => {
-                closeMenu();
+                debugSelection.current = `agent:${thread.threadId}`;
                 debugMenu.toggle(thread.threadId);
               }
             : undefined
@@ -2411,9 +2428,9 @@ function ThreadRow({
         hasActiveTurn={hasActiveTurn}
         labelledBy={`thread-menu-trigger-${thread.threadId}`}
         menuId={`thread-menu-${thread.threadId}`}
-        menuRef={menuRef}
-        menuTriggerRef={menuTriggerRef}
-        open={menuOpen}
+        menuRef={menuOpen ? menuRef : detailsRef}
+        menuTriggerRef={menuOpen ? menuTriggerRef : rowRef}
+        open={menuOpen || detailsOpen}
         pinned={pinned}
         renaming={renaming}
         renameDraft={renameDraft}
@@ -2424,7 +2441,7 @@ function ThreadRow({
         onFork={() =>
           void runAction("fork", () => onForkThread(thread.threadId))
         }
-        onCancelRename={() => setRenaming(false)}
+        onCancelRename={finishRename}
         onRequestClose={() => closeMenu()}
         onDraftChange={setRenameDraft}
         onPin={() =>
@@ -2446,6 +2463,7 @@ function ThreadRow({
 }
 
 function ThreadInformation({
+  titleEditor,
   thread,
   projectName,
   projectPath,
@@ -2453,12 +2471,13 @@ function ThreadInformation({
   triggerStatus,
   onRename,
 }: {
+  titleEditor?: ReactNode;
   thread: NativeThreadSummary;
   projectName: string;
   projectPath: string | null;
   triggers: SidebarTriggerState["triggers"];
   triggerStatus: SidebarTriggerState["status"];
-  onRename(): void;
+  onRename(origin: HTMLButtonElement): void;
 }) {
   const [now, setNow] = useState(Date.now);
   const next = nextSidebarTrigger(triggers, now);
@@ -2494,17 +2513,25 @@ function ThreadInformation({
   // host-local child IPC. Fleet remote references are not admitted here.
   return (
     <>
-      <button
-        type="button"
-        className="thread-information-title"
-        onClick={onRename}
-        aria-label={i18n.t("shell:renameThreadNamed", {
-          title: threadTitle(thread),
-        })}
+      <div
+        className="thread-information-title-slot"
+        data-editing={!!titleEditor}
       >
-        <span>{threadTitle(thread)}</span>
-        <Icon name="compose" size={14} />
-      </button>
+        <button
+          type="button"
+          className="thread-information-title"
+          tabIndex={titleEditor ? -1 : undefined}
+          aria-hidden={titleEditor ? true : undefined}
+          onClick={(event) => onRename(event.currentTarget)}
+          aria-label={i18n.t("shell:renameThreadNamed", {
+            title: threadTitle(thread),
+          })}
+        >
+          <span>{threadTitle(thread)}</span>
+          <Icon name="compose" size={14} />
+        </button>
+        {titleEditor}
+      </div>
       <dl className="thread-information-facts">
         <div>
           <dt>{i18n.t("shell:threadProjectLabel")}</dt>
@@ -2568,6 +2595,11 @@ function ThreadInformation({
 }
 
 export function ThreadItemMenu({
+  informationOnly = false,
+  onPointerEnter,
+  onPointerLeave,
+  onFocus,
+  onBlur,
   debugging = false,
   onToggleDebug,
   details,
@@ -2593,9 +2625,14 @@ export function ThreadItemMenu({
   onRename,
   onUnarchive,
 }: {
+  informationOnly?: boolean;
+  onPointerEnter?: React.PointerEventHandler<HTMLDivElement>;
+  onPointerLeave?: React.PointerEventHandler<HTMLDivElement>;
+  onFocus?: React.FocusEventHandler<HTMLDivElement>;
+  onBlur?: React.FocusEventHandler<HTMLDivElement>;
   debugging?: boolean;
   onToggleDebug?(): void;
-  details?: ReactNode;
+  details?(titleEditor: ReactNode): ReactNode;
   archived: boolean;
   busyAction:
     "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null;
@@ -2604,13 +2641,13 @@ export function ThreadItemMenu({
   labelledBy?: string;
   menuId?: string;
   menuRef?: RefObject<HTMLDivElement | null>;
-  menuTriggerRef?: RefObject<HTMLButtonElement | null>;
+  menuTriggerRef?: RefObject<HTMLElement | null>;
   open: boolean;
   pinned: boolean;
   renaming: boolean;
   renameDraft: string;
   onArchive(): void;
-  onBeginRename(): void;
+  onBeginRename(origin?: HTMLElement): void;
   onFork?(): void;
   onCancelRename(): void;
   onRequestClose?(): void;
@@ -2646,19 +2683,83 @@ export function ThreadItemMenu({
   }, [open, renaming]);
   if (!open) return null;
   const busy = busyAction !== null;
+  const renameEditor = renaming ? (
+    <form
+      className={`thread-menu-rename${details ? " thread-menu-rename-inline" : ""}`}
+      onCompositionStart={() => {
+        composing.current = true;
+      }}
+      onCompositionEnd={() => {
+        composing.current = false;
+      }}
+      onKeyDown={(event) => {
+        if (
+          event.key === "Enter" &&
+          (composing.current ||
+            event.nativeEvent.isComposing ||
+            event.keyCode === 229)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (busy || composing.current || !renameDraft.trim()) return;
+        onRename();
+      }}
+    >
+      <label>
+        <span className="sr-only">{i18n.t("shell:threadName")}</span>
+        <input
+          ref={renameInput}
+          autoFocus
+          readOnly={busy}
+          aria-invalid={error ? true : undefined}
+          value={renameDraft}
+          onChange={(event) => onDraftChange(event.target.value)}
+        />
+      </label>
+      <div>
+        <button
+          type="submit"
+          aria-label={
+            busyAction === "rename"
+              ? i18n.t("shell:saving")
+              : i18n.t("shell:save")
+          }
+          title={i18n.t("shell:save")}
+          disabled={busy || !renameDraft.trim()}
+        >
+          {busyAction === "rename"
+            ? i18n.t("shell:saving")
+            : i18n.t("shell:save")}
+        </button>
+        <button type="button" disabled={busy} onClick={onCancelRename}>
+          {i18n.t("shell:cancel")}
+        </button>
+      </div>
+    </form>
+  ) : null;
   return (
     <SidebarMenuPopover
       anchorRef={menuTriggerRef}
-      className="thread-item-menu"
+      lockSize={renaming}
+      className={informationOnly ? "thread-information" : "thread-item-menu"}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      onFocus={onFocus}
+      onBlur={onBlur}
       id={menuId}
       menuRef={menuRef}
-      role={renaming ? "dialog" : "menu"}
+      role={renaming || informationOnly ? "dialog" : "menu"}
       aria-labelledby={labelledBy}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
-          onRequestClose?.();
+          if (renaming) onCancelRename();
+          else onRequestClose?.();
           return;
         }
         if (
@@ -2688,62 +2789,21 @@ export function ThreadItemMenu({
         items[nextIndex]?.focus();
       }}
     >
-      {!renaming && details ? (
-        <div className="thread-menu-information">{details}</div>
-      ) : null}
-      {renaming ? (
-        <form
-          className="thread-menu-rename"
-          onCompositionStart={() => {
-            composing.current = true;
-          }}
-          onCompositionEnd={() => {
-            composing.current = false;
-          }}
-          onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              (composing.current ||
-                event.nativeEvent.isComposing ||
-                event.keyCode === 229)
-            ) {
-              event.preventDefault();
-              event.stopPropagation();
-            }
-          }}
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (busy || composing.current || !renameDraft.trim()) return;
-            onRename();
-          }}
+      {details ? (
+        <div
+          className={informationOnly ? undefined : "thread-menu-information"}
         >
-          <label>
-            <span>{i18n.t("shell:threadName")}</span>
-            <input
-              ref={renameInput}
-              autoFocus
-              value={renameDraft}
-              onChange={(event) => onDraftChange(event.target.value)}
-            />
-          </label>
-          <div>
-            <button type="submit" disabled={busy || !renameDraft.trim()}>
-              {busyAction === "rename"
-                ? i18n.t("shell:saving")
-                : i18n.t("shell:save")}
-            </button>
-            <button type="button" disabled={busy} onClick={onCancelRename}>
-              {i18n.t("shell:cancel")}
-            </button>
-          </div>
-        </form>
-      ) : archived ? (
+          {details(renameEditor)}
+        </div>
+      ) : null}
+      {!details && renaming ? renameEditor : null}
+      {informationOnly ? null : archived ? (
         <button
           type="button"
           role="menuitem"
           tabIndex={-1}
           data-thread-action="unarchive"
-          disabled={busy}
+          disabled={busy || renaming}
           onClick={onUnarchive}
         >
           <Icon name="restore" />
@@ -2753,30 +2813,13 @@ export function ThreadItemMenu({
         </button>
       ) : (
         <>
-          {onToggleDebug ? (
-            <button
-              type="button"
-              role="menuitemcheckbox"
-              aria-checked={debugging}
-              tabIndex={-1}
-              data-thread-action="debug"
-              disabled={busy}
-              onClick={onToggleDebug}
-            >
-              <Icon name="terminal" />
-              {i18n.t("shell:debugMode")}
-              <span className="thread-debug-menu-state" aria-hidden="true">
-                {debugging ? "✓" : ""}
-              </span>
-            </button>
-          ) : null}
           <button
             type="button"
             role="menuitem"
             tabIndex={-1}
             data-thread-action="rename"
-            disabled={busy}
-            onClick={onBeginRename}
+            disabled={busy || renaming}
+            onClick={(event) => onBeginRename(event.currentTarget)}
           >
             <Icon name="compose" />
             {i18n.t("shell:rename")}
@@ -2786,7 +2829,7 @@ export function ThreadItemMenu({
             role="menuitem"
             tabIndex={-1}
             data-thread-action="fork"
-            disabled={busy}
+            disabled={busy || renaming}
             title={i18n.t(
               "shell:forksThroughTheLatestCompleteTurnAndUsesTheSameWorkingDirectory",
             )}
@@ -2802,7 +2845,7 @@ export function ThreadItemMenu({
             role="menuitem"
             tabIndex={-1}
             data-thread-action={pinned ? "unpin" : "pin"}
-            disabled={busy}
+            disabled={busy || renaming}
             onClick={onPin}
           >
             <Icon name={pinned ? "pin-off" : "pin"} />
@@ -2819,7 +2862,7 @@ export function ThreadItemMenu({
             role="menuitem"
             tabIndex={-1}
             data-thread-action="archive"
-            disabled={busy || hasActiveTurn}
+            disabled={busy || renaming || hasActiveTurn}
             title={
               hasActiveTurn
                 ? i18n.t("shell:waitForTheActiveTurnToFinishBeforeArchiving")
@@ -2837,6 +2880,23 @@ export function ThreadItemMenu({
               {i18n.t("shell:waitForTheActiveTurnToFinishBeforeArchiving")}
             </p>
           ) : null}
+          {onToggleDebug ? (
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={debugging}
+              tabIndex={-1}
+              data-thread-action="debug"
+              disabled={busy || renaming}
+              onClick={onToggleDebug}
+            >
+              <Icon name="terminal" />
+              {i18n.t("shell:debugMode")}
+              <span className="thread-debug-menu-switch" aria-hidden="true">
+                <span />
+              </span>
+            </button>
+          ) : null}
         </>
       )}
       {error === null ? null : <p role="alert">{error}</p>}
@@ -2848,18 +2908,32 @@ const SIDEBAR_MENU_GAP = 6;
 const SIDEBAR_MENU_VIEWPORT_MARGIN = 8;
 
 function SidebarMenuPopover({
+  lockSize = false,
   anchorRef,
   children,
   className,
   menuRef,
   ...props
 }: {
+  lockSize?: boolean;
   anchorRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
   className: string;
   menuRef?: RefObject<HTMLDivElement | null>;
 } & Omit<React.HTMLAttributes<HTMLDivElement>, "children" | "className">) {
   const [layout, setLayout] = useState<SidebarMenuLayout | null>(null);
+  const [lockedSize, setLockedSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const rect = lockSize ? menuRef?.current?.getBoundingClientRect() : null;
+    setLockedSize(
+      rect && rect.width > 0 && rect.height > 0
+        ? { width: rect.width, height: rect.height }
+        : null,
+    );
+  }, [lockSize, menuRef]);
 
   useLayoutEffect(() => {
     const anchor = anchorRef?.current;
@@ -2907,7 +2981,11 @@ function SidebarMenuPopover({
       ref={menuRef}
       className={className}
       data-placement={layout?.placement}
-      style={anchorRef === undefined ? undefined : popoverStyle(layout)}
+      style={
+        anchorRef === undefined
+          ? undefined
+          : { ...popoverStyle(layout), ...(lockSize ? lockedSize : null) }
+      }
     >
       {children}
     </div>

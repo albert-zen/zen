@@ -5842,12 +5842,14 @@ for (const visibility of ["keep", "hide", "reopen"] as const) {
   });
 }
 
-test("side conversations keep distinct tabs, drafts and selection across close, reopen and main navigation", async () => {
+test("same-title side conversations retain identity, drafts and reading positions through rename, close, reopen and main navigation", async () => {
   const children = ["child-a", "child-b"].map((id) => ({
     ...summary(false, id, "Same child title"),
     parentThreadId: "thread-1",
   }));
+  const renames: Array<{ threadId: string; title: string }> = [];
   const harness = await mountThreadApp({
+    initialPinnedThreadIds: ["child-a"],
     projectsGet: async () => ({
       projects: [
         {
@@ -5883,6 +5885,25 @@ test("side conversations keep distinct tabs, drafts and selection across close, 
       },
     },
   });
+  window.zenx.titles.rename = async (threadId, title) => {
+    renames.push({ threadId, title });
+    return { threadId, title, status: "manual", version: 1, source: "manual" };
+  };
+  // Model native scroll clamping while exercising App's real per-Thread cache.
+  const tops = new WeakMap<HTMLElement, number>();
+  Object.defineProperties(harness.dom.window.HTMLElement.prototype, {
+    clientHeight: { configurable: true, get: () => 400 },
+    scrollHeight: { configurable: true, get: () => 1600 },
+    scrollTop: {
+      configurable: true,
+      get(this: HTMLElement) {
+        return tops.get(this) ?? 0;
+      },
+      set(this: HTMLElement, value: number) {
+        tops.set(this, Math.max(0, Math.min(1200, value)));
+      },
+    },
+  });
   const tab = (id: string) =>
     document.getElementById(`aux-tab-${id}`) as HTMLButtonElement;
   const sideComposer = (id: string) =>
@@ -5892,6 +5913,25 @@ test("side conversations keep distinct tabs, drafts and selection across close, 
           `side-composer-${id}`,
         ) as HTMLTextAreaElement | null,
     );
+  const sideMessages = (id: string) => {
+    const messages = document
+      .getElementById(`side-composer-${id}`)
+      ?.closest(".thread-view")
+      ?.querySelector<HTMLElement>(".messages");
+    assert.ok(messages, `Expected the visible transcript for ${id}`);
+    return messages;
+  };
+  const readAt = async (id: string, top: number) => {
+    const messages = sideMessages(id);
+    await act(async () => {
+      messages.dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -75, bubbles: true }),
+      );
+      messages.scrollTop = top;
+      messages.dispatchEvent(new window.Event("scroll"));
+    });
+    assert.equal(messages.scrollTop, top);
+  };
   const click = async (button: HTMLElement) => {
     assert.ok(button);
     await act(async () => button.click());
@@ -5943,16 +5983,54 @@ test("side conversations keep distinct tabs, drafts and selection across close, 
     });
     await click(rows[0]!);
     await setTextareaValue(await sideComposer("child-a"), "Draft A");
+    await readAt("child-a", 275);
     await openChild(1);
     await setTextareaValue(await sideComposer("child-b"), "Draft B");
+    await readAt("child-b", 650);
     assert.ok(
       tab("thread:child-a"),
       "Opening B must retain the existing A instance",
     );
     assert.ok(tab("thread:child-b"));
     assert.equal(tab("thread:child-b").getAttribute("aria-selected"), "true");
+    assert.equal(tab("thread:child-a").textContent, "Same child title");
+    assert.equal(tab("thread:child-b").textContent, "Same child title");
+    const selectedTranscript = sideMessages("child-b");
+    const selectedDraft = await sideComposer("child-b");
+    // Rename inactive A through the real Sidebar action, keeping B selected.
+    await click(document.getElementById("thread-menu-trigger-child-a")!);
+    await click(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[data-thread-action="rename"]',
+        ),
+      ),
+    );
+    const titleInput = await waitFor(() =>
+      document.querySelector<HTMLInputElement>(".thread-menu-rename input"),
+    );
+    await setInputValue(titleInput, "Renamed child A");
+    await invokeFormSubmit(titleInput.form!);
+    await waitFor(
+      () => tab("thread:child-a").textContent === "Renamed child A",
+    );
+    assert.deepEqual(renames, [
+      { threadId: "child-a", title: "Renamed child A" },
+    ]);
+    assert.equal(tab("thread:child-b").textContent, "Same child title");
+    assert.equal(tab("thread:child-b").getAttribute("aria-selected"), "true");
+    assert.equal(await sideComposer("child-b"), selectedDraft);
+    assert.equal(selectedDraft.value, "Draft B");
+    assert.equal(sideMessages("child-b"), selectedTranscript);
+    assert.equal(selectedTranscript.scrollTop, 650);
+    assert.equal(
+      document.querySelector(".workspace-header .thread-title-line strong")
+        ?.textContent,
+      "Thread one",
+    );
     await click(tab("thread:child-a"));
     assert.equal((await sideComposer("child-a")).value, "Draft A");
+    assert.equal(sideMessages("child-a").scrollTop, 275);
     await click(
       tab("thread:child-b").parentElement!.querySelector<HTMLButtonElement>(
         ".workspace-tab-close",
@@ -5962,6 +6040,8 @@ test("side conversations keep distinct tabs, drafts and selection across close, 
     assert.equal(tab("thread:child-a").getAttribute("aria-selected"), "true");
     await openChild(1);
     assert.equal((await sideComposer("child-b")).value, "Draft B");
+    assert.equal(sideMessages("child-b").scrollTop, 650);
+    assert.equal(tab("thread:child-a").textContent, "Renamed child A");
     await openChild(1);
     assert.equal(
       document.querySelectorAll('[id="aux-tab-thread:child-b"]').length,
@@ -5979,6 +6059,8 @@ test("side conversations keep distinct tabs, drafts and selection across close, 
     await click(parent);
     assert.equal((await sideComposer("child-b")).value, "Draft B");
     assert.ok(tab("thread:child-a"));
+    assert.equal(tab("thread:child-a").textContent, "Renamed child A");
+    assert.equal(sideMessages("child-b").scrollTop, 650);
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value,
       "Keep parent draft",
@@ -5990,6 +6072,7 @@ test("side conversations keep distinct tabs, drafts and selection across close, 
     );
     assert.equal(tab("thread:child-a").getAttribute("aria-selected"), "true");
     assert.equal((await sideComposer("child-a")).value, "Draft A");
+    assert.equal(sideMessages("child-a").scrollTop, 275);
   } finally {
     await unmountApp(harness);
   }

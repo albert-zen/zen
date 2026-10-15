@@ -11,6 +11,7 @@ import { workspaceLauncherSnapshot } from "../workspace-launcher-snapshot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
+import type { ThreadTitleSnapshot } from "../../src/main/thread-title-types.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App } from "../../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
@@ -33,6 +34,8 @@ const sideConversations = [
   { ...summary("design-child", "Design review"), parentThreadId: "thread-1" },
   { ...summary("test-child", "Test coverage"), parentThreadId: "thread-1" },
 ];
+const fixtureTitles: ThreadTitleSnapshot = {};
+let titleVersion = 0;
 const options = {
   request: async (method: string, request?: unknown) => {
     if (method === "zen/thread/resume") {
@@ -220,7 +223,19 @@ const zenx = {
     }),
   },
   titles: {
-    get: async () => ({}),
+    get: async () => ({ ...fixtureTitles }),
+    rename: async (threadId: string, title: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const projection = {
+        threadId,
+        title,
+        status: "manual" as const,
+        source: "user" as const,
+        version: ++titleVersion,
+      };
+      fixtureTitles[threadId] = projection;
+      return projection;
+    },
     onChange: () => () => undefined,
   },
   triggers: {

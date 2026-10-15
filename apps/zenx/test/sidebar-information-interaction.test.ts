@@ -258,6 +258,13 @@ test("details retain focus, title directly renames, and late save cannot close a
         .querySelector<HTMLButtonElement>(".thread-information-title")!
         .click(),
     );
+    assert.equal(
+      document.querySelector(".thread-information"),
+      details,
+      "hover title edits inside the original information panel",
+    );
+    assert.equal(document.querySelector(".thread-item-menu"), null);
+    assert.ok(details.querySelector(".thread-information-facts"));
     let input = document.querySelector<HTMLInputElement>(
       ".thread-menu-rename input",
     )!;
@@ -346,14 +353,21 @@ test("details retain focus, title directly renames, and late save cannot close a
     await act(async () => input.dispatchEvent(event("Escape")));
     assert.equal(document.querySelector(".thread-menu-rename"), null);
     assert.equal(
-      document.activeElement === nextRow,
-      true,
-      "Escape restores the editor-owned focus to the visible thread row",
+      document.activeElement,
+      document.querySelector(
+        ".thread-menu-information .thread-information-title",
+      ),
+    );
+    assert.ok(
+      document.querySelector(".thread-item-menu"),
+      "cancel keeps the same panel open",
+    );
+    await act(async () =>
+      document.activeElement!.dispatchEvent(event("Escape")),
     );
     assert.equal(
-      document.querySelector(".thread-information"),
-      null,
-      "restoring row focus does not reopen details",
+      document.activeElement,
+      document.querySelector('[data-thread-id="b"] .thread-menu-trigger'),
     );
     await act(async () => row.focus());
     const pane = document.querySelector<HTMLElement>(".thread-information")!;
@@ -368,13 +382,14 @@ test("details retain focus, title directly renames, and late save cannot close a
     );
     assert.equal(document.activeElement, row);
     const openNameEditor = async () => {
-      await act(async () =>
-        document
-          .querySelector<HTMLButtonElement>(
-            '[data-thread-id="b"] .thread-menu-trigger',
-          )!
-          .click(),
-      );
+      if (!document.querySelector(".thread-item-menu"))
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(
+              '[data-thread-id="b"] .thread-menu-trigger',
+            )!
+            .click(),
+        );
       await act(async () =>
         document
           .querySelector<HTMLButtonElement>(
@@ -398,9 +413,11 @@ test("details retain focus, title directly renames, and late save cannot close a
     );
     await act(async () => resolve!());
     assert.equal(
-      document.activeElement === nextRow,
-      true,
-      "successful Enter restores owned focus to the row",
+      document.activeElement,
+      document.querySelector(
+        ".thread-menu-information .thread-information-title",
+      ),
+      "successful Enter restores owned focus to the title in the same panel",
     );
     input = await openNameEditor();
     await change(input, "save while moving elsewhere");

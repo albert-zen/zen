@@ -10,7 +10,6 @@ import {
   summarizeTraceActivity,
   createTraceObservationIndex,
   observedCommandStatus,
-  observedShellNonzeroResult,
 } from "../src/renderer/src/turn-projection.js";
 
 test("adjacent reasoning without public details has one honest row, not one per item", () => {
@@ -86,7 +85,7 @@ test("thread send and rename summaries report successful actions without redunda
   );
   assert.equal(
     traceSummary([sent, { ...renamed, status: "failed" }]),
-    "2 tool calls · Rename thread · failed · Sent message",
+    "2 tool calls · Rename thread · ended · Sent message",
   );
 });
 
@@ -348,10 +347,9 @@ test("collapsed trace counts all calls without hiding earlier failures", () => {
     ...items.slice(1),
   ]);
   assert.equal(activity.total, 4);
-  assert.equal(activity.failed, 1);
 });
 
-test("shell nonzero warnings are counted separately while actual failure phases stay intact", () => {
+test("ended results remain ordinary calls while lifecycle phases stay intact", () => {
   const shell = {
     ...command("nonzero", "grep absent file"),
     toolName: "shell",
@@ -384,14 +382,14 @@ test("shell nonzero warnings are counted separately while actual failure phases 
   };
   const activity = summarizeTraceActivity([shell, task, other, cancelled]);
   assert.equal(activity.total, 4);
-  assert.equal(activity.shellNonzero, 1);
-  assert.equal(activity.failed, 2);
   assert.equal(activity.cancelled, 1);
   assert.equal(activity.active, 0);
-  assert.match(traceSummary([shell]), /shell returned a nonzero status/);
+  assert.equal("failed" in activity, false);
+  assert.equal("shellNonzero" in activity, false);
+  assert.match(traceSummary([shell]), /ended/);
 });
 
-test("later nonzero observation updates earlier shell summaries without changing items or double-counting", () => {
+test("later settlement updates earlier shell summaries without changing canonical items", () => {
   const early = {
     ...command("early", "grep absent file"),
     toolName: "shell",
@@ -417,15 +415,12 @@ test("later nonzero observation updates earlier shell summaries without changing
   };
   const items = [early, final];
   const before = structuredClone(items);
-  assert.match(traceSummary([early], items), /shell returned a nonzero status/);
+  assert.match(traceSummary([early], items), /ended/);
   assert.doesNotMatch(traceSummary(items), /failed/i);
-  assert.equal(summarizeTraceActivity(items).shellNonzero, 1);
-  assert.equal(summarizeTraceActivity(items).failed, 0);
-  assert.equal(summarizeTraceActivity([early], items).shellNonzero, 0);
   assert.deepEqual(items, before);
 });
 
-test("observed nonzero facts cannot override signals, cancellation, other tools or a newer terminal outcome", () => {
+test("observed settlement preserves cancellation and timeout facts and cannot regress to running", () => {
   const early = {
     ...command("early", "grep absent file"),
     toolName: "shell",
@@ -452,18 +447,17 @@ test("observed nonzero facts cannot override signals, cancellation, other tools 
   for (const [patch, label] of [
     [{ status: "timed_out" }, "Timed out"],
     [{ status: "cancelled" }, "Cancelled"],
-    [{ foreground_signal: "SIGTERM" }, "Failed"],
-    [{ tool_name: "other_tool" }, "Failed"],
+    [{ foreground_signal: "SIGTERM" }, "Ended"],
+    [{ tool_name: "other_tool" }, "Ended"],
   ] as const) {
     const index = createTraceObservationIndex([
       early,
       { ...final, structuredContent: { ...final.structuredContent, ...patch } },
     ]);
-    assert.equal(observedShellNonzeroResult(early, index), false);
     assert.equal(observedCommandStatus(early, index), label);
   }
   const lateRunning = { ...early, id: "late-running" };
   const index = createTraceObservationIndex([early, final, lateRunning]);
-  assert.equal(observedShellNonzeroResult(early, index), true);
-  assert.equal(observedShellNonzeroResult(lateRunning, index), true);
+  assert.equal(observedCommandStatus(early, index), "Ended");
+  assert.equal(observedCommandStatus(lateRunning, index), "Ended");
 });

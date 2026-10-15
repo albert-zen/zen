@@ -189,7 +189,18 @@ test("Thread menu manages keyboard focus through close and row removal", async (
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
     ).find((item) => item.textContent?.includes("Rename"));
     assert.ok(rename);
+    const beforeRenamePanel = document.querySelector(".thread-item-menu");
     await act(async () => rename.click());
+    assert.equal(
+      document.querySelector(".thread-item-menu"),
+      beforeRenamePanel,
+    );
+    assert.ok(
+      document.querySelector(
+        ".thread-menu-information .thread-menu-rename input",
+      ),
+    );
+    assert.ok(document.querySelector('[data-thread-action="archive"]'));
     const renameInput = requiredElement<HTMLInputElement>(
       ".thread-menu-rename input",
     );
@@ -209,14 +220,28 @@ test("Thread menu manages keyboard focus through close and row removal", async (
       await Promise.resolve();
     });
     assert.equal(
-      document.activeElement === trigger,
-      true,
-      "focus returns to the exact trigger object",
+      document.activeElement,
+      rename,
+      "Escape cancels in place and restores Rename",
     );
+    assert.equal(
+      document.querySelector(".thread-item-menu"),
+      beforeRenamePanel,
+    );
+    await act(async () =>
+      rename.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      ),
+    );
+    assert.equal(document.activeElement, trigger);
     assert.equal(document.querySelector('[role="menu"]'), null);
 
     const openRename = async () => {
-      await act(async () => trigger.click());
+      if (!document.querySelector(".thread-item-menu"))
+        await act(async () => trigger.click());
       await act(async () =>
         requiredElement<HTMLButtonElement>(
           '[data-thread-action="rename"]',
@@ -280,9 +305,9 @@ test("Thread menu manages keyboard focus through close and row removal", async (
     await act(async () => finishRename!());
     assert.equal(document.querySelector(".thread-menu-rename"), null);
     assert.equal(
-      document.activeElement === trigger,
-      true,
-      "successful rename returns to the exact ellipsis invoker",
+      document.activeElement?.getAttribute("data-thread-action"),
+      "rename",
+      "successful rename returns to the same Rename action in its open menu",
     );
 
     input = await openRename();
@@ -296,7 +321,8 @@ test("Thread menu manages keyboard focus through close and row removal", async (
       "late save cannot reclaim focus moved away from the editor",
     );
 
-    await act(async () => trigger.click());
+    if (!document.querySelector(".thread-item-menu"))
+      await act(async () => trigger.click());
     const copy = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
     ).find((item) => item.textContent?.includes("Fork thread"));

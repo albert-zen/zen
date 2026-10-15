@@ -191,7 +191,7 @@ Trace sequence projection 按 Item 顺序生成：
 
 Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
-Tool 状态统一投影为 `queued / running / success / failed / cancelled / approval_required`。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。
+Tool 展示动作、执行进度和中性的已结束状态；超时、取消、拒绝、审批与取消未确认保留具体事实标签，不另设通用失败标签或计数。状态更新同一个稳定 Item，不创建重复 row；原始结果、输出与退出码保留在详情，长 payload 在摘要截断，在详情内换行或局部滚动。
 
 `run_code` outer command 与 nested `tools.*` command 仍属于同一 trace sequence。展开后，UI
 只根据 ZAS protocol projection 携带的 canonical `callId / parentCallId` 缩进实际 child；不得从
@@ -337,7 +337,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Sidebar 的 Plugin spaces 位于**整个 Projects group 之前**。Plugin contribution 不能插入 Projects header 与 Project/Thread list 之间，也不能把这个 group 拆成两段。
 - 人类使用插件页面、settings、panel、command/menu 或普通领域 action 不创建 Turn；只有标为 **Run Agent** 的显式动作才调用 AppServer 并产生普通 canonical Turn。
 - Plugin 生命周期只有 `installed`、`enabled`、`uninstalled`。Disable 撤销 active UI/tools 但保留安装；Uninstall 撤销 runtime/UI/tool 注册并默认保留 data。Bundled plugin 也可卸载和重装；删除 data 必须是独立动作。
-- Shell 非零结果单独以警示呈现为“Shell返回非零状态”，保留原退出码、输出和失败生命周期；不能凭命令文本、退出码 1 或空输出推断无匹配或成功。已有 signal、timeout、cancel 状态继续按原专门状态呈现。此为展示层缓解，不改变模型或 canonical 语义。
+- 工具调用摘要展示动作、进度与中性的“已结束”，不汇总工具失败或 Shell 非零计数。原始输出、stderr、退出码与结构化结果保留在调用详情中；超时、取消、拒绝和结果未确认保留专门事实标签。此为展示层选择，不改模型、canonical 结果或安全行为，也不根据 stderr 有无判断成败。
 - Result renderer 只读取既有 `ToolResultItem` 上的可选 structured content；它缺失、disabled 或 uninstalled 时使用 text/JSON fallback。历史模型文本、reasoning、tool call/result 与 title trace 保持原样，不能为 renderer 或能力变化扫描、脱敏或重写。
 
 ### 6.2 Experiment / guidance / TBD
@@ -496,7 +496,7 @@ Creating PAW defaults to a new idle working Thread in a configured Project, with
 
 The existing right workspace shell is shared. Room-owned tabs expose Overview, Matters, Memory, Triggers and Threads. Matters and memory are assistant-maintained notebook annotations, with exact references to execution Threads and Triggers. They do not act as a second scheduler or an execution ledger. A plan such as “waiting for review” is visibly distinct from a live Thread status. Remote references show their full device/workspace identity and do not silently open a local Thread with the same ID.
 
-Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
+Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. The PAW Overview displays its exact working Thread title with inline rename through the existing Host title authority; this never renames the PAW or its speaker. Direct working-Thread navigation retains title editing while the Thread-list projection catches up after successful recovery. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
 
 Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Triggers tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
 
@@ -577,7 +577,7 @@ Only the terminal Agent response exposes Copy and Fork in its hover/focus action
 
 ### 2026-10-14: Compact activity context
 
-Settled multi-tool disclosures retain the call count and the latest three action summaries, newest first, rather than reducing their title to the count alone. Failure and cancellation counts remain explicit, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
+Settled multi-tool disclosures retain the call count and the latest three action summaries, newest first, rather than reducing their title to the count alone. Cancellation counts remain explicit; generic failure and nonzero-result counts are omitted, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
 
 ### 2026-10-14: Codex conversation import in Settings
 
@@ -589,7 +589,7 @@ Delivered and queued Thread messages expose a compact source action using the ca
 
 ### 2026-10-14: Opt-in Thread debug mode
 
-Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an unchecked-by-default option in the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode never enables Host request capture; that remains a separate explicit control with unchanged safety boundaries.
+Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an off-by-default switch in the last row of the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. The same panel stays open and anchored, with its toggle and keyboard focus in place so a second click exits debug mode. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode never enables Host request capture; that remains a separate explicit control with unchanged safety boundaries.
 
 ### 2026-10-14: Compact request inspection
 
@@ -621,3 +621,18 @@ Subagents and Triggers use the same horizontal launcher surface and title/descri
 ### 2026-10-15: Multiple side conversation tabs
 
 A Thread or Room workspace can keep several side conversations open at once. Each tab is identified by its target Thread ID, independently of its title or category; opening an existing target selects that tab, and opening another target preserves its siblings. Closing a tab changes only that workspace's tab order and selection, without closing or archiving the Thread. Main navigation retains each workspace's open tabs and selected target, while the existing App-owned draft and reading caches retain each Thread's local state. File and Browser tabs retain their existing path/tab-ID identity; a plugin's manager panel remains one contribution rather than becoming a generic multi-instance runtime.
+
+### 2026-10-15: Stable Thread menu editing and compact Items
+
+The Thread information title and Rename action edit the title inline in their
+existing panel. Metadata and action rows stay in place; no replacement popover or
+modal opens. Enter saves, Escape cancels only the edit, and successful save or
+cancel returns focus to the initiating title/action without closing the panel.
+Outside interaction or navigation dismisses the panel and retires its draft; a
+late save receipt cannot close a newer editor or reclaim focus moved elsewhere.
+Failures retain the draft and show an explicit local error.
+
+Items remains the default debugger tab in canonical order. Tool call arguments,
+tool result content and tool images start collapsed and mount only after an
+explicit disclosure. Exact Item JSON and the existing full-content controls stay
+available; debug mode does not add conversation copy/fork actions.

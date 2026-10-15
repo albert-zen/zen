@@ -3,7 +3,6 @@ import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 import {
   commandSummary,
   commandStatus,
-  isShellNonzeroResult,
   commandPhaseLabel,
   commandPhase,
   commandTask,
@@ -285,19 +284,13 @@ export function projectTurn(
 }
 
 export interface TraceObservationIndex {
-  tasks: ReadonlyMap<
-    string,
-    { itemId: string; phase: CommandPhase; shellNonzero: boolean }
-  >;
+  tasks: ReadonlyMap<string, { itemId: string; phase: CommandPhase }>;
 }
 /** Disposable observation facts, never a second runtime state. A task cannot restart. */
 export function createTraceObservationIndex(
   items: readonly ThreadItem[],
 ): TraceObservationIndex {
-  const tasks = new Map<
-    string,
-    { itemId: string; phase: CommandPhase; shellNonzero: boolean }
-  >();
+  const tasks = new Map<string, { itemId: string; phase: CommandPhase }>();
   for (const item of items) {
     if (item.type !== "commandExecution") continue;
     const task = commandTask(item);
@@ -312,7 +305,6 @@ export function createTraceObservationIndex(
     tasks.set(task.id, {
       itemId: item.id,
       phase: task.phase,
-      shellNonzero: isShellNonzeroResult(item),
     });
   }
   return { tasks };
@@ -326,24 +318,10 @@ export function observedCommandPhase(
   if (task === null || isTerminalCommandPhase(phase)) return phase;
   return observations.tasks.get(task.id)?.phase ?? phase;
 }
-/** Use the same observation as the phase; never infer from the earlier receipt's code. */
-export function observedShellNonzeroResult(
-  item: CommandItem,
-  observations: TraceObservationIndex,
-): boolean {
-  const phase = commandPhase(item);
-  const task = commandTask(item);
-  if (task === null || isTerminalCommandPhase(phase))
-    return isShellNonzeroResult(item);
-  const observed = observations.tasks.get(task.id);
-  return observed?.phase === "failed" && observed.shellNonzero;
-}
 export function observedCommandStatus(
   item: CommandItem,
   observations: TraceObservationIndex,
 ): string {
-  if (observedShellNonzeroResult(item, observations))
-    return i18n.t("shell:shellNonzeroStatus");
   const phase = observedCommandPhase(item, observations);
   return phase === commandPhase(item)
     ? commandStatus(item)
@@ -362,8 +340,6 @@ export interface TraceActivity {
   total: number;
   active: number;
   outstanding: number;
-  failed: number;
-  shellNonzero: number;
   cancelled: number;
   unconfirmed: number;
   pending: number;
@@ -384,8 +360,6 @@ export function summarizeTraceActivity(
     total: 0,
     active: 0,
     outstanding: 0,
-    failed: 0,
-    shellNonzero: 0,
     cancelled: 0,
     unconfirmed: 0,
     pending: 0,
@@ -403,8 +377,6 @@ export function summarizeTraceActivity(
     const category = toolPresentation(item.toolName ?? item.command).category;
     categories.set(category, (categories.get(category) ?? 0) + 1);
     const phase = commandPhase(item);
-    if (isShellNonzeroResult(item)) result.shellNonzero += 1;
-    else if (phase === "failed" || phase === "timed_out") result.failed += 1;
     if (phase === "cancelled" || phase === "declined") result.cancelled += 1;
     const task = commandTask(item);
     const observed = task === null ? null : observations.tasks.get(task.id);
