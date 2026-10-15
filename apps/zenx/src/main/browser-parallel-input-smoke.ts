@@ -551,15 +551,15 @@ export async function runTargetedInputContractSmoke(options: {
         `${origin}/input-contract?mode=${mode}`,
       );
       await poll(async () => {
-        try {
-          return (await rpc.evaluate<boolean>(
-            `window.contract?.mode === ${JSON.stringify(mode)}`,
-          ))
-            ? true
-            : undefined;
-        } catch {
-          return undefined;
-        } // Only read-only document readiness is retried.
+        const ready = await rpc.evaluate<boolean>(
+          `window.contract?.mode === ${JSON.stringify(mode)}`,
+        );
+        assert.equal(
+          typeof ready,
+          "boolean",
+          "Fixture readiness must be boolean",
+        );
+        return ready ? true : undefined;
       }, `contract ${mode} document`);
       options.onPhase?.(`input-contracts:${mode}:actions`);
       assert.equal(
@@ -1039,15 +1039,15 @@ async function main(): Promise<void> {
     );
     userRpc = await Rpc.connect(user.webSocketDebuggerUrl);
     await poll(async () => {
-      try {
-        return (await userRpc!.evaluate<boolean>(
-          "Boolean(window.fixture && document.querySelector('#user-input'))",
-        ))
-          ? true
-          : undefined;
-      } catch {
-        return undefined;
-      } // Read-only readiness may race initial navigation.
+      const ready = await userRpc!.evaluate<boolean>(
+        "Boolean(window.fixture && document.querySelector('#user-input'))",
+      );
+      assert.equal(
+        typeof ready,
+        "boolean",
+        "Fixture readiness must be boolean",
+      );
+      return ready ? true : undefined;
     }, "user fixture document");
     phase = "startup-user-focus";
     await userRpc.evaluate(`document.querySelector('#user-input').focus()`);
@@ -1087,15 +1087,15 @@ async function main(): Promise<void> {
     phase = "startup-agent-document";
     agentRpc = await Rpc.connect(agent.webSocketDebuggerUrl);
     await poll(async () => {
-      try {
-        return (await agentRpc!.evaluate<boolean>(
-          "Boolean(window.fixture && document.querySelector('#agent-input'))",
-        ))
-          ? true
-          : undefined;
-      } catch {
-        return undefined;
-      }
+      const ready = await agentRpc!.evaluate<boolean>(
+        "Boolean(window.fixture && document.querySelector('#agent-input'))",
+      );
+      assert.equal(
+        typeof ready,
+        "boolean",
+        "Fixture readiness must be boolean",
+      );
+      return ready ? true : undefined;
     }, "agent fixture document");
     phase = "startup-agent-inspection";
     // The fixture DOM can exist before the provider receives the final initial
