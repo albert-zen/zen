@@ -368,6 +368,10 @@ test("terminal panel fills its flex host instead of keeping intrinsic width", as
     source,
     /body\{padding:0\}\.xterm\{height:100%;box-sizing:border-box;padding:10px\}/,
   );
+  assert.match(
+    source,
+    /\.xterm \.xterm-viewport\{background-color:var\(--color-surface-control\)\}/,
+  );
 });
 
 test("ended session labels stay neutral while exit code and specific timeout facts remain", async () => {

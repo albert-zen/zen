@@ -450,7 +450,7 @@ function ShellTerminal({
       const style = terminalDocument.createElement("style");
       style.textContent =
         terminalCss +
-        "html,body{height:100%;margin:0;overflow:hidden;background:var(--color-surface-control)}body{padding:0}.xterm{height:100%;box-sizing:border-box;padding:10px}";
+        "html,body{height:100%;margin:0;overflow:hidden;background:var(--color-surface-control)}body{padding:0}.xterm{height:100%;box-sizing:border-box;padding:10px}.xterm .xterm-viewport{background-color:var(--color-surface-control)}";
       terminalDocument.head.append(style);
       term = new Terminal({
         documentOverride: terminalDocument,
