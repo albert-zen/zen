@@ -1,10 +1,23 @@
+import { Icon } from "./icons.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import "./i18n.js";
 
 /** Public snapshot rendering only; never resolves target assets against local files. */
-export function FleetHistory({ value }: { value: unknown }) {
+export function FleetHistory({
+  value,
+  onSource,
+  onReadItem,
+}: {
+  value: unknown;
+  onReadItem?: (itemId: string) => void;
+  onSource?: (target: {
+    kind: "thread" | "trigger";
+    id: string;
+    remote?: boolean;
+  }) => void;
+}) {
   const { t } = useTranslation("settings");
   const items = record(value).items;
   if (!Array.isArray(items)) return <p>{t("fleetHistory.readPrompt")}</p>;
@@ -80,6 +93,22 @@ export function FleetHistory({ value }: { value: unknown }) {
           <article key={string(row.itemId ?? row.id ?? item.id) || index}>
             {type === "host_message" ? (
               <HostMessageContent
+                sourceAction={
+                  (row.source ?? item.source) === "trigger" && onSource ? (
+                    <button
+                      className="thread-message-sender message-source-link"
+                      onClick={() =>
+                        onSource({
+                          kind: "trigger",
+                          id: string(row.sourceId ?? item.sourceId),
+                        })
+                      }
+                    >
+                      <Icon name="trigger" size={12} />
+                      {t("shell:hostMessageTrigger")}
+                    </button>
+                  ) : undefined
+                }
                 source={
                   (row.source ?? item.source) === "trigger"
                     ? "trigger"
@@ -93,7 +122,26 @@ export function FleetHistory({ value }: { value: unknown }) {
               />
             ) : message ? (
               <>
-                <strong>{label}</strong>
+                <strong>
+                  {type === "thread_message" && onSource ? (
+                    <button
+                      className="thread-message-sender message-source-link"
+                      title={JSON.stringify(sender)}
+                      onClick={() =>
+                        onSource({
+                          kind: "thread",
+                          id: string(sender.threadId),
+                          remote: typeof sender.deviceId === "string",
+                        })
+                      }
+                    >
+                      <Icon name="conversation" size={12} />
+                      {label}
+                    </button>
+                  ) : (
+                    label
+                  )}
+                </strong>
                 <p className="fleet-history-text">
                   {text.slice(0, 16384) || t("fleetHistory.remoteAttachment")}
                 </p>
@@ -106,6 +154,16 @@ export function FleetHistory({ value }: { value: unknown }) {
             ) : (
               <small className="settings-note">{summary}</small>
             )}
+            {truncated && onReadItem ? (
+              <button
+                className="quiet-button"
+                onClick={() =>
+                  onReadItem(string(row.itemId ?? row.id ?? item.id))
+                }
+              >
+                {t("shell:sourceReadFullItem")}
+              </button>
+            ) : null}
             {truncated ? (
               <small className="settings-note">
                 {t("fleetHistory.boundedExcerpt")}

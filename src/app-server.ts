@@ -1556,6 +1556,10 @@ export class ZenAppServer {
     input: ThreadMessageInput,
     authenticatedDeviceId: string,
     clientId: string,
+    provenance?: Pick<
+      ThreadMessageSender,
+      "origin" | "returnRoute" | "threadName"
+    >,
   ): Promise<ThreadMessageReceipt> {
     if (
       !authenticatedDeviceId ||
@@ -1581,6 +1585,7 @@ export class ZenAppServer {
       threadId,
       structuredClone(input),
       {
+        ...structuredClone(provenance),
         deviceId: authenticatedDeviceId,
         threadId: input.sender.threadId,
         toolCallId: input.sender.toolCallId,

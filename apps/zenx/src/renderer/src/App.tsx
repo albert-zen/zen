@@ -11,6 +11,11 @@ import {
   unreadThreadIds,
 } from "./conversation-read-state.js";
 import { createThreadEndNotificationObserver } from "./thread-end-notifications.js";
+import {
+  RemoteMessageSourceDialog,
+  type RemoteMessageSourceApi,
+} from "./RemoteMessageSourceDialog.js";
+import type { FleetMessageSourceView } from "../../main/fleet-settings.js";
 import { SessionImportDialog } from "./SessionImportDialog.js";
 import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
 import { ThreadReadingStateProvider } from "./thread-reading-state.js";
@@ -2507,6 +2512,9 @@ function AppContent() {
     );
   }, [page, pluginSnapshot]);
 
+  const [remoteMessageSource, setRemoteMessageSource] =
+    useState<FleetMessageSourceView | null>(null);
+  useEffect(() => setRemoteMessageSource(null), [page, selectedThreadId]);
   const sourceNavigationIntent = useRef(0);
   const sourceNavigationState = useRef({ page, selectedThreadId });
   sourceNavigationState.current = { page, selectedThreadId };
@@ -2521,10 +2529,19 @@ function AppContent() {
       sourceNavigationState.current.page === navigation.page &&
       sourceNavigationState.current.selectedThreadId ===
         navigation.selectedThreadId;
-    if (
-      !target.id ||
-      (target.kind === "thread" && target.deviceId !== undefined)
-    )
+    if (target.kind === "thread" && target.deviceId !== undefined) {
+      if (!target.itemId || !target.returnBound)
+        throw new Error(i18n.t("shell:sourceRemoteUnavailable"));
+      const api = (window.zenx as unknown as { fleet: RemoteMessageSourceApi })
+        .fleet;
+      const source = await api.messageSource({
+        threadId: owner.threadId,
+        itemId: target.itemId,
+      });
+      if (current()) setRemoteMessageSource(source);
+      return;
+    }
+    if (!target.id)
       throw new Error(i18n.t("shell:sourceNavigationUnavailable"));
     if (target.kind === "trigger") {
       if (
@@ -3541,6 +3558,15 @@ function AppContent() {
           </main>
         </RoomDraftContext.Provider>
 
+        {remoteMessageSource && (
+          <RemoteMessageSourceDialog
+            value={remoteMessageSource}
+            onClose={() => {
+              sourceNavigationIntent.current++;
+              setRemoteMessageSource(null);
+            }}
+          />
+        )}
         {importSessionOpen && (
           <SessionImportDialog
             models={models}

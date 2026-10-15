@@ -35,6 +35,29 @@ export class ZenXFleetCapabilityPackage implements ZenXCapabilityPackage {
     for (const key of Object.keys(args))
       if (!allowed.includes(key))
         throw new Error(`Unexpected Fleet argument: ${key}`);
+    if (name === "zenx_fleet_trigger_read")
+      return await this.options.fleet.router.invoke(
+        string(args.device, "device"),
+        {
+          ...invocation,
+          arguments: {
+            workspace: string(args.workspace, "workspace"),
+            threadId: string(args.threadId, "owner Thread"),
+            triggerId: string(args.triggerId, "Trigger"),
+          },
+        },
+        string(args.deviceKey, "device key"),
+      );
+    if (name === "zenx_fleet_source_read" || name === "zenx_fleet_source_send")
+      return await this.options.fleet.messageSource(
+        {
+          threadId: string(args.threadId, "receiving Thread"),
+          itemId: string(args.itemId, "message Item"),
+        },
+        name === "zenx_fleet_source_send"
+          ? { ...invocation, arguments: args }
+          : undefined,
+      );
     if (name === "zenx_fleet_readiness")
       return await this.options.fleet.readiness();
     if (name === "zenx_fleet_devices")

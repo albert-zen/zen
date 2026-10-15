@@ -1,5 +1,5 @@
 import { MessageSourceLink } from "./message-source-navigation.js";
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { HostWakeupInput } from "../../../../../src/item.js";
 import { Icon } from "./icons.js";
@@ -10,6 +10,7 @@ export function HostMessageContent({
   source,
   sourceId,
   sourceNavigation = false,
+  sourceAction,
   text,
   prompt,
   copyAction = true,
@@ -17,6 +18,7 @@ export function HostMessageContent({
   onReadingChange,
 }: Pick<HostWakeupInput, "source" | "sourceId" | "text"> & {
   sourceNavigation?: boolean;
+  sourceAction?: ReactNode;
   prompt?: string;
   copyAction?: boolean;
   truncated?: boolean;
@@ -46,20 +48,21 @@ export function HostMessageContent({
     <div className="host-message-content">
       <header>
         <strong>
-          {source === "trigger" && sourceNavigation ? (
-            <MessageSourceLink
-              target={{ kind: "trigger", id: sourceId ?? "" }}
-              label={label}
-              className="host-message-source"
-            />
-          ) : (
-            <span
-              className="thread-message-sender host-message-source"
-              title={JSON.stringify({ source, sourceId })}
-            >
-              {label}
-            </span>
-          )}
+          {sourceAction ??
+            (source === "trigger" && sourceNavigation ? (
+              <MessageSourceLink
+                target={{ kind: "trigger", id: sourceId ?? "" }}
+                label={label}
+                className="host-message-source"
+              />
+            ) : (
+              <span
+                className="thread-message-sender host-message-source"
+                title={JSON.stringify({ source, sourceId })}
+              >
+                {label}
+              </span>
+            ))}
         </strong>
       </header>
       {welcome ? (

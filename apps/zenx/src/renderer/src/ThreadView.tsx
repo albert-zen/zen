@@ -3478,7 +3478,11 @@ function InputMessage({
             id: item.sender.threadId,
             ...(item.sender.deviceId === undefined
               ? {}
-              : { deviceId: item.sender.deviceId }),
+              : {
+                  deviceId: item.sender.deviceId,
+                  itemId: item.id,
+                  returnBound: item.sender.returnRoute !== undefined,
+                }),
           }}
           label={i18n.t(
             item.sender.deviceId === undefined
