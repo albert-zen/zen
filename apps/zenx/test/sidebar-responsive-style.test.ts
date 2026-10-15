@@ -338,7 +338,7 @@ test("shell owns the sidebar width default before and after the resizer mounts",
   assert.match(shell, /--sidebar-track:\s*var\(--sidebar-width\);/u);
 });
 
-test("Room unread numbers have explicit symmetric layout and zero inherited indentation", async () => {
+test("Room unread numbers center their cap box without font-leading bias", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/room-conversations.css", import.meta.url),
     "utf8",
@@ -348,5 +348,8 @@ test("Room unread numbers have explicit symmetric layout and zero inherited inde
   assert.match(badge, /place-items: center;/u);
   assert.match(badge, /text-align: center;/u);
   assert.match(badge, /text-indent: 0;/u);
-  assert.match(badge, /line-height: 18px;/u);
+  assert.match(badge, /line-height: 1;/u);
+  const value = styles.match(/\.room-unread-value\s*\{[^}]*\}/u)?.[0] ?? "";
+  assert.match(value, /text-box-trim: trim-both;/u);
+  assert.match(value, /text-box-edge: cap alphabetic;/u);
 });
