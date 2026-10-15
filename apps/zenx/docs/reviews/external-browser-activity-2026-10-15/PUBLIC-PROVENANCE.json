@@ -1,0 +1,73 @@
+{
+  "captureHead": "cc51c88c7b43d245d4461edd49f852ff0d42d779",
+  "captureTree": "880e5d353bb1db9e9799615541209b7ba71899e0",
+  "date": "2026-10-15",
+  "environment": "Cloud Chrome, synthetic production component fixture",
+  "fixture": "apps/zenx/test/fixtures/browser-external-activity-visual.html",
+  "limitations": [
+    "Synthetic bridge/events and placeholder, no native E2E claim",
+    "390 CSS viewport, not native touch/DPR testing",
+    "External auto-presentation is once per session incarnation and target",
+    "Follow removed after activation; focus becomes body",
+    "07 does not show external unknown state"
+  ],
+  "files": [
+    {
+      "file": "01-workspace-before-external-light.jpg",
+      "sha256": "5aecbfbca8bf61ee07c9ba074b234fd2ca56670e5c78762a5987a636ef08bc21"
+    },
+    {
+      "file": "02-external-activity-auto-selected-light.jpg",
+      "sha256": "32214b73c3f095b6ea8f2186fdec6ca885994721016757a097d090cd951df10c"
+    },
+    {
+      "file": "03-external-finished-page-retained-light.jpg",
+      "sha256": "df8ef34b2f67a9cfb7662a9cc7181a8b42ef50cbe6f3aa6370ce0302dd8d361b"
+    },
+    {
+      "file": "04-manual-away-optout-light.jpg",
+      "sha256": "90291d4aaa334374514b3624cf21f4c8c1e9780f487faf39094f6dbc34272ee9"
+    },
+    {
+      "file": "05-follow-restores-external-light.jpg",
+      "sha256": "3e73e14a0b2fd7fb006ded911e22f233ab1c944a046b2f3d5eee80130bc3f0f6"
+    },
+    {
+      "file": "06-late-external-finish-no-steal-light.jpg",
+      "sha256": "5daa6420c96fc3040d5cbe5b8dba32e2a48b70ede56caf7c399a83c968eb42b7"
+    },
+    {
+      "file": "07-external-unknown-static-light.jpg",
+      "sha256": "302ac8ca8e8c4ed83b714dda0cfc52796c3651c24fcb1c922c366b3f9b1b94be"
+    },
+    {
+      "file": "08-external-unknown-inspected-light.jpg",
+      "sha256": "c437e871e14dc555aedb70e34b66970c1804039e62d09b6162c71379d11ac54b"
+    },
+    {
+      "file": "09-external-active-narrow-dark.jpg",
+      "sha256": "9e340cf3c3fd065af2684ba521902b52831625e1c555397f43e7c9550b3dba43"
+    },
+    {
+      "file": "10-external-unknown-narrow-dark.jpg",
+      "sha256": "401d22a60e76e8cbf889eeab0f175fdc11c0c01fdda32c9db30cffca5cad783a"
+    },
+    {
+      "file": "11-narrow-light-optout-follow.jpg",
+      "sha256": "ad72cf31e5716eefb6ec87f492d1cd6b7d863eab86d7c59f99ee6e65742c7a6b"
+    },
+    {
+      "file": "12-narrow-light-follow-restored.jpg",
+      "sha256": "88f80852736733ecc9e080585c9933d618cad22bfdea5d36604d04acf2eee12b"
+    },
+    {
+      "file": "13-narrow-closed-panel-not-reopened.jpg",
+      "sha256": "2da85ce95b715977a2060ec3ec0ae1bc8ae21d21ad98765217c9cdc038392e36"
+    }
+  ],
+  "releaseLocalHead": "f7e1ce55466c440bf39407ce2b1afc2c9eae21be",
+  "releaseTree": "6bbd9b2152bea533af12ac321c84672feb95e453",
+  "mapping": "Original capture cc51/tree880e5d35 preserved. Release composes main53cb and main22c; feature edit lines equal. This is not a claim that all renderer files are identical.",
+  "publishedHead": "c6a8d760000d7d8bd7f548b758df17347e9ace72",
+  "publishedTree": "3bf5ba0d6f77be060d10f21e0f7b206fec92e454"
+}
