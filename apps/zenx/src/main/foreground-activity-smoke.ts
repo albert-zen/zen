@@ -5,24 +5,43 @@ import {
   ElectronForegroundActivityPresenter,
   foregroundOverlayBounds,
 } from "./foreground-activity-electron.js";
+import {
+  observeForegroundDisplaySmoke,
+  type ForegroundDisplaySmokePhase,
+} from "./foreground-display-smoke-diagnostics.js";
 import { startWindowsForegroundInputProbe } from "./windows-foreground-input-probe.js";
 
 /** Owned native fixture. It never grants product foreground-control consent. */
 export async function verifyForegroundActivityOverlay(preloadPath: string) {
-  const cdp = await verifyForegroundActivityCdpOverlay(preloadPath);
-  const osRoutedInput =
-    process.platform === "win32"
-      ? await verifyWindowsForegroundActivityInput(preloadPath)
-      : {
-          status: "not_verified",
-          reason:
-            "External-app OS-input phase is not implemented on this platform; CDP evidence only",
-        };
-  return { ...cdp, osRoutedInput };
+  const diagnostics = observeForegroundDisplaySmoke(screen);
+  try {
+    const cdp = await verifyForegroundActivityCdpOverlay(
+      preloadPath,
+      diagnostics.mark,
+    );
+    diagnostics.mark("cdp-complete");
+    if (process.platform === "win32") diagnostics.mark("os-input-start");
+    const osRoutedInput =
+      process.platform === "win32"
+        ? await verifyWindowsForegroundActivityInput(preloadPath)
+        : {
+            status: "not_verified",
+            reason:
+              "External-app OS-input phase is not implemented on this platform; CDP evidence only",
+          };
+    return { ...cdp, osRoutedInput };
+  } finally {
+    diagnostics.mark("verification-finished");
+    console.log(
+      "Foreground overlay display diagnostic",
+      JSON.stringify(diagnostics.close()),
+    );
+  }
 }
 
 async function verifyForegroundActivityCdpOverlay(
   preloadPath: string,
+  mark: (phase: ForegroundDisplaySmokePhase) => void,
 ): Promise<{
   displays: number;
   focusedFixturePreserved: true;
@@ -31,6 +50,7 @@ async function verifyForegroundActivityCdpOverlay(
 }> {
   const keepAlive = () => {};
   app.on("window-all-closed", keepAlive);
+  mark("fixture-create");
   const fixture = new BrowserWindow({
     width: 640,
     height: 480,
@@ -41,13 +61,16 @@ async function verifyForegroundActivityCdpOverlay(
       nodeIntegration: false,
     },
   });
+  mark("fixture-created");
   const overlays: BrowserWindow[] = [];
   let activity: ForegroundActivity | undefined;
   let release: (() => void) | undefined;
   const errors: unknown[] = [];
   const presenter = new ElectronForegroundActivityPresenter({
     createWindow: (options) => {
+      mark("overlay-create");
       const window = new BrowserWindow(options);
+      mark("overlay-created");
       overlays.push(window);
       return window;
     },
@@ -68,9 +91,13 @@ async function verifyForegroundActivityCdpOverlay(
     await fixture.loadURL(
       "data:text/html,<title>ZenX foreground overlay fixture</title><input id='field' autofocus value='Focus guard'>",
     );
+    mark("fixture-loaded");
     fixture.show();
+    mark("fixture-shown");
     fixture.focus();
+    mark("fixture-focus-requested");
     await waitFor(() => fixture.isFocused(), "owned fixture focus");
+    mark("fixture-focus-confirmed");
     const cursorBefore = screen.getCursorScreenPoint();
     const invocation = {
       callId: "owned-overlay-fixture",
@@ -82,6 +109,7 @@ async function verifyForegroundActivityCdpOverlay(
     let entered = false;
     let executionError: unknown;
     let cancelled = false;
+    mark("activity-requested");
     const running = activity.run(
       invocation,
       (signal) =>
@@ -105,6 +133,7 @@ async function verifyForegroundActivityCdpOverlay(
       "rendered foreground indicator",
     );
     if (executionError !== undefined) throw executionError;
+    mark("activity-admitted");
     assert.equal(overlays.length, screen.getAllDisplays().length * 2);
     assert.equal(
       fixture.isFocused(),
@@ -127,6 +156,7 @@ async function verifyForegroundActivityCdpOverlay(
     // sendInputEvent requires OS focus; CDP exercises the trusted preload click
     // path here, but does not prove physical OS pointer pass-through.
     const debugger_ = status.webContents.debugger;
+    mark("stop-requested");
     debugger_.attach("1.3");
     try {
       await debugger_.sendCommand("Input.dispatchMouseEvent", {
@@ -149,6 +179,7 @@ async function verifyForegroundActivityCdpOverlay(
       if (!status.isDestroyed() && debugger_.isAttached()) debugger_.detach();
     }
     await waitFor(() => cancelled, "trusted Stop cancellation");
+    mark("stop-confirmed");
     assert.equal(activity.snapshot.activities.length, 1);
     assert.equal(activity.snapshot.activities[0]?.stopping, true);
     assert.ok(overlays.every((window) => !window.isDestroyed()));
@@ -167,10 +198,15 @@ async function verifyForegroundActivityCdpOverlay(
       cleanedUp: true,
     };
   } finally {
-    activity.close();
-    release?.();
-    if (!fixture.isDestroyed()) fixture.destroy();
-    app.removeListener("window-all-closed", keepAlive);
+    mark("cleanup-start");
+    try {
+      activity.close();
+      release?.();
+      if (!fixture.isDestroyed()) fixture.destroy();
+      app.removeListener("window-all-closed", keepAlive);
+    } finally {
+      mark("cleanup-finished");
+    }
   }
 }
 
