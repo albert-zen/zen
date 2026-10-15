@@ -1,3 +1,7 @@
+import {
+  readOriginalThreadHistory,
+  type OriginalHistoryOptions,
+} from "../../thread-history.js";
 import { parseSessionImport, previewSessionImport } from "../session-import.js";
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
 import { AppServerError, type ZenAppServer } from "../../app-server.js";
@@ -20,6 +24,7 @@ import {
   NATIVE_THREAD_EVENT_METHOD,
   NATIVE_THREAD_RESUME_METHOD,
   NATIVE_THREAD_READ_METHOD,
+  NATIVE_THREAD_ORIGINAL_READ_METHOD,
   NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_THREAD_FORK_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
@@ -791,6 +796,40 @@ export class NativeConnection {
                 : {}),
           },
         });
+      }
+      return;
+    }
+    if (message.method === NATIVE_THREAD_ORIGINAL_READ_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        if (
+          !isRecord(message.params) ||
+          typeof message.params.threadId !== "string" ||
+          !message.params.threadId.trim()
+        )
+          throw new Error("threadId is required");
+        const { threadId, ...options } = message.params;
+        const thread = await this.#projection.read(threadId);
+        const result = readOriginalThreadHistory(
+          thread,
+          options as unknown as OriginalHistoryOptions,
+        );
+        if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: -32602,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
       }
       return;
     }
