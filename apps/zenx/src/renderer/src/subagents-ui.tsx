@@ -330,7 +330,9 @@ function SubagentSidebarVisibility({
           visible ? "shell:hideFromSidebar" : "shell:showInSidebar",
         )}
         aria-busy={busy}
-        disabled={busy}
+        // Keep keyboard focus while saving; the synchronous inflight lock
+        // rejects repeated pointer and keyboard activation without disabling DOM focus.
+        aria-disabled={busy}
         onClick={() => void change()}
       >
         <Icon name="panel-left" />

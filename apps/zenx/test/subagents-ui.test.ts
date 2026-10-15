@@ -575,12 +575,19 @@ test("failed visibility save keeps the switch unchanged and retryable without du
   try {
     await f.render("parent", "panel", [summary("child", "parent")]);
     const toggle = f.button("Show in sidebar: child");
+    toggle.focus();
     await act(async () => {
       toggle.click();
       toggle.click();
     });
     assert.equal(attempts, 1);
-    assert.equal(toggle.disabled, true);
+    assert.equal(
+      toggle.disabled,
+      false,
+      "pending save must not disable DOM focus",
+    );
+    assert.equal(toggle.getAttribute("aria-disabled"), "true");
+    assert.equal(document.activeElement, toggle);
     assert.equal(toggle.getAttribute("aria-checked"), "false");
     await act(async () => reject(new Error("Could not save visibility")));
     assert.match(
@@ -588,10 +595,21 @@ test("failed visibility save keeps the switch unchanged and retryable without du
       /Could not save visibility/,
     );
     assert.equal(toggle.disabled, false);
+    assert.equal(toggle.getAttribute("aria-disabled"), "false");
+    assert.equal(
+      document.activeElement,
+      toggle,
+      "failed save retains focus for retry",
+    );
     assert.equal(toggle.getAttribute("aria-checked"), "false");
     await f.click(toggle);
     await f.render("parent", "panel", [summary("child", "parent")]);
     assert.equal(toggle.getAttribute("aria-checked"), "true");
+    assert.equal(
+      document.activeElement,
+      toggle,
+      "successful save retains focus",
+    );
     assert.equal(document.querySelector('[role="alert"]'), null);
     assert.equal(attempts, 2);
     assert.deepEqual(f.routes, []);
