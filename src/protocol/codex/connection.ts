@@ -1,3 +1,4 @@
+import { originalHistoryBoundary } from "../../context-compaction.js";
 import os from "node:os";
 import path from "node:path";
 
@@ -481,20 +482,12 @@ export class CodexConnection {
         const threadId = requiredString(params, "threadId");
         const throughItemId = requiredString(params, "throughItemId");
         const snapshot = await this.#appServer.readThread(threadId);
-        const boundary = snapshot.items.findIndex(
-          (item) => item.id === throughItemId,
-        );
-        if (
-          boundary < 0 ||
-          !snapshot.items.some(
-            (item) =>
-              item.type === "context_compaction" &&
-              item.coveredThroughItemId === throughItemId &&
-              item.includeOriginalReference === true,
-          )
-        ) {
+        let boundary: number;
+        try {
+          boundary = originalHistoryBoundary(snapshot.items, throughItemId);
+        } catch (error) {
           throw new InvalidParamsError(
-            "Original ItemList reference is not enabled for this boundary",
+            error instanceof Error ? error.message : String(error),
           );
         }
         const limit = optionalListLimit(params.limit, 50);

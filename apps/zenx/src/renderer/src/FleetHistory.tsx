@@ -135,7 +135,7 @@ export function FleetHistory({
                         })
                       }
                     >
-                      <Icon name="thread" size={12} />
+                      <Icon name="conversation" size={12} />
                       {label}
                     </button>
                   ) : (

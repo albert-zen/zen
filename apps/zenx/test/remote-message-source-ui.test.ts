@@ -37,6 +37,94 @@ const source: FleetMessageSourceView = {
   },
 };
 
+for (const remote of [false, true]) {
+  test(`nested ${remote ? "unbound remote" : "same-Host"} Thread source uses the conversation glyph without changing its route`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "https://zenx.local",
+    });
+    const prior = { window: globalThis.window, document: globalThis.document };
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    const calls: unknown[] = [];
+    (window as any).zenx = {
+      fleet: {
+        sourceHistory: async (input: unknown) => {
+          calls.push(input);
+          return { threadId: "nested-thread", items: [], nextCursor: null };
+        },
+      },
+      protocol: {
+        request: async () => {
+          assert.fail("A remote source must not navigate to a local Thread");
+        },
+      },
+    };
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () =>
+        root.render(
+          React.createElement(RemoteMessageSourceDialog, {
+            value: {
+              ...source,
+              history: {
+                items: [
+                  {
+                    id: "nested-message",
+                    type: "thread_message",
+                    sender: {
+                      ...(remote ? { deviceId: "unbound-peer" } : {}),
+                      threadId: "nested-thread",
+                      threadName: remote
+                        ? "Unbound peer"
+                        : "Follow-up research",
+                    },
+                    text: "Source context",
+                  },
+                ],
+              },
+            },
+            onClose() {},
+          }),
+        ),
+      );
+      const button = document.querySelector<HTMLButtonElement>(
+        ".thread-message-sender",
+      )!;
+      assert.equal(
+        button.textContent,
+        remote ? "Remote: Unbound peer" : "From Follow-up research",
+      );
+      assert.equal(
+        button.querySelector("svg")!.getAttribute("data-icon"),
+        "conversation",
+      );
+      await act(async () => button.click());
+      if (remote) {
+        assert.match(
+          document.querySelector('[role="alert"]')!.textContent!,
+          /no verified return route/,
+        );
+        assert.deepEqual(calls, []);
+      } else {
+        assert.deepEqual(calls, [
+          {
+            receipt: source.receipt,
+            locator: { ...source.locator, threadId: "nested-thread" },
+          },
+        ]);
+        assert.equal(document.querySelector('[role="alert"]'), null);
+      }
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+      Object.assign(globalThis, prior);
+    }
+  });
+}
+
 test("source dialog reads exact remote Trigger settings, older history and full original text without local navigation or writes", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
   const prior = { window: globalThis.window, document: globalThis.document };

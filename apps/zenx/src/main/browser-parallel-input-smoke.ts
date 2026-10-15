@@ -25,6 +25,7 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
+import { UserBrowserCdpDiagnosticObserver } from "./capabilities/user-browser-cdp-diagnostics.js";
 import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import type {
   BrowserInspection,
@@ -922,6 +923,9 @@ async function main(): Promise<void> {
   const profile = path.join(directory, "browser-profile");
   await mkdir(profile);
   const reports: Record<string, unknown>[] = [];
+  const cdpDiagnostics = new UserBrowserCdpDiagnosticObserver();
+  let diagnosticOutcome: "running" | "passed" | "failed" = "running";
+  let cleanupCompleted = false;
   let browser: ChildProcess | undefined;
   let browserError = "";
   let phase = "startup";
@@ -1072,7 +1076,9 @@ async function main(): Promise<void> {
     assert.equal(beforeOpen.hasFocus, true);
     assert.equal(beforeOpen.visibility, "visible");
     phase = "startup-connect-provider";
-    connection = await connectUserBrowserCdp(endpoint);
+    connection = await connectUserBrowserCdp(endpoint, undefined, {
+      cdpDiagnosticObserver: cdpDiagnostics,
+    });
     await connection.backend.listTabs(sessionId);
     phase = "startup-open-agent";
     const opened = await connection.backend.open(sessionId, `${origin}/agent`);
@@ -1614,7 +1620,9 @@ async function main(): Promise<void> {
         JSON.stringify(report, null, 2),
       );
     }
+    diagnosticOutcome = "passed";
   } catch (error) {
+    diagnosticOutcome = "failed";
     console.error(
       JSON.stringify({
         status: "failed",
@@ -1635,28 +1643,84 @@ async function main(): Promise<void> {
     );
     throw error;
   } finally {
-    stopTransport?.();
-    await native?.call("clear").catch(() => undefined);
-    await Promise.resolve(connection?.backend.close()).catch(() => undefined);
-    await browserRpc?.send("Browser.close").catch(() => undefined);
-    userRpc?.close();
-    agentRpc?.close();
-    browserRpc?.close();
-    if (browser) await stopOwnedChild(browser);
-    await native?.close();
-    if (server.listening) {
-      const closing = new Promise<void>((resolve) =>
-        server.close(() => resolve()),
+    cdpDiagnostics.mark("cleanup-start");
+    try {
+      stopTransport?.();
+      await native?.call("clear").catch(() => undefined);
+      await Promise.resolve(connection?.backend.close()).catch(() => undefined);
+      await browserRpc?.send("Browser.close").catch(() => undefined);
+      userRpc?.close();
+      agentRpc?.close();
+      browserRpc?.close();
+      if (browser) await stopOwnedChild(browser);
+      await native?.close();
+      if (server.listening) {
+        const closing = new Promise<void>((resolve) =>
+          server.close(() => resolve()),
+        );
+        server.closeAllConnections();
+        await closing;
+      }
+      await rm(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 150,
+      });
+      cleanupCompleted = true;
+      cdpDiagnostics.mark("cleanup-complete");
+    } finally {
+      await finishCdpDiagnostic(
+        cdpDiagnostics,
+        diagnosticOutcome,
+        cleanupCompleted,
       );
-      server.closeAllConnections();
-      await closing;
     }
-    await rm(directory, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 150,
-    });
+  }
+}
+
+/** Runs only after existing cleanup, without waiting for late replies or close. */
+export async function finishCdpDiagnostic(
+  observer: UserBrowserCdpDiagnosticObserver,
+  outcome: "running" | "passed" | "failed",
+  cleanupCompleted: boolean,
+  output: {
+    write(report: unknown): Promise<void>;
+    log(report: unknown): void;
+  } = {
+    write: async (report) => {
+      const directory = process.env.ZENX_PARALLEL_INPUT_ARTIFACT_DIR;
+      if (directory === undefined) return;
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        path.join(directory, "browser-provider-cdp-diagnostic.json"),
+        JSON.stringify(report, null, 2),
+      );
+    },
+    log: (report) =>
+      console.log("Provider CDP final diagnostic", JSON.stringify(report)),
+  },
+): Promise<void> {
+  // Diagnostic serialization, file and console failures never replace a fixture error.
+  try {
+    const report = {
+      ...observer.stop(),
+      outcome,
+      cleanupCompleted,
+      artifactErrors: 0,
+    };
+    try {
+      await output.write(report);
+    } catch {
+      report.artifactErrors += 1;
+    }
+    try {
+      output.log(report);
+    } catch {
+      /* No remaining diagnostic output channel. */
+    }
+  } catch {
+    /* Preserve the original fixture/cleanup outcome. */
   }
 }
 

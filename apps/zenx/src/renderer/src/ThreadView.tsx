@@ -1,3 +1,4 @@
+import { OriginalHistoryReference } from "./OriginalHistory.js";
 import { ThreadDebugger } from "./ThreadDebugger.js";
 import {
   MessageSourceLink,
@@ -1989,6 +1990,7 @@ export function ContextCompactionEvent({
         </span>
         <Icon name="chevron-down" size={13} />
       </button>
+      <OriginalHistoryReference key={item.id} item={item} />
       {expanded ? (
         <div className="context-compaction-detail">
           <div className="compaction-summary-heading">
