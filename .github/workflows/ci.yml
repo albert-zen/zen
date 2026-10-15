@@ -457,7 +457,15 @@ jobs:
       - name: Exercise Workspace background capture and targeted input
         timeout-minutes: 3
         working-directory: apps/zenx
+        env:
+          ZENX_BROWSER_BLANK_ARTIFACT_DIR: ${{ runner.temp }}/zenx-browser-blank-evidence
         run: npx --no-install electron ./out/main/workspace-browser-smoke.js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-browser-blank-appearance
+          path: ${{ runner.temp }}/zenx-browser-blank-evidence
+          if-no-files-found: ignore
       - name: Prepare a pinned headed Chromium for parallel input
         run: |
           fixture="$RUNNER_TEMP/zenx-browser-fixture"

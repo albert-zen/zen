@@ -71,6 +71,8 @@ export type WorkspaceBrowserCommand =
   | "return-control";
 
 interface Tab {
+  appearance?: "light" | "dark";
+  backgroundColor?: string;
   id: string;
   threadId: string;
   view: WebContentsView;
@@ -227,7 +229,29 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       });
   }
 
+  #updateBlankBackground(tab: Tab): void {
+    if (tab.appearance === undefined || tab.view.webContents.isDestroyed())
+      return;
+    const web = tab.view.webContents;
+    // Only the empty native document follows app appearance. Never inject CSS
+    // into websites or obscure loading/error content with a renderer overlay.
+    const color =
+      web.getURL() === "about:blank" &&
+      !web.isLoading() &&
+      !tab.error &&
+      tab.appearance === "dark"
+        ? "#000000"
+        : "#ffffff";
+    if (tab.backgroundColor !== color) {
+      tab.view.setBackgroundColor(color);
+      tab.backgroundColor = color;
+    }
+  }
+
   #publish(threadId: string): void {
+    for (const tab of this.#tabs.values()) {
+      if (tab.threadId === threadId) this.#updateBlankBackground(tab);
+    }
     const tabs = this.#workspaceSnapshot(threadId);
     for (const owner of this.#owners.values()) {
       if (
@@ -510,6 +534,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       threadId?: unknown;
       tabId?: unknown;
       lease?: unknown;
+      appearance?: unknown;
       bounds?: { x: number; y: number; width: number; height: number };
     };
     if (typeof value.lease !== "string" || value.lease.length > 100)
@@ -542,6 +567,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     if (!bounds.width || !bounds.height) {
       if (owner.active?.lease === value.lease) this.#hide(owner);
       return;
+    }
+    if (value.appearance === "light" || value.appearance === "dark") {
+      tab.appearance = value.appearance;
+      this.#updateBlankBackground(tab);
     }
     const previousBounds =
       owner.active?.tab === tab ? owner.active.bounds : tab.view.getBounds();

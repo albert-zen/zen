@@ -11278,3 +11278,12 @@ button:disabled {
     background: ButtonText;
   }
 }
+
+/* Native view background is synchronized separately; this also paints the
+   empty viewport before the Electron child view is mounted. */
+.workspace-browser-viewport[data-blank="true"] {
+  background: #ffffff;
+}
+:root[data-appearance="dark"] .workspace-browser-viewport[data-blank="true"] {
+  background: #000000;
+}
