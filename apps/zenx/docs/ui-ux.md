@@ -436,7 +436,7 @@ ThreadView
 ## Thread 辅助右栏
 
 - Thread 顶栏只有一个工作区入口；文件、Terminal、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
-- 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。显式配置外部 provider 时，Attached browser 可跟随或固定当前 Thread 的 Agent 目标；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
+- 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。外部 provider 的每个目标在同一 tab strip 中以“外部 · 只读”页面展示，固定其 backend/connection/session/observer 身份；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。不再单设 Agent Browser / Attached browser 入口。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
 - 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
@@ -450,8 +450,8 @@ ThreadView
 - 参考官方源码与文档：[Codex file search](https://github.com/openai/codex/tree/main/codex-rs/file-search) 的工作区文件发现与路径匹配，[T3 Code file tree](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/chat/ChangedFilesTree.tsx) 的目录缩进/折叠，以及 [T3 Code file preview](https://github.com/pingdotgg/t3code/blob/main/docs/user/composer.md#attached-files) 的带语法高亮预览。采用这些交互方向，不导入其权限范围或状态模型。
 - 插件 `contributions.panels` 按 order 排列在加号选择器中，打开后与文件、浏览器并列。内容继续使用 Generic UI Host：可信模块或隔离 iframe，不在聊天底部重复挂载；context 包含当前 threadId。插件卸载或停用后移除其 tab。
 - 插件通过 Host SDK `ui.panels.open({ panelId, threadId })` 请求展示自己声明的 panel。请求只改变易失 UI 选择，不切换当前 Thread，不创建 Turn；给后台 Thread 的请求在用户选择该 Thread 时展示。没有窗口或 panel 不可用时明确报错；成功表示已分发给窗口，不代表用户已看到或确认内容。
-- Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 仍通过 “Attached browser” 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
-- Browser 地址框与 Attached browser 的当前页面 URL 框内部最右侧常显“在外部浏览器打开当前页面”外链箭头，使用系统默认浏览器；地址输入保留 Enter 导航，不再并排放置含义易混淆的 Go 箭头。只打开当前已选页面的实际 HTTP(S) URL（保留 query/hash），不使用地址栏未提交草稿；Attached browser 由 Host 按当前订阅的精确目标读取并打开，工具摘要仍保持脱敏。空页面、加载中、连接失效或切换尚未得到新页面时禁用。图标沿用共享样式并具有 tooltip、可访问名称与键盘焦点；窄窗和触屏按钮至少 44px，URL 框与工具栏随之增高。
+- Browser 的共享标签使用真实 Chromium WebContentsView 支持输入地址、点击、输入、滚动、前进/后退和刷新；同一 Thread 的 Browser 工具与用户挂载并操作精确相同的 target，登录状态保存在独立的 ZenX 持久 profile。外部 CDP provider 通过同一 tab strip 的外部只读 tab 显示其原页面，不把同 URL 的新页面冒充接管。Ctrl/Cmd+L 聚焦地址栏。
+- Browser 地址框与外部只读 tab 的当前页面 URL 框内部最右侧常显“在外部浏览器打开当前页面”外链箭头，使用系统默认浏览器；地址输入保留 Enter 导航，不再并排放置含义易混淆的 Go 箭头。只打开当前已选页面的实际 HTTP(S) URL（保留 query/hash），不使用地址栏未提交草稿；外部只读 tab 由 Host 按当前订阅的精确目标读取并打开，工具摘要仍保持脱敏。空页面、加载中、连接失效或切换尚未得到新页面时禁用。图标沿用共享样式并具有 tooltip、可访问名称与键盘焦点；窄窗和触屏按钮至少 44px，URL 框与工具栏随之增高。
 - 共享网页没有 Node 或 ZenX preload，外部导航限 HTTP(S)；设备、位置、通知等权限默认拒绝。关闭标签释放页面；关闭窗口、隐藏面板或切换 Thread 时只移除 native view，Host 继续持有页面供同一 Thread 的 Agent 使用。当前最多20个共享标签，不提供书签、扩展或完整历史管理。
 - Terminal 打开当前真实 Thread 的本机 Shell 会话管理首页，显示同一 ToolTaskManager 中 Agent 命令与人工交互终端的稳定 task ID、来源、cwd 和实际状态；不跨 Thread 聚合同目录进程，不建立第二套执行注册表。远端 Fleet 会话不映射成本机会话，不静默降级。
 - New terminal 是明确的人工执行操作，在 Thread 的 canonical cwd 创建真实 PTY；仅在既有 Full Access 且 Shell 未被拒绝时可用，归档或受限策略不被自动修改。启动本机交互 Shell 可能读取其正常 startup files。人工拥有输入，Agent 通过同一 Shell 系统的 shell_sessions / wait 观察，不向人工终端交错输入；Agent 取消等待不会终止人工终端。
@@ -661,6 +661,16 @@ Triggers use the existing clock artwork throughout navigation, workspace tabs an
 ### 2026-10-15: Side chat creation settings
 
 The Subagents panel keeps one-click inherited side-chat creation and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Creation still starts no Turn. The workspace launcher plus remains the inherited one-click action.
+
+### 2026-10-15: Unified Browser tabs and bounded Workspace presentation
+
+Workspace Agent tools use the existing ordinary Browser tab and its exact WebContents/profile. The first real operation on a tab in a session incarnation requests display in the current Thread's workspace before capture or dispatch. This is session-scoped, not a reset on every canonical Turn. List, frame, finish and activity updates never select a tab. Selecting another tab, opening the picker or closing the workspace suppresses automatic following for that session; Follow Agent explicitly resumes it. No OS activation, keyboard-focus transfer or main-Thread navigation is requested.
+
+Automatic display has a 750 ms Host deadline. Hidden renderers, user suppression, expired requests and unavailable UI leave the attempt `not-shown`; tools continue only under their existing availability and safety rules. Late display tokens cannot mount a native page after an observation has been returned. An already mounted page acknowledges with its existing lease and geometry, without a remount. A changed mount still invalidates observation evidence normally. Failed or cancelled Agent opens retain the original page for inspection; already-dispatched uncertainty remains explicit and never triggers replay.
+
+Actual inspection and dispatched-action activity appears on tab/chrome edges, never as a website overlay or input interceptor. Reduced motion is static; forced colors retain a visible boundary. Settlement removes activity while preserving the page and permission controls. Unknown action outcomes remain visibly stated and are not presented as safe cancellation.
+
+External connected pages are separate, explicitly read-only peer tabs keyed by their exact observer/backend identity. Same URLs never merge identities. Each pane fixes its subscription to that exact target; a disconnected target is unavailable rather than replaced by another page. Closing such a view only dismisses presentation, not the external page. This first slice automatically presents Workspace operations only; connected-browser automatic operation following remains a separate Host-notification integration. Native same-page/login-state and compositor validation remains distinct from synthetic renderer evidence.
 
 ### 2026-10-15: Machine picker and generation throughput
 

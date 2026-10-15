@@ -17,6 +17,9 @@ export function BrowserThreadPanel({
   onOpenChange,
   providerRevision,
   embedded = false,
+  fixedTargetId,
+  activityCount = 0,
+  activityFailed = false,
 }: {
   threadId: string;
   title: string;
@@ -24,6 +27,9 @@ export function BrowserThreadPanel({
   onOpenChange(open: boolean): void;
   providerRevision: unknown;
   embedded?: boolean;
+  fixedTargetId?: string;
+  activityCount?: number;
+  activityFailed?: boolean;
 }) {
   useTranslation("panels");
   const [targets, setTargets] = useState<BrowserThreadTarget[]>([]);
@@ -88,6 +94,9 @@ export function BrowserThreadPanel({
     setTargets([]);
     setSelectedId(undefined);
     setStatus({ status: "idle", message: "" });
+    // Fixed peer panes share one frame IPC lane. Hidden peers must not replace
+    // the selected pane's subscription; their metadata lives in the catalog.
+    if (fixedTargetId !== undefined && (!open || !visible)) return;
     const receive = (event: BrowserThreadEvent) => {
       if (!active) return;
       if (event.type === "targets") {
@@ -119,7 +128,13 @@ export function BrowserThreadPanel({
           message: "",
           capturedAt: event.capturedAt,
         });
-      } else if (live && open && visible && event.frame.sequence > sequence) {
+      } else if (
+        event.type === "frame" &&
+        live &&
+        open &&
+        visible &&
+        event.frame.sequence > sequence
+      ) {
         sequence = event.frame.sequence;
         const image = imageRef.current;
         if (image) {
@@ -134,7 +149,9 @@ export function BrowserThreadPanel({
       {
         threadId,
         frames: open === true && visible,
-        ...(targetId === undefined ? {} : { targetId }),
+        ...((fixedTargetId ?? targetId) === undefined
+          ? {}
+          : { targetId: fixedTargetId ?? targetId }),
       },
       receive,
     );
@@ -144,7 +161,7 @@ export function BrowserThreadPanel({
       stop();
       imageRef.current?.removeAttribute("src");
     };
-  }, [threadId, targetId, open, visible, providerRevision]);
+  }, [threadId, targetId, open, visible, providerRevision, fixedTargetId]);
   const close = () => {
     setExpanded(false);
     openChange.current(false);
@@ -200,6 +217,7 @@ export function BrowserThreadPanel({
       className={`browser-thread-panel${embedded ? " embedded" : ""}`}
       aria-label={i18n.t("panels:browserFor", { title })}
       data-expanded={expanded}
+      data-agent-active={activityCount > 0}
       style={{ "--browser-panel-width": `${width}px` } as React.CSSProperties}
     >
       <div
@@ -278,45 +296,58 @@ export function BrowserThreadPanel({
           </button>
         </div>
       </header>
+      {fixedTargetId && !selected ? (
+        <p role="status">{i18n.t("panels:selectedPageUnavailable")}</p>
+      ) : null}
       <div className="browser-panel-target">
-        <label htmlFor="thread-browser-target">{i18n.t("panels:page")}</label>
-        <Select
-          id="thread-browser-target"
-          value={targetId ?? ""}
-          onValueChange={(value) => choose(value)}
-        >
-          <option value="">
-            {i18n.t("panels:followAgent")}
-            {selected ? ` · ${selected.title}` : ""}
-          </option>
-          {targetId !== undefined &&
-          !targets.some((target) => target.id === targetId) ? (
-            <option value={targetId}>
-              {i18n.t("panels:selectedPageUnavailable")}
-            </option>
-          ) : null}
-          {targets.map((target) => (
-            <option key={target.id} value={target.id}>
-              {target.backendId === "workspace"
-                ? i18n.t("panels:workspaceBrowserTarget")
-                : target.backendId === "connected"
-                  ? target.connectionLabel
-                    ? `${target.connectionLabel} · `
-                    : i18n.t("panels:connectedBrowserTarget")
-                  : ""}
-              {target.title || target.url}
-            </option>
-          ))}
-        </Select>
-        {targetId !== undefined ? (
-          <button
-            type="button"
-            className="browser-follow-button"
-            onClick={() => choose("")}
-          >
-            {i18n.t("panels:followAgent")}
-          </button>
-        ) : null}
+        {fixedTargetId ? (
+          <span className="browser-read-only-label">
+            {i18n.t("panels:externalReadOnly")}
+          </span>
+        ) : (
+          <>
+            <label htmlFor="thread-browser-target">
+              {i18n.t("panels:page")}
+            </label>
+            <Select
+              id="thread-browser-target"
+              value={targetId ?? ""}
+              onValueChange={(value) => choose(value)}
+            >
+              <option value="">
+                {i18n.t("panels:followAgent")}
+                {selected ? ` · ${selected.title}` : ""}
+              </option>
+              {targetId !== undefined &&
+              !targets.some((target) => target.id === targetId) ? (
+                <option value={targetId}>
+                  {i18n.t("panels:selectedPageUnavailable")}
+                </option>
+              ) : null}
+              {targets.map((target) => (
+                <option key={target.id} value={target.id}>
+                  {target.backendId === "workspace"
+                    ? i18n.t("panels:workspaceBrowserTarget")
+                    : target.backendId === "connected"
+                      ? target.connectionLabel
+                        ? `${target.connectionLabel} · `
+                        : i18n.t("panels:connectedBrowserTarget")
+                      : ""}
+                  {target.title || target.url}
+                </option>
+              ))}
+            </Select>
+            {targetId !== undefined ? (
+              <button
+                type="button"
+                className="browser-follow-button"
+                onClick={() => choose("")}
+              >
+                {i18n.t("panels:followAgent")}
+              </button>
+            ) : null}
+          </>
+        )}
         <div className="browser-panel-location browser-url-field">
           <span title={selected?.url}>{selected?.url}</span>
           <BrowserExternalOpen
@@ -382,6 +413,14 @@ export function BrowserThreadPanel({
                         : i18n.t("panels:browserObservation")}
               </strong>
               <small>{statusMessage}</small>
+              {activityCount > 0 ? (
+                <small>{i18n.t("panels:browserAgentWorking")}</small>
+              ) : null}
+              {activityFailed ? (
+                <small className="browser-ui-error">
+                  {i18n.t("panels:browserOperationFailed")}
+                </small>
+              ) : null}
             </span>
           </div>
         </header>

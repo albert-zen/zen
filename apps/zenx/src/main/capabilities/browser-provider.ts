@@ -1,3 +1,4 @@
+import { withBrowserOperationOrder } from "./browser-operation-order.js";
 import {
   assertBrowserInputSnapshot,
   browserInputKeys,
@@ -71,6 +72,8 @@ export interface BrowserTabSummary {
   agentActionOutcomeUnknown?: boolean;
   requiresFreshObservation?: boolean;
   mutationsRequireObservation?: boolean;
+  /** Workspace automatic presentation attempt only, not current visibility or action authority. */
+  automaticPresentation?: "shown" | "not-shown";
 }
 
 export interface BrowserInspection extends BrowserTabSummary {
@@ -578,7 +581,17 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     this.manifest = manifest;
   }
 
-  async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+  invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    return withBrowserOperationOrder(
+      () => this.#invokeOrdered(toolName, invocation),
+      true,
+    );
+  }
+
+  async #invokeOrdered(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
     if (invocation.threadId === undefined)
       return await this.#invokeAndObserve(toolName, invocation);
     const publicSessionId = requiredTargetId(invocation.arguments, "sessionId");
@@ -586,21 +599,33 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       invocation.threadId,
       publicSessionId,
     );
-    const result = await this.#invokeAndObserve(toolName, {
-      ...invocation,
-      arguments: {
-        ...invocation.arguments,
-        sessionId: session.providerSessionId,
-      },
-    });
-    this.#threadObservation.publish(
+    const settle = this.#threadObservation.operation(
       session,
       toolName,
-      result,
-      typeof invocation.arguments.tabId === "string"
-        ? invocation.arguments.tabId
-        : undefined,
+      invocation,
     );
+    let result: unknown;
+    try {
+      result = await this.#invokeAndObserve(toolName, {
+        ...invocation,
+        arguments: {
+          ...invocation.arguments,
+          sessionId: session.providerSessionId,
+        },
+      });
+      this.#threadObservation.publish(
+        session,
+        toolName,
+        result,
+        typeof invocation.arguments.tabId === "string"
+          ? invocation.arguments.tabId
+          : undefined,
+      );
+      settle(false, result);
+    } catch (error) {
+      settle(true);
+      throw error;
+    }
     const project = (value: unknown) =>
       typeof value === "object" && value !== null && "sessionId" in value
         ? { ...value, sessionId: publicSessionId }

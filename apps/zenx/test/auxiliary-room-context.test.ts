@@ -120,7 +120,7 @@ async function mount(
     },
     browserObservation: {
       subscribe: ({ threadId }: { threadId: string }) => {
-        calls.push({ id: "attached", threadId });
+        calls.push({ id: "browser-targets", threadId });
         return () => {};
       },
     },
@@ -562,7 +562,10 @@ test("removing a Room resource Thread retains its selected custom tab and reject
     );
     assert.deepEqual(
       h.calls.filter((call) => call.threadId),
-      [{ id: "browser-list", threadId: "old-execution" }],
+      [
+        { id: "browser-list", threadId: "old-execution" },
+        { id: "browser-targets", threadId: "old-execution" },
+      ],
     );
   } finally {
     await h.unmount();

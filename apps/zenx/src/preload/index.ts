@@ -127,6 +127,26 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
     mount: async (request: unknown) =>
       await ipcRenderer.invoke(ipcChannels.workspaceBrowserMount, request),
+    presentationContext: (request: unknown) =>
+      ipcRenderer.invoke(
+        ipcChannels.workspaceBrowserPresentationContext,
+        request,
+      ),
+    declinePresentation: (requestId: string) =>
+      ipcRenderer.invoke(
+        ipcChannels.workspaceBrowserDeclinePresentation,
+        requestId,
+      ),
+    onPresentation: (listener: (value: unknown) => void) => {
+      const receive = (_event: Electron.IpcRendererEvent, value: unknown) =>
+        listener(value);
+      ipcRenderer.on(ipcChannels.workspaceBrowserPresentation, receive);
+      return () =>
+        ipcRenderer.removeListener(
+          ipcChannels.workspaceBrowserPresentation,
+          receive,
+        );
+    },
     onChanged: (listener: (value: unknown) => void) => {
       const receive = (_event: Electron.IpcRendererEvent, value: unknown) =>
         listener(value);
@@ -552,6 +572,15 @@ contextBridge.exposeInMainWorld("zenx", {
       request: BrowserThreadRequest,
       listener: (event: BrowserThreadEvent) => void,
     ): (() => void) => {
+      const eventChannel = request.catalog
+        ? ipcChannels.browserCatalogEvent
+        : ipcChannels.browserLiveEvent;
+      const subscribeChannel = request.catalog
+        ? ipcChannels.browserCatalogSubscribe
+        : ipcChannels.browserLiveSubscribe;
+      const unsubscribeChannel = request.catalog
+        ? ipcChannels.browserCatalogUnsubscribe
+        : ipcChannels.browserLiveUnsubscribe;
       let active = true;
       const subscriptionId = crypto.randomUUID();
       const wrapped = (
@@ -561,9 +590,9 @@ contextBridge.exposeInMainWorld("zenx", {
         if (active && value.subscriptionId === subscriptionId)
           listener(value.event);
       };
-      ipcRenderer.on(ipcChannels.browserLiveEvent, wrapped);
+      ipcRenderer.on(eventChannel, wrapped);
       void ipcRenderer
-        .invoke(ipcChannels.browserLiveSubscribe, subscriptionId, request)
+        .invoke(subscribeChannel, subscriptionId, request)
         .catch(() => {
           if (active) {
             listener({
@@ -576,11 +605,8 @@ contextBridge.exposeInMainWorld("zenx", {
       return () => {
         if (!active) return;
         active = false;
-        ipcRenderer.off(ipcChannels.browserLiveEvent, wrapped);
-        void ipcRenderer.invoke(
-          ipcChannels.browserLiveUnsubscribe,
-          subscriptionId,
-        );
+        ipcRenderer.off(eventChannel, wrapped);
+        void ipcRenderer.invoke(unsubscribeChannel, subscriptionId);
       };
     },
   },

@@ -10,6 +10,11 @@ export const ipcChannels = {
   skillsImport: "zenx:skills:import",
   skillsMode: "zenx:skills:mode",
   workspaceBrowserCommand: "zenx:workspace-browser:command",
+  workspaceBrowserPresentation: "zenx:workspace-browser:presentation",
+  workspaceBrowserPresentationContext:
+    "zenx:workspace-browser:presentation-context",
+  workspaceBrowserDeclinePresentation:
+    "zenx:workspace-browser:decline-presentation",
   workspaceBrowserMount: "zenx:workspace-browser:mount",
   workspaceBrowserChanged: "zenx:workspace-browser:changed",
   workspaceBrowserFocusAddress: "zenx:workspace-browser:focus-address",
@@ -90,6 +95,9 @@ export const ipcChannels = {
   browserLiveSubscribe: "zenx:browser-live:subscribe",
   browserLiveUnsubscribe: "zenx:browser-live:unsubscribe",
   browserOpenExternal: "zenx:browser-live:open-external",
+  browserCatalogEvent: "zenx:browser-catalog:event",
+  browserCatalogSubscribe: "zenx:browser-catalog:subscribe",
+  browserCatalogUnsubscribe: "zenx:browser-catalog:unsubscribe",
   browserLiveEvent: "zenx:browser-live:event",
   computerLiveSubscribe: "zenx:computer-live:subscribe",
   computerLiveUnsubscribe: "zenx:computer-live:unsubscribe",

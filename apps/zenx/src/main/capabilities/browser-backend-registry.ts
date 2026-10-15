@@ -1,3 +1,4 @@
+import { withBrowserOperationOrder } from "./browser-operation-order.js";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
@@ -272,7 +273,16 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     return { key, capability };
   }
 
-  async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+  invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    return withBrowserOperationOrder(() =>
+      this.#invokeOrdered(toolName, invocation),
+    );
+  }
+
+  async #invokeOrdered(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
     if (this.#closed) throw new Error("Browser registry is closed");
     if (toolName === "browser_connections" && this.#source !== undefined)
       return this.#source
@@ -314,7 +324,11 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
       arguments: args,
     });
     const threadId = invocation.threadId;
-    if (!this.#closed && threadId !== undefined) {
+    if (
+      !this.#closed &&
+      this.#packages.get(backendId) === selected &&
+      threadId !== undefined
+    ) {
       if (canonicalName === "browser_close_session") {
         const last = this.#lastAction.get(threadId);
         if (last?.backendId === backendId && last.sessionId === args.sessionId)
@@ -459,7 +473,8 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
           if (
             active &&
             generation === frameGeneration &&
-            event.type !== "targets"
+            event.type !== "targets" &&
+            event.type !== "activity"
           )
             send(event);
         },
@@ -502,7 +517,17 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
         const dispose = capability.observeThread(
           { threadId: request.threadId, frames: false },
           (event) => {
-            if (!active || event.type !== "targets") return;
+            if (!active || this.#packages.get(backendId) !== capability) return;
+            if (event.type === "activity") {
+              if (!request.frames)
+                send({
+                  ...event,
+                  targetId: qualify(backendId, event.targetId),
+                  sessionEpoch: qualify(backendId, event.sessionEpoch),
+                });
+              return;
+            }
+            if (event.type !== "targets") return;
             targets.set(
               backendId,
               event.targets.map((target) => ({

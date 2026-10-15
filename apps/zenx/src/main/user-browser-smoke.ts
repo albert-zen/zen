@@ -1,3 +1,4 @@
+import { smokeConnectedActivity } from "./browser-connected-activity-smoke.js";
 import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -438,6 +439,24 @@ try {
       assert.equal(snapshot.visibilityByTarget.get(opened.tabId), "hidden");
     },
   });
+  await smokeConnectedActivity(
+    backend,
+    `http://127.0.0.1:${String(port)}/opened`,
+  );
+  assert.equal(
+    foregroundWindowHandle(),
+    foregroundBeforeOpen,
+    "Registry background open/inspect must preserve the OS foreground window",
+  );
+  const afterActivity = await browserTargetSnapshot(
+    endpoint,
+    fixtureBrowserHwnd,
+  );
+  assert.equal(
+    afterActivity.activeTargetId,
+    targetsBeforeOpen.activeTargetId,
+    "Registry background open/inspect must preserve the actual Chrome active tab",
+  );
   const detached = await backend.closeSession("windows-smoke");
   await retry(async () =>
     liveEvents.some(

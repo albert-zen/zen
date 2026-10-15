@@ -1,3 +1,4 @@
+import { browserOperationOrder } from "./capabilities/browser-operation-order.js";
 import {
   assertBrowserInputSnapshot,
   browserInputSnapshotScript,
@@ -55,6 +56,7 @@ export interface WorkspaceBrowserTab {
   sharedWithAgent: true;
   control: "agent" | "human";
   agentActionsInFlight: number;
+  agentInspectionsInFlight?: number;
   agentActionOutcomeUnknown: boolean;
   requiresFreshObservation: boolean;
   error?: string;
@@ -69,6 +71,16 @@ export type WorkspaceBrowserCommand =
   | "close"
   | "take-control"
   | "return-control";
+
+export interface WorkspaceBrowserPresentation {
+  requestId: string;
+  operationSequence: number;
+  requestedAt: number;
+  expiresAt: number;
+  sessionEpoch: string;
+  threadId: string;
+  tab: WorkspaceBrowserTab;
+}
 
 interface Tab {
   appearance?: "light" | "dark";
@@ -92,6 +104,8 @@ interface Tab {
   error?: string;
 }
 interface Owner {
+  threadId?: string;
+  contextLease?: string;
   window: BrowserWindow;
   active?: { tab: Tab; lease: string; bounds: Electron.Rectangle };
 }
@@ -136,6 +150,19 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   readonly #tabs = new Map<string, Tab>();
   readonly #sessionThreads = new Map<string, string>();
   readonly #sessionIncarnations = new Map<string, string>();
+  readonly #presentationWaits = new Map<string, Promise<void>>();
+  readonly #presented = new Map<string, Map<string, boolean>>();
+  readonly #presentations = new Map<
+    string,
+    {
+      tab: Tab;
+      epoch: string;
+      owner: Owner;
+      markShown(): void;
+      finish(): void;
+    }
+  >();
+  readonly #inspections = new Map<string, number>();
   readonly #artifacts: BrowserScreenshotArtifactStore;
   readonly #dependencies: WorkspaceBrowserDependencies;
 
@@ -183,6 +210,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       const id = sender.id;
       window.once("closed", () => {
         this.#hide(owner!);
+        for (const pending of this.#presentations.values())
+          if (pending.owner === owner) pending.finish();
         for (const tab of this.#tabs.values()) {
           if (tab.owner === owner) tab.owner = undefined;
         }
@@ -223,6 +252,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           canGoBack: web.navigationHistory.canGoBack(),
           canGoForward: web.navigationHistory.canGoForward(),
           sharedWithAgent: true,
+          agentInspectionsInFlight: this.#inspections.get(tab.id) ?? 0,
           ...this.#controlSummary(tab),
           ...(tab.error ? { error: tab.error } : {}),
         };
@@ -527,6 +557,104 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     return this.#workspaceSnapshot(threadId);
   }
 
+  /** Presentation is bounded UI work, completed before observation admission. */
+  #present(
+    sessionId: string,
+    tab: Tab,
+    signal?: AbortSignal,
+  ): Promise<void> | undefined {
+    signal?.throwIfAborted();
+    const incarnation = this.#sessionIncarnations.get(sessionId);
+    if (!incarnation) throw new Error("Browser session is no longer available");
+    let seen = this.#presented.get(incarnation);
+    if (!seen) this.#presented.set(incarnation, (seen = new Map()));
+    const key = JSON.stringify([incarnation, tab.id]);
+    const waiting = this.#presentationWaits.get(key);
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (
+        this.#sessionIncarnations.get(sessionId) !== incarnation ||
+        this.#requireAgentTab(sessionId, tab.id) !== tab
+      )
+        throw new Error(
+          "Browser session or target changed during presentation",
+        );
+    };
+    if (waiting) return waiting.then(assertCurrent);
+    if (seen.has(tab.id)) return;
+    seen.set(tab.id, false);
+    // Only the renderer that owns this Thread may answer. No OS activation.
+    const owner =
+      tab.owner ??
+      [...this.#owners.values()].find(
+        (candidate) => candidate.threadId === tab.threadId,
+      );
+    if (!owner || owner.threadId !== tab.threadId || owner.window.isDestroyed())
+      return;
+    const requestId = randomUUID();
+    const requestedAt = Date.now();
+    const wait = new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", finish);
+        this.#presentations.delete(requestId);
+        resolve();
+      };
+      const timer = setTimeout(finish, 750);
+      this.#presentations.set(requestId, {
+        tab,
+        epoch: incarnation,
+        owner,
+        markShown: () => seen!.set(tab.id, true),
+        finish,
+      });
+      signal?.addEventListener("abort", finish, { once: true });
+      owner.window.webContents.send(ipcChannels.workspaceBrowserPresentation, {
+        requestId,
+        operationSequence: browserOperationOrder(),
+        requestedAt,
+        expiresAt: requestedAt + 750,
+        sessionEpoch: incarnation,
+        threadId: tab.threadId,
+        tab: this.#workspaceSnapshot(tab.threadId).find(
+          (value) => value.id === tab.id,
+        )!,
+      } satisfies WorkspaceBrowserPresentation);
+    });
+    this.#presentationWaits.set(key, wait);
+    return wait
+      .finally(() => this.#presentationWaits.delete(key))
+      .then(assertCurrent);
+  }
+
+  presentationContext(sender: WebContents, request: unknown): void {
+    if (!request || typeof request !== "object")
+      throw new Error("Invalid presentation context");
+    const { threadId, lease } = request as {
+      threadId?: unknown;
+      lease?: unknown;
+    };
+    if (
+      typeof lease !== "string" ||
+      lease.length > 100 ||
+      (threadId !== undefined &&
+        (typeof threadId !== "string" || !threadId || threadId.length > 512))
+    )
+      throw new Error("Invalid presentation context");
+    const owner = this.#owner(sender);
+    if (threadId === undefined && owner.contextLease !== lease) return;
+    for (const pending of this.#presentations.values())
+      if (pending.owner === owner) pending.finish();
+    owner.threadId = threadId as string | undefined;
+    owner.contextLease = threadId === undefined ? undefined : lease;
+  }
+
+  declinePresentation(sender: WebContents, requestId: unknown): void {
+    if (typeof requestId !== "string") return;
+    const pending = this.#presentations.get(requestId);
+    if (pending?.owner.window.webContents === sender) pending.finish();
+  }
+
   mount(sender: WebContents, request: unknown): void {
     if (!request || typeof request !== "object")
       throw new Error("Invalid browser view");
@@ -534,6 +662,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       threadId?: unknown;
       tabId?: unknown;
       lease?: unknown;
+      presentationId?: unknown;
       appearance?: unknown;
       bounds?: { x: number; y: number; width: number; height: number };
     };
@@ -548,6 +677,19 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       typeof value.tabId === "string" ? this.#tabs.get(value.tabId) : undefined;
     if (!tab || tab.threadId !== value.threadId)
       throw new Error("Browser tab is not in this Thread");
+    const presentation =
+      typeof value.presentationId === "string"
+        ? this.#presentations.get(value.presentationId)
+        : undefined;
+    if (
+      value.presentationId !== undefined &&
+      (!presentation ||
+        presentation.tab !== tab ||
+        presentation.owner !== owner)
+    )
+      throw new Error(
+        "Browser automatic display expired; select the tab to view it",
+      );
     const { x, y, width, height } = value.bounds;
     if (![x, y, width, height].every(Number.isFinite))
       throw new Error("Invalid browser bounds");
@@ -581,7 +723,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       previousBounds.y !== bounds.y ||
       previousBounds.width !== bounds.width ||
       previousBounds.height !== bounds.height;
-    if (!changedMount) return;
+    if (!changedMount) {
+      presentation?.markShown();
+      presentation?.finish();
+      return;
+    }
     // Return the exact borrowed view before accepting newer UI ownership.
     this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner !== undefined && tab.owner !== owner) this.#hide(tab.owner);
@@ -598,6 +744,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     owner.active = { tab, lease: value.lease, bounds };
     tab.view.setBounds(bounds);
     tab.view.setVisible(true);
+    presentation?.markShown();
+    presentation?.finish();
   }
 
   observeTab(
@@ -689,7 +837,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         this.#requireAgentTab(sessionId, tab.id),
       );
     } catch (error) {
-      if (!tab.handoffMode) this.#closeTab(tab);
+      // A failed or cancelled open leaves the same page available for recovery.
+      this.#publish(threadId);
       throw error;
     }
   }
@@ -720,7 +869,27 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     return this.#agentSummary(sessionId, tab);
   }
 
-  async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
+  async inspect(
+    sessionId: string,
+    tabId: string,
+    signal?: AbortSignal,
+  ): Promise<BrowserInspection> {
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    const presentation = this.#present(sessionId, tab, signal);
+    if (presentation) await presentation;
+    this.#inspections.set(tabId, (this.#inspections.get(tabId) ?? 0) + 1);
+    this.#publish(tab.threadId);
+    try {
+      return await this.#inspect(sessionId, tabId);
+    } finally {
+      const remaining = (this.#inspections.get(tabId) ?? 1) - 1;
+      if (remaining) this.#inspections.set(tabId, remaining);
+      else this.#inspections.delete(tabId);
+      this.#publish(tab.threadId);
+    }
+  }
+
+  async #inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireAgentTab(sessionId, tabId);
     const controlRevision = tab.controlRevision;
     return await this.#rendered(tab, async () => {
@@ -1178,12 +1347,18 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
 
   closeSession(sessionId: string): number {
     this.#requireSessionThread(sessionId);
+    const epoch = this.#sessionIncarnations.get(sessionId);
+    if (epoch) this.#presented.delete(epoch);
+    for (const pending of this.#presentations.values())
+      if (pending.epoch === epoch) pending.finish();
     this.#sessionThreads.delete(sessionId);
     this.#sessionIncarnations.delete(sessionId);
     return 0;
   }
 
   async close(): Promise<void> {
+    for (const pending of this.#presentations.values()) pending.finish();
+    this.#presented.clear();
     this.#sessionThreads.clear();
     this.#sessionIncarnations.clear();
   }
@@ -1296,6 +1471,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       targetedInput?: boolean;
     } = {},
   ): Promise<T> {
+    const presentation = this.#present(sessionId, tab, signal);
+    if (presentation) await presentation;
     signal?.throwIfAborted();
     if (
       !inputOptions.allowQuarantinedClose &&
@@ -1512,9 +1689,19 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
 
   #agentSummary(sessionId: string, tab: Tab): BrowserTabSummary {
     const web = tab.view.webContents;
+    const shown = this.#presented
+      .get(this.#sessionIncarnations.get(sessionId) ?? "")
+      ?.get(tab.id);
     return {
       sessionId,
       tabId: tab.id,
+      ...(shown === undefined
+        ? {}
+        : {
+            automaticPresentation: shown
+              ? ("shown" as const)
+              : ("not-shown" as const),
+          }),
       title: (web.getTitle() || "New tab").slice(0, 256),
       url: redactBrowserUrl(web.getURL() || "about:blank"),
       loading: web.isLoading(),
@@ -1523,6 +1710,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }
 
   #closeTab(tab: Tab): void {
+    for (const seen of this.#presented.values()) seen.delete(tab.id);
+    for (const pending of this.#presentations.values())
+      if (pending.tab === tab) pending.finish();
     this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
     this.#tabs.delete(tab.id);
