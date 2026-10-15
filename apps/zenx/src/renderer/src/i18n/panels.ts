@@ -521,6 +521,8 @@ export const en = {
   browseASharedPageWithTheAgent: "Browse a shared page with the agent",
   observeTheAgentSDesktopActivity: "Observe the agent’s desktop activity",
   inspectConnectedBrowserActivity: "Inspect connected browser activity",
+  subagentsWorkspaceDescription: "View delegated work and side chats",
+  triggersWorkspaceDescription: "Set up and inspect conversation triggers",
   openConversationFullScreen: "Open conversation full screen",
   triggerUnavailableInThisAssistantContext:
     "Trigger unavailable in this assistant context",
@@ -1362,6 +1364,8 @@ export const zhCN = {
   browseASharedPageWithTheAgent: "与 Agent 一起浏览共享页面",
   observeTheAgentSDesktopActivity: "观察 Agent 的桌面活动",
   inspectConnectedBrowserActivity: "查看已连接浏览器的活动",
+  subagentsWorkspaceDescription: "查看委派任务与旁支会话",
+  triggersWorkspaceDescription: "设置和查看此会话的触发器",
   openConversationFullScreen: "全屏打开会话",
   triggerUnavailableInThisAssistantContext: "此助手上下文中的触发器不可用",
   threadUnavailableOrWorkspaceChanged: "会话不可用或工作区已变化",

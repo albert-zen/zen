@@ -5674,7 +5674,7 @@ test("side conversation message source stays in the side panel and preserves the
     );
     const subagents = await waitFor(() =>
       [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (node) => node.textContent?.trim() === "Subagents",
+        (node) => node.querySelector("strong")?.textContent === "Subagents",
       ),
     );
     await act(async () => subagents.click());

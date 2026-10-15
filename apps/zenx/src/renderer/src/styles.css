@@ -8758,7 +8758,8 @@ button:disabled {
   gap: 3px;
   text-align: left;
 }
-.workspace-tab-types button {
+.workspace-tab-types > button,
+.workspace-plugin-choice > button {
   min-height: 64px;
 }
 .workspace-content-tab[data-active="true"] {
@@ -10301,16 +10302,46 @@ button:disabled {
 }
 
 .workspace-plugin-choice {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0;
   border-radius: 8px;
   background: var(--color-surface-wash);
-  padding-right: 10px;
 }
 .workspace-plugin-choice > button {
   flex: 1;
   min-width: 0;
+  background: transparent;
+}
+.workspace-plugin-choice > [data-plugin-surface] {
+  flex: none;
+  margin-inline-end: 10px;
+}
+.workspace-plugin-choice .subagent-create-button-compact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--color-border-control);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.workspace-plugin-choice .subagent-create-button-compact:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+@media (hover: none), (pointer: coarse) {
+  .workspace-plugin-choice .subagent-create-button-compact {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
 }
 .workspace-plugin-choice .subagent-create-error {
   position: absolute;
