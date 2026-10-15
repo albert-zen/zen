@@ -85,12 +85,18 @@ public static class ZenXPackagedFixture {
     bool replaced = false, duplicated = false;
     Form duplicate = null;
     var lifetime = Stopwatch.StartNew();
+    bool diagnostics = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ZENX_NATIVE_GUARD_DIAGNOSTICS_DIR"));
+    long heartbeatSequence = 0, lastHeartbeat = -250;
     var timer = new System.Windows.Forms.Timer(); timer.Interval = 10;
     timer.Tick += delegate {
       string currentEditorValue = editor.Text;
       if (!string.Equals(observedEditorValue, currentEditorValue, StringComparison.Ordinal)) {
         Write("editor-value", currentEditorValue);
         observedEditorValue = currentEditorValue;
+      }
+      if (diagnostics && lifetime.ElapsedMilliseconds - lastHeartbeat >= 250) {
+        lastHeartbeat = lifetime.ElapsedMilliseconds;
+        try { Json("target-heartbeat.json", new { sequence = ++heartbeatSequence, elapsedMs = lastHeartbeat, utcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }); } catch { /* Diagnostic IO never changes fixture behavior. */ }
       }
       if (Exists("replace-editor") && !replaced) {
         replaced = true; string old = editor.Handle.ToInt64().ToString();
