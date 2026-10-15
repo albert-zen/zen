@@ -19,6 +19,7 @@ import {
   type WinAppCliRunner,
 } from "./capabilities/windows-computer-provider.js";
 import { waitForFile, waitForText } from "./windows-packaged-uia-files.js";
+import { PackagedUiaDiagnostic } from "./windows-packaged-uia-diagnostic.js";
 import { WINDOWS_PACKAGED_UIA_FIXTURE } from "./windows-packaged-uia-fixture.js";
 import {
   assertWindowsPackagedUiaFocusEvidence,
@@ -73,6 +74,12 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
   );
   const signal = controller.signal;
   const fixtures: FixtureProcess[] = [];
+  const evidence = new PackagedUiaDiagnostic(
+    process.env.ZENX_NATIVE_GUARD_DIAGNOSTICS_DIR,
+  );
+  let diagnosticCall = 0;
+  let completed = false;
+  let cleanupCompleted = false;
   const runner = new SpawnWinAppCliRunner();
   let nativeLaunch: NativeLaunch | undefined;
   let nativeInspection: NativeReceipt | undefined;
@@ -86,6 +93,9 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
     async run(executable, args, launchOptions) {
       if (args.includes("--zenx-uia-strict"))
         nativeLaunch = { executable, args, options: launchOptions };
+      const call = ++diagnosticCall;
+      const strict = args.includes("--zenx-uia-strict");
+      if (strict) evidence.record("call-start", { call });
       let spawned = false;
       try {
         const result = await runner.run(executable, args, {
@@ -95,9 +105,11 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
             spawned = true;
             spawnCount++;
             lastPid = pid;
+            if (strict) evidence.record("call-spawn", { call, pid });
           },
         });
         if (args.includes("--zenx-uia-strict")) {
+          evidence.receipt(call, result.stdout);
           const receipt = JSON.parse(result.stdout) as NativeReceipt;
           if (
             receipt.operation === "inspect" &&
@@ -115,6 +127,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
         // Production runBoundedProcess settles only after ChildProcess 'close',
         // including stdout/stderr pipes, and after releasing the asset binding.
         if (spawned) closedLaunches++;
+        if (strict) evidence.record("call-settled", { call, spawned });
       }
     },
   };
@@ -202,6 +215,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       title: string;
       editorHwnd: string;
     }>(directory, "target.json", signal, fixtures);
+    evidence.owner("target", target.pid, target.hwnd);
     fixtures.push(
       startFixture(script, [
         "-Mode",
@@ -220,6 +234,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       hwnd: string;
       hookInstalled: boolean;
     }>(directory, "guard-ready.json", signal, fixtures);
+    evidence.owner("guard", guard.pid, guard.hwnd);
     assert.notEqual(target.pid, guard.pid);
     assert.equal(guard.hookInstalled, true);
 
@@ -237,6 +252,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       "packaged discovery must find exactly the native target",
     );
     const selectedTarget = matches[0]!.target;
+    await evidence.heartbeat(directory, "before-inspect");
     const first = await invoke<ComputerInspection>("computer_inspect", {
       target: selectedTarget,
     });
@@ -563,6 +579,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       invoke("computer_inspect", { target: selectedTarget }),
       /ambiguous|multiple|exactly one/iu,
     );
+    completed = true;
     return {
       provider: diagnostic,
       resourcesPath: process.resourcesPath,
@@ -586,22 +603,46 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
         "Observed fixture epoch only; target-owned side effects and races prevent a global focus guarantee",
     };
   } finally {
-    clearTimeout(timeout);
-    controller.abort(new Error("Packaged UIA smoke cleanup"));
-    await writeFile(path.join(directory, "release-value"), "release");
-    await writeFile(path.join(directory, "quit"), "quit");
-    await Promise.all(
-      fixtures.map(async (fixture) => {
-        const force = setTimeout(() => fixture.child.kill("SIGKILL"), 2_000);
-        try {
-          await fixture.closed;
-        } finally {
-          clearTimeout(force);
-        }
-      }),
-    );
-    await computer?.close();
-    await rm(directory, { recursive: true, force: true });
+    evidence.record("smoke-settled", { completed });
+    const heartbeat = evidence.heartbeat(directory, "before-cleanup");
+    for (const [index, fixture] of fixtures.entries())
+      evidence.record("fixture-state", {
+        index,
+        pid: fixture.child.pid,
+        exitCode: fixture.child.exitCode,
+        signalCode: fixture.child.signalCode,
+      });
+    evidence.record("cleanup-start");
+    try {
+      clearTimeout(timeout);
+      controller.abort(new Error("Packaged UIA smoke cleanup"));
+      await writeFile(path.join(directory, "release-value"), "release");
+      await writeFile(path.join(directory, "quit"), "quit");
+      await Promise.all(
+        fixtures.map(async (fixture) => {
+          const force = setTimeout(() => fixture.child.kill("SIGKILL"), 2_000);
+          try {
+            await fixture.closed;
+          } finally {
+            clearTimeout(force);
+          }
+        }),
+      );
+      await computer?.close();
+      await rm(directory, { recursive: true, force: true });
+      cleanupCompleted = true;
+      evidence.record("cleanup-complete");
+    } finally {
+      for (const [index, fixture] of fixtures.entries())
+        evidence.record("fixture-cleanup-state", {
+          index,
+          pid: fixture.child.pid,
+          exitCode: fixture.child.exitCode,
+          signalCode: fixture.child.signalCode,
+        });
+      await heartbeat;
+      await evidence.finish(!completed || !cleanupCompleted);
+    }
   }
 }
 
