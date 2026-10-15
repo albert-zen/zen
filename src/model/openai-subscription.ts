@@ -1,7 +1,16 @@
+import {
+  safeProviderErrorIdentity,
+  safeProviderErrorParameter,
+  providerRecoveryBlocked,
+  mediaRequestRejected,
+  recordMediaPaths,
+  rejectedMediaParts,
+} from "../loop-recovery.js";
 import { observeRequestBody } from "./request-observation.js";
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import {
   fetchModelResponse,
+  retryAfterMilliseconds,
   isTransientTransportError,
 } from "./request-retry.js";
 import {
@@ -96,16 +105,30 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     );
     const sessionHint = promptCacheHint(request.sessionId);
     const input: Array<Record<string, unknown>> = [];
+    const mediaPaths = new Map<string, object>();
     for (const [index, message] of request.messages.entries()) {
-      input.push(
-        ...(await toResponsesInput(
-          message,
-          index,
-          this.#attachments,
-          replayRawToolNames,
-          rawCallIds,
-        )),
+      const encoded = await toResponsesInput(
+        message,
+        index,
+        this.#attachments,
+        replayRawToolNames,
+        rawCallIds,
       );
+      if (message.role === "user")
+        recordMediaPaths(
+          mediaPaths,
+          `input[${input.length}]`,
+          modelUserContent(message),
+          ["image"],
+        );
+      if (message.role === "tool" && message.modelContent !== undefined)
+        recordMediaPaths(
+          mediaPaths,
+          `input[${input.length + encoded.length - 1}]`,
+          message.modelContent,
+          ["image"],
+        );
+      input.push(...encoded);
     }
     const body = JSON.stringify({
       model: requiredLabel(request.model, "model"),
@@ -169,10 +192,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     }
 
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(
-        `OpenAI subscription model request failed with HTTP ${response.status}`,
-      );
+      throw await subscriptionHttpError(response, signal, mediaPaths);
     }
     if (response.body === null) {
       throw retryableModelSampleError(
@@ -180,13 +200,28 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       );
     }
 
-    yield* parseResponsesStream(
-      response.body,
-      signal,
-      allowedToolNames,
-      rawToolNames,
-      accessToken,
-    );
+    try {
+      yield* parseResponsesStream(
+        response.body,
+        signal,
+        allowedToolNames,
+        rawToolNames,
+        accessToken,
+      );
+    } catch (error) {
+      if (error instanceof Error) {
+        const details = (
+          error as Error & { recoveryDetails?: { param?: string } }
+        ).recoveryDetails;
+        Object.assign(error, {
+          recoveryRejectedMediaParts: rejectedMediaParts(
+            mediaPaths,
+            details?.param,
+          ),
+        });
+      }
+      throw error;
+    }
   }
 
   async #request(
@@ -642,10 +677,23 @@ async function* parseResponsesStream(
           : recordValue(response.incomplete_details);
       const reason =
         details === undefined ? undefined : stringField(details, "reason");
-      throw new Error(
-        `OpenAI subscription response was incomplete${
-          reason === undefined ? "" : `: ${reason}`
-        }`,
+      throw Object.assign(
+        new Error(
+          `OpenAI subscription response was incomplete${
+            reason === undefined ? "" : `: ${reason}`
+          }`,
+        ),
+        {
+          modelRecoveryBlocked: reason === "content_filter",
+          recoveryOutputLimit: reason === "max_output_tokens",
+          recoveryRedact: (text: string) =>
+            text
+              .replaceAll(accessToken, "[redacted]")
+              .replaceAll(
+                JSON.stringify(accessToken).slice(1, -1),
+                "[redacted]",
+              ),
+        },
       );
     }
 
@@ -1039,10 +1087,24 @@ function providerEventError(
     stringField(event, "message") ??
     (nested === undefined ? undefined : stringField(nested, "message"));
   const safeMessage = message?.replaceAll(accessToken, "[redacted]");
-  return new Error(
-    `OpenAI subscription response failed${
-      code === undefined ? "" : ` (${code})`
-    }${safeMessage === undefined ? "" : `: ${safeMessage}`}`,
+  const identity = safeProviderErrorIdentity(code);
+  const type = safeProviderErrorIdentity(nested?.type);
+  const param = safeProviderErrorParameter(nested?.param ?? event.param);
+  const details = {
+    ...(identity === undefined ? {} : { code: identity }),
+    ...(type === undefined ? {} : { type }),
+    ...(param === undefined ? {} : { param }),
+  };
+  return Object.assign(
+    new Error(
+      `OpenAI subscription response failed${
+        code === undefined ? "" : ` (${code})`
+      }${safeMessage === undefined ? "" : `: ${safeMessage}`}`,
+    ),
+    {
+      recoveryDetails: details,
+      modelRecoveryBlocked: providerRecoveryBlocked(details),
+    },
   );
 }
 
@@ -1240,4 +1302,96 @@ function numberField(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Read only a bounded error envelope; raw body/credentials never enter recovery. */
+async function subscriptionHttpError(
+  response: Response,
+  signal: AbortSignal,
+  mediaPaths: ReadonlyMap<string, object>,
+): Promise<Error> {
+  const reader = response.body?.getReader();
+  let text = "";
+  let complete = false;
+  if (reader !== undefined) {
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    const abort = () => {
+      void reader.cancel().catch(() => undefined);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      for (;;) {
+        signal.throwIfAborted();
+        const chunk = await reader.read();
+        if (chunk.done) {
+          complete = true;
+          text += decoder.decode();
+          break;
+        }
+        bytes += chunk.value.byteLength;
+        if (bytes > 16_384) break;
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+    } catch {
+      signal.throwIfAborted();
+    } finally {
+      signal.removeEventListener("abort", abort);
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  signal.throwIfAborted();
+  let details: { code?: string; type?: string; param?: string } = {};
+  let mediaRejected = false;
+  if (complete) {
+    try {
+      const payload: unknown = JSON.parse(text);
+      const value =
+        payload !== null && typeof payload === "object"
+          ? (payload as { error?: unknown }).error
+          : undefined;
+      if (value !== null && typeof value === "object") {
+        const error = value as {
+          code?: unknown;
+          type?: unknown;
+          param?: unknown;
+          message?: unknown;
+        };
+        const code = safeProviderErrorIdentity(error.code);
+        const type = safeProviderErrorIdentity(error.type);
+        const param = safeProviderErrorParameter(error.param);
+        details = {
+          ...(code === undefined ? {} : { code }),
+          ...(type === undefined ? {} : { type }),
+          ...(param === undefined ? {} : { param }),
+        };
+        mediaRejected = mediaRequestRejected(
+          Object.assign(
+            new Error(typeof error.message === "string" ? error.message : ""),
+            { recoveryDetails: details },
+          ),
+        );
+      }
+    } catch {
+      /* Unparseable/oversized bodies are never model context. */
+    }
+  }
+  return Object.assign(
+    new Error(
+      `OpenAI subscription model request failed with HTTP ${response.status}`,
+    ),
+    {
+      status: response.status,
+      recoveryDetails: details,
+      // A bounded/truncated envelope cannot prove that a safety rejection is absent.
+      modelRecoveryBlocked:
+        providerRecoveryBlocked(details) || (reader !== undefined && !complete),
+      recoveryDelayMs: retryAfterMilliseconds(
+        response.headers.get("retry-after") ?? "",
+      ),
+      recoveryMediaRejected: mediaRejected,
+      recoveryRejectedMediaParts: rejectedMediaParts(mediaPaths, details.param),
+    },
+  );
 }

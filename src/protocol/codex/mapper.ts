@@ -15,7 +15,7 @@ import type {
 import { previewFromUserMessage, textFromUserMessage } from "../../item.js";
 import type { DerivedTurn } from "../../thread.js";
 import type { NativeThreadSummary } from "../../thread-summary.js";
-import { encodeModelKey } from "./model-key.js";
+import { encodeModelKey } from "../model-key.js";
 
 export interface CodexThread {
   id: string;
@@ -262,7 +262,7 @@ export function projectTurn(
     );
   const failure = [...turn.items]
     .reverse()
-    .find((item) => item.type === "failure");
+    .find((item) => item.type === "failure" && item.recovery === undefined);
   const startedAt = started === undefined ? null : seconds(started.createdAt);
   const completedAt =
     terminal === undefined ? null : seconds(terminal.createdAt);

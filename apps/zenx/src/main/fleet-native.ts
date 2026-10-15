@@ -6,6 +6,7 @@ import {
   REMOTE_HOST_VERSION,
   REMOTE_UNARCHIVED_SEND_CAPABILITY,
   REMOTE_THREAD_MESSAGE_CAPABILITY,
+  REMOTE_MESSAGE_ORIGIN_CAPABILITY,
   REMOTE_METHODS,
   REMOTE_SHELL_MAX_COMMAND_BYTES,
   REMOTE_SHELL_MAX_TIMEOUT_MS,
@@ -25,6 +26,7 @@ import {
   fleetTools,
   normalizeFleetEndpoint,
   type FleetRequest,
+  type FleetSourceFence,
   type NativeFleetDevice,
   type NativeFleetPort,
 } from "./fleet.js";
@@ -98,7 +100,9 @@ export class NativeFleetRejectedError extends Error {
       message ??
         (code === "approval_required"
           ? "Fleet tool approval is required on the target Host. Approve there before retrying; remote tools cannot answer target approval requests."
-          : `Fleet remote error: ${code}`),
+          : code === "trigger_unavailable"
+            ? "The exact remote Trigger is missing, moved, disabled or inaccessible; no local settings were opened."
+            : `Fleet remote error: ${code}`),
     );
   }
 }
@@ -216,6 +220,12 @@ function item(value: unknown, threadId: string): RemoteItemView {
         : {
             threadName: string(source.threadName, "sender display name", 1024),
           }),
+      ...(source.origin === undefined
+        ? {}
+        : { origin: parseMessageOrigin(source.origin) }),
+      ...(source.returnRoute === undefined
+        ? {}
+        : { returnRoute: parseMessageReturnRoute(source.returnRoute) }),
       toolCallId: string(source.toolCallId, "sender tool call"),
       callId: string(source.callId, "sender call"),
       ...(source.deviceId === undefined
@@ -523,7 +533,11 @@ class NativeSession {
     params: Record<string, unknown>,
     signal: AbortSignal,
     mutation = false,
-    options: { timeoutMs?: number; cancelShellOnAbort?: boolean } = {},
+    options: {
+      timeoutMs?: number;
+      cancelShellOnAbort?: boolean;
+      beforeSend?: () => void;
+    } = {},
   ): Promise<unknown> {
     signal.throwIfAborted();
     if (this.#closed || this.socket.readyState !== WebSocket.OPEN)
@@ -594,6 +608,17 @@ class NativeSession {
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) {
         abort();
+        return;
+      }
+      try {
+        // No await may separate receipt authority from the actual socket write.
+        options.beforeSend?.();
+      } catch (error) {
+        finish(
+          error instanceof Error
+            ? error
+            : new Error("Fleet source authorization changed"),
+        );
         return;
       }
       this.socket.send(payload, (error) => {
@@ -1233,6 +1258,7 @@ export class NativeFleetClient implements NativeFleetPort {
     input: NativeFleetDevice,
     request: FleetRequest,
     signal: AbortSignal,
+    sourceFence?: FleetSourceFence,
   ): Promise<unknown> {
     const peer = this.#peer(input);
     if (
@@ -1247,6 +1273,7 @@ export class NativeFleetClient implements NativeFleetPort {
     const args = request.arguments;
     // Validate before connecting or admitting any mutation.
     const supported: Record<string, string[]> = {
+      zenx_fleet_trigger_read: ["workspace", "threadId", "triggerId"],
       zenx_fleet_shell: [
         "workspace",
         "targetThreadId",
@@ -1414,6 +1441,32 @@ export class NativeFleetClient implements NativeFleetPort {
         selectors[0],
         requestSignal,
       );
+      if (request.name === "zenx_fleet_trigger_read") {
+        if (!session.capabilities.includes("trigger-source-read"))
+          throw new Error(
+            "This Host does not support remote Trigger source settings",
+          );
+        const triggerId = string(args.triggerId, "Trigger ID");
+        const threadId = string(args.threadId, "Trigger owner Thread ID");
+        const result = await session.request(
+          REMOTE_METHODS.triggerRead,
+          { workspaceId, triggerId, threadId },
+          requestSignal,
+        );
+        if (
+          !record(result) ||
+          !record(result.trigger) ||
+          result.trigger.id !== triggerId ||
+          result.trigger.threadId !== threadId
+        )
+          throw new Error("Invalid remote Trigger source identity");
+        return {
+          source: SOURCE,
+          hostId: peer.hostId,
+          workspace: workspaceId,
+          trigger: result.trigger,
+        };
+      }
       const binding = createHash("sha256")
         .update(JSON.stringify([peer.hostId, peer.endpoint, workspaceId]))
         .digest("hex");
@@ -1523,10 +1576,18 @@ export class NativeFleetClient implements NativeFleetPort {
           throw new Error(
             "Target Zen Host does not support archive-fenced Thread sends. Update the target Host before retrying.",
           );
+        if (
+          request.source &&
+          !session.capabilities.includes(REMOTE_MESSAGE_ORIGIN_CAPABILITY)
+        )
+          throw new Error(
+            "Target Host does not support message source origins. Update it before sending; no unbound fallback was sent.",
+          );
         const agentSender =
           request.threadId !== undefined &&
           request.canonicalToolCallId !== undefined
             ? {
+                ...request.source,
                 threadId: request.threadId,
                 toolCallId: request.canonicalToolCallId,
                 callId: request.callId,
@@ -1555,6 +1616,10 @@ export class NativeFleetClient implements NativeFleetPort {
             ]),
           )
           .digest("hex")}`;
+        // Connect/credential lookup, workspace and exact Thread discovery all
+        // precede this final local authorization pass. The synchronous check
+        // remains attached to NativeSession's actual socket-write boundary.
+        await sourceFence?.revalidate();
         const result = await session.request(
           REMOTE_METHODS.send,
           {
@@ -1567,6 +1632,7 @@ export class NativeFleetClient implements NativeFleetPort {
           },
           requestSignal,
           true,
+          { beforeSend: sourceFence?.assertUnchanged },
         );
         if (
           !record(result) ||
@@ -2321,5 +2387,26 @@ function readHistory(
     items: (entries as RemoteItemView[]).slice(start, end).map(preview),
     truncated: start > 0,
     nextCursor,
+  };
+}
+
+function parseMessageOrigin(
+  value: unknown,
+): import("../../../../src/item.js").ThreadMessageOrigin {
+  if (!record(value)) throw new Error("Invalid Fleet message origin");
+  return {
+    hostId: string(value.hostId, "source Host"),
+    workspaceId: string(value.workspaceId, "source workspace"),
+  };
+}
+function parseMessageReturnRoute(
+  value: unknown,
+): import("../../../../src/item.js").ThreadMessageReturnRoute {
+  if (!record(value)) throw new Error("Invalid Fleet message return route");
+  return {
+    ...parseMessageOrigin(value),
+    receiverHostId: string(value.receiverHostId, "receiving Host"),
+    deviceId: string(value.deviceId, "return device"),
+    deviceKey: string(value.deviceKey, "return device key"),
   };
 }

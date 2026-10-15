@@ -4,23 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { ZenAppServer } from "../src/app-server.js";
+import { ZenAppServer, type AppServerEvent } from "../src/app-server.js";
 import { JsonlThreadJournal } from "../src/journal.js";
 import type { ThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
-import { FakeModel } from "../src/model.js";
+import { FakeModel, type ModelAdapter } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { projectThreadSummary } from "../src/protocol/codex/mapper.js";
+import {
+  projectCompletedItem,
+  projectThreadSummary,
+} from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { JsonlThreadMetadataStore } from "../src/thread-metadata.js";
 import { JsonThreadSummaryProjection } from "../src/thread-summary.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
+import { isTurnEndItem, turnEndPosition } from "../src/turn-end.js";
+import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
 
 function createServer(
   directory: string,
   journal?: ThreadJournal,
+  model: ModelAdapter = new FakeModel(),
 ): ZenAppServer {
-  const model = new FakeModel();
   const modelCatalog = new StaticModelCatalog([
     { id: "fake", isDefault: true, contextWindow: 32_768 },
     { id: "other", contextWindow: 32_768 },
@@ -115,6 +120,257 @@ test("rebuilds native summaries and follows canonical and product metadata chang
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a real tool turn publishes canonical end evidence only after it stops", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-summary-final-"));
+  let enterApproval!: () => void;
+  let releaseApproval!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enterApproval = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    releaseApproval = resolve;
+  });
+  let sample = 0;
+  const model: ModelAdapter = {
+    provider: "fake",
+    async *stream() {
+      if (sample++ === 0) {
+        yield { type: "text_delta", delta: "Checking the result first." };
+        yield {
+          type: "tool_call",
+          callId: "check",
+          name: "shell",
+          arguments: { command: "echo synthetic" },
+        };
+      } else {
+        yield { type: "text_delta", delta: "The final reply." };
+      }
+    },
+  };
+  try {
+    const server = createServer(directory, undefined, model);
+    const thread = await server.startThread({ approvalPolicy: "always" });
+    const turn = await server.startTurn(thread.id, "Check then reply", {
+      requestApproval: async () => {
+        enterApproval();
+        await released;
+        return "decline";
+      },
+    });
+    await entered;
+    const [running] = await server.listThreadSummaries();
+    assert(running && running.status === "active");
+    assert.ok(
+      running.lastAgentMessage,
+      "the real runtime committed pre-tool commentary",
+    );
+    assert.equal(running.lastTurnEnd, undefined);
+    releaseApproval();
+    await turn.done;
+    const [completed] = await server.listThreadSummaries();
+    assert(completed && completed.status === "idle");
+    const completedItems = (await server.readThread(thread.id)).items;
+    const terminal = completedItems.at(-1)!;
+    assert.equal(terminal.type, "turn_completed");
+    assert.deepEqual(completed.lastTurnEnd, {
+      id: terminal.id,
+      turnId: turn.id,
+      createdAt: terminal.createdAt,
+      position: turnEndPosition(
+        completedItems,
+        terminal as Parameters<typeof turnEndPosition>[1],
+      ),
+    });
+    assert.ok(completed.lastTurnEnd);
+    const [reloaded] = await createServer(directory).listThreadSummaries();
+    assert(reloaded && reloaded.status === "idle");
+    assert.deepEqual(reloaded.lastTurnEnd, completed.lastTurnEnd);
+  } finally {
+    releaseApproval();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+for (const outcome of [
+  "normal",
+  "empty",
+  "failure",
+  "partial-failure",
+  "abort",
+  "tool-empty",
+] as const) {
+  test(`canonical end event is committed once and survives recovery: ${outcome}`, async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "zen-summary-end-"));
+    let entered!: () => void;
+    const inSample = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "fake",
+      async *stream(request) {
+        entered();
+        if (outcome === "normal") yield { type: "text_delta", delta: "Done." };
+        if (outcome === "partial-failure" || outcome === "abort") {
+          yield { type: "text_delta", delta: "Partial text only" };
+        }
+        if (outcome === "failure" || outcome === "partial-failure")
+          throw new Error("synthetic model failure");
+        if (outcome === "abort") {
+          await new Promise<void>((resolve, reject) => {
+            if (request.signal.aborted) reject(request.signal.reason);
+            else
+              request.signal.addEventListener(
+                "abort",
+                () => reject(request.signal.reason),
+                { once: true },
+              );
+          });
+        }
+        if (outcome === "tool-empty" && samples++ === 0) {
+          yield {
+            type: "tool_call",
+            callId: "tool-only",
+            name: "shell",
+            arguments: { command: "echo synthetic" },
+          };
+        }
+      },
+    };
+    try {
+      const journal = new JsonlThreadJournal(path.join(directory, "threads"));
+      const server = createServer(directory, journal, model);
+      const recovery = new NativeRecoveryProjection(server, {
+        processEpoch: "test-epoch",
+      });
+      try {
+        const thread = await server.startThread({ approvalPolicy: "always" });
+        const observed: AppServerEvent[] = [];
+        const diskChecks: Promise<void>[] = [];
+        server.subscribe((event) => {
+          observed.push(event);
+          if (
+            event.type === "item_completed" &&
+            (isTurnEndItem(event.item) || event.item.type === "turn_started")
+          ) {
+            diskChecks.push(
+              journal.read(thread.id).then((items) => {
+                assert.deepEqual(
+                  items.find((item) => item.id === event.item.id),
+                  event.item,
+                  "the event is the original already-durable terminal Item",
+                );
+              }),
+            );
+          }
+        });
+        const turn = await server.startTurn(thread.id, outcome, {
+          requestApproval: async () => "decline",
+        });
+        if (outcome === "abort") {
+          await inSample;
+          const [running] = await server.listThreadSummaries();
+          assert(running && running.status === "active");
+          assert.equal(running.lastTurnEnd, undefined);
+          await server.interruptTurn(thread.id, turn.id);
+        }
+        await turn.done;
+        await Promise.all(diskChecks);
+        const snapshot = await server.readThread(thread.id);
+        const terminal = snapshot.items.findLast(isTurnEndItem)!;
+        assert(terminal);
+        assert.equal(
+          projectCompletedItem(terminal),
+          null,
+          "legacy CAS does not invent a message from a terminal Item",
+        );
+        assert.equal(
+          terminal.type,
+          outcome === "abort" ? "turn_aborted" : "turn_completed",
+        );
+        const startEvents = observed.filter(
+          (event) =>
+            event.type === "item_completed" &&
+            event.item.type === "turn_started",
+        );
+        assert.equal(startEvents.length, 1);
+        assert.equal(
+          observed[observed.indexOf(startEvents[0]!) + 1]?.type,
+          "turn_started",
+        );
+        const startEvent = startEvents[0]!;
+        assert(startEvent.type === "item_completed");
+        assert.equal(
+          projectCompletedItem(startEvent.item),
+          null,
+          "legacy CAS ignores the lifecycle Item",
+        );
+        const terminalEvents = observed.filter(
+          (event) =>
+            event.type === "item_completed" && isTurnEndItem(event.item),
+        );
+        assert.equal(terminalEvents.length, 1);
+        const itemIndex = observed.indexOf(terminalEvents[0]!);
+        assert.equal(
+          observed[itemIndex + 1]?.type,
+          "turn_completed",
+          "terminal Item precedes the unchanged status event",
+        );
+        assert.equal(
+          observed.filter((event) => event.type === "turn_completed").length,
+          1,
+        );
+        if (outcome === "empty" || outcome === "tool-empty") {
+          assert.equal(
+            snapshot.items.findLast((item) => item.type === "agent_message")
+              ?.text,
+            "",
+          );
+        }
+        const [summary] = await server.listThreadSummaries();
+        assert(summary && summary.status === "idle");
+        assert.deepEqual(summary.lastTurnEnd, {
+          id: terminal.id,
+          turnId: turn.id,
+          createdAt: terminal.createdAt,
+          position: turnEndPosition(snapshot.items, terminal),
+        });
+        const terminalEvent = terminalEvents[0]!;
+        assert(terminalEvent.type === "item_completed");
+        assert.equal(
+          terminalEvent.turnEndPosition,
+          summary.lastTurnEnd?.position,
+        );
+        const resumed = await recovery.resume(thread.id);
+        const again = await recovery.resume(thread.id);
+        assert.equal(
+          again.watermark,
+          resumed.watermark,
+          "read-only resume never emits another end",
+        );
+        assert.deepEqual(
+          resumed.thread.items.findLast(isTurnEndItem),
+          terminal,
+        );
+        assert.equal(
+          observed.filter(
+            (event) =>
+              event.type === "item_completed" && isTurnEndItem(event.item),
+          ).length,
+          1,
+        );
+        const [reloaded] = await createServer(directory).listThreadSummaries();
+        assert(reloaded && reloaded.status === "idle");
+        assert.deepEqual(reloaded.lastTurnEnd, summary.lastTurnEnd);
+      } finally {
+        recovery.close();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test("Turn sort timestamp changes only at a new Turn and survives projection rebuild", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-summary-turn-"));
@@ -224,6 +480,11 @@ test("fork uses its own creation instead of inherited Turn recency", async () =>
     );
     assert(current && current.status !== "systemError");
     assert.equal(current.turnSortAt, current.createdAt);
+    assert.equal(
+      current.lastTurnEnd,
+      undefined,
+      "inherited completed history is not this fork executing",
+    );
     await (
       await server.startTurn(fork.id, "fork's own Turn")
     ).done;
@@ -238,6 +499,93 @@ test("fork uses its own creation instead of inherited Turn recency", async () =>
       )?.createdAt,
     );
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("running-source forks and side chats do not notify for synthetic snapshot closures", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-running-fork-"),
+  );
+  let entered!: () => void;
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let done: Promise<unknown> | undefined;
+  let sample = 0;
+  const server = createServer(directory, undefined, {
+    provider: "fake",
+    async *stream() {
+      if (sample++ === 0) {
+        yield { type: "text_delta", delta: "Still working before tool" };
+        yield {
+          type: "tool_call",
+          callId: "pending",
+          name: "shell",
+          arguments: { command: "echo synthetic" },
+        };
+      }
+    },
+  });
+  try {
+    const source = await server.startThread({ approvalPolicy: "always" });
+    const running = await server.startTurn(source.id, "run", {
+      requestApproval: async () => {
+        entered();
+        await released;
+        return "decline";
+      },
+    });
+    done = running.done;
+    await waiting;
+    const boundary = (await server.readThread(source.id)).items.findLast(
+      (item) => item.type === "agent_message",
+    )!;
+    const fork = await server.forkThread({
+      sourceThreadId: source.id,
+      through: { type: "item", itemId: boundary.id },
+      workspace: { type: "same-directory" },
+    });
+    const side = await server.createChildThread({
+      parentThreadId: source.id,
+      mode: "side-chat",
+    });
+    for (const target of [fork, side]) {
+      assert(
+        target.items.some((item) => item.type === "turn_aborted"),
+        "fixture includes a synthetic snapshot closure",
+      );
+      const summary = (await server.listThreadSummaries()).find(
+        (item) => item.threadId === target.id,
+      )!;
+      assert(summary.status === "idle");
+      assert.equal(
+        summary.lastTurnEnd,
+        undefined,
+        "no execution was transferred into the target",
+      );
+      const local = await server.startTurn(target.id, "new local execution");
+      await local.done;
+      const ended = (await server.listThreadSummaries()).find(
+        (item) => item.threadId === target.id,
+      )!;
+      assert(ended.status === "idle");
+      assert.equal(ended.lastTurnEnd?.turnId, local.id);
+      const reloaded = (
+        await createServer(directory).listThreadSummaries()
+      ).find((item) => item.threadId === target.id)!;
+      assert(reloaded.status === "idle");
+      assert.deepEqual(reloaded.lastTurnEnd, ended.lastTurnEnd);
+    }
+    release();
+    await running.done;
+  } finally {
+    release();
+    await done;
     await rm(directory, { recursive: true, force: true });
   }
 });

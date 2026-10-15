@@ -2025,7 +2025,10 @@ function ThreadRow({
     information?.triggers.triggers.filter(
       (t) => t.threadId === thread.threadId && t.active,
     ) ?? [];
-  const unread = information?.unreadThreadIds.has(thread.threadId) ?? false;
+  const unread =
+    !hasActiveTurn &&
+    !pendingApproval &&
+    (information?.unreadThreadIds.has(thread.threadId) ?? false);
   const statusCount =
     Number(boundTriggers.length > 0) +
     Number(hasActiveTurn || pendingApproval || watching) +
@@ -2328,7 +2331,7 @@ function ThreadRow({
           <span className="thread-status-slot">
             <span
               className="thread-unread-dot"
-              aria-label={i18n.t("shell:threadUnreadReply")}
+              aria-label={i18n.t("shell:threadUnseenEnd")}
             />
           </span>
         ) : null}

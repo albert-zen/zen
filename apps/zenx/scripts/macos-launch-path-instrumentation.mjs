@@ -248,6 +248,7 @@ export async function prepareLaunchPathApp(appDirectory) {
   for (const name of [
     "macos-launch-path-host-observation.mjs",
     "macos-launch-path-control.mjs",
+    "macos-launch-path-ownership.mjs",
     "macos-launch-path-cleanup.mjs",
   ])
     await copyFile(

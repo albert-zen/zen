@@ -241,6 +241,9 @@ export function applyNativeThreadEvent(
   if (event.type === "item_completed") {
     if (event.item.type === "context_compaction") return thread;
     if (event.item.type === "failure") {
+      // Repair diagnostics remain canonical context, not a terminal Turn error.
+      // A replayed repair must not overwrite a later real terminal failure.
+      if (event.item.recovery !== undefined) return thread;
       // Failure Items project to null as ThreadItems; surface them through the
       // turn error immediately instead of waiting for the next snapshot read.
       const failure = event.item;
@@ -290,6 +293,14 @@ export function applyNativeThreadEvent(
     );
   }
   const existing = thread.turns.find((turn) => turn.id === event.turnId);
+  const canonicalStart = thread.canonicalItems?.find(
+    (item) => item.type === "turn_started" && item.turnId === event.turnId,
+  );
+  const canonicalEnd = thread.canonicalItems?.findLast(
+    (item) =>
+      (item.type === "turn_completed" || item.type === "turn_aborted") &&
+      item.turnId === event.turnId,
+  );
   return applyThreadViewNotification(
     thread,
     "turn/completed",
@@ -304,9 +315,13 @@ export function applyNativeThreadEvent(
         startedAt: existing?.startedAt ?? null,
         completedAt: nowSeconds,
         durationMs:
-          existing?.startedAt === null || existing?.startedAt === undefined
+          canonicalStart === undefined || canonicalEnd === undefined
             ? null
-            : Math.max(0, (nowSeconds - existing.startedAt) * 1_000),
+            : Math.max(
+                0,
+                Date.parse(canonicalEnd.createdAt) -
+                  Date.parse(canonicalStart.createdAt),
+              ),
       },
     },
     nowSeconds,
@@ -600,7 +615,7 @@ function projectNativeThread(
         );
       const failure = [...turn.items]
         .reverse()
-        .find((item) => item.type === "failure");
+        .find((item) => item.type === "failure" && item.recovery === undefined);
       const startedAt =
         started === undefined ? null : seconds(started.createdAt);
       const completedAt =
@@ -623,7 +638,11 @@ function projectNativeThread(
         durationMs:
           startedAt === null || completedAt === null
             ? null
-            : Math.max(0, (completedAt - startedAt) * 1_000),
+            : Math.max(
+                0,
+                Date.parse(terminal!.createdAt) -
+                  Date.parse(started!.createdAt),
+              ),
       };
     }),
   };

@@ -307,6 +307,12 @@ contextBridge.exposeInMainWorld("zenx", {
       ),
   },
   fleet: {
+    sourceHistory: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "sourceHistory", input),
+    triggerSource: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "triggerSource", input),
+    messageSource: (input: unknown) =>
+      ipcRenderer.invoke(ipcChannels.fleetControl, "messageSource", input),
     catalog: (id: string) =>
       ipcRenderer.invoke(ipcChannels.fleetControl, "catalog", id),
     listThreads: (input: unknown) =>

@@ -5,7 +5,7 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { SessionImportDialog } from "../src/renderer/src/SessionImportDialog.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 import {
   parseSessionImport,
   previewSessionImport,

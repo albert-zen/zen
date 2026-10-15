@@ -543,6 +543,10 @@ async function bootstrapZenX(): Promise<void> {
         const fleet = fleetSettingsService!;
         if (action === "status") return await fleet.status();
         if (action === "readiness") return await fleet.readiness();
+        if (action === "messageSource")
+          return await fleet.messageSource(
+            input as Parameters<typeof fleet.messageSource>[0],
+          );
         if (action === "catalog" && typeof input === "string")
           return await fleetProduct.catalog(input);
         if (action === "listThreads")
@@ -552,6 +556,14 @@ async function bootstrapZenX(): Promise<void> {
         if (action === "createThread")
           return await fleetProduct.create(
             input as Parameters<typeof fleetProduct.create>[0],
+          );
+        if (action === "sourceHistory")
+          return await fleetProduct.sourceHistory(
+            input as Parameters<typeof fleetProduct.sourceHistory>[0],
+          );
+        if (action === "triggerSource")
+          return await fleetProduct.triggerSource(
+            input as Parameters<typeof fleetProduct.triggerSource>[0],
           );
         if (action === "readThread")
           return await fleetProduct.read(

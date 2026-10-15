@@ -260,3 +260,65 @@ test("Fleet is an ordinary explicit model-facing plugin over the existing Zen th
     /Unexpected Fleet argument/u,
   );
 });
+
+test("source history, full Item and Trigger settings recheck the receipt after awaited reads", async () => {
+  const peer = {
+    id: "peer",
+    transport: "https" as const,
+    hostId: "host",
+    endpoint: "https://remote.example",
+    access: "read" as const,
+    label: "Source",
+  };
+  const locator = {
+    deviceId: peer.id,
+    hostId: peer.hostId,
+    deviceKey: fleetDeviceKey(peer),
+    workspace: "workspace",
+    threadId: "thread",
+  };
+  const receipt = { threadId: "receiving-thread", itemId: "canonical-message" };
+  let revoked = false,
+    checks = 0,
+    reads = 0;
+  const fleet = {
+    config: async () => ({ version: 1, devices: [peer] }),
+    sourceTargetFence: (actual: unknown, target: unknown) => ({
+      revalidate: () =>
+        fleet.assertMessageSourceTarget(actual as never, target as never),
+      assertUnchanged() {},
+    }),
+    assertMessageSourceTarget: async (actual: unknown, target: unknown) => {
+      assert.deepEqual(actual, receipt);
+      assert.deepEqual(target, locator);
+      checks++;
+      if (revoked) throw new Error("inbound grant revoked");
+    },
+    invoke: async () => {
+      reads++;
+      revoked = true;
+      return { device: peer.id, result: { threadId: locator.threadId } };
+    },
+  } as unknown as FleetSettingsService;
+  const product = new FleetProductService(fleet);
+  for (const read of [
+    () => product.sourceHistory({ receipt, locator, cursor: "older" }),
+    () =>
+      product.sourceHistory({
+        receipt,
+        locator,
+        itemId: "large",
+        cursor: "next-part",
+      }),
+    () => product.triggerSource({ receipt, locator, triggerId: "trigger" }),
+  ]) {
+    revoked = false;
+    checks = 0;
+    reads = 0;
+    await assert.rejects(read(), /inbound grant revoked/);
+    assert.equal(checks, 2);
+    assert.equal(reads, 1);
+    await assert.rejects(read(), /inbound grant revoked/);
+    assert.equal(reads, 1, "revoked receipt cannot make another remote read");
+  }
+});

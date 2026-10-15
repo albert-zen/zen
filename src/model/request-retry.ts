@@ -67,7 +67,7 @@ export async function fetchModelResponse(
   }
 }
 
-function retryAfterMilliseconds(value: string): number {
+export function retryAfterMilliseconds(value: string): number {
   if (/^\d+(?:\.\d+)?$/u.test(value.trim())) return Number(value) * 1000;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;

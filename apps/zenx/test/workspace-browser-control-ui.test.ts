@@ -39,6 +39,7 @@ async function withPanel(
     render(changes?: object, threadId?: string, open?: boolean): Promise<void>;
     button(label: string): HTMLButtonElement;
     calls: unknown[][];
+    mounts: Record<string, unknown>[];
     pending: ReturnType<typeof deferred>[];
     unmount(): Promise<void>;
   }) => Promise<void>,
@@ -57,12 +58,15 @@ async function withPanel(
     },
   });
   const calls: unknown[][] = [];
+  const mounts: Record<string, unknown>[] = [];
   const pending: ReturnType<typeof deferred>[] = [];
   Object.defineProperty(dom.window, "zenx", {
     value: {
       workspaceBrowser: {
         onFocusAddress: () => () => {},
-        mount: async () => {},
+        mount: async (request: Record<string, unknown>) => {
+          mounts.push(request);
+        },
         command: (...args: unknown[]) => {
           calls.push(args);
           const work = deferred();
@@ -97,6 +101,7 @@ async function withPanel(
     await run({
       render,
       calls,
+      mounts,
       pending,
       unmount,
       button: (label) => {
@@ -319,4 +324,32 @@ test("native smoke layout probe resolves the current permission UI in every stat
     await i18n.changeLanguage("en");
     dom.window.close();
   }
+});
+
+test("blank viewport distinguishes websites, loading and errors; theme updates retain native lease", async () => {
+  await withPanel(async ({ render, mounts }) => {
+    const viewport = () =>
+      document.querySelector(".workspace-browser-viewport")!;
+    await render({ url: "about:blank", loading: false });
+    assert.equal(viewport().getAttribute("data-blank"), "true");
+    const lease = mounts.at(-1)!.lease;
+    await act(async () => {
+      document.documentElement.dataset.appearance = "dark";
+    });
+    assert.equal(mounts.at(-1)!.appearance, "dark");
+    assert.equal(mounts.at(-1)!.lease, lease);
+    await act(async () => {
+      document.documentElement.dataset.appearance = "light";
+    });
+    assert.equal(mounts.at(-1)!.appearance, "light");
+    assert.equal(mounts.at(-1)!.lease, lease);
+    for (const changes of [
+      { url: "about:blank", loading: true },
+      { url: "about:blank", error: "Navigation failed" },
+      { url: "https://example.test/", loading: false },
+    ]) {
+      await render(changes);
+      assert.equal(viewport().hasAttribute("data-blank"), false);
+    }
+  });
 });

@@ -1,3 +1,4 @@
+import { parseRemoteMessageSourceBindings } from "../../../../src/protocol/native/remote-wire.js";
 import { X509Certificate } from "node:crypto";
 import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
@@ -40,6 +41,7 @@ export interface FleetHostConfig {
   originEndpoint?: string;
   relayRegistrationToken?: string;
   workspaces: Array<{ id: string; label: string; cwd: string }>;
+  messageSources?: import("../../../../src/protocol/native/remote-host.js").RemoteMessageSourceBinding[];
 }
 /** Current configured authorities only; this never tests network reachability. */
 export function fleetInvitationEndpoints(
@@ -107,6 +109,8 @@ export function validateFleetHostConfig(value: unknown): FleetHostConfig {
   )
     throw new Error("Invalid Fleet hosting configuration");
   const workspaces = validateWorkspaces(c.workspaces);
+  if (c.messageSources !== undefined)
+    parseRemoteMessageSourceBindings(c.messageSources);
   for (const file of c.enabled
     ? [c.tlsCertificateFile, c.tlsKeyFile, c.grantFile]
     : [c.grantFile])
@@ -324,6 +328,9 @@ export class FleetHostService {
         appServer: this.appServer,
         hostId: config.hostId,
         grantFile: config.grantFile,
+        ...(config.messageSources
+          ? { messageSources: config.messageSources }
+          : {}),
         access: config.access,
         workspaces: () => {
           if (this.#scopeRefreshing)

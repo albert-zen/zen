@@ -1,11 +1,18 @@
+import {
+  parseRemoteMessageSourceBindings,
+  type RemoteMessageSourceBinding,
+} from "./remote-wire.js";
+export type { RemoteMessageSourceBinding } from "./remote-wire.js";
 export interface RemoteRoomsPort {
   request(
-    operation: "list" | "read" | "post",
+    operation: "list" | "read" | "post" | "trigger",
     params: {
       workspaceId: string;
       workspaceCwd: string;
       deviceId: string;
       roomId?: string;
+      triggerId?: string;
+      threadId?: string;
       text?: string;
       clientId?: string;
     },
@@ -45,6 +52,7 @@ import {
   REMOTE_HOST_VERSION,
   REMOTE_UNARCHIVED_SEND_CAPABILITY,
   REMOTE_THREAD_MESSAGE_CAPABILITY,
+  REMOTE_MESSAGE_ORIGIN_CAPABILITY,
   REMOTE_SHELL_MAX_COMMAND_BYTES,
   REMOTE_SHELL_MAX_TIMEOUT_MS,
   REMOTE_SHELL_MAX_OUTPUT_BYTES,
@@ -357,6 +365,7 @@ interface Device {
 /** Host-external grants; an explicit private state file preserves authorization across restarts. */
 export class RemoteHostAccess {
   readonly #appServer: ZenAppServer;
+  readonly #messageSources: readonly RemoteMessageSourceBinding[];
   readonly #grantFile: RemoteGrantFile | undefined;
   readonly #accessMode: "read" | "control" | undefined;
   readonly #rooms: RemoteRoomsPort | undefined;
@@ -380,6 +389,7 @@ export class RemoteHostAccess {
     appServer: ZenAppServer;
     hostId: string;
     grantFile?: string;
+    messageSources?: readonly RemoteMessageSourceBinding[];
     access?: "read" | "control" | undefined;
     rooms?: RemoteRoomsPort;
     shell?: RemoteShellPort;
@@ -391,6 +401,9 @@ export class RemoteHostAccess {
   }) {
     if (!options.hostId.trim()) throw new Error("Host ID required");
     this.#appServer = options.appServer;
+    this.#messageSources = parseRemoteMessageSourceBindings(
+      options.messageSources ?? [],
+    );
     this.#hostId = options.hostId;
     this.#accessMode = options.access;
     this.#rooms = options.rooms;
@@ -569,7 +582,7 @@ export class RemoteHostAccess {
       capabilities: [
         "workspaces",
         "models",
-        ...(this.#rooms ? ["rooms"] : []),
+        ...(this.#rooms ? ["rooms", "trigger-source-read"] : []),
         "threads",
         "create",
         "resume",
@@ -577,6 +590,7 @@ export class RemoteHostAccess {
         "send",
         REMOTE_UNARCHIVED_SEND_CAPABILITY,
         REMOTE_THREAD_MESSAGE_CAPABILITY,
+        REMOTE_MESSAGE_ORIGIN_CAPABILITY,
         "interrupt",
         ...(this.#shell && this.#shellAllowed(deviceId) ? ["shell"] : []),
         ...(this.#tools && this.#toolsAllowed(deviceId)
@@ -825,6 +839,12 @@ export class RemoteHostAccess {
       try {
         if (input.sender !== undefined) {
           if (!control) throw new RemoteHostError("operation_forbidden");
+          const binding = this.#messageSources.find(
+            (entry) =>
+              entry.inboundDeviceId === deviceId &&
+              entry.hostId === input.sender?.origin?.hostId &&
+              entry.workspaceId === input.sender.origin.workspaceId,
+          );
           const receipt = await this.#appServer.sendRemoteThreadMessage(
             input.threadId,
             {
@@ -836,6 +856,23 @@ export class RemoteHostAccess {
             },
             deviceId,
             input.clientId,
+            {
+              ...(input.sender.threadName
+                ? { threadName: input.sender.threadName }
+                : {}),
+              ...(input.sender.origin ? { origin: input.sender.origin } : {}),
+              ...(binding
+                ? {
+                    returnRoute: {
+                      receiverHostId: this.#hostId,
+                      hostId: binding.hostId,
+                      workspaceId: binding.workspaceId,
+                      deviceId: binding.deviceId,
+                      deviceKey: binding.deviceKey,
+                    },
+                  }
+                : {}),
+            },
           );
           const { turnId, ...rest } = receipt;
           return { ...rest, ...(turnId === null ? {} : { turnId }) };
@@ -1194,10 +1231,12 @@ export class RemoteHostAccess {
   async roomRequest(
     deviceId: string,
     token: string,
-    operation: "list" | "read" | "post",
+    operation: "list" | "read" | "post" | "trigger",
     params: {
       workspaceId: string;
       roomId?: string;
+      triggerId?: string;
+      threadId?: string;
       text?: string;
       clientId?: string;
     },
@@ -1210,12 +1249,25 @@ export class RemoteHostAccess {
       token,
       params.workspaceId,
     );
-    const result = await this.#rooms.request(operation, {
-      ...params,
-      workspaceCwd,
-      deviceId,
-    });
-    this.authenticate(deviceId, token);
+    let result: unknown;
+    try {
+      result = await this.#rooms.request(operation, {
+        ...params,
+        workspaceCwd,
+        deviceId,
+      });
+    } catch (error) {
+      // This operation is read-only. Do not turn a missing/deleted/disabled
+      // source into an uncertain write outcome or expose bridge error details.
+      if (operation === "trigger")
+        throw new RemoteHostError("trigger_unavailable");
+      throw error;
+    }
+    if (
+      (await this.#workspace(deviceId, token, params.workspaceId)) !==
+      workspaceCwd
+    )
+      throw new RemoteHostError("wrong_workspace");
     return result;
   }
   onRoomChange(

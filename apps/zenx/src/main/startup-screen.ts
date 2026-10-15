@@ -7,7 +7,8 @@ export function startupScreenHtml(
   appearanceBootstrap: string,
   error?: string,
 ): string {
-  const bootstrap =
+  // HTML parsing normalizes CRLF/CR before CSP hashes inline script text.
+  const bootstrap = (
     appearanceBootstrap +
     `
  const resolveStartupLanguage = ${resolveLanguage.toString()};
@@ -29,7 +30,8 @@ export function startupScreenHtml(
    const retry = document.querySelector(".startup-retry") || document.createElement("p");
    retry.textContent = zh ? "请关闭此窗口并重新打开 ZenX 以重试。" : "Close this window and reopen ZenX to try again.";
    document.querySelector("main").append(retry);
- }, { once: true });`;
+ }, { once: true });`
+  ).replace(/\r\n?/gu, "\n");
   const scriptHash = createHash("sha256").update(bootstrap).digest("base64");
   const escape = (value: string) =>
     value.replace(

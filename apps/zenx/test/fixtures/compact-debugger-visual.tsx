@@ -22,7 +22,7 @@ import { RoomsPage } from "../../src/renderer/src/bundled-automation-ui.js";
 import { pluginUiRegistry } from "../../src/renderer/src/PluginProductPage.js";
 import { App } from "../../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
-import { encodeModelKey } from "../../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";

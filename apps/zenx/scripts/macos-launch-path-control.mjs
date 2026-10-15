@@ -1,9 +1,10 @@
 // Test-app-only independent control worker. It can terminate only its own process.
-import { chmod, realpath, writeFile } from "node:fs/promises";
+import { chmod, realpath } from "node:fs/promises";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import net from "node:net";
 import { workerData } from "node:worker_threads";
 import { nativeProcessIdentity } from "./macos-launch-path-cleanup.mjs";
+import { publishOwnershipReceipt } from "./macos-launch-path-ownership.mjs";
 
 const config = workerData.config;
 const native = await nativeProcessIdentity(process.pid);
@@ -66,7 +67,4 @@ await new Promise((resolve, reject) => {
   server.listen(config.controlSocket, resolve);
 });
 await chmod(config.controlSocket, 0o600);
-await writeFile(config.ownershipFile, JSON.stringify(identity), {
-  flag: "wx",
-  mode: 0o600,
-});
+await publishOwnershipReceipt(config.ownershipFile, identity);

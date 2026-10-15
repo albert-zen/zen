@@ -509,6 +509,8 @@ function recentItemCandidates(
   );
   return coveredItems.filter((item) => {
     if (!projectsIntoModelContext(item)) return false;
+    // Repair prompts consume tokens, but do not displace recent conversation slots.
+    if (item.type === "failure" && item.recovery !== undefined) return false;
     if (item.type === "tool_call") return item.parentCallId === undefined;
     if (item.type === "tool_result") {
       return !nestedCalls.has(`${item.turnId}\0${item.callId}`);

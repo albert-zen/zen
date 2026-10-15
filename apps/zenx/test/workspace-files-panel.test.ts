@@ -74,6 +74,37 @@ test("inline editors autosave real files, preserve in-flight input, and expose c
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
   };
+  const waitForSaved = async (
+    relative: string,
+    expected: string,
+    timeoutMs = 2000,
+  ) => {
+    const key = JSON.stringify(["a", relative]);
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+      const draft = drafts.snapshot().get(key);
+      assert.equal(draft?.error, undefined, "autosave reported an error");
+      assert.equal(draft?.conflict, undefined, "autosave reported a conflict");
+      if (
+        draft !== undefined &&
+        draft.base.text === expected &&
+        draft.text === expected &&
+        draft.saving === false
+      )
+        return;
+      await act(async () => {
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(10, deadline - performance.now())),
+        );
+      });
+    }
+    assert.fail(
+      `Timed out waiting for saved ${relative}: ${JSON.stringify({
+        writes,
+        draft: drafts.snapshot().get(key),
+      })}`,
+    );
+  };
   const button = (text: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent === text,
@@ -144,12 +175,22 @@ test("inline editors autosave real files, preserve in-flight input, and expose c
       document.querySelector('[role="status"]')!.textContent!,
       /Saving/,
     );
+    // A dispatched write is not settlement: the existing gate must time out.
+    await assert.rejects(
+      waitForSaved("README.md", "# First\r\n\r\nBody\r\n", 20),
+      {
+        code: "ERR_ASSERTION",
+        message: /Timed out waiting for saved README.md/,
+      },
+    );
 
     await edit("# Second\r\n\r\nBody\r\n");
     const release = blockedSaveRelease;
     assert.ok(release);
     await act(async () => release());
-    await settle();
+    // The first real fsync/rename and the queued follow-up write can exceed
+    // settle()'s fixed delay. Observe both saves completing before asserting.
+    await waitForSaved("README.md", "# Second\r\n\r\nBody\r\n");
     assert.deepEqual(writes.slice(0, 2), [
       "# First\r\n\r\nBody\r\n",
       "# Second\r\n\r\nBody\r\n",

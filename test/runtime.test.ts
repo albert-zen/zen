@@ -21,6 +21,7 @@ import {
 } from "../src/app-server.js";
 import type {
   CanonicalItem,
+  FailureItem,
   ThreadMetadataItem,
   UserMessageItem,
 } from "../src/item.js";
@@ -230,19 +231,22 @@ test("preserves credential-matching model and tool trace strings verbatim", asyn
   );
 });
 
-test("persists only the latest usage for a model response even when the stream later fails", async () => {
+test("persists only the latest usage per failed sample across bounded recovery", async () => {
+  const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "usage-provider",
-    async *stream(): AsyncIterable<ModelEvent> {
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
+      const attempt = requests.length;
       yield {
         type: "usage",
-        inputTokens: 10,
+        inputTokens: 10 + attempt,
         cachedInputTokens: 4,
         outputTokens: 2,
       };
       yield {
         type: "usage",
-        inputTokens: 12,
+        inputTokens: 12 + attempt,
         cachedInputTokens: 8,
         outputTokens: 3,
         reasoningOutputTokens: 1,
@@ -250,7 +254,7 @@ test("persists only the latest usage for a model response even when the stream l
       throw new Error("request failed after usage");
     },
   };
-  const server = createServer({ model });
+  const server = createServer({ model, runtime: sampleRetryRuntime() });
   const thread = await server.startThread();
   await (
     await server.startTurn(thread.id, "measure usage")
@@ -258,23 +262,48 @@ test("persists only the latest usage for a model response even when the stream l
 
   const snapshot = await server.readThread(thread.id);
   const usage = snapshot.items.filter((item) => item.type === "model_usage");
-  assert.equal(usage.length, 1);
-  assert.deepEqual(usage[0], {
-    id: usage[0]?.id,
-    threadId: thread.id,
-    turnId: usage[0]?.turnId,
-    createdAt: usage[0]?.createdAt,
-    type: "model_usage",
-    modelResponseId: usage[0]?.modelResponseId,
-    inputTokens: 12,
-    cachedInputTokens: 8,
-    outputTokens: 3,
-    reasoningOutputTokens: 1,
-  });
-  assert.equal(
-    snapshot.items.find((item) => item.type === "turn_completed")?.status,
-    "failed",
+  assert.equal(requests.length, 3);
+  assert.equal(usage.length, 3);
+  assert.equal(new Set(usage.map((item) => item.modelResponseId)).size, 3);
+  for (const [index, item] of usage.entries()) {
+    assert.deepEqual(item, {
+      id: item.id,
+      threadId: thread.id,
+      turnId: snapshot.turns[0]?.id,
+      createdAt: item.createdAt,
+      type: "model_usage",
+      modelResponseId: item.modelResponseId,
+      inputTokens: 13 + index,
+      cachedInputTokens: 8,
+      outputTokens: 3,
+      reasoningOutputTokens: 1,
+    });
+  }
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
   );
+  assert.deepEqual(
+    recoveries.map((item) => item.recovery?.sampleId),
+    usage.slice(0, 2).map((item) => item.modelResponseId),
+  );
+  assert.deepEqual(
+    recoveries.map((item) => item.recovery?.sampleAttempt),
+    [2, 3],
+  );
+  for (const [index, messages] of requests.entries()) {
+    assert.equal(
+      JSON.stringify(messages).match(/Host recovery context/gu)?.length ?? 0,
+      index,
+    );
+  }
+  const terminal = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery === undefined,
+  );
+  assert.equal(terminal.length, 1);
+  assert.equal(terminal[0]?.retried, 2);
+  assert.equal(snapshot.turns[0]?.status, "failed");
 });
 
 test("persists opaque reasoning semantics and derives replay selection", async () => {
@@ -1681,10 +1710,12 @@ test("streams one correlated reasoning lifecycle and journals one complete item"
   }
 });
 
-test("failed reasoning streams preserve an incomplete canonical trace", async () => {
+test("failed reasoning samples preserve incomplete traces without replaying them during recovery", async () => {
+  const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "reasoning-stream-failure",
-    async *stream(): AsyncIterable<ModelEvent> {
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
       yield { type: "reasoning_started", reasoningId: "failed-reasoning" };
       yield {
         type: "reasoning_content_delta",
@@ -1694,7 +1725,7 @@ test("failed reasoning streams preserve an incomplete canonical trace", async ()
       throw new Error("reasoning stream failed");
     },
   };
-  const server = createServer({ model });
+  const server = createServer({ model, runtime: sampleRetryRuntime() });
   const events: AppServerEvent[] = [];
   server.subscribe((event) => events.push(event));
   const thread = await server.startThread();
@@ -1703,25 +1734,52 @@ test("failed reasoning streams preserve an incomplete canonical trace", async ()
   ).done;
 
   const snapshot = await server.readThread(thread.id);
-  assert.equal(
-    snapshot.items.some(
-      (item) => item.type === "reasoning" && item.incomplete === true,
+  const traces = snapshot.items.filter((item) => item.type === "reasoning");
+  assert.equal(requests.length, 3);
+  assert.equal(traces.length, 3);
+  assert.equal(new Set(traces.map((item) => item.id)).size, 3);
+  assert(
+    traces.every(
+      (item) =>
+        item.incomplete === true && item.reasoningContent === "transient only",
     ),
-    true,
-  );
-  assert(events.some((event) => event.type === "reasoning_content_delta"));
-  const partial = snapshot.items.find((item) => item.type === "reasoning");
-  assert.equal(partial?.reasoningContent, "transient only");
-  assert.equal(
-    compileModelMessages(snapshot.items).some(
-      (message) => message.role === "reasoning",
-    ),
-    false,
   );
   assert.equal(
-    snapshot.items.find((item) => item.type === "failure")?.message,
-    "reasoning stream failed",
+    events.filter((event) => event.type === "reasoning_content_delta").length,
+    3,
   );
+  for (const [index, messages] of [
+    ...requests,
+    compileModelMessages(snapshot.items),
+  ].entries()) {
+    assert.equal(
+      messages.some((message) => message.role === "reasoning"),
+      false,
+    );
+    assert.equal(JSON.stringify(messages).includes("transient only"), false);
+    if (index < requests.length) {
+      assert.equal(
+        JSON.stringify(messages).match(/Host recovery context/gu)?.length ?? 0,
+        index,
+      );
+    }
+  }
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
+  );
+  assert.equal(recoveries.length, 2);
+  const terminal = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery === undefined,
+  );
+  assert.equal(terminal.length, 1);
+  assert.equal(
+    terminal[0]?.message,
+    "An unexpected execution error interrupted the previous step.",
+  );
+  assert.equal(terminal[0]?.retried, 2);
+  assert.equal(snapshot.turns[0]?.status, "failed");
 });
 
 test("aborted reasoning streams preserve the public summary", async () => {
@@ -1763,40 +1821,76 @@ test("aborted reasoning streams preserve the public summary", async () => {
   assert.equal(snapshot.turns[0]?.status, "interrupted");
 });
 
-test("partial model text is retained when the model ends incomplete", async () => {
+test("partial model text is retained for each failed sample across bounded recovery", async () => {
+  const requests: ModelMessage[][] = [];
   const incompleteModel: ModelAdapter = {
     provider: "incomplete-test",
-    async *stream(): AsyncIterable<ModelEvent> {
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
       yield { type: "text_delta", delta: "transient partial answer" };
+      // An untyped exception does not establish the adapter's structured output-limit contract.
       throw new Error(
         "OpenAI subscription response was incomplete: max_output_tokens",
       );
     },
   };
-  const server = createServer({ model: incompleteModel });
-  const events: AppServerEvent[] = [];
-  server.subscribe((event) => {
-    events.push(event);
+  const server = createServer({
+    model: incompleteModel,
+    runtime: sampleRetryRuntime(),
   });
-
+  const events: AppServerEvent[] = [];
+  server.subscribe((event) => events.push(event));
   const thread = await server.startThread();
-  const turn = await server.startTurn(thread.id, "answer fully");
-  await turn.done;
+  await (
+    await server.startTurn(thread.id, "answer fully")
+  ).done;
 
   const snapshot = await server.readThread(thread.id);
-  assert(events.some((event) => event.type === "item_delta"));
-  assert.equal(
-    snapshot.items.some(
+  assert.equal(requests.length, 3);
+  assert.equal(events.filter((event) => event.type === "item_delta").length, 3);
+  const partials = snapshot.items.filter(
+    (item) => item.type === "agent_message",
+  );
+  assert.equal(partials.length, 3);
+  assert.equal(new Set(partials.map((item) => item.id)).size, 3);
+  assert(
+    partials.every(
       (item) =>
-        item.type === "agent_message" &&
-        item.text === "transient partial answer",
+        item.incomplete === true && item.text === "transient partial answer",
     ),
-    true,
   );
+  for (const [index, messages] of requests.entries()) {
+    assert.equal(
+      JSON.stringify(messages).match(/Host recovery context/gu)?.length ?? 0,
+      index,
+    );
+    assert.equal(
+      JSON.stringify(messages).includes("transient partial answer"),
+      false,
+    );
+  }
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
+  );
+  assert.equal(recoveries.length, 2);
+  assert(
+    recoveries.every(
+      (item) =>
+        item.recovery?.outputLimit === undefined &&
+        item.recovery?.publicPartial === undefined,
+    ),
+  );
+  const terminal = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery === undefined,
+  );
+  assert.equal(terminal.length, 1);
   assert.equal(
-    snapshot.items.find((item) => item.type === "failure")?.message,
-    "OpenAI subscription response was incomplete: max_output_tokens",
+    terminal[0]?.message,
+    "An unexpected execution error interrupted the previous step.",
   );
+  assert.equal(terminal[0]?.retried, 2);
   assert.equal(snapshot.turns[0]?.status, "failed");
 });
 
@@ -1861,9 +1955,11 @@ test("HTTP credentials crossing the message bound never reach the journal or lat
 
 test("retryable model stream failures are replayed within the turn", async () => {
   let attempts = 0;
+  const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "retryable-stream",
-    async *stream(): AsyncIterable<ModelEvent> {
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
       attempts += 1;
       if (attempts === 1) {
         yield { type: "reasoning_started", reasoningId: "attempt-one" };
@@ -1905,13 +2001,34 @@ test("retryable model stream failures are replayed within the turn", async () =>
     ),
   );
   assert.equal(
-    snapshot.items.some((item) => item.type === "failure"),
+    snapshot.items.some(
+      (item): item is FailureItem =>
+        item.type === "failure" && item.recovery === undefined,
+    ),
     false,
   );
   assert(
     snapshot.items.some(
       (item) => item.type === "reasoning" && item.incomplete === true,
     ),
+  );
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
+  );
+  assert.equal(recoveries.length, 1);
+  assert.equal(recoveries[0]?.recovery?.attempt, 1);
+  assert.equal(recoveries[0]?.recovery?.sampleAttempt, 2);
+  assert.equal(
+    JSON.stringify(requests[0]).includes("Host recovery context"),
+    false,
+  );
+  assert.match(JSON.stringify(requests[1]), /invalid or incomplete tool call/u);
+  assert.equal(JSON.stringify(requests[1]).includes("partial draft"), false);
+  assert.equal(JSON.stringify(requests[1]).includes("cut off"), false);
+  assert.equal(
+    projectThread(snapshot, { includeTurns: true }).turns[0]?.error,
+    null,
   );
   // Each billed attempt records its own usage item.
   assert.equal(
@@ -1936,9 +2053,11 @@ test("retryable model stream failures are replayed within the turn", async () =>
 
 test("sample retries are bounded and surface the failure after exhaustion", async () => {
   let attempts = 0;
+  const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "always-failing-stream",
-    async *stream(): AsyncIterable<ModelEvent> {
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
       attempts += 1;
       yield { type: "text_delta", delta: `draft ${String(attempts)}` };
       throw retryableDiagnosedStreamError(
@@ -1955,18 +2074,43 @@ test("sample retries are bounded and surface the failure after exhaustion", asyn
   const snapshot = await server.readThread(thread.id);
   assert.equal(attempts, 3);
   assert.equal(snapshot.turns[0]?.status, "failed");
-  assert.equal(
-    snapshot.items.find((item) => item.type === "failure")?.message,
-    "OpenAI-compatible model returned invalid tool arguments",
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
   );
-  assert.equal(
-    snapshot.items.find((item) => item.type === "failure")?.retried,
-    2,
+  assert.deepEqual(
+    recoveries.map((item) => [
+      item.recovery?.attempt,
+      item.recovery?.sampleAttempt,
+    ]),
+    [
+      [1, 2],
+      [2, 3],
+    ],
   );
-  assert.equal(
-    snapshot.items.find((item) => item.type === "failure")?.diagnosticId,
-    "diag-stream-1",
+  const terminal = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery === undefined,
   );
+  assert.equal(terminal.length, 1);
+  assert.equal(
+    terminal[0]?.message,
+    "The model produced an invalid or incomplete tool call; that sample's calls were not executed.",
+  );
+  assert.equal(terminal[0]?.retried, 2);
+  assert.equal(terminal[0]?.diagnosticId, "diag-stream-1");
+  for (const [index, messages] of requests.entries()) {
+    assert.equal(
+      JSON.stringify(messages).match(/Host recovery context/gu)?.length ?? 0,
+      index,
+    );
+    if (index > 0)
+      assert.match(
+        JSON.stringify(messages),
+        /invalid or incomplete tool call/u,
+      );
+    assert.equal(JSON.stringify(messages).includes("draft "), false);
+  }
   const partials = snapshot.items.filter(
     (item): item is Extract<CanonicalItem, { type: "agent_message" }> =>
       item.type === "agent_message" && item.text.startsWith("draft "),
@@ -2077,13 +2221,15 @@ test("subscription transport credentials never reach retry logs or durable failu
   const warnings: unknown[] = [];
   t.mock.method(console, "warn", (...args: unknown[]) => warnings.push(args));
   let attempts = 0;
+  const bodies: string[] = [];
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
   const token = `${encode({ alg: "none" })}.${encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_runtime" } })}.signature`;
   const model = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: token }),
-    fetch: async () => {
+    fetch: async (_input, init) => {
       attempts += 1;
+      bodies.push(String(init?.body));
       return new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
@@ -2106,9 +2252,46 @@ test("subscription transport credentials never reach retry logs or durable failu
   assert.equal(attempts, 3);
   assert.equal(snapshot.turns[0]?.status, "failed");
   assert.equal(
-    snapshot.items.find((item) => item.type === "failure")?.retried,
+    snapshot.items.find(
+      (item): item is FailureItem =>
+        item.type === "failure" && item.recovery === undefined,
+    )?.retried,
     2,
   );
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
+  );
+  assert.deepEqual(
+    recoveries.map((item) => item.recovery?.sampleAttempt),
+    [2, 3],
+  );
+  assert.equal(
+    snapshot.items.filter(
+      (item): item is FailureItem =>
+        item.type === "failure" && item.recovery === undefined,
+    ).length,
+    1,
+  );
+  const safeDiagnostic =
+    "An unexpected execution error interrupted the previous step.";
+  // The adapter discards the credential-bearing socket cause before this boundary.
+  assert.deepEqual(
+    recoveries.map((item) => item.message),
+    [safeDiagnostic, safeDiagnostic],
+  );
+  assert.equal(
+    snapshot.items.find(
+      (item): item is FailureItem =>
+        item.type === "failure" && item.recovery === undefined,
+    )?.message,
+    safeDiagnostic,
+  );
+  for (const [index, body] of bodies.entries()) {
+    assert.equal(body.match(/Host recovery context/gu)?.length ?? 0, index);
+    if (index > 0) assert.equal(body.includes(safeDiagnostic), true);
+    assert.equal(body.includes(token), false);
+  }
   assert.equal(JSON.stringify(warnings).includes(token), false);
   assert.equal(JSON.stringify(snapshot.items).includes(token), false);
   assert.equal(
@@ -2119,13 +2302,15 @@ test("subscription transport credentials never reach retry logs or durable failu
 
 test("subscription runtime replay does not multiply HTTP admission attempts", async () => {
   let attempts = 0;
+  const bodies: string[] = [];
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
   const token = `${encode({ alg: "none" })}.${encode({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_runtime" } })}.signature`;
   const model = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: token }),
-    fetch: async () => {
+    fetch: async (_input, init) => {
       attempts += 1;
+      bodies.push(String(init?.body));
       if (attempts === 1) return new Response("data: {}\n\n");
       return new Response("busy", { status: 503 });
     },
@@ -2136,19 +2321,44 @@ test("subscription runtime replay does not multiply HTTP admission attempts", as
     await server.startTurn(thread.id, "answer")
   ).done;
   const snapshot = await server.readThread(thread.id);
-  assert.equal(attempts, 2);
+  // One initial stream plus two repair samples; each repair has exactly one HTTP admission.
+  assert.equal(attempts, 3);
   assert.equal(snapshot.turns[0]?.status, "failed");
-  assert.match(
-    snapshot.items.find((item) => item.type === "failure")?.message ?? "",
-    /HTTP 503/u,
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
   );
+  assert.deepEqual(
+    recoveries.map((item) => [
+      item.recovery?.attempt,
+      item.recovery?.sampleAttempt,
+    ]),
+    [
+      [1, 2],
+      [2, 3],
+    ],
+  );
+  assert.match(recoveries[1]?.message ?? "", /HTTP status: 503/u);
+  const terminal = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery === undefined,
+  );
+  assert.equal(terminal.length, 1);
+  assert.equal(terminal[0]?.retried, 2);
+  assert.match(terminal[0]?.message ?? "", /HTTP status: 503/u);
+  for (const [index, body] of bodies.entries()) {
+    assert.equal(body.match(/Host recovery context/gu)?.length ?? 0, index);
+  }
+  assert.match(bodies[2] ?? "", /HTTP status: 503/u);
 });
 
-test("non-retryable model errors are not replayed", async () => {
+test("unmarked unexpected model errors receive bounded canonical recovery", async () => {
   let attempts = 0;
+  const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "fatal-stream",
-    async *stream(): AsyncIterable<ModelEvent> {
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(structuredClone(request.messages));
       attempts += 1;
       yield { type: "text_delta", delta: "partial" };
       throw new Error("provider configuration rejected the request shape");
@@ -2161,7 +2371,50 @@ test("non-retryable model errors are not replayed", async () => {
   ).done;
 
   const snapshot = await server.readThread(thread.id);
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 3);
+  const recoveries = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery !== undefined,
+  );
+  assert.deepEqual(
+    recoveries.map((item) => [
+      item.recovery?.attempt,
+      item.recovery?.sampleAttempt,
+    ]),
+    [
+      [1, 2],
+      [2, 3],
+    ],
+  );
+  const terminal = snapshot.items.filter(
+    (item): item is FailureItem =>
+      item.type === "failure" && item.recovery === undefined,
+  );
+  assert.equal(terminal.length, 1);
+  assert.equal(terminal[0]?.retried, 2);
+  for (const [index, messages] of requests.entries()) {
+    assert.equal(
+      JSON.stringify(messages).match(/Host recovery context/gu)?.length ?? 0,
+      index,
+    );
+    assert.equal(
+      messages.some((message) => message.role === "assistant"),
+      false,
+    );
+    if (index > 0)
+      assert.match(
+        JSON.stringify(messages),
+        /not a human message or new authorization/u,
+      );
+  }
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "user_message").length,
+    1,
+  );
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "turn_started").length,
+    1,
+  );
   assert.equal(snapshot.turns[0]?.status, "failed");
 });
 

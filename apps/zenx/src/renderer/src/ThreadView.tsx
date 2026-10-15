@@ -44,6 +44,11 @@ import {
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { FailureItem } from "../../../../../src/item.js";
+import {
+  isTurnEndItem,
+  latestTurnEnd,
+  turnEndPosition,
+} from "../../../../../src/turn-end.js";
 import { pendingQueuedMessages } from "../../../../../src/input-queue.js";
 import type {
   NativeQueueEditParams,
@@ -120,7 +125,7 @@ import {
   observedCommandPhase,
   observedCommandStatus,
   traceSummary,
-  traceGroupIcon,
+  traceGroupIcons,
   type TraceObservationIndex,
   type TraceActivity,
   traceDisplayRows,
@@ -572,28 +577,34 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const lastCanonicalAgentMessage = thread?.canonicalItems?.findLast(
-    (item) => item.type === "agent_message",
-  );
+  const lastCanonicalTurnEnd = latestTurnEnd(thread?.canonicalItems ?? []);
   const readMessageOrder = useMemo(
     () =>
       thread?.canonicalItems?.flatMap((item) =>
-        item.type === "agent_message" ? [item.id] : [],
+        isTurnEndItem(item) ? [item.id] : [],
       ),
     [thread?.canonicalItems],
   );
   useReadVisibleMessage({
     scope: "threads",
     conversationId: thread?.id,
-    message: lastCanonicalAgentMessage
+    message: lastCanonicalTurnEnd
       ? {
-          id: lastCanonicalAgentMessage.id,
-          createdAt: Date.parse(lastCanonicalAgentMessage.createdAt),
+          id: lastCanonicalTurnEnd.id,
+          createdAt: Date.parse(lastCanonicalTurnEnd.createdAt),
+          position: turnEndPosition(
+            thread!.canonicalItems!,
+            lastCanonicalTurnEnd,
+          ),
         }
       : undefined,
     messageOrder: readMessageOrder,
     viewport: scrollRef,
     occluder: bottomZoneRef,
+    enabled:
+      thread?.status.type !== "active" &&
+      !thread?.turns.some((turn) => turn.status === "inProgress") &&
+      thread?.turns.at(-1)?.id === lastCanonicalTurnEnd?.turnId,
   });
   const runningTurn = thread === null ? null : activeTurn(thread);
   const runKey =
@@ -1197,6 +1208,11 @@ function ThreadViewContent({
                         index={row.index}
                         key={JSON.stringify([thread?.id, row.turn.id])}
                         turn={row.turn}
+                        endItemId={
+                          lastCanonicalTurnEnd?.turnId === row.turn.id
+                            ? lastCanonicalTurnEnd.id
+                            : undefined
+                        }
                         stopping={
                           interrupting && row.turn.id === runningTurn?.id
                         }
@@ -1211,9 +1227,10 @@ function ThreadViewContent({
                           ) ?? false
                         }
                         failureDetail={
-                          thread?.canonicalItems?.find(
+                          thread?.canonicalItems?.findLast(
                             (item): item is FailureItem =>
                               item.type === "failure" &&
+                              item.recovery === undefined &&
                               item.turnId === row.turn.id,
                           ) ?? null
                         }
@@ -1628,6 +1645,10 @@ function ThreadViewContent({
               <ContextUsageIndicator
                 context={threadUsage?.context}
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
+                threadOutputRate={threadOutputRatePerSecond(
+                  thread ?? null,
+                  threadUsage,
+                )}
                 compactDisabled={
                   composerDisabled || runningTurn !== null || submitting
                 }
@@ -2202,6 +2223,7 @@ function isNestedTranscriptScroll(
 
 function TurnBlock({
   turn,
+  endItemId,
   stopping,
   approvals,
   confirmedStopped,
@@ -2217,6 +2239,7 @@ function TurnBlock({
   failureDetail,
 }: {
   turn: Turn;
+  endItemId?: string | undefined;
   stopping: boolean;
   approvals: readonly ApprovalCardState[];
   confirmedStopped: boolean;
@@ -2350,6 +2373,7 @@ function TurnBlock({
     <section
       ref={sectionRef}
       className={`turn ${turn.status}`}
+      data-read-message-id={complete ? endItemId : undefined}
       aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
     >
       {projection.inputItems.map(renderInputItem)}
@@ -2609,14 +2633,66 @@ export function threadCacheUsageLabel(
       });
 }
 
+function outputWindowSeconds(turn: Turn): number | null {
+  const ms = turn.durationMs;
+  return turn.status === "completed" &&
+    ms !== null &&
+    Number.isFinite(ms) &&
+    ms > 0
+    ? ms / 1_000
+    : null;
+}
+
+/** Output tokens per second for one Turn. Unknown without usage telemetry or
+ * a positive completed window; the UI never guesses from model names. */
+export function turnOutputRatePerSecond(
+  usage: ModelUsageAggregate | undefined,
+  turn: Turn,
+): number | null {
+  const seconds = outputWindowSeconds(turn);
+  if (usage === undefined || seconds === null) return null;
+  return usage.outputTokens > 0 ? usage.outputTokens / seconds : null;
+}
+
+/** Session rate over completed Turns with matched usage and known duration.
+ * Idle gaps between Turns are excluded; tool/wait time within a Turn remains
+ * part of its observed execution duration. */
+export function threadOutputRatePerSecond(
+  thread: Thread | null,
+  usage: ModelUsageProjection | undefined,
+): number | null {
+  if (thread === null || usage === undefined) return null;
+  let tokens = 0;
+  let seconds = 0;
+  for (const turn of thread.turns) {
+    const window = outputWindowSeconds(turn);
+    const turnUsage = usage.turns[turn.id];
+    if (window === null || turnUsage === undefined) continue;
+    tokens += turnUsage.outputTokens;
+    seconds += window;
+  }
+  if (tokens <= 0 || seconds <= 0) return null;
+  return tokens / seconds;
+}
+
+export function outputRateLabel(rate: number | null): string {
+  if (rate === null) return i18n.t("shell:outputRateUnknown");
+  const formatted = rate >= 10 ? String(Math.round(rate)) : rate.toFixed(1);
+  return i18n.t("shell:outputRate", { rate: formatted });
+}
+
 export function ContextUsageIndicator({
   context,
   threadCacheHitRate,
+  threadOutputRate,
   compactDisabled = false,
   onCompact,
 }: {
   context?: ModelContextUsageProjection;
   threadCacheHitRate?: number;
+  /** Session output rate in tokens/s; `null` renders Unknown. Omitted for
+   * Threads without usage data, where the line would always be noise. */
+  threadOutputRate?: number | null;
   compactDisabled?: boolean;
   onCompact?(): Promise<void>;
 }) {
@@ -2747,7 +2823,13 @@ export function ContextUsageIndicator({
     percent,
     usage: tokenUsage,
   });
-  const tooltip = `${contextLabel}\n${threadCacheUsageLabel(threadCacheHitRate)}`;
+  const tooltip = [
+    contextLabel,
+    threadCacheUsageLabel(threadCacheHitRate),
+    ...(threadOutputRate === undefined
+      ? []
+      : [outputRateLabel(threadOutputRate)]),
+  ].join("\n");
   const radius = 7;
   return (
     <div
@@ -2820,6 +2902,9 @@ export function ContextUsageIndicator({
             </div>
             <p>{tokenUsage}</p>
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
+            {threadOutputRate === undefined ? null : (
+              <p>{outputRateLabel(threadOutputRate)}</p>
+            )}
             <button
               className="context-usage-compact"
               type="button"
@@ -2974,7 +3059,11 @@ function TraceSequence({
           aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <Icon name={traceGroupIcon(node.items)} size={15} />
+          <span className="trace-tool-icons" aria-hidden="true">
+            {traceGroupIcons(node.items).map((name) => (
+              <Icon key={name} name={name} size={15} />
+            ))}
+          </span>
           <span
             className="trace-activity-title"
             title={traceSummary(node.items, observations)}
@@ -3390,7 +3479,11 @@ function InputMessage({
             id: item.sender.threadId,
             ...(item.sender.deviceId === undefined
               ? {}
-              : { deviceId: item.sender.deviceId }),
+              : {
+                  deviceId: item.sender.deviceId,
+                  itemId: item.id,
+                  returnBound: item.sender.returnRoute !== undefined,
+                }),
           }}
           label={i18n.t(
             item.sender.deviceId === undefined
@@ -3561,7 +3654,9 @@ function MessageActions({
       {usage === undefined ? null : (
         <span
           className="message-cache"
-          title={i18n.t("shell:turnCacheTelemetry")}
+          title={`${i18n.t("shell:turnCacheTelemetry")} · ${outputRateLabel(
+            turnOutputRatePerSecond(usage, turn),
+          )}`}
         >
           {usageLabel(usage, i18n.t("shell:cache"))}
         </span>

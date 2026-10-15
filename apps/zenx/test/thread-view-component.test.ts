@@ -28,6 +28,65 @@ const { requestContextCompaction } =
 
 const noop = async () => undefined;
 
+test("native recovery keeps one live Turn until completion and terminal failure uses final details", async () => {
+  const { recoveryScenario } =
+    await import("./fixtures/loop-recovery-scenario.js");
+  await withDom(async (root) => {
+    for (const phase of [
+      "running",
+      "recovering",
+      "continuing",
+      "completed",
+      "failed",
+      "stopped",
+    ] as const) {
+      const view = recoveryScenario(phase);
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: view,
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+      const section = requiredElement(".turn");
+      assert.equal(document.querySelectorAll(".turn").length, 1);
+      assert.equal(
+        section.classList.contains("inProgress"),
+        ["running", "recovering", "continuing"].includes(phase),
+      );
+      if (["running", "recovering", "continuing"].includes(phase)) {
+        assert.equal(document.querySelector(".turn-outcome"), null);
+        assert.equal(document.querySelector(".turn-final"), null);
+      }
+      if (phase === "completed") {
+        assert.equal(document.querySelector(".turn-outcome"), null);
+        assert.match(
+          requiredElement(".turn-final").textContent ?? "",
+          /没有重复执行/,
+        );
+      }
+      if (phase === "failed") {
+        const text = requiredElement(".turn-outcome").textContent ?? "";
+        assert.match(text, /bounded recovery budget/);
+        assert.match(text, /Auto-retried 2 times/);
+      }
+      if (phase === "stopped") {
+        assert.equal(section.classList.contains("interrupted"), true);
+        assert.doesNotMatch(
+          requiredElement(".turn-outcome").textContent ?? "",
+          /transport failed unexpectedly/,
+        );
+      }
+    }
+  });
+});
+
 test("new-thread execution context can sit beneath input while existing conversations keep their context before it", () => {
   for (const position of ["before", "after"] as const) {
     const html = renderToStaticMarkup(
@@ -4108,5 +4167,141 @@ test("earlier shell rows inherit neutral settlement across separated trace group
     }
   } finally {
     dom.window.close();
+  }
+});
+
+test("Turn and session output rates reach the message hover and context-ring telemetry", async () => {
+  const completed = turnWithItems(
+    "completed",
+    [user("ask"), agent("answer")],
+    1000,
+  );
+  assert.equal(completed.startedAt, 10);
+  assert.equal(completed.completedAt, 11);
+  const usageProjection: ModelUsageProjection = {
+    thread: { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+    turns: {
+      "turn-1": { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+    },
+    context: {
+      inputTokens: 120_000,
+      inputTokenSource: "provider",
+      contextWindow: 400_000,
+      ratio: 0.3,
+    },
+  };
+  const {
+    turnOutputRatePerSecond,
+    threadOutputRatePerSecond,
+    outputRateLabel,
+  } = await import("../src/renderer/src/ThreadView.js");
+
+  assert.equal(
+    turnOutputRatePerSecond(usageProjection.turns["turn-1"], completed),
+    900,
+  );
+  assert.equal(turnOutputRatePerSecond(undefined, completed), null);
+  assert.equal(
+    turnOutputRatePerSecond(
+      usageProjection.turns["turn-1"],
+      turnWithItems("inProgress", []),
+    ),
+    null,
+    "running Turns never invent a rate",
+  );
+  assert.equal(
+    threadOutputRatePerSecond(thread([completed]), usageProjection),
+    900,
+  );
+  assert.equal(
+    threadOutputRatePerSecond(thread([completed]), {
+      ...usageProjection,
+      turns: {},
+    }),
+    null,
+    "turns without usage telemetry are excluded, not guessed",
+  );
+  assert.equal(
+    outputRateLabel(null),
+    "output speed unknown",
+    "Unknown mirrors the cache telemetry semantics",
+  );
+  assert.equal(outputRateLabel(45.2), "output 45 tok/s (Turn duration)");
+  assert.equal(outputRateLabel(3.26), "output 3.3 tok/s (Turn duration)");
+
+  const html = renderTurns([completed], [], undefined, {}, usageProjection);
+  assert.match(
+    html,
+    /class="message-cache" title="Turn cache telemetry[^"]*output 900 tok\/s/u,
+    "the final message hover carries its own Turn rate",
+  );
+  assert.match(
+    html,
+    /aria-label="[^"]*output 900 tok\/s[^"]*"/u,
+    "the context ring hover carries the session rate",
+  );
+
+  // A Thread whose Turn lacks usage keeps the ring honest.
+  const bare = renderTurns(
+    [completed],
+    [],
+    undefined,
+    {},
+    {
+      ...usageProjection,
+      turns: {},
+    },
+  );
+  assert.match(bare, /output speed unknown/u);
+  assert.doesNotMatch(bare, /message-cache/u);
+});
+
+test("session throughput weights matched completed windows and excludes gaps, failures and missing telemetry", async () => {
+  const { threadOutputRatePerSecond, turnOutputRatePerSecond } =
+    await import("../src/renderer/src/ThreadView.js");
+  const one = { ...turnWithItems("completed", [], 250), id: "one" };
+  const two = {
+    ...turnWithItems("completed", [], 750),
+    id: "two",
+    startedAt: 86400,
+    completedAt: 86401,
+  };
+  const failed = { ...turnWithItems("failed", [], 1000), id: "failed" };
+  const unmeasured = {
+    ...turnWithItems("completed", [], 1000),
+    id: "unmeasured",
+  };
+  const untimed = {
+    ...turnWithItems("completed", [], 1000),
+    id: "untimed",
+    durationMs: null,
+  };
+  const usage: ModelUsageProjection = {
+    context: {
+      inputTokens: null,
+      inputTokenSource: null,
+      contextWindow: null,
+      ratio: null,
+    },
+    thread: { responseCount: 5, inputTokens: 100, outputTokens: 5000 },
+    turns: {
+      one: { responseCount: 1, inputTokens: 10, outputTokens: 50 },
+      two: { responseCount: 1, inputTokens: 10, outputTokens: 150 },
+      failed: { responseCount: 1, inputTokens: 10, outputTokens: 2000 },
+      untimed: { responseCount: 1, inputTokens: 10, outputTokens: 2800 },
+    },
+  };
+  assert.equal(
+    threadOutputRatePerSecond(
+      thread([one, two, failed, unmeasured, untimed]),
+      usage,
+    ),
+    200,
+  );
+  for (const durationMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(
+      turnOutputRatePerSecond(usage.turns.one, { ...one, durationMs }),
+      null,
+    );
   }
 });

@@ -71,6 +71,10 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
           threadId,
           tabId: active.id,
           lease,
+          appearance:
+            document.documentElement.dataset.appearance === "dark"
+              ? "dark"
+              : "light",
           ...(visible
             ? {
                 bounds: {
@@ -91,6 +95,13 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
     };
     const observer = new ResizeObserver(mount);
     observer.observe(area.current);
+    // Keep the same mount lease when appearance changes: recoloring a blank
+    // surface must not invalidate an Agent observation or interrupt its action.
+    const themeObserver = new MutationObserver(mount);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-appearance"],
+    });
     window.addEventListener("resize", mount);
     window.addEventListener("scroll", mount, true);
     document.addEventListener("visibilitychange", mount);
@@ -98,6 +109,7 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
     return () => {
       stopped = true;
       observer.disconnect();
+      themeObserver.disconnect();
       window.removeEventListener("resize", mount);
       window.removeEventListener("scroll", mount, true);
       document.removeEventListener("visibilitychange", mount);
@@ -265,6 +277,11 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
         ) : null}
         <div
           className="workspace-browser-viewport"
+          data-blank={
+            active.url === "about:blank" && !active.loading && !active.error
+              ? "true"
+              : undefined
+          }
           ref={area}
           aria-label={i18n.t("panels:interactiveWebPage")}
         />
