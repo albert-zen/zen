@@ -17,7 +17,7 @@ export interface CompanionViewState {
   selected: string;
   tabs: string[];
   member: string;
-  conversationThreadId?: string;
+  conversationThreadIds?: string[];
 }
 
 export function CompanionWorkspace({
@@ -534,19 +534,21 @@ export function CompanionWorkspace({
   ];
   return (
     <AuxiliaryPanel
-      conversation={
-        view.conversationThreadId && renderConversation
-          ? {
-              threadId: view.conversationThreadId,
-              title: (() => {
-                const t = threads.find(
-                  (t) => t.threadId === view.conversationThreadId,
-                );
-                return t ? threadTitle(t) : i18n.t("panels:conversation");
-              })(),
-              render: renderConversation,
-            }
-          : undefined
+      conversations={
+        renderConversation
+          ? (view.conversationThreadIds ?? []).map((threadId) => {
+              const thread = threads.find(
+                (value) => value.threadId === threadId,
+              );
+              return {
+                threadId,
+                title: thread
+                  ? threadTitle(thread)
+                  : i18n.t("panels:conversation"),
+                render: renderConversation,
+              };
+            })
+          : []
       }
       fileDrafts={fileDrafts}
       messageLinkRequest={

@@ -67,11 +67,11 @@ type AuxiliaryPanelProps = {
   customTabs?: readonly AuxiliaryCustomTab[];
   contextControl?: React.ReactNode;
   threadContext?: Readonly<Record<string, unknown>>;
-  conversation?: {
+  conversations?: readonly {
     threadId: string;
     title: string;
     render(threadId: string): React.ReactNode;
-  };
+  }[];
   messageLinkRequest?: {
     id: number;
     kind: "file" | "browser";
@@ -116,7 +116,7 @@ export function AuxiliaryPanel({
   messageLinkRequest,
   onMessageLinkRequestHandled,
   threadContext,
-  conversation,
+  conversations = [],
 }: AuxiliaryPanelProps) {
   useTranslation("panels");
   const roomContext =
@@ -233,15 +233,11 @@ export function AuxiliaryPanel({
         ]
       : []),
     ...customTabs.map((tab) => ({ ...tab, id: `custom:${tab.id}` })),
-    ...(conversation && threadId !== undefined
-      ? [
-          {
-            id: `thread:${conversation.threadId}`,
-            title: conversation.title,
-            icon: "users" as const,
-          },
-        ]
-      : []),
+    ...(threadId !== undefined ? conversations : []).map((conversation) => ({
+      id: `thread:${conversation.threadId}`,
+      title: conversation.title,
+      icon: "users" as const,
+    })),
     ...files.map(([, draft]) => ({
       id: `file:${draft.base.path}`,
       title: draft.base.path.split("/").at(-1)!,
@@ -939,6 +935,9 @@ export function AuxiliaryPanel({
       {tabs.map((tab) => {
         const visible = !showChooser && active === tab.id;
         const panel = panels.find((value) => `plugin:${value.key}` === tab.id);
+        const conversation = conversations.find(
+          (value) => `thread:${value.threadId}` === tab.id,
+        );
         return (
           <div
             className="auxiliary-content"
