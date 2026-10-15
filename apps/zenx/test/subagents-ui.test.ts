@@ -14,6 +14,7 @@ import {
   createPluginUiRegistry,
 } from "../src/renderer/src/plugin-ui-host.js";
 import {
+  ChildThreadSidebarContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
   registerSubagentsUi,
@@ -65,6 +66,7 @@ async function fixture(
   execute: (call: CommandCall) => Promise<unknown> = async () => ({
     threads: [],
   }),
+  sidebar?: React.ContextType<typeof ChildThreadSidebarContext>,
 ) {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
@@ -116,36 +118,40 @@ async function fixture(
   ) => {
     await act(async () => {
       root.render(
-        surface === "header"
-          ? React.createElement(PluginThreadHeaders, {
-              snapshot,
-              threadId: parent,
-              threads,
-              navigate,
-              registry,
-            })
-          : surface === "breadcrumb"
-            ? React.createElement(ThreadBreadcrumbAncestors, {
+        React.createElement(
+          ChildThreadSidebarContext.Provider,
+          { value: sidebar ?? null },
+          surface === "header"
+            ? React.createElement(PluginThreadHeaders, {
+                snapshot,
                 threadId: parent,
                 threads,
                 navigate,
-              })
-            : React.createElement(GenericPluginUiHost, {
                 registry,
-                snapshot,
-                pluginId: "zenx-subagents",
-                surfaceId: "subagents-panel",
-                context: {
+              })
+            : surface === "breadcrumb"
+              ? React.createElement(ThreadBreadcrumbAncestors, {
                   threadId: parent,
-                  quickCreate: surface === "quick-create",
                   threads,
-                  ...(active === undefined ? {} : { active }),
-                },
-                theme: "light",
-                navigate,
-                executeCommand,
-                readHandle,
-              }),
+                  navigate,
+                })
+              : React.createElement(GenericPluginUiHost, {
+                  registry,
+                  snapshot,
+                  pluginId: "zenx-subagents",
+                  surfaceId: "subagents-panel",
+                  context: {
+                    threadId: parent,
+                    quickCreate: surface === "quick-create",
+                    threads,
+                    ...(active === undefined ? {} : { active }),
+                  },
+                  theme: "light",
+                  navigate,
+                  executeCommand,
+                  readHandle,
+                }),
+        ),
       );
     });
   };
@@ -480,6 +486,115 @@ test("chooser quick-create reuses side-chat creation without loading the tree", 
       },
     ]);
     assert.deepEqual(f.routes, ["/threads/quick-child?view=panel"]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("each child has its own accessible Sidebar switch without changing navigation or siblings", async () => {
+  const changes: Array<[string, boolean]> = [];
+  const sidebar = {
+    visibleSubagentThreadIds: [] as string[],
+    setVisible: async (id: string, visible: boolean) => {
+      changes.push([id, visible]);
+      sidebar.visibleSubagentThreadIds = visible
+        ? [...sidebar.visibleSubagentThreadIds, id]
+        : sidebar.visibleSubagentThreadIds.filter((entry) => entry !== id);
+    },
+  };
+  const f = await fixture(undefined, sidebar);
+  const children = [
+    summary("child-a", "parent", { name: "Research" }),
+    summary("child-b", "parent"),
+    summary("nested", "child-a"),
+  ];
+  const switchFor = (title: string) => f.button(`Show in sidebar: ${title}`);
+  try {
+    await f.render("parent", "panel", children);
+    assert.equal(document.querySelectorAll('[role="switch"]').length, 3);
+    const toggle = switchFor("Research");
+    assert.equal(toggle.closest(".subagent-tree-row"), null);
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    toggle.focus();
+    assert.equal(document.activeElement, toggle);
+    await f.click(toggle);
+    await f.render("parent", "panel", children);
+    assert.equal(switchFor("Research").getAttribute("aria-checked"), "true");
+    assert.equal(switchFor("child-b").getAttribute("aria-checked"), "false");
+    assert.equal(switchFor("nested").getAttribute("aria-checked"), "false");
+    assert.equal(
+      document.activeElement,
+      toggle,
+      "switch retains keyboard focus",
+    );
+    await f.click(switchFor("nested"));
+    await f.render("parent", "panel", children);
+    await f.click(switchFor("Research"));
+    await f.render("parent", "panel", children);
+    assert.deepEqual(sidebar.visibleSubagentThreadIds, ["nested"]);
+    assert.deepEqual(changes, [
+      ["child-a", true],
+      ["nested", true],
+      ["child-a", false],
+    ]);
+    assert.deepEqual(
+      f.routes,
+      [],
+      "visibility does not open or select a conversation",
+    );
+    await f.click(
+      document.querySelector<HTMLButtonElement>(".subagent-tree-row")!,
+    );
+    assert.deepEqual(
+      f.routes,
+      ["/threads/child-a?view=panel"],
+      "hidden child stays accessible",
+    );
+    assert.equal(children[0]!.parentThreadId, "parent");
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed visibility save keeps the switch unchanged and retryable without duplicate requests", async () => {
+  let reject!: (reason: Error) => void;
+  let attempts = 0;
+  const sidebar = {
+    visibleSubagentThreadIds: [] as string[],
+    setVisible: async (_id: string, visible: boolean) => {
+      attempts++;
+      assert.equal(visible, true);
+      if (attempts === 1)
+        await new Promise<void>((_resolve, fail) => {
+          reject = fail;
+        });
+      else sidebar.visibleSubagentThreadIds = ["child"];
+    },
+  };
+  const f = await fixture(undefined, sidebar);
+  try {
+    await f.render("parent", "panel", [summary("child", "parent")]);
+    const toggle = f.button("Show in sidebar: child");
+    await act(async () => {
+      toggle.click();
+      toggle.click();
+    });
+    assert.equal(attempts, 1);
+    assert.equal(toggle.disabled, true);
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    await act(async () => reject(new Error("Could not save visibility")));
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Could not save visibility/,
+    );
+    assert.equal(toggle.disabled, false);
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    await f.click(toggle);
+    await f.render("parent", "panel", [summary("child", "parent")]);
+    assert.equal(toggle.getAttribute("aria-checked"), "true");
+    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.equal(attempts, 2);
+    assert.deepEqual(f.routes, []);
   } finally {
     await f.close();
   }

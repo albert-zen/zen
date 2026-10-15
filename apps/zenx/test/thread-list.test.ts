@@ -4,6 +4,7 @@ import test from "node:test";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import {
   deriveInboxSections,
+  deriveSidebarThreads,
   derivePinnedThreads,
   deriveProjectGroups,
   movePinnedThreadIds,
@@ -428,3 +429,45 @@ function project(key: string, threadIds: string[]) {
     threadIds,
   };
 }
+
+test("per-Thread Sidebar visibility is independent for siblings, nested children, Pins and ordinary forks", () => {
+  const parent = summary("parent", "idle", 10);
+  const child = { ...summary("child", "active", 20), parentThreadId: "parent" };
+  const sibling = {
+    ...summary("sibling", "idle", 30),
+    parentThreadId: "parent",
+  };
+  const nested = { ...summary("nested", "idle", 40), parentThreadId: "child" };
+  const fork = { ...summary("fork", "idle", 50), forkedFromThreadId: "child" };
+  const threads = [parent, child, sibling, nested, fork];
+  const ids = (visible: string[]) =>
+    deriveSidebarThreads(threads, visible).map((entry) => entry.threadId);
+  assert.deepEqual(ids([]), ["parent", "fork"]);
+  assert.deepEqual(ids(["nested", "missing"]), ["parent", "nested", "fork"]);
+  assert.deepEqual(ids(["child", "sibling"]), [
+    "parent",
+    "child",
+    "sibling",
+    "fork",
+  ]);
+  const pins = ["sibling", "parent", "child"];
+  const pinned = (visible: string[]) =>
+    derivePinnedThreads(deriveSidebarThreads(threads, visible), pins).map(
+      (entry) => entry.threadId,
+    );
+  assert.deepEqual(pinned([]), ["parent"]);
+  assert.deepEqual(pinned(["child"]), ["parent", "child"]);
+  assert.deepEqual(pinned(["nested"]), ["parent"], "showing does not pin");
+  assert.deepEqual(pinned(["child", "sibling"]), [
+    "sibling",
+    "parent",
+    "child",
+  ]);
+  assert.deepEqual(
+    pins,
+    ["sibling", "parent", "child"],
+    "hiding never clears Pin order",
+  );
+  assert.equal(nested.parentThreadId, "child");
+  assert.equal(threads.length, 5);
+});

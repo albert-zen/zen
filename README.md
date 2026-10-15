@@ -21,6 +21,7 @@ Provider 账户和 workspace 配置由宿主持有，不进入 Thread。
 - `run`、`chat`、`threads`、`app-server` 薄 CLI
 - 独立 IMZen（QQ / Telegram / Feishu / Weixin channel adapters）
 - ZenX Plugin Package lifecycle、Host SDK 与 Generic UI Host（sidebar、page/subroute、settings、panel、command/menu；第三方 iframe 隔离）
+- Subagents 树按每个子线程独立控制左侧栏显隐，默认隐藏并持久化本机偏好；显隐与 Pin/Unpin 分离，隐藏后仍可从树和已打开标签访问。
 - `@zenx/plugin-sdk` 的公开 manifest/schema、Host SDK/Runtime/UI 类型、fixture Host 与 `create` / `validate` / 标准 npm `pack` 开发命令
 - 既有 tool result 的可选 namespaced structured content，以及缺失插件时仍可读的 JSON/Text fallback renderer
 

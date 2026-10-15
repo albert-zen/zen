@@ -178,6 +178,7 @@ function deletionProfile(): ZenXHostProfile {
     lastUsedWorkspace: null,
     approvalPolicy: "never",
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   };
 }

@@ -444,6 +444,15 @@ contextBridge.exposeInMainWorld("zenx", {
       threadIds: readonly string[],
     ): Promise<PublicHostSettings> =>
       await ipcRenderer.invoke(ipcChannels.pinnedThreadsSet, threadIds),
+    setSubagentThreadSidebarVisible: async (
+      threadId: string,
+      visible: boolean,
+    ): Promise<PublicHostSettings> =>
+      await ipcRenderer.invoke(
+        ipcChannels.subagentThreadSidebarVisibleSet,
+        threadId,
+        visible,
+      ),
     setSidebarOrder: async (
       order: ZenXSidebarOrder,
     ): Promise<PublicHostSettings> =>

@@ -42,8 +42,99 @@ const profile: ZenXHostProfile = {
   toolPresentation: "both",
   composerSendMode: "queue",
   pinnedThreadIds: [],
+  visibleSubagentThreadIds: [],
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
+
+test("normalizes explicit child Thread Sidebar visibility independently of Pins", () => {
+  const legacy = { ...profile } as Record<string, unknown>;
+  delete legacy.visibleSubagentThreadIds;
+  legacy.pinnedThreadIds = ["child-pinned"];
+  assert.deepEqual(validateHostProfile(legacy).visibleSubagentThreadIds, []);
+
+  const input = {
+    ...profile,
+    pinnedThreadIds: ["child-pinned", "root"],
+    visibleSubagentThreadIds: [" child-b ", "child-a", "child-b", " child-a"],
+    sidebarOrder: {
+      pinnedProjectKeys: ["project"],
+      projectKeys: ["project"],
+      threadIdsByProject: { project: ["child-a", "root", "child-b"] },
+    },
+  };
+  const normalized = validateHostProfile(input);
+  assert.deepEqual(normalized.visibleSubagentThreadIds, ["child-b", "child-a"]);
+  assert.deepEqual(normalized.pinnedThreadIds, input.pinnedThreadIds);
+  assert.deepEqual(normalized.sidebarOrder, input.sidebarOrder);
+  assert.deepEqual(input.visibleSubagentThreadIds, [
+    " child-b ",
+    "child-a",
+    "child-b",
+    " child-a",
+  ]);
+});
+
+test("rejects malformed or unbounded child Thread Sidebar visibility preferences", () => {
+  for (const visibleSubagentThreadIds of [
+    null,
+    "child-a",
+    {},
+    [null],
+    [1],
+    [""],
+    ["   "],
+    ["x".repeat(513)],
+    Array.from({ length: 4_097 }, (_, index) => `child-${index}`),
+  ]) {
+    assert.throws(
+      () => validateHostProfile({ ...profile, visibleSubagentThreadIds }),
+      /visible Subagent Thread (?:list|id) is invalid/u,
+    );
+  }
+  const atLimit = Array.from({ length: 4_096 }, (_, index) => `child-${index}`);
+  atLimit[0] = "x".repeat(512);
+  assert.deepEqual(
+    validateHostProfile({ ...profile, visibleSubagentThreadIds: atLimit })
+      .visibleSubagentThreadIds,
+    atLimit,
+  );
+});
+
+test("persists the hidden-by-default migration without deriving visibility from Pins", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-child-sidebar-"),
+  );
+  const file = path.join(directory, "host-profile.json");
+  try {
+    const expected = validateHostProfile({
+      ...profile,
+      pinnedThreadIds: ["child-pinned", "root"],
+      sidebarOrder: {
+        projectKeys: ["project"],
+        threadIdsByProject: { project: ["child-pinned", "root"] },
+      },
+    });
+    const legacy = { ...expected } as Record<string, unknown>;
+    delete legacy.visibleSubagentThreadIds;
+    await writeFile(file, JSON.stringify(legacy));
+    const first = await new ZenXHostProfileStore(file).readOptional();
+    assert.deepEqual(first, expected);
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), expected);
+    const second = await new ZenXHostProfileStore(file).readOptional();
+    assert.deepEqual(second, expected);
+
+    await new ZenXHostProfileStore(file).write({
+      ...expected,
+      visibleSubagentThreadIds: [" child-b ", "child-a", "child-b"],
+    });
+    assert.deepEqual(await new ZenXHostProfileStore(file).readOptional(), {
+      ...expected,
+      visibleSubagentThreadIds: ["child-b", "child-a"],
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("foreground computer control is an explicit persisted opt-in", async () => {
   assert.equal(
@@ -514,6 +605,7 @@ test("migrates v2 string catalogs deterministically without changing active mode
         lastUsedWorkspace: null,
         approvalPolicy: "never",
         pinnedThreadIds: [],
+        visibleSubagentThreadIds: [],
         sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
       }),
       { mode: 0o600 },

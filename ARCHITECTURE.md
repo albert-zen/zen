@@ -317,6 +317,7 @@
   解析结果投影为同一套组件消费的根级语义色彩 token；它不进入 Core、Thread、Project、host
   restart 或 canonical ItemList。不启用原生窗口材质；标题栏、品牌区、侧栏与窄屏抽屉共享实色侧栏背景，
   旧透明偏好被忽略，其余配色选择保持有效。
+- **ZenXChildSidebarVisibility** — ZenXHostProfile 的 `visibleSubagentThreadIds` 按精确 threadId 保存子线程的本机侧栏显隐，默认隐藏；renderer 只从 canonical `parentThreadId` 识别子线程，显隐独立于 Pin、排序及运行状态，隐藏也保留 Subagents 树和已打开会话，不写入 ItemList 或改变 Project/祖先关系。
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
   canonical ItemList，也不改变 Runtime、调度或 Inbox 优先级。

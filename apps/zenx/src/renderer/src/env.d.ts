@@ -262,6 +262,10 @@ declare global {
         setPinnedThreadIds(
           threadIds: readonly string[],
         ): Promise<PublicHostSettings>;
+        setSubagentThreadSidebarVisible(
+          threadId: string,
+          visible: boolean,
+        ): Promise<PublicHostSettings>;
         setSidebarOrder(order: ZenXSidebarOrder): Promise<PublicHostSettings>;
         getDirectoryBrowser(): Promise<DirectoryBrowserSnapshot>;
         listDirectory(directory: string): Promise<DirectoryListing>;

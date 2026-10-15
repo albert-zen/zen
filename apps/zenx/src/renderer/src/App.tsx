@@ -174,6 +174,7 @@ import {
   type QueueEditStore,
 } from "./queue-edit-state.js";
 import {
+  ChildThreadSidebarContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
 } from "./subagents-ui.js";
@@ -624,6 +625,9 @@ function AppContent() {
     [],
   );
   const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>([]);
+  const [visibleSubagentThreadIds, setVisibleSubagentThreadIds] = useState<
+    string[]
+  >([]);
   const [sidebarOrder, setSidebarOrder] =
     useState<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const [archivedThreadSummaries, setArchivedThreadSummaries] = useState<
@@ -741,9 +745,11 @@ function AppContent() {
 
   const confirmProfilePreferences = (profile: {
     pinnedThreadIds: readonly string[];
+    visibleSubagentThreadIds: readonly string[];
     sidebarOrder: ZenXSidebarOrder;
   }) => {
     confirmPinnedThreadIds(profile.pinnedThreadIds);
+    setVisibleSubagentThreadIds([...(profile.visibleSubagentThreadIds ?? [])]);
     confirmSidebarOrder(profile.sidebarOrder);
   };
 
@@ -883,6 +889,21 @@ function AppContent() {
       const next = update(current);
       if (next === current) return;
       const value = await window.zenx.settings.setPinnedThreadIds(next);
+      confirmProfilePreferences(value.profile);
+    });
+    profilePreferenceQueueRef.current = result.catch(() => undefined);
+    return result;
+  };
+
+  const setSubagentThreadSidebarVisible = (
+    threadId: string,
+    visible: boolean,
+  ): Promise<void> => {
+    const result = profilePreferenceQueueRef.current.then(async () => {
+      const value = await window.zenx.settings.setSubagentThreadSidebarVisible(
+        threadId,
+        visible,
+      );
       confirmProfilePreferences(value.profile);
     });
     profilePreferenceQueueRef.current = result.catch(() => undefined);
@@ -2842,7 +2863,7 @@ function AppContent() {
     />
   );
 
-  return (
+  const shell = (
     <ThreadViewActionsProvider fork={forkMessage} source={openMessageSource}>
       <div
         className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
@@ -3087,6 +3108,7 @@ function AppContent() {
                   : [...(current.pinnedProjectKeys ?? []), key],
               }))
             }
+            visibleSubagentThreadIds={visibleSubagentThreadIds}
             sidebarOrder={sidebarOrder}
             pinnedThreads={pinnedSummaries}
             threadError={threadListErrors.active}
@@ -3558,6 +3580,16 @@ function AppContent() {
         ) : null}
       </div>
     </ThreadViewActionsProvider>
+  );
+  return (
+    <ChildThreadSidebarContext.Provider
+      value={{
+        visibleSubagentThreadIds,
+        setVisible: setSubagentThreadSidebarVisible,
+      }}
+    >
+      {shell}
+    </ChildThreadSidebarContext.Provider>
   );
 }
 

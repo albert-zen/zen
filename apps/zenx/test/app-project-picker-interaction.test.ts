@@ -3965,6 +3965,10 @@ async function mountApp(
     setPinnedThreadIds?(
       threadIds: readonly string[],
     ): Promise<ReturnType<typeof publicSettings>>;
+    setSubagentThreadSidebarVisible?(
+      threadId: string,
+      visible: boolean,
+    ): Promise<ReturnType<typeof publicSettings>>;
     request?(method: string, params?: unknown): Promise<unknown>;
     observeTitle?(): Promise<undefined>;
     pickImages?(): Promise<ZenXImageDraft[]>;
@@ -4107,7 +4111,34 @@ async function mountApp(
         if (options.setPinnedThreadIds !== undefined)
           return await options.setPinnedThreadIds(threadIds);
         options.onPinnedThreadIds?.(threadIds);
-        currentSettings = publicSettings([...threadIds]);
+        currentSettings = {
+          ...currentSettings,
+          profile: {
+            ...currentSettings.profile,
+            pinnedThreadIds: [...threadIds],
+          },
+        };
+        return currentSettings;
+      },
+      setSubagentThreadSidebarVisible: async (
+        threadId: string,
+        visible: boolean,
+      ) => {
+        if (options.setSubagentThreadSidebarVisible !== undefined)
+          return await options.setSubagentThreadSidebarVisible(
+            threadId,
+            visible,
+          );
+        const current = currentSettings.profile.visibleSubagentThreadIds;
+        currentSettings = {
+          ...currentSettings,
+          profile: {
+            ...currentSettings.profile,
+            visibleSubagentThreadIds: visible
+              ? [...new Set([...current, threadId])]
+              : current.filter((id) => id !== threadId),
+          },
+        };
         return currentSettings;
       },
       markWorkspaceUsed: async (workspace: string) =>
@@ -4182,6 +4213,7 @@ function publicSettings(pinnedThreadIds: string[]) {
       lastUsedWorkspace: "/work/zen",
       approvalPolicy: "never" as const,
       pinnedThreadIds,
+      visibleSubagentThreadIds: [] as string[],
       sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
     },
     hasApiKey: false,
@@ -5850,6 +5882,7 @@ test("same-title side conversations retain identity, drafts and reading position
   const renames: Array<{ threadId: string; title: string }> = [];
   const harness = await mountThreadApp({
     initialPinnedThreadIds: ["child-a"],
+    initialProfile: { visibleSubagentThreadIds: ["child-a"] },
     projectsGet: async () => ({
       projects: [
         {
@@ -6073,6 +6106,183 @@ test("same-title side conversations retain identity, drafts and reading position
     assert.equal(tab("thread:child-a").getAttribute("aria-selected"), "true");
     assert.equal((await sideComposer("child-a")).value, "Draft A");
     assert.equal(sideMessages("child-a").scrollTop, 275);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("App persists per-child visibility independently of Pin and preserves open conversation tabs", async () => {
+  const children = [
+    { ...summary(false, "child-a", "Child A"), parentThreadId: "thread-1" },
+    { ...summary(false, "child-b", "Child B"), parentThreadId: "thread-1" },
+    { ...summary(false, "nested", "Nested"), parentThreadId: "child-a" },
+  ];
+  const resumes: string[] = [];
+  const pinWrites: string[][] = [];
+  const harness = await mountThreadApp({
+    initialPinnedThreadIds: ["child-a"],
+    threads: async (archived) =>
+      archived ? [] : [summary(false), ...children],
+    projectsGet: async () => ({
+      ...oneProject(),
+      projects: [
+        {
+          ...oneProject().projects[0]!,
+          threadIds: ["thread-1", ...children.map((child) => child.threadId)],
+        },
+      ],
+    }),
+    onPinnedThreadIds: (ids) => pinWrites.push([...ids]),
+    request: async (method, params) => {
+      assert.equal(method, "zen/thread/resume");
+      const id = (params as { threadId: string }).threadId;
+      resumes.push(id);
+      return resumed({ ...liveThread(), id });
+    },
+    plugins: {
+      get: async () => messageSourcePlugins(),
+      executeCommand: async (_plugin, command) => {
+        assert.equal(command, "list");
+        return { threads: children };
+      },
+    },
+  });
+  const click = async (element: HTMLElement | null) => {
+    assert.ok(element);
+    await act(async () => element.click());
+  };
+  const row = (id: string) =>
+    document.getElementById(`thread-menu-trigger-${id}`);
+  const toggle = (title: string) =>
+    document.querySelector<HTMLButtonElement>(
+      `[role="switch"][aria-label="Show in sidebar: ${title}"]`,
+    );
+  const tab = (id: string) => document.getElementById(`aux-tab-${id}`);
+  const openTree = async () => {
+    if (tab("plugin:zenx-subagents:subagents"))
+      await click(tab("plugin:zenx-subagents:subagents"));
+    else {
+      await click(
+        document.querySelector<HTMLButtonElement>(
+          '[aria-label="Open side panel"]',
+        ),
+      );
+      await click(
+        await waitFor(() =>
+          [
+            ...document.querySelectorAll<HTMLButtonElement>(
+              ".workspace-tab-types button",
+            ),
+          ].find(
+            (node) => node.querySelector("strong")?.textContent === "Subagents",
+          ),
+        ),
+      );
+    }
+    await waitFor(() => toggle("Child A"));
+  };
+  try {
+    harness.dom.window.localStorage.setItem(
+      "zenx-sidebar-show-subagents",
+      "true",
+    );
+    await selectedComposer();
+    await openTree();
+    assert.equal(row("child-a"), null, "Pin does not override default hidden");
+    assert.equal(row("child-b"), null);
+    assert.equal(row("nested"), null);
+    await click(toggle("Child B"));
+    assert.ok(row("child-b"));
+    assert.equal(
+      document.querySelector(".pinned-thread-group"),
+      null,
+      "show does not Pin",
+    );
+    assert.equal(row("child-a"), null);
+    await click(row("child-b"));
+    await click(exactMenuButton("Pin")!);
+    assert.ok(
+      document.querySelector(".pinned-thread-group")?.contains(row("child-b")),
+    );
+    assert.deepEqual(pinWrites, [["child-b", "child-a"]]);
+    await click(toggle("Child B"));
+    assert.equal(row("child-b"), null);
+    assert.deepEqual(
+      (await window.zenx.settings.get()).profile.pinnedThreadIds,
+      ["child-b", "child-a"],
+    );
+    await click(toggle("Child B"));
+    await click(row("child-b"));
+    await click(exactMenuButton("Unpin")!);
+    assert.ok(row("child-b"), "Unpin does not hide");
+    assert.equal(toggle("Child B")?.getAttribute("aria-checked"), "true");
+    await click(toggle("Child A"));
+    await click(toggle("Nested"));
+    assert.deepEqual(pinWrites, [["child-b", "child-a"], ["child-a"]]);
+    await click(
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(".subagent-tree-row"),
+      ].find((node) => node.textContent?.includes("Child A"))!,
+    );
+    await waitFor(() => document.getElementById("side-composer-child-a"));
+    await setTextareaValue(
+      document.getElementById("side-composer-child-a") as HTMLTextAreaElement,
+      "Retain child draft",
+    );
+    await openTree();
+    const beforeHideResumes = [...resumes];
+    await click(toggle("Child A"));
+    assert.equal(row("child-a"), null);
+    assert.ok(row("nested"), "hiding a parent does not hide its nested child");
+    assert.ok(
+      tab("thread:child-a"),
+      "hiding does not close an existing child tab",
+    );
+    assert.equal(
+      tab("plugin:zenx-subagents:subagents")?.getAttribute("aria-selected"),
+      "true",
+    );
+    assert.deepEqual(
+      resumes,
+      beforeHideResumes,
+      "visibility does not navigate",
+    );
+    await click(tab("thread:child-a"));
+    assert.equal(
+      (
+        await waitFor(
+          () =>
+            document.getElementById(
+              "side-composer-child-a",
+            ) as HTMLTextAreaElement,
+        )
+      ).value,
+      "Retain child draft",
+    );
+    await act(async () => harness.root.render(null));
+    await act(async () => harness.root.render(createElement(App)));
+    await waitFor(() => row("thread-1"));
+    assert.equal(row("child-a"), null, "remount preserves hidden Pin");
+    assert.ok(row("child-b"));
+    assert.ok(row("nested"));
+    await click(
+      row("thread-1")!
+        .closest(".thread-row-shell")!
+        .querySelector<HTMLButtonElement>(".thread-row"),
+    );
+    await waitFor(() => document.getElementById("thread-composer"));
+    await openTree();
+    assert.equal(toggle("Child A")?.getAttribute("aria-checked"), "false");
+    assert.equal(toggle("Child B")?.getAttribute("aria-checked"), "true");
+    await click(toggle("Child A"));
+    assert.ok(
+      document.querySelector(".pinned-thread-group")?.contains(row("child-a")),
+      "show restores the existing Pin",
+    );
+    assert.deepEqual(
+      children.map((child) => child.parentThreadId),
+      ["thread-1", "thread-1", "child-a"],
+    );
   } finally {
     await unmountApp(harness);
   }

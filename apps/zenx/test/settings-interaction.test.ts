@@ -182,6 +182,7 @@ const settings: PublicHostSettings = {
     lastUsedWorkspace: "/work/zen",
     approvalPolicy: "never",
     pinnedThreadIds: [],
+    visibleSubagentThreadIds: [],
     sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
   },
   hasApiKey: false,

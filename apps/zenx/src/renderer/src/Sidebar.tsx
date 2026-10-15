@@ -29,6 +29,7 @@ import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
 import {
   deriveInboxSections,
+  deriveSidebarThreads,
   deriveProjectGroups,
   EMPTY_SIDEBAR_ORDER,
   threadModelIdentity,
@@ -123,6 +124,7 @@ interface SidebarProps {
   threadLoading: boolean;
   projects: ZenXProjectProjectionSnapshot;
   sidebarOrder?: ZenXSidebarOrder;
+  visibleSubagentThreadIds?: readonly string[];
   pinnedThreads: readonly NativeThreadSummary[];
   threads: readonly NativeThreadSummary[];
 }
@@ -170,8 +172,9 @@ export function Sidebar({
   threadLoading,
   projects,
   sidebarOrder = EMPTY_SIDEBAR_ORDER,
-  pinnedThreads,
+  pinnedThreads: allPinnedThreads,
   threads,
+  visibleSubagentThreadIds = [],
 }: SidebarProps) {
   useTranslation("shell");
   const [sidebarOrderError, setSidebarOrderError] = useState<string | null>(
@@ -192,20 +195,13 @@ export function Sidebar({
       return "detailed";
     }
   });
-  const [showSubagents, setShowSubagents] = useState(() => {
-    try {
-      return (
-        window.localStorage.getItem("zenx-sidebar-show-subagents") === "true"
-      );
-    } catch {
-      return false;
-    }
-  });
-  const visibleThreads = threads.filter(
-    (thread) =>
-      showSubagents ||
-      !thread.parentThreadId ||
-      pinnedThreads.some((pinned) => pinned.threadId === thread.threadId),
+  const visibleThreads = deriveSidebarThreads(
+    threads,
+    visibleSubagentThreadIds,
+  );
+  const pinnedThreads = useMemo(
+    () => deriveSidebarThreads(allPinnedThreads, visibleSubagentThreadIds),
+    [allPinnedThreads, visibleSubagentThreadIds],
   );
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
   useEffect(() => {
@@ -597,27 +593,6 @@ export function Sidebar({
             )}
             <span className="sidebar-view-actions">
               {mode === "inbox" ? <span>{visibleThreads.length}</span> : null}
-              <button
-                className="sidebar-inline-action sidebar-subagents-toggle"
-                type="button"
-                aria-label={i18n.t("shell:showSubagentsInSidebar")}
-                title={i18n.t("shell:showSubagentsInSidebar")}
-                aria-pressed={showSubagents}
-                onClick={() => {
-                  const next = !showSubagents;
-                  setShowSubagents(next);
-                  try {
-                    window.localStorage.setItem(
-                      "zenx-sidebar-show-subagents",
-                      String(next),
-                    );
-                  } catch {
-                    // The preference remains valid for this window.
-                  }
-                }}
-              >
-                <Icon name="users" size={14} />
-              </button>
               <button
                 className="sidebar-density-toggle"
                 type="button"

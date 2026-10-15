@@ -33,6 +33,7 @@ function summary(id: string, cwd: string): NativeThreadSummary {
 async function harness(
   run: (controls: {
     remount(): Promise<void>;
+    setVisible(ids: string[]): Promise<void>;
     selected: string[];
     created: (string | undefined)[];
     key(
@@ -59,6 +60,7 @@ async function harness(
   });
   Object.assign(dom.window, { zenx: { platform: "darwin" } });
   const root = createRoot(document.getElementById("root")!);
+  let visibleSubagentThreadIds: string[] = [];
   const selected: string[] = [];
   const created: (string | undefined)[] = [];
   function Harness() {
@@ -154,7 +156,10 @@ async function harness(
       threadError: null,
       threadLoading: false,
       liveThread: null,
-      pinnedThreads: [threads[0]!],
+      visibleSubagentThreadIds,
+      pinnedThreads: includeChildren
+        ? [threads[0]!, threads[3]!]
+        : [threads[0]!],
       threads,
     });
   }
@@ -166,6 +171,10 @@ async function harness(
     await remount();
     await run({
       remount,
+      setVisible: async (ids) => {
+        visibleSubagentThreadIds = ids;
+        await remount();
+      },
       selected,
       created,
       key: async (key, init = {}, target = document.body) => {
@@ -381,23 +390,43 @@ test("shortcuts leave composition, extra modifiers, dialogs, missing slots and d
   });
 });
 
-test("Subagents are hidden by default, can be shown explicitly, and remember the toggle", async () => {
-  await harness(async ({ remount }) => {
+test("per-child Sidebar preference filters ordinary and Pinned lists and ignores the old global switch", async () => {
+  await harness(async ({ remount, setVisible }) => {
     const rows = () =>
       [...document.querySelectorAll(".thread-row-shell")].map(
         (row) => row.textContent,
       );
     assert.ok(!rows().some((text) => text?.includes("Child")));
     assert.ok(rows().some((text) => text?.includes("Independent fork")));
-    const toggle = () =>
-      document.querySelector<HTMLButtonElement>(".sidebar-subagents-toggle")!;
-    assert.equal(toggle().getAttribute("aria-pressed"), "false");
-    await act(async () => toggle().click());
-    assert.ok(rows().some((text) => text?.includes("Child")));
+    assert.equal(document.querySelector(".sidebar-subagents-toggle"), null);
+    window.localStorage.setItem("zenx-sidebar-show-subagents", "true");
     await remount();
-    assert.equal(toggle().getAttribute("aria-pressed"), "true");
+    assert.ok(
+      !rows().some((text) => text?.includes("Child")),
+      "legacy global state must not reveal a child",
+    );
+    await setVisible(["Child"]);
+    assert.ok(
+      document
+        .querySelector(".pinned-thread-group")
+        ?.textContent?.includes("Child"),
+    );
+    await remount();
     assert.ok(rows().some((text) => text?.includes("Child")));
-    await act(async () => toggle().click());
+    await setVisible([]);
     assert.ok(!rows().some((text) => text?.includes("Child")));
+    assert.ok(
+      document
+        .querySelector(".pinned-thread-group")
+        ?.textContent?.includes("Pinned"),
+      "ordinary Pin stays visible",
+    );
+    await setVisible(["Child"]);
+    assert.ok(
+      document
+        .querySelector(".pinned-thread-group")
+        ?.textContent?.includes("Child"),
+      "child Pin preference survives hiding",
+    );
   }, true);
 });
