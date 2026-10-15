@@ -9,7 +9,7 @@ import type {
 } from "../src/protocol-client/index.js";
 import type { ZenXProviderProfile } from "../src/main/host-profile.js";
 import { structuredLegacyModelCatalog } from "../src/main/host-profile.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 import {
   applySettingsMirror,
   canSendWithModel,

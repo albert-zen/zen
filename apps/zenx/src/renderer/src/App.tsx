@@ -6,9 +6,11 @@ import {
 import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
 import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
 import {
+  conversationReadStore,
   useConversationReadPreference,
   unreadThreadIds,
 } from "./conversation-read-state.js";
+import { createThreadEndNotificationObserver } from "./thread-end-notifications.js";
 import {
   RemoteMessageSourceDialog,
   type RemoteMessageSourceApi,
@@ -97,7 +99,7 @@ import type {
 import {
   decodeModelKey,
   encodeModelKey,
-} from "../../../../../src/protocol/codex/model-key.js";
+} from "../../../../../src/protocol/model-key.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -181,6 +183,7 @@ import {
 import {
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
+  SubagentCreationModelsContext,
 } from "./subagents-ui.js";
 import { cancellationResultsFromItems } from "./queue-cancel-state.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
@@ -424,6 +427,23 @@ function updateThreadProjectionCache(
   return next;
 }
 
+function AppConversationProviders({
+  models,
+  modelCatalogError,
+  ...actions
+}: React.ComponentProps<typeof ThreadViewActionsProvider> & {
+  models: readonly ModelSummary[];
+  modelCatalogError: string | null;
+}) {
+  return (
+    <SubagentCreationModelsContext.Provider
+      value={{ models, error: modelCatalogError }}
+    >
+      <ThreadViewActionsProvider {...actions} />
+    </SubagentCreationModelsContext.Provider>
+  );
+}
+
 export function App() {
   return (
     <ThreadReadingStateProvider>
@@ -437,6 +457,9 @@ function AppContent() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
+  const endNotificationsRef = useRef<ReturnType<
+    typeof createThreadEndNotificationObserver
+  > | null>(null);
   const [debugThreadId, setDebugThreadId] = useState<string | null>(null);
   const messageForkRequests = useRef(new Map<string, Promise<void>>());
   const messageForkNavigation = useRef(0);
@@ -1079,6 +1102,7 @@ function AppContent() {
           throw new Error(i18n.t("shell:importOpenSuperseded"));
         return;
       }
+      endNotificationsRef.current?.recover(threadId, result);
       const pending = pendingResumeProjectionRef.current;
       const notifications =
         pending?.epoch === epoch && pending.threadId === threadId
@@ -1197,6 +1221,12 @@ function AppContent() {
 
   useEffect(() => {
     let active = true;
+    const endNotifications = createThreadEndNotificationObserver(
+      conversationReadStore(),
+      () => window.zenx.protocol.request("zen/initialize", {}),
+    );
+    endNotificationsRef.current = endNotifications;
+    void endNotifications.connect();
     const loadModels = async () => {
       const epoch = ++modelCatalogLoadEpoch.current;
       const [result, settings] = await Promise.allSettled([
@@ -1249,7 +1279,9 @@ function AppContent() {
     const disposeStatus = window.zenx.protocol.onStatus((status) => {
       if (!active) return;
       setServerStatus(status);
+      if (status.type !== "ready") endNotifications.disconnect();
       if (status.type === "ready") {
+        void endNotifications.connect();
         void replaceApprovalSnapshot();
         void loadThreadSummaries();
         void loadProjects();
@@ -1295,6 +1327,9 @@ function AppContent() {
           void loadProjects();
         }
         if (method === "zen/thread/event") {
+          endNotifications.observe(
+            params as ServerNotificationParams["zen/thread/event"],
+          );
           const lifecycle = (
             params as ServerNotificationParams["zen/thread/event"]
           ).event;
@@ -1520,6 +1555,7 @@ function AppContent() {
         if (!active) return;
         setServerStatus(status);
         if (status.type === "ready") {
+          void endNotifications.connect();
           void replaceApprovalSnapshot();
           void loadThreadSummaries();
           void loadProjects();
@@ -1531,6 +1567,9 @@ function AppContent() {
       );
     return () => {
       active = false;
+      endNotifications.disconnect();
+      if (endNotificationsRef.current === endNotifications)
+        endNotificationsRef.current = null;
       disposeStatus();
       disposeNotifications();
       disposeApprovals();
@@ -2820,6 +2859,9 @@ function AppContent() {
   const renderSideConversation = (id: string) => (
     <ThreadConversationViewport
       queueEditStore={queueEditStore}
+      onRecovery={(threadId, snapshot) =>
+        endNotificationsRef.current?.recover(threadId, snapshot)
+      }
       key={id}
       threadId={id}
       composer={composerStates[id] ?? emptyComposerState()}
@@ -2860,7 +2902,12 @@ function AppContent() {
   );
 
   return (
-    <ThreadViewActionsProvider fork={forkMessage} source={openMessageSource}>
+    <AppConversationProviders
+      fork={forkMessage}
+      source={openMessageSource}
+      models={models}
+      modelCatalogError={modelCatalogError}
+    >
       <div
         className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
         style={
@@ -3583,7 +3630,7 @@ function AppContent() {
           />
         ) : null}
       </div>
-    </ThreadViewActionsProvider>
+    </AppConversationProviders>
   );
 }
 

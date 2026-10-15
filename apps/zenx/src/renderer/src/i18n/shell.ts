@@ -146,7 +146,7 @@ export const en = {
   threadAutomationCount: "{{count}} triggers",
   threadAutomationCount_one: "{{count}} trigger",
   threadAutomationCount_other: "{{count}} triggers",
-  threadUnreadReply: "Unread agent reply",
+  threadUnseenEnd: "Thread ended, not yet viewed",
   renameThreadNamed: "Rename {{title}}",
   importSourceModel: "Original provider / model (reference only)",
   importCheckpointWarning:
@@ -1023,7 +1023,7 @@ export const zhCN = {
   threadAutomationCount: "{{count}} 个触发器",
   threadAutomationCount_one: "{{count}} 个触发器",
   threadAutomationCount_other: "{{count}} 个触发器",
-  threadUnreadReply: "Agent 有未读回复",
+  threadUnseenEnd: "线程已结束，尚未查看",
   renameThreadNamed: "重命名 {{title}}",
   importSourceModel: "原 Provider / 模型（仅供参考）",
   importCheckpointWarning:

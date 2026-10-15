@@ -30,12 +30,13 @@ import {
   runtimeCommand,
   runtimeThread,
 } from "./fixtures/agent-runtime-data.js";
+import { conversationReadStore } from "../src/renderer/src/conversation-read-state.js";
 import { App } from "../src/renderer/src/App.js";
 import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
 import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 
@@ -1295,6 +1296,106 @@ test("App message requests survive acknowledgements, repeated clicks, and Thread
   }
 });
 
+test("App records live execution ends below the install timestamp without treating cold summaries as new", async () => {
+  let notify: NotificationListener | undefined;
+  let current = summary();
+  assert(current.status === "idle");
+  const harness = await mountApp({
+    threads: async () => [current],
+    request: async (method) => {
+      if (method === "zen/initialize") return { processEpoch: "live-epoch" };
+      throw new Error(`Unexpected request: ${method}`);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {};
+    },
+  });
+  try {
+    assert.equal(document.querySelectorAll(".thread-unread-dot").length, 0);
+    current = {
+      ...current,
+      status: "idle",
+      lastTurnEnd: {
+        id: "new-live-end",
+        turnId: "live-turn",
+        position: 0,
+        createdAt: new Date(150).toISOString(),
+      },
+    };
+    await act(async () => {
+      notify!("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "live-epoch",
+        watermark: 10,
+        event: {
+          type: "item_completed",
+          turnEndPosition: 0,
+          item: {
+            type: "turn_completed",
+            id: "new-live-end",
+            threadId: "thread-1",
+            turnId: "live-turn",
+            status: "completed",
+            createdAt: new Date(150).toISOString(),
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    assert.equal(
+      conversationReadStore().getSnapshot().pendingThreadEnds["thread-1"]?.id,
+      "new-live-end",
+    );
+    assert.equal(document.querySelectorAll(".thread-unread-dot").length, 1);
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("App observes a terminal event transferred in a valid resume response", async () => {
+  const snapshot = nativeRecoveryForThread(
+    threadWithMessage("Synthetic reply"),
+    { processEpoch: "live-epoch", watermark: 20 },
+  );
+  const end = snapshot.thread.items.find(
+    (item) => item.type === "turn_completed",
+  )!;
+  end.createdAt = new Date(150).toISOString();
+  snapshot.events = [
+    {
+      processEpoch: snapshot.processEpoch,
+      threadId: snapshot.threadId,
+      watermark: 20,
+      event: { type: "item_completed", item: end, turnEndPosition: 0 },
+    },
+  ];
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "zen/initialize")
+        return { processEpoch: snapshot.processEpoch };
+      if (method === "zen/thread/resume") return snapshot;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    assert.deepEqual(
+      conversationReadStore().getSnapshot().pendingThreadEnds,
+      {},
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    assert.equal(
+      conversationReadStore().getSnapshot().pendingThreadEnds[snapshot.threadId]
+        ?.id,
+      end.id,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
 interface MountOptions {
   titles?: typeof window.zenx.titles;
   readFile?(threadId: string, path: string): Promise<never>;
@@ -1359,6 +1460,7 @@ async function mountApp(options: MountOptions) {
       request: async (method: string, params?: unknown) => {
         if (method === "model/list")
           return { data: [model()], nextCursor: null };
+        if (method === "zen/initialize") return { processEpoch: "live-epoch" };
         return await options.request(method, params);
       },
       respondToApproval: async () => undefined,

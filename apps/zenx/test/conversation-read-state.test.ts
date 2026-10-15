@@ -27,7 +27,11 @@ function storage() {
     },
   };
 }
-const message = (id: string, createdAt: number) => ({ id, createdAt });
+const message = (id: string, createdAt: number, position?: number) => ({
+  id,
+  createdAt,
+  ...(position === undefined ? {} : { position }),
+});
 function summary(id: string, createdAt: number): ThreadSummary {
   return {
     threadId: "thread",
@@ -43,10 +47,15 @@ function summary(id: string, createdAt: number): ThreadSummary {
       sandbox: "read-only",
       approvalPolicy: "never",
     },
-    lastAgentMessage: { id, createdAt: new Date(createdAt).toISOString() },
+    lastTurnEnd: {
+      id,
+      turnId: "turn",
+      position: createdAt,
+      createdAt: new Date(createdAt).toISOString(),
+    },
   };
 }
-test("first install establishes an old-history baseline; canonical new replies survive restart", () => {
+test("first install establishes an old-history baseline; canonical new execution ends survive restart", () => {
   const disk = storage();
   const store = createConversationReadStore(disk, 100);
   assert.equal(
@@ -63,12 +72,12 @@ test("first install establishes an old-history baseline; canonical new replies s
     unreadThreadIds([summary("new", 150)], restarted.getSnapshot()).size,
     1,
   );
-  restarted.advance("threads", "thread", message("new", 150));
+  restarted.advance("threads", "thread", message("new", 150, 150));
   assert.equal(
     unreadThreadIds([summary("new", 150)], restarted.getSnapshot()).size,
     0,
   );
-  restarted.advance("threads", "thread", message("old", 50));
+  restarted.advance("threads", "thread", message("old", 50, 50));
   assert.equal(
     restarted.getSnapshot().threads.thread?.id,
     "new",
@@ -83,7 +92,7 @@ test("first install establishes an old-history baseline; canonical new replies s
   );
   assert.ok(disk.getItem(CONVERSATION_READ_KEY));
 });
-test("updatedAt, user sends, missing legacy projections and streaming state do not invent Agent unread", () => {
+test("updatedAt, user sends, missing legacy projections and streaming state do not invent an unseen execution end", () => {
   const store = createConversationReadStore(storage(), 100);
   const thread = summary("agent", 101);
   thread.lastMessage = {
@@ -94,14 +103,107 @@ test("updatedAt, user sends, missing legacy projections and streaming state do n
   assert.equal(
     unreadThreadIds([thread], store.getSnapshot()).size,
     1,
-    "a user send cannot clear an unread reply",
+    "a queued user send cannot acknowledge an execution end",
   );
-  delete thread.lastAgentMessage;
+  delete thread.lastTurnEnd;
   thread.status = "active";
   assert.equal(
     unreadThreadIds([thread], store.getSnapshot()).size,
     0,
     "streaming is not a canonical message",
+  );
+});
+test("canonical intermediate messages and legacy summaries are not execution-end evidence", () => {
+  const store = createConversationReadStore(storage(), 100);
+  const intermediate = summary("pre-tool-commentary", 101);
+  intermediate.lastAgentMessage = {
+    id: "pre-tool-commentary",
+    createdAt: new Date(101).toISOString(),
+  };
+  delete intermediate.lastTurnEnd;
+  intermediate.status = "active";
+  assert.equal(unreadThreadIds([intermediate], store.getSnapshot()).size, 0);
+  intermediate.status = "idle";
+  assert.equal(unreadThreadIds([intermediate], store.getSnapshot()).size, 0);
+});
+
+test("running suppresses an old unseen end without reading it; every newer end can notify", () => {
+  const disk = storage();
+  const store = createConversationReadStore(disk, 100);
+  const thread = summary("ended-first", 101);
+  assert.equal(unreadThreadIds([thread], store.getSnapshot()).size, 1);
+  thread.status = "active";
+  assert.equal(unreadThreadIds([thread], store.getSnapshot()).size, 0);
+  assert.equal(store.getSnapshot().threads.thread, undefined);
+  thread.status = "idle";
+  assert.equal(unreadThreadIds([thread], store.getSnapshot()).size, 1);
+  store.advance("threads", "thread", message("ended-first", 101, 101));
+  assert.equal(unreadThreadIds([thread], store.getSnapshot()).size, 0);
+  thread.lastTurnEnd = {
+    id: "ended-next",
+    turnId: "next",
+    position: 102,
+    createdAt: new Date(101).toISOString(),
+  };
+  assert.equal(
+    unreadThreadIds([thread], store.getSnapshot()).size,
+    1,
+    "same-millisecond ends have distinct canonical IDs",
+  );
+  store.advance("threads", "thread", message("ended-next", 101, 102), [
+    "ended-first",
+    "ended-next",
+  ]);
+  const reloaded = createConversationReadStore(disk, 1000);
+  assert.equal(unreadThreadIds([thread], reloaded.getSnapshot()).size, 0);
+});
+
+test("old Agent-message cursors migrate once without reviving history or changing Room reads", () => {
+  const disk = storage();
+  disk.setItem(
+    CONVERSATION_READ_KEY,
+    JSON.stringify({
+      baseline: 10,
+      threads: { thread: message("old-agent", 50) },
+      rooms: { room: message("room-read", 30) },
+    }),
+  );
+  const store = createConversationReadStore(disk, 100);
+  assert.equal(store.getSnapshot().baseline, 10);
+  assert.equal(store.getSnapshot().threadEndBaseline, 100);
+  assert.deepEqual(store.getSnapshot().rooms, {
+    room: message("room-read", 30),
+  });
+  assert.deepEqual(store.getSnapshot().threads, {});
+  assert.equal(
+    unreadThreadIds([summary("old-end", 50)], store.getSnapshot()).size,
+    0,
+  );
+  assert.equal(
+    unreadThreadIds([summary("ended-during-upgrade", 100)], store.getSnapshot())
+      .size,
+    1,
+    "an end in the installation millisecond is not lost",
+  );
+  store.advance("threads", "thread", message("ended-during-upgrade", 100, 100));
+  const restarted = createConversationReadStore(disk, 1000);
+  assert.equal(restarted.getSnapshot().threadEndBaseline, 100);
+  assert.equal(
+    restarted.getSnapshot().threads.thread?.id,
+    "ended-during-upgrade",
+  );
+  assert.equal(
+    unreadThreadIds([summary("new-empty-end", 101)], restarted.getSnapshot())
+      .size,
+    1,
+  );
+  assert.equal(
+    roomMessageReadProjection(
+      [roomMessage("room-read", 30), roomMessage("room-new", 50)],
+      restarted.getSnapshot().rooms.room,
+      restarted.getSnapshot().baseline,
+    ).unreadCount,
+    1,
   );
 });
 function roomMessage(
@@ -232,7 +334,9 @@ test("selection, hover, hidden tabs and unfocused windows never mark read; visib
     useReadVisibleMessage({
       scope: "threads",
       conversationId: "thread",
-      message: canonical ? message(id, Date.now()) : undefined,
+      message: canonical
+        ? message(id, Date.now(), id === "reply" ? 0 : 1)
+        : undefined,
       viewport,
     });
     return React.createElement(

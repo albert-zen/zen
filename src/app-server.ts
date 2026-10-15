@@ -13,6 +13,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { decodeCanonicalItem } from "./item.js";
+import { isTurnEndItem, latestTurnEnd, turnEndPosition } from "./turn-end.js";
 import {
   MAX_THREAD_IMPORT_BYTES,
   MAX_THREAD_IMPORT_RECORDS,
@@ -245,6 +246,8 @@ export interface ForkThreadInput {
 export interface CreateChildThreadInput {
   parentThreadId: string;
   mode: "fresh" | "fork" | "side-chat";
+  selection?: ProviderSelectionInput;
+  reasoningEffort?: string;
 }
 
 export interface SteerTurnOptions {
@@ -294,7 +297,13 @@ export interface ModelCatalogUpdatedEvent {
 }
 
 export type AppServerEvent =
-  | RuntimeEvent
+  | Exclude<RuntimeEvent, { type: "item_completed" }>
+  | {
+      type: "item_completed";
+      item: CanonicalItem;
+      /** Present only for a live locally executed canonical end; matches summary.position. */
+      turnEndPosition?: number;
+    }
   | {
       type: "queue_admission_started";
       /** Missing only on events from older Hosts. */
@@ -889,17 +898,14 @@ export class ZenAppServer {
         },
         parent.id,
         input.mode === "side-chat",
+        input,
       );
     }
     const configuration = parent.effectiveConfiguration();
     return await this.#startThread(
       {
         cwd: configuration.cwd,
-        selection: {
-          providerProfileId: configuration.providerProfileId,
-          modelId: configuration.modelId,
-          reasoningEffort: configuration.reasoningEffort,
-        },
+        selection: this.#selectionFromInput(configuration, input),
         sandbox: configuration.sandbox,
         approvalPolicy: configuration.approvalPolicy,
       },
@@ -959,6 +965,10 @@ export class ZenAppServer {
     input: ForkThreadInput,
     parentThreadId?: string,
     fullContext = false,
+    settings: Pick<
+      CreateChildThreadInput,
+      "selection" | "reasoningEffort"
+    > = {},
   ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("other", "thread/fork");
     try {
@@ -1043,7 +1053,21 @@ export class ZenAppServer {
         workspace: "same-directory",
         ...(fullContext ? { context: "full" as const } : {}),
       };
-      const thread = new Thread(threadId, [...copiedItems, forked]);
+      const thread = new Thread(threadId, copiedItems);
+      const inherited = thread.effectiveConfiguration();
+      const selection = this.#selectionFromInput(inherited, settings);
+      if (!sameSelection(selection, inherited)) {
+        thread.append({
+          id: this.#id(),
+          threadId,
+          createdAt: this.#now(),
+          type: "thread_configuration_changed",
+          selection: { from: selectionFrom(inherited), to: selection },
+        });
+      }
+      // Keep configuration in the copied boundary's contiguous tail so a
+      // nested fork inherits it before the new provenance/instruction Items.
+      thread.append(forked);
       if (fullContext || itemId !== undefined) {
         appendForkSnapshotClosures(
           thread,
@@ -1052,6 +1076,7 @@ export class ZenAppServer {
           fullContext ? "side chat" : "fork",
         );
       }
+
       if (fullContext) {
         thread.append({
           id: this.#id(),
@@ -4584,7 +4609,18 @@ export class ZenAppServer {
     const lastAgentMessage = items.findLast(
       (item) => item.type === "agent_message",
     );
+    const turnEnd = latestTurnEnd(items);
     return {
+      ...(turnEnd === undefined
+        ? {}
+        : {
+            lastTurnEnd: {
+              id: turnEnd.id,
+              turnId: turnEnd.turnId,
+              createdAt: turnEnd.createdAt,
+              position: turnEndPosition(items, turnEnd),
+            },
+          }),
       ...(lastMessage === undefined
         ? {}
         : {
@@ -4845,6 +4881,32 @@ export class ZenAppServer {
   }
 
   #emit(event: AppServerEvent): void {
+    if (event.type === "turn_completed" || event.type === "turn_started") {
+      // Live readers need the same local lifecycle evidence as a resumed
+      // snapshot. Publish the already-committed Item before its status event.
+      const lifecycle = this.#threads
+        .get(event.threadId)
+        ?.items.findLast(
+          (item) =>
+            item.turnId === event.turnId &&
+            (event.type === "turn_started"
+              ? item.type === "turn_started"
+              : isTurnEndItem(item)),
+        );
+      if (lifecycle)
+        this.#emit({
+          type: "item_completed",
+          item: lifecycle,
+          ...(isTurnEndItem(lifecycle)
+            ? {
+                turnEndPosition: turnEndPosition(
+                  this.#threads.get(event.threadId)!.items,
+                  lifecycle,
+                ),
+              }
+            : {}),
+        });
+    }
     for (const subscriber of this.#subscribers) {
       try {
         subscriber(event);

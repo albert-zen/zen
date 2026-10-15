@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Dialog } from "./ui/controls.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
-import { decodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
+import { decodeModelKey } from "../../../../../src/protocol/model-key.js";
 import { MAX_THREAD_IMPORT_BYTES } from "../../../../../src/thread-import.js";
 import type { SessionImportPreview } from "../../../../../src/protocol/session-import.js";
 import type { ModelSummary } from "../../protocol-client/index.js";
