@@ -253,6 +253,19 @@ jobs:
       - name: Exercise Project workspace with the same packaged app
         shell: pwsh
         run: ./apps/zenx/scripts/windows-project-workspace-smoke.ps1 -PackagedExecutable "apps/zenx/.packaged/artifact/ZenX-win32-x64/ZenX.exe"
+      - name: Verify startup harness failure and cleanup assertions
+        run: node --test apps/zenx/test/windows-startup-harness.test.mjs
+      - name: Observe native startup with delayed and failed bootstrap
+        shell: pwsh
+        run: ./apps/zenx/scripts/windows-startup-acceptance.ps1 -PackageDirectory "apps/zenx/.packaged/artifact/ZenX-win32-x64"
+      - name: Retain Windows startup acceptance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenx-windows-startup-evidence
+          path: apps/zenx/.packaged/startup-evidence
+          if-no-files-found: warn
+          retention-days: 14
       - name: Retain the same-run native input and provenance for review
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
