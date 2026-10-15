@@ -1,0 +1,137 @@
+{
+  "freeze": "4ba841dbf11538b0ee45b6a31f080fe716e905c7",
+  "main": "c1831e72671abfba59faf1e774079f78e07e78e1",
+  "tree": "f3667a1edd7e8f2d27857634959d1a9e5836fcdc",
+  "conflicts": [],
+  "checks": {
+    "ThreadViewEqualsLatestMain": true,
+    "AuxiliaryEqualsReviewedFreeze": true
+  },
+  "featureDelta": [
+    {
+      "path": "ARCHITECTURE.md",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": false
+    },
+    {
+      "path": "apps/zenx/docs/ui-ux.md",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": false
+    },
+    {
+      "path": "apps/zenx/src/main/browser-live-observation-ipc.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/main/capabilities/browser-provider.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/main/capabilities/browser-thread-observation.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/main/index.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": false
+    },
+    {
+      "path": "apps/zenx/src/main/workspace-browser-smoke.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/main/workspace-browser.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/preload/index.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": false
+    },
+    {
+      "path": "apps/zenx/src/preload/ipc.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/auxiliary-panel.tsx",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/browser-thread-panel.tsx",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/env.d.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/i18n/panels.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/styles.css",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": false
+    },
+    {
+      "path": "apps/zenx/src/renderer/src/workspace-browser-panel.tsx",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/auxiliary-panel.test.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/auxiliary-room-context.test.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/browser-live-observation-ipc.test.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/browser-presentation.test.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/fixtures/browser-unified-visual.html",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/fixtures/browser-unified-visual.tsx",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/workspace-browser-control-ui.test.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "apps/zenx/test/workspace-browser-shared-target.test.ts",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    },
+    {
+      "path": "docs/evidence/issue179-unified-browser-acceptance.md",
+      "featureLineDeltaIdentical": true,
+      "unchangedFromScreenshot": true
+    }
+  ]
+}

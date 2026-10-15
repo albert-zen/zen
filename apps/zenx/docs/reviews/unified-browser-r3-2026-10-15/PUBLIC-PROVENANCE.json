@@ -1,0 +1,31 @@
+{
+  "pr": "https://github.com/albert-zen/zen/pull/431",
+  "head": "c38e1577849af93712fe813a7d3c1f4326e7250e",
+  "tree": "f3667a1edd7e8f2d27857634959d1a9e5836fcdc",
+  "sourceFreeze": "4ba841dbf11538b0ee45b6a31f080fe716e905c7",
+  "sourceTree": "1ee809ef80003acc5035d03bdd80412c8dfdb2e0",
+  "mainParent": "c1831e72671abfba59faf1e774079f78e07e78e1",
+  "previousHead": "a55956005d624c75e7bf34501aedc52f29ba3715",
+  "ciRun": 38784352521,
+  "draft": true,
+  "captureDate": "2026-10-15",
+  "screenshots": {
+    "04-external-readonly-peer-light.jpg": "b7d0ec38c723bfd4231412eb6febcb956a1e1e3c0692745e4694d7b50058e9d2",
+    "11-integrated-blank-white-light.jpg": "3171e4c2fc1b74cabadaf2c501fa54b43b6eee44d020c3219cb29671ff343370",
+    "07-unknown-paused-keyboard-narrow-dark.jpg": "d4cbab439f4461b1040edffcbe91cf1b130c63b24392563bc404d7fb2d5e113d",
+    "08-external-readonly-narrow-dark.jpg": "d96178807901b843ee6669a27a00c4c97cc8ded58ba5ea16719e97d43ea9b4bd",
+    "03-manual-away-follow-suppressed-light.jpg": "bcde4b61a6c6a75379cf7cf9070c0181e4aa0e2607b71327d50c1a5154740d91",
+    "09-working-narrow-light.jpg": "c26c2ac68d77203f357f308b795e6f196ba913c93f47503bd12e5601373ae636",
+    "06-unknown-narrow-dark.jpg": "d1164deae0fe1e36479f760c5d19e00114dc5dfd44f4d836cc3288730b2a7529",
+    "02-finished-page-retained-light.jpg": "77eab28a458c238c8b29717127ffc87794d4b0c05d62e8a55bed33699177acc9",
+    "01-working-unified-strip-light.jpg": "8d0feebe3494478d274ca2491a4a6ff9163b3fd71cc59d65290eb63048659139",
+    "05-external-dismissed-after-snapshot.jpg": "1a5ac01bcf13bce1e45be8aa159929840807c632912c7638d8b2962692d3678e",
+    "10-manual-away-follow-narrow-light.jpg": "281653e380e7614a1e41c7b4932cf0848b685572fb0420977aece4b6892e3829",
+    "12-integrated-blank-black-dark.jpg": "6817bace7aa5128e91984aa4a7fcda2002dd6b4fc422ceae13cba3b501e669bf"
+  },
+  "limits": [
+    "Synthetic renderer events and inert placeholder; no native session/login/form evidence",
+    "External automatic presentation is outside this PR; read-only peer tabs only",
+    "styles.css incorporates other main UI additions; not byte-identical as a whole"
+  ]
+}
