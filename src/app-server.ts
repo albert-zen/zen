@@ -31,7 +31,7 @@ import {
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
   contextCompactionTokenBudget,
-  originalItemListReference,
+  originalItemListReferenceText,
   latestCompaction,
   latestCompletedCompactionBoundary,
   latestEligibleCompactionBoundary,
@@ -4169,7 +4169,7 @@ export class ZenAppServer {
     const summaryTokens = estimateModelMessageInputTokens([
       {
         role: "user",
-        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}${(options.includeOriginalReference ?? options.contextCompaction.includeOriginalReference) === false ? "" : `\n[Original ItemList: ${originalItemListReference(options.thread.id, options.boundary.item.id)}; use authorized thread/original/read, do not infer hidden content]`}`,
+        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}${(options.includeOriginalReference ?? options.contextCompaction.includeOriginalReference) === false ? "" : originalItemListReferenceText(options.thread.id, options.boundary.item.id)}`,
       },
     ]);
     if (summaryTokens > targetTokenBudget) {
