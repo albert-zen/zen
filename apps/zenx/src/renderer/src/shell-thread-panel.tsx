@@ -143,24 +143,78 @@ export function ShellThreadPanel({
   return (
     <section className="shell-panel" aria-label={t("shellTitle")}>
       <header className="shell-panel-heading">
-        <div>
-          <span className="shell-eyebrow">{t("shellLocalHost")}</span>
-          <h3>{t("shellTitle")}</h3>
+        {selected ? (
+          <button
+            type="button"
+            className="secondary-button shell-back"
+            aria-label={t("shellSessions")}
+            title={t("shellSessions")}
+            onClick={() => {
+              viewEpoch.current++;
+              setSelected(null);
+              setStopConfirm(false);
+            }}
+          >
+            <Icon name="arrow-left" />
+          </button>
+        ) : null}
+        <div className="shell-heading-context">
+          {selected ? (
+            <strong
+              title={
+                selected.kind === "terminal"
+                  ? t("shellInteractive")
+                  : selected.command
+              }
+            >
+              {selected.kind === "terminal"
+                ? t("shellInteractive")
+                : selected.command}
+            </strong>
+          ) : (
+            <span className="shell-eyebrow">{t("shellLocalHost")}</span>
+          )}
+          <span
+            className="shell-directory"
+            title={selected?.cwd ?? listing?.cwd}
+          >
+            {selected?.cwd ?? listing?.cwd ?? t("shellLoading")}
+          </span>
         </div>
+        {selected ? (
+          <span className="shell-status" data-status={selected.status}>
+            {listing?.sessions.some((s) => s.taskId === selected.taskId)
+              ? statusText(selected)
+              : t("shellStatus_unknown")}
+          </span>
+        ) : null}
         <button
           type="button"
-          className="secondary-button"
+          className="secondary-button shell-new"
           disabled={!api || busy || !listing?.canCreate}
           onClick={() => void create()}
           title={t("shellCreationContext")}
+          aria-label={t("shellNew")}
         >
           <Icon name="plus" />
-          {t("shellNew")}
+          <span>{t("shellNew")}</span>
         </button>
+        {selected && !ended(selected.status) ? (
+          <button
+            type="button"
+            className="secondary-button shell-stop"
+            aria-label={t("shellStop")}
+            title={t("shellStop")}
+            disabled={
+              busy ||
+              !listing?.sessions.some((s) => s.taskId === selected.taskId)
+            }
+            onClick={() => setStopConfirm(true)}
+          >
+            <Icon name="stop" />
+          </button>
+        ) : null}
       </header>
-      <p className="shell-directory" title={listing?.cwd}>
-        {listing?.cwd ?? t("shellLoading")}
-      </p>
       {!api ? <p role="status">{t("shellUnavailable")}</p> : null}
       {listing?.restriction ? (
         <p className="shell-notice">
@@ -178,58 +232,27 @@ export function ShellThreadPanel({
       ) : null}
       {selected ? (
         <>
-          <div className="shell-session-heading">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => {
-                viewEpoch.current++;
-                setSelected(null);
-                setStopConfirm(false);
-              }}
-            >
-              <Icon name="arrow-left" />
-              {t("shellSessions")}
-            </button>
-            <span className="shell-status" data-status={selected.status}>
-              {listing?.sessions.some((s) => s.taskId === selected.taskId)
-                ? statusText(selected)
-                : t("shellStatus_unknown")}
-            </span>
-            {!ended(selected.status) ? (
-              <button
-                type="button"
-                className="secondary-button shell-stop"
-                disabled={
-                  busy ||
-                  !listing?.sessions.some((s) => s.taskId === selected.taskId)
-                }
-                onClick={() => setStopConfirm(true)}
-              >
-                {t("shellStop")}
-              </button>
-            ) : null}
-          </div>
-          <div className="shell-session-identity">
-            <strong>
-              {selected.kind === "terminal"
-                ? t("shellInteractive")
-                : selected.command}
-            </strong>
-            <span>
-              {t(
-                selected.origin === "user"
-                  ? "shellOriginUser"
-                  : "shellOriginAgent",
-              )}
-            </span>
-            <details className="shell-details">
-              <summary>{t("shellSessionDetails")}</summary>
+          <details className="shell-details shell-session-details">
+            <summary>{t("shellSessionDetails")}</summary>
+            <div className="shell-session-identity">
+              <p>
+                {t(
+                  selected.origin === "user"
+                    ? "shellOriginUser"
+                    : "shellOriginAgent",
+                )}
+              </p>
+              <p>
+                <code>{selected.command}</code>
+              </p>
+              <p>
+                <code>{selected.cwd}</code>
+              </p>
               <p>
                 {t("shellTaskId")}: <code>{selected.taskId}</code>
               </p>
-            </details>
-          </div>
+            </div>
+          </details>
           {stopConfirm ? (
             <div
               className="shell-stop-confirm"
@@ -274,13 +297,6 @@ export function ShellThreadPanel({
             active={active}
             onError={setError}
           />
-          <p className="shell-footnote">
-            {t(
-              selected.origin === "user"
-                ? "shellUserInput"
-                : "shellAgentReadOnly",
-            )}
-          </p>
         </>
       ) : (
         <div className="shell-session-list">
@@ -327,6 +343,15 @@ export function ShellThreadPanel({
         </div>
       )}
       <footer className="shell-lifetime">
+        {selected ? (
+          <p className="shell-footnote shell-input-mode">
+            {t(
+              selected.origin === "user"
+                ? "shellUserInput"
+                : "shellAgentReadOnly",
+            )}
+          </p>
+        ) : null}
         <p className="shell-footnote">{t("shellCloseHint")}</p>
         <details className="shell-details">
           <summary>{t("shellSessionHelp")}</summary>
@@ -420,10 +445,12 @@ function ShellTerminal({
           ?.getAttribute("content") !== "v1"
       )
         throw new Error("Unexpected terminal surface; input is disabled");
+      // FitAddon subtracts padding on the xterm element, not its parent.
+      // Keep the body unpadded so the fitted rows and columns remain visible.
       const style = terminalDocument.createElement("style");
       style.textContent =
         terminalCss +
-        "html,body{height:100%;margin:0;overflow:hidden;background:var(--color-surface-control)}body{box-sizing:border-box;padding:10px}.xterm{height:100%}";
+        "html,body{height:100%;margin:0;overflow:hidden;background:var(--color-surface-control)}body{padding:0}.xterm{height:100%;box-sizing:border-box;padding:10px}";
       terminalDocument.head.append(style);
       term = new Terminal({
         documentOverride: terminalDocument,
@@ -482,7 +509,14 @@ function ShellTerminal({
       });
       let lastSize = "";
       const measure = () => {
-        if (!term || disposed || !element.current?.clientWidth) return;
+        if (
+          !term ||
+          disposed ||
+          !visible.current ||
+          !element.current?.clientWidth ||
+          !element.current.clientHeight
+        )
+          return;
         fit.fit();
         const cols = Math.min(500, Math.max(1, term.cols));
         const rows = Math.min(200, Math.max(1, term.rows));
