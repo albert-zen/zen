@@ -36,7 +36,12 @@ const tab = (changes = {}): WorkspaceBrowserTab => ({
 });
 async function withPanel(
   run: (h: {
-    render(changes?: object, threadId?: string, open?: boolean): Promise<void>;
+    render(
+      changes?: object,
+      threadId?: string,
+      open?: boolean,
+      presentationId?: string,
+    ): Promise<void>;
     button(label: string): HTMLButtonElement;
     calls: unknown[][];
     mounts: Record<string, unknown>[];
@@ -84,13 +89,19 @@ async function withPanel(
       mounted = false;
     }
   };
-  const render = async (changes = {}, threadId = "thread-a", open = true) => {
+  const render = async (
+    changes = {},
+    threadId = "thread-a",
+    open = true,
+    presentationId?: string,
+  ) => {
     await act(async () =>
       root.render(
         React.createElement(WorkspaceBrowserPanel, {
           threadId,
           tab: tab(changes),
           open,
+          presentationId,
         }),
       ),
     );
@@ -326,6 +337,24 @@ test("native smoke layout probe resolves the current permission UI in every stat
   }
 });
 
+test("unknown outcome keeps a reserved toolbar status slot when cleared", async () => {
+  await withPanel(async ({ render }) => {
+    await render({ agentActionOutcomeUnknown: true });
+    const status = document.querySelector(".browser-outcome-status")!;
+    assert.equal(status.parentElement?.className, "workspace-browser-address");
+    assert.equal(status.getAttribute("data-unknown"), "true");
+    assert.equal(
+      status.textContent,
+      i18n.t("panels:browserActionOutcomeUnknown"),
+    );
+    assert.equal(document.querySelector("p[role=status]"), null);
+    await render({ agentActionOutcomeUnknown: false });
+    assert.equal(document.querySelector(".browser-outcome-status"), status);
+    assert.equal(status.getAttribute("data-unknown"), "false");
+    assert.equal(status.textContent, "");
+  });
+});
+
 test("blank viewport distinguishes websites, loading and errors; theme updates retain native lease", async () => {
   await withPanel(async ({ render, mounts }) => {
     const viewport = () =>
@@ -351,5 +380,33 @@ test("blank viewport distinguishes websites, loading and errors; theme updates r
       await render(changes);
       assert.equal(viewport().hasAttribute("data-blank"), false);
     }
+  });
+});
+
+test("presentation acknowledgement and appearance updates share one native lease", async () => {
+  await withPanel(async ({ render, mounts }) => {
+    const viewport = document.querySelector(".workspace-browser-viewport")!;
+    viewport.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 640, height: 480 }) as DOMRect;
+    await render({ url: "about:blank" }, "thread-a", true, "presentation-a");
+    const acknowledged = mounts.at(-1)!;
+    assert.equal(acknowledged.presentationId, "presentation-a");
+    assert.ok(acknowledged.bounds);
+    await act(async () => {
+      document.documentElement.dataset.appearance = "dark";
+    });
+    const themed = mounts.at(-1)!;
+    assert.equal(themed.lease, acknowledged.lease);
+    assert.equal(themed.appearance, "dark");
+    assert.equal(
+      themed.presentationId,
+      undefined,
+      "acknowledged token must not be replayed by theme changes",
+    );
+    assert.deepEqual(themed.bounds, acknowledged.bounds);
+    await render({ url: "about:blank" }, "thread-a", true, "presentation-b");
+    assert.equal(mounts.at(-1)!.lease, acknowledged.lease);
+    assert.equal(mounts.at(-1)!.presentationId, "presentation-b");
+    assert.equal(mounts.at(-1)!.appearance, "dark");
   });
 });

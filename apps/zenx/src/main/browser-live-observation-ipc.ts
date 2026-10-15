@@ -24,6 +24,7 @@ export interface BrowserLiveObservationRenderer {
 export class BrowserLiveObservationIpcBridge {
   readonly #source: BrowserLiveObservationSource;
   readonly #eventChannel: string;
+  readonly #catalogOnly: boolean;
   readonly #subscriptions = new Map<
     BrowserLiveObservationRenderer,
     {
@@ -39,7 +40,12 @@ export class BrowserLiveObservationIpcBridge {
       destroyed: () => void;
     }
   >();
-  constructor(source: BrowserLiveObservationSource, eventChannel: string) {
+  constructor(
+    source: BrowserLiveObservationSource,
+    eventChannel: string,
+    catalogOnly = false,
+  ) {
+    this.#catalogOnly = catalogOnly;
     this.#source = source;
     this.#eventChannel = eventChannel;
   }
@@ -61,6 +67,10 @@ export class BrowserLiveObservationIpcBridge {
         (typeof request.targetId !== "string" || request.targetId.length > 80))
     )
       throw new Error("Invalid Browser observation request");
+    if (this.#catalogOnly && (request.frames || request.targetId !== undefined))
+      throw new Error(
+        "Browser catalog subscriptions are read-only target lists",
+      );
     this.unsubscribe(renderer);
     const subscription = {
       id: subscriptionId,

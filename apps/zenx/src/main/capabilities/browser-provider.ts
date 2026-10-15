@@ -71,6 +71,8 @@ export interface BrowserTabSummary {
   agentActionOutcomeUnknown?: boolean;
   requiresFreshObservation?: boolean;
   mutationsRequireObservation?: boolean;
+  /** Workspace automatic presentation attempt only, not current visibility or action authority. */
+  automaticPresentation?: "shown" | "not-shown";
 }
 
 export interface BrowserInspection extends BrowserTabSummary {

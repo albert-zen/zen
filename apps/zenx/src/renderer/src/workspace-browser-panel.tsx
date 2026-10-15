@@ -12,6 +12,7 @@ type BrowserPanelProps = {
   threadId: string;
   tab: WorkspaceBrowserTab;
   open: boolean;
+  presentationId?: string;
 };
 
 export function WorkspaceBrowserPanel(props: BrowserPanelProps) {
@@ -23,7 +24,12 @@ export function WorkspaceBrowserPanel(props: BrowserPanelProps) {
   );
 }
 
-function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
+function BrowserPanel({
+  threadId,
+  tab: active,
+  open,
+  presentationId,
+}: BrowserPanelProps) {
   useTranslation("panels");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
@@ -36,6 +42,9 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
   const area = useRef<HTMLDivElement>(null);
   const addressInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
+  const presentationRef = useRef(presentationId);
+  presentationRef.current = presentationId;
+  const mountCurrent = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     generation.current++;
     const api = window.zenx.workspaceBrowser;
@@ -58,19 +67,31 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
     if (!open || !active || !area.current) return;
     const lease = crypto.randomUUID();
     let stopped = false;
+    let acknowledgedPresentation: string | undefined;
+    let mountQueued = false;
+    let pendingMount = false;
     const mount = () => {
       if (stopped) return;
+      if (pendingMount) {
+        mountQueued = true;
+        return;
+      }
+      const presentationId = presentationRef.current;
       const rect = area.current?.getBoundingClientRect();
       const visible =
         document.visibilityState !== "hidden" &&
         rect &&
         rect.width > 0 &&
         rect.height > 0;
+      pendingMount = true;
       void window.zenx.workspaceBrowser
         .mount({
           threadId,
           tabId: active.id,
           lease,
+          ...(presentationId && acknowledgedPresentation !== presentationId
+            ? { presentationId }
+            : {}),
           appearance:
             document.documentElement.dataset.appearance === "dark"
               ? "dark"
@@ -86,13 +107,27 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
               }
             : {}),
         })
+        .then(() => {
+          if (visible) {
+            acknowledgedPresentation = presentationId;
+            if (!stopped) setMountError("");
+          }
+        })
         .catch((reason) => {
           if (!stopped)
             setMountError(
               reason instanceof Error ? reason.message : String(reason),
             );
+        })
+        .finally(() => {
+          pendingMount = false;
+          if (mountQueued) {
+            mountQueued = false;
+            mount();
+          }
         });
     };
+    mountCurrent.current = mount;
     const observer = new ResizeObserver(mount);
     observer.observe(area.current);
     // Keep the same mount lease when appearance changes: recoloring a blank
@@ -108,6 +143,7 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
     mount();
     return () => {
       stopped = true;
+      mountCurrent.current = undefined;
       observer.disconnect();
       themeObserver.disconnect();
       window.removeEventListener("resize", mount);
@@ -118,6 +154,9 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
         .catch(() => undefined);
     };
   }, [open, active?.id, threadId]);
+  useEffect(() => {
+    mountCurrent.current?.();
+  }, [presentationId]);
   const command = async (
     operation: WorkspaceBrowserCommand,
     tabId = active?.id,
@@ -179,6 +218,10 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
   return (
     <section
       className="workspace-browser-panel"
+      data-agent-active={
+        active.agentActionsInFlight > 0 ||
+        (active.agentInspectionsInFlight ?? 0) > 0
+      }
       aria-label={i18n.t("panels:browserWorkspace")}
       onKeyDown={(event) => {
         if (
@@ -208,6 +251,12 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
         </p>
       ) : null}
       <>
+        <span className="sr-only" role="status">
+          {active.agentActionsInFlight > 0 ||
+          (active.agentInspectionsInFlight ?? 0) > 0
+            ? i18n.t("panels:browserAgentWorking")
+            : ""}
+        </span>
         <form
           className="workspace-browser-address"
           onSubmit={(event) => {
@@ -252,6 +301,23 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
               disabled={!open || busy || active.loading}
             />
           </div>
+          <span
+            className="browser-outcome-status"
+            data-unknown={active.agentActionOutcomeUnknown}
+            role="status"
+            title={
+              active.agentActionOutcomeUnknown
+                ? i18n.t("panels:browserActionOutcomeUnknown")
+                : undefined
+            }
+          >
+            <Icon name="warning" />
+            <span className="sr-only">
+              {active.agentActionOutcomeUnknown
+                ? i18n.t("panels:browserActionOutcomeUnknown")
+                : ""}
+            </span>
+          </span>
           <button
             type="button"
             role="switch"

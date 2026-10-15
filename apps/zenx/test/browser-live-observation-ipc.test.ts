@@ -242,3 +242,55 @@ test("external opening rejects foreign targets and late reads after target, subs
     f.bridge.close();
   }
 });
+
+test("catalog and frame bridges coexist without weakening frame authority or stale cleanup", async () => {
+  const callbacks: Array<(event: BrowserLiveObservationEvent) => void> = [];
+  const disposed: number[] = [];
+  const source = {
+    observeBrowserLive(
+      _request: unknown,
+      listener: (event: BrowserLiveObservationEvent) => void,
+    ) {
+      const id = callbacks.push(listener) - 1;
+      return () => {
+        disposed.push(id);
+      };
+    },
+  };
+  const catalog = new BrowserLiveObservationIpcBridge(source, "catalog", true);
+  const frame = new BrowserLiveObservationIpcBridge(source, "frames");
+  const renderer = new FakeRenderer();
+  assert.throws(
+    () => catalog.subscribe(renderer, "bad", { threadId: "a", frames: true }),
+    /catalog/i,
+  );
+  catalog.subscribe(renderer, "catalog-a", { threadId: "a", frames: false });
+  frame.subscribe(renderer, "frame-a", {
+    threadId: "a",
+    frames: true,
+    targetId: "target",
+  });
+  assert.deepEqual(disposed, []);
+  callbacks[0]!({ type: "targets", targets: [] });
+  callbacks[1]!({ type: "status", status: "live", message: "live" });
+  assert.deepEqual(
+    renderer.sent.map((value) => value.channel),
+    ["catalog", "frames"],
+  );
+  catalog.subscribe(renderer, "catalog-b", { threadId: "b", frames: false });
+  catalog.unsubscribe(renderer, "catalog-a");
+  callbacks[0]!({ type: "targets", targets: [] });
+  callbacks[2]!({ type: "targets", targets: [] });
+  callbacks[1]!({ type: "status", status: "live", message: "still live" });
+  assert.deepEqual(disposed, [0]);
+  assert.equal(renderer.sent.length, 4);
+  await assert.rejects(
+    catalog.openExternal(renderer, "b", "target", async () => {}),
+    /not current/,
+  );
+  renderer.destroy();
+  assert.deepEqual(disposed.sort(), [0, 1, 2]);
+  callbacks[1]!({ type: "status", status: "live", message: "late" });
+  callbacks[2]!({ type: "targets", targets: [] });
+  assert.equal(renderer.sent.length, 4);
+});

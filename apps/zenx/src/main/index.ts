@@ -1376,6 +1376,16 @@ function installProtocolIpc(
       url: unknown,
     ) => workspaceBrowser.command(event.sender, threadId, command, tabId, url),
   );
+  ipcMain.handle(
+    ipcChannels.workspaceBrowserPresentationContext,
+    (event, request: unknown) =>
+      workspaceBrowser.presentationContext(event.sender, request),
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceBrowserDeclinePresentation,
+    (event, requestId: unknown) =>
+      workspaceBrowser.declinePresentation(event.sender, requestId),
+  );
   ipcMain.handle(ipcChannels.workspaceBrowserMount, (event, request: unknown) =>
     workspaceBrowser.mount(event.sender, request),
   );
@@ -2289,6 +2299,23 @@ function installCapabilityIpc(
   const browserLive = new BrowserLiveObservationIpcBridge(
     capabilities,
     ipcChannels.browserLiveEvent,
+  );
+  const browserCatalog = new BrowserLiveObservationIpcBridge(
+    capabilities,
+    ipcChannels.browserCatalogEvent,
+    true,
+  );
+  ipcMain.handle(
+    ipcChannels.browserCatalogSubscribe,
+    (event, subscriptionId, request) => {
+      browserCatalog.subscribe(event.sender, subscriptionId, request);
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.browserCatalogUnsubscribe,
+    (event, subscriptionId) => {
+      browserCatalog.unsubscribe(event.sender, subscriptionId);
+    },
   );
   const computerLive = new ComputerLiveObservationIpcBridge(
     capabilities,
