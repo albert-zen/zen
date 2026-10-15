@@ -1,5 +1,5 @@
 import type { CanonicalItem, ModelUsageItem, UserInput } from "./item.js";
-import type { ModelMessage } from "./model.js";
+import { modelUserContent, type ModelMessage } from "./model.js";
 
 export interface ModelUsageAggregate {
   responseCount: number;
@@ -231,9 +231,7 @@ function estimateModelMessage(message: ModelMessage): number {
           : estimateUserInput(message.modelContent),
       );
     case "user":
-      return "content" in message
-        ? estimateUserInput(message.content)
-        : estimateText(message.text);
+      return estimateUserInput(modelUserContent(message));
   }
 }
 

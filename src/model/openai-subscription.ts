@@ -1,4 +1,14 @@
-import { fetchModelResponse } from "./request-retry.js";
+import { observeRequestBody } from "./request-observation.js";
+import { historicalCallId, historicalToolName } from "./imported-history.js";
+import {
+  fetchModelResponse,
+  isTransientTransportError,
+} from "./request-retry.js";
+import {
+  isRetryableModelSampleError,
+  retryableModelSampleError,
+  modelUserContent,
+} from "../model.js";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -40,6 +50,7 @@ export interface OpenAiSubscriptionModelOptions {
  */
 export class OpenAiSubscriptionModel implements ModelAdapter {
   readonly provider = "openai-codex";
+  readonly requestPayloadFormat = "responses" as const;
 
   readonly #acquireAccessLease: OpenAiSubscriptionModelOptions["acquireAccessLease"];
   readonly #renewAccessLease:
@@ -74,7 +85,11 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       request.messages.flatMap((message) =>
         message.role === "assistant" && "toolCalls" in message
           ? message.toolCalls
-              .filter((call) => replayRawToolNames.has(call.name))
+              .filter((call) =>
+                call.imported
+                  ? call.imported.inputFormat === "text"
+                  : replayRawToolNames.has(call.name),
+              )
               .map((call) => call.callId)
           : [],
       ),
@@ -112,10 +127,30 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       ...(sessionHint === undefined ? {} : { prompt_cache_key: sessionHint }),
     });
 
+    let transportAttempt = 0;
+    const observedTokens = new Set<string>();
+    const observe = (accessToken: string) => {
+      observedTokens.add(accessToken);
+      observeRequestBody(
+        request,
+        body,
+        this.requestPayloadFormat,
+        this.provider,
+        ++transportAttempt,
+        [...observedTokens],
+      );
+    };
     let lease = await this.#acquireAccessLease(request.signal);
     let accessToken = requiredSecret(lease.accessToken);
     let signal = accessLeaseSignal(request.signal, lease.signal);
-    let response = await this.#request(body, sessionHint, accessToken, signal);
+    let response = await this.#request(
+      body,
+      sessionHint,
+      accessToken,
+      signal,
+      request.isSamplingRetry !== true,
+      observe,
+    );
 
     if (response.status === 401 && this.#renewAccessLease !== undefined) {
       await response.body?.cancel().catch(() => undefined);
@@ -123,7 +158,14 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       lease = await this.#renewAccessLease(accessToken, request.signal);
       accessToken = requiredSecret(lease.accessToken);
       signal = accessLeaseSignal(request.signal, lease.signal);
-      response = await this.#request(body, sessionHint, accessToken, signal);
+      response = await this.#request(
+        body,
+        sessionHint,
+        accessToken,
+        signal,
+        request.isSamplingRetry !== true,
+        observe,
+      );
     }
 
     if (!response.ok) {
@@ -133,7 +175,9 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       );
     }
     if (response.body === null) {
-      throw new Error("OpenAI subscription model response had no stream body");
+      throw retryableModelSampleError(
+        "OpenAI subscription model response had no stream body",
+      );
     }
 
     yield* parseResponsesStream(
@@ -150,6 +194,8 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     sessionHint: string | undefined,
     accessToken: string,
     signal: AbortSignal,
+    allowRetries: boolean,
+    observe: (accessToken: string) => void,
   ): Promise<Response> {
     signal.throwIfAborted();
     const headers = new Headers({
@@ -167,14 +213,17 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     }
     try {
       return await fetchModelResponse(
-        () =>
-          this.#fetch(this.#endpoint, {
+        () => {
+          observe(accessToken);
+          return this.#fetch(this.#endpoint, {
             method: "POST",
             body,
             headers,
             signal,
-          }),
+          });
+        },
         signal,
+        { allowRetries },
       );
     } catch {
       signal.throwIfAborted();
@@ -263,40 +312,32 @@ async function toResponsesInput(
     ];
   }
   if (message.role === "user") {
-    if ("content" in message) {
-      const content: Array<Record<string, unknown>> = [];
-      for (const part of message.content) {
-        if (part.type === "text") {
-          content.push({ type: "input_text", text: part.text });
-        } else {
-          const attachment = part.attachment;
-          if (part.type !== "image") {
-            content.push({
-              type: "input_text",
-              text: `Audio input is not supported by this Responses transport. Attachment: ${attachment.sha256} (${attachment.mediaType}, ${attachment.byteLength} bytes).`,
-            });
-            continue;
-          }
-          if (attachments === undefined) {
-            throw new Error(
-              "OpenAI subscription attachment reader is required for image input",
-            );
-          }
-          const bytes = await attachments.read(part.attachment);
+    const content: Array<Record<string, unknown>> = [];
+    for (const part of modelUserContent(message)) {
+      if (part.type === "text") {
+        content.push({ type: "input_text", text: part.text });
+      } else {
+        const attachment = part.attachment;
+        if (part.type !== "image") {
           content.push({
-            type: "input_image",
-            image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+            type: "input_text",
+            text: `Audio input is not supported by this Responses transport. Attachment: ${attachment.sha256} (${attachment.mediaType}, ${attachment.byteLength} bytes).`,
           });
+          continue;
         }
+        if (attachments === undefined) {
+          throw new Error(
+            "OpenAI subscription attachment reader is required for image input",
+          );
+        }
+        const bytes = await attachments.read(part.attachment);
+        content.push({
+          type: "input_image",
+          image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+        });
       }
-      return [{ role: "user", content }];
     }
-    return [
-      {
-        role: "user",
-        content: [{ type: "input_text", text: message.text }],
-      },
-    ];
+    return [{ role: "user", content }];
   }
 
   if (message.role === "tool") {
@@ -305,8 +346,11 @@ async function toResponsesInput(
         type: rawCallIds.has(message.callId)
           ? "custom_tool_call_output"
           : "function_call_output",
-        call_id: providerCallId(message.callId),
-        output: `Exit code: ${String(message.exitCode)}\n${message.text}`,
+        call_id:
+          message.exitCode === null
+            ? historicalCallId(message.callId)
+            : providerCallId(message.callId),
+        output: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
       },
     ];
     if (message.modelContent !== undefined) {
@@ -329,6 +373,24 @@ async function toResponsesInput(
       input.push(assistantTextInput(message.text, index));
     }
     for (const call of message.toolCalls) {
+      if (call.imported) {
+        input.push(
+          call.imported.inputFormat === "text"
+            ? {
+                type: "custom_tool_call",
+                call_id: historicalCallId(call.callId),
+                name: historicalToolName(call),
+                input: call.arguments.input,
+              }
+            : {
+                type: "function_call",
+                call_id: historicalCallId(call.callId),
+                name: historicalToolName(call),
+                arguments: serializeArguments(call.arguments),
+              },
+        );
+        continue;
+      }
       assertProviderToolName(call.name);
       if (rawToolNames.has(call.name)) {
         if (
@@ -428,6 +490,10 @@ async function* parseResponsesStream(
 
     const event = parseEvent(payload);
     const type = stringField(event, "type");
+    const terminalResponse =
+      type === "response.completed" || type === "response.done"
+        ? recordField(event, "response")
+        : undefined;
     if (type === undefined) {
       continue;
     }
@@ -441,7 +507,7 @@ async function* parseResponsesStream(
       throw providerEventError(event, accessToken);
     }
 
-    if (type === "response.failed") {
+    if (type === "response.failed" || terminalResponse?.status === "failed") {
       state.terminalSeen = true;
       const usage = terminalResponseUsage(recordField(event, "response"));
       if (usage !== undefined) yield usage;
@@ -531,7 +597,7 @@ async function* parseResponsesStream(
 
     if (type === "response.function_call_arguments.delta") {
       const slot = slotFor(state, event, "function_call");
-      const delta = stringField(event, "delta");
+      const delta = functionArgumentsField(event, "delta");
       if (slot !== undefined && delta !== undefined) {
         slot.arguments += delta;
       }
@@ -540,7 +606,7 @@ async function* parseResponsesStream(
 
     if (type === "response.function_call_arguments.done") {
       const slot = slotFor(state, event, "function_call");
-      const argumentsJson = stringField(event, "arguments");
+      const argumentsJson = functionArgumentsField(event, "arguments");
       if (slot !== undefined && argumentsJson !== undefined) {
         slot.arguments = argumentsJson;
       }
@@ -562,7 +628,10 @@ async function* parseResponsesStream(
       continue;
     }
 
-    if (type === "response.incomplete") {
+    if (
+      type === "response.incomplete" ||
+      terminalResponse?.status === "incomplete"
+    ) {
       state.terminalSeen = true;
       const response = recordField(event, "response");
       const usage = terminalResponseUsage(response);
@@ -584,7 +653,7 @@ async function* parseResponsesStream(
       state.terminalSeen = true;
       const response = recordField(event, "response");
       if (response === undefined || response.status !== "completed") {
-        throw new Error(
+        throw retryableModelSampleError(
           "OpenAI subscription response ended without completed status",
         );
       }
@@ -612,7 +681,7 @@ async function* parseResponsesStream(
   }
 
   if (!state.terminalSeen) {
-    throw new Error(
+    throw retryableModelSampleError(
       "OpenAI subscription stream ended without a terminal response event",
     );
   }
@@ -707,7 +776,12 @@ async function* finishOutputItem(
     const itemCallId = stringField(item, "call_id");
     const itemId = stringField(item, "id");
     const name = stringField(item, "name");
-    const argumentsJson = stringField(item, "arguments");
+    const argumentsJson = functionArgumentsField(item, "arguments");
+    if ((itemCallId ?? slot.callId).trim().length === 0) {
+      throw retryableModelSampleError(
+        "OpenAI subscription model returned invalid tool call id",
+      );
+    }
     const callId = canonicalCallId(
       itemCallId ?? slot.callId,
       itemId ?? slot.itemId,
@@ -718,14 +792,18 @@ async function* finishOutputItem(
       return;
     }
     const toolName = name ?? slot.name;
-    assertProviderToolName(toolName);
+    if (!providerToolName.test(toolName)) {
+      throw retryableModelSampleError(
+        "OpenAI subscription model returned invalid tool name",
+      );
+    }
     if (!allowedToolNames.has(toolName)) {
-      throw new Error(
+      throw retryableModelSampleError(
         `OpenAI subscription model requested unavailable tool: ${toolName}`,
       );
     }
     if ((slot.type === "custom_tool_call") !== rawToolNames.has(toolName)) {
-      throw new Error(
+      throw retryableModelSampleError(
         "OpenAI subscription model returned mismatched tool input format",
       );
     }
@@ -767,8 +845,21 @@ function customInputField(
 ): string | undefined {
   const value = item[field];
   if (value !== undefined && typeof value !== "string") {
-    throw new Error(
+    throw retryableModelSampleError(
       "OpenAI subscription model returned invalid custom tool input",
+    );
+  }
+  return value;
+}
+
+function functionArgumentsField(
+  item: Record<string, unknown>,
+  field: string,
+): string | undefined {
+  const value = item[field];
+  if (value !== undefined && typeof value !== "string") {
+    throw retryableModelSampleError(
+      "OpenAI subscription model returned invalid tool arguments",
     );
   }
   return value;
@@ -795,7 +886,9 @@ function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
     const callId = stringField(item, "call_id");
     const name = stringField(item, "name");
     if (callId === undefined || name === undefined) {
-      return undefined;
+      throw retryableModelSampleError(
+        "OpenAI subscription model returned incomplete tool call",
+      );
     }
     const itemId = stringField(item, "id");
     return {
@@ -804,7 +897,7 @@ function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
       name,
       ...(type === "custom_tool_call"
         ? { type, input: customInputField(item, "input") ?? "" }
-        : { type, arguments: stringField(item, "arguments") ?? "" }),
+        : { type, arguments: functionArgumentsField(item, "arguments") ?? "" }),
     };
   }
   return undefined;
@@ -871,7 +964,30 @@ async function* readSse(
   try {
     while (true) {
       signal.throwIfAborted();
-      const result = await reader.read();
+      let result: ReadableStreamReadResult<Uint8Array>;
+      try {
+        result = await reader.read();
+      } catch (error) {
+        signal.throwIfAborted();
+        if (
+          error instanceof Error &&
+          (error.name === "AbortError" || error.name === "TimeoutError")
+        )
+          throw error;
+        if (isRetryableModelSampleError(error)) throw error;
+        if (
+          isTransientTransportError(error) ||
+          (error instanceof Error &&
+            (error.cause as { code?: string } | undefined)?.code ===
+              "UND_ERR_BODY_TIMEOUT") ||
+          (error instanceof TypeError && error.message === "terminated")
+        ) {
+          throw retryableModelSampleError(
+            "OpenAI subscription model stream read failed",
+          );
+        }
+        throw error;
+      }
       signal.throwIfAborted();
       if (result.done) {
         reachedEof = true;
@@ -896,10 +1012,14 @@ function parseEvent(payload: string): Record<string, unknown> {
   try {
     value = JSON.parse(payload);
   } catch {
-    throw new Error("OpenAI subscription stream contained invalid JSON");
+    throw retryableModelSampleError(
+      "OpenAI subscription stream contained invalid JSON",
+    );
   }
   if (!isRecord(value)) {
-    throw new Error("OpenAI subscription stream contained an invalid event");
+    throw retryableModelSampleError(
+      "OpenAI subscription stream contained an invalid event",
+    );
   }
   return value;
 }
@@ -974,12 +1094,12 @@ function parseArguments(value: string): Record<string, unknown> {
   try {
     parsed = JSON.parse(value || "{}");
   } catch {
-    throw new Error(
+    throw retryableModelSampleError(
       "OpenAI subscription model returned invalid tool arguments",
     );
   }
   if (!isRecord(parsed)) {
-    throw new Error(
+    throw retryableModelSampleError(
       "OpenAI subscription model returned invalid tool arguments",
     );
   }

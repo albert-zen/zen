@@ -41,6 +41,7 @@ async function harness(
       target?: Element,
     ): Promise<boolean>;
   }) => Promise<void>,
+  includeChildren = false,
 ) {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
   const previous = {
@@ -71,6 +72,15 @@ async function harness(
       summary("Pinned", "/a"),
       summary("Alpha", "/a"),
       summary("Beta", "/b"),
+      ...(includeChildren
+        ? [
+            { ...summary("Child", "/b"), parentThreadId: "Beta" },
+            {
+              ...summary("Independent fork", "/b"),
+              forkedFromThreadId: "Beta",
+            },
+          ]
+        : []),
     ];
     return createElement(Sidebar, {
       mode: "projects",
@@ -121,7 +131,7 @@ async function harness(
             name: "B",
             configured: true,
             isDefault: false,
-            threadIds: ["Beta"],
+            threadIds: ["Beta", "Child", "Independent fork"],
           },
         ],
         unavailableThreadIds: [],
@@ -369,4 +379,25 @@ test("shortcuts leave composition, extra modifiers, dialogs, missing slots and d
     assert.equal(await key("n"), false);
     assert.deepEqual(created, []);
   });
+});
+
+test("Subagents are hidden by default, can be shown explicitly, and remember the toggle", async () => {
+  await harness(async ({ remount }) => {
+    const rows = () =>
+      [...document.querySelectorAll(".thread-row-shell")].map(
+        (row) => row.textContent,
+      );
+    assert.ok(!rows().some((text) => text?.includes("Child")));
+    assert.ok(rows().some((text) => text?.includes("Independent fork")));
+    const toggle = () =>
+      document.querySelector<HTMLButtonElement>(".sidebar-subagents-toggle")!;
+    assert.equal(toggle().getAttribute("aria-pressed"), "false");
+    await act(async () => toggle().click());
+    assert.ok(rows().some((text) => text?.includes("Child")));
+    await remount();
+    assert.equal(toggle().getAttribute("aria-pressed"), "true");
+    assert.ok(rows().some((text) => text?.includes("Child")));
+    await act(async () => toggle().click());
+    assert.ok(!rows().some((text) => text?.includes("Child")));
+  }, true);
 });

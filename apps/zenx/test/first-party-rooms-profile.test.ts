@@ -154,7 +154,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         pluginId: ZENX_ROOMS_CAPABILITY_ID,
         packageName: ZENX_ROOMS_PACKAGE_NAME,
       }),
-      /already version 1\.0\.6/u,
+      /already version 1\.0\.7/u,
     );
     const unchangedCatalog = JSON.parse(
       await readFile(path.join(userData, "capability-grants.json"), "utf8"),
@@ -882,8 +882,19 @@ test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing
         .pluginSnapshot()
         .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID)
         ?.version,
-      "1.0.6",
+      "1.0.7",
     );
+    const unreadList = (await capabilities.executePluginCommand(
+      ZENX_ROOMS_CAPABILITY_ID,
+      "list",
+      { cursor: 0, readSince: 0, readCursors: {} },
+    )) as {
+      readCursorVersion: number;
+      rooms: Array<{ id: string; unreadCount: number }>;
+    };
+    assert.equal(unreadList.readCursorVersion, 1);
+    assert.equal(unreadList.rooms[0]?.id, "companion-room");
+    assert.equal(unreadList.rooms[0]?.unreadCount, 0);
     const before = await capabilities.executePluginCommand(
       ZENX_ROOMS_CAPABILITY_ID,
       "workspace",

@@ -1,3 +1,8 @@
+import type {
+  ImportedToolCallOrigin,
+  ThreadImportOrigin,
+} from "./thread-import.js";
+import { IMPORTED_TOOL_RESULT_CONTENT_TYPE } from "./thread-import.js";
 import {
   MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
@@ -6,7 +11,10 @@ import {
   type AttachmentRef,
 } from "./attachment-ref.js";
 
-/** Observation receipt for a copied tool call, never an executed child operation. */
+/**
+ * Observation receipt for a copied tool call, never an executed child operation.
+ * The historical wire name is shared by side-chat and exact-item fork closures.
+ */
 export const SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE =
   "zen.side-chat-tool-snapshot.v1";
 
@@ -34,6 +42,12 @@ export type ItemType =
   | "user_message_queue_cancelled"
   | "user_message_queue_edited"
   | "user_message"
+  | "host_message"
+  | "host_message_queued"
+  | "host_message_cancelled"
+  | "thread_message"
+  | "thread_message_queued"
+  | "thread_message_cancelled"
   | "agent_message"
   | "model_usage"
   | "reasoning"
@@ -58,6 +72,12 @@ const CANONICAL_ITEM_TYPES = {
   user_message_queue_cancelled: true,
   user_message_queue_edited: true,
   user_message: true,
+  host_message: true,
+  host_message_queued: true,
+  host_message_cancelled: true,
+  thread_message: true,
+  thread_message_queued: true,
+  thread_message_cancelled: true,
   agent_message: true,
   model_usage: true,
   reasoning: true,
@@ -76,6 +96,7 @@ export interface ItemBase {
 }
 
 interface ThreadMetadataItemBase extends ItemBase {
+  importedFrom?: ThreadImportOrigin;
   type: "thread_metadata";
   cwd: string;
   /** Immutable creation relation; ordinary copies do not inherit it. */
@@ -190,6 +211,7 @@ export interface TurnAbortedItem extends ItemBase {
 
 interface TurnReplacementRequestedItemBase extends ItemBase {
   type: "turn_replacement_requested";
+  sender?: ThreadMessageSender;
   turnId: string;
   successorTurnId: string;
   clientId: string;
@@ -258,10 +280,98 @@ export interface MultimodalUserMessageItem extends UserMessageItemBase {
 
 export type UserMessageItem = LegacyUserMessageItem | MultimodalUserMessageItem;
 
+/** Host-captured provenance. Neither sender identity nor authority comes from message text. */
+export interface ThreadMessageSender {
+  /** Present only when the receiving Host captured an authenticated Fleet peer. */
+  deviceId?: string;
+  threadId: string;
+  /** Host-captured display snapshot only; never an identity or authorization key. */
+  threadName?: string;
+  /** Local canonical Turn; remote peers cannot assert a local Turn. */
+  turnId?: string;
+  toolCallId: string;
+  callId: string;
+}
+
+/** Host-authored wakeup; source IDs are provenance, never human authority. */
+export interface HostWakeupInput {
+  clientId: string;
+  source: "bootstrap" | "trigger" | "room";
+  sourceId?: string;
+  text: string;
+}
+export interface HostMessageItem extends ItemBase, HostWakeupInput {
+  type: "host_message";
+  sender: "host";
+  turnId: string;
+  mode: "start" | "steer";
+  deliveryAfter?: string;
+}
+export interface QueuedHostMessageItem extends ItemBase, HostWakeupInput {
+  type: "host_message_queued";
+  sender: "host";
+  input: UserInput;
+  /** Whether this input may join an already admitted Turn. */
+  intent: "steer" | "queue";
+  deliveryMode: "batch-next";
+}
+export interface HostMessageCancelledItem extends ItemBase {
+  type: "host_message_cancelled";
+  queuedItemId: string;
+  clientId: string;
+}
+
+export interface ThreadMessageInput {
+  sender: Pick<ThreadMessageSender, "threadId" | "toolCallId" | "callId">;
+  text: string;
+  messageType?: "guidance" | "follow_up" | "replacement";
+}
+
+export interface ThreadMessageItem extends ItemBase {
+  type: "thread_message";
+  mode: "steer" | "batch-next" | "replace";
+  messageType: "guidance" | "follow_up" | "replacement";
+  turnId: string;
+  clientId: string;
+  sender: ThreadMessageSender;
+  content: UserInput;
+  deliveryAfter?: string;
+}
+
+export interface QueuedThreadMessageItem extends ItemBase {
+  type: "thread_message_queued";
+  messageType: "guidance" | "follow_up" | "replacement";
+  clientId: string;
+  sender: ThreadMessageSender;
+  input: UserInput;
+  deliveryMode: "batch-next";
+}
+
+export interface ThreadMessageCancelledItem extends ItemBase {
+  type: "thread_message_cancelled";
+  queuedItemId: string;
+  clientId: string;
+}
+
+export type QueuedInputItem =
+  QueuedUserMessageItem | QueuedThreadMessageItem | QueuedHostMessageItem;
+export type DeliveredInputItem =
+  UserMessageItem | ThreadMessageItem | HostMessageItem;
+export interface InitialInputMessage {
+  hostInput?: HostWakeupInput;
+  input: UserInput;
+  clientId: string;
+  sender?: ThreadMessageSender;
+  messageType?: "guidance" | "follow_up" | "replacement";
+  mode?: "batch-next" | "replace";
+}
+
 export interface AgentMessageItem extends ItemBase {
   type: "agent_message";
   turnId: string;
   text: string;
+  /** Observed partial text from an interrupted model sample; never replayed. */
+  incomplete?: true;
 }
 
 /** Provider-reported usage for one stable model response. */
@@ -311,6 +421,8 @@ export interface ToolCallItem extends ItemBase {
   parentCallId?: string;
   name: string;
   arguments: Record<string, unknown>;
+  /** Imported history only; never a registered local tool or execution grant. */
+  imported?: ImportedToolCallOrigin;
 }
 
 export interface ToolResultItem extends ItemBase {
@@ -318,7 +430,8 @@ export interface ToolResultItem extends ItemBase {
   turnId: string;
   callId: string;
   output: string;
-  exitCode: number;
+  /** null is reserved for imported historical observations with unknown outcome. */
+  exitCode: number | null;
   /** Runtime-owned execution fact; absent on legacy Items. */
   executionStatus?: "completed" | "failed" | "declined";
   /** Optional provider-neutral data for product rendering; absent on legacy Items. */
@@ -337,6 +450,10 @@ export interface FailureItem extends ItemBase {
   turnId: string;
   code: string;
   message: string;
+  /** Bounded in-turn sample replays exhausted before this failure. */
+  retried?: number;
+  /** Points at the persisted raw failure context in the Host diagnostics log. */
+  diagnosticId?: string;
 }
 
 interface ContextCompactionItemBase extends ItemBase {
@@ -416,6 +533,12 @@ export interface CodeStateItem extends ItemBase {
 }
 
 export type CanonicalItem =
+  | HostMessageItem
+  | QueuedHostMessageItem
+  | HostMessageCancelledItem
+  | ThreadMessageItem
+  | QueuedThreadMessageItem
+  | ThreadMessageCancelledItem
   | CodeStateItem
   | QueuedUserMessageItem
   | QueuedUserMessageCancelledItem
@@ -547,6 +670,58 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
   switch (type) {
     case "thread_metadata":
       requireNoTurnId(item);
+      if (item.importedFrom !== undefined) {
+        const origin = requireRecord(item.importedFrom, "importedFrom");
+        for (const key of [
+          "format",
+          "sourceId",
+          "sourceVersion",
+          "sourceCwd",
+          "sha256",
+        ])
+          requireNonEmptyString(origin[key], `importedFrom.${key}`);
+        requireOptionalNonEmptyString(
+          origin.sourceProvider,
+          "importedFrom.sourceProvider",
+        );
+        requireOptionalNonEmptyString(
+          origin.sourceModel,
+          "importedFrom.sourceModel",
+        );
+        if (!/^[a-f0-9]{64}$/u.test(String(origin.sha256)))
+          throw new Error("Invalid import digest");
+        if (origin.contextBasis !== undefined) {
+          const basis = requireRecord(
+            origin.contextBasis,
+            "importedFrom.contextBasis",
+          );
+          requireEnum(
+            basis.kind,
+            ["replacement-history", "summary-checkpoint"],
+            "importedFrom.contextBasis.kind",
+          );
+          requireSafeInteger(
+            basis.sourceLine,
+            "importedFrom.contextBasis.sourceLine",
+          );
+          requireSafeInteger(
+            basis.earlierRecords,
+            "importedFrom.contextBasis.earlierRecords",
+          );
+          if (Number(basis.sourceLine) < 2 || Number(basis.earlierRecords) < 0)
+            throw new Error("Invalid import checkpoint provenance");
+        }
+        requireSafeInteger(
+          origin.historyItemCount,
+          "importedFrom.historyItemCount",
+        );
+        if (
+          Number(origin.historyItemCount) < 1 ||
+          !Array.isArray(origin.exclusions) ||
+          origin.exclusions.some((value) => typeof value !== "string")
+        )
+          throw new Error("Invalid import provenance");
+      }
       requireNonEmptyString(item.cwd, "thread_metadata.cwd");
       if (item.parentThreadId !== undefined) {
         requireNonEmptyString(
@@ -785,6 +960,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireNonEmptyString(item.reason, "turn_aborted.reason");
       break;
     case "turn_replacement_requested":
+      if (item.sender !== undefined) {
+        validateThreadMessageSender(item.sender, `${type}.sender`);
+      }
       requireTurnId(item, type);
       requireNonEmptyString(item.successorTurnId, `${type}.successorTurnId`);
       requireNonEmptyString(item.clientId, `${type}.clientId`);
@@ -793,6 +971,67 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         requireNonEmptyString(item.text, `${type}.text`);
       else validateUserInput(item.input, `${type}.input`);
       break;
+    case "host_message":
+    case "host_message_queued":
+      if (type === "host_message") requireTurnId(item, type);
+      else requireNoTurnId(item);
+      requireEnum(item.sender, ["host"], `${type}.sender`);
+      requireEnum(
+        item.source,
+        ["bootstrap", "trigger", "room"],
+        `${type}.source`,
+      );
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireNonEmptyString(item.text, `${type}.text`);
+      if (item.source !== "bootstrap")
+        requireNonEmptyString(item.sourceId, `${type}.sourceId`);
+      else requireOptionalNonEmptyString(item.sourceId, `${type}.sourceId`);
+      if (type === "host_message") {
+        requireEnum(item.mode, ["start", "steer"], `${type}.mode`);
+        requireOptionalNonEmptyString(
+          item.deliveryAfter,
+          `${type}.deliveryAfter`,
+        );
+      } else {
+        requireEnum(item.intent, ["steer", "queue"], `${type}.intent`);
+        requireEnum(item.deliveryMode, ["batch-next"], `${type}.deliveryMode`);
+        validateUserInput(item.input, `${type}.input`);
+        if (
+          JSON.stringify(item.input) !==
+          JSON.stringify([{ type: "text", text: item.text }])
+        )
+          throw new Error(`${type}.input must match Host text`);
+      }
+      break;
+    case "thread_message":
+    case "thread_message_queued": {
+      if (type === "thread_message") requireTurnId(item, type);
+      else requireNoTurnId(item);
+      requireNonEmptyString(item.clientId, `${type}.clientId`);
+      requireEnum(
+        item.messageType,
+        ["guidance", "follow_up", "replacement"],
+        `${type}.messageType`,
+      );
+      if (type === "thread_message")
+        requireEnum(
+          item.mode,
+          ["steer", "batch-next", "replace"],
+          `${type}.mode`,
+        );
+      validateThreadMessageSender(item.sender, `${type}.sender`);
+      if (type === "thread_message") {
+        validateUserInput(item.content, `${type}.content`);
+        requireOptionalNonEmptyString(
+          item.deliveryAfter,
+          `${type}.deliveryAfter`,
+        );
+      } else {
+        validateUserInput(item.input, `${type}.input`);
+        requireEnum(item.deliveryMode, ["batch-next"], `${type}.deliveryMode`);
+      }
+      break;
+    }
     case "user_message_queued":
       requireNonEmptyString(item.clientId, `${type}.clientId`);
       validateUserInput(item.input, `${type}.input`);
@@ -807,6 +1046,8 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         throw new Error(`${type}.revision must be positive`);
       validateUserInput(item.input, `${type}.input`);
       break;
+    case "host_message_cancelled":
+    case "thread_message_cancelled":
     case "user_message_queue_cancelled":
       requireNoTurnId(item);
       requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);
@@ -827,6 +1068,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "agent_message":
       requireTurnId(item, type);
       requireString(item.text, `${type}.text`);
+      if (item.incomplete !== undefined && item.incomplete !== true) {
+        throw new Error("agent_message.incomplete must be true when present");
+      }
       break;
     case "model_usage":
       requireTurnId(item, type);
@@ -878,12 +1122,42 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireOptionalNonEmptyString(item.parentCallId, `${type}.parentCallId`);
       requireNonEmptyString(item.name, `${type}.name`);
       requireRecord(item.arguments, `${type}.arguments`);
+      if (item.imported !== undefined) {
+        requireRecord(item.imported, `${type}.imported`);
+        const origin = item.imported as Record<string, unknown>;
+        requireEnum(
+          origin.inputFormat,
+          ["json", "text"],
+          `${type}.imported.inputFormat`,
+        );
+        requireOptionalNonEmptyString(
+          origin.namespace,
+          `${type}.imported.namespace`,
+        );
+        if (origin.inputFormat === "text") {
+          const args = item.arguments as Record<string, unknown>;
+          requireString(args.input, `${type}.arguments.input`);
+          if (Object.keys(args).some((key) => key !== "input"))
+            throw new Error(
+              "Historical text calls require exactly their original input",
+            );
+        }
+        rejectPresent(item, ["parentCallId", "modelResponseId"], type);
+      }
       break;
     case "tool_result": {
       requireTurnId(item, type);
       requireNonEmptyString(item.callId, `${type}.callId`);
       requireString(item.output, `${type}.output`);
-      requireSafeInteger(item.exitCode, `${type}.exitCode`);
+      if (item.exitCode === null) {
+        if (
+          item.contentType !== IMPORTED_TOOL_RESULT_CONTENT_TYPE ||
+          item.executionStatus !== undefined
+        )
+          throw new Error(
+            "Unknown exit status requires an imported historical result",
+          );
+      } else requireSafeInteger(item.exitCode, `${type}.exitCode`);
       if (item.executionStatus !== undefined) {
         requireEnum(
           item.executionStatus,
@@ -917,6 +1191,12 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireTurnId(item, type);
       requireNonEmptyString(item.code, `${type}.code`);
       requireString(item.message, `${type}.message`);
+      if (item.retried !== undefined) {
+        requireTokenCount(item.retried, `${type}.retried`);
+        if ((item.retried as number) < 1)
+          throw new Error("failure.retried must be a positive safe integer");
+      }
+      requireOptionalNonEmptyString(item.diagnosticId, `${type}.diagnosticId`);
       break;
     default:
       return unreachableItemType(type);
@@ -1136,4 +1416,18 @@ function hasOwn(value: object, key: string): boolean {
 
 function unreachableItemType(value: never): never {
   throw new Error(`Unknown canonical Item type: ${String(value)}`);
+}
+
+function validateThreadMessageSender(value: unknown, label: string): void {
+  const sender = requireRecord(value, label);
+  requireOptionalNonEmptyString(sender.threadName, `${label}.threadName`);
+  for (const field of ["threadId", "toolCallId", "callId"])
+    requireNonEmptyString(sender[field], `${label}.${field}`);
+  if (sender.deviceId === undefined)
+    requireNonEmptyString(sender.turnId, `${label}.turnId`);
+  else {
+    requireNonEmptyString(sender.deviceId, `${label}.deviceId`);
+    if (sender.turnId !== undefined)
+      throw new Error("Remote sender cannot assert a local Turn identity");
+  }
 }

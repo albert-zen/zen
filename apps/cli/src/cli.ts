@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 
+import { importModelSelection } from "./import-model-selection.js";
+import { readSelectedImportFile } from "../../../src/protocol/import-file.js";
+import { CODEX_ROLLOUT_FORMAT } from "../../../src/protocol/codex/rollout-import.js";
+import {
+  parseSessionImport,
+  previewSessionImport,
+} from "../../../src/protocol/session-import.js";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { open, readFile, unlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
@@ -58,6 +66,10 @@ async function main(): Promise<void> {
     await runCommand(parseArguments(args));
   } else if (command === "chat") {
     await chatCommand(parseArguments(args));
+  } else if (command === "import-session") {
+    await importSessionCommand(
+      parseArguments(args, ["commit", "sandbox"], ["commit"]),
+    );
   } else if (command === "threads") {
     await threadsCommand(parseArguments(args));
   } else if (command === "auth") {
@@ -425,6 +437,52 @@ async function printModels(client: CodexClient): Promise<void> {
   }
 }
 
+async function importSessionCommand(args: ParsedArguments): Promise<void> {
+  const [file, ...extra] = args.positionals;
+  if (!file || extra.length)
+    throw new Error(
+      "Usage: zen import-session <selected-rollout.jsonl> [--commit --cwd <local-directory>]",
+    );
+  const contents = await readSelectedImportFile(file);
+  const preview = previewSessionImport(
+    parseSessionImport({ format: CODEX_ROLLOUT_FORMAT, contents }),
+  );
+  process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`);
+  if (!flag(args, "commit")) return;
+  const cwd = option(args, "cwd");
+  if (!cwd)
+    throw new Error(
+      "--commit requires an explicit --cwd; source paths and permissions are never restored",
+    );
+  const sandbox = option(args, "sandbox") ?? "read-only";
+  const session = await connectClient(args);
+  try {
+    const requestedModel = option(args, "model");
+    const selection =
+      requestedModel === undefined
+        ? undefined
+        : importModelSelection(
+            await session.client.request("model/list", {}),
+            requestedModel,
+          );
+    const result = await session.client.request("zen/thread/import", {
+      format: CODEX_ROLLOUT_FORMAT,
+      contents,
+      expectedSha256: preview.source.sha256,
+      configuration: {
+        cwd: path.resolve(cwd),
+        sandbox,
+        ...(selection === undefined ? {} : { selection }),
+      },
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } finally {
+    session.client.close();
+    await session.localServer?.close();
+    await session.localHost?.closeHostResources();
+  }
+}
+
 async function threadsCommand(args: ParsedArguments): Promise<void> {
   assertNoPositionals(args);
   const session = await connectClient(args);
@@ -620,6 +678,20 @@ async function runOneTurn(
     resolveCompletion = resolve;
     rejectCompletion = reject;
   });
+  // Admission may race the predecessor's final notification. Only the accepted
+  // Turn can settle this send; unknown transport outcomes are never replayed.
+  const earlyCompletions = new Map<string, Record<string, unknown>>();
+  const settleCompletion = (turn: Record<string, unknown>) => {
+    if (turn.status === "failed") {
+      rejectCompletion(
+        new Error(
+          isRecord(turn.error) && typeof turn.error.message === "string"
+            ? turn.error.message
+            : "Turn failed",
+        ),
+      );
+    } else resolveCompletion();
+  };
   const streamedItems = new Set<string>();
   const disposers = [
     client.onNotification("item/agentMessage/delta", (params) => {
@@ -658,19 +730,12 @@ async function runOneTurn(
       ) {
         return;
       }
-      if (expectedTurnId !== undefined && params.turn.id !== expectedTurnId) {
+      if (typeof params.turn.id !== "string") return;
+      if (expectedTurnId === undefined) {
+        earlyCompletions.set(params.turn.id, params.turn);
         return;
       }
-      if (params.turn.status === "failed") {
-        const message =
-          isRecord(params.turn.error) &&
-          typeof params.turn.error.message === "string"
-            ? params.turn.error.message
-            : "Turn failed";
-        rejectCompletion(new Error(message));
-      } else {
-        resolveCompletion();
-      }
+      if (params.turn.id === expectedTurnId) settleCompletion(params.turn);
     }),
     client.onNotification("error", (params) => {
       if (
@@ -684,15 +749,18 @@ async function runOneTurn(
   ];
 
   try {
-    const response = await client.request("turn/start", {
+    const response = await client.request("zen/turn/send", {
       threadId,
-      input: [{ type: "text", text, text_elements: [] }],
+      clientUserMessageId: randomUUID(),
+      input: [{ type: "text", text }],
     });
-    const turn = responseResult<Record<string, unknown>>(response, "turn");
-    if (typeof turn.id !== "string") {
-      throw new Error("App Server response omitted turn.id");
+    if (!isRecord(response) || typeof response.turnId !== "string") {
+      throw new Error("App Server response omitted turnId");
     }
-    expectedTurnId = turn.id;
+    expectedTurnId = response.turnId;
+    const early = earlyCompletions.get(expectedTurnId);
+    if (early !== undefined) settleCompletion(early);
+    earlyCompletions.clear();
     await completion;
     process.stdout.write("\n");
   } finally {
@@ -1081,6 +1149,9 @@ Usage:
   zen run [options] <prompt>
   zen chat [options]
   zen threads [options]
+  zen import-session <selected-rollout.jsonl> [--commit --cwd <directory>] [options]
+    Preview first; --commit creates an idle continuable Thread. Permissions default to read-only with approval.
+    --sandbox read-only|workspace-write|danger-full-access selects fresh local file permissions.
   zen auth login
   zen auth status
   zen auth logout

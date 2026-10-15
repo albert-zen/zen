@@ -313,6 +313,14 @@ test("transcript selection pauses live following; explicit Back to live clears i
         runtimeTask("run", "task", "running"),
       ]),
     );
+    const scroll = document.querySelector<HTMLElement>(".messages")!;
+    let height = 1000;
+    Object.defineProperties(scroll, {
+      clientHeight: { configurable: true, get: () => 400 },
+      scrollHeight: { configurable: true, get: () => height },
+    });
+    scroll.scrollTop = 600;
+    await act(async () => scroll.dispatchEvent(new window.Event("scroll")));
     await act(async () => {
       const range = document.createRange();
       range.selectNodeContents(
@@ -321,12 +329,28 @@ test("transcript selection pauses live following; explicit Back to live clears i
       document.getSelection()!.addRange(range);
       document.dispatchEvent(new Event("selectionchange"));
     });
+    assert.equal(
+      document.querySelector(".back-live"),
+      null,
+      "selection at the floor has no hidden content to return to",
+    );
+    await act(async () => {
+      height = 1400;
+      scroll.dispatchEvent(new window.Event("scroll"));
+    });
+    assert.equal(
+      scroll.scrollTop,
+      600,
+      "selection pauses follow as content grows",
+    );
     assert.ok(document.querySelector(".back-live"));
-    const scroll = document.querySelector<HTMLElement>(".messages")!;
     // JSDOM has no scrolling primitive; this verifies the actual handler and selection semantics.
-    scroll.scrollTo = () => {};
+    scroll.scrollTo = () => {
+      scroll.scrollTop = height - 400;
+    };
     await h.click(".back-live");
     assert.equal(document.getSelection()!.isCollapsed, true);
+    assert.equal(scroll.scrollTop, 1000);
     assert.ok(!document.querySelector(".back-live"));
   });
 });

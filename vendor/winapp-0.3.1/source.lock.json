@@ -6,8 +6,8 @@
     "commit": "c8ada4a403c43b96780b87abc454cba51f649c60"
   },
   "downstream": {
-    "providerBuild": "zenx-winapp-0.3.1-af0.1",
-    "version": "0.3.1-zenx.af0.1"
+    "providerBuild": "zenx-winapp-0.3.1-af0.2",
+    "version": "0.3.1-zenx.af0.2"
   },
   "project": "src/winapp-CLI/WinApp.Cli/WinApp.Cli.csproj",
   "targetRid": "win-x64",
@@ -15,13 +15,19 @@
   "runtimeVersion": "10.0.12",
   "patch": {
     "path": "vendor/winapp-0.3.1/disable-auto-set-focus.patch",
-    "sha256": "6d6aead43ccbb9cb7d35d9d59d8c0b327707ea53b8476186d235a1b424e1690a"
+    "sha256": "8b09be221d60cf51be31cfebf8c56a12d9cefc412b1b6926942583ec77f34900"
   },
   "sourceFiles": {
     "src/winapp-CLI/WinApp.Cli/NativeMethods.txt": "c61454eb1b8c80e87cb3ae075fd452cff12c4c30",
     "src/winapp-CLI/WinApp.Cli/Program.cs": "27a16c859ad039438ec234bbe053edf35fb36293",
-    "src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs": "5149796fe968050d63fc96163be37e2a66bd78f5"
+    "src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs": "5149796fe968050d63fc96163be37e2a66bd78f5",
+    "src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs": null
   },
-  "dependencyLockMode": "capture-then-locked-restore",
-  "nodeVersion": "22.23.3"
+  "dependencyLockMode": "frozen-locked-restore",
+  "nodeVersion": "22.23.3",
+  "dependencyLock": {
+    "path": "vendor/winapp-0.3.1/packages.lock.json",
+    "sha256": "33e2b9b7fad15c4b582be384306f769ead57ac17cfc598672c3d361a54e4860a",
+    "sizeBytes": 13704
+  }
 }

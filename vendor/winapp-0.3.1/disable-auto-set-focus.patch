@@ -1,6 +1,8 @@
+diff --git a/src/winapp-CLI/WinApp.Cli/NativeMethods.txt b/src/winapp-CLI/WinApp.Cli/NativeMethods.txt
+index c61454e..6505cfd 100644
 --- a/src/winapp-CLI/WinApp.Cli/NativeMethods.txt
 +++ b/src/winapp-CLI/WinApp.Cli/NativeMethods.txt
-@@ -47,6 +47,7 @@
+@@ -47,6 +47,7 @@ DBG_CONTINUE
  DBG_EXCEPTION_NOT_HANDLED
  GetShortPathName
  IUIAutomation
@@ -8,9 +10,19 @@
  CUIAutomation8
  IUIAutomationElement
  IUIAutomationCondition
+@@ -95,3 +96,7 @@ OpenThread
+ GetThreadContext
+ CONTEXT
+ CONTEXT_FLAGS
++IsWindow
++IsChild
++GetAncestor
++SafeArrayDestroy
+diff --git a/src/winapp-CLI/WinApp.Cli/Program.cs b/src/winapp-CLI/WinApp.Cli/Program.cs
+index 27a16c8..2831325 100644
 --- a/src/winapp-CLI/WinApp.Cli/Program.cs
 +++ b/src/winapp-CLI/WinApp.Cli/Program.cs
-@@ -88,6 +88,18 @@
+@@ -88,6 +88,24 @@ internal static class Program
 
          using var serviceProvider = services.BuildServiceProvider();
 
@@ -20,23 +32,30 @@
 +        {
 +            var uia = (UiAutomationService)serviceProvider.GetRequiredService<IUiAutomationService>();
 +            var autoSetFocus = uia.ZenXAutoSetFocus;
-+            Console.Out.WriteLine("{\"schemaVersion\":1,\"providerBuild\":\"zenx-winapp-0.3.1-af0.1\","
++            Console.Out.WriteLine("{\"schemaVersion\":1,\"contractVersion\":1,\"providerBuild\":\"zenx-winapp-0.3.1-af0.2\","
 +                + "\"upstreamCommit\":\"c8ada4a403c43b96780b87abc454cba51f649c60\","
 +                + "\"autoSetFocus\":" + (autoSetFocus ? "true" : "false") + "}");
 +            return autoSetFocus ? 1 : 0;
 +        }
 +
++        if (args.Length == 1 && args[0] == "--zenx-uia-strict")
++        {
++            return ZenXStrictUiaCommand.Run(() =>
++                (UiAutomationService)serviceProvider.GetRequiredService<IUiAutomationService>());
++        }
++
          var rootCommand = serviceProvider.GetRequiredService<WinAppRootCommand>();
 
          // Skip first-run notice for machine-readable output modes and completions
+diff --git a/src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs b/src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs
+index 5149796..8046f17 100644
 --- a/src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs
 +++ b/src/winapp-CLI/WinApp.Cli/Services/UiAutomationService.cs
-@@ -23,8 +23,19 @@
+@@ -23,9 +23,20 @@ internal sealed partial class UiAutomationService : IUiAutomationService
      {
          _logger = logger;
          _selectorService = selectorService;
 -        _automation = CUIAutomation8.CreateInstance<IUIAutomation>();
--    }
 +        // ZenX downstream variant: configure the actual action client before any UIA work.
 +        // CsWin32 generates this interface from the Windows SDK; no handwritten ABI.
 +        var automation = CUIAutomation8.CreateInstance<IUIAutomation2>();
@@ -46,10 +65,611 @@
 +            throw new InvalidOperationException("ZenX UIA client did not disable AutoSetFocus.");
 +        }
 +        _automation = automation;
-+    }
-+
+     }
+
 +    // Report the live setting of this service instance, not an assumed compile-time value.
 +    internal bool ZenXAutoSetFocus => ((IUIAutomation2)_automation).get_AutoSetFocus();
-
++
      public List<(nint Hwnd, int Pid, string Title)> FindWindowsByTitle(string titleQuery)
      {
+         return EnumerateWindows((pid, title) =>
+diff --git a/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
+new file mode 100644
+index 0000000..83e6b3d
+--- /dev/null
++++ b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
+@@ -0,0 +1,594 @@
++// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
++// Licensed under the MIT License.
++
++// Private downstream protocol. Stock WinApp commands do not call this path.
++using System.Diagnostics;
++using System.Globalization;
++using System.Runtime.InteropServices;
++using System.Runtime.InteropServices.Marshalling;
++using System.Text;
++using System.Text.Json;
++using Windows.Win32;
++using Windows.Win32.Foundation;
++using Windows.Win32.UI.Accessibility;
++using Windows.Win32.UI.WindowsAndMessaging;
++
++namespace WinApp.Cli.Services;
++
++internal sealed partial class UiAutomationService
++{
++    // The registered service owns the one client whose live AutoSetFocus is probed.
++    internal IUIAutomation ZenXStrictClient => _automation;
++}
++
++internal static class ZenXStrictUiaCommand
++{
++    internal const int MaxRequestBytes = 256 * 1024;
++    internal const int MaxValueLength = 4000;
++    private const int MaxIdentityLength = 1024;
++    private const int MaxResponseBytes = 2 * 1024 * 1024;
++    private const int MaxControls = 256;
++    private const int MaxDepth = 32;
++    private const int MaxNodes = 2048;
++    private const string Build = "zenx-winapp-0.3.1-af0.2";
++    private const string Commit = "c8ada4a403c43b96780b87abc454cba51f649c60";
++
++    private enum RuntimeReadContext { RootInitial, RootRecheck, WalkRoot, WalkChild, WalkVirtual, ActionControl }
++
++    private sealed class Refusal(string code) : Exception
++    {
++        internal string Code { get; } = code;
++    }
++
++    private sealed record Root(string Hwnd, int Pid, string ProcessStartTimeTicks, string ClassName, int[] RuntimeId);
++    private sealed record Bounds(int Left, int Top, int Width, int Height);
++    private sealed record Control(string Hwnd, int Pid, string NativeClassName, int[] RuntimeId,
++        string Name, string AutomationId, string ClassName, string FrameworkId, int ControlType,
++        Bounds Bounds, bool Enabled, bool Offscreen, bool Password, bool InvokePattern,
++        bool ValuePattern, bool? ValueReadOnly);
++    private sealed record Request(string Operation, string? Hwnd, int Pid, Root? Root, Control? Control, string? Value);
++
++    // Parse before resolving the service, and never send provider exception messages or
++    // user-entered values in errors. Dispatch is an irreversible boundary, even on throw.
++    internal static int Run(Func<UiAutomationService> resolveService)
++    {
++        string? operation = null;
++        bool? autoSetFocus = null;
++        var dispatched = false;
++        var phase = "parse_request";
++        using var response = new MemoryStream();
++        try
++        {
++            var request = ParseRequest();
++            operation = request.Operation;
++            phase = "resolve_service";
++            var service = resolveService();
++            var automation = service.ZenXStrictClient;
++            phase = "read_autofocus";
++            autoSetFocus = service.ZenXAutoSetFocus;
++            Require(autoSetFocus == false, "auto_focus_enabled");
++
++            Root? root = null;
++            List<Control>? controls = null;
++            string? value = null;
++            if (operation == "inspect")
++            {
++                phase = "inspect_element";
++                var rootElement = automation.ElementFromHandle(Handle(request.Hwnd!, false));
++                root = CaptureRoot(rootElement, request.Hwnd!, request.Pid, ref phase);
++                controls = [];
++                var visited = new HashSet<string>(StringComparer.Ordinal);
++                var nodes = 0;
++                phase = "raw_walker";
++                Walk(automation.get_RawViewWalker(), rootElement, 0, controls, visited, ref nodes, ref phase);
++                Require(SameRoot(root, CaptureRoot(rootElement, root.Hwnd, root.Pid, ref phase, RuntimeReadContext.RootRecheck)), "root_changed");
++                phase = "read_autofocus";
++                autoSetFocus = service.ZenXAutoSetFocus;
++                Require(autoSetFocus == false, "auto_focus_enabled");
++            }
++            else
++            {
++                value = Mutate(service, request, ref dispatched, ref autoSetFocus, ref phase);
++            }
++            phase = "serialize_response";
++            using (var writer = new Utf8JsonWriter(response))
++            {
++                WriteEnvelope(writer, operation, autoSetFocus, "completed", null);
++                if (root is not null)
++                {
++                    writer.WritePropertyName("root");
++                    WriteRoot(writer, root);
++                    writer.WriteStartArray("controls");
++                    foreach (var control in controls!) { WriteControl(writer, control); }
++                    writer.WriteEndArray();
++                }
++                if (value is not null) { writer.WriteString("value", value); }
++                writer.WriteEndObject();
++            }
++            Require(response.Length <= MaxResponseBytes, "response_limit");
++        }
++        catch (Exception error)
++        {
++            // No retry, selector lookup, ancestor activation or alternate pattern here.
++            var code = error is Refusal refusal ? refusal.Code : ProviderError(error, phase);
++            response.SetLength(0);
++            response.Position = 0;
++            using var writer = new Utf8JsonWriter(response);
++            WriteEnvelope(writer, operation, autoSetFocus, dispatched ? "unknown" : "not_dispatched", code);
++            writer.WriteEndObject();
++        }
++        // The only stdout write occurs after the complete bounded response is available.
++        // A broken pipe after dispatch cannot be reclassified as not_dispatched.
++        Console.Out.WriteLine(Encoding.UTF8.GetString(response.ToArray()));
++        return 0;
++    }
++
++    private static string ProviderError(Exception error, string phase)
++    {
++        // Source-defined phase/category labels and a fixed-width HRESULT only.
++        // Never expose exception messages, type names, stacks or UI identities.
++        var category = error switch
++        {
++            COMException => "com",
++            System.ComponentModel.Win32Exception => "win32",
++            InvalidCastException => "invalid_cast",
++            InvalidOperationException => "invalid_operation",
++            OverflowException => "overflow",
++            _ => "other"
++        };
++        var hresult = unchecked((uint)error.HResult).ToString("x8", CultureInfo.InvariantCulture);
++        return $"provider_error_{phase}_{category}_h{hresult}";
++    }
++
++    private static string? Mutate(UiAutomationService service, Request request, ref bool dispatched, ref bool? autoSetFocus, ref string phase)
++    {
++        phase = "mutation_identity";
++        var expectedRoot = request.Root!;
++        var expected = request.Control!;
++        var rootHwnd = Handle(expectedRoot.Hwnd, false);
++        var hwnd = Handle(expected.Hwnd, false); // HWND 0 / virtual controls are never actionable.
++        var automation = service.ZenXStrictClient;
++        var root = automation.ElementFromHandle(rootHwnd);
++        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid, ref phase)), "root_changed");
++        phase = "mutation_native_ancestry";
++        VerifyNativeAncestry(rootHwnd, hwnd, expectedRoot.Pid, expected.Pid);
++
++        phase = "mutation_uia_identity";
++        var element = UniqueNativeElement(automation, root, hwnd);
++        var fromHwnd = automation.ElementFromHandle(hwnd);
++        Require(automation.CompareElements(element, fromHwnd), "native_identity_changed");
++        Require(SameControl(expected, CaptureControl(element, ref phase)), "control_changed");
++        Require(expected.Enabled && !expected.Offscreen && !expected.Password, "control_ineligible");
++        Require(expected.Bounds.Width > 0 && expected.Bounds.Height > 0, "control_ineligible");
++        phase = "mutation_uia_ancestry";
++        VerifyUiaAncestry(automation, root, element);
++
++        if (request.Operation == "invoke")
++        {
++            Require(expected.InvokePattern, "pattern_unavailable");
++            phase = "invoke_pattern";
++            var pattern = element.GetCurrentPattern(UIA_PATTERN_ID.UIA_InvokePatternId) as IUIAutomationInvokePattern;
++            Require(pattern is not null, "pattern_unavailable");
++            Revalidate(service, expectedRoot, expected, root, element, ref autoSetFocus, ref phase);
++            // Same verified element/client. UIA providers may still change or activate
++            // themselves during the call; no client can eliminate that last-instant race.
++            phase = "invoke_dispatch";
++            dispatched = true;
++            pattern!.Invoke();
++            return null;
++        }
++
++        Require(expected.ValuePattern && expected.ValueReadOnly == false, "pattern_unavailable");
++        phase = "value_pattern";
++        var valuePattern = element.GetCurrentPattern(UIA_PATTERN_ID.UIA_ValuePatternId) as IUIAutomationValuePattern;
++        Require(valuePattern is not null && !valuePattern.get_CurrentIsReadOnly(), "pattern_unavailable");
++        var input = request.Value!;
++        var bstr = Marshal.StringToBSTR(input);
++        try
++        {
++            Revalidate(service, expectedRoot, expected, root, element, ref autoSetFocus, ref phase);
++            unsafe
++            {
++                phase = "value_dispatch";
++                dispatched = true;
++                valuePattern!.SetValue(new BSTR((char*)bstr));
++            }
++        }
++        finally { Marshal.FreeBSTR(bstr); }
++        // Read the entire BSTR, not a preview, prefix or separately re-resolved element.
++        phase = "value_readback";
++        var readback = ReadBstr(valuePattern!.get_CurrentValue(), MaxValueLength);
++        Require(string.Equals(input, readback, StringComparison.Ordinal), "readback_mismatch");
++        return readback;
++    }
++
++    private static IUIAutomationElement UniqueNativeElement(IUIAutomation automation, IUIAutomationElement root, HWND hwnd)
++    {
++        // Native HWND only, scoped to this exact root. Never resolve by name, AutomationId,
++        // ordinal, slug or a selector. A provider that aliases one HWND is ambiguous.
++        var condition = automation.CreatePropertyCondition(UIA_PROPERTY_ID.UIA_NativeWindowHandlePropertyId,
++            ComVariant.Create(unchecked((int)(nint)hwnd)));
++        var matches = root.FindAll(TreeScope.TreeScope_Subtree, condition);
++        if (matches is null || matches.get_Length() != 1) { throw new Refusal("native_identity_not_unique"); }
++        return matches.GetElement(0);
++    }
++
++    private static void Revalidate(UiAutomationService service, Root expectedRoot, Control expected,
++        IUIAutomationElement root, IUIAutomationElement element, ref bool? autoSetFocus, ref string phase)
++    {
++        phase = "read_autofocus";
++        autoSetFocus = service.ZenXAutoSetFocus;
++        Require(autoSetFocus == false, "auto_focus_enabled");
++        Require(SameRoot(expectedRoot, CaptureRoot(root, expectedRoot.Hwnd, expectedRoot.Pid, ref phase, RuntimeReadContext.RootRecheck)), "root_changed");
++        phase = "revalidate_ancestry";
++        VerifyNativeAncestry(Handle(expectedRoot.Hwnd, false), Handle(expected.Hwnd, false), expectedRoot.Pid, expected.Pid);
++        VerifyUiaAncestry(service.ZenXStrictClient, root, element);
++        phase = "revalidate_uia_identity";
++        var stillUnique = UniqueNativeElement(service.ZenXStrictClient, root, Handle(expected.Hwnd, false));
++        Require(service.ZenXStrictClient.CompareElements(element, stillUnique), "native_identity_changed");
++        Require(SameControl(expected, CaptureControl(element, ref phase)), "control_changed");
++        // Read the live setting last, immediately before the one pattern call.
++        phase = "read_autofocus";
++        autoSetFocus = service.ZenXAutoSetFocus;
++        Require(autoSetFocus == false, "auto_focus_enabled");
++    }
++
++    private static Root CaptureRoot(IUIAutomationElement element, string hwndText, int pid, ref string phase,
++        RuntimeReadContext runtimeContext = RuntimeReadContext.RootInitial)
++    {
++        phase = "root_native_identity";
++        var hwnd = Handle(hwndText, false);
++        Require(PInvoke.IsWindow(hwnd) && PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOT) == hwnd, "root_not_top_level");
++        Require(PInvoke.IsWindowVisible(hwnd) && !PInvoke.IsIconic(hwnd), "root_not_visible");
++        phase = "root_uia_identity";
++        Require(NativePid(hwnd) == pid && element.get_CurrentProcessId() == pid, "root_process_changed");
++        Require(element.get_CurrentNativeWindowHandle() == hwnd, "root_identity_changed");
++        phase = "root_process_metadata";
++        using var process = Process.GetProcessById(pid);
++        var ticks = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
++        Require(!process.HasExited, "root_process_changed");
++        phase = "root_native_class";
++        var className = NativeClass(hwnd);
++        return new Root(hwndText, pid, ticks, className, RuntimeId(element, runtimeContext, ref phase));
++    }
++
++    private static void VerifyNativeAncestry(HWND root, HWND child, int rootPid, int childPid)
++    {
++        Require(PInvoke.IsWindow(child) && rootPid == childPid && NativePid(root) == rootPid && NativePid(child) == childPid,
++            "native_process_changed");
++        Require(PInvoke.GetAncestor(child, GET_ANCESTOR_FLAGS.GA_ROOT) == root && (child == root || PInvoke.IsChild(root, child)),
++            "native_ancestry_changed");
++        Require(PInvoke.IsWindowVisible(child), "control_ineligible");
++    }
++
++    private static void VerifyUiaAncestry(IUIAutomation automation, IUIAutomationElement root, IUIAutomationElement element)
++    {
++        var walker = automation.get_RawViewWalker();
++        IUIAutomationElement? current = element;
++        for (var depth = 0; current is not null && depth <= MaxDepth; depth++)
++        {
++            if (automation.CompareElements(root, current)) { return; }
++            current = walker.GetParentElement(current);
++        }
++        throw new Refusal("uia_ancestry_changed");
++    }
++
++    private static void Walk(IUIAutomationTreeWalker walker, IUIAutomationElement element, int depth,
++        List<Control> controls, HashSet<string> visited, ref int nodes, ref string phase)
++    {
++        Require(++nodes <= MaxNodes && depth <= MaxDepth && controls.Count < MaxControls, "scan_limit");
++        var control = CaptureControl(element, ref phase, depth == 0 ? RuntimeReadContext.WalkRoot : RuntimeReadContext.WalkChild);
++        // Empty virtual identities are readable rows, never comparable identities.
++        // Every visit still consumes the budgets above and walks all children below.
++        Require(control.RuntimeId.Length == 0 || visited.Add(string.Join(",", control.RuntimeId)), "duplicate_runtime_identity");
++        controls.Add(control);
++        phase = "walk_first_child";
++        var child = walker.GetFirstChildElement(element);
++        while (child is not null)
++        {
++            Walk(walker, child, depth + 1, controls, visited, ref nodes, ref phase);
++            phase = "walk_next_sibling";
++            child = walker.GetNextSiblingElement(child);
++        }
++    }
++
++    private static Control CaptureControl(IUIAutomationElement element, ref string phase,
++        RuntimeReadContext runtimeContext = RuntimeReadContext.ActionControl)
++    {
++        phase = "control_handle";
++        var hwnd = element.get_CurrentNativeWindowHandle();
++        var readContext = runtimeContext == RuntimeReadContext.WalkChild && hwnd.IsNull
++            ? RuntimeReadContext.WalkVirtual : runtimeContext;
++        phase = "control_bounds";
++        var rect = element.get_CurrentBoundingRectangle();
++        phase = "control_invoke_pattern";
++        var invoke = ReadPattern(element, UIA_PATTERN_ID.UIA_InvokePatternId) is IUIAutomationInvokePattern;
++        phase = "control_value_pattern";
++        var value = ReadPattern(element, UIA_PATTERN_ID.UIA_ValuePatternId) as IUIAutomationValuePattern;
++        phase = "control_native_identity";
++        var pid = element.get_CurrentProcessId();
++        var nativeClassName = hwnd.IsNull ? "" : NativeClass(hwnd);
++        var runtimeId = RuntimeId(element, readContext, ref phase);
++        phase = "control_properties";
++        return new Control(((long)(nint)hwnd).ToString(CultureInfo.InvariantCulture), pid,
++            nativeClassName, runtimeId, ReadBstr(element.get_CurrentName()),
++            ReadBstr(element.get_CurrentAutomationId()), ReadBstr(element.get_CurrentClassName()),
++            ReadBstr(element.get_CurrentFrameworkId()), (int)element.get_CurrentControlType(),
++            new Bounds(rect.left, rect.top, checked(rect.right - rect.left), checked(rect.bottom - rect.top)),
++            element.get_CurrentIsEnabled(), element.get_CurrentIsOffscreen(), element.get_CurrentIsPassword(),
++            invoke, value is not null, value is null ? null : (bool)value.get_CurrentIsReadOnly());
++    }
++
++    private static object? ReadPattern(IUIAutomationElement element, UIA_PATTERN_ID id)
++    {
++        try { return element.GetCurrentPattern(id); }
++        catch (COMException error) when (error.HResult == unchecked((int)0x80040204)) { return null; } // UIA_E_NOTSUPPORTED
++    }
++
++    private static unsafe int[] RuntimeId(IUIAutomationElement element, RuntimeReadContext context, ref string phase)
++    {
++        phase = "runtime_id";
++        var array = element.GetRuntimeId();
++        if (array == null) { throw RuntimeRefusal(context, "null"); }
++        try
++        {
++            var dimensions = array->cDims;
++            var elementSize = array->cbElements;
++            if (dimensions != 1) { throw RuntimeRefusal(context, "dimensions", dimensions, elementSize); }
++            if (elementSize != sizeof(int)) { throw RuntimeRefusal(context, "element_size", dimensions, elementSize); }
++            if (array->pvData == null) { throw RuntimeRefusal(context, "data_null", dimensions, elementSize); }
++            // Do not read the bound until the same original shape guards have passed.
++            var length = array->rgsabound[0].cElements;
++            // Only an already identified HWND0 walk node may lack a RuntimeId.
++            // Root, native and action reads retain the nonempty identity requirement.
++            if (length == 0 && context == RuntimeReadContext.WalkVirtual) { return []; }
++            if (length is 0 or > 64) { throw RuntimeRefusal(context, "length", dimensions, elementSize, length); }
++            var result = new int[(int)length];
++            new ReadOnlySpan<int>(array->pvData, (int)length).CopyTo(result);
++            return result;
++        }
++        finally { PInvoke.SafeArrayDestroy(array); }
++    }
++
++    private static Refusal RuntimeRefusal(RuntimeReadContext context, string reason,
++        ushort? dimensions = null, uint? elementSize = null, uint? length = null)
++    {
++        var scope = context switch
++        {
++            RuntimeReadContext.RootInitial => "root_initial",
++            RuntimeReadContext.RootRecheck => "root_recheck",
++            RuntimeReadContext.WalkRoot => "walk_root",
++            RuntimeReadContext.WalkChild => "walk_child",
++            RuntimeReadContext.WalkVirtual => "walk_virtual",
++            RuntimeReadContext.ActionControl => "action_control",
++            _ => throw new InvalidOperationException("Invalid internal runtime identity context.")
++        };
++        // Only controlled context/reason labels and bounded SAFEARRAY shape numbers.
++        // Never report element text, values, RuntimeId contents or pointer addresses.
++        var d = dimensions?.ToString(CultureInfo.InvariantCulture) ?? "na";
++        var b = elementSize?.ToString(CultureInfo.InvariantCulture) ?? "na";
++        var n = length?.ToString(CultureInfo.InvariantCulture) ?? "na";
++        return new Refusal($"runtime_identity_{scope}_{reason}_d{d}_b{b}_n{n}");
++    }
++
++    private static unsafe int NativePid(HWND hwnd)
++    {
++        uint pid = 0;
++        Require(PInvoke.GetWindowThreadProcessId(hwnd, &pid) != 0 && pid is > 0 and <= int.MaxValue, "native_process_unavailable");
++        return (int)pid;
++    }
++
++    private static unsafe string NativeClass(HWND hwnd)
++    {
++        Span<char> buffer = stackalloc char[256];
++        fixed (char* pointer = buffer)
++        {
++            var length = PInvoke.GetClassName(hwnd, pointer, buffer.Length);
++            Require(length > 0 && length < buffer.Length - 1, "native_class_unavailable");
++            return ValidateString(new string(pointer, 0, length), MaxIdentityLength);
++        }
++    }
++
++    private static unsafe string ReadBstr(BSTR bstr, int limit = MaxIdentityLength)
++    {
++        try
++        {
++            Require(bstr.Length <= limit, "field_limit");
++            return ValidateString(bstr.ToString() ?? "", limit);
++        }
++        finally { Marshal.FreeBSTR((nint)bstr.Value); }
++    }
++
++    private static bool SameRoot(Root a, Root b) => a.Hwnd == b.Hwnd && a.Pid == b.Pid
++        && a.ProcessStartTimeTicks == b.ProcessStartTimeTicks && a.ClassName == b.ClassName
++        && a.RuntimeId.AsSpan().SequenceEqual(b.RuntimeId);
++
++    private static bool SameControl(Control a, Control b) => a.Hwnd == b.Hwnd && a.Pid == b.Pid
++        && a.NativeClassName == b.NativeClassName && a.RuntimeId.AsSpan().SequenceEqual(b.RuntimeId)
++        && a.Name == b.Name && a.AutomationId == b.AutomationId && a.ClassName == b.ClassName
++        && a.FrameworkId == b.FrameworkId && a.ControlType == b.ControlType && a.Bounds == b.Bounds
++        && a.Enabled == b.Enabled && a.Offscreen == b.Offscreen && a.Password == b.Password
++        && a.InvokePattern == b.InvokePattern && a.ValuePattern == b.ValuePattern && a.ValueReadOnly == b.ValueReadOnly;
++
++    private static Request ParseRequest()
++    {
++        try
++        {
++            using var input = Console.OpenStandardInput();
++            var bytes = new byte[MaxRequestBytes + 1];
++            var length = 0;
++            while (length < bytes.Length)
++            {
++                var read = input.Read(bytes, length, bytes.Length - length);
++                if (read == 0) { break; }
++                length += read;
++            }
++            Require(length > 0 && length <= MaxRequestBytes, "bad_request");
++            using var document = JsonDocument.Parse(bytes.AsMemory(0, length), new JsonDocumentOptions { MaxDepth = 8 });
++            var request = document.RootElement;
++            var operation = Text(request, "operation", 16);
++            Require(request.GetProperty("schemaVersion").GetInt32() == 1, "bad_request");
++            if (operation == "inspect")
++            {
++                Fields(request, "schemaVersion", "operation", "hwnd", "pid");
++                var hwnd = Text(request, "hwnd", 20);
++                _ = Handle(hwnd, false);
++                var pid = PositiveInt(request, "pid");
++                return new Request(operation, hwnd, pid, null, null, null);
++            }
++            Require(operation is "invoke" or "set_value", "bad_request");
++            Fields(request, operation == "invoke" ? ["schemaVersion", "operation", "root", "control"]
++                : ["schemaVersion", "operation", "root", "control", "value"]);
++            var root = ParseRoot(request.GetProperty("root"));
++            var control = ParseControl(request.GetProperty("control"));
++            var value = operation == "set_value" ? Text(request, "value", MaxValueLength) : null;
++            return new Request(operation, null, 0, root, control, value);
++        }
++        catch { throw new Refusal("bad_request"); }
++    }
++
++    private static Root ParseRoot(JsonElement element)
++    {
++        Fields(element, "hwnd", "pid", "processStartTimeTicks", "className", "runtimeId");
++        var hwnd = Text(element, "hwnd", 20);
++        _ = Handle(hwnd, false);
++        var ticks = Text(element, "processStartTimeTicks", 20);
++        Require(long.TryParse(ticks, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
++            && ticks == parsed.ToString(CultureInfo.InvariantCulture), "bad_request");
++        return new Root(hwnd, PositiveInt(element, "pid"), ticks, Text(element, "className"), ParseRuntimeId(element));
++    }
++
++    private static Control ParseControl(JsonElement element)
++    {
++        Fields(element, "hwnd", "pid", "nativeClassName", "runtimeId", "name", "automationId", "className", "frameworkId",
++            "controlType", "bounds", "enabled", "offscreen", "password", "invokePattern", "valuePattern", "valueReadOnly");
++        var hwnd = Text(element, "hwnd", 20);
++        _ = Handle(hwnd, true);
++        var bounds = element.GetProperty("bounds");
++        Fields(bounds, "left", "top", "width", "height");
++        var readOnly = element.GetProperty("valueReadOnly");
++        var valuePattern = element.GetProperty("valuePattern").GetBoolean();
++        Require(valuePattern == (readOnly.ValueKind != JsonValueKind.Null), "bad_request");
++        return new Control(hwnd, PositiveInt(element, "pid"), Text(element, "nativeClassName"), ParseRuntimeId(element, allowEmpty: hwnd == "0"),
++            Text(element, "name"), Text(element, "automationId"), Text(element, "className"), Text(element, "frameworkId"),
++            PositiveInt(element, "controlType"), new Bounds(bounds.GetProperty("left").GetInt32(), bounds.GetProperty("top").GetInt32(),
++                bounds.GetProperty("width").GetInt32(), bounds.GetProperty("height").GetInt32()),
++            element.GetProperty("enabled").GetBoolean(), element.GetProperty("offscreen").GetBoolean(),
++            element.GetProperty("password").GetBoolean(), element.GetProperty("invokePattern").GetBoolean(),
++            valuePattern, valuePattern ? readOnly.GetBoolean() : null);
++    }
++
++    private static int[] ParseRuntimeId(JsonElement element, bool allowEmpty = false)
++    {
++        var array = element.GetProperty("runtimeId");
++        Require(array.ValueKind == JsonValueKind.Array
++            && array.GetArrayLength() <= 64 && (allowEmpty || array.GetArrayLength() > 0), "bad_request");
++        return array.EnumerateArray().Select(value => value.GetInt32()).ToArray();
++    }
++
++    private static HWND Handle(string text, bool allowZero)
++    {
++        Require(ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var value)
++            && value <= uint.MaxValue && (allowZero || value > 0)
++            && text == value.ToString(CultureInfo.InvariantCulture), "native_identity_required");
++        return new HWND((nint)value);
++    }
++
++    private static int PositiveInt(JsonElement element, string field)
++    {
++        var value = element.GetProperty(field).GetInt32();
++        Require(value > 0, "bad_request");
++        return value;
++    }
++
++    private static string Text(JsonElement element, string field, int limit = MaxIdentityLength)
++        => ValidateString(element.GetProperty(field).GetString() ?? throw new Refusal("bad_request"), limit);
++
++    private static string ValidateString(string value, int limit)
++    {
++        Require(value.Length <= limit, "field_limit");
++        for (var i = 0; i < value.Length; i++)
++        {
++            if (char.IsHighSurrogate(value[i]))
++            {
++                Require(i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]), "invalid_unicode");
++                i++;
++            }
++            else { Require(!char.IsLowSurrogate(value[i]), "invalid_unicode"); }
++        }
++        return value;
++    }
++
++    private static void Fields(JsonElement element, params string[] names)
++    {
++        Require(element.ValueKind == JsonValueKind.Object, "bad_request");
++        var unseen = new HashSet<string>(names, StringComparer.Ordinal);
++        foreach (var property in element.EnumerateObject()) { Require(unseen.Remove(property.Name), "bad_request"); }
++        Require(unseen.Count == 0, "bad_request");
++    }
++
++    private static void Require(bool condition, string code)
++    {
++        if (!condition) { throw new Refusal(code); }
++    }
++
++    private static void WriteEnvelope(Utf8JsonWriter writer, string? operation, bool? autoSetFocus, string outcome, string? error)
++    {
++        writer.WriteStartObject();
++        writer.WriteNumber("schemaVersion", 1);
++        writer.WriteNumber("contractVersion", 1);
++        writer.WriteString("providerBuild", Build);
++        writer.WriteString("upstreamCommit", Commit);
++        if (autoSetFocus is bool setting) { writer.WriteBoolean("autoSetFocus", setting); }
++        else { writer.WriteNull("autoSetFocus"); }
++        writer.WriteString("operation", operation);
++        writer.WriteString("outcome", outcome);
++        writer.WriteString("error", error);
++    }
++
++    private static void WriteRoot(Utf8JsonWriter writer, Root root)
++    {
++        writer.WriteStartObject();
++        writer.WriteString("hwnd", root.Hwnd);
++        writer.WriteNumber("pid", root.Pid);
++        writer.WriteString("processStartTimeTicks", root.ProcessStartTimeTicks);
++        writer.WriteString("className", root.ClassName);
++        WriteRuntimeId(writer, root.RuntimeId);
++        writer.WriteEndObject();
++    }
++
++    private static void WriteControl(Utf8JsonWriter writer, Control control)
++    {
++        writer.WriteStartObject();
++        writer.WriteString("hwnd", control.Hwnd);
++        writer.WriteNumber("pid", control.Pid);
++        writer.WriteString("nativeClassName", control.NativeClassName);
++        WriteRuntimeId(writer, control.RuntimeId);
++        writer.WriteString("name", control.Name);
++        writer.WriteString("automationId", control.AutomationId);
++        writer.WriteString("className", control.ClassName);
++        writer.WriteString("frameworkId", control.FrameworkId);
++        writer.WriteNumber("controlType", control.ControlType);
++        writer.WriteStartObject("bounds");
++        writer.WriteNumber("left", control.Bounds.Left);
++        writer.WriteNumber("top", control.Bounds.Top);
++        writer.WriteNumber("width", control.Bounds.Width);
++        writer.WriteNumber("height", control.Bounds.Height);
++        writer.WriteEndObject();
++        writer.WriteBoolean("enabled", control.Enabled);
++        writer.WriteBoolean("offscreen", control.Offscreen);
++        writer.WriteBoolean("password", control.Password);
++        writer.WriteBoolean("invokePattern", control.InvokePattern);
++        writer.WriteBoolean("valuePattern", control.ValuePattern);
++        if (control.ValueReadOnly is bool readOnly) { writer.WriteBoolean("valueReadOnly", readOnly); }
++        else { writer.WriteNull("valueReadOnly"); }
++        writer.WriteEndObject();
++    }
++
++    private static void WriteRuntimeId(Utf8JsonWriter writer, int[] runtimeId)
++    {
++        writer.WriteStartArray("runtimeId");
++        foreach (var value in runtimeId) { writer.WriteNumberValue(value); }
++        writer.WriteEndArray();
++    }
++}

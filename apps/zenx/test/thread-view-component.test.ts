@@ -255,6 +255,113 @@ test("context ring opens an accessible popover before its compact action runs", 
   });
 });
 
+test("failed turns show a concise banner with expandable detail, retry count and diagnostics entry", async () => {
+  await withDom(async (root) => {
+    const longDetail = `provider detail ${"x".repeat(500)}`;
+    const failureItem: CanonicalItem = {
+      id: "failure-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: new Date(11_000).toISOString(),
+      type: "failure",
+      code: "runtime_error",
+      message: `OpenAI-compatible model request failed with HTTP 400: ${longDetail}\nsecond line of provider detail`,
+      retried: 2,
+      diagnosticId: "diag-1",
+    };
+    const failedTurn: Turn = {
+      ...turnWithItems("failed", []),
+      error: {
+        message: failureItem.message,
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    };
+    const view: Thread = {
+      ...thread([failedTurn]),
+      canonicalItems: [failureItem],
+    };
+    let openedFolders = 0;
+    (window as unknown as { zenx: unknown }).zenx = {
+      settings: {
+        openDiagnosticsFolder: async (source?: string) => {
+          assert.equal(source, "model");
+          openedFolders += 1;
+          throw new Error("folder unavailable");
+        },
+      },
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: view,
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+
+    const banner = requiredElement(".turn-outcome");
+    const initialText = banner.textContent ?? "";
+    assert.match(initialText, /HTTP 400: provider detail/u);
+    assert.match(initialText, /Auto-retried 2 times/u);
+    assert(!initialText.includes("second line of provider detail"));
+
+    const buttons = [
+      ...banner.querySelectorAll<HTMLButtonElement>(
+        ".turn-outcome-actions .quiet-button",
+      ),
+    ];
+    assert.equal(buttons.length, 2);
+    const detailsToggle = buttons[0]!;
+    assert.equal(detailsToggle.getAttribute("aria-expanded"), "false");
+    await act(async () => detailsToggle.click());
+    assert.equal(detailsToggle.getAttribute("aria-expanded"), "true");
+    assert.match(banner.textContent ?? "", /second line of provider detail/u);
+    assert.match(banner.textContent ?? "", /Diagnostic ID: diag-1/u);
+
+    await act(async () => buttons[1]!.click());
+    assert.equal(openedFolders, 1);
+    assert.match(
+      banner.textContent ?? "",
+      /Could not open the model diagnostics folder/u,
+    );
+  });
+});
+
+test("a 241-character failure remains fully accessible through Details", async () => {
+  await withDom(async (root) => {
+    const message = "x".repeat(240) + "Z";
+    const failedTurn: Turn = {
+      ...turnWithItems("failed", []),
+      error: { message, codexErrorInfo: null, additionalDetails: null },
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: thread([failedTurn]),
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    const toggle = requiredButton(".turn-outcome-actions button");
+    await act(async () => toggle.click());
+    assert.match(
+      requiredElement(".turn-outcome-error").textContent ?? "",
+      /Z$/u,
+    );
+  });
+});
+
 test("context pressure above the configured window keeps the real percent in its label", () => {
   const html = renderToStaticMarkup(
     createElement(ContextUsageIndicator, {
@@ -274,7 +381,8 @@ test("context pressure above the configured window keeps the real percent in its
   assert.match(html, /stroke-dasharray="1 1"/u);
 });
 
-test("context hover remains open across a real gap corridor above and below the ring, then closes outside or on Escape", async () => {
+test("context hover remains open across a real gap corridor above and below the ring, then closes outside or on Escape", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   for (const placement of ["above", "below"] as const) {
     await withDom(async (root) => {
       const anchorTop = placement === "above" ? 300 : 4;
@@ -342,6 +450,10 @@ test("context hover remains open across a real gap corridor above and below the 
           }),
         ),
       );
+      assert.ok(document.querySelector('[role="dialog"]'));
+      await act(async () => t.mock.timers.tick(199));
+      assert.ok(document.querySelector('[role="dialog"]'));
+      await act(async () => t.mock.timers.tick(1));
       assert.equal(document.querySelector('[role="dialog"]'), null);
       await act(async () => ring.focus());
       assert.ok(document.querySelector('[role="dialog"]'));
@@ -356,6 +468,77 @@ test("context hover remains open across a real gap corridor above and below the 
       assert.equal(document.querySelector('[role="dialog"]'), null);
     });
   }
+});
+
+test("context hover grace cancels on re-entry, preserves focused actions, and dismisses immediately", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await withDom(async (root) => {
+    let compactions = 0;
+    await act(async () =>
+      root.render(
+        createElement(ContextUsageIndicator, {
+          context: usageProjection().context,
+          onCompact: async () => {
+            compactions += 1;
+          },
+        }),
+      ),
+    );
+    const ring = requiredButton(".context-usage-trigger");
+    const enter = async (element: HTMLElement) =>
+      act(async () => {
+        element.dispatchEvent(
+          new window.MouseEvent("mouseover", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        );
+      });
+    const leave = async (element: HTMLElement) =>
+      act(async () => {
+        element.dispatchEvent(
+          new window.MouseEvent("mouseout", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        );
+      });
+    await enter(ring);
+    for (let i = 0; i < 3; i += 1) {
+      await leave(ring);
+      await act(async () => t.mock.timers.tick(150));
+      await enter(requiredElement<HTMLElement>(".context-usage-popover"));
+      await act(async () => t.mock.timers.tick(250));
+      assert.ok(document.querySelector('[role="dialog"]'));
+    }
+    const compact = requiredButton(".context-usage-compact");
+    await act(async () => compact.focus());
+    await leave(compact);
+    await act(async () => t.mock.timers.tick(250));
+    assert.ok(document.querySelector('[role="dialog"]'));
+    await act(async () => compact.click());
+    assert.equal(compactions, 1);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await leave(ring);
+    await act(async () =>
+      document.body.dispatchEvent(
+        new window.MouseEvent("mousedown", { bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await leave(ring);
+    await act(async () =>
+      ring.dispatchEvent(
+        new window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await act(async () => t.mock.timers.tick(250));
+    assert.ok(document.querySelector('[role="dialog"]'));
+  });
 });
 
 test("compaction progress is a transcript item and completed items reveal exact effective messages", async () => {
@@ -1943,7 +2126,7 @@ test("streaming append preserves an explicitly closed trace group", async () => 
   });
 });
 
-test("terminal transition folds intermediate trace before Turn history reopens", async () => {
+test("terminal transition folds Turn history without discarding explicit trace choices", async () => {
   await withDom(async (root) => {
     const items = [
       reasoningItem("reasoning-terminal", ["Mapped"], []),
@@ -1964,7 +2147,7 @@ test("terminal transition folds intermediate trace before Turn history reopens",
     await act(async () => requiredButton(".turn-toggle").click());
     assert.equal(
       requiredButton(".trace-toggle").getAttribute("aria-expanded"),
-      "false",
+      "true",
     );
   });
 });
@@ -2574,9 +2757,9 @@ test("failed turn opens received trace and preserves the error without a final a
     /Observed trace/u,
   );
   assert.equal(document.querySelector(".turn-final"), null);
-  assert.equal(
-    document.querySelector(".turn-outcome > p")?.textContent,
-    "invalid tool call id",
+  assert.match(
+    document.querySelector(".turn-outcome")?.textContent ?? "",
+    /invalid tool call id/u,
   );
 });
 
@@ -2794,7 +2977,7 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
       ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
       ["wait", "cancelled", "Cancelled"],
       ["wait", "timed_out", "Timed out"],
-      ["wait", "failed", "Failed"],
+      ["wait", "failed", "Ended"],
       ["wait", "completed", "Waited"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
@@ -3603,3 +3786,311 @@ function openSendOptions(): void {
     new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
   );
 }
+
+test("native Agent input displays its sender separately from human input, including queued messages", () => {
+  const sender = {
+    threadId: "worker-thread",
+    threadName: "Research worker",
+    turnId: "worker-turn",
+    toolCallId: "worker-tool",
+    callId: "provider-call",
+  };
+  const inbound: ThreadItem = {
+    type: "threadMessage",
+    id: "received",
+    clientId: "agent-input",
+    sender,
+    content: [{ type: "text", text: "Worker finding", text_elements: [] }],
+  };
+  const current = {
+    ...thread([turnWithItems("completed", [inbound])]),
+    canonicalItems: [
+      {
+        type: "thread_message_queued",
+        id: "queued-agent",
+        threadId: "thread",
+        clientId: "queued-agent-input",
+        createdAt: "2026-10-13T00:00:00.000Z",
+        sender,
+        input: [{ type: "text", text: "Next finding" }],
+        deliveryMode: "batch-next",
+        messageType: "follow_up",
+      },
+    ] as CanonicalItem[],
+    queuedMessages: [
+      {
+        id: "queued-agent",
+        clientId: "queued-agent-input",
+        text: "Next finding",
+        imageCount: 0,
+        sender,
+      },
+    ],
+  };
+  const html = renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: current,
+      onDraftChange: () => {},
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+      onEditQueued: async () => {
+        throw new Error("Agent editing must not be called");
+      },
+    }),
+  );
+  const dom = new JSDOM(html);
+  try {
+    const row = dom.window.document.querySelector(".thread-message-row");
+    assert.ok(row);
+    assert.match(
+      row.querySelector(".thread-message-sender")?.textContent ?? "",
+      /Research worker/,
+    );
+    assert.match(row.textContent ?? "", /Worker finding/);
+    assert.doesNotMatch(row.textContent ?? "", /worker-thread/);
+    assert.match(
+      row.querySelector(".thread-message-sender")?.getAttribute("title") ?? "",
+      /Research worker/,
+    );
+    assert.equal(dom.window.document.querySelector(".queue-row-edit"), null);
+    assert.ok(
+      dom.window.document.querySelectorAll(".thread-message-sender").length >=
+        2,
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("remote sender remains visibly remote without exposing raw IDs in the message label", async () => {
+  const { FleetHistory } = await import("../src/renderer/src/FleetHistory.js");
+  const local = {
+    threadId: "uuid-source",
+    threadName: "Research worker",
+    turnId: "turn",
+    toolCallId: "tool",
+    callId: "call",
+  };
+  const remote = {
+    threadId: "uuid-source",
+    threadName: "Research worker",
+    deviceId: "uuid-peer",
+    toolCallId: "tool",
+    callId: "call",
+  };
+  const inbound = (sender: typeof local | typeof remote): ThreadItem => ({
+    type: "threadMessage",
+    id: "inbound",
+    clientId: "client",
+    sender,
+    content: [{ type: "text", text: "finding", text_elements: [] }],
+  });
+  const html = renderToStaticMarkup(
+    createElement(ThreadView, {
+      approvals: [],
+      composer: emptyComposerState(),
+      thread: {
+        ...thread([
+          turnWithItems("completed", [inbound(local), inbound(remote)]),
+        ]),
+        queuedMessages: [
+          {
+            id: "pending",
+            clientId: "queued",
+            sender: remote,
+            text: "pending",
+            imageCount: 0,
+          },
+        ],
+      },
+      onDraftChange: () => {},
+      onInterrupt: noop,
+      onRespondToApproval: noop,
+      onSubmit: noop,
+    }),
+  );
+  const dom = new JSDOM(html);
+  try {
+    const labels = [
+      ...dom.window.document.querySelectorAll(".thread-message-sender"),
+    ];
+    assert.ok(labels.some((label) => label.textContent?.includes("Remote:")));
+    assert.equal(
+      labels.filter((label) => label.textContent?.includes("Remote:")).length,
+      2,
+    );
+    assert.ok(labels.every((label) => !label.textContent?.includes("uuid-")));
+    assert.ok(
+      labels
+        .filter((label) => label.textContent?.includes("Remote:"))
+        .every((label) =>
+          label.classList.contains("message-source-link")
+            ? label.getAttribute("title")?.includes("verified return route")
+            : label.getAttribute("title")?.includes("peer-reported") &&
+              label.getAttribute("title")?.includes("uuid-peer"),
+        ),
+    );
+  } finally {
+    dom.window.close();
+  }
+  const renderFleet = (sender: typeof local | typeof remote) =>
+    renderToStaticMarkup(
+      createElement(FleetHistory, {
+        value: {
+          items: [
+            { id: "message", type: "thread_message", text: "context", sender },
+          ],
+        },
+      }),
+    );
+  const localHtml = renderFleet(local),
+    remoteHtml = renderFleet(remote);
+  assert.notEqual(localHtml, remoteHtml);
+  assert.match(remoteHtml, /Remote: Research worker/);
+  assert.match(remoteHtml, /peer-reported/);
+});
+
+test("singleton activity highlight follows actual receipt and turn lifetime", () => {
+  const base = commandItem("activity-call", "sleep 2");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  for (const turnStatus of [
+    "inProgress",
+    "completed",
+    "failed",
+    "interrupted",
+  ] as const) {
+    for (const phase of [
+      "running",
+      "completed",
+      "failed",
+      "cancelled",
+      "cancel_requested",
+      "cancellation_unconfirmed",
+      "queued",
+    ] as const) {
+      const html = renderTurns([
+        turnWithItems(turnStatus, [
+          {
+            ...base,
+            toolName: "shell",
+            contentType: "application/vnd.zen.tool-task+json",
+            structuredContent: { task_id: "activity-task", status: phase },
+          },
+        ]),
+      ]);
+      const dom = new JSDOM(html);
+      assert.equal(
+        dom.window.document
+          .querySelector(".trace-singleton .activity-text")
+          ?.getAttribute("data-active") === "true",
+        turnStatus === "inProgress" && phase === "running",
+        `${turnStatus}/${phase}`,
+      );
+      dom.window.close();
+    }
+  }
+});
+
+test("tool results use neutral ended labels without failure or nonzero rollups", () => {
+  const base = commandItem("shell-nonzero", "grep absent file");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  const shell = {
+    ...base,
+    toolName: "shell",
+    status: "failed" as const,
+    exitCode: 1,
+    aggregatedOutput: "",
+  };
+  const other = {
+    ...base,
+    id: "other-failure",
+    toolName: "other_tool",
+    status: "failed" as const,
+    exitCode: 1,
+  };
+  const dom = new JSDOM(
+    renderTurns([turnWithItems("completed", [shell, other])]),
+  );
+  try {
+    const doc = dom.window.document;
+    assert.equal(doc.querySelector(".trace-nonzero, .trace-failed"), null);
+    assert.doesNotMatch(
+      doc.querySelector(".trace-toggle")?.textContent ?? "",
+      /failed|nonzero/i,
+    );
+    const singleton = new JSDOM(
+      renderTurns([turnWithItems("inProgress", [shell])]),
+    );
+    try {
+      assert.match(
+        singleton.window.document.querySelector(".tool-status.ended")
+          ?.textContent ?? "",
+        /Ended/,
+      );
+      assert.equal(
+        singleton.window.document.querySelector(
+          ".tool-status.failed, .tool-status.shell-nonzero",
+        ),
+        null,
+      );
+    } finally {
+      singleton.window.close();
+    }
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("earlier shell rows inherit neutral settlement across separated trace groups", () => {
+  const base = commandItem("early-shell", "grep absent file");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  const early = {
+    ...base,
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "shared",
+      tool_name: "shell",
+      status: "running",
+      exit_code: null,
+    },
+  };
+  const final = {
+    ...early,
+    id: "final-wait",
+    toolName: "wait",
+    status: "failed" as const,
+    exitCode: 1,
+    structuredContent: {
+      ...early.structuredContent,
+      status: "failed",
+      exit_code: 1,
+    },
+  };
+  const separator: ThreadItem = {
+    type: "agentMessage",
+    id: "separator",
+    text: "Waiting for search.",
+    phase: "final_answer",
+    memoryCitation: null,
+  };
+  const dom = new JSDOM(
+    renderTurns([turnWithItems("inProgress", [early, separator, final])]),
+  );
+  try {
+    const marks = [...dom.window.document.querySelectorAll(".tool-status")];
+    assert.equal(marks.length, 2);
+    for (const mark of marks) {
+      assert.equal(mark.textContent, "Ended");
+      assert.equal(mark.className, "tool-status ended");
+    }
+  } finally {
+    dom.window.close();
+  }
+});

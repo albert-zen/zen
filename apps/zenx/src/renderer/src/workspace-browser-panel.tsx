@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { Icon } from "./icons.js";
+import { BrowserExternalOpen } from "./browser-external-open.js";
 import React, { useEffect, useId, useRef, useState } from "react";
 import type {
   WorkspaceBrowserCommand,
@@ -140,6 +141,29 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
       }
     }
   };
+  const agentAllowed = active.control === "agent";
+  const permissionDetail = [
+    i18n.t("panels:browserAgentPermission"),
+    i18n.t(
+      agentAllowed
+        ? "panels:browserPermissionEnabled"
+        : "panels:browserPermissionDisabled",
+    ),
+    i18n.t("panels:browserPermissionDetail"),
+    active.agentActionsInFlight > 0
+      ? i18n.t("panels:browserActionsInFlight", {
+          count: active.agentActionsInFlight,
+        })
+      : undefined,
+    active.agentActionOutcomeUnknown
+      ? i18n.t("panels:browserActionOutcomeUnknown")
+      : undefined,
+    agentAllowed && active.requiresFreshObservation
+      ? i18n.t("panels:browserFreshObservationRequired")
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return (
     <section
       className="workspace-browser-panel"
@@ -156,60 +180,6 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
         }
       }}
     >
-      <div className="workspace-browser-control">
-        <div
-          id={controlDescription}
-          role="status"
-          aria-live="polite"
-          tabIndex={0}
-          aria-label={i18n.t("panels:browserControlStatus")}
-        >
-          <strong>
-            {i18n.t(
-              active.control === "human"
-                ? "panels:browserHumanControl"
-                : "panels:browserAgentControl",
-            )}
-          </strong>
-          <p>
-            {i18n.t(
-              active.control === "human"
-                ? "panels:browserHumanControlDetail"
-                : "panels:browserAgentControlDetail",
-            )}
-          </p>
-          {active.agentActionsInFlight > 0 ? (
-            <p>
-              {i18n.t("panels:browserActionsInFlight", {
-                count: active.agentActionsInFlight,
-              })}
-            </p>
-          ) : null}
-          {active.agentActionOutcomeUnknown ? (
-            <p>{i18n.t("panels:browserActionOutcomeUnknown")}</p>
-          ) : null}
-          {active.control === "agent" && active.requiresFreshObservation ? (
-            <p>{i18n.t("panels:browserFreshObservationRequired")}</p>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          aria-describedby={controlDescription}
-          aria-busy={controlBusy}
-          disabled={!open || controlBusy}
-          onClick={() =>
-            void command(
-              active.control === "human" ? "return-control" : "take-control",
-            )
-          }
-        >
-          {i18n.t(
-            active.control === "human"
-              ? "panels:browserReturnControl"
-              : "panels:browserTakeControl",
-          )}
-        </button>
-      </div>
       {controlError ? (
         <p role="alert" className="browser-ui-error">
           {controlError}
@@ -257,7 +227,7 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
           >
             <Icon name="reload" />
           </button>
-          <div className="workspace-browser-location">
+          <div className="workspace-browser-location browser-url-field">
             <input
               ref={addressInput}
               aria-label={i18n.t("panels:browserAddress")}
@@ -265,15 +235,28 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
               value={address}
               onChange={(event) => setAddress(event.target.value)}
             />
-            <button
-              type="submit"
-              aria-label={i18n.t("panels:go")}
-              title={i18n.t("panels:go")}
-              disabled={busy}
-            >
-              <Icon name="arrow-right" />
-            </button>
+            <BrowserExternalOpen
+              url={active.url}
+              disabled={!open || busy || active.loading}
+            />
           </div>
+          <button
+            type="button"
+            role="switch"
+            className="plugin-switch browser-permission-switch"
+            aria-label={i18n.t("panels:browserAgentPermission")}
+            aria-checked={agentAllowed}
+            aria-describedby={controlDescription}
+            aria-busy={controlBusy}
+            title={permissionDetail}
+            disabled={!open || controlBusy}
+            onClick={() =>
+              void command(agentAllowed ? "take-control" : "return-control")
+            }
+          />
+          <span id={controlDescription} className="sr-only">
+            {permissionDetail}
+          </span>
         </form>
         {active.error ? (
           <p role="alert" className="browser-ui-error">

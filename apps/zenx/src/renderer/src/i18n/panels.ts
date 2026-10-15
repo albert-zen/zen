@@ -1,4 +1,36 @@
 export const en = {
+  findInFile: "Find in file",
+  previousMatch: "Previous match",
+  nextMatch: "Next match",
+  closeFileSearch: "Close find",
+  fileSearchNoMatches: "No matches",
+  fileSearchMatchCount: "{{current}} of {{total}}",
+  refreshFileList: "Refresh file list",
+  hideFileNavigation: "Hide file navigation",
+  showFileNavigation: "Show file navigation",
+  resizeFileNavigation: "Resize file navigation",
+  workspaceFileSearchScope: "Workspace files · ⌘ / Ctrl P",
+  searchWorkspaceFiles: "Search workspace files",
+  searchFilesByNameOrPath: "Find files…",
+  clearFileSearch: "Clear file search",
+  workspaceSearchResults: "Workspace results",
+  collapseFileFolders: "Collapse folders",
+  searchingWorkspaceFiles: "Searching workspace…",
+  noMatchingWorkspaceFiles:
+    "No matching files. Try another name or a relative path.",
+  fileTreeTruncated:
+    "Some files are hidden by the display limit. Collapse folders or search by path.",
+  workspaceFileSearchHint:
+    "Search all workspace folders. Git metadata, common dependency folders and symlinks are excluded from search.",
+  largeFileHighlightingDisabled:
+    "Large file: syntax highlighting is disabled to keep editing responsive.",
+  openEnteredFilePath: "Open entered path",
+
+  unreadMessages: "{{count}} unread messages",
+  wakeupDelivery: "This Trigger’s message delivery",
+  roomMessageDelivery: "This Room’s message delivery",
+  wakeupSteer: "Steer active work (default)",
+  wakeupQueue: "Queue for the next Turn",
   shellTitle: "Terminal",
   shellChooser: "Manage shared Shell sessions and open your own terminal",
   shellLocalHost: "This thread · This device",
@@ -43,7 +75,7 @@ export const en = {
   shellStatus_queued: "Queued",
   shellStatus_running: "Running",
   shellStatus_completed: "Exited",
-  shellStatus_failed: "Failed",
+  shellStatus_failed: "Ended",
   shellStatus_timed_out: "Timed out",
   shellStatus_cancel_requested: "Stopping…",
   shellStatus_cancellation_unconfirmed: "Stop unconfirmed",
@@ -89,6 +121,11 @@ export const en = {
   imWorkspaceDescription:
     "New conversations and PAW lists in IM use this directory.",
   imConnectionConfiguration: "Connection configuration",
+  imInputContinuation: "Ordinary IM input",
+  imInputContinuationSteer: "Soft steer (default)",
+  imInputContinuationQueue: "Queue for the next turn",
+  imInputContinuationDescription:
+    "Independent from Composer, Room and Trigger settings. Saving takes effect after reconnecting and does not change already accepted input.",
   imPrivatePathNotice:
     "Use absolute paths and your own IMZen-format configuration. Enter only paths here; set credential values in the private local file.",
   imPreparationDoesNotConnect:
@@ -151,7 +188,7 @@ export const en = {
   imClearCredential: "Clear {{field}}",
   imEnabledChannels: "Enabled channels: {{channels}}",
   pawWorkingConversationDisclosure:
-    "PAW creates its own working conversation in your Project. You can also choose an existing conversation. Creating PAW doesn't run the model; new messages wake it up.",
+    "PAW creates its own working conversation in your Project. You can also choose an existing conversation. Creating and saying hello runs the configured model for its welcome; your later messages continue the conversation.",
   pawNewWorkingConversation: "Create a new conversation",
   pawExistingWorkingConversation: "Use an existing conversation",
   pawExistingConversation: "Existing conversation",
@@ -181,7 +218,43 @@ export const en = {
   pawDelegateWork: "Delegate work",
   imReadinessChanged:
     "IM settings changed after readiness was reviewed. Check readiness, confirm other bot consumers are stopped, then Connect again.",
-  mentionAgentForReply: "@mention an agent to request a reply",
+  mentionAgentForReply: "Type @ to choose a room member",
+  roomRepliesUnavailableCount_one:
+    "Automatic replies are off for {{count}} member",
+  roomRepliesUnavailableCount_other:
+    "Automatic replies are off for {{count}} members",
+  roomViewReplySettings: "View settings",
+  roomRepliesUnavailableHelp:
+    "Replies may be unconfigured, paused, or disabled for this Host. Review a member's settings to see its current setup. Viewing settings does not enable replies or replay earlier messages.",
+  roomMemberReplySettings: "Reply settings for @{{member}}",
+  roomSourceNotRecorded: "Source not recorded",
+  roomUnknownSender: "Unknown member",
+  roomMessageActions: "Message actions",
+  roomDelivered: "Delivered",
+  roomReadCount_one: "Read by {{count}}",
+  roomReadCount_other: "Read by {{count}}",
+  roomTechnicalDetails: "Technical details",
+  roomReactionSummary: "{{emoji}} · {{count}} · {{names}}",
+  roomRemoveReaction: "Remove {{emoji}} reaction",
+  roomUnnamedSender: "Unnamed conversation",
+  roomSenderProfile: "About {{name}}",
+  roomOpenSourceConversation: "Open source conversation",
+  roomSourceNotRecordedHelp:
+    "The source conversation was not saved with this message.",
+  roomSourceThread: "Thread · {{name}}",
+  roomSourceThreadHelp:
+    "Open the recorded source conversation: {{id}}. Its displayed name is current.",
+  roomSourcePaw: "Linked PAW · {{name}}",
+  roomSourcePawHelp:
+    "Current PAW binding for this source conversation; it does not change the recorded message author.",
+  roomSourcePawCount_one: "{{count}} linked PAW",
+  roomSourcePawCount_other: "{{count}} linked PAWs",
+  scrollForEarlierMessages: "Scroll up for earlier messages",
+  earliestRetainedMessages: "Start of retained history",
+  retryEarlierMessages: "Retry earlier messages",
+  roomHistoryChangedRetry:
+    "New messages arrived while loading history. Try again.",
+
   roomSettingsTitle: "{{name}} settings",
   messageRole: "Message role: {{role}}",
   sidePanelFor: "Side panel for {{title}}",
@@ -239,7 +312,8 @@ export const en = {
   chooseARoomMember: "Choose a Room member",
   once: "Once",
   threadTriggers: "Thread triggers",
-  automations: "Automations",
+  automations: "Triggers",
+  triggerPluginDescription: "Schedule and inspect triggers.",
   anEarlierThreadCreationDidNotReturn:
     "An earlier Thread creation did not return a confirmed outcome. Inspect Threads before retrying; leaving its form did not cancel the Host request.",
   anEarlierTriggerSaveReturnedAnUncertain:
@@ -355,6 +429,49 @@ export const en = {
     "Replies paused. Messages are saved only; resuming does not replay them.",
   sending2: "Sending…",
   send: "Send",
+  manageNamedConversation: "Manage {{name}}",
+  renamePaw: "Rename PAW",
+  openPawWorkspace: "Open workspace",
+  setUpPaw: "Set up your PAW",
+  meetYourPaw: "A personal agent, just for you",
+  pawWelcomeDescription:
+    "Start a conversation, then choose a name and way of working together.",
+  pawLater: "Later",
+  pawAdvancedSetup: "Advanced setup",
+  pawOpenInstructions: "Open workspace AGENTS.md",
+  pawInstructionsBoundary:
+    "This edits the existing AGENTS.md inside this working directory, using the shared file editor and its save/conflict checks. Core reads repository-root AGENTS.md when a new Thread first receives input; if this directory is below that root, use a root-directory conversation to manage it. Missing files are not created automatically.",
+  pawIntroductionPreview: "PAW welcome",
+  pawStartTitle: "Meet your PAW",
+  pawStartHelp:
+    "Create your PAW and it will welcome you. You can choose its name together or start working right away.",
+  pawCreateAndGreet: "Create and say hello",
+  pawIntroductionRequest:
+    "Your PAW will introduce itself and ask what you’d like to call it. This runs your configured model.",
+  pawIntroductionFailed:
+    "Your PAW was created, but its introduction could not be confirmed. Check this conversation's delivery before retrying.",
+  pawEmptyChat:
+    "Your PAW is ready. Ask for an introduction, or just send a message to start working. You can change its name and work instructions later from settings.",
+  pawStartIntroduction: "Start introduction",
+  pawCancelWelcome: "Cancel welcome",
+  pawWelcomeAlreadyStarted:
+    "The PAW welcome has already started; cancelling this receipt cannot stop it.",
+  pawWelcomeStarting: "Your PAW is getting ready to say hello…",
+  pawWelcomeNoMessage:
+    "The welcome has no confirmed reply. You can check the working conversation, or send your own message here.",
+  pawWorkInstructions: "Working directory & instructions",
+  pawWorkInstructionsHelp:
+    "Open the working conversation to inspect its directory and existing AGENTS.md. File edits keep the same workspace permissions; renaming your PAW does not move the directory.",
+  pawNameStep: "What should we call your PAW?",
+  pawNameHelp:
+    "This is how your personal agent appears in conversations. You can change it anytime from its sidebar menu.",
+  pawNext: "Continue",
+  pawBack: "Back",
+  pawCapabilities: "Capabilities & setup details",
+  pawSetupStep: "Choose a place to work",
+  pawSetupHelp:
+    "Review the project and existing settings before creating your PAW. Nothing runs until you send a message.",
+  pawRetrySetup: "Retry setup checks",
   createPaw: "Create PAW",
   createRoom: "Create Room",
   newPawConversation: "New PAW conversation",
@@ -431,6 +548,8 @@ export const en = {
   browseASharedPageWithTheAgent: "Browse a shared page with the agent",
   observeTheAgentSDesktopActivity: "Observe the agent’s desktop activity",
   inspectConnectedBrowserActivity: "Inspect connected browser activity",
+  subagentsWorkspaceDescription: "View delegated work and side chats",
+  triggersWorkspaceDescription: "Set up and inspect conversation triggers",
   openConversationFullScreen: "Open conversation full screen",
   triggerUnavailableInThisAssistantContext:
     "Trigger unavailable in this assistant context",
@@ -509,17 +628,15 @@ export const en = {
   image: "Image",
   toolResult: "Tool result",
   browserWorkspace: "Browser workspace",
-  browserControlStatus: "Browser control status",
-  browserTakeControl: "Take control",
-  browserReturnControl: "Return to Agent",
-  browserAgentControl: "Agent control enabled",
-  browserHumanControl: "You control this tab",
-  browserAgentControlDetail:
-    "Take control to block new Agent actions on this tab. You can still browse manually.",
-  browserHumanControlDetail:
-    "New Agent actions are blocked on this tab. Returning control does not replay actions or start a Turn.",
+  browserAgentPermission: "Allow Agent to operate this tab",
+  browserPermissionEnabled:
+    "Allowed. Agent may operate this tab; this does not mean it is currently running.",
+  browserPermissionDisabled:
+    "Not allowed. New Agent actions on this tab are blocked.",
+  browserPermissionDetail:
+    "You can always browse and sign in manually. Turn this permission off to block new Agent actions, or back on to allow them. Enabling it does not start a task, continue a conversation, or replay earlier actions. Actions already dispatched may still finish.",
   browserActionsInFlight:
-    "{{count}} Agent action(s) already dispatched may still finish. Taking control does not cancel them.",
+    "{{count}} Agent action(s) already dispatched may still finish. Changing this permission does not cancel them.",
   browserActionOutcomeUnknown:
     "An earlier Agent action’s outcome is uncertain. Inspect the page before repeating it.",
   browserFreshObservationRequired:
@@ -528,6 +645,9 @@ export const en = {
   forward: "Forward",
   reloadPage: "Reload page",
   browserAddress: "Browser address",
+  openCurrentPageExternally: "Open current page in external browser",
+  openCurrentPageFailed:
+    "Could not open the current page. Check that it is still connected, then try again.",
   enterAUrl: "Enter a URL",
   go: "Go",
   interactiveWebPage: "Interactive web page",
@@ -590,7 +710,7 @@ export const en = {
     "Closing the window keeps the connection; quitting ZenX or disabling the plugin disconnects it.",
   sleepOrHostExitPausesExecutionMissed:
     "Sleep or Host exit pauses execution; missed timers fire at most once when Host resumes. Unknown deliveries are not retried automatically. Pausing or deleting a trigger leaves history intact.",
-  allAutomations: "All automations",
+  allAutomations: "All triggers",
   backToRoom: "Back to Room",
   repliesTo: "Replies to @",
   in: "in #",
@@ -660,17 +780,17 @@ export const en = {
   directThreadMessagesStayInTheThread:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without duplicating replies.",
   creatingAPawEnablesMessageWakeupsOnly:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Automations when needed; they can consume model quota. Reading this workspace does not start a run.",
+    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start a run.",
   membersShareThisConversationChooseAMember:
     "members share this conversation. Choose a member above to use its files, browser and other thread tools.",
-  automationStatusUnavailable: "Automation status unavailable:",
+  automationStatusUnavailable: "Trigger status unavailable:",
   refresh: "Refresh",
   assistantWrittenPlansAndNotesLinkedExecution:
     "Assistant-written plans and notes. Linked execution status is shown separately.",
   noMattersRecordedYetAskYourPaw:
     "No matters recorded yet. Ask your PAW to track something.",
   next: "· next",
-  configureAutomations: "Configure automations",
+  configureAutomations: "Configure triggers",
   otherDelegatedWorkAppearsUnderItsMatter:
     "Other delegated work appears under its matter with its device and workspace identity.",
   resourcesFrom: "Resources from",
@@ -710,7 +830,7 @@ export const en = {
   pawThreadRoomNote:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without copying every message between them.",
   pawWakeupNote:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Automations when needed; they can consume model quota. Reading this workspace does not start agent work.",
+    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start agent work.",
   mattersDescription:
     "Assistant-written plans and notes. Linked execution status is shown separately.",
   delegatedWorkDescription:
@@ -797,6 +917,35 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  findInFile: "在文件中查找",
+  previousMatch: "上一个匹配",
+  nextMatch: "下一个匹配",
+  closeFileSearch: "关闭查找",
+  fileSearchNoMatches: "无匹配结果",
+  fileSearchMatchCount: "{{current}} / {{total}}",
+  refreshFileList: "刷新文件列表",
+  hideFileNavigation: "收起文件导航",
+  showFileNavigation: "显示文件导航",
+  resizeFileNavigation: "调整文件导航大小",
+  workspaceFileSearchScope: "工作区文件 · ⌘ / Ctrl P",
+  searchWorkspaceFiles: "搜索工作区文件",
+  searchFilesByNameOrPath: "搜索文件…",
+  clearFileSearch: "清除文件搜索",
+  workspaceSearchResults: "工作区搜索结果",
+  collapseFileFolders: "折叠文件夹",
+  searchingWorkspaceFiles: "正在搜索工作区…",
+  noMatchingWorkspaceFiles: "未找到匹配文件，请尝试其他名称或相对路径。",
+  fileTreeTruncated: "部分文件因显示数量限制被隐藏，请折叠文件夹或按路径搜索。",
+  workspaceFileSearchHint:
+    "搜索整个工作区。搜索会跳过 Git 元数据、常见依赖目录和符号链接。",
+  largeFileHighlightingDisabled: "文件较大，已关闭语法高亮以保持编辑流畅。",
+  openEnteredFilePath: "打开输入的路径",
+
+  unreadMessages: "{{count}} 条未读消息",
+  wakeupDelivery: "此 触发器 的消息投递",
+  roomMessageDelivery: "此聊天室的消息投递",
+  wakeupSteer: "补充到当前工作（默认）",
+  wakeupQueue: "排队到下一轮",
   shellTitle: "终端",
   shellChooser: "管理共享 Shell 会话，或创建自己的交互终端",
   shellLocalHost: "当前线程 · 本机",
@@ -840,7 +989,7 @@ export const zhCN = {
   shellStatus_queued: "等待中",
   shellStatus_running: "运行中",
   shellStatus_completed: "已退出",
-  shellStatus_failed: "失败",
+  shellStatus_failed: "已结束",
   shellStatus_timed_out: "已超时",
   shellStatus_cancel_requested: "正在停止…",
   shellStatus_cancellation_unconfirmed: "停止未确认",
@@ -882,6 +1031,11 @@ export const zhCN = {
     "本机进程状态不能证明 QQ 等渠道已完成真实消息投递",
   imWorkspaceDescription: "IM 中的新会话与 PAW 列表使用这个目录。",
   imConnectionConfiguration: "连接配置",
+  imInputContinuation: "普通 IM 输入",
+  imInputContinuationSteer: "柔性引导（默认）",
+  imInputContinuationQueue: "排队到下一轮",
+  imInputContinuationDescription:
+    "独立于输入框、Room 和 触发器 设置。保存后重新连接生效，已接收的消息不受影响。",
   imPrivatePathNotice:
     "使用绝对路径和自己的 IMZen格式配置。这里只填写路径；凭证值在本机私有文件中设置。",
   imPreparationDoesNotConnect: "保存准备不会启动或重启连接",
@@ -939,7 +1093,7 @@ export const zhCN = {
   imClearCredential: "清除 {{field}}",
   imEnabledChannels: "启用的渠道：{{channels}}",
   pawWorkingConversationDisclosure:
-    "PAW 默认在项目中创建自己的工作会话，也可以选择已有会话。创建 PAW 不运行模型；新消息会唤醒它。",
+    "PAW 默认在项目中创建自己的工作会话，也可以选择已有会话。创建并打招呼会调用已配置的模型，之后可直接发消息继续对话。",
   pawNewWorkingConversation: "创建新会话",
   pawExistingWorkingConversation: "使用已有会话",
   pawExistingConversation: "已有会话",
@@ -967,7 +1121,37 @@ export const zhCN = {
   pawDelegateWork: "委派工作",
   imReadinessChanged:
     "检查准备情况后，IM 设置发生了变化。请重新检查准备情况，确认其他机器人消费进程已停止，再连接。",
-  mentionAgentForReply: "@提及 Agent 来请求回复",
+  mentionAgentForReply: "输入 @ 选择房间成员",
+  roomRepliesUnavailableCount_one: "{{count}} 位成员的自动回复未启用",
+  roomRepliesUnavailableCount_other: "{{count}} 位成员的自动回复未启用",
+  roomViewReplySettings: "查看设置",
+  roomRepliesUnavailableHelp:
+    "可能尚未设置回复、已暂停，或此主机已关闭自动回复。查看成员的设置可确认当前配置；查看不会启用回复，也不会重放此前的消息。",
+  roomMemberReplySettings: "@{{member}} 的回复设置",
+  roomSourceNotRecorded: "来源未记录",
+  roomUnknownSender: "未知成员",
+  roomMessageActions: "消息操作",
+  roomDelivered: "已送达",
+  roomReadCount_one: "{{count}} 人已读",
+  roomReadCount_other: "{{count}} 人已读",
+  roomTechnicalDetails: "技术详情",
+  roomReactionSummary: "{{emoji}} · {{count}} · {{names}}",
+  roomRemoveReaction: "移除 {{emoji}} 表情",
+  roomUnnamedSender: "未命名会话",
+  roomSenderProfile: "关于 {{name}}",
+  roomOpenSourceConversation: "打开来源会话",
+  roomSourceNotRecordedHelp: "这条消息未保存来源会话。",
+  roomSourceThread: "会话 · {{name}}",
+  roomSourceThreadHelp: "打开记录的来源会话：{{id}}。显示的是当前会话名称。",
+  roomSourcePaw: "关联 PAW · {{name}}",
+  roomSourcePawHelp: "来源会话当前关联的 PAW；不改变消息记录的作者身份。",
+  roomSourcePawCount_one: "关联 {{count}} 个 PAW",
+  roomSourcePawCount_other: "关联 {{count}} 个 PAW",
+  scrollForEarlierMessages: "向上滚动查看更早消息",
+  earliestRetainedMessages: "已到保留记录的开头",
+  retryEarlierMessages: "重试加载更早消息",
+  roomHistoryChangedRetry: "加载历史时有新消息到达，请重试。",
+
   roomSettingsTitle: "{{name}} 设置",
   messageRole: "消息角色：{{role}}",
   sidePanelFor: "{{title}} 的侧边面板",
@@ -1015,7 +1199,8 @@ export const zhCN = {
   chooseARoomMember: "选择房间成员",
   once: "一次",
   threadTriggers: "会话触发器",
-  automations: "自动化",
+  automations: "触发器",
+  triggerPluginDescription: "配置和查看触发器。",
   anEarlierThreadCreationDidNotReturn:
     "之前创建会话的结果尚未确认。重试前请检查会话列表；离开表单并未取消 Host 请求。",
   anEarlierTriggerSaveReturnedAnUncertain:
@@ -1121,6 +1306,45 @@ export const zhCN = {
     "回复已暂停。消息仅会保存；恢复后不会重放。",
   sending2: "发送中…",
   send: "发送",
+  manageNamedConversation: "管理 {{name}}",
+  renamePaw: "给 PAW 改名",
+  openPawWorkspace: "打开工作空间",
+  setUpPaw: "设置你的 PAW",
+  meetYourPaw: "你的个人 Agent",
+  pawWelcomeDescription: "先开始对话，再一起决定名字和工作方式。",
+  pawLater: "稍后再说",
+  pawAdvancedSetup: "高级设置",
+  pawOpenInstructions: "打开工作目录 AGENTS.md",
+  pawInstructionsBoundary:
+    "这里通过共享文件编辑器修改当前工作目录内已有的 AGENTS.md，沿用保存与冲突检查。Core 在新会话首次收到输入时读取仓库根目录 AGENTS.md；如果当前目录位于仓库内层，请在根目录会话中管理。不会自动创建缺失文件。",
+  pawIntroductionPreview: "PAW 欢迎",
+  pawStartTitle: "认识你的 PAW",
+  pawStartHelp:
+    "创建后，PAW 会主动和你打招呼。你们可以一起决定名字，也可以直接开始工作。",
+  pawCreateAndGreet: "创建并打个招呼",
+  pawIntroductionRequest:
+    "PAW 会主动介绍自己，问问你想怎么称呼它。这会调用已配置的模型。",
+  pawIntroductionFailed:
+    "PAW 已创建，但尚无法确认欢迎请求的结果。请先检查本对话的投递状态，再重试。",
+  pawEmptyChat:
+    "PAW 已就绪。可以让它介绍自己，也可以直接发消息开始工作。以后仍可从设置修改名字和工作说明。",
+  pawStartIntroduction: "开始介绍",
+  pawCancelWelcome: "取消欢迎",
+  pawWelcomeAlreadyStarted: "PAW 已开始欢迎，取消这条回执不能停止运行。",
+  pawWelcomeStarting: "PAW 正准备和你打招呼…",
+  pawWelcomeNoMessage:
+    "尚无已确认的欢迎回复。你可以查看工作会话，也可以直接在这里发消息。",
+  pawWorkInstructions: "工作目录与说明",
+  pawWorkInstructionsHelp:
+    "打开工作会话，查看目录与已有的 AGENTS.md。文件编辑仍遵循原有工作目录权限；给 PAW 改名不会移动目录。",
+  pawNameStep: "给你的 PAW 起个名字",
+  pawNameHelp: "这个名字会显示在对话中。以后可以从侧栏菜单随时修改。",
+  pawNext: "继续",
+  pawBack: "返回",
+  pawCapabilities: "能力与设置详情",
+  pawSetupStep: "选择工作位置",
+  pawSetupHelp: "创建前确认项目和已有设置。发送消息后才开始工作。",
+  pawRetrySetup: "重试准备检查",
   createPaw: "创建 PAW",
   createRoom: "创建房间",
   newPawConversation: "新建 PAW 会话",
@@ -1191,6 +1415,8 @@ export const zhCN = {
   browseASharedPageWithTheAgent: "与 Agent 一起浏览共享页面",
   observeTheAgentSDesktopActivity: "观察 Agent 的桌面活动",
   inspectConnectedBrowserActivity: "查看已连接浏览器的活动",
+  subagentsWorkspaceDescription: "查看委派任务与旁支会话",
+  triggersWorkspaceDescription: "设置和查看此会话的触发器",
   openConversationFullScreen: "全屏打开会话",
   triggerUnavailableInThisAssistantContext: "此助手上下文中的触发器不可用",
   threadUnavailableOrWorkspaceChanged: "会话不可用或工作区已变化",
@@ -1266,17 +1492,14 @@ export const zhCN = {
   image: "图片",
   toolResult: "工具结果",
   browserWorkspace: "浏览器工作区",
-  browserControlStatus: "浏览器控制状态",
-  browserTakeControl: "接管控制",
-  browserReturnControl: "交还 Agent",
-  browserAgentControl: "Agent 控制已启用",
-  browserHumanControl: "你正在控制此标签页",
-  browserAgentControlDetail:
-    "接管后会阻止 Agent 对此标签页发起新操作。你仍可手动浏览。",
-  browserHumanControlDetail:
-    "已阻止 Agent 对此标签页发起新操作。交还控制不会重放操作或启动 Turn。",
+  browserAgentPermission: "允许 Agent 操作此标签页",
+  browserPermissionEnabled:
+    "已允许。Agent 可以操作此标签页，不代表它正在运行。",
+  browserPermissionDisabled: "未允许。已阻止 Agent 对此标签页发起新操作。",
+  browserPermissionDetail:
+    "你始终可以手动浏览和登录。关闭后阻止 Agent 发起新操作，重新开启即可允许。开启不会启动任务、继续会话或重放之前的操作。已经发出的操作仍可能完成。",
   browserActionsInFlight:
-    "{{count}} 个已发出的 Agent 操作仍可能完成；接管控制不会取消它们。",
+    "{{count}} 个已发出的 Agent 操作仍可能完成；切换此权限不会取消它们。",
   browserActionOutcomeUnknown:
     "先前 Agent 操作的结果尚不确定。请先检查页面，再决定是否重复操作。",
   browserFreshObservationRequired:
@@ -1285,6 +1508,8 @@ export const zhCN = {
   forward: "前进",
   reloadPage: "重新加载页面",
   browserAddress: "浏览器地址",
+  openCurrentPageExternally: "在外部浏览器打开当前页面",
+  openCurrentPageFailed: "无法打开当前页面。请确认页面仍已连接，再重试。",
   enterAUrl: "输入网址",
   go: "前往",
   interactiveWebPage: "交互式网页",
@@ -1341,7 +1566,7 @@ export const zhCN = {
     "关闭窗口仍保持连接；退出 ZenX 或停用插件后断开。",
   sleepOrHostExitPausesExecutionMissed:
     "休眠或 Host 退出会暂停执行；Host 恢复后漏掉的定时器最多触发一次。未知投递不会自动重试。暂停或删除触发器不会删除历史。",
-  allAutomations: "所有自动化",
+  allAutomations: "所有触发器",
   backToRoom: "返回房间",
   repliesTo: "回复 @",
   in: "在 #",
@@ -1407,16 +1632,16 @@ export const zhCN = {
   directThreadMessagesStayInTheThread:
     "直接发送给会话的消息留在会话中。助手仅通过房间消息工具在此发言。此绑定使两个会话保持关联，而不会重复回复。",
   creatingAPawEnablesMessageWakeupsOnly:
-    "创建 PAW 只启用消息唤醒。需要时在自动化中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动运行。",
+    "创建 PAW 只启用消息唤醒。需要时在触发器中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动运行。",
   membersShareThisConversationChooseAMember:
     "名成员共享此会话。请在上方选择成员，以使用其文件、浏览器和其他会话工具。",
-  automationStatusUnavailable: "自动化状态不可用：",
+  automationStatusUnavailable: "触发器状态不可用：",
   refresh: "刷新",
   assistantWrittenPlansAndNotesLinkedExecution:
     "助手编写的计划与笔记。关联的执行状态会单独显示。",
   noMattersRecordedYetAskYourPaw: "尚无记录的事项。请让 PAW 跟进某件事。",
   next: "· 下次",
-  configureAutomations: "配置自动化",
+  configureAutomations: "配置触发器",
   otherDelegatedWorkAppearsUnderItsMatter:
     "其他委派工作显示在所属事项下，并标明设备和工作区身份。",
   resourcesFrom: "资源来自",
@@ -1455,7 +1680,7 @@ export const zhCN = {
   pawThreadRoomNote:
     "直接发送给会话的消息留在会话中。助手仅通过房间消息工具在此发言。此绑定使两个会话保持关联，而不会复制每条消息。",
   pawWakeupNote:
-    "创建 PAW 只启用消息唤醒。需要时在自动化中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动 Agent 工作。",
+    "创建 PAW 只启用消息唤醒。需要时在触发器中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动 Agent 工作。",
   mattersDescription: "助手编写的计划和笔记。关联的执行状态会单独显示。",
   delegatedWorkDescription:
     "其他委派工作显示在所属事项下，并标明设备和工作区身份。",

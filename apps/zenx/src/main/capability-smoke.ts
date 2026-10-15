@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { verifyForegroundActivityOverlay } from "./foreground-activity-smoke.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { access, writeFile } from "node:fs/promises";
@@ -80,6 +82,9 @@ void app.whenReady().then(async () => {
     }
     const port = await listen();
     await verifyElectronScrollCancellation(`http://127.0.0.1:${String(port)}/`);
+    await verifyForegroundActivityOverlay(
+      join(__dirname, "../preload/foreground-activity.cjs"),
+    );
     await computerBackend.prepareForegroundInput(new AbortController().signal);
     const cursorBefore = screen.getCursorScreenPoint();
     const foregroundBefore = await computerBackend.desktopContext();

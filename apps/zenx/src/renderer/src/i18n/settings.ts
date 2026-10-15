@@ -1,5 +1,8 @@
 // Settings UI copy. Keep keys stable across locales; product data and user content stay unchanged.
 export const en = {
+  "settingsView.importConversations": "Import conversations",
+  "settingsView.importConversationsHelp":
+    "Bring a Codex conversation into ZenX from a local rollout file.",
   "fleetConnection.verifyHostIdentity":
     "Check this Host ID directly on the other machine before pairing.",
   "fleetConnection.accessHelp": "About access & remote shell",
@@ -1290,6 +1293,9 @@ export const en = {
 } as const;
 
 export const zhCN: Record<keyof typeof en, string> = {
+  "settingsView.importConversations": "导入会话",
+  "settingsView.importConversationsHelp":
+    "从本地 rollout 文件将 Codex 会话导入 ZenX。",
   "fleetConnection.verifyHostIdentity":
     "配对前，请在另一台机器上直接核对这个主机 ID。",
   "fleetConnection.accessHelp": "访问权限与远程命令说明",

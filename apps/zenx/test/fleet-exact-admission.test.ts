@@ -241,6 +241,9 @@ test("exact-ID guidance retries a definite steer race without losing its archive
         "mode" in params &&
         "clientUserMessageId" in params
       ) {
+        // This case exercises explicit steer -> start. An omitted mode means
+        // default soft steering and must not silently satisfy that contract.
+        assert(params.mode !== undefined);
         modes.push(params.mode);
         identities.push(params.clientUserMessageId);
         if (params.mode === "steer") {

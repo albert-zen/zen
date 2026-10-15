@@ -7,6 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { windowsStrictUiaCapabilityManifest } from "../src/main/capabilities/windows-strict-uia-provider.js";
+import { windowsComputerCapabilityManifest } from "../src/main/capabilities/windows-computer-provider.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { ZenXTriggersCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
 import type { ZenXAutomationControlPort } from "../src/main/capabilities/automation-control-package.js";
@@ -139,6 +141,119 @@ test("updating an old bundled Computer profile uses the current resource and exp
   } finally {
     await service?.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("strict Windows Computer profile upgrades retain disablement and do not approve foreground control", async () => {
+  for (const disabled of [false, true]) {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-strict-profile-upgrade-"),
+    );
+    const resources = path.join(root, "resources");
+    const userDataDirectory = path.join(root, "profile");
+    const staging = path.join(root, "old-package");
+    const run = promisify(execFile);
+    let service!: ZenXCapabilityService;
+    try {
+      await copyPreparedFirstPartyPlugins(resources);
+      await mkdir(staging);
+      const current = path.join(
+        resources,
+        "plugins",
+        "zenx-computer-plugin-win32-strict-1.2.0.tgz",
+      );
+      const previous = path.join(
+        resources,
+        "plugins",
+        "zenx-computer-plugin-win32-1.1.5.tgz",
+      );
+      await run("tar", ["-xf", current, "-C", staging]);
+      const manifest = {
+        ...structuredClone(windowsComputerCapabilityManifest),
+        runtime: { type: "bundled", entry: "./dist/runtime.js" },
+      };
+      await writeFile(
+        path.join(staging, "package", "zenx.plugin.json"),
+        JSON.stringify(manifest),
+      );
+      const packagePath = path.join(staging, "package", "package.json");
+      const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
+      packageJson.version = "1.1.5";
+      await writeFile(packagePath, JSON.stringify(packageJson));
+      await run("tar", ["-czf", previous, "-C", staging, "package"]);
+      service = new ZenXCapabilityService({
+        userDataDirectory,
+        resourcesDirectory: resources,
+        pnpmCliPath: pnpmCli,
+        bundledProvidersOnly: true,
+        computerBackend: computerBackend(),
+        computerManifest: windowsStrictUiaCapabilityManifest,
+        allowForegroundRequired: false,
+        providerCatalogOptions: { platform: "win32" },
+        trustedProfileLoaders: {
+          computer: createDelegatingFirstPartyProfileLoader(() =>
+            service.computerProfilePackage(),
+          ),
+        },
+      });
+      await service.initialize();
+      await service.installBundledPluginPackage(previous, {
+        pluginId: "computer",
+        packageName: "@zenx/computer-plugin",
+      });
+      if (disabled) await service.setEnabled("computer", false);
+      await rm(previous);
+      await service.updatePluginPackage("computer");
+      const updated = service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === "computer");
+      assert.equal(updated?.version, "1.2.0");
+      assert.equal(updated?.enabled, !disabled);
+      assert.equal(
+        path.basename(updated?.profileSource?.packageSpec ?? ""),
+        path.basename(current),
+      );
+      assert.equal(
+        service
+          .hostSnapshot()
+          .definitions.some((tool) => tool.name === "computer_set_value"),
+        !disabled,
+      );
+      await assert.rejects(
+        service
+          .computerProfilePackage()
+          .invoke("computer_foreground_key_press", {
+            callId: "unchanged-consent",
+            name: "computer_foreground_key_press",
+            cwd: root,
+            arguments: { key: "enter" },
+            signal: new AbortController().signal,
+          }),
+        /Foreground computer control/iu,
+      );
+      const persisted = JSON.parse(
+        await readFile(
+          path.join(userDataDirectory, "capability-grants.json"),
+          "utf8",
+        ),
+      );
+      assert.equal(persisted.grants, undefined);
+      assert.deepEqual(persisted.disabled, disabled ? ["computer"] : []);
+      assert.equal(
+        persisted.packages.computer.manifest.provider.id,
+        "zenx-winapp-uia",
+      );
+      assert.equal(
+        persisted.packages.computer.manifest.permissions.some(
+          (permission: { id: string }) =>
+            permission.id === "computer.foreground.control",
+        ),
+        false,
+      );
+    } finally {
+      await service?.close();
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1025,7 +1140,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 resources,
                 "plugins",
                 platform === "win32"
-                  ? "zenx-computer-plugin-win32-1.1.3.tgz"
+                  ? "zenx-computer-plugin-win32-1.1.5.tgz"
                   : "zenx-computer-plugin-macos-1.0.2.tgz",
               ),
               { pluginId: "computer", packageName: "@zenx/computer-plugin" },
@@ -1055,7 +1170,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 reason:
                   platform === "linux"
                     ? "No computer provider is available for this platform"
-                    : "Packaged WinApp provider manifest trust anchor is missing",
+                    : "Strict UIA requires the verified Windows application bundle and compiled manifest trust anchor",
               },
               { id: "zenx-rooms", available: true, reason: undefined },
               {

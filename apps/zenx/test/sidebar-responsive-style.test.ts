@@ -3,22 +3,69 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { SIDEBAR_DEFAULT_WIDTH } from "../src/renderer/src/sidebar-width.js";
 
-test("narrow desktop Thread rows reserve the overflow menu column", async () => {
+test("Thread rows reserve factual status space and reveal actions over a surface fade", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
   );
-  const mediumStart = styles.indexOf("@media (max-width: 820px)");
-  const mobileStart = styles.indexOf("@media (max-width: 640px)");
-  assert.notEqual(mediumStart, -1);
-  assert.ok(mobileStart > mediumStart);
   assert.match(
-    styles.slice(mediumStart, mobileStart),
-    /\.thread-row\s*\{\s*padding: 10px 46px 10px 10px;/u,
+    styles,
+    /padding-inline-end: calc\(10px \+ var\(--thread-state-space, 0px\)\);/u,
   );
   assert.match(
-    styles.slice(mobileStart),
-    /\.thread-row\s*\{\s*padding-right: 52px;/u,
+    styles,
+    /background: linear-gradient\(\s*to right,\s*transparent,[^;]*var\(--thread-row-surface\) 32px\s*\);/u,
+  );
+  assert.match(styles, /@media \(hover: none\), \(pointer: coarse\)/u);
+  // Other controls have their own coarse-pointer blocks; inspect the block
+  // containing Thread actions rather than relying on its position in the file.
+  const touchStyles = [
+    ...styles.matchAll(
+      /@media \(hover: none\), \(pointer: coarse\)\s*\{(?:[^{}]|\{[^{}]*\})*\}/gu,
+    ),
+  ].find(([block]) => block.includes(".thread-menu-trigger"))?.[0];
+  assert.ok(touchStyles, "Thread actions retain their coarse-pointer rules");
+  assert.match(
+    touchStyles,
+    /\.thread-menu-trigger\s*\{[^}]*width: 44px;[^}]*height: 44px;[^}]*pointer-events: auto;/u,
+  );
+
+  assert.match(
+    styles,
+    /@media \(prefers-reduced-motion: reduce\)[^{]*\{\s*\.thread-running-spinner\s*\{[^}]*animation: none;/u,
+  );
+  assert.doesNotMatch(styles, /padding: 10px 46px|padding-right: 52px/u);
+});
+
+test("Thread status and actions share icon size and spacing with a full-height rounded fade", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.thread-status-rail\s*\{[^}]*inset-block: 0;[^}]*inset-inline-end: 0;[^}]*gap: 0;[^}]*border-radius: inherit;[^}]*border-start-start-radius: 32px 50%;[^}]*border-end-start-radius: 32px 50%;/u,
+  );
+  assert.doesNotMatch(
+    styles.match(/\.thread-status-rail\s*\{[^}]*\}/u)?.[0] ?? "",
+    /radius: 999px/u,
+    "oversized capsule radii must not flatten the opposite row corners",
+  );
+  assert.match(
+    styles,
+    /\.thread-status-slot\s*\{[^}]*flex: 0 0 28px;[^}]*width: 28px;[^}]*height: 28px;/u,
+  );
+  assert.match(
+    styles,
+    /\.thread-status-slot > svg,\s*\.thread-status-rail \.thread-menu-trigger > svg\s*\{[^}]*width: 16px;[^}]*height: 16px;/u,
+  );
+  assert.match(
+    styles,
+    /\.thread-status-rail\s+\.thread-menu-trigger\s*\{[^}]*width: 28px;/u,
+  );
+  assert.match(
+    styles,
+    /\.thread-status-rail \.thread-menu-trigger\s*\{[^}]*height: 28px;[^}]*border-radius: 50%;/u,
   );
 });
 
@@ -289,4 +336,17 @@ test("shell owns the sidebar width default before and after the resizer mounts",
   const defaultWidth = shell.match(/--sidebar-width:\s*(\d+)px;/u)?.[1];
   assert.equal(Number(defaultWidth), SIDEBAR_DEFAULT_WIDTH);
   assert.match(shell, /--sidebar-track:\s*var\(--sidebar-width\);/u);
+});
+
+test("Room unread numbers have explicit symmetric layout and zero inherited indentation", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/room-conversations.css", import.meta.url),
+    "utf8",
+  );
+  const badge = styles.match(/\.room-unread-count\s*\{[^}]*\}/u)?.[0] ?? "";
+  assert.match(badge, /display: inline-grid;/u);
+  assert.match(badge, /place-items: center;/u);
+  assert.match(badge, /text-align: center;/u);
+  assert.match(badge, /text-indent: 0;/u);
+  assert.match(badge, /line-height: 18px;/u);
 });

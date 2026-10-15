@@ -182,7 +182,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     const choose = (name: string) =>
       [
         ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types > button",
+          ".workspace-tab-types button",
         ),
       ].find((e) => e.querySelector("strong")?.textContent === name)!;
     await act(async () => choose("Attached browser").click());
@@ -201,7 +201,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     assert.ok(stopped > 0);
     await act(async () =>
       [
-        ...document.querySelectorAll<HTMLButtonElement>(".file-list button"),
+        ...document.querySelectorAll<HTMLButtonElement>('[role="treeitem"]'),
       ][0]!.click(),
     );
     assert.equal(
@@ -437,7 +437,7 @@ for (const throughHostSdk of [false, true]) {
       const choose = (name: string) =>
         [
           ...document.querySelectorAll<HTMLButtonElement>(
-            ".workspace-tab-types > button",
+            ".workspace-tab-types button",
           ),
         ].find(
           (element) => element.querySelector("strong")?.textContent === name,
@@ -478,7 +478,7 @@ for (const throughHostSdk of [false, true]) {
       );
       await act(async () => choose("File").click());
       await act(async () =>
-        document.querySelector<HTMLButtonElement>(".file-list button")!.click(),
+        document.querySelector<HTMLButtonElement>('[role="treeitem"]')!.click(),
       );
       await act(async () =>
         document
@@ -506,3 +506,417 @@ for (const throughHostSdk of [false, true]) {
     }
   });
 }
+
+test("file navigation remains mounted across file tabs and hide/show while dirty drafts stay authoritative", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    Window: dom.window.Window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle,
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  (dom.window.HTMLElement.prototype as any).attachEvent = () => {};
+  (dom.window.HTMLElement.prototype as any).detachEvent = () => {};
+  const { WorkspaceFileDrafts, fileDraftKey } =
+    await import("../src/renderer/src/workspace-file-drafts.js");
+  const drafts = new WorkspaceFileDrafts(60_000);
+  drafts.set(fileDraftKey("a", "src/a.ts"), {
+    base: { path: "src/a.ts", text: "disk", revision: "r" },
+    text: "unsaved draft",
+  });
+  (window as any).zenx = {
+    workspaceFiles: {
+      list: async (_id: string, path: string) => ({
+        path,
+        entries:
+          path === "."
+            ? [{ name: "src", path: "src", kind: "directory" }]
+            : [
+                { name: "a.ts", path: "src/a.ts", kind: "file" },
+                { name: "b.ts", path: "src/b.ts", kind: "file" },
+              ],
+        truncated: false,
+      }),
+      read: async (_id: string, path: string) => ({
+        path,
+        text: "disk",
+        revision: "r",
+      }),
+      search: async () => ({
+        cwd: "/workspace",
+        entries: [],
+        scanned: 3,
+        truncated: false,
+      }),
+    },
+  };
+  function Harness() {
+    const [selected, select] = useState("file:src/a.ts");
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "a",
+      title: "Files",
+      open: true,
+      onOpenChange: () => {},
+      snapshot: null,
+      selectedTab: selected,
+      onSelectTab: select,
+      fileDrafts: drafts,
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    const navigation = document.getElementById("workspace-file-navigation")!;
+    const search = navigation.querySelector('input[type="search"]')!;
+    const separator = document.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="Resize file navigation"]',
+    );
+    assert.ok(
+      separator,
+      "file navigation can be resized independently of the outer panel",
+    );
+    assert.equal(separator.getAttribute("aria-orientation"), "vertical");
+    assert.equal(separator.getAttribute("aria-valuenow"), "192");
+    await act(async () =>
+      separator.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "ArrowRight",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(separator.getAttribute("aria-valuenow"), "212");
+    await act(async () =>
+      separator.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Home",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(
+      separator.getAttribute("aria-valuenow"),
+      separator.getAttribute("aria-valuemin"),
+    );
+    await act(async () =>
+      separator.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "End",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(
+      separator.getAttribute("aria-valuenow"),
+      separator.getAttribute("aria-valuemax"),
+    );
+    assert.ok(
+      navigation.querySelector('[data-file-path="src/b.ts"]'),
+      "selected file ancestors open automatically",
+    );
+    await act(async () =>
+      (
+        navigation.querySelector('[data-file-path="src/b.ts"]') as HTMLElement
+      ).click(),
+    );
+    assert.equal(
+      document.getElementById("workspace-file-navigation"),
+      navigation,
+    );
+    assert.equal(navigation.querySelector('input[type="search"]'), search);
+    assert.equal(
+      document
+        .querySelector('[data-file-path="src/b.ts"]')
+        ?.getAttribute("data-current"),
+      "true",
+    );
+    await act(async () =>
+      (
+        document.querySelector(
+          '[aria-label="Hide file navigation"]',
+        ) as HTMLElement
+      ).click(),
+    );
+    assert.equal(navigation.hidden, true);
+    assert.equal(separator.hidden, true);
+    await act(async () =>
+      (
+        document.querySelector(
+          '[aria-label="Show file navigation"]',
+        ) as HTMLElement
+      ).click(),
+    );
+    assert.equal(navigation.hidden, false);
+    assert.equal(separator.hidden, false);
+    assert.equal(navigation.querySelector('input[type="search"]'), search);
+    await act(async () =>
+      (
+        navigation.querySelector(
+          '[aria-label="Refresh file list"]',
+        ) as HTMLElement
+      ).click(),
+    );
+    assert.ok(
+      navigation.querySelector('[data-file-path="src/b.ts"]'),
+      "refresh reloads expanded selected ancestors",
+    );
+    await act(async () =>
+      (
+        document.querySelector(
+          '[aria-label="Hide file navigation"]',
+        ) as HTMLElement
+      ).click(),
+    );
+    await act(async () => {
+      document
+        .querySelector('[role="tabpanel"]:not([hidden]) .cm-content')!
+        .dispatchEvent(
+          new dom.window.KeyboardEvent("keydown", {
+            key: "p",
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    assert.equal(navigation.hidden, false);
+    assert.equal(
+      document.activeElement,
+      search,
+      "Ctrl+P restores navigation and search focus from the editor",
+    );
+    await act(async () =>
+      (
+        navigation.querySelector('[data-file-path="src/a.ts"]') as HTMLElement
+      ).click(),
+    );
+    assert.equal(
+      drafts.snapshot().get(fileDraftKey("a", "src/a.ts"))?.text,
+      "unsaved draft",
+    );
+    assert.match(
+      document.querySelector('[role="tabpanel"]:not([hidden])')!.textContent!,
+      /unsaved draft/,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+import {
+  WorkspaceFileDrafts,
+  fileDraftKey,
+} from "../src/renderer/src/workspace-file-drafts.js";
+function r4Fixture(api: any) {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    Window: dom.window.Window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  (dom.window.Range.prototype as any).getClientRects = () => [];
+  (dom.window.Range.prototype as any).getBoundingClientRect = () => ({
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    top: 0,
+    width: 0,
+  });
+  (window as any).zenx = { workspaceFiles: api };
+  const root = createRoot(document.getElementById("root")!);
+  return {
+    dom,
+    root,
+    render: async (node: any) => act(async () => root.render(node)),
+    close: async () => {
+      await act(async () => root.unmount());
+      dom.window.close();
+    },
+  };
+}
+async function r4Click(selector: string) {
+  await act(async () => document.querySelector<HTMLElement>(selector)!.click());
+}
+async function r4ChooseFile() {
+  await r4Click(".workspace-add-tab");
+  await act(async () =>
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        ".workspace-tab-types button",
+      ),
+    ]
+      .find((b) => b.querySelector("strong")?.textContent === "File")!
+      .click(),
+  );
+}
+
+test("back during a pending file read resets the persistent navigator without admitting the stale file", async () => {
+  let resolveRead!: (v: any) => void;
+  let readB = 0;
+  const f = r4Fixture({
+    list: async () => ({
+      path: ".",
+      entries: [
+        { name: "a.ts", path: "a.ts", kind: "file" },
+        { name: "b.ts", path: "b.ts", kind: "file" },
+      ],
+      truncated: false,
+    }),
+    read: async (_t: string, p: string) =>
+      p === "a.ts"
+        ? { path: p, text: "a", revision: "r" }
+        : (readB++, new Promise((r) => (resolveRead = r))),
+  });
+  const drafts = new WorkspaceFileDrafts();
+  drafts.set(fileDraftKey("t", "a.ts"), {
+    base: { path: "a.ts", text: "a", revision: "r" },
+    text: "a",
+  });
+  function Harness() {
+    const [selectedTab, onSelectTab] = useState("file:a.ts");
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "t",
+      title: "T",
+      open: true,
+      onOpenChange: () => {},
+      snapshot: null,
+      selectedTab,
+      onSelectTab,
+      fileDrafts: drafts,
+    });
+  }
+  try {
+    await f.render(React.createElement(Harness));
+    await r4ChooseFile();
+    await r4Click('[data-file-path="b.ts"]');
+    assert.equal(readB, 1);
+    await r4Click('[aria-label="Back to tab types"]');
+    await act(async () =>
+      resolveRead({ path: "b.ts", text: "b", revision: "r" }),
+    );
+    assert.equal(
+      drafts.snapshot().has(fileDraftKey("t", "b.ts")),
+      false,
+      "the cancelled read remains fenced",
+    );
+    await act(async () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types button",
+        ),
+      ]
+        .find((b) => b.querySelector("strong")?.textContent === "File")!
+        .click(),
+    );
+    await r4Click('[data-file-path="b.ts"]');
+    assert.equal(
+      readB,
+      2,
+      "new reads must remain possible after backing out of a cancelled read",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("persistent file tree and drafts coexist with multiple same-title conversation tabs", async () => {
+  const f = r4Fixture({
+    list: async () => ({
+      path: ".",
+      entries: [{ name: "main.go", path: "main.go", kind: "file" }],
+      truncated: false,
+    }),
+  });
+  const drafts = new WorkspaceFileDrafts();
+  drafts.set(fileDraftKey("t", "main.go"), {
+    base: { path: "main.go", text: "package main", revision: "r" },
+    text: "package main // retained draft",
+  });
+  function Harness() {
+    const [selectedTab, onSelectTab] = useState("file:main.go");
+    return React.createElement(
+      React.Fragment,
+      null,
+      ...["child-a", "child-b"].map((id) =>
+        React.createElement(
+          "button",
+          {
+            key: id,
+            id: `open-${id}`,
+            onClick: () => onSelectTab(`thread:${id}`),
+          },
+          id,
+        ),
+      ),
+      React.createElement(AuxiliaryPanel, {
+        threadId: "t",
+        title: "T",
+        open: true,
+        onOpenChange: () => {},
+        snapshot: null,
+        selectedTab,
+        onSelectTab,
+        fileDrafts: drafts,
+        conversations: ["child-a", "child-b"].map((threadId) => ({
+          threadId,
+          title: "Same title",
+          render: (id: string) =>
+            React.createElement("div", { "data-child": id }, id),
+        })),
+      }),
+    );
+  }
+  try {
+    await f.render(React.createElement(Harness));
+    const nav = document.querySelector<HTMLElement>(
+      ".workspace-file-navigation",
+    )!;
+    assert.equal(nav.hidden, false);
+    await r4Click("#open-child-a");
+    await r4Click("#open-child-b");
+    assert.ok(document.getElementById("aux-tab-thread:child-a"));
+    assert.ok(document.getElementById("aux-tab-thread:child-b"));
+    assert.equal(
+      nav.hidden,
+      true,
+      "the tree must not steal space from conversation or terminal surfaces",
+    );
+    assert.equal(
+      document.querySelector('[data-child="child-b"]')?.textContent,
+      "child-b",
+    );
+    await act(async () =>
+      document.getElementById("aux-tab-file:main.go")!.click(),
+    );
+    assert.equal(nav.hidden, false);
+    assert.match(
+      document.querySelector('[role="tabpanel"]:not([hidden])')!.textContent!,
+      /retained draft/,
+    );
+    assert.ok(document.getElementById("aux-tab-thread:child-a"));
+    assert.ok(document.getElementById("aux-tab-thread:child-b"));
+  } finally {
+    await f.close();
+  }
+});

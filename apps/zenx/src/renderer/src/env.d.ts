@@ -68,6 +68,13 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      modelRequestDebug?: {
+        request(
+          input: import("../../../../cli/src/model-request-debug-types.js").ModelRequestDebugCommand,
+        ): Promise<
+          import("../../../../cli/src/model-request-debug-types.js").ModelRequestDebugResult
+        >;
+      };
       shellPanel?: import("../../shell-panel.js").ShellPanelBridge;
       imzenx: {
         inspect(): Promise<ImZenXSetupView>;
@@ -218,7 +225,7 @@ declare global {
         recordDiagnostic(
           event: import("../../main/settings-diagnostic-log.js").SettingsDiagnosticEvent,
         ): Promise<void>;
-        openDiagnosticsFolder(): Promise<void>;
+        openDiagnosticsFolder(source?: "model"): Promise<void>;
         addProvider(
           provider: ZenXProviderProfile,
           apiKey?: string,
@@ -295,6 +302,7 @@ declare global {
         openSettings(kind: "accessibility" | "screen-recording"): Promise<void>;
       };
       browserObservation: {
+        openExternal(threadId: string, targetId: string): Promise<void>;
         subscribe(
           request: BrowserThreadRequest,
           listener: (event: BrowserThreadEvent) => void,

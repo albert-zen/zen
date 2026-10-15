@@ -1,6 +1,13 @@
 # ARCHITECTURE
 
+- **Message source navigation** — Renderer-only source intents use canonical Thread sender / Host Trigger IDs and existing App routes; local Thread reads validate exact identity and availability before navigation, while unverified Fleet return routes fail closed and Trigger routes select only the exact current Host definition. No message text, display name, new execution or model-provenance rewrite participates.
+
+- **Imported tool replay** — Canonical calls preserve inert source namespace/input-format provenance; model adapters create deterministic, past-only wire aliases and matched call/result IDs without registering tool definitions or granting execution authority.
+
+- **Selected-file conversation import** — Version-pinned external parsers live under their protocol adapter and produce bounded provider-neutral historical Items; AppServer atomically creates an idle continuable Thread with canonical source/checkpoint provenance, explicit local cwd/model/permissions, inert tool observations and no inherited execution or source authority. Imported tool outcomes may have a null exitCode only with the historical-result content type; native presentation calls them unknown. The import prefix length lets the first new local Turn load current workspace instructions. Compacted exports use their latest explicit continuation checkpoint and visibly disclose omitted earlier records.
+
 - **Concurrent Browser registry** — ZenX owns independent ephemeral Workspace and explicitly connected external Browser packages; new fixed tool namespaces never inherit legacy tool-name approvals, while backend-qualified tab/observation/target/cursor references prevent cross-backend routing without adding Thread state. External opt-in never removes the Workspace backend. Profile upgrades publish routing only at the existing Catalog transaction boundary; the app-owned Workspace port lends generation-specific opaque sessions, and retirement observes the existing Supervisor runtime drain before detaching only the retiring generation’s leases (no second lease counter or cancellation authority).
+- **ZenX reading state** — One App-owned, memory-only renderer cache retains scroll/follow intent per exact Thread and explicit disclosure choices by exact Thread/Turn/Item identity across navigation, without retaining hidden transcripts or changing execution, canonical history or Host storage. Explicit return to the bottom resumes following; content/viewport growth, including completion and delayed media layout, preserves that intent until the reader navigates away. The return-to-live affordance reflects actual distance from the bottom.
 
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous trace summaries from existing Items; request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
@@ -11,6 +18,8 @@
 - **ZenX login-shell PATH** — After opening the static startup window, a bounded, cancellable macOS GUI-startup probe captures only the login shell’s framed PATH before Host initialization; a pipe-held supervisor pins the owned process group until cleanup, including helpers surviving login-shell exit, without persistent state. PATH semantics are preserved, failure retains the inherited environment, and the existing tool-environment whitelist remains the disclosure boundary.
 
 ## 核心概念
+
+- **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
 
 - **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
 - **IMZenX managed configuration** — Its trusted local form uses provider-declared pinned field contracts and the existing OS-encrypted vault to save write-only channel credentials; model tools see only nonsecret references/readiness, explicit connection validates a transient nonsecret reviewed-configuration revision under the runtime queue before decrypting the chosen configuration into the existing private child pipe, and explicit runtime preparation copies the locked packaged project to an IM-owned runtime directory without modifying App Resources or enrolling credentials.
@@ -46,6 +55,7 @@
 - **ZenX 自控原文与发送** — 原生 `zen/thread/read` 无订阅地读取完整 canonical snapshot；Host 用 Item/Turn 边界派生分页，并在所有模型可见预览与续读前递归投影可公开的 Item：标记 opaque 的结构只保留定位字段与公开 summary，public reasoning 与工具原文字符串不改写，journal 与可信原生读取/恢复仍完整。发送幂等键和 Turn fence 从可信工具调用身份及当前快照推导；发送偏好仍由 Host profile 持有，不引入命令账本或会话权威。
 - **Trigger Thread Watch** — 既有 Trigger 配置固定来源 device/workspace/Thread 与目标 Thread，可监听一次或后续各 Turn 的终态；原生远端订阅由定义版本、生命周期和订阅身份围栏保护，canonical 快照与实时事件通过命名空间去重写入既有历史，一次性监听在事件接纳时停用；sourceError 仅为易失投影，不增加 journal 或补发无关历史事件。
 - **Host Skills** — Host 保存标准目录的完整导入副本与独立可见性覆盖；ZAS 的统一发送入口按预算将自动目录和显式引用解析为带来源的 canonical 文本输入，重试从已有 Item 复用快照，恢复与压缩不重新读取目录。默认手动模式不自动披露任何元数据，禁用模式拒绝加载。
+- **Model Sample 有界重放** — 模型采样在任何工具副作用产生前完成；适配器标记 retryable 的流式协议/传输失败由 AgentRuntime 在同一 Turn 内以有界次数与抖动退避重放，失败尝试的部分输出以 incomplete Item 留痕且不进入模型投影，重试耗尽或不可重试的失败仍明确落 failure Item（含已重试次数与诊断指针，全文留在 journal，模型投影只保留可操作的首行）。HTTP 准入失败仍由请求层处理；未发生凭证续期时，首个采样最多四次准入请求，后续每个采样仅一次请求，默认三次采样合计最多六次模型 HTTP 请求。订阅适配器保留每次采样至多一次 HTTP 401 凭证续期及续期后请求：首个采样的续期前后各最多四次，后续采样的续期前后各最多一次，因此发生续期时默认三次采样合计最多十二次模型 HTTP 请求；续期后的 HTTP 401 不再次续期，后续采样的续期也不重启准入重试。上述模型请求计数不含认证端点的续期流量，永久 Provider 错误、明确 terminal 原因、取消与 journal 失败不重试。
 - **ZenX 界面控件** — Renderer 的共享 Select、Popover、Dialog 使用无样式可访问性 primitives 与既有主题 tokens 统一键盘、焦点、浮层避让及可取消动效，只管理易失展示状态。
 - **Plugin UI 主题快照** — Host renderer 向 trusted/isolated surface 提供版本化、只读的颜色、密度与 reduced-motion 变量，主题变化仅更新展示，不重载插件或放宽隔离。
 - **ZenX 插件就绪预览** — Host 通过只读 IPC 投影当前平台许可和用户配置，Renderer 在启用 Browser/Computer 前显示 manifest 请求范围及分别可操作的准备步骤；此预览不代替原生 helper 与具体工具执行时的能力检查，也不保存授权事实。
@@ -81,8 +91,8 @@
   工具调用、工具结果与失败，都是 Item。
 - **Canonical Item Decoder** — JSONL journal 只在读取边界用一个穷尽的 runtime decoder 接纳现行与明确 legacy Item shape，拒绝不能安全重放的结构，而写侧继续只使用同一组 canonical TypeScript 类型。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。
-- **Thread Fork** — 普通 fork / Copy 由 Core 在最近一个完整 Turn 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；新 Thread 继续独立追加，且不继承源 Thread 的活动执行、排队输入或 Host 资源。
-- **Child Thread** — Core 在创建普通 Thread 时将不可变 `parentThreadId` 与初始历史原子保存，原生 AppServer 按同目录 fresh/fork/side-chat 创建并投影关系；普通 Copy 不继承亲缘关系，父线程归档不联动子线程，不增加委派任务或调度状态。
+- **Thread Fork** — 普通 fork / Copy 由 Core 在最近一个完整 Turn 或原生请求指定的已落盘 `agent_message` 精确 Item 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；精确消息边界包含该消息且排除全部后续历史，复用 snapshot-only 工具、Turn 与队列闭合使继承执行惰性化，只在显式新输入后启动新 Turn；源 Thread 不变，新 Thread 不继承其活动执行或 Host 资源。
+- **Child Thread** — Core 在创建普通 Thread 时将不可变 `parentThreadId` 与初始历史原子保存，原生 AppServer 按同目录 fresh/fork/side-chat 创建并投影关系；普通 Copy 不继承亲缘关系，父线程归档不联动子线程，不增加委派任务或调度状态。 ZenX 并排工作区按目标 Thread ID 保留多个会话 Tab；打开集合、排序和选择只属 renderer-local UI 状态，不新增 Thread 或执行语义。
 - **Side chat snapshot** — Side chat creation snapshots the parent’s full canonical ItemList into an ordinary child Thread, appends canonical snapshot-only tool/Turn/queue closures and one standalone `thread_instruction`, and never starts execution or changes the parent. Snapshot-only tool receipts explicitly report `executed:false`; sampling places these observations at their original call-batch closure before compaction selection, without rewriting the stored source history. `thread_instruction` is a persisted model-visible instruction without a Turn; it projects through the existing user-role instruction channel and survives compaction.
 - **Thread Instruction** — `thread_instruction` is a canonical standalone instruction with no Turn ID; native journal validation, context projection and compaction preserve it, while legacy CAS projection does not invent a Turn for it.
 - **Subagents Plugin** — 默认内置且可停用的第一方 package 经同一 Plugin Catalog 注册子线程工具及右栏树，导航打开 Host 的普通对话视图；停用撤销工具与入口，Thread 历史及亲缘关系仍由 Core 持有。
@@ -98,6 +108,7 @@
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
 - **Code Runtime** — 每次调用在可硬终止的 Worker 内用独立 JavaScript module context 编排同一个 Tool Environment 的工具；guest 无 Node、文件、网络或模块加载能力，执行生命期由统一工具任务管理器持有。
 - **Code State** — 线程内有界 JSON 数据从 append-only `code_state` Items 重建，`store/load` 只提供显式写入和当前程序的快照读取，不保存函数、执行栈或另一份会话权威。
+- **User Message Time Projection** — 模型请求为每条 canonical `user_message` 单独携带明确时区的原始 `createdAt`；队列与替换输入从同一 ItemList 的最早准入 Item 派生，先于压缩过滤，fork/replay 不重取时钟。未知或无时区旧记录标为 null；replacement-history 导入前缀因旧记录无法区分 checkpoint 时间与原消息时间而保守标为未知（含导入尾部），后续本地输入不受影响；Provider 以独立文本 part 标明 Host 元数据，不改写用户正文、媒体或授权。
 - **Model Content Projection** — 根据本次模型的输入能力投影历史与当前媒体内容，只改变 ModelRequest，不改写 canonical Items 或附件。
 - **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
@@ -142,6 +153,7 @@
 - **First-party Plugin Tarball** — Browser、Computer、ZenX self-control、Triggers 与 Rooms 的标准 npm tarball，随 App Resources 分发并通过同一个 profile installer 首装或重装。
 - **Plugin Marketplace Inventory** — ZenX 唯一的插件浏览与管理读模型，把 Host-owned 内置库存、只读外部 package metadata 和 Catalog 中已安装 package 合并去重，所有动作仍委托同一个 profile lifecycle authority。
 - **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
+- **Room Header Presentation Slot** — App 提供仅匹配当前 Room 路由的 renderer-local 标题栏位置；Rooms 可经 React portal 展示既有操作，但不取得新的导航、执行或持久状态 authority。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
 - **Tool Result Renderer** — 按 namespaced content type 渲染既有 `ToolResultItem` 可选 structured content 的插件 UI contribution；renderer 缺失时必须回退 text/JSON，且不得改写历史 Item。
@@ -169,6 +181,8 @@
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
 - **TurnSortAt** — 原生 Thread summary 从本地 `turn_started` 的最新时间（fork 后的 Turn；没有则本线程创建时间）推导默认列表排序键，独立于 updatedAt，可随 journal 重建。
+- **SidebarThreadInformation** — 既有 host-local ThreadSummary / Project 投影与已 admit Trigger 插件显式声明的 sidebar-facts 窄只读命令组成的可丢弃 renderer 投影，在 Host 序列化前只取绑定/调度白名单字段；由 Catalog 每次真实 activation 的易失 admissionId 隔离替换回执，不因无关 catalog 通知重读，不拥有 scheduler 或 Thread 状态。
+- **ZenXConversationReadPreference** — Renderer 在本机 app origin 保存初装时间与已看见的 canonical 消息 ID/时间游标；Thread 的最后 user/agent 消息由既有 summary 扫描投影，Room 的未读数字由既有 list 在权威消息数组上按本机游标计数（只计 Agent，human 为本机用户，system 不计），仅前台有焦点且消息末尾实际进入阅读范围才推进，不发外部已读回执、不持久化消息镜像、不新增轮询。
 - **NativeThreadSummaryProjection** — ZAS 把 canonical journal 与
   ThreadMetadataStore 归约为可持久化、可删除重建的原生 `ThreadSummary` /
   `CurrentMetadata` 列表读取模型；它只加速产品读取，不成为新的权威状态。
@@ -192,6 +206,7 @@
   `user_message` 投影按 Item 顺序排列的 `AttachmentRef`，并以只接受这些引用的 typed preload IPC
   导入和读取 Attachment Store payload；renderer 只持有草稿引用与短时 object URL，不取得任意文件读取权。
 - **ZenXThreadWorkspace** — Thread 右侧唯一的平级内容选项卡容器；每个文件、共享浏览器页面、Computer 观察或插件注册的 panel 直接占一个顶层 Tab，通过加号选择内容类型，不增加 Browser/Files 分类路由层。Host 持有打开顺序与选中项，插件仍用自身 surface 渲染内容；打开、宽度和编辑草稿是本机 UI 状态，真实文件写入由 Host 校验并使用版本冲突保护，不引入会话语义。
+- **ZenXWorkspaceFileExplorer** — Renderer-local lazy folder expansion and debounced filename/path search reuse the Host’s Thread-cwd-scoped listing/search boundary; bounded highlighted source views share a raw-source-preserving CodeMirror adapter with Markdown, while existing draft/autosave/conflict ownership remains unchanged. File-local Find is disposable Renderer UI over the existing CodeMirror document; Markdown source is temporarily revealed while Find is open. File navigation stays mounted across auxiliary file tabs, with bounded renderer-local split sizing; editor scrolling follows the available pane height, without introducing a file index or new durable state.
 - **ZenXSidebarMenuPopover** — 项目与会话菜单共用锚点定位的临时浮层，在侧栏右侧显示并按视口边界回退，不参与列表布局或持久化状态。
 - **ZenXProjectNamePreference** — host-profile 按已配置 workspace 保存可编辑显示名称；名称不改变目录身份、Thread cwd 或 journal，修改只刷新 Project 投影，不重启 Host。
 - **ZenXGitWorktreeGrouping** — Host 仅在 Project 列表投影中用本机 Git 的 canonical common-directory 身份将同一仓库的工作树归组；显式配置的路径各自保留独立 Project，Thread cwd、配置 workspace 和新建执行路径不变，Git 不可用时退回路径身份。
@@ -338,7 +353,7 @@
 - **ProviderTransport** — 宿主为 Provider HTTP 请求注入的显式连接策略；首版只接受
   无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
 - **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
-  唤醒条件与命中历史；每次命中以稳定幂等 key 通过 App Server 提交普通输入，Thread 完成通知使用既有 canonical queue，失败明确记录且不自动补偿。
+  唤醒条件与命中历史；每次命中以稳定幂等 key 通过 native Host wake 提交带真实来源的输入，缺省 soft steer；只有该 Trigger 显式 queue 才等待下一轮，失败明确记录且不自动补偿。
   Windows program cleanup captures ownership only while the spawned root remains live, verifies its direct parent, and admits new descendants only through a simultaneously observed matching parent generation with nondecreasing creation times; ambiguous lineage is an explicit containment failure. Previously captured descendants remain tracked after parent exit, and termination remains bound to each exact identity. Process-table snapshots do not prove exhaustive ownership of unobserved generations.
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread；读取转录使用有界分页而非把全部历史压入一次插件命令结果。
@@ -350,9 +365,9 @@
 - **ZenXAutomationServiceGenerationHealth** — Host 的可丢弃瞬时标志区分已接纳的 Room/Trigger 租约和底层仍可执行的 generation；stop 持久写失败后只有一次显式 start 能从实际磁盘重新建立能力，失败不被当作已保存事实或自动重试。
 - **ZenXWakeupProjection** — ZenX 把 Trigger 命中的 `clientUserMessageId` 与外部审计记录
   关联成系统级唤醒卡片，并把有界、带明确来源的 completed Turn / Room 上下文作为
-  新 Turn 输入投影；它不是第二份权威 transcript，canonical `user_message` 仍是唯一输入事实。
+  Host 输入投影；它不是第二份权威 transcript，canonical `host_message` 与对应 queued/cancelled Items 才是输入事实，旧 `user_message` 仅兼容已存历史。
 - **ZenXTriggerAppServerPort** — ZenX Trigger 服务观察 completed Item/Turn 并发起普通
-  `turn/start` / `turn/queue` 与按需 Thread 读取所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
+  `zen/turn/wake` 与按需 native Thread 读取所需的最小 host-local App Server 边界；它不引入另一套 Runtime、队列或重试器。
 - **ZenXExternalLinkPolicy** — ZenX renderer 与 Electron 主进程共同执行的外链 allowlist；
   只有 `http:`、`https:`、`mailto:` 可交给操作系统，页内锚点留在 renderer 处理。
 - **ZenXPluginCatalog** — ZenX 主进程从 profile 的直接 dependencies 注册 v2 package，原子管理
@@ -366,6 +381,7 @@
   协商实际影响且禁止静默降级；`foreground_required` 默认不投影也不执行，只有本机用户在 ZenX 中明确
   开启可撤销的 foreground computer control 后才可用，旧 permission grants 不构成授权；foreground helper
   从准备到实际进程 spawn 的每个边界都重验当前 consent，已撤销的 signal 绝不启动全局输入 helper。
+- **ZenXForegroundActivity** — Electron main projects only admitted, validated foreground Computer calls into disposable, non-activating native indicators across current displays; an indicator must be visible before input, remains until provider settlement, and its exact-owner Stop reuses cancellation/Turn interruption. It grants no consent, owns no scheduler or durable state, and never marks background-safe work as global control. A Host-owned global Escape registration exists only while foreground owners remain and uses the same exact-owner Stop boundary; failed registration is presented honestly with the button fallback.
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
@@ -386,17 +402,24 @@
   瞬时且 fail-closed 的 acquire→dispatch fence，先把 Page/Runtime domain enable 作为精确 attachment setup barrier，
   再在每个 awaited setup 步骤后及发送 page code 前按有序 CDP 事件流原子重验；它不进入 Zen Core 或 durable journal，
   且 mutation 已发送后的失效继续使用 outcome-unknown/taint 与 lease 语义。
+  Attachment setup 从 attach 开始共享一个 10 秒总预算；Page/Runtime enable 各只发送一次，所有调用者等待同一
+  setup barrier，且每个 CDP 响应必须匹配请求的精确 session route。该预算是有限启动等待契约，不承诺冻结 renderer
+  会恢复；setup 过期/取消仍保留 unknown 并补偿 detach，导航/页代码/Input 的既有 2 秒 outcome deadline 不变。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA JSON
-  投影为既有的有界 opaque observation 与 background-safe computer tools；外部 CLI 的安装、版本和进程生命周期
+  投影为既有的有界 opaque observation 与按真实影响分类的 computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
   只读窗口发现返回所属应用与可直接传给现有定向工具的精确 target；列表截断与查询过滤不改变目标身份。
-  WinApp downstream build candidate 是独立构建期产物：固定上游 source/patch/SDK，记录依赖闭包与原生 binary provenance，只供 native 验证；未经过正式 provider trust-chain 集成和 packaged 验证前，不改变运行时 provider 选择或 background 声明。
+  Stock/system WinApp UIA set-value 与 Invoke 已实测可能激活目标窗口，故在任何原生调用之前要求既有可撤销 foreground computer control 许可；app-targeted/no-global-input 不是 focus-isolated 的证明，不启用自动授权、焦点恢复或输入注入 fallback。
+- **ZenXStrictUiaComputerProvider** — Windows App build 将固定上游/patch/SDK/真实 NuGet closure 编译成独立 `zenx-winapp-uia` NativeAOT 资源，同一构建的显式 provenance digest 交给既有 assembler；compiled manifest digest 是唯一产品 trust anchor，覆盖 exe、完整 native bin 树及逐文件、source/patch/closure/provenance/license，选择与每次启动均重验，不覆盖 official archive、不在用户机器编译或降级。
+  构建时仅把精确顶层 `bin/winapp.pdb` 的调试符号移到独立 CI evidence，以原 publish 全量清单、符号 hash 与产品 provenance digest 证明分区完整；其它未知资产仍全部留在无 ignored paths 的 runtime bin 闭包，符号证据不是运行时依赖或新的 trust anchor。
+  新后台语义 route 仅在 verified packaged 身份及 live AutoSetFocus FALSE 合同成立时开放；既有 opaque observation 保存精确进程出生、HWND/class/RuntimeId/完整语义几何身份，私有原生命令拒绝虚拟、陈旧、歧义或变化目标，只对同一验证过的 UIA element 单次调用指定 ValuePattern 或 InvokePattern，不走 selector/ancestor/其它 pattern fallback。最终校验不是原子性或所有第三方应用零焦点副作用保证；此客户端不请求激活，目标应用自身仍可能改变焦点。
+  同一 Host 取消和 retirement signal 覆盖启动前边界，已可能派发但缺少可信完成回执的失败/中断保持 outcome unknown，等待实际 child/pipe close 后结算而不假称回滚或自动重试。旧 Computer profile 先恢复已提交的精确 backend，新 variant 与既有 Catalog transaction 一起提交；失败保持旧 generation，disabled/uninstalled/external override 与 foreground consent 不变，旧 grants 不构成新增授权。
   Windows 截图由应用内固定源码、独立限时进程的 PrintWindow helper 获取，禁止激活/恢复窗口；像素仅经 Host 校验后写入瞬时 artifact，无法后台渲染时显式失败。
 - **ZenXCapabilityProviderCatalog** — ZenX 产品层探测并诊断可选的成熟外部执行后端，按显式优先级选择
   Playwright、Peekaboo、WinApp 或适用平台的 bundled fallback；版本、权限与可用性只属于 host 配置和瞬时诊断，不进入 Zen Core。
 - **ZenXBrowserScreenshotArtifactStore** — ZenX provider 为一次最新 Browser observation 写入有界、短时、可清理的 PNG
   artifact，并把 observation identity 与 artifact metadata 一起投影；文件是外部瞬时观测，不进入 Zen Core 或 durable journal。
-- **ZenXWorkspaceBrowserRenderLease** — Hidden or minimized shared views borrow a non-activating compositor surface using only the current mount owner, lease and render revision; user remount/show/restore/hide invalidates that transient borrow immediately; control changes return the still-owned physical view before expiring its observation witness, and cleanup never shows or activates its window. Before rendering, a lease-scoped Electron frame subscription waits at most five seconds for a nonempty, backing-display-scaled frame after non-activating renderer display; ownership changes, cancellation and cleanup stop that subscription without replaying capture. This is compositor readiness evidence, not a guarantee against a later native/GPU copy failure.
+- **ZenXWorkspaceBrowserRenderLease** — Hidden or minimized shared views borrow a non-activating compositor surface using only the current mount owner, lease and render revision; user remount/show/restore/hide invalidates that transient borrow immediately; control changes return the still-owned physical view before expiring its observation witness, and cleanup never shows or activates its window. Before rendering, a lease-scoped Electron frame subscription waits at most five seconds for a nonempty, backing-display-scaled frame after non-activating renderer display; ownership changes, cancellation and cleanup stop that subscription without replaying capture. This is compositor readiness evidence only: its first frame may be an older surface. Each bounded native capture first requests a same-target CDP screenshot redraw/new-surface acknowledgement, then copies with Electron capturePage to retain its NativeImage and scale-rounding contract; it never detaches an existing debugger, copies after an expired deadline or changed target/document/control/session/render generation or bounds, or falls back to an unfenced surface. This adds no observation authority and does not guarantee against a later native/GPU copy failure.
 - **ZenXWorkspaceBrowserControl** — the existing same-Thread shared page registry owns an ephemeral, user-selected Agent/human mutation barrier and control revision. Takeover invalidates observations; only trusted Browser UI returns control. Once a tab has entered handoff mode, every Agent mutation (including navigate/close) consumes the latest post-return observation reference, so pre-takeover queued requests cannot regain authority after a later inspect. Dispatch fences cover asynchronous renderer/CDP preparation; already-dispatched work is counted until settlement and reported as uncertain across control changes, never as cancelled or automatically replayed. Inspect while work is still in flight cannot renew action authority. Human input, Thread scoping and shared-profile behavior remain unchanged; this is not a Core scheduler, durable handoff record, cross-Thread transfer, or website confirmation grant.
 - **ZenXWorkspaceBrowserUnmountedRenderer** — 共享 Browser 的页面未挂到用户窗口时，Host 在 Agent 观察或操作期间把同一 WebContentsView 临时挂到不可见的本地渲染窗口，提供有界视口并在完成、失败或用户挂载时释放；它不复制页面、不持有 Thread 状态，也不改变页面归属。
 - **ZenXBrowserLiveObservation** — ZenX user-browser provider 把当前线程面板选择的同一 CDP target 作为
@@ -405,6 +428,7 @@
   fence 校验的 viewport compositor JPEG。无 document/世代绑定的 screencast 事件仅 ack 并触发新采集，绝不发布其像素；
   采集保持单次串行，事件触发间隔至少 100ms，静默时每 500ms 采集；收到真实帧后才标记 Live。
   此投影不进入 plugin storage、Core、ItemList、ZAS protocol、磁盘或历史。
+- **ZenXBrowserExternalOpening** — 人工 Browser 快捷入口由可信窗口当前观察订阅绑定精确 Thread、target 与 backend generation；Host 临时读取该页面的实际 HTTP(S) URL 后交给系统浏览器，异步前后复核选择与资源身份。完整 query/hash 只在 Host 的读取/打开调用中流转，不加入工具摘要、renderer 回执或持久日志，现有工具 URL 脱敏保持不变。Electron/Workspace 的人工观察 loading 从精确 WebContents 的实时加载事件更新，订阅退役移除事件监听；历史工具 summary 不充当持续的加载状态权威。
 - **ZenXBrowserThreadObservation** — Browser 插件沿可信工具上下文接收 threadId，在 Host 内将每线程的逻辑 session 隔离为独立 provider session，并把目标集合、最近观察截图和定向实时订阅投影到线程右栏；这些瞬时资源随 provider 退役失效，不从模型参数或当前选中线程推断归属，不增加会话历史权威。
 - **ZenXCapabilityTransientReset** — ZenX 主进程在 App Server/settings restart、provider replacement 或 close 时
   单调使 provider-owned artifacts 失效并重建可重建 backend；它不改写 canonical ItemList、Catalog lifecycle
@@ -415,6 +439,7 @@
 - **ZenXProviderLaunchVerification** — 外部 provider 在实际 spawn 前再次验证绑定的 canonical executable、browser payload、shim companion、manifest digest 与 pinned semantic version；失败只产生显式诊断，不自动改用未验证资产。
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
+- Windows packaged UIA smoke 的文件观察 helper 仅在既有观察期限内重读 owned fixture 的 ENOENT/EBUSY，不重放 UIA 动作；文本匹配与文件可读性共用同一观察期限。
 - **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并在完整 staging 后发布稳定产物；Windows 上仅对 staging 发布 rename 的 EPERM 做有界退避，每次失败先回滚旧产物，跨等待以 no-follow 目录身份核对源与目标、异常即失败且保留可恢复备份；目录身份预检不构成抵抗非合作写者在检查与 rename 间竞态的 OS 级原子保证；它不复制 release pipeline。
 - **ZenXMacLocalSigningProfile** — macOS portable packaging 可从 host-local `signing.json` 读取稳定自签名证书指纹，并以无 Apple Team ID 的空 entitlements、非 hardened-runtime 参数统一签署 app、Electron nested code 与原生 helper；显式环境变量优先，配置或签名错误 fail closed，证书与私钥不进入仓库、Core 或 ItemList。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 profile-managed Plugin Runtime 暴露 Project/Thread 自控工具，
@@ -879,8 +904,9 @@ ModelAdapter 的 reasoning stream 只传递 provider-neutral lifecycle correlati
 opaque content 永不流向公共事件；OpenAI-compatible 的公开 `reasoning_content` 则作为 content
 delta 实时投影。保存 canonical reasoning 与把它编码进后续请求是两个边界：Core 保留完整标准
 Item，adapter 按目标 Provider/model 的工具续接或 preserved-thinking 合同决定是否回传，并只发送
-该合同支持的推理与流式工具参数。失败或中断只丢弃内存中的 correlation/buffer，不留下不完整
-canonical Item。
+该合同支持的推理与流式工具参数。一次采样整体通过校验后才提交 completed reasoning；失败或中断将已观察到的 trace
+一次性提交为 `incomplete: true` canonical Item，保留 opaque visibility，随后丢弃内存
+correlation/buffer；所有 incomplete Item 都不重放给模型。
 
 Reasoning control 只有一个权威：UI/Core 在 Turn admission 时冻结 canonical
 `reasoningEffort`，ModelAdapter 只把该值翻译为目标模型支持的 wire 字段。OpenAI-compatible
@@ -1094,11 +1120,13 @@ root；这些 package 关系不会长出 Project、第二套 Agent 或调度语�
 自建薄 CLI 是首个稳定接入端；原版 `codex --remote` / T3 Code 只作为固定版本
 CAS mapped surface 的机会型验收，不反向塑造 ZAS 或 Zen Core。
 
-模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 的 `incomplete: true` 标记只供历史显示，禁止作为 Provider reasoning 重放；失败回合的文本属于 trace，不作为成功最终答复。
+模型流异常终止时，Runtime 将已收到的公开文本与 reasoning 一次性提交为 canonical 快照，再记录失败或中断；不记录流式 delta、不执行未完成工具调用。Reasoning 与 agent_message 的 `incomplete: true` 标记只供历史显示，不进入模型上下文、recent-items 计数或显式压缩保留；失败尝试的文本属于 trace，不作为成功最终答复。
 
 Host 为兼容模型流解析失败保存独立、限量轮转的结构化诊断（请求关联、分片序号、字段类型），失败时附带最近8个接收分片（各至多8KiB，明确标记截断），保留实际响应及工具参数以支持诊断；不记录请求头或请求正文，遮盖配置的API密钥，不作为会话语义来源；诊断写入失败不得替换原始模型错误。
 
-消息队列由 canonical `user_message_queued` 记录及同clientId的已交付user_message推导，Core按FIFO在正常完成后启动新Turn，失败/中断暂停且可显式继续；接入端仅投影队列。显式 batch-next 是队列Item上的投递选择，Host在下一Turn接纳固定有界FIFO批次并为每条输入分别写入带原clientId的canonical user_message；未指定选择的自动化/兼容客户端继续逐条Turn。运行中发送模式是桌面偏好，新手动Composer默认有活动Turn时 steer、无活动Turn时 start，可选下一轮合批或逐条队列；偏好不改变已入队的Item。偏好的 explicit 标记仅用于区分新手动Composer隐式 steer 与旧用户显式 steer 对自控插件的影响，不携带Thread运行时语义。Host 以临时 attemptId + queuedItemId 标识队列接纳尝试，预检或异步启动失败发出不携原始凭证/输入的 native queue_failed 通知；显式 resume 共享同一Thread首批临时 admission Promise，直到初始输入落盘或启动拒收才应答，不等待完整Turn、不自动重试，也不把该Promise存为会话权威；队列状态仅由 ItemList 决定。旧归一化Queue无法区分隐式默认与旧手选时，用户偏好层一次迁移至手动steer并记录版本、原Queue值和可见恢复/确认状态；该设置不改变已有队列Item或自动化投递。
+普通新输入默认 soft steer：有活动 Turn 时在既有 model/tool-batch 安全边界进入，不硬中断；空闲时启动接收批次。用户 Composer、Agent/self-control、Fleet、IM、每个 Trigger 与 assistant Room 各自拥有独立配置或显式投递参数，缺省语义相同但绝不相互继承设置；只有入口自己的显式 queue/follow_up 才排队。显式 start/steer/replace 控制 RPC 仍保留各自 precondition，approval/reply 控制协议不是新消息。原生 `zen/turn/send` 省略 mode 时由 Core 选择 active steer 或 idle start。
+
+消息队列仅由各来源 canonical queued 记录及同 clientId 的已交付输入/cancelled Item 推导。Core 按 FIFO 在正常完成后启动新 Turn，失败/中断暂停且可显式继续；接入端只投影队列。显式 batch-next 和 Host/Agent 的 idle 接纳使用固定有界批次，每条输入分别保留 canonical 身份与来源；历史已入队 Item 保留原投递选择。Host 以临时 attemptId + queuedItemId 标识接纳尝试，失败发出不携原始凭证/输入的 native queue_failed 通知。显式 resume 共享同 Thread 首批 admission Promise，直到初始输入落盘或拒收才应答；不等待完整 Turn、不自动重试、不另存会话权威。旧归一化 Composer Queue 无法区分隐式默认与旧手选时，一次迁移至 soft 并保留版本、原值及可见恢复/确认；可靠标记的显式 Queue 保留，迁移不改变既有队列或其它入口配置。
 
 ZenX 在 app ready 后先打开无需IPC的静态启动页，同一窗口在Host/IPC准备就绪后切入应用；启动错误显示在该窗口，启动中再次激活只聚焦或恢复启动窗口。
 
@@ -1118,7 +1146,7 @@ Context pressure estimation includes tool `modelContent` as the additional user 
 
 工具适配器返回的 ToolExecutionResult 必须代表底层操作的真实最终结果（包括非零退出）；仅停止本地等待或不确认远端状态时必须 reject，不能伪造最终结果。默认取消后 reject 保留未知状态与资源 fence，但其诊断输出会回传一次。wait 的固定控制 envelope 不占用已独立校验的原工具 structuredContent 预算。
 
-模型请求在适配器共享的 request admission 边界最多尝试 4 次：临时连接错误及 HTTP 408/429/500/502/503/504 采用可取消、带抖动的指数退避，遵守 Retry-After，累计退避不超过 120 秒。成功响应开始后不重放流、Turn 或工具；耗尽后由原有 failure 路径告知用户，不引入 durable 重试状态。
+模型请求在适配器共享的 request admission 边界最多尝试 4 次：临时连接错误及 HTTP 408/429/500/502/503/504 采用可取消、带抖动的指数退避，遵守 Retry-After，累计退避不超过 120 秒。准入层不消费或重放成功响应流；Runtime 仅对明确可重试的 OpenAI-compatible 流采样失败执行上述有界重采样，不重跑 Turn 或工具。耗尽后由原有 failure 路径告知用户，不引入 durable 重试状态。
 
 ZenX 的 reasoning 状态仅是展示投影：item/started 开始转圈，item/completed 移除运行态，canonical incomplete 显示 Interrupted；Turn 终止时尚未闭合的展示行收束为 Interrupted。兼容投影允许携带可选状态元数据，旧 CAS/已完成记录缺省不显示状态；不新增运行时对象或推断工具与推理的先后生命周期。
 
@@ -1163,6 +1191,23 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 ### Always On Assistant preset
 
 An assistant Room binds one real Thread to an owned roomMention Trigger.
+Its personal display name is the existing Room name; an explicit PAW rename
+atomically updates that name, its bound member name and owned Trigger mention.
+Historical messages and canonical Thread titles remain unchanged. First-use
+setup is an inline renderer surface over existing setup/configuration APIs;
+only its optional welcome dismissal is an origin-local presentation preference.
+Conversational initialization is an explicit Host bootstrap wakeup on the owned
+Trigger. Its existing Room operation receipt records a bootstrap kind and wakeup
+ID, never a human Room message; the native Host input retains that provenance in
+the canonical Thread. Only the real Agent posts the welcome. Prepared/cancelled
+receipts use existing explicit recovery; rendering never runs the model. A restored
+connection reconciles terminal observations of known active wakeups by reading
+exact canonical Turns, without replaying input or offline watcher occurrences.
+The Host's canonical calling Thread scopes PAW name-tool updates to
+its exact binding (shared-Thread PAWs require an unambiguous active source Room);
+UI management and ordinary Room tool scope remain unchanged. Existing AGENTS.md
+stays under Core workspace instructions and file permissions, with no second
+Host identity document or bootstrap execution ledger.
 Trusted setup defaults to creating an idle Thread through the existing Host
 Project/thread-start boundary with confirmed settings; explicit existing-Thread
 binding remains available. The Room and its Trigger commit atomically in the
@@ -1173,9 +1218,9 @@ workflow. A partial failure identifies a known created Thread for explicit bindi
 and never silently starts another. Setup adds
 no Runtime, Thread authority, scheduler or journal. The reusable preset composes
 Rooms, Triggers and Fleet-enabled self-control; it has no personal Work dependency.
-Human Room posts wake the assistant; event/timer Triggers targeting its Thread
-use the same next-cycle delivery and preserve their explicit prompts and Room
-destination. New input starts idle work
+Room posts wake the assistant with their actual author represented in Host-origin context; event/timer Triggers targeting its Thread
+retain their own independent delivery mode, explicit prompts and Room destination.
+Each Trigger and assistant Room defaults to soft steering; an explicit queue applies only to that object. New input starts idle work
 or steers the active Turn for the next model cycle. Definitive pre-admission
 thread_busy/turn_not_running races re-read and retry with the same client identity;
 unknown transport outcomes never trigger an automatic mutation retry. Multiple
@@ -1213,15 +1258,28 @@ displayed list; a rejected oversized refresh leaves the previous numbers intact.
 Non-numeric queries may resolve an authoritative bounded search without publishing
 new numbers. `/new` clears selection and the next input creates a Thread.
 
-ZAS `thread/resume` owns a non-reentrant per-Thread observation barrier. The product
-client serializes its authoritative-read and explicit-resume calls through that
-same public boundary per Thread, including recovery resumes. Queued callers may
-cancel without dispatch; an admitted native request keeps its transient lock until
-its actual result or SDK-bounded timeout/reset even if its caller cancels. The
-client owns and observes those original request tasks, fences new admission before
-close, closes the SDK transport, and joins the tasks; cancellation of a close
-waiter cannot abandon this cleanup. It never caches snapshots, adds outcome
-retries, or blocks an unrelated Thread behind another Thread's read.
+IM ordinary input has an independent deployment continuation preference, default
+soft steer or explicit queue, passed only to the public SDK Gateway. The SDK owns
+durable IM admission/reply correlation while canonical queued identity and
+execution remain in the native ItemList; the consumer adds no scheduler. PAW Room
+posts, Trigger policies, Composer preferences, commands and approval replies keep
+their separate owners. Changing the deployment preference never rewrites an
+already admitted input's identity or continuation mode.
+Queue status presentation and `/queued`/`/unqueue` are product-only views over
+the SDK's original-actor/conversation-scoped controls; they do not select a Thread,
+accept native queue IDs as authority, retain a second queue, or interrupt an
+admitted Turn. Late automatic notices retain the existing foreground/PAW route
+fence, while an explicit original-scope query does not change that route.
+
+ZAS `thread/resume` owns a non-reentrant per-Thread observation barrier. The SDK
+client owns serialization for every public resume entry, including recovery;
+IMZen only adapts its authoritative reads to that public observation boundary.
+Queued callers may cancel without dispatch; an admitted native request remains
+owned until its actual result or SDK-bounded timeout/reset even if its caller
+cancels. The SDK fences new admission before close, resets transport and joins
+original tasks before propagating close cancellation. IMZen has no duplicate
+lifecycle owner, snapshot cache or outcome retry, and unrelated Threads remain
+independent.
 
 The IMZen legacy-state upgrader is a product deployment boundary: it validates a
 copy of the selected old SQLite state against authoritative native Thread/workspace
@@ -1236,6 +1294,31 @@ IMZenX may explicitly bind an external IM conversation to an existing PAW Room i
 
 - **ZenX sidebar width** — A renderer-only local preference drives the existing shell track; viewport clamping, pointer gestures and collapsed/overlay presentation are disposable layout state and never alter Thread or Host facts.
 
+### 跨 Thread Agent 消息
+
+跨 Thread 工具发送由 Host 捕获 source Thread / Turn / canonical tool_call / callId，
+写独立 `thread_message`，不伪装 `user_message`、目标自身 `agent_message` 或 Host bootstrap。
+来源是可审计的 provenance，不是新增的人类授权；模型投影和产品历史明确区分来源。
+默认与 guidance 由 Core 在目标 mutation fence 内接纳到活跃 Turn，沿 `deliveryAfter`
+等当前模型响应的完整 tool batch 结束再采样；不打断正在执行的工具或审批。
+空闲接纳与显式 follow_up 通过 `thread_message_queued` 进入既有队列投影，逐条身份
+保留，只有同类 Agent 消息做有界 FIFO 合批。手工用户 queue 不受 Agent 默认值影响。
+队列取消通过 `thread_message_cancelled` 引用原 canonical 身份；全部投递状态从同一
+ItemList 推导。初始输入接纳期间到达的 guidance 在首次 sample 前加入同一 Turn。
+失败或中断留下可观察 pending/terminal 状态，不新增自动恢复 ledger，不重试不明传输结果。
+
+Native Fleet 对端通过 `thread-message-v1` capability 协商支持此消息；接收 Host 只从
+已有认证 session 绑定 deviceId，远端 source Thread/tool ID 明确是 peer-reported，
+不能冒充本机验证的来源。旧 native Host 与不支持该 provenance 合同的 SSH Agent
+发送明确拒绝且不降级为人类消息；显式 trusted UI 的旧发送协议保持兼容。
+显式 replacement 沿既有 replacement intent 保存同一 sender，失败不重放工具副作用。
+来源可读名称是 Host 捕获的有界展示快照，不参与 identity、幂等比较或授权；远端
+来源始终可见地区分，精确 device / Thread / tool proof 放在来源详情中。
+
+- Ordinary ingress uses soft steering by default: human sends, Agent messages, Host wakeups, Triggers and Room messages join active work at the existing completed model/tool-batch boundary without aborting it; idle ingress starts a bounded batch. Each ingress owns its independent explicit queue preference; no Trigger, Room, IM or Agent inherits the Composer preference. Explicit start/steer/queue/replacement control operations retain their contracts.
+- Host wakeups reuse the native `zen/turn/wake` / canonical `host_message` contract (including bootstrap), extended with exact trigger/room source identifiers and canonical queued/cancelled Items. They are Host-authored context, never human authorization or fabricated Agent tool calls. The ItemList remains the only durable admission/queue truth, and approval replies are control protocol rather than new inputs.
+- PAW bootstrap observation validates canonical Host source and exact client/Thread/Turn receipt against the existing history origin (a Room with no originating Room message), through the same bounded native recovery barrier. The bounded Room operation log is not a recovery authority, so acknowledged operation eviction cannot erase canonical bootstrap provenance. Bootstrap and ordinary wakeups share one admission owner; reconnect or a lost acknowledgement never replays input or introduces another dispatch registry.
+
 ### Browser instance resource routing
 
 The process-local Browser backend registry owns independent capability sessions for the app-owned Workspace port and each explicitly connected external browser instance. `BrowserConnectionSource` projects only opaque installation identity, human label, connection state and Host generation; lazy instance CDP views never enumerate another instance's tabs. Native sockets, pending commands, observation references, preview selection and approvals retain that instance/generation, while the Supervisor remains the sole runtime retirement authority. This resource catalog is not a new Thread history or permission graph.
@@ -1245,3 +1328,9 @@ Extension-created tab groups are ephemeral visual organization scoped to the cur
 ### Browser targeted input
 
 Browser coordinate click and named-key input are transient, observation-bound CDP operations: one captured screenshot, CSS viewport, page-local focus and document/control generation authorize a bounded event pair on the exact tab; uncertain held input blocks further mutations until that tab is closed, with no OS-input fallback, automatic retry, or durable recovery state. CDP acknowledgement and exact Host fences authorize the planned pair; page-consumable event counters are supplementary interference evidence. Bounded open-shadow resolution and mutation observation reuse this per-document state; exact-node CDP shadow metadata distinguishes ordinary containers from actual closed roots without a tag denylist, while known closed or untracked surfaces remain locally unsupported. Structured probe denials have a bounded shared classification; arbitrary Runtime exceptions are never classified as native-surface refusal.
+
+### Opt-in model request observations
+
+`ModelRequestDebugStore` is a Host-owned, session-only, bounded observation buffer: it records final serialized adapter request bodies at each HTTP dispatch boundary, using passive Thread/Turn/sample/boundary identities supplied by Runtime (or a separately identified compaction sample), and cannot supply or restore conversation or execution state. Canonical ItemList remains the sole authority. The local ZenX diagnostic IPC is separate from model tools, native/codex thread protocols and Fleet: it exposes an explicit opt-in, clear/disable, search and paginated inspection only to the local UI, never uploads data, never persists request content and starts disabled after Host restart. Whole old captures are evicted; oversized bodies are explicitly marked truncated. Credential redaction happens before bounding; observer failures cannot change model execution. Unsupported adapters expose only a labeled sampling-time input projection, never a claimed transport capture. Title generation and capability probes outside the conversation Host are not captured.
+
+The embedded Agent debugger reads canonicalItems directly in append order, reusing message and tool presentation without creating a second trace authority; opt-in local transport observations are a separate actual-requests tab.

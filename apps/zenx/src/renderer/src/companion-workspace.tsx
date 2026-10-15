@@ -10,13 +10,14 @@ import type {
 } from "../../main/trigger-types.js";
 import type { RoomConversation } from "./room-conversations.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { threadTitle } from "./thread-list.js";
 
 export interface CompanionViewState {
   selected: string;
   tabs: string[];
   member: string;
-  conversationThreadId?: string;
+  conversationThreadIds?: string[];
 }
 
 export function CompanionWorkspace({
@@ -24,6 +25,7 @@ export function CompanionWorkspace({
   threads,
   snapshot,
   section,
+  sectionRequest,
   navigate,
   onClose,
   fileDrafts,
@@ -31,7 +33,9 @@ export function CompanionWorkspace({
   viewState,
   onViewChange,
   renderConversation,
+  onRenameThread,
 }: {
+  onRenameThread?(threadId: string, title: string): Promise<void>;
   renderConversation?(threadId: string): React.ReactNode;
   room: RoomConversation;
   threads: readonly NativeThreadSummary[];
@@ -43,6 +47,7 @@ export function CompanionWorkspace({
   fileDrafts: WorkspaceFileDrafts;
   onWidthChange(width: number): void;
   section: string;
+  sectionRequest?: string;
   navigate(route: string): void;
   onClose(): void;
 }) {
@@ -67,6 +72,7 @@ export function CompanionWorkspace({
   const [triggerError, setTriggerError] = useState<string | null>(null);
   const [triggersLoaded, setTriggersLoaded] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [instructionsRequest, setInstructionsRequest] = useState(0);
   const memberExists = room.members.some((value) => value.threadId === member);
   const execution = memberExists
     ? threads.find(
@@ -86,7 +92,8 @@ export function CompanionWorkspace({
   );
   useEffect(() => {
     if (section) setSelected(`custom:${section}`);
-  }, [section]);
+    if (section === "instructions") setInstructionsRequest((id) => id + 1);
+  }, [section, sectionRequest]);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -210,6 +217,9 @@ export function CompanionWorkspace({
       </li>
     );
   };
+  const workingThread = threads.find(
+    (thread) => thread.threadId === room.assistant?.threadId,
+  );
   const facts = (
     <>
       <h3>PAW</h3>
@@ -217,6 +227,19 @@ export function CompanionWorkspace({
       <dl>
         <dt>{i18n.t("panels:workingThread")}</dt>
         <dd>
+          {workingThread && onRenameThread ? (
+            <ThreadTitleEditor
+              key={workingThread.threadId}
+              title={threadTitle(workingThread)}
+              editable={
+                !workingThread.archived &&
+                workingThread.status !== "systemError"
+              }
+              onRename={(title) =>
+                onRenameThread(workingThread.threadId, title)
+              }
+            />
+          ) : null}
           {room.assistant ? (
             <button
               type="button"
@@ -272,6 +295,25 @@ export function CompanionWorkspace({
     </>
   );
   const tabsContent = [
+    ...(room.assistant
+      ? [
+          {
+            id: "instructions",
+            title: i18n.t("panels:pawWorkInstructions"),
+            icon: "file" as const,
+            render: () =>
+              resource ? (
+                <div className="companion-content">
+                  <p className="companion-note">
+                    {i18n.t("panels:pawInstructionsBoundary")}
+                  </p>
+                </div>
+              ) : (
+                <p role="status">{i18n.t("panels:unavailableWorkspace")}</p>
+              ),
+          },
+        ]
+      : []),
     {
       id: "overview",
       title: i18n.t("panels:overview"),
@@ -492,21 +534,31 @@ export function CompanionWorkspace({
   ];
   return (
     <AuxiliaryPanel
-      conversation={
-        view.conversationThreadId && renderConversation
-          ? {
-              threadId: view.conversationThreadId,
-              title: (() => {
-                const t = threads.find(
-                  (t) => t.threadId === view.conversationThreadId,
-                );
-                return t ? threadTitle(t) : i18n.t("panels:conversation");
-              })(),
-              render: renderConversation,
-            }
-          : undefined
+      conversations={
+        renderConversation
+          ? (view.conversationThreadIds ?? []).map((threadId) => {
+              const thread = threads.find(
+                (value) => value.threadId === threadId,
+              );
+              return {
+                threadId,
+                title: thread
+                  ? threadTitle(thread)
+                  : i18n.t("panels:conversation"),
+                render: renderConversation,
+              };
+            })
+          : []
       }
       fileDrafts={fileDrafts}
+      messageLinkRequest={
+        section === "instructions" &&
+        selected === "custom:instructions" &&
+        instructionsRequest > 0 &&
+        resource
+          ? { id: instructionsRequest, kind: "file", value: "AGENTS.md" }
+          : null
+      }
       onWidthChange={onWidthChange}
       conversationContext={{
         kind: "room",

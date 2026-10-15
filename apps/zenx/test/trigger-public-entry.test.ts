@@ -40,9 +40,6 @@ test(
         userDataDirectory: directory,
         appServer: {
           request: (method, params) => manager.request(method, params),
-          enqueue: async (params) => {
-            await manager.request("turn/queue", params);
-          },
           onNotification: (listener) => manager.onNotification(listener),
         },
         threadTargets: {
@@ -126,18 +123,15 @@ test(
       }
       assert(entry, "Host timer did not complete");
       assert.equal(entry.threadId, bound.threadId);
-      const read = await manager.request("thread/read", {
+      const read = await manager.request("zen/thread/read", {
         threadId: bound.threadId,
-        includeTurns: true,
       });
       assert(
-        read.thread.turns
-          .flatMap((turn) => turn.items)
-          .some(
-            (item) =>
-              item.type === "userMessage" &&
-              item.clientId === entry?.clientUserMessageId,
-          ),
+        read.thread.items.some(
+          (item) =>
+            item.type === "host_message" &&
+            item.clientId === entry?.clientUserMessageId,
+        ),
       );
       const snapshot = (await invoke("zenx_triggers_list", {})) as {
         triggers: Array<{ id: string; active: boolean }>;
@@ -229,17 +223,14 @@ test(
       let canonicalWatchInput = false;
       const canonicalDeadline = Date.now() + 10_000;
       while (Date.now() < canonicalDeadline) {
-        const watchedRead = await manager.request("thread/read", {
+        const watchedRead = await manager.request("zen/thread/read", {
           threadId: bound.threadId,
-          includeTurns: true,
         });
-        canonicalWatchInput = watchedRead.thread.turns
-          .flatMap((turn) => turn.items)
-          .some(
-            (item) =>
-              item.type === "userMessage" &&
-              item.clientId === watched?.clientUserMessageId,
-          );
+        canonicalWatchInput = watchedRead.thread.items.some(
+          (item) =>
+            item.type === "host_message" &&
+            item.clientId === watched?.clientUserMessageId,
+        );
         if (canonicalWatchInput) break;
         await new Promise((resolve) => setTimeout(resolve, 30));
       }

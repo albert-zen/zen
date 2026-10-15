@@ -176,9 +176,24 @@ test("trusted Room composer switches rooms, sends once, and treats post error as
       null,
       "confirmed technical receipt leaves the chat rail",
     );
+    assert.equal(document.querySelector(".room-message-details"), null);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".room-message-action-more")!
+        .click(),
+    );
+    await act(async () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".room-message-action-popover button",
+        ),
+      ]
+        .find((button) => button.textContent?.includes("Technical details"))!
+        .click(),
+    );
     assert.match(
-      document.querySelector(".room-message-details")!.textContent!,
-      /Message ID: saved/u,
+      document.querySelector(".room-message-technical-fields")!.textContent!,
+      /Message ID:saved/u,
     );
   } finally {
     await act(async () => root.unmount());

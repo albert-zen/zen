@@ -486,8 +486,10 @@ export function contextCompactionTokenBudget(
 function projectsIntoModelContext(item: CanonicalItem): boolean {
   return (
     item.type === "user_message" ||
+    item.type === "host_message" ||
+    item.type === "thread_message" ||
     item.type === "thread_instruction" ||
-    item.type === "agent_message" ||
+    (item.type === "agent_message" && item.incomplete !== true) ||
     item.type === "tool_call" ||
     item.type === "tool_result" ||
     item.type === "failure"
@@ -624,7 +626,8 @@ function successfulFinalMessages(
     } else if (item.type === "turn_completed") {
       if (item.status === "completed") {
         const final = finalByTurn.get(item.turnId);
-        if (final !== undefined) finals.push(final);
+        if (final !== undefined && final.incomplete !== true)
+          finals.push(final);
       }
       finalByTurn.delete(item.turnId);
     } else if (item.type === "turn_aborted") {

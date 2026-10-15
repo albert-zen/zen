@@ -173,23 +173,33 @@ function MarketplaceSettings({
       ),
     [catalog, plugins],
   );
-  const entries = inventory.filter((entry) => {
-    if (filter === "built-in" && entry.source !== "built-in") return false;
-    if (
-      filter === "installed" &&
-      entry.lifecycle !== "enabled" &&
-      entry.lifecycle !== "installed"
-    ) {
-      return false;
-    }
-    const needle = query.trim().toLocaleLowerCase();
-    return (
-      needle.length === 0 ||
-      [entry.name, entry.description, entry.packageSpec ?? ""].some((value) =>
-        value.toLocaleLowerCase().includes(needle),
-      )
-    );
-  });
+  const entries = inventory
+    .map((entry) =>
+      entry.pluginId === "zenx-triggers"
+        ? {
+            ...entry,
+            name: i18n.t("panels:automations"),
+            description: i18n.t("panels:triggerPluginDescription"),
+          }
+        : entry,
+    )
+    .filter((entry) => {
+      if (filter === "built-in" && entry.source !== "built-in") return false;
+      if (
+        filter === "installed" &&
+        entry.lifecycle !== "enabled" &&
+        entry.lifecycle !== "installed"
+      ) {
+        return false;
+      }
+      const needle = query.trim().toLocaleLowerCase();
+      return (
+        needle.length === 0 ||
+        [entry.name, entry.description, entry.packageSpec ?? ""].some((value) =>
+          value.toLocaleLowerCase().includes(needle),
+        )
+      );
+    });
 
   const installSource = async () => {
     if (packageSpec.trim().length === 0) return;

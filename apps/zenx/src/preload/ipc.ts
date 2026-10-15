@@ -1,4 +1,5 @@
 export const ipcChannels = {
+  modelRequestDebug: "zenx:model-request-debug",
   shellPanelRequest: "zenx:shell-panel:request",
   imzenxSetupInspect: "zenx:imzenx-setup:inspect",
   imzenxSetupSaveChannel: "zenx:imzenx-setup:save-channel",
@@ -86,6 +87,7 @@ export const ipcChannels = {
   pluginsChanged: "zenx:plugins:changed",
   browserLiveSubscribe: "zenx:browser-live:subscribe",
   browserLiveUnsubscribe: "zenx:browser-live:unsubscribe",
+  browserOpenExternal: "zenx:browser-live:open-external",
   browserLiveEvent: "zenx:browser-live:event",
   computerLiveSubscribe: "zenx:computer-live:subscribe",
   computerLiveUnsubscribe: "zenx:computer-live:unsubscribe",

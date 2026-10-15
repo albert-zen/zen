@@ -1,5 +1,6 @@
 import type { WorkspaceInstructionFile } from "./item.js";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { codeExecutionOptions } from "./code-options.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
 import {
@@ -26,6 +27,9 @@ import type {
   TurnStartedItem,
   UserInput,
   UserMessageItem,
+  ThreadMessageItem,
+  HostMessageItem,
+  InitialInputMessage,
 } from "./item.js";
 import {
   AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
@@ -40,6 +44,7 @@ import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
 import {
   compileModelMessages,
   compileWorkspaceInstructionMessages,
+  isRetryableModelSampleError,
   type ModelAdapter,
   type ModelMessage,
   type ModelTool,
@@ -146,7 +151,7 @@ export interface RunTurnOptions {
   input: UserInput;
   clientId?: string;
   /** Fixed FIFO admission snapshot; each entry retains a canonical identity. */
-  initialMessages?: readonly { input: UserInput; clientId: string }[];
+  initialMessages?: readonly InitialInputMessage[];
   configuration: RuntimeConfiguration;
   modelAdapter: ModelAdapter;
   signal: AbortSignal;
@@ -172,7 +177,24 @@ export type ToolDefinitionProjection = (
   items: readonly CanonicalItem[],
 ) => readonly ModelTool[];
 
+interface ModelSampleResult {
+  itemId: string;
+  text: string;
+  presentation: ToolPresentationSnapshot;
+  contextBoundaryItemId: string;
+  inputTokens: number | undefined;
+  toolCalls: Array<{
+    callId: string;
+    name: string;
+    arguments: Record<string, unknown>;
+  }>;
+}
+
 export const DEFAULT_MAX_CONCURRENT_TOOL_BODIES = 8;
+
+/** Bounded in-turn replay of side-effect-free model samples. */
+export const DEFAULT_SAMPLE_RETRY_MAX_ATTEMPTS = 3;
+const DEFAULT_SAMPLE_RETRY_BASE_DELAY_MS = 1000;
 
 function assertPositiveExecutionLimit(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -189,6 +211,13 @@ export class AgentRuntime {
   readonly #toolPresentation: ToolPresentation | undefined;
   readonly #toolOutputSpool: ToolOutputSpool | undefined;
   readonly #maxConcurrentToolBodies: number;
+  readonly #sampleRetryMaxAttempts: number;
+  readonly #sampleRetryBaseDelayMs: number;
+  readonly #sampleRetryRandom: () => number;
+  readonly #sampleRetrySleep: (
+    milliseconds: number,
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly #codeStateTails = new Map<string, Promise<void>>();
   readonly #resolveCodeMedia:
     | ((
@@ -206,6 +235,13 @@ export class AgentRuntime {
     toolPresentation?: ToolPresentation;
     toolOutputSpool?: ToolOutputSpool;
     maxConcurrentToolBodies?: number;
+    /** Bounded replay of retryable model sample failures; tests may shrink it. */
+    sampleRetry?: {
+      maxAttempts?: number;
+      baseDelayMs?: number;
+      random?: () => number;
+      sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+    };
     resolveCodeMedia?: (
       media: readonly { type: "image" | "audio"; value: JsonValue }[],
       items: readonly CanonicalItem[],
@@ -237,6 +273,34 @@ export class AgentRuntime {
       );
     }
     this.#maxConcurrentToolBodies = maxConcurrentToolBodies;
+    const sampleRetryMaxAttempts =
+      options.sampleRetry?.maxAttempts ?? DEFAULT_SAMPLE_RETRY_MAX_ATTEMPTS;
+    if (
+      !Number.isSafeInteger(sampleRetryMaxAttempts) ||
+      sampleRetryMaxAttempts < 1
+    ) {
+      throw new Error(
+        "Sample retry max attempts must be a positive safe integer",
+      );
+    }
+    this.#sampleRetryMaxAttempts = sampleRetryMaxAttempts;
+    const sampleRetryBaseDelayMs =
+      options.sampleRetry?.baseDelayMs ?? DEFAULT_SAMPLE_RETRY_BASE_DELAY_MS;
+    if (
+      !Number.isSafeInteger(sampleRetryBaseDelayMs) ||
+      sampleRetryBaseDelayMs < 0
+    ) {
+      throw new Error(
+        "Sample retry base delay must be a non-negative safe integer",
+      );
+    }
+    this.#sampleRetryBaseDelayMs = sampleRetryBaseDelayMs;
+    this.#sampleRetryRandom = options.sampleRetry?.random ?? Math.random;
+    this.#sampleRetrySleep =
+      options.sampleRetry?.sleep ??
+      (async (ms, signal) => {
+        await delay(ms, undefined, { signal });
+      });
   }
 
   hasActiveToolTasks(threadId: string): boolean {
@@ -284,19 +348,46 @@ export class AgentRuntime {
     try {
       this.#assertSandbox(options.configuration.sandbox);
       for (const message of options.initialMessages ?? [
-        { input: options.input, clientId: options.clientId },
+        {
+          input: options.input,
+          clientId: options.clientId,
+          sender: undefined,
+          hostInput: undefined,
+          mode: undefined,
+          messageType: undefined,
+        },
       ]) {
-        const userItem: UserMessageItem = {
-          id: this.#id(),
-          threadId: options.thread.id,
-          turnId,
-          createdAt: this.#now(),
-          type: "user_message",
-          content: message.input,
-          ...(message.clientId === undefined
-            ? {}
-            : { clientId: message.clientId }),
-        };
+        const userItem: UserMessageItem | ThreadMessageItem | HostMessageItem =
+          message.hostInput !== undefined
+            ? {
+                id: this.#id(),
+                threadId: options.thread.id,
+                turnId,
+                createdAt: this.#now(),
+                type: "host_message",
+                sender: "host",
+                mode: "start",
+                ...message.hostInput,
+              }
+            : {
+                id: this.#id(),
+                threadId: options.thread.id,
+                turnId,
+                createdAt: this.#now(),
+                ...(message.sender === undefined
+                  ? { type: "user_message" as const }
+                  : {
+                      type: "thread_message" as const,
+                      sender: message.sender,
+                      clientId: message.clientId!,
+                      mode: message.mode ?? "batch-next",
+                      messageType: message.messageType ?? "guidance",
+                    }),
+                content: message.input,
+                ...(message.clientId === undefined
+                  ? {}
+                  : { clientId: message.clientId }),
+              };
         await this.#completeItem(userItem, options);
       }
       initialInputCommitted = true;
@@ -410,6 +501,7 @@ export class AgentRuntime {
         return;
       }
 
+      const sampleFailureDiagnosticId = failureDiagnosticId(error);
       const failure: FailureItem = {
         id: this.#id(),
         threadId: options.thread.id,
@@ -421,6 +513,12 @@ export class AgentRuntime {
             ? "unsupported_sandbox"
             : "runtime_error",
         message: describeError(error),
+        ...(error instanceof SampleRetriesExhaustedError
+          ? { retried: error.retried }
+          : {}),
+        ...(sampleFailureDiagnosticId === undefined
+          ? {}
+          : { diagnosticId: sampleFailureDiagnosticId }),
       };
       await this.#completeItem(failure, options);
       const completed: TurnCompletedItem = {
@@ -441,21 +539,55 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * Replays retryable sample failures in place. A failed sample is
+   * side-effect-free — Tools run only after a complete sample returns — and
+   * each attempt commits its own partial/usage Items, so the journal stays
+   * append-only and derivable. Exhausted or non-retryable failures surface
+   * unchanged.
+   */
   async #runModel(
     turnId: string,
     options: RunTurnOptions,
-  ): Promise<{
-    itemId: string;
-    text: string;
-    presentation: ToolPresentationSnapshot;
-    contextBoundaryItemId: string;
-    inputTokens: number | undefined;
-    toolCalls: Array<{
-      callId: string;
-      name: string;
-      arguments: Record<string, unknown>;
-    }>;
-  }> {
+  ): Promise<ModelSampleResult> {
+    const maxAttempts = this.#sampleRetryMaxAttempts;
+    for (let attempt = 1; ; attempt += 1) {
+      options.signal.throwIfAborted();
+      const result = await this.#runModelOnce(turnId, options, attempt);
+      if (!("error" in result)) return result;
+      options.signal.throwIfAborted();
+      if (
+        attempt >= maxAttempts ||
+        !isRetryableModelSampleError(result.error)
+      ) {
+        if (
+          attempt > 1 &&
+          result.error instanceof Error &&
+          isRetryableModelSampleError(result.error)
+        ) {
+          throw new SampleRetriesExhaustedError(result.error, attempt - 1);
+        }
+        throw result.error;
+      }
+      const delayMs = Math.round(
+        Math.min(this.#sampleRetryBaseDelayMs * 2 ** (attempt - 1), 30_000) *
+          (1 + this.#sampleRetryRandom()),
+      );
+      console.warn("Model sample retry", {
+        attempt: attempt + 1,
+        maxAttempts,
+        delayMs,
+        reason: describeError(result.error),
+      });
+      await this.#sampleRetrySleep(delayMs, options.signal);
+    }
+  }
+
+  async #runModelOnce(
+    turnId: string,
+    options: RunTurnOptions,
+    sampleAttempt: number,
+  ): Promise<ModelSampleResult | { error: unknown }> {
     const itemId = this.#id();
     let started = false;
     let text = "";
@@ -464,6 +596,11 @@ export class AgentRuntime {
       name: string;
       arguments: Record<string, unknown>;
     }> = [];
+    const completedReasoning: Extract<
+      ReasoningItem,
+      { reasoningContent: string }
+    >[] = [];
+    let failure: { error: unknown } | undefined;
     const reasoningItems = new Map<string, string>();
     const reasoningDeltas = new Map<
       string,
@@ -540,6 +677,15 @@ export class AgentRuntime {
         ),
         signal: options.signal,
         sessionId: options.thread.id,
+        ...(sampleAttempt > 1 ? { isSamplingRetry: true } : {}),
+        debugContext: {
+          threadId: options.thread.id,
+          purpose: "turn",
+          turnId,
+          sampleId: itemId,
+          contextBoundaryItemId,
+          sampleAttempt,
+        },
       })) {
         if (event.type === "text_delta") {
           if (!started) {
@@ -606,8 +752,8 @@ export class AgentRuntime {
               ? {}
               : { providerItemId: event.providerItemId }),
           };
-          await options.commit(reasoning);
-          options.emit({ type: "item_completed", item: reasoning });
+          // Later tool validation can still invalidate this entire sample.
+          completedReasoning.push(reasoning);
           if (event.reasoningId !== undefined) {
             reasoningItems.delete(event.reasoningId);
             reasoningDeltas.delete(event.reasoningId);
@@ -644,12 +790,23 @@ export class AgentRuntime {
           });
         }
       }
+      options.signal.throwIfAborted();
       if (reasoningItems.size > 0) {
         throw new Error("Model stream ended with incomplete reasoning");
       }
     } catch (error) {
-      // Never retry a journal append whose outcome is unknown.
       if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
+      failure = { error };
+    }
+    // All canonical writes are outside the sample-error boundary: preparation
+    // and persistence failures cannot become a replayable model failure.
+    for (const reasoning of completedReasoning) {
+      const snapshot: ReasoningItem =
+        failure === undefined ? reasoning : { ...reasoning, incomplete: true };
+      await options.commit(snapshot);
+      options.emit({ type: "item_completed", item: snapshot });
+    }
+    if (failure !== undefined) {
       for (const [reasoningId, partialId] of reasoningItems) {
         const partial = reasoningDeltas.get(reasoningId)!;
         if (!partial.content && !partial.summary) continue;
@@ -675,26 +832,29 @@ export class AgentRuntime {
           createdAt: this.#now(),
           type: "agent_message",
           text,
+          // Superseded by a retry or by the surfaced failure; never replayed
+          // to the model.
+          incomplete: true,
         };
         await options.commit(snapshot);
         options.emit({ type: "item_completed", item: snapshot });
       }
-      throw error;
-    } finally {
-      if (latestUsage !== undefined) {
-        const usage: ModelUsageItem = {
-          id: this.#id(),
-          threadId: options.thread.id,
-          turnId,
-          createdAt: this.#now(),
-          type: "model_usage",
-          modelResponseId: itemId,
-          ...latestUsage,
-        };
-        await options.commit(usage);
-        options.emit({ type: "item_completed", item: usage });
-      }
     }
+    if (latestUsage !== undefined) {
+      const usage: ModelUsageItem = {
+        id: this.#id(),
+        threadId: options.thread.id,
+        turnId,
+        createdAt: this.#now(),
+        type: "model_usage",
+        modelResponseId: itemId,
+        ...latestUsage,
+      };
+      await options.commit(usage);
+      options.emit({ type: "item_completed", item: usage });
+    }
+
+    if (failure !== undefined) return failure;
 
     if (!started && toolCalls.length === 0) {
       options.emit({
@@ -1651,6 +1811,26 @@ function readCommand(toolCall: {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** Internal marker: a retryable sample failure that exhausted its replay budget. */
+class SampleRetriesExhaustedError extends Error {
+  readonly retried: number;
+
+  constructor(cause: Error, retried: number) {
+    super(cause.message);
+    this.name = "SampleRetriesExhaustedError";
+    this.cause = cause;
+    this.retried = retried;
+  }
+}
+
+function failureDiagnosticId(error: unknown): string | undefined {
+  const direct = (error as { diagnosticId?: unknown } | null)?.diagnosticId;
+  if (typeof direct === "string") return direct;
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  const nested = (cause as { diagnosticId?: unknown } | null)?.diagnosticId;
+  return typeof nested === "string" ? nested : undefined;
 }
 
 function describeError(error: unknown): string {

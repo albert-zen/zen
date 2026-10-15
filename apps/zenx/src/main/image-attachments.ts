@@ -12,7 +12,11 @@ import {
   type AttachmentRef,
   type AttachmentStore,
 } from "../../../../src/attachment.js";
-import { contentFromUserMessage } from "../../../../src/item.js";
+import {
+  projectThreadAttachmentItems,
+  type ZenXThreadAttachmentProjection,
+} from "../thread-attachment-projection.js";
+export type { ZenXThreadAttachmentProjection } from "../thread-attachment-projection.js";
 
 export interface ZenXImageDraft {
   id: string;
@@ -25,11 +29,6 @@ export interface ZenXImageImport {
   mediaType: string;
   bytes: Uint8Array;
 }
-
-export type ZenXThreadAttachmentProjection = Record<
-  string,
-  readonly AttachmentRef[]
->;
 
 export function imageDraft(
   filename: string,
@@ -66,34 +65,7 @@ export async function importImageDrafts(
 export function projectThreadAttachments(
   snapshot: ThreadSnapshot,
 ): ZenXThreadAttachmentProjection {
-  const calls = new Map(
-    snapshot.items.flatMap((item) =>
-      item.type === "tool_call"
-        ? [[JSON.stringify([item.turnId, item.callId]), item.id] as const]
-        : [],
-    ),
-  );
-  return Object.fromEntries(
-    snapshot.items.flatMap((item) => {
-      const id =
-        item.type === "user_message"
-          ? item.id
-          : item.type === "tool_result"
-            ? calls.get(JSON.stringify([item.turnId, item.callId]))
-            : undefined;
-      if (id === undefined) return [];
-      const content =
-        item.type === "user_message"
-          ? contentFromUserMessage(item)
-          : item.type === "tool_result"
-            ? (item.modelContent ?? [])
-            : [];
-      const attachments = content.flatMap((part) =>
-        part.type === "image" ? [part.attachment] : [],
-      );
-      return attachments.length === 0 ? [] : [[id, attachments] as const];
-    }),
-  );
+  return projectThreadAttachmentItems(snapshot.items);
 }
 
 export async function readAttachmentPayload(

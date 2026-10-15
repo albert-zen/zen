@@ -1,0 +1,644 @@
+/* File discovery and source viewing share shell tokens, never a separate theme. */
+.workspace-file-picker,
+.workspace-file-explorer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.workspace-file-picker {
+  height: 100%;
+}
+.workspace-file-explorer {
+  flex: 1;
+}
+.workspace-file-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  margin: 4px 12px 10px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 7px;
+  background: var(--color-surface-main);
+  color: var(--color-text-secondary);
+}
+.workspace-file-search:focus-within {
+  outline: 2px solid var(--color-text-accent);
+  outline-offset: 1px;
+}
+.workspace-file-search > svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+.workspace-file-search input {
+  border: 0;
+  outline: none;
+  min-width: 0;
+  width: 100%;
+  padding: 8px 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+.workspace-file-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.workspace-file-search .icon-button,
+.workspace-file-tree-heading .icon-button {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+}
+.workspace-file-tree-heading {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px 4px;
+  gap: 5px;
+}
+.workspace-file-tree-heading > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.workspace-file-tree-scroll {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 0 6px 6px;
+}
+.workspace-file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 31px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.workspace-file-row:hover {
+  background: var(--color-surface-hover);
+}
+.workspace-file-row[aria-selected="true"] {
+  background: var(--color-surface-hover);
+}
+.workspace-file-row:focus-visible {
+  outline: 2px solid var(--color-text-accent);
+  outline-offset: -2px;
+}
+.workspace-file-row > svg {
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+  color: var(--color-text-secondary);
+}
+.workspace-file-row[data-kind="directory"] > svg {
+  color: var(--color-text-accent);
+}
+.workspace-file-disclosure {
+  display: inline-flex;
+  flex: 0 0 12px;
+  width: 12px;
+}
+.workspace-file-disclosure svg {
+  width: 12px;
+  height: 12px;
+}
+.workspace-file-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+.workspace-file-label > span,
+.workspace-file-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-file-label small {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.workspace-file-note {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  padding: 8px 12px;
+  margin: 0;
+}
+.workspace-file-note[role="alert"] {
+  color: var(--color-status-danger);
+}
+.workspace-file-search-hint {
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+.workspace-file-open-path {
+  margin: 6px 12px;
+  padding: 6px 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 5px;
+  color: var(--color-text-primary);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-files-panel .file-content:has(> .workspace-file-explorer) {
+  display: flex;
+  padding: 8px 0 0;
+}
+.file-location {
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-files-panel .file-content:has(.file-source-editor) {
+  padding: 0;
+}
+.workspace-files-panel
+  .file-content:has(.file-source-editor)
+  > .file-save-status {
+  padding-inline: 14px;
+}
+.file-source-editor {
+  min-height: 0;
+  min-width: 0;
+  font-size: 13px;
+}
+.file-source-editor .cm-editor {
+  background: transparent;
+}
+.file-source-editor .cm-focused {
+  outline: none;
+}
+.file-source-editor .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.65;
+  overflow: auto;
+}
+.file-source-editor .cm-content {
+  padding: 10px 0;
+  caret-color: var(--color-text-primary);
+}
+.file-source-editor .cm-line {
+  padding: 0 14px 0 8px;
+}
+.file-source-editor .cm-gutters {
+  color: var(--color-text-secondary);
+  background: var(--color-surface-main);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.file-source-editor .cm-activeLine,
+.file-source-editor .cm-activeLineGutter {
+  background: var(--color-surface-hover);
+}
+.file-source-editor .cm-cursor {
+  border-left-color: var(--color-text-primary);
+}
+.file-source-editor .cm-selectionBackground {
+  background: var(--color-surface-hover);
+}
+.file-conflict .file-source-editor {
+  max-height: 240px;
+  overflow: auto;
+}
+@media (pointer: coarse), (max-width: 700px) {
+  .workspace-file-row {
+    min-height: 44px;
+  }
+  .workspace-file-search {
+    min-height: 44px;
+  }
+  .workspace-file-search .icon-button,
+  .workspace-file-tree-heading .icon-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+}
+
+/* Navigation is part of the existing auxiliary workspace, alongside its tabs. */
+.auxiliary-panel {
+  container-type: inline-size;
+  container-name: auxiliary;
+}
+.auxiliary-body,
+.auxiliary-views {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.auxiliary-views {
+  flex-direction: column;
+}
+.auxiliary-views[hidden],
+.workspace-file-navigation[hidden],
+.workspace-picker-heading[hidden] {
+  display: none;
+}
+.workspace-file-navigation {
+  display: flex;
+  width: var(--file-navigation-width, 192px);
+  flex: 0 0 var(--file-navigation-width, 192px);
+  min-height: 0;
+  background: var(--color-surface-wash-subtle);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.auxiliary-body[data-picking="true"] > .workspace-file-navigation {
+  width: 100%;
+  flex: 1;
+  border: 0;
+}
+.workspace-file-navigation .workspace-file-picker {
+  min-width: 0;
+  padding-top: 8px;
+}
+.workspace-file-search {
+  min-height: 30px;
+  margin: 0 8px 6px;
+  gap: 5px;
+  padding-inline: 7px;
+  border-radius: 5px;
+  background: var(--color-surface-inset);
+}
+.workspace-file-search input {
+  padding-block: 6px;
+  font-size: 12px;
+}
+.workspace-file-search > svg {
+  width: 13px;
+  height: 13px;
+}
+.workspace-file-tree-heading {
+  min-height: 30px;
+  padding: 0 8px 2px;
+}
+.workspace-file-tree-heading > span {
+  font-size: 11px;
+  font-weight: 550;
+}
+.workspace-file-tree-scroll {
+  padding-inline: 4px;
+}
+.workspace-file-row {
+  min-height: 28px;
+  padding-block: 4px;
+  gap: 5px;
+  border-radius: 4px;
+  font: 12px/1.5 var(--font-mono);
+}
+.workspace-file-row > svg {
+  width: 14px;
+  height: 14px;
+  flex-basis: 14px;
+}
+.workspace-file-row[data-kind="directory"] > svg {
+  color: var(--color-text-muted);
+}
+.workspace-file-row[data-current="true"] {
+  background: var(--color-accent-soft);
+  color: var(--color-text-accent);
+}
+.workspace-file-row[data-extension="tsx"] > svg,
+.workspace-file-row[data-extension="ts"] > svg {
+  color: var(--color-text-accent);
+}
+.workspace-file-row[data-extension="json"] > svg {
+  color: var(--color-status-warning);
+}
+.workspace-file-row[data-extension="md"] > svg {
+  color: var(--color-text-secondary);
+}
+.workspace-file-row[data-extension="css"] > svg {
+  color: var(--color-text-violet);
+}
+.workspace-file-label small {
+  font: 10px/1.4 var(--font-body);
+}
+.workspace-file-search-hint {
+  padding: 7px 10px;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
+}
+.workspace-file-open-path {
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  border-radius: 0;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.workspace-file-open-path:hover {
+  background: var(--color-surface-hover);
+}
+.file-location {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 3px 10px;
+  font-family: var(--font-mono);
+}
+.file-location-path {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.file-location-path > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-location-path > span:last-child {
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+.file-location-path > svg {
+  color: var(--color-text-muted);
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.file-location .icon-button {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+.file-location-status {
+  color: var(--color-text-muted);
+  font: 10px var(--font-body);
+  white-space: nowrap;
+}
+.file-source-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.file-source-editor > div:last-child {
+  min-height: 0;
+  flex: 1;
+}
+.file-source-editor .cm-editor {
+  height: 100%;
+}
+.file-source-editor .cm-scroller {
+  line-height: 1.7;
+  font-size: 12px;
+}
+.file-source-editor .cm-gutters {
+  border: 0;
+  color: var(--color-text-muted);
+}
+.file-source-editor .cm-lineNumbers .cm-gutterElement {
+  padding-inline: 12px;
+}
+.workspace-files-panel .file-content:has(> .file-source-editor) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+@container auxiliary (max-width: 499px) {
+  .auxiliary-body[data-files="true"] {
+    flex-direction: column;
+  }
+  .workspace-file-navigation {
+    width: 100%;
+    flex: 0 0 var(--file-navigation-height, 180px);
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+  .auxiliary-body[data-picking="true"] > .workspace-file-navigation {
+    flex: 1;
+  }
+  .workspace-file-navigation .workspace-file-search-hint {
+    display: none;
+  }
+  .file-location-status {
+    display: none;
+  }
+}
+@media (pointer: coarse) {
+  .workspace-file-row,
+  .workspace-file-search {
+    min-height: 44px;
+  }
+  .workspace-file-search .icon-button,
+  .workspace-file-tree-heading .icon-button,
+  .file-location .icon-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+}
+
+/* One compact, editor-local Find bar, shared by source and Markdown. */
+.cm-file-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--color-surface-inset);
+  color: var(--color-text-primary);
+  font: 12px var(--font-body);
+}
+.cm-file-search-input {
+  flex: 1;
+  min-width: 90px;
+  width: 120px;
+  height: 28px;
+  padding: 4px 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-main);
+  font: 12px var(--font-body);
+}
+.cm-file-search-input:focus-visible {
+  outline: 2px solid var(--color-text-accent);
+  outline-offset: -1px;
+}
+.cm-file-search-count {
+  min-width: 42px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  text-align: center;
+}
+.cm-file-search .cm-file-search-button {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  font: 17px var(--font-body);
+}
+:is(.file-source-editor, .markdown-live-editor) .cm-searchMatch {
+  background: var(--color-accent-soft);
+  outline: 1px solid var(--color-border-accent);
+}
+:is(.file-source-editor, .markdown-live-editor) .cm-searchMatch-selected {
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+}
+:is(.file-source-editor, .markdown-live-editor) .cm-panels {
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface-inset);
+}
+@media (pointer: coarse) {
+  .cm-file-search-input,
+  .cm-file-search .cm-file-search-button {
+    min-height: 44px;
+  }
+  .cm-file-search .cm-file-search-button {
+    min-width: 44px;
+  }
+}
+
+.workspace-file-name {
+  display: flex;
+  min-width: 0;
+}
+.workspace-file-name-prefix {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-file-name-suffix {
+  flex-shrink: 0;
+}
+
+/* T3-style single-row file actions; the arrows collapse folders, never context. */
+.workspace-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px 6px;
+  min-width: 0;
+}
+.workspace-file-actions > .workspace-file-search {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-inline: 6px;
+}
+.workspace-file-actions > .icon-button {
+  width: 26px;
+  height: 28px;
+  flex: 0 0 26px;
+}
+.workspace-file-actions > .icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+.workspace-file-actions > [data-refreshing="true"] svg {
+  animation: workspace-file-refresh 900ms linear infinite;
+}
+@keyframes workspace-file-refresh {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-file-actions > [data-refreshing="true"] svg {
+    animation: none;
+  }
+}
+@media (pointer: coarse) {
+  .workspace-file-actions > .icon-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+}
+
+/* The editor owns scrolling; its height follows the pane rather than the viewport. */
+.auxiliary-content:has(> .workspace-files-panel) {
+  overflow: hidden;
+}
+.workspace-files-panel
+  .file-content:has(> :is(.file-source-editor, .markdown-live-editor)) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-files-panel
+  .file-content
+  > :not(.file-source-editor, .markdown-live-editor) {
+  flex-shrink: 0;
+}
+.workspace-files-panel .file-content > .markdown-live-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-files-panel .markdown-live-editor .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+.workspace-files-panel .markdown-live-editor .cm-scroller {
+  overflow: auto;
+}
+.workspace-files-panel .file-conflict {
+  max-height: 40%;
+  overflow: auto;
+}
+.workspace-file-resizer {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 6px;
+  margin-inline: -3px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.workspace-file-resizer:hover,
+.workspace-file-resizer:focus-visible {
+  background: var(--color-accent-soft);
+  outline: 1px solid var(--color-text-accent);
+  outline-offset: -1px;
+}
+.workspace-file-resizer[hidden] {
+  display: none;
+}
+@container auxiliary (max-width: 499px) {
+  .workspace-file-resizer {
+    margin-inline: 0;
+    margin-block: -3px;
+    cursor: row-resize;
+  }
+}
