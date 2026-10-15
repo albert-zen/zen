@@ -1,6 +1,13 @@
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import {
@@ -11,6 +18,23 @@ import {
 import { Icon } from "./icons.js";
 import { threadTitle } from "./thread-list.js";
 import { useAppearance } from "./PluginProductPage.js";
+
+import type { ModelSummary } from "../../protocol-client/index.js";
+import {
+  decodeModelKey,
+  encodeModelKey,
+} from "../../../../../src/protocol/model-key.js";
+import {
+  Select,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "./ui/controls.js";
+
+export const SubagentCreationModelsContext = createContext<{
+  models: readonly ModelSummary[];
+  error: string | null;
+}>({ models: [], error: null });
 
 type RelatedThread = NativeThreadSummary & { parentThreadId?: string };
 
@@ -133,10 +157,41 @@ function CreateSideChat({
   compact?: boolean;
 }) {
   useTranslation("panels");
+  const catalog = useContext(SubagentCreationModelsContext);
+  const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const parentSummary = contextThreads(sdk.context.threads).find(
+    (entry) => entry.threadId === parent && entry.status !== "systemError",
+  );
+  const inheritedModel =
+    parentSummary?.status !== "systemError" && parentSummary
+      ? encodeModelKey({
+          providerProfileId:
+            parentSummary.currentMetadata.providerProfileId ??
+            parentSummary.currentMetadata.provider,
+          modelId:
+            parentSummary.currentMetadata.modelId ??
+            parentSummary.currentMetadata.model,
+        })
+      : "";
+  const availableModels = catalog.models.filter((entry) => !entry.hidden);
+  const selectedModel = availableModels.find(
+    (entry) => entry.id === (model || inheritedModel),
+  );
+  const efforts = selectedModel?.supportedReasoningEfforts ?? [];
+  const selectionInvalid =
+    (model !== "" && (!selectedModel || catalog.error !== null)) ||
+    (effort !== "" &&
+      (catalog.error !== null ||
+        !efforts.some((entry) => entry.reasoningEffort === effort)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef(false);
   const active = sdk.context.active !== false;
+  useEffect(() => {
+    if (!active || busy) setOptionsOpen(false);
+  }, [active, busy]);
   const epoch = useRef(0);
   useLayoutEffect(() => {
     epoch.current += 1;
@@ -152,7 +207,7 @@ function CreateSideChat({
     };
   }, []);
   const create = async () => {
-    if (inflight.current || !active) return;
+    if (inflight.current || !active || selectionInvalid) return;
     inflight.current = true;
     const source = parent;
     const requestEpoch = epoch.current;
@@ -162,6 +217,8 @@ function CreateSideChat({
       const result = (await sdk.commands.execute("create", {
         parentThreadId: source,
         mode: "side-chat",
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
       })) as { thread?: { id?: string }; threadId?: string };
       const id = result.thread?.id ?? result.threadId;
       if (!id) throw new Error(i18n.t("panels:newConversationUnidentified"));
@@ -186,7 +243,7 @@ function CreateSideChat({
         className={`subagent-create-button${compact ? " subagent-create-button-compact" : ""}`}
         aria-label={i18n.t("panels:newSideChat")}
         title={i18n.t("panels:forkThisConversationIntoASideChat")}
-        disabled={!parent || busy || !active}
+        disabled={!parent || busy || !active || selectionInvalid}
         onClick={() => void create()}
       >
         <Icon name="plus" />
@@ -196,6 +253,78 @@ function CreateSideChat({
           </span>
         )}
       </button>
+      {compact ? null : (
+        <Popover
+          open={optionsOpen && active && !busy}
+          onOpenChange={setOptionsOpen}
+        >
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="subagent-create-options icon-button"
+              aria-label={i18n.t("panels:sideChatModelSettings")}
+              title={i18n.t("panels:sideChatModelSettings")}
+              disabled={!parent || busy || !active}
+            >
+              <Icon name="settings" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="subagent-model-options" align="end">
+            <strong>{i18n.t("panels:sideChatModelSettings")}</strong>
+            <label>
+              <span>{i18n.t("panels:childModel")}</span>
+              <Select
+                aria-label={i18n.t("panels:childModel")}
+                value={model}
+                onValueChange={(value) => {
+                  setModel(value);
+                  setEffort("");
+                }}
+              >
+                <option value="">{i18n.t("panels:inheritParentModel")}</option>
+                {availableModels.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.displayName} (
+                    {decodeModelKey(entry.id).providerProfileId})
+                  </option>
+                ))}
+                {model &&
+                !availableModels.some((entry) => entry.id === model) ? (
+                  <option value={model} disabled>
+                    {i18n.t("shell:unavailableModel")}
+                  </option>
+                ) : null}
+              </Select>
+            </label>
+            <label>
+              <span>{i18n.t("panels:childReasoningEffort")}</span>
+              <Select
+                aria-label={i18n.t("panels:childReasoningEffort")}
+                value={effort}
+                disabled={efforts.length === 0}
+                onValueChange={setEffort}
+              >
+                <option value="">
+                  {i18n.t("panels:inheritOrModelDefault")}
+                </option>
+                {efforts.map((entry) => (
+                  <option
+                    key={entry.reasoningEffort}
+                    value={entry.reasoningEffort}
+                  >
+                    {entry.reasoningEffort}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <small>{i18n.t("panels:childSelectionBeforeCreation")}</small>
+            {catalog.error ? <p role="alert">{catalog.error}</p> : null}
+            {selectionInvalid ? (
+              <p role="alert">{i18n.t("panels:childSelectionUnavailable")}</p>
+            ) : null}
+          </PopoverContent>
+        </Popover>
+      )}
       {error ? (
         <p className="subagent-create-error" role="alert">
           {error}

@@ -645,3 +645,7 @@ Items remains the default debugger tab in canonical order. Tool call arguments,
 tool result content and tool images start collapsed and mount only after an
 explicit disclosure. Exact Item JSON and the existing full-content controls stay
 available; debug mode does not add conversation copy/fork actions.
+
+### 2026-10-15: Side chat creation settings
+
+The Subagents panel keeps one-click inherited side-chat creation and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Creation still starts no Turn. The workspace launcher plus remains the inherited one-click action.

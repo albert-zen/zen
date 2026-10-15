@@ -38,7 +38,7 @@ import {
   threadSettings,
   threadSettingsUpdated,
 } from "./mapper.js";
-import { decodeModelKey, encodeModelKey } from "./model-key.js";
+import { resolveModelKey, encodeModelKey } from "../model-key.js";
 import {
   isNotification,
   isRecord,
@@ -826,37 +826,21 @@ export class CodexConnection {
     effort: string | undefined,
     fallbackProviderProfileId?: string,
   ): ProviderSelectionInput {
-    let identity: ReturnType<typeof decodeModelKey>;
-    if (model.startsWith("zen-model-v1:")) {
-      try {
-        identity = decodeModelKey(model);
-      } catch (error) {
-        throw new InvalidParamsError(describeError(error));
-      }
-    } else {
-      const matches = this.#appServer
-        .listModels()
-        .filter((entry) => entry.model.id === model);
-      if (matches.length > 1) {
-        throw new InvalidParamsError(
-          `Model id ${model} is ambiguous; use the opaque key from model/list`,
-        );
-      }
-      const matched = matches[0];
-      identity = {
-        providerProfileId:
-          matched?.providerProfileId ??
+    try {
+      return {
+        ...resolveModelKey(
+          model,
+          this.#appServer.listModels(),
           fallbackProviderProfileId ??
-          this.#appServer.listModels().find((entry) => entry.isDefault)
-            ?.providerProfileId ??
-          "",
-        modelId: model,
+            this.#appServer.listModels().find((entry) => entry.isDefault)
+              ?.providerProfileId ??
+            "",
+        ),
+        ...(effort === undefined ? {} : { reasoningEffort: effort }),
       };
+    } catch (error) {
+      throw new InvalidParamsError(describeError(error));
     }
-    return {
-      ...identity,
-      ...(effort === undefined ? {} : { reasoningEffort: effort }),
-    };
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {

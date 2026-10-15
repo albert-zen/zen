@@ -13,7 +13,7 @@ import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 const { act, createElement } = React;

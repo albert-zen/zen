@@ -10,10 +10,8 @@ import type {
 } from "../../../../src/protocol/native/wire.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { CanonicalItem } from "../../../../src/item.js";
-import type {
-  CreateChildThreadInput,
-  ThreadSnapshot,
-} from "../../../../src/app-server.js";
+import type { ThreadSnapshot } from "../../../../src/app-server.js";
+import type { NativeCreateChildThreadParams } from "../../../../src/protocol/native/wire.js";
 import type {
   NativeProjectedThreadEvent,
   NativeThreadRecoverySnapshot,
@@ -197,7 +195,8 @@ export interface ClientRequestParams {
   "zen/thread/delete": { threadId: string; expectedLastItemId: string };
   "zen/thread/deleted/list": Record<string, never>;
   "zen/thread/restore": { threadId: string; deletionItemId: string };
-  "zen/thread/create-child": CreateChildThreadInput;
+  "zen/thread/create-child": NativeCreateChildThreadParams;
+  "zen/thread/create-child-configured": NativeCreateChildThreadParams;
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
     limit?: number;
@@ -297,6 +296,7 @@ export interface ClientRequestResults {
   };
   "zen/thread/restore": { thread: ThreadSnapshot };
   "zen/thread/create-child": { thread: ThreadSnapshot };
+  "zen/thread/create-child-configured": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {
     data: Thread[];

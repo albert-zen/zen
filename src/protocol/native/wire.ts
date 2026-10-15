@@ -60,7 +60,16 @@ export interface NativeForkThreadResult {
   thread: ThreadSnapshot;
 }
 export const NATIVE_THREAD_CREATE_CHILD_METHOD = "zen/thread/create-child";
-export type NativeCreateChildThreadParams = CreateChildThreadInput;
+/** Older Hosts must reject configured creation rather than ignore its selection. */
+export const NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD =
+  "zen/thread/create-child-configured";
+export interface NativeCreateChildThreadParams extends Pick<
+  CreateChildThreadInput,
+  "parentThreadId" | "mode"
+> {
+  model?: string;
+  effort?: string;
+}
 export interface NativeCreateChildThreadResult {
   thread: ThreadSnapshot;
 }

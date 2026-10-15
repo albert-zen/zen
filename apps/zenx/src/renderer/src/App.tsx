@@ -92,7 +92,7 @@ import type {
 import {
   decodeModelKey,
   encodeModelKey,
-} from "../../../../../src/protocol/codex/model-key.js";
+} from "../../../../../src/protocol/model-key.js";
 import {
   addApprovalRequest,
   markApprovalResponding,
@@ -176,6 +176,7 @@ import {
 import {
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
+  SubagentCreationModelsContext,
 } from "./subagents-ui.js";
 import { cancellationResultsFromItems } from "./queue-cancel-state.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
@@ -417,6 +418,23 @@ function updateThreadProjectionCache(
   const next = { ...updated, activeTurnNotifications };
   cache.set(threadId, next);
   return next;
+}
+
+function AppConversationProviders({
+  models,
+  modelCatalogError,
+  ...actions
+}: React.ComponentProps<typeof ThreadViewActionsProvider> & {
+  models: readonly ModelSummary[];
+  modelCatalogError: string | null;
+}) {
+  return (
+    <SubagentCreationModelsContext.Provider
+      value={{ models, error: modelCatalogError }}
+    >
+      <ThreadViewActionsProvider {...actions} />
+    </SubagentCreationModelsContext.Provider>
+  );
 }
 
 export function App() {
@@ -2843,7 +2861,12 @@ function AppContent() {
   );
 
   return (
-    <ThreadViewActionsProvider fork={forkMessage} source={openMessageSource}>
+    <AppConversationProviders
+      fork={forkMessage}
+      source={openMessageSource}
+      models={models}
+      modelCatalogError={modelCatalogError}
+    >
       <div
         className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarOpen ? " sidebar-open" : ""}`}
         style={
@@ -3557,7 +3580,7 @@ function AppContent() {
           />
         ) : null}
       </div>
-    </ThreadViewActionsProvider>
+    </AppConversationProviders>
   );
 }
 

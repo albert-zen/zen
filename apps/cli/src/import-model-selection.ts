@@ -1,4 +1,4 @@
-import { decodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { decodeModelKey } from "../../../src/protocol/model-key.js";
 import type { ProviderSelectionInput } from "../../../src/provider-registry.js";
 
 /** Resolve an explicit CLI choice against the actual target Host catalog. */
