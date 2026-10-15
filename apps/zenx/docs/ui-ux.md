@@ -645,3 +645,7 @@ Items remains the default debugger tab in canonical order. Tool call arguments,
 tool result content and tool images start collapsed and mount only after an
 explicit disclosure. Exact Item JSON and the existing full-content controls stay
 available; debug mode does not add conversation copy/fork actions.
+
+### 2026-10-15: Consistent interface icon semantics
+
+Triggers use the existing clock artwork throughout navigation, workspace tabs and launchers, Marketplace, and delivered or queued message sources. The public plugin icon key `trigger` remains supported as an alias of `clock`, so plugin contributions cannot reintroduce a different Trigger glyph. Settings → Plugins uses the existing plug. Thread message source actions use the existing conversation bubble, including remote/unavailable sources, while trace/list controls retain their own icons. File tabs use the file icon and the file-tree visibility toggle uses the folder icon; neither uses context-compaction artwork. These changes reuse the existing icon sizes, strokes, containers and localized labels, without altering source navigation, Trigger execution or file disclosure behavior.

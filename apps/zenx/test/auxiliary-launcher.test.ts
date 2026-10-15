@@ -72,6 +72,10 @@ for (const language of ["en", "zh-CN"]) {
         rows[1]!.querySelector("strong")?.textContent,
         language === "en" ? "Triggers" : "触发器",
       );
+      assert.ok(
+        rows[1]!.querySelector('svg[data-icon="trigger"] circle'),
+        "Triggers launcher uses clock artwork",
+      );
       const quickCreate = rows[0]!.querySelector<HTMLButtonElement>(
         ".subagent-create-button",
       )!;
