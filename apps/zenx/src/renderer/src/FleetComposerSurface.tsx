@@ -338,6 +338,7 @@ export function FleetComposerSurface({
         ref={machineTrigger}
         aria-label={t("fleetComposer.runOn")}
         className="fleet-machine-trigger"
+        popoverClassName="fleet-machine-popover"
         value={deviceId}
         disabled={disabled || busy || locator !== null}
         title={

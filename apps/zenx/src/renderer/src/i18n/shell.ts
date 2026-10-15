@@ -659,6 +659,8 @@ export const en = {
   toolSetup: "Tool setup",
   triggerWakeup: "Trigger",
   turnCacheTelemetry: "Turn cache telemetry",
+  outputRate: "output {{rate}} tok/s (Turn duration)",
+  outputRateUnknown: "output speed unknown",
   unarchive: "Unarchive",
   unarchiving: "Unarchiving…",
   unavailableJournal: "Unavailable journal",
@@ -884,6 +886,8 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  outputRate: "输出 {{rate}} tok/s（按 Turn 时长）",
+  outputRateUnknown: "输出速度未知",
   debugItemPaging: "Item 分页",
   debugItemRange: "第 {{start}}–{{end}} 条，共 {{count}} 条 Items",
   debugPreviousItems: "上一页",

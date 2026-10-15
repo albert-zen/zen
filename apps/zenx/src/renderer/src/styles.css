@@ -9846,8 +9846,21 @@ button:disabled {
 }
 .trace-toggle {
   width: 100%;
-  grid-template-columns: 16px minmax(120px, 1fr) auto 14px;
+  grid-template-columns: 32px minmax(120px, 1fr) auto 14px;
   padding: 5px 6px;
+}
+.trace-tool-icons {
+  display: flex;
+  width: 32px;
+  height: 16px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.trace-tool-icons > svg {
+  flex: none;
 }
 .trace-toggle > .trace-activity-title {
   color: var(--text-2);
@@ -10038,7 +10051,7 @@ button:disabled {
 }
 @container (max-width: 460px) {
   .trace-toggle {
-    grid-template-columns: 16px minmax(0, 1fr) 14px;
+    grid-template-columns: 32px minmax(0, 1fr) 14px;
     gap: 5px 8px;
   }
   .trace-toggle > .trace-counts {
@@ -11277,6 +11290,12 @@ button:disabled {
   .thread-debug-menu-switch > span {
     background: ButtonText;
   }
+}
+
+/* Native view background is synchronized separately; this also paints the
+   empty viewport before the Electron child view is mounted. */
+.workspace-browser-viewport[data-blank="true"] {
+  background: var(--color-surface-browser-blank);
 }
 
 .remote-message-source-dialog {

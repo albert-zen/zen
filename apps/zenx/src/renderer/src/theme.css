@@ -28,6 +28,7 @@
   --color-canvas: #090a0c;
   --color-surface-sidebar: #111216;
   --color-surface-main: #0d0e11;
+  --color-surface-browser-blank: #000000;
   --color-surface: #15171c;
   --color-surface-elevated: #1a1c22;
   --color-surface-emphasis: #20232a;
@@ -137,6 +138,7 @@
 }
 
 :root[data-appearance="light"] {
+  --color-surface-browser-blank: #ffffff;
   color-scheme: light;
   --color-canvas: #e8eaf1;
   --color-surface-sidebar: #eff1f6;

@@ -290,6 +290,14 @@ export function applyNativeThreadEvent(
     );
   }
   const existing = thread.turns.find((turn) => turn.id === event.turnId);
+  const canonicalStart = thread.canonicalItems?.find(
+    (item) => item.type === "turn_started" && item.turnId === event.turnId,
+  );
+  const canonicalEnd = thread.canonicalItems?.findLast(
+    (item) =>
+      (item.type === "turn_completed" || item.type === "turn_aborted") &&
+      item.turnId === event.turnId,
+  );
   return applyThreadViewNotification(
     thread,
     "turn/completed",
@@ -304,9 +312,13 @@ export function applyNativeThreadEvent(
         startedAt: existing?.startedAt ?? null,
         completedAt: nowSeconds,
         durationMs:
-          existing?.startedAt === null || existing?.startedAt === undefined
+          canonicalStart === undefined || canonicalEnd === undefined
             ? null
-            : Math.max(0, (nowSeconds - existing.startedAt) * 1_000),
+            : Math.max(
+                0,
+                Date.parse(canonicalEnd.createdAt) -
+                  Date.parse(canonicalStart.createdAt),
+              ),
       },
     },
     nowSeconds,
@@ -623,7 +635,11 @@ function projectNativeThread(
         durationMs:
           startedAt === null || completedAt === null
             ? null
-            : Math.max(0, (completedAt - startedAt) * 1_000),
+            : Math.max(
+                0,
+                Date.parse(terminal!.createdAt) -
+                  Date.parse(started!.createdAt),
+              ),
       };
     }),
   };
