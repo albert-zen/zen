@@ -7,6 +7,7 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -329,4 +330,32 @@ test("bundle evidence digest changes when signed resources change", async (t) =>
   assert.equal(await bundleDigest(directory), before);
   await writeFile(path.join(directory, "resource"), "after");
   assert.notEqual(await bundleDigest(directory), before);
+});
+
+test("userData isolation accepts real filesystem aliases but rejects other or missing directories", async (t) => {
+  const config = await fixture(t);
+  const actual = path.join(config.directory, "real");
+  const alias = path.join(config.directory, "alias");
+  const unrelated = path.join(config.directory, "unrelated");
+  await mkdir(actual);
+  await mkdir(unrelated);
+  await symlink(actual, alias, "junction");
+  config.userData = alias;
+  const configPath = path.join(config.directory, "config.json");
+  await writeFile(configPath, JSON.stringify(config));
+  const source = `
+    import assert from 'node:assert/strict';
+    import { unlinkSync } from 'node:fs';
+    import { matchesFixtureUserData } from ${JSON.stringify(new URL("../scripts/macos-launch-path-observer.mjs", import.meta.url).href)};
+    assert.equal(matchesFixtureUserData(${JSON.stringify(actual)}), true, 'macOS /var and /private/var aliases must identify the same owned directory');
+    assert.equal(matchesFixtureUserData(${JSON.stringify(alias)}), true);
+    assert.equal(matchesFixtureUserData(${JSON.stringify(unrelated)}), false);
+    assert.throws(() => matchesFixtureUserData(${JSON.stringify(path.join(config.directory, "missing"))}), { code: 'ENOENT' });
+    unlinkSync(${JSON.stringify(alias)});
+    assert.throws(() => matchesFixtureUserData(${JSON.stringify(actual)}), { code: 'ENOENT' });
+  `;
+  await run(process.execPath, ["--input-type=module", "-e", source], {
+    cwd: root,
+    env: { ...process.env, ZENX_LAUNCH_PATH_FIXTURE: configPath },
+  });
 });

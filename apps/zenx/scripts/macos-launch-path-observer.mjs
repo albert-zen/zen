@@ -2,7 +2,12 @@
 // This observes the production bootstrap and Host composition, without supplying
 // PATH, replacing recovery, constructing a Shell runtime, or adding product IPC.
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 
@@ -32,6 +37,10 @@ function receipt(name, record) {
 
 function hasFixturePath() {
   return process.env.PATH?.split(path.delimiter).includes(config.bin) === true;
+}
+
+export function matchesFixtureUserData(userData) {
+  return realpathSync(userData) === realpathSync(config.userData);
 }
 
 function noProfileSecrets() {
@@ -87,7 +96,7 @@ export function observeMain(app) {
       noProfileSecrets: noProfileSecrets(),
       isolatedHome:
         process.env.HOME === config.home && process.env.ZDOTDIR === config.home,
-      isolatedUserData: app.getPath("userData") === config.userData,
+      isolatedUserData: matchesFixtureUserData(app.getPath("userData")),
     });
     assert(
       app.isPackaged && process.platform === "darwin",
@@ -104,7 +113,10 @@ export function observeMain(app) {
     );
     assert.equal(process.env.HOME, config.home);
     assert.equal(process.env.ZDOTDIR, config.home);
-    assert.equal(app.getPath("userData"), config.userData);
+    assert(
+      matchesFixtureUserData(app.getPath("userData")),
+      "App userData does not resolve to the isolated fixture directory",
+    );
   } catch (error) {
     fail(error);
     throw error;
