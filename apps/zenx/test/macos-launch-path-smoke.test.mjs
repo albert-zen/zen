@@ -248,6 +248,15 @@ test("staging validates both entries before writing and copies the observer befo
       "utf8",
     ),
   );
+  for (const name of [
+    "macos-launch-path-control.mjs",
+    "macos-launch-path-ownership.mjs",
+    "macos-launch-path-cleanup.mjs",
+  ])
+    assert.equal(
+      await readFile(path.join(main, name), "utf8"),
+      await readFile(new URL(`../scripts/${name}`, import.meta.url), "utf8"),
+    );
   const packager = await readFile(
     new URL("../scripts/package-zenx-portable.mjs", import.meta.url),
     "utf8",

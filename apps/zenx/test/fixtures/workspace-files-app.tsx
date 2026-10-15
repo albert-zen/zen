@@ -16,7 +16,7 @@ import type { ThreadTitleSnapshot } from "../../src/main/thread-title-types.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App } from "../../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
-import { encodeModelKey } from "../../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../../src/protocol/model-key.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });

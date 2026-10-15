@@ -392,6 +392,28 @@ function Fixture() {
             </button>
             <button
               onClick={() =>
+                setThread((t) => ({
+                  ...t,
+                  turns: t.turns.map((turn) => ({
+                    ...turn,
+                    items: [
+                      ...turn.items,
+                      {
+                        ...runtimeCommand(
+                          `browser-${next.current++}`,
+                          "browser_inspect",
+                        ),
+                        toolName: "browser_inspect",
+                      },
+                    ],
+                  })),
+                }))
+              }
+            >
+              追加浏览器调用
+            </button>
+            <button
+              onClick={() =>
                 setThread((t) => confirmedStopped(t.turns[0]!.items))
               }
             >

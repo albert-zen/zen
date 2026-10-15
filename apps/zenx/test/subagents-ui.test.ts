@@ -14,10 +14,14 @@ import {
   createPluginUiRegistry,
 } from "../src/renderer/src/plugin-ui-host.js";
 import {
+  SubagentCreationModelsContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
   registerSubagentsUi,
 } from "../src/renderer/src/subagents-ui.js";
+
+import type { ModelSummary } from "../src/protocol-client/index.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -78,6 +82,10 @@ async function fixture(
     value: dom.window.navigator,
     configurable: true,
   });
+  const modelCatalog: { models: ModelSummary[]; error: string | null } = {
+    models: [],
+    error: null,
+  };
   const calls: CommandCall[] = [];
   const routes: string[] = [];
   const executeCommand = async (
@@ -116,36 +124,40 @@ async function fixture(
   ) => {
     await act(async () => {
       root.render(
-        surface === "header"
-          ? React.createElement(PluginThreadHeaders, {
-              snapshot,
-              threadId: parent,
-              threads,
-              navigate,
-              registry,
-            })
-          : surface === "breadcrumb"
-            ? React.createElement(ThreadBreadcrumbAncestors, {
+        React.createElement(
+          SubagentCreationModelsContext.Provider,
+          { value: { ...modelCatalog } },
+          surface === "header"
+            ? React.createElement(PluginThreadHeaders, {
+                snapshot,
                 threadId: parent,
                 threads,
                 navigate,
-              })
-            : React.createElement(GenericPluginUiHost, {
                 registry,
-                snapshot,
-                pluginId: "zenx-subagents",
-                surfaceId: "subagents-panel",
-                context: {
+              })
+            : surface === "breadcrumb"
+              ? React.createElement(ThreadBreadcrumbAncestors, {
                   threadId: parent,
-                  quickCreate: surface === "quick-create",
                   threads,
-                  ...(active === undefined ? {} : { active }),
-                },
-                theme: "light",
-                navigate,
-                executeCommand,
-                readHandle,
-              }),
+                  navigate,
+                })
+              : React.createElement(GenericPluginUiHost, {
+                  registry,
+                  snapshot,
+                  pluginId: "zenx-subagents",
+                  surfaceId: "subagents-panel",
+                  context: {
+                    threadId: parent,
+                    quickCreate: surface === "quick-create",
+                    threads,
+                    ...(active === undefined ? {} : { active }),
+                  },
+                  theme: "light",
+                  navigate,
+                  executeCommand,
+                  readHandle,
+                }),
+        ),
       );
     });
   };
@@ -164,6 +176,7 @@ async function fixture(
   return {
     dom,
     calls,
+    modelCatalog,
     routes,
     catalog,
     render,
@@ -480,6 +493,244 @@ test("chooser quick-create reuses side-chat creation without loading the tree", 
       },
     ]);
     assert.deepEqual(f.routes, ["/threads/quick-child?view=panel"]);
+  } finally {
+    await f.close();
+  }
+});
+
+function creationModel(
+  profile: string,
+  id: string,
+  efforts: string[],
+): ModelSummary {
+  return {
+    id: encodeModelKey({ providerProfileId: profile, modelId: id }),
+    model: id,
+    displayName: "Shared model",
+    description: "",
+    hidden: false,
+    supportedReasoningEfforts: efforts.map((reasoningEffort) => ({
+      reasoningEffort,
+      description: reasoningEffort,
+    })),
+    defaultReasoningEffort: efforts[0] ?? null,
+    inputModalities: ["text"],
+    isDefault: false,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+  };
+}
+
+async function chooseCreationOption(
+  f: Awaited<ReturnType<typeof fixture>>,
+  label: string,
+  value: string,
+) {
+  const trigger = f.button(label);
+  await act(async () =>
+    trigger.dispatchEvent(
+      new f.dom.window.KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+      }),
+    ),
+  );
+  const option = [
+    ...f.dom.window.document.querySelectorAll<HTMLElement>("[role='option']"),
+  ].find((entry) => entry.dataset.value === value);
+  assert.ok(option, `Missing option ${value}`);
+  await f.click(option);
+}
+
+test("side chat model and effort are exact creation arguments; no task starts", async () => {
+  const f = await fixture(async (call) =>
+    call.commandId === "create"
+      ? { threadId: "configured-child" }
+      : { threads: [] },
+  );
+  const first = creationModel("provider-a", "shared", ["low", "high"]);
+  const second = creationModel("provider-b", "shared", ["medium", "xhigh"]);
+  f.modelCatalog.models = [first, second];
+  try {
+    await f.render("parent", "panel");
+    await f.click(f.button("Side chat model settings"));
+    await chooseCreationOption(f, "Child model", second.id);
+    await chooseCreationOption(f, "Reasoning effort", "xhigh");
+    await f.click(f.button("Side chat model settings"));
+    await f.click(f.button("New side chat"));
+    assert.deepEqual(
+      f.calls
+        .filter((call) => call.commandId === "create")
+        .map((call) => call.input),
+      [
+        {
+          parentThreadId: "parent",
+          mode: "side-chat",
+          model: second.id,
+          effort: "xhigh",
+        },
+      ],
+    );
+    assert.equal(
+      f.calls.some((call) => call.commandId === "send"),
+      false,
+    );
+    assert.deepEqual(f.routes, ["/threads/configured-child?view=panel"]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("changing model clears effort and changing parent resets creation choices", async () => {
+  const f = await fixture(async (call) =>
+    call.commandId === "create" ? { threadId: "child" } : { threads: [] },
+  );
+  const first = creationModel("a", "reasoning", ["high"]);
+  const second = creationModel("b", "text-only", []);
+  f.modelCatalog.models = [first, second];
+  try {
+    await f.render("parent", "panel");
+    await f.click(f.button("Side chat model settings"));
+    await chooseCreationOption(f, "Child model", first.id);
+    await chooseCreationOption(f, "Reasoning effort", "high");
+    await chooseCreationOption(f, "Child model", second.id);
+    assert.equal(f.button("Reasoning effort").dataset.value, "");
+    assert.equal(f.button("Reasoning effort").disabled, true);
+    await f.click(f.button("Side chat model settings"));
+    await f.click(f.button("New side chat"));
+    assert.deepEqual(
+      f.calls.find((call) => call.commandId === "create")?.input,
+      { parentThreadId: "parent", mode: "side-chat", model: second.id },
+    );
+    await f.render("other", "panel");
+    await f.click(f.button("Side chat model settings"));
+    assert.equal(f.button("Child model").dataset.value, "");
+    assert.equal(f.button("Reasoning effort").dataset.value, "");
+  } finally {
+    await f.close();
+  }
+});
+
+test("removed models and unsupported efforts block creation until the user chooses again", async () => {
+  const f = await fixture();
+  const first = creationModel("a", "reasoning", ["high"]);
+  f.modelCatalog.models = [first];
+  try {
+    await f.render("parent", "panel");
+    await f.click(f.button("Side chat model settings"));
+    await chooseCreationOption(f, "Child model", first.id);
+    await chooseCreationOption(f, "Reasoning effort", "high");
+    f.modelCatalog.models = [];
+    await f.render("parent", "panel");
+    assert.equal(f.button("New side chat").disabled, true);
+    assert.match(
+      f.dom.window.document.body.textContent!,
+      /selected model or effort is unavailable/,
+    );
+    assert.equal(
+      f.calls.some((call) => call.commandId === "create"),
+      false,
+    );
+    await chooseCreationOption(f, "Child model", "");
+    assert.equal(f.button("New side chat").disabled, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("effort-only choices retain the inherited model and survive a failed creation", async () => {
+  let attempts = 0;
+  const f = await fixture(async (call) => {
+    if (call.commandId !== "create") return { threads: [] };
+    if (++attempts === 1) throw new Error("Host unavailable");
+    return { threadId: "retried-child" };
+  });
+  f.modelCatalog.models = [creationModel("fake", "fake", ["low", "high"])];
+  try {
+    await f.render("parent", "panel", [summary("parent")]);
+    await f.click(f.button("Side chat model settings"));
+    await chooseCreationOption(f, "Reasoning effort", "high");
+    await act(async () =>
+      f.dom.window.document.activeElement?.dispatchEvent(
+        new f.dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      ),
+    );
+    await f.click(f.button("New side chat"));
+    assert.match(f.dom.window.document.body.textContent!, /Host unavailable/);
+    await f.click(f.button("New side chat"));
+    assert.deepEqual(
+      f.calls
+        .filter((call) => call.commandId === "create")
+        .map((call) => call.input),
+      [
+        { parentThreadId: "parent", mode: "side-chat", effort: "high" },
+        { parentThreadId: "parent", mode: "side-chat", effort: "high" },
+      ],
+    );
+    assert.deepEqual(f.routes, ["/threads/retried-child?view=panel"]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("an inherited effort invalidated by a catalog refresh cannot silently fall back", async () => {
+  const f = await fixture();
+  f.modelCatalog.models = [creationModel("fake", "fake", ["low", "high"])];
+  try {
+    await f.render("parent", "panel", [summary("parent")]);
+    await f.click(f.button("Side chat model settings"));
+    await chooseCreationOption(f, "Reasoning effort", "high");
+    f.modelCatalog.models = [creationModel("fake", "fake", ["low"])];
+    await f.render("parent", "panel", [summary("parent")]);
+    assert.equal(f.button("New side chat").disabled, true);
+    await chooseCreationOption(f, "Reasoning effort", "");
+    assert.equal(f.button("New side chat").disabled, false);
+    f.modelCatalog.error = "Catalog is unavailable";
+    await f.render("parent", "panel", [summary("parent")]);
+    assert.equal(
+      f.button("New side chat").disabled,
+      false,
+      "omitted overrides keep native inheritance available",
+    );
+    assert.match(
+      f.dom.window.document.body.textContent!,
+      /Catalog is unavailable/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("clear an effort-only override after its model loses selectable efforts", async () => {
+  const f = await fixture();
+  f.modelCatalog.models = [
+    { ...creationModel("fake", "fake", ["low", "high"]), isDefault: true },
+  ];
+  try {
+    await f.render("parent", "panel", [summary("parent")]);
+    await f.click(f.button("Side chat model settings"));
+    await chooseCreationOption(f, "Reasoning effort", "high");
+    f.modelCatalog.models = [
+      { ...creationModel("fake", "fake", []), isDefault: true },
+    ];
+    await f.render("parent", "panel", [summary("parent")]);
+    assert.equal(f.button("New side chat").disabled, true);
+    assert.equal(f.button("Reasoning effort").dataset.value, "high");
+    assert.equal(
+      f.button("Reasoning effort").disabled,
+      false,
+      "the stale effort must remain clearable to inheritance",
+    );
+    await chooseCreationOption(f, "Reasoning effort", "");
+    assert.equal(f.button("New side chat").disabled, false);
   } finally {
     await f.close();
   }

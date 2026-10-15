@@ -31,6 +31,7 @@ type SelfControlRequestMethod = Extract<
   | "zen/thread/read"
   | "zen/thread/original/read"
   | "zen/thread/create-child"
+  | "zen/thread/create-child-configured"
   | "zen/turn/send-unarchived"
   | "zen/thread/message"
   | "model/list"

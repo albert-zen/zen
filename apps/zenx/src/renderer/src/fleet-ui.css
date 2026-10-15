@@ -59,6 +59,16 @@
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
+/* The machine picker needs real room for device names; the generic Select
+ * popover only guarantees the narrow trigger's width. */
+.ui-select-popover.fleet-machine-popover {
+  min-width: min(
+    max(260px, var(--radix-select-trigger-width)),
+    calc(100vw - 20px)
+  );
+  width: max-content;
+  max-width: min(360px, calc(100vw - 20px));
+}
 .fleet-machine-choice {
   display: inline-flex;
   align-items: center;

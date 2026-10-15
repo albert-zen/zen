@@ -3,7 +3,7 @@ import test from "node:test";
 import { i18n } from "../src/renderer/src/i18n.js";
 import {
   traceSummary,
-  traceGroupIcon,
+  traceGroupIcons,
 } from "../src/renderer/src/turn-projection.js";
 import {
   runtimeCommand,
@@ -21,7 +21,7 @@ test("settled groups lead with action sets, count calls rather than invented fil
     toolArguments: { command: "cat same-file.txt" },
   }));
   assert.equal(traceSummary(commands), "Run command ×3");
-  assert.equal(traceGroupIcon(commands), "terminal");
+  assert.deepEqual(traceGroupIcons(commands), ["terminal"]);
   const mixed = [
     ...commands,
     call("page", "browser_inspect"),
@@ -31,7 +31,7 @@ test("settled groups lead with action sets, count calls rather than invented fil
     traceSummary(mixed),
     "Run command ×3 · Inspect page ×1 · 1 other action",
   );
-  assert.equal(traceGroupIcon(mixed), "list-detail");
+  assert.deepEqual(traceGroupIcons(mixed), ["terminal", "browser"]);
   assert.equal(
     traceSummary([...mixed, call("custom", "acme_read_record")]),
     "acme_read_record ×1 · Run command ×3 · Inspect page ×1 · 1 other action",

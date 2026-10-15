@@ -14,7 +14,7 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { importModelSelection } from "../apps/cli/src/import-model-selection.js";
-import { encodeModelKey } from "../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../src/protocol/model-key.js";
 
 test("import CLI rejects unavailable/ambiguous model names and resolves exact target IDs", () => {
   const model = (providerProfileId: string) => ({

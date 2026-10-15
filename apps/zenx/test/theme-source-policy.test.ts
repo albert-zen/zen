@@ -154,3 +154,22 @@ async function rendererProductFiles(directory: string): Promise<string[]> {
   );
   return files.flat().sort();
 }
+
+test("blank browser surface has explicit theme-owned pure black and white values", async () => {
+  const [theme, styles] = await Promise.all([
+    readFile(themePath, "utf8"),
+    readFile(path.join(rendererRoot, "styles.css"), "utf8"),
+  ]);
+  assert.match(
+    theme,
+    /:root\s*\{[^}]*--color-surface-browser-blank:\s*#000000/su,
+  );
+  assert.match(
+    theme,
+    /:root\[data-appearance="light"\]\s*\{[^}]*--color-surface-browser-blank:\s*#ffffff/su,
+  );
+  assert.match(
+    styles,
+    /\.workspace-browser-viewport\[data-blank="true"\]\s*\{[^}]*background:\s*var\(--color-surface-browser-blank\)/su,
+  );
+});

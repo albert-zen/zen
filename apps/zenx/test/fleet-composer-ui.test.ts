@@ -261,6 +261,38 @@ test("machine selection is a compact composer-context control rather than a page
   }
 });
 
+test("machine picker opens a dedicated wider popover", async () => {
+  const view = await mount();
+  try {
+    const trigger = view.select("Run on");
+    await act(async () => {
+      trigger.focus();
+      trigger.dispatchEvent(
+        new view.dom.window.KeyboardEvent("keydown", {
+          key: "ArrowDown",
+          bubbles: true,
+        }),
+      );
+    });
+    const popover = document.querySelector(".ui-select-popover");
+    assert.ok(popover, "the machine popover is open");
+    assert.ok(
+      popover?.classList.contains("fleet-machine-popover"),
+      "the machine picker opts into its own minimum width",
+    );
+    await act(async () => {
+      trigger.dispatchEvent(
+        new view.dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      );
+    });
+  } finally {
+    await view.close();
+  }
+});
+
 test("Run on supports keyboard dismissal and returns focus after the draft changes targets", async () => {
   const view = await mount();
   try {

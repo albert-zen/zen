@@ -120,7 +120,7 @@ export const en = {
   threadAutomationCount: "{{count}} triggers",
   threadAutomationCount_one: "{{count}} trigger",
   threadAutomationCount_other: "{{count}} triggers",
-  threadUnreadReply: "Unread agent reply",
+  threadUnseenEnd: "Thread ended, not yet viewed",
   renameThreadNamed: "Rename {{title}}",
   importSourceModel: "Original provider / model (reference only)",
   importCheckpointWarning:
@@ -649,6 +649,8 @@ export const en = {
   toolSetup: "Tool setup",
   triggerWakeup: "Trigger",
   turnCacheTelemetry: "Turn cache telemetry",
+  outputRate: "output {{rate}} tok/s (Turn duration)",
+  outputRateUnknown: "output speed unknown",
   unarchive: "Unarchive",
   unarchiving: "Unarchiving…",
   unavailableJournal: "Unavailable journal",
@@ -874,6 +876,8 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  outputRate: "输出 {{rate}} tok/s（按 Turn 时长）",
+  outputRateUnknown: "输出速度未知",
   debugItemPaging: "Item 分页",
   debugItemRange: "第 {{start}}–{{end}} 条，共 {{count}} 条 Items",
   debugPreviousItems: "上一页",
@@ -988,7 +992,7 @@ export const zhCN = {
   threadAutomationCount: "{{count}} 个触发器",
   threadAutomationCount_one: "{{count}} 个触发器",
   threadAutomationCount_other: "{{count}} 个触发器",
-  threadUnreadReply: "Agent 有未读回复",
+  threadUnseenEnd: "线程已结束，尚未查看",
   renameThreadNamed: "重命名 {{title}}",
   importSourceModel: "原 Provider / 模型（仅供参考）",
   importCheckpointWarning:

@@ -18,7 +18,7 @@ import type {
 } from "../src/protocol-client/index.js";
 import { App } from "../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
-import { encodeModelKey } from "../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../src/protocol/model-key.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 
@@ -400,7 +400,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
         ?.getAttribute("aria-label") ?? null;
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown\noutput speed unknown",
     );
     await act(async () => {
       usageRequests[1]?.response.resolve(projectedUsage(4));
@@ -408,7 +408,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown",
+      "Open context details. Context 9% · 9 / 100 tokens\nThread cache unknown\noutput speed unknown",
     );
 
     await act(async () => {
@@ -434,7 +434,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown\noutput speed unknown",
     );
     await act(async () => {
       usageRequests[3]?.response.resolve(projectedUsage(12));
@@ -442,7 +442,7 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
     });
     assert.equal(
       contextUsageText(),
-      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown",
+      "Open context details. Context 2% · 2 / 100 tokens\nThread cache unknown\noutput speed unknown",
     );
   } finally {
     await act(async () => root.unmount());

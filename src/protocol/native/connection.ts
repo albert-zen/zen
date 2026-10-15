@@ -3,6 +3,7 @@ import {
   type OriginalHistoryOptions,
 } from "../../thread-history.js";
 import { parseSessionImport, previewSessionImport } from "../session-import.js";
+import { resolveModelKey } from "../model-key.js";
 import type { JsonRpcMessage, SendJson } from "../codex/wire.js";
 import { AppServerError, type ZenAppServer } from "../../app-server.js";
 import type { ApprovalHandler } from "../../tool.js";
@@ -27,6 +28,7 @@ import {
   NATIVE_THREAD_ORIGINAL_READ_METHOD,
   NATIVE_THREAD_CREATE_CHILD_METHOD,
   NATIVE_THREAD_FORK_METHOD,
+  NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
   NATIVE_QUEUE_EDIT_METHOD,
   NATIVE_QUEUE_STEER_METHOD,
@@ -508,7 +510,10 @@ export class NativeConnection {
       }
       return;
     }
-    if (message.method === NATIVE_THREAD_CREATE_CHILD_METHOD) {
+    if (
+      message.method === NATIVE_THREAD_CREATE_CHILD_METHOD ||
+      message.method === NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD
+    ) {
       if (!this.#initialized && !this.#isInitialized()) {
         this.#send({
           id: message.id,
@@ -531,14 +536,59 @@ export class NativeConnection {
             "invalid_request",
             "parentThreadId and fresh/fork/side-chat mode are required",
           );
+        for (const key of Object.keys(params)) {
+          if (!["parentThreadId", "mode", "model", "effort"].includes(key))
+            throw new AppServerError(
+              "invalid_request",
+              `Unexpected argument: ${key}`,
+            );
+        }
+        for (const key of ["model", "effort"]) {
+          const value = params[key];
+          if (
+            value !== undefined &&
+            (typeof value !== "string" ||
+              value.trim().length === 0 ||
+              value.length > 4096)
+          )
+            throw new AppServerError(
+              "invalid_request",
+              `${key} must be a non-empty string of at most 4096 characters`,
+            );
+        }
         if (this.#appServer === undefined)
           throw new AppServerError(
             "unavailable",
             "Native child creation is unavailable",
           );
+        let selection;
+        if (typeof params.model === "string") {
+          try {
+            selection = {
+              ...resolveModelKey(
+                params.model,
+                this.#appServer.listModels(),
+                this.#appServer.threadStartDefaults().providerProfileId,
+              ),
+              ...(params.effort === undefined
+                ? {}
+                : { reasoningEffort: params.effort as string }),
+            };
+          } catch (error) {
+            throw new AppServerError(
+              "invalid_request",
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
         const thread = await this.#appServer.createChildThread({
           parentThreadId: params.parentThreadId,
           mode: params.mode,
+          ...(selection === undefined
+            ? params.effort === undefined
+              ? {}
+              : { reasoningEffort: params.effort as string }
+            : { selection }),
         });
         if (!this.#closed) this.#send({ id: message.id, result: { thread } });
       } catch (error) {

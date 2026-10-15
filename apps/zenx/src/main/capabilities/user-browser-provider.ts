@@ -100,6 +100,9 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   /** Original initialization deadline; cached attachments never renew it. */
   setupDeadline: number;
   firstInspectClaimed: boolean;
+  /** A returned reservation keeps its originally granted deadline, even expired. */
+  firstInspectGrantedDeadline?: number;
+  firstInspectReservation?: { deadline: number };
   attach: UserBrowserCdpOutcome;
   enable: UserBrowserCdpOutcome;
   runtimeEnable: UserBrowserCdpOutcome;
@@ -2474,10 +2477,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     onDispatched?: () => void,
   ): Promise<{ value: unknown; documentIdentity: string }> {
     throwIfAborted(signal);
-    const before = await this.#executionDocument(targetId, owner, signal);
-    // Claim synchronously, before any identity/abort/dispatch rejection. A failed
-    // attempt cannot lend this epoch's window to a retry or another document.
-    const inspectDeadline = this.#claimFirstInspectDeadline(before, expression);
+    const before = await this.#executionDocument(
+      targetId,
+      owner,
+      signal,
+      expression === browserInspectScript,
+    );
+    const inspectDeadline = before.inspectDeadline;
     if (
       expectedDocumentIdentity !== undefined &&
       before.identity !== expectedDocumentIdentity
@@ -3205,18 +3211,26 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   #claimFirstInspectDeadline(
     fence: ZenXUserBrowserDocumentExecutionFence,
     expression: string,
-  ): number | undefined {
+  ): { deadline: number } | undefined {
     if (expression !== browserInspectScript) return undefined;
     const epoch = fence.attachmentEpoch;
     if (epoch.firstInspectClaimed) return undefined;
     epoch.firstInspectClaimed = true;
-    this.#assertDocumentFence(fence, true);
-    // A first inspection made after initialization still has its ordinary 2s.
-    // This policy only lends unused startup time; it never shortens that budget.
-    return epoch.setupDeadline - performance.now() >
+    this.#assertDocumentFence(fence, false);
+    // Only the initial grant requires >2s remaining. A known-undispatched
+    // lifecycle rejection may return its reservation, never renew its deadline
+    // or fall back to an ordinary budget when reclaiming an expired grant.
+    const deadline =
+      epoch.firstInspectGrantedDeadline ??
+      (epoch.setupDeadline - performance.now() >
       USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS
-      ? epoch.setupDeadline
-      : undefined;
+        ? epoch.setupDeadline
+        : undefined);
+    if (deadline === undefined) return undefined;
+    epoch.firstInspectGrantedDeadline = deadline;
+    const reservation = { deadline };
+    epoch.firstInspectReservation = reservation;
+    return reservation;
   }
 
   async #sendDocumentCommand(
@@ -3296,10 +3310,12 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     targetId: string,
     owner: UserBrowserAttachmentOwner,
     signal?: AbortSignal,
+    firstInspect = false,
   ): Promise<
     ZenXUserBrowserDocumentExecutionFence & {
       identity: string;
       executionContextId: number;
+      inspectDeadline?: number;
     }
   > {
     const sessionId = await this.#attach(targetId, owner, signal);
@@ -3325,123 +3341,188 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       loaderId: "",
       url: "",
     };
-    const response = asRecord(
-      await this.#send("Page.getFrameTree", {}, sessionId, signal),
-    );
-    this.#assertDocumentFence(fence, false);
-    const frame = asRecord(asRecord(response?.frameTree)?.frame);
-    if (
-      frame === undefined ||
-      typeof frame.id !== "string" ||
-      typeof frame.loaderId !== "string" ||
-      typeof frame.url !== "string"
-    ) {
-      throw new Error("User browser CDP document identity is invalid");
-    }
-    fence.frameId = frame.id;
-    fence.loaderId = frame.loaderId;
-    fence.url = frame.url;
-    const state = this.#targetDocuments.get(targetId);
-    if (state === undefined || state.alive === false)
-      throw new UserBrowserDocumentChangedBeforeDispatchError();
-    const pendingMainFrameInvalidations = [
-      ...state.pendingFrameInvalidations,
-    ].filter((event) => event.endsWith(`\u0000${frame.id}`));
-    if (pendingMainFrameInvalidations.length > 0) {
+    // Reserve synchronously before asynchronous preflight. Only a known
+    // document-change rejection before world dispatch may return this token.
+    const reservation = firstInspect
+      ? this.#claimFirstInspectDeadline(fence, browserInspectScript)
+      : undefined;
+    const inspectDeadline = reservation?.deadline;
+    let worldDispatched = false;
+    const assertInspectDeadline = () => {
+      if (inspectDeadline !== undefined && performance.now() >= inspectDeadline)
+        throw new Error(
+          "Attachment inspection deadline elapsed before dispatch",
+        );
+    };
+    try {
+      assertInspectDeadline();
+      const response = asRecord(
+        await this.#send("Page.getFrameTree", {}, sessionId, signal),
+      );
+      this.#assertDocumentFence(fence, false);
+      assertInspectDeadline();
+      const frame = asRecord(asRecord(response?.frameTree)?.frame);
+      if (
+        frame === undefined ||
+        typeof frame.id !== "string" ||
+        typeof frame.loaderId !== "string" ||
+        typeof frame.url !== "string"
+      ) {
+        throw new Error("User browser CDP document identity is invalid");
+      }
+      fence.frameId = frame.id;
+      fence.loaderId = frame.loaderId;
+      fence.url = frame.url;
+      const state = this.#targetDocuments.get(targetId);
+      if (state === undefined || state.alive === false)
+        throw new UserBrowserDocumentChangedBeforeDispatchError();
+      const pendingMainFrameInvalidations = [
+        ...state.pendingFrameInvalidations,
+      ].filter((event) => event.endsWith(`\u0000${frame.id}`));
+      if (pendingMainFrameInvalidations.length > 0) {
+        state.pendingFrameInvalidations.clear();
+        this.#invalidateTarget(targetId, false);
+        throw new UserBrowserDocumentChangedBeforeDispatchError(
+          `pending lifecycle ${pendingMainFrameInvalidations
+            .map((event) => event.slice(0, event.indexOf("\u0000")))
+            .join(", ")}`,
+        );
+      }
       state.pendingFrameInvalidations.clear();
-      this.#invalidateTarget(targetId, false);
-      throw new UserBrowserDocumentChangedBeforeDispatchError(
-        `pending lifecycle ${pendingMainFrameInvalidations
-          .map((event) => event.slice(0, event.indexOf("\u0000")))
-          .join(", ")}`,
+      this.#targetDocuments.set(targetId, {
+        revision: state.revision,
+        frameId: frame.id,
+        loaderId: frame.loaderId,
+        url: frame.url,
+        alive: true,
+        pendingFrameInvalidations: state.pendingFrameInvalidations,
+        invalidExecutionContextIds: state.invalidExecutionContextIds,
+        pendingIsolatedContexts: state.pendingIsolatedContexts,
+        isolatedExecutionContextId: state.isolatedExecutionContextId,
+      });
+      assertInspectDeadline();
+      await this.#documentBarrier(fence, signal);
+      this.#assertDocumentFence(fence, false);
+      assertInspectDeadline();
+      const world = asRecord(
+        await this.#send(
+          "Page.createIsolatedWorld",
+          {
+            frameId: frame.id,
+            worldName: USER_BROWSER_DOCUMENT_WORLD_NAME,
+            grantUniveralAccess: false,
+          },
+          sessionId,
+          signal,
+          USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
+          undefined,
+          reservation === undefined
+            ? undefined
+            : () => {
+                worldDispatched = true;
+                if (epoch.firstInspectReservation === reservation)
+                  delete epoch.firstInspectReservation;
+              },
+          inspectDeadline === undefined
+            ? undefined
+            : () => this.#assertDocumentFence(fence, false),
+          undefined,
+          inspectDeadline,
+        ),
       );
-    }
-    state.pendingFrameInvalidations.clear();
-    this.#targetDocuments.set(targetId, {
-      revision: state.revision,
-      frameId: frame.id,
-      loaderId: frame.loaderId,
-      url: frame.url,
-      alive: true,
-      pendingFrameInvalidations: state.pendingFrameInvalidations,
-      invalidExecutionContextIds: state.invalidExecutionContextIds,
-      pendingIsolatedContexts: state.pendingIsolatedContexts,
-      isolatedExecutionContextId: state.isolatedExecutionContextId,
-    });
-    await this.#documentBarrier(fence, signal);
-    this.#assertDocumentFence(fence, false);
-    const world = asRecord(
-      await this.#send(
-        "Page.createIsolatedWorld",
-        {
-          frameId: frame.id,
-          worldName: USER_BROWSER_DOCUMENT_WORLD_NAME,
-          grantUniveralAccess: false,
-        },
-        sessionId,
-        signal,
-      ),
-    );
-    this.#assertDocumentFence(fence, false);
-    if (typeof world?.executionContextId !== "number") {
-      throw new Error("User browser CDP execution context is invalid");
-    }
-    fence.executionContextId = world.executionContextId;
-    const contextState = this.#targetDocuments.get(targetId);
-    if (contextState === undefined || contextState.alive === false) {
-      throw new UserBrowserDocumentChangedBeforeDispatchError();
-    }
-    const replacement = [...contextState.pendingIsolatedContexts].some(
-      ([contextId, frameId]) =>
-        frameId === fence.frameId && contextId !== world.executionContextId,
-    );
-    contextState.pendingIsolatedContexts.clear();
-    contextState.isolatedExecutionContextId = world.executionContextId;
-    if (
-      replacement ||
-      contextState.invalidExecutionContextIds.has(world.executionContextId)
-    ) {
-      this.#invalidateTarget(targetId, false);
-      throw new UserBrowserDocumentChangedBeforeDispatchError(
-        "isolated execution context invalidated",
-      );
-    }
-    contextState.invalidExecutionContextIds.clear();
-    await this.#documentBarrier(fence, signal);
-    const settledContextState = this.#targetDocuments.get(targetId);
-    if (
-      settledContextState !== undefined &&
-      settledContextState.revision === fence.documentRevision
-    ) {
-      const settledReplacement = [
-        ...settledContextState.pendingIsolatedContexts,
-      ].some(
+      // A successful reply must not beat an overdue absolute timer. Unlike an
+      // expired preflight, this world command has already been dispatched.
+      if (inspectDeadline !== undefined && performance.now() >= inspectDeadline)
+        throw new UserBrowserCdpOutcomeUnknownError(
+          "Page.createIsolatedWorld",
+          "original attachment inspection deadline elapsed",
+        );
+      this.#assertDocumentFence(fence, false);
+      if (typeof world?.executionContextId !== "number") {
+        throw new Error("User browser CDP execution context is invalid");
+      }
+      fence.executionContextId = world.executionContextId;
+      const contextState = this.#targetDocuments.get(targetId);
+      if (contextState === undefined || contextState.alive === false) {
+        throw new UserBrowserDocumentChangedBeforeDispatchError();
+      }
+      const replacement = [...contextState.pendingIsolatedContexts].some(
         ([contextId, frameId]) =>
           frameId === fence.frameId && contextId !== world.executionContextId,
       );
+      contextState.pendingIsolatedContexts.clear();
+      contextState.isolatedExecutionContextId = world.executionContextId;
       if (
-        settledReplacement ||
-        settledContextState.invalidExecutionContextIds.has(
-          world.executionContextId,
-        )
+        replacement ||
+        contextState.invalidExecutionContextIds.has(world.executionContextId)
       ) {
         this.#invalidateTarget(targetId, false);
         throw new UserBrowserDocumentChangedBeforeDispatchError(
           "isolated execution context invalidated",
         );
       }
-      settledContextState.pendingIsolatedContexts.clear();
-      settledContextState.invalidExecutionContextIds.clear();
-    }
-    this.#assertDocumentFence(fence, true);
-    return {
-      identity: this.#documentFenceIdentity({
+      contextState.invalidExecutionContextIds.clear();
+      await this.#documentBarrier(fence, signal);
+      const settledContextState = this.#targetDocuments.get(targetId);
+      if (
+        settledContextState !== undefined &&
+        settledContextState.revision === fence.documentRevision
+      ) {
+        const settledReplacement = [
+          ...settledContextState.pendingIsolatedContexts,
+        ].some(
+          ([contextId, frameId]) =>
+            frameId === fence.frameId && contextId !== world.executionContextId,
+        );
+        if (
+          settledReplacement ||
+          settledContextState.invalidExecutionContextIds.has(
+            world.executionContextId,
+          )
+        ) {
+          this.#invalidateTarget(targetId, false);
+          throw new UserBrowserDocumentChangedBeforeDispatchError(
+            "isolated execution context invalidated",
+          );
+        }
+        settledContextState.pendingIsolatedContexts.clear();
+        settledContextState.invalidExecutionContextIds.clear();
+      }
+      this.#assertDocumentFence(fence, true);
+      assertInspectDeadline();
+      return {
+        inspectDeadline,
+        identity: this.#documentFenceIdentity({
+          ...fence,
+          executionContextId: world.executionContextId,
+        }),
         ...fence,
         executionContextId: world.executionContextId,
-      }),
-      ...fence,
-      executionContextId: world.executionContextId,
-    };
+      };
+    } catch (error) {
+      // Only the local token holder can return the still-undispatched grant.
+      // This is a synchronous release on exit, not a retry or a late callback.
+      if (
+        reservation !== undefined &&
+        epoch.firstInspectReservation === reservation
+      ) {
+        const canReturn =
+          error instanceof UserBrowserDocumentChangedBeforeDispatchError &&
+          !worldDispatched &&
+          signal?.aborted !== true &&
+          !this.#closed &&
+          this.#providerRevision === fence.providerRevision &&
+          this.#attachmentClosures.get(targetId) === epoch &&
+          sameAttachmentOwner(epoch, fence) &&
+          epoch.cdpSessionId === sessionId &&
+          this.#targetSessions.get(targetId) === sessionId &&
+          this.#sessionEpochs.get(sessionId) === epoch &&
+          this.#targetDocuments.get(targetId)?.alive === true;
+        delete epoch.firstInspectReservation;
+        if (canReturn) epoch.firstInspectClaimed = false;
+      }
+      throw error;
+    }
   }
 
   #documentFenceIdentity(

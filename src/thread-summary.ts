@@ -26,6 +26,13 @@ export interface ThreadSummary {
   /** Canonical messages only; omitted on empty/legacy projections. */
   lastMessage?: ThreadMessageSummary;
   lastAgentMessage?: Omit<ThreadMessageSummary, "kind">;
+  /** Canonical end of the latest local Turn; position is its zero-based canonical end ordinal. */
+  lastTurnEnd?: {
+    id: string;
+    turnId: string;
+    createdAt: string;
+    position: number;
+  };
   threadId: string;
   /** Canonical delete fence; absent only on legacy or unavailable projections. */
   lastItemId?: string;
@@ -179,6 +186,12 @@ export function isNativeThreadSummary(
           value.lastMessage.kind === "agent"))) &&
     (value.lastAgentMessage === undefined ||
       isMessageSummary(value.lastAgentMessage)) &&
+    (value.lastTurnEnd === undefined ||
+      (isMessageSummary(value.lastTurnEnd) &&
+        typeof value.lastTurnEnd.turnId === "string" &&
+        value.lastTurnEnd.turnId.length > 0 &&
+        Number.isSafeInteger(value.lastTurnEnd.position) &&
+        (value.lastTurnEnd.position as number) >= 0)) &&
     (value.forkedFromThreadId === undefined ||
       typeof value.forkedFromThreadId === "string") &&
     (value.forkedFromTurnId === undefined ||

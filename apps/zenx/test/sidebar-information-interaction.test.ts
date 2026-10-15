@@ -105,7 +105,7 @@ test("details retain focus, title directly renames, and late save cannot close a
     ],
     selectedPage: "agent",
     selectedThreadId: "a",
-    serverStatus: { type: "ready" },
+    serverStatus: { type: "ready", reconnected: false },
     liveThread: null,
     threadError: null,
     threadLoading: false,
@@ -250,7 +250,7 @@ test("details retain focus, title directly renames, and late save cannot close a
     assert.equal(status.querySelector(".live-dot"), null);
     assert.ok(
       document.querySelector(
-        '[data-thread-id="b"] [aria-label="Unread agent reply"]',
+        '[data-thread-id="b"] [aria-label="Thread ended, not yet viewed"]',
       ),
     );
     await act(async () =>
@@ -435,6 +435,103 @@ test("details retain focus, title directly renames, and late save cannot close a
       true,
       "late success cannot reclaim focus the user has moved elsewhere",
     );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("pinned and hidden child rows preserve unseen ends while running and approvals suppress the dot", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  const running = summary("a");
+  const stopped = summary("b");
+  const child = { ...summary("child"), parentThreadId: "b" };
+  const unread = new Set(["a", "b", "child"]);
+  const props: React.ComponentProps<typeof Sidebar> = {
+    mode: "projects",
+    open: true,
+    onClose: noop,
+    onChangeThreadLifecycle: async () => {},
+    onChangeThreadPinned: async () => {},
+    onNewThread: noop,
+    onAddProject: noop,
+    onRemoveProject: noop,
+    onSetDefaultProject: noop,
+    onOpenContribution: noop,
+    onOpenSettings: noop,
+    onRetryThreads: noop,
+    onRenameThread: async () => {},
+    onSelectThread: noop,
+    pendingApprovalThreadIds: new Set(),
+    pluginContributions: [],
+    selectedPage: "agent",
+    selectedThreadId: null,
+    serverStatus: { type: "ready", reconnected: false },
+    liveThread: null,
+    threadError: null,
+    threadLoading: false,
+    projects: {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["a", "b", "child"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    threads: [running, stopped, child] as React.ComponentProps<
+      typeof Sidebar
+    >["threads"],
+    pinnedThreads: [running, stopped] as React.ComponentProps<
+      typeof Sidebar
+    >["threads"],
+    unreadThreadIds: unread,
+  };
+  const render = async () => {
+    await act(async () => root.render(React.createElement(Sidebar, props)));
+  };
+  const dot = (id: string) =>
+    document.querySelector(`[data-thread-id="${id}"] .thread-unread-dot`);
+  try {
+    await render();
+    assert.equal(
+      dot("a"),
+      null,
+      "a pinned running row never shows an old end dot",
+    );
+    assert.ok(dot("b"), "a pinned stopped row retains its unseen end");
+    assert.equal(document.querySelector('[data-thread-id="child"]'), null);
+    assert.ok(
+      unread.has("child"),
+      "hiding a child does not consume its unseen end",
+    );
+    props.pendingApprovalThreadIds = new Set(["b"]);
+    await render();
+    assert.equal(
+      dot("b"),
+      null,
+      "approval state suppresses even a stale idle summary",
+    );
+    props.pendingApprovalThreadIds = new Set();
+    props.pinnedThreads = [child] as React.ComponentProps<
+      typeof Sidebar
+    >["threads"];
+    await render();
+    assert.ok(
+      dot("child"),
+      "pinning a hidden child reveals its original unseen end",
+    );
+    assert.ok(dot("b"));
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

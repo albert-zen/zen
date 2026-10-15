@@ -1,9 +1,12 @@
 import { requestQueuedSteer } from "./queue-steer-request.js";
 import { i18n } from "./i18n.js";
 import React, { useEffect, useRef, useState } from "react";
-import type { NativeProjectedThreadEvent } from "../../../../../src/protocol/native/recovery.js";
+import type {
+  NativeProjectedThreadEvent,
+  NativeThreadRecoverySnapshot,
+} from "../../../../../src/protocol/native/recovery.js";
 import type { EffectiveThreadConfiguration } from "../../../../../src/thread.js";
-import { encodeModelKey } from "../../../../../src/protocol/codex/model-key.js";
+import { encodeModelKey } from "../../../../../src/protocol/model-key.js";
 import type { ModelUsageProjection } from "../../../../../src/model-usage.js";
 import type {
   QueuedCancellationTarget,
@@ -74,6 +77,7 @@ function nativeSettings(
 /** A transient viewport onto the existing native Thread, never a new session. */
 export function ThreadConversationViewport({
   queueEditStore,
+  onRecovery,
   threadId,
   composer,
   readComposer,
@@ -93,6 +97,7 @@ export function ThreadConversationViewport({
   archived = false,
 }: {
   queueEditStore?: QueueEditStore;
+  onRecovery?(threadId: string, snapshot: NativeThreadRecoverySnapshot): void;
   threadId: string;
   composer: ComposerState;
   readComposer(): ComposerState;
@@ -132,8 +137,8 @@ export function ThreadConversationViewport({
     code: string;
     message: string;
   } | null>(null);
-  const callbacks = useRef({ updateComposer });
-  callbacks.current = { updateComposer };
+  const callbacks = useRef({ updateComposer, onRecovery });
+  callbacks.current = { updateComposer, onRecovery };
   const generation = useRef(0);
   useEffect(() => {
     const epoch = ++generation.current;
@@ -263,6 +268,7 @@ export function ThreadConversationViewport({
       .request("zen/thread/resume", { threadId })
       .then((snapshot) => {
         if (!current()) return;
+        callbacks.current.onRecovery?.(threadId, snapshot);
         projection = projectNativeRecovery(snapshot);
         processEpoch = snapshot.processEpoch;
         watermark = snapshot.watermark;

@@ -95,6 +95,8 @@ test("import persists atomically, remains idle, and new input continues with loc
     rollout(
       message("user", "remember apples"),
       message("assistant", "remembered"),
+      message("user", "second imported request"),
+      message("assistant", "second historical answer"),
     ),
   );
   const imported = await app.importThread(history, { cwd: os.tmpdir() });
@@ -102,12 +104,48 @@ test("import persists atomically, remains idle, and new input continues with loc
   assert.equal(imported.thread.sandbox, "read-only");
   assert.equal(imported.thread.approvalPolicy, "always");
   assert.equal(requests.length, 0);
+  const importedSummary = (await app.listThreadSummaries())[0]!;
+  assert(importedSummary.status === "idle");
+  assert.equal(
+    importedSummary.lastTurnEnd,
+    undefined,
+    "imported history and its synthetic closure did not execute in this Thread",
+  );
   assert.equal(imported.thread.turns[0]?.status, "interrupted");
+  const earlier = imported.thread.items.find(
+    (item) => item.type === "agent_message",
+  )!;
+  const fork = await app.forkThread({
+    sourceThreadId: imported.thread.id,
+    through: { type: "item", itemId: earlier.id },
+    workspace: { type: "same-directory" },
+  });
+  const forkSummary = (await app.listThreadSummaries()).find(
+    (entry) => entry.threadId === fork.id,
+  )!;
+  assert(forkSummary.status === "idle");
+  assert.equal(forkSummary.lastTurnEnd, undefined);
+  await (
+    await app.startTurn(fork.id, "local execution after truncated import fork")
+  ).done;
+  const forkEnd = (await app.listThreadSummaries()).find(
+    (entry) => entry.threadId === fork.id,
+  )!;
+  assert(forkEnd.status === "idle" && forkEnd.lastTurnEnd);
+  requests.length = 0;
   const restarted = server(journal, requests);
   await (
     await restarted.startTurn(imported.thread.id, "continue now")
   ).done;
   assert.equal(requests.length, 1);
+  const localSummary = (await restarted.listThreadSummaries()).find(
+    (entry) => entry.threadId === imported.thread.id,
+  )!;
+  assert(localSummary.status === "idle");
+  assert(
+    localSummary.lastTurnEnd,
+    "a real local Turn after import can notify normally",
+  );
   assert(
     requests[0]?.some(
       (entry) =>
@@ -130,8 +168,8 @@ test("import persists atomically, remains idle, and new input continues with loc
   );
   const again = await restarted.importThread(history, { cwd: os.tmpdir() });
   assert.equal(again.status, "already_imported");
-  assert.equal((await journal.listThreadIds()).length, 1);
-  assert.equal(again.thread.turns.length, 2);
+  assert.equal((await journal.listThreadIds()).length, 2);
+  assert.equal(again.thread.turns.length, 3);
 });
 
 test("explicit compacted replacement history is the continuation basis, with honest source provenance", async () => {
