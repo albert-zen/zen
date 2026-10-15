@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { EventEmitter, getEventListeners } from "node:events";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -17,6 +25,7 @@ import {
   validateLaunchRound,
   validateRelaunch,
 } from "../scripts/smoke-macos-launch-path.mjs";
+import { observeLaunchHostShell } from "../scripts/macos-launch-path-host-observation.mjs";
 import { packageZenX } from "../scripts/package-zenx-portable.mjs";
 
 const run = promisify(execFile);
@@ -226,6 +235,19 @@ test("staging validates both entries before writing and copies the observer befo
     await readFile(path.join(main, "launch-path-observer.mjs"), "utf8"),
     /toolEnvironment\.execute\(prepared\)/u,
   );
+  assert.equal(
+    await readFile(
+      path.join(main, "macos-launch-path-host-observation.mjs"),
+      "utf8",
+    ),
+    await readFile(
+      new URL(
+        "../scripts/macos-launch-path-host-observation.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
   const packager = await readFile(
     new URL("../scripts/package-zenx-portable.mjs", import.meta.url),
     "utf8",
@@ -393,6 +415,48 @@ test(
     // This unit test supplies PATH deliberately; only macOS open exercises capture.
     const recovered = { ...env, PATH: `${fixture.bin}:${SPARSE_PATH}` };
     await run(process.execPath, args, { cwd: root, env: recovered });
+    const shellRecords = async () =>
+      Promise.all(
+        (await readdir(evidence))
+          .filter((name) => /^shell-result-\d+\.json$/u.test(name))
+          .map(async (name) =>
+            JSON.parse(await readFile(path.join(evidence, name), "utf8")),
+          ),
+      );
+    const success = await shellRecords();
+    assert.equal(success.length, 1);
+    // waitForCompletion may return a direct Shell result without task facts.
+    assert.equal(success[0].result.status, null);
+    assert.equal(success[0].result.exitCode, 0);
+    assert.equal(success[0].result.markerMatched, true);
+    assert.equal(success[0].outerSignal.aborted, false);
+    const fixtureCommand = path.join(fixture.bin, "zenx-path-fixture");
+    const originalCommand = await readFile(fixtureCommand, "utf8");
+    try {
+      // Exercise an actual Shell runtime exit 130, not a synthesized receipt.
+      await writeFile(fixtureCommand, "#!/bin/sh\nexit 130\n");
+      await assert.rejects(
+        run(process.execPath, args, { cwd: root, env: recovered }),
+        /The first real Host shell command failed/u,
+      );
+      const failure = (await shellRecords()).find(
+        (record) => record.result.exitCode === 130,
+      );
+      assert.equal(failure.result.status, null);
+      assert.equal(failure.result.foreground_exit_code, null);
+      assert.equal(failure.result.markerMatched, false);
+      assert.equal(failure.outerSignal.aborted, false);
+      assert.deepEqual(
+        failure.events.map((event) => event.event),
+        ["shell-start", "shell-result"],
+      );
+      assert.doesNotMatch(
+        JSON.stringify(failure),
+        new RegExp(fixture.marker, "u"),
+      );
+    } finally {
+      await writeFile(fixtureCommand, originalCommand);
+    }
     await assert.rejects(
       run(process.execPath, args, {
         cwd: root,
@@ -408,3 +472,331 @@ test(
     );
   },
 );
+
+function shellObservationHarness() {
+  const emitter = new EventEmitter();
+  const controller = new AbortController();
+  const records = [];
+  let time = 100;
+  const invoke = (execute, extra = {}) =>
+    observeLaunchHostShell({
+      execute,
+      signal: controller.signal,
+      marker: "synthetic-marker",
+      emitter,
+      now: () => time,
+      record: (phase, facts) => records.push({ phase, ...facts }),
+      ...extra,
+    });
+  return {
+    emitter,
+    controller,
+    records,
+    invoke,
+    at(value) {
+      time = value;
+    },
+  };
+}
+
+function assertObservationListenersRemoved(h) {
+  for (const name of ["message", "disconnect", "SIGINT", "SIGTERM"])
+    assert.equal(h.emitter.listenerCount(name), 0, name);
+  assert.equal(getEventListeners(h.controller.signal, "abort").length, 0);
+}
+
+test("Host shell diagnostics return the exact result with only allowlisted facts", async () => {
+  const h = shellObservationHarness();
+  const result = {
+    output: "synthetic-marker\n",
+    exitCode: 0,
+    structuredContent: {
+      status: "completed",
+      exit_code: 0,
+      cancellation: "confirmable",
+      foreground: "exited",
+      stdio: "eof",
+      foreground_exit_code: 0,
+      foreground_signal: null,
+      task_id: "private-task",
+      result: { secret: "private-result" },
+      payload: "private-payload",
+    },
+  };
+  let calls = 0;
+  assert.equal(
+    await h.invoke(async () => {
+      calls++;
+      h.at(107);
+      return result;
+    }),
+    result,
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(
+    h.records.map((r) => [r.phase, r.elapsedMs]),
+    [
+      ["start", 0],
+      ["result", 7],
+    ],
+  );
+  assert.deepEqual(h.records[1].result, {
+    exitCode: 0,
+    outputBytes: 17,
+    markerMatched: true,
+    status: "completed",
+    exit_code: 0,
+    cancellation: "confirmable",
+    foreground: "exited",
+    stdio: "eof",
+    foreground_exit_code: 0,
+    foreground_signal: null,
+  });
+  assert.doesNotMatch(JSON.stringify(h.records), /synthetic-marker|private-/u);
+  assertObservationListenersRemoved(h);
+});
+
+for (const [status, code] of [
+  ["cancelled", 130],
+  ["timed_out", 124],
+  ["failed", 130],
+]) {
+  test(`Host shell diagnostics preserve ${status} and exit ${code} without re-execution`, async () => {
+    const h = shellObservationHarness();
+    const result = {
+      output: "sensitive output",
+      exitCode: code,
+      structuredContent: {
+        status,
+        exit_code: code,
+        foreground: "exited",
+        foreground_exit_code: null,
+        foreground_signal: "SIGTERM",
+        stdio: "eof",
+      },
+    };
+    let calls = 0;
+    assert.equal(
+      await h.invoke(async () => {
+        calls++;
+        return result;
+      }),
+      result,
+    );
+    assert.equal(calls, 1);
+    assert.equal(h.records[1].result.status, status);
+    assert.equal(h.records[1].result.exitCode, code);
+    assert.equal(h.records[1].result.foreground_signal, "SIGTERM");
+    assert.equal(h.records[1].result.markerMatched, false);
+    assert.doesNotMatch(JSON.stringify(h.records), /sensitive output/u);
+    assertObservationListenersRemoved(h);
+  });
+}
+
+test("Host shell diagnostics correlate outer abort and passive control events without inspecting payloads", async () => {
+  const h = shellObservationHarness();
+  const originalEvents = [];
+  const onMessage = (message) => originalEvents.push(message);
+  const onDisconnect = () => originalEvents.push("disconnected");
+  h.emitter.on("message", onMessage);
+  h.emitter.once("disconnect", onDisconnect);
+  await h.invoke(async () => {
+    h.at(103);
+    h.emitter.emit("message", { type: "unrelated", payload: "private" });
+    h.at(105);
+    h.emitter.emit("message", { type: "shutdown", payload: "private" });
+    h.at(108);
+    h.controller.abort(new DOMException("private reason", "TimeoutError"));
+    h.at(109);
+    h.emitter.emit("disconnect");
+    h.at(111);
+    return { output: "", exitCode: 130 };
+  });
+  assert.deepEqual(h.records[1].events, [
+    { event: "shell-start", elapsedMs: 0 },
+    { event: "shutdown-message", elapsedMs: 5 },
+    { event: "outer-abort", elapsedMs: 8 },
+    { event: "disconnect", elapsedMs: 9 },
+    { event: "shell-result", elapsedMs: 11 },
+  ]);
+  assert.deepEqual(h.records[1].outerSignal, {
+    aborted: true,
+    reasonName: "TimeoutError",
+  });
+  assert.equal(originalEvents.length, 3);
+  assert.equal(h.emitter.listenerCount("message"), 1);
+  h.emitter.off("message", onMessage);
+  assertObservationListenersRemoved(h);
+  assert.doesNotMatch(JSON.stringify(h.records), /private/u);
+});
+
+test("Host shell signal observation preserves one-shot handlers and does not install default-suppressing handlers", async () => {
+  const h = shellObservationHarness();
+  let calls = 0;
+  h.emitter.once("SIGTERM", () => calls++);
+  await h.invoke(async () => {
+    assert.equal(h.emitter.listenerCount("SIGINT"), 0);
+    assert.equal(h.emitter.listenerCount("SIGTERM"), 2);
+    h.at(102);
+    h.emitter.emit("SIGTERM");
+    assert.equal(h.emitter.listenerCount("SIGTERM"), 0);
+    h.emitter.emit("SIGTERM");
+    return { output: "", exitCode: 130 };
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(h.records[0].observedSignals, ["SIGTERM"]);
+  assert.equal(
+    h.records[1].events.filter((e) => e.event === "SIGTERM").length,
+    1,
+  );
+  assertObservationListenersRemoved(h);
+});
+
+test("Host shell diagnostics keep first and last events within a fixed bound", async () => {
+  const h = shellObservationHarness();
+  await h.invoke(async () => {
+    for (let index = 1; index <= 40; index++) {
+      h.at(100 + index);
+      h.emitter.emit("message", { type: "shutdown" });
+    }
+    return { output: "", exitCode: 130 };
+  });
+  const result = h.records[1];
+  assert.equal(result.events.length, 16);
+  assert.equal(result.droppedEvents, 26);
+  assert.deepEqual(
+    result.events.slice(0, 8).map((e) => e.elapsedMs),
+    [0, 1, 2, 3, 4, 5, 6, 7],
+  );
+  assert.deepEqual(
+    result.events.slice(8).map((e) => e.elapsedMs),
+    [34, 35, 36, 37, 38, 39, 40, 40],
+  );
+  assertObservationListenersRemoved(h);
+});
+
+for (const thrown of [new Error("private exception"), undefined]) {
+  test(`Host shell diagnostics rethrow the original ${thrown === undefined ? "undefined" : "error"} and clean up`, async () => {
+    const h = shellObservationHarness();
+    let rejected = false;
+    try {
+      await h.invoke(async () => {
+        throw thrown;
+      });
+    } catch (error) {
+      rejected = true;
+      assert.equal(error, thrown);
+    }
+    assert.equal(rejected, true);
+    assert.equal(h.records[1].outcome, "threw");
+    assert.equal(h.records[1].result, null);
+    assert.doesNotMatch(JSON.stringify(h.records), /private exception/u);
+    assertObservationListenersRemoved(h);
+  });
+}
+
+test("Host shell diagnostic write failure fails closed without losing the execution exception", async () => {
+  const h = shellObservationHarness();
+  const execution = new Error("original");
+  const recording = new Error("record failed");
+  await assert.rejects(
+    h.invoke(
+      async () => {
+        throw execution;
+      },
+      {
+        record(phase) {
+          if (phase === "result") throw recording;
+        },
+      },
+    ),
+    (error) =>
+      error instanceof AggregateError &&
+      error.errors[0] === execution &&
+      error.errors[1] === recording,
+  );
+  assertObservationListenersRemoved(h);
+});
+
+test("Host shell passive sampling faults cannot throw into product event handling", async () => {
+  const h = shellObservationHarness();
+  let completed = false;
+  await assert.rejects(
+    h.invoke(async () => {
+      assert.doesNotThrow(() =>
+        h.emitter.emit("message", {
+          get type() {
+            throw new Error("private");
+          },
+        }),
+      );
+      completed = true;
+      return { output: "", exitCode: 130 };
+    }),
+    /Host shell observation failed/u,
+  );
+  assert.equal(completed, true);
+  assert.equal(h.records[1].diagnosticErrorCount, 1);
+  assert.doesNotMatch(JSON.stringify(h.records), /private/u);
+  assertObservationListenersRemoved(h);
+});
+
+test("Host shell diagnostics exclude unknown labels and custom abort names", async () => {
+  const h = shellObservationHarness();
+  h.controller.abort({ name: "private reason", message: "private message" });
+  await h.invoke(async () => ({
+    output: "é",
+    exitCode: NaN,
+    structuredContent: {
+      status: "private status",
+      cancellation: "private cancellation",
+      foreground: "private foreground",
+      stdio: "private stdio",
+      foreground_signal: "private signal",
+      foreground_exit_code: Infinity,
+    },
+  }));
+  assert.deepEqual(h.records[1].outerSignal, {
+    aborted: true,
+    reasonName: "other",
+  });
+  assert.equal(h.records[1].result.outputBytes, 2);
+  assert.equal(h.records[1].result.exitCode, null);
+  assert.equal(h.records[1].result.status, null);
+  assert.doesNotMatch(JSON.stringify(h.records), /private/u);
+  assertObservationListenersRemoved(h);
+});
+
+test("Host shell start receipt failure prevents execution and removes its listeners", async () => {
+  const h = shellObservationHarness();
+  const recording = new Error("record failed");
+  let calls = 0;
+  await assert.rejects(
+    h.invoke(
+      async () => {
+        calls++;
+      },
+      {
+        record() {
+          throw recording;
+        },
+      },
+    ),
+    (error) => error instanceof AggregateError && error.errors[0] === recording,
+  );
+  assert.equal(calls, 0);
+  assertObservationListenersRemoved(h);
+});
+
+test("Host shell clock failure keeps the original thrown result and cleans up", async () => {
+  const h = shellObservationHarness();
+  const execution = new Error("original");
+  await assert.rejects(
+    h.invoke(async () => {
+      h.at(99);
+      throw execution;
+    }),
+    (error) => error instanceof AggregateError && error.errors[0] === execution,
+  );
+  assertObservationListenersRemoved(h);
+});

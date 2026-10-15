@@ -1,5 +1,6 @@
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
+import { prepareWindowsSmokeGuard } from "./prepare-windows-smoke-guard.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -86,6 +87,11 @@ export async function packageZenX(arguments_, options = {}) {
         appDirectory: appDir,
         manifestSha256: assembly.manifestSha256,
       });
+      const windowsSmokeGuard = await prepareWindowsSmokeGuard({
+        target,
+        mainDirectory: path.join(appDir, "main"),
+        stagingDirectory: staging,
+      });
       await writeFile(
         path.join(appDir, "package.json"),
         `${JSON.stringify(packageManifest(target, zenxPackage), null, 2)}\n`,
@@ -171,7 +177,10 @@ export async function packageZenX(arguments_, options = {}) {
         );
       }
       if (target === "smoke") {
-        await runExecutable(executablePath(packaged[0], target));
+        await runExecutable(
+          executablePath(packaged[0], target),
+          windowsSmokeGuard,
+        );
       }
       const finalArtifact = path.join(
         options.artifactDirectory ?? artifactRoot,
@@ -1063,12 +1072,17 @@ function executablePath(appPath, packageTarget) {
   return path.join(appPath, executableName);
 }
 
-async function runExecutable(executable) {
+async function runExecutable(executable, windowsSmokeGuard) {
   await new Promise((resolve, reject) => {
     const child = spawn(executable, [], {
       stdio: "inherit",
       windowsHide: true,
-      env: { ...process.env, ZENX_PACKAGED_SMOKE: "1" },
+      env: {
+        ...process.env,
+        ZENX_PACKAGED_SMOKE: "1",
+        // Never inherit an old/private artifact path from a different run.
+        ZENX_WINDOWS_SMOKE_GUARD_ASSEMBLY: windowsSmokeGuard?.path ?? "",
+      },
     });
     child.once("error", reject);
     child.once("exit", (code, signal) =>
