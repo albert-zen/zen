@@ -1,0 +1,53 @@
+name: First inspect latency (single observation)
+on:
+  pull_request:
+    types: [opened]
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  owned-first-inspect:
+    if: >-
+      github.repository == 'albert-zen/zen' &&
+      github.event.pull_request.head.repo.full_name == 'albert-zen/zen' &&
+      github.event.pull_request.head.ref == 'diagnostic/first-inspect-latency-20261015' &&
+      github.event.pull_request.draft == true &&
+      github.run_attempt == 1
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check one-shot transport and source contracts
+        run: node --import tsx --test apps/zenx/test/browser-inspect-latency.test.ts apps/zenx/test/browser-inspect-runner.test.mjs
+      - name: Prepare the same pinned headed fixture
+        run: |
+          fixture="$RUNNER_TEMP/zenx-inspect-browser"
+          npm install --prefix "$fixture" --no-package-lock --no-audit --no-fund playwright@1.63.0
+          node "$fixture/node_modules/playwright/cli.js" install chromium
+          browser=$(node -e "process.stdout.write(require(process.argv[1]).chromium.executablePath())" "$fixture/node_modules/playwright")
+          test -f "$browser"
+          echo "ZENX_USER_BROWSER_EXECUTABLE=$browser" >> "$GITHUB_ENV"
+      - name: Observe one fresh profile, then stop regardless of reproduction
+        timeout-minutes: 3
+        env:
+          CI: "1"
+          ZENX_INSPECT_ARTIFACT_DIR: ${{ runner.temp }}/zenx-inspect-evidence
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          ZENX_DIAGNOSTIC_HEAD=$(git rev-parse HEAD) \
+          ZENX_DIAGNOSTIC_TREE=$(git rev-parse 'HEAD^{tree}') \
+            node --import tsx apps/zenx/src/main/browser-inspect-diagnostic.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-first-inspect-latency
+          path: ${{ runner.temp }}/zenx-inspect-evidence
+          if-no-files-found: warn

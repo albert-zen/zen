@@ -1726,7 +1726,10 @@ async function stopOwnedChild(child: ChildProcess): Promise<void> {
   if (child.exitCode === null && child.signalCode === null)
     child.kill("SIGKILL");
 }
-async function startNative(directory: string): Promise<Native> {
+async function startNative(
+  directory: string,
+  diagnosticSource?: (source: string) => string,
+): Promise<Native> {
   if (process.platform === "darwin") {
     // Read-only discovery first. Missing tools is a blocker, never an install prompt.
     // Cold xcrun lookup can exceed five seconds on a fresh hosted runner. All
@@ -1761,7 +1764,10 @@ async function startNative(directory: string): Promise<Native> {
     assert.ok(path.isAbsolute(sdk), "macOS SDK must be an absolute path");
     const source = path.join(directory, "Native.swift"),
       binary = path.join(directory, "native-fixture");
-    await writeFile(source, MAC_NATIVE);
+    await writeFile(
+      source,
+      diagnosticSource ? diagnosticSource(MAC_NATIVE) : MAC_NATIVE,
+    );
     await runFile(
       compiler,
       [
@@ -2016,6 +2022,8 @@ while ($null -ne ($line = [Console]::ReadLine())) {
   } catch { @{id=$request.id;error=$_.Exception.Message} | ConvertTo-Json -Compress }
 }
 `;
+
+export { Rpc, page, startNative, stopOwnedChild };
 
 // Imported by the Windows smoke for the shared contract fixture only.
 if (
