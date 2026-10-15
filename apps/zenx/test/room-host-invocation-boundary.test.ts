@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { createZenXTrustedPlugin } from "../../../packages/zenx-rooms-plugin/src/runtime.js";
 import { createBundledAutomationPluginService } from "../src/main/automation-plugin-service.js";
+import { ZenXRoomsCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
 import { createZenXRoomsProfileLoader } from "../src/main/rooms-profile-loader.js";
 
 test("Host Room service gate denies a cached arguments.input runtime without rejecting ordinary Agent and UI calls", async () => {
@@ -166,4 +167,117 @@ test("Host Room service gate denies a cached arguments.input runtime without rej
     await service.stopPlugin("zenx-rooms").catch(() => {});
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("PAW model rename uses Host binding and current Room while ordinary Room management remains available", async () => {
+  const rooms = [
+    {
+      id: "paw-a",
+      name: "PAW",
+      assistant: { threadId: "thread-a", triggerId: "trigger-a" },
+    },
+    {
+      id: "paw-b",
+      name: "Other",
+      assistant: { threadId: "thread-b", triggerId: "trigger-b" },
+    },
+    { id: "shared", name: "Team" },
+  ];
+  const history: Array<{
+    threadId: string;
+    status: string;
+    sourceRoomId: string | null;
+  }> = [];
+  const renamed: string[] = [];
+  const domain = {
+    prepareRoomMessage() {},
+    postPreparedRoomMessage() {},
+    cancelPreparedRoomOperation() {},
+    snapshot: () => ({ rooms, history }),
+    renameRoom: async (id: string, name: string) => {
+      renamed.push(`${id}:${name}`);
+    },
+  };
+  const runtime = createZenXRoomsProfileLoader(() => domain as never)({
+    createZenXTrustedPlugin,
+  });
+  const rename = (
+    roomId: string,
+    threadId?: string,
+    extra: Record<string, unknown> = {},
+    ui = false,
+    cwd = "/workspace-a",
+  ) =>
+    runtime.invoke("zenx_rooms_rename", {
+      callId: randomUUID(),
+      cwd,
+      signal: new AbortController().signal,
+      ...(threadId ? { threadId } : {}),
+      ...(ui ? { trustedPluginUi: true as const } : {}),
+      arguments: ui
+        ? { input: { roomId, name: "Nova" } }
+        : { roomId, name: "Nova", ...extra },
+    });
+  await rename("paw-a", "thread-a");
+  for (const caller of [
+    undefined,
+    "thread-b",
+    "thread-a-fork",
+    "thread-a-sidechat",
+  ]) {
+    await assert.rejects(
+      rename("paw-a", caller, { threadId: "thread-a", trustedPluginUi: true }),
+      /Only the bound PAW/,
+    );
+  }
+  await assert.rejects(
+    rename("paw-b", "thread-a", { cwd: "/workspace-b" }),
+    /Only the bound PAW/,
+  );
+  await assert.rejects(
+    rename("paw-a", "thread-b", {}, false, "/workspace-b"),
+    /Only the bound PAW/,
+  );
+  rooms.push({
+    id: "paw-a-second",
+    name: "Second",
+    assistant: { threadId: "thread-a", triggerId: "trigger-second" },
+  });
+  await assert.rejects(rename("paw-a", "thread-a"), /unambiguous current Room/);
+  history.push({
+    threadId: "thread-a",
+    status: "running",
+    sourceRoomId: "paw-a",
+  });
+  await rename("paw-a", "thread-a");
+  await assert.rejects(
+    rename("paw-a-second", "thread-a"),
+    /unambiguous current Room/,
+  );
+  history.push({
+    threadId: "thread-a",
+    status: "starting",
+    sourceRoomId: "paw-a-second",
+  });
+  await assert.rejects(rename("paw-a", "thread-a"), /unambiguous current Room/);
+  await rename("shared", "ordinary-management-agent");
+  await rename("paw-b", undefined, {}, true);
+  const legacy = new ZenXRoomsCapabilityPackage(domain as never);
+  await assert.rejects(
+    legacy.invoke("zenx_rooms_rename", {
+      name: "zenx_rooms_rename",
+      callId: randomUUID(),
+      threadId: "thread-a-fork",
+      cwd: "/workspace-a",
+      arguments: { roomId: "paw-a", name: "Forged" },
+      signal: new AbortController().signal,
+    }),
+    /Only the bound PAW/,
+  );
+  assert.deepEqual(renamed, [
+    "paw-a:Nova",
+    "paw-a:Nova",
+    "shared:Nova",
+    "paw-b:Nova",
+  ]);
 });

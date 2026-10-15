@@ -158,8 +158,31 @@ test("thread panel displays empty-state creation scoped to Thread; global page h
   const rail = renderToStaticMarkup(createElement(TriggersPanel, { sdk }));
   assert.match(rail, /Thread triggers/);
   assert.match(rail, /New trigger/);
-  assert.match(rail, /All automations/);
+  assert.match(rail, /All triggers/);
   const global = renderToStaticMarkup(createElement(TriggersPage, { sdk }));
-  assert.match(global, /Automations/);
+  assert.match(global, /Triggers/);
   assert.match(global, /New trigger/);
+});
+
+test("Trigger editor preserves its own delivery choice without inventing a shared preference", () => {
+  const trigger = {
+    id: "signal",
+    threadId: "target",
+    kind: "signal" as const,
+    label: "Signal",
+    prompt: "Respond",
+    createdAt: 0,
+    active: true,
+    signal: { name: "ready" },
+  };
+  assert.equal(
+    triggerEditorInput(editorFromTrigger(trigger)).deliveryMode,
+    undefined,
+  );
+  for (const deliveryMode of ["steer", "queue"] as const)
+    assert.equal(
+      triggerEditorInput(editorFromTrigger({ ...trigger, deliveryMode }))
+        .deliveryMode,
+      deliveryMode,
+    );
 });

@@ -1,6 +1,7 @@
 import { ZenXProtocolError } from "../protocol-client/protocol-client.js";
 /** Product preset: reusable by any user, independent of personal workspace conventions. */
 export const ALWAYS_ON_ASSISTANT_PROMPT = `You are the user's ongoing personal assistant in ZenX. Use their chosen name or bound Room/member identity; PAW is a preset label. The Room is IM communication; the Thread is your working context.
+Save requested names with zenx_rooms_rename for the current Reply Room ID; confirm only after success. This updates your Room/member identity, not the working Thread title. On failure explain retry/settings. Never repeat naming after a choice or skip. Existing repository-root AGENTS.md is the workspace instruction path; edit only when requested and permitted. Never move the directory or create a parallel name registry.
 PAW owns no special tools. All Agents use ordinary plugin APIs and permission checks. Discover/read zenx-rooms, zenx-triggers, zenx-self-control, zenx-subagents and zenx-fleet via zenx_plugin; readiness reports missing/disabled plugins, never approval. Read each plugin's setup guidance. For machine selection and remote tools, read Fleet's HOWTO and respect the user's requested machine. IM uses imzenx_prepare and imzenx_readiness for authorized nonsecret paths; secrets require secure local completion and one explicit consumer. Never extract secrets or inspect other apps' configs. Report unavailable capabilities honestly.
 Absorb new messages into ongoing work; prioritize corrections next cycle. Continue authorized work until done or a decision is needed.
 Direct messages in the working Thread stay there: reply normally, without copying messages or answers into a Room unless the user requests it. Do not reuse a Reply Room ID from an earlier turn for a new direct message. For a current Room wakeup, use its explicit Reply Room ID. For event continuations, use only the registered trigger's explicit destination.
@@ -92,4 +93,69 @@ export async function deliverAssistantInput(
     }
   }
   throw new Error("Assistant input was not admitted");
+}
+
+export type AssistantWakeupInput = Pick<
+  ClientRequestParams["zen/turn/wake"],
+  "threadId" | "clientId" | "source" | "text"
+>;
+export interface AssistantWakeupPort {
+  request<M extends "thread/read" | "zen/turn/wake">(
+    method: M,
+    params: ClientRequestParams[M],
+  ): Promise<ClientRequestResults[M]>;
+}
+
+/** Bootstrap admission is honest Host input; never use the user-message fallback. */
+export async function deliverAssistantWakeup(
+  port: AssistantWakeupPort,
+  params: AssistantWakeupInput,
+  signal?: AbortSignal,
+  admission: { requireUnarchived?: true } = {},
+): Promise<{
+  turnId: string;
+  mode: "start" | "steer";
+  expectedTurnId?: string;
+}> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    signal?.throwIfAborted();
+    const { thread } = await port.request("thread/read", {
+      threadId: params.threadId,
+      includeTurns: true,
+    });
+    signal?.throwIfAborted();
+    const active = thread.turns.find((turn) => turn.status === "inProgress");
+    try {
+      const result = await port.request("zen/turn/wake", {
+        ...params,
+        mode: active ? "steer" : "start",
+        ...(active ? { expectedTurnId: active.id } : {}),
+        ...admission,
+      });
+      if (
+        typeof result.turnId !== "string" ||
+        !result.turnId ||
+        (result.mode !== "start" && result.mode !== "steer")
+      )
+        throw new Error(
+          "Host wakeup outcome is unconfirmed; read the Thread before retrying",
+        );
+      return {
+        turnId: result.turnId,
+        mode: result.mode,
+        ...(result.mode === "steer" ? { expectedTurnId: result.turnId } : {}),
+      };
+    } catch (error) {
+      const code =
+        error instanceof ZenXProtocolError &&
+        (error.code === -32000 || error.code === -32602) &&
+        error.data &&
+        typeof error.data === "object"
+          ? (error.data as { zenCode?: unknown }).zenCode
+          : undefined;
+      if (code !== "thread_busy" && code !== "turn_not_running") throw error;
+      if (attempt === 7) throw error;
+    }
+  }
+  throw new Error("Host wakeup was not admitted");
 }

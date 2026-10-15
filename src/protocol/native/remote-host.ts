@@ -44,6 +44,7 @@ import type { CanonicalItem } from "../../item.js";
 import {
   REMOTE_HOST_VERSION,
   REMOTE_UNARCHIVED_SEND_CAPABILITY,
+  REMOTE_THREAD_MESSAGE_CAPABILITY,
   REMOTE_SHELL_MAX_COMMAND_BYTES,
   REMOTE_SHELL_MAX_TIMEOUT_MS,
   REMOTE_SHELL_MAX_OUTPUT_BYTES,
@@ -104,6 +105,25 @@ export function projectRemoteItem(item: CanonicalItem): RemoteItemView | null {
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("\n"),
+    };
+  if (item.type === "host_message")
+    return {
+      ...base,
+      type: item.type,
+      text: item.text,
+      source: item.source,
+      ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+      mode: item.mode,
+    };
+  if (item.type === "thread_message")
+    return {
+      ...base,
+      type: item.type,
+      text: item.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n"),
+      sender: item.sender,
     };
   if (item.type === "agent_message")
     return { ...base, type: item.type, text: item.text };
@@ -556,6 +576,7 @@ export class RemoteHostAccess {
         "resumePage",
         "send",
         REMOTE_UNARCHIVED_SEND_CAPABILITY,
+        REMOTE_THREAD_MESSAGE_CAPABILITY,
         "interrupt",
         ...(this.#shell && this.#shellAllowed(deviceId) ? ["shell"] : []),
         ...(this.#tools && this.#toolsAllowed(deviceId)
@@ -802,6 +823,23 @@ export class RemoteHostAccess {
             }),
       };
       try {
+        if (input.sender !== undefined) {
+          if (!control) throw new RemoteHostError("operation_forbidden");
+          const receipt = await this.#appServer.sendRemoteThreadMessage(
+            input.threadId,
+            {
+              sender: input.sender,
+              text: input.text,
+              ...(input.messageType === undefined
+                ? {}
+                : { messageType: input.messageType }),
+            },
+            deviceId,
+            input.clientId,
+          );
+          const { turnId, ...rest } = receipt;
+          return { ...rest, ...(turnId === null ? {} : { turnId }) };
+        }
         if (input.messageType === "follow_up") {
           if (!control) throw new RemoteHostError("operation_forbidden");
           await this.#appServer.queueMessage(

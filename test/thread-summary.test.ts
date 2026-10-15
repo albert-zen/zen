@@ -69,6 +69,7 @@ test("rebuilds native summaries and follows canonical and product metadata chang
     assert.equal(archived.length, 1);
     assert.deepEqual(archived[0], {
       threadId: started.id,
+      lastItemId: (await server.readThread(started.id)).items.at(-1)?.id,
       currentMetadata: {
         providerProfileId: "fake",
         modelId: "other",
@@ -493,6 +494,57 @@ test("parallel cold reads never write a terminal or consume queued input", async
       ).length,
       0,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("message summaries follow canonical user/Agent messages, not metadata or trailing lifecycle items", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-messages-"),
+  );
+  try {
+    const server = createServer(directory);
+    const thread = await server.startThread();
+    const [empty] = await server.listThreadSummaries();
+    assert(empty && empty.status !== "systemError");
+    assert.equal(empty.lastMessage, undefined);
+    assert.equal(empty.lastAgentMessage, undefined);
+    await (
+      await server.startTurn(thread.id, "hello")
+    ).done;
+    const canonical = (await server.readThread(thread.id)).items;
+    const lastAgent = canonical.findLast(
+      (item) => item.type === "agent_message",
+    )!;
+    assert(lastAgent);
+    assert.notEqual(
+      canonical.at(-1)?.id,
+      lastAgent.id,
+      "lifecycle tail is not a message",
+    );
+    const [summary] = await server.listThreadSummaries();
+    assert(summary && summary.status !== "systemError");
+    assert.deepEqual(summary.lastAgentMessage, {
+      id: lastAgent.id,
+      createdAt: lastAgent.createdAt,
+    });
+    assert.deepEqual(summary.lastMessage, {
+      id: lastAgent.id,
+      createdAt: lastAgent.createdAt,
+      kind: "agent",
+    });
+    await server.updateThreadSettings(thread.id, { model: "other" });
+    await server.setThreadName(thread.id, "rename is not a message");
+    const [renamed] = await server.listThreadSummaries();
+    assert(renamed && renamed.status !== "systemError");
+    assert.deepEqual(renamed.lastMessage, summary.lastMessage);
+    assert.deepEqual(renamed.lastAgentMessage, summary.lastAgentMessage);
+    await unlink(path.join(directory, "thread-summaries.json"));
+    const [rebuilt] = await createServer(directory).listThreadSummaries();
+    assert(rebuilt && rebuilt.status !== "systemError");
+    assert.deepEqual(rebuilt.lastMessage, summary.lastMessage);
+    assert.deepEqual(rebuilt.lastAgentMessage, summary.lastAgentMessage);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

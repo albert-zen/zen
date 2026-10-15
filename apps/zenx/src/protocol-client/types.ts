@@ -4,6 +4,10 @@ import type {
   CodexThreadItem,
   CodexTurn,
 } from "../../../../src/protocol/codex/mapper.js";
+import type {
+  NativeForkThreadParams,
+  NativeForkThreadResult,
+} from "../../../../src/protocol/native/wire.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import type { CanonicalItem } from "../../../../src/item.js";
 import type {
@@ -15,14 +19,46 @@ import type {
   NativeThreadRecoverySnapshot,
 } from "../../../../src/protocol/native/recovery.js";
 
-export type Thread = Omit<CodexThread, "parentThreadId"> & {
+export type Thread = Omit<
+  CodexThread,
+  "parentThreadId" | "turns" | "queuedMessages"
+> & {
   /** Native-only creation relation; CAS continues to project null. */
   parentThreadId: string | null;
   /** Native product projection input; absent on CAS-only compatibility data. */
   canonicalItems?: readonly CanonicalItem[];
+  turns: Turn[];
+  queuedMessages?: Array<
+    NonNullable<CodexThread["queuedMessages"]>[number] & {
+      sender?: import("../../../../src/item.js").ThreadMessageSender;
+      hostSource?: Pick<
+        import("../../../../src/item.js").HostWakeupInput,
+        "source" | "sourceId"
+      >;
+    }
+  >;
 };
-export type Turn = CodexTurn;
-export type ThreadItem = CodexThreadItem;
+export type Turn = Omit<CodexTurn, "items"> & { items: ThreadItem[] };
+export type ThreadItem =
+  | CodexThreadItem
+  | {
+      type: "hostMessage";
+      id: string;
+      clientId: string;
+      source: import("../../../../src/item.js").HostWakeupInput["source"];
+      sourceId?: string;
+      text: string;
+      mode: "start" | "steer";
+      deliveryAfter?: string;
+    }
+  | {
+      type: "threadMessage";
+      id: string;
+      clientId: string;
+      sender: import("../../../../src/item.js").ThreadMessageSender;
+      content: Array<{ type: "text"; text: string; text_elements: [] }>;
+      deliveryAfter?: string;
+    };
 export type CommandItem = CodexCommandItem;
 
 export interface ClientInfo {
@@ -132,7 +168,11 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportParams;
+  "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
+  "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/thread/queue/cancel": {
@@ -145,6 +185,7 @@ export interface ClientRequestParams {
   "skills/list": { cwds: string[] };
   "model/list": { cursor?: null };
   "thread/start": ThreadConfigurationParams;
+  "zen/thread/fork": NativeForkThreadParams;
   "thread/fork": {
     sourceThreadId: string;
     through: { type: "latest-complete" };
@@ -153,6 +194,9 @@ export interface ClientRequestParams {
   "thread/resume": { threadId: string } & ThreadConfigurationParams;
   "zen/thread/resume": { threadId: string };
   "zen/thread/read": { threadId: string };
+  "zen/thread/delete": { threadId: string; expectedLastItemId: string };
+  "zen/thread/deleted/list": Record<string, never>;
+  "zen/thread/restore": { threadId: string; deletionItemId: string };
   "zen/thread/create-child": CreateChildThreadInput;
   "thread/read": { threadId: string; includeTurns?: boolean };
   "thread/list": {
@@ -221,7 +265,14 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportPreview;
+  "zen/thread/import": {
+    thread: ThreadSnapshot;
+    status: "imported" | "already_imported";
+  };
+  "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
+  "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/thread/queue/cancel": {
@@ -235,10 +286,16 @@ export interface ClientRequestResults {
   };
   "model/list": { data: ModelSummary[]; nextCursor: null };
   "thread/start": { thread: Thread } & ThreadSettingsSnapshot;
+  "zen/thread/fork": NativeForkThreadResult;
   "thread/fork": { thread: Thread } & ThreadSettingsSnapshot;
   "thread/resume": { thread: Thread } & ThreadSettingsSnapshot;
   "zen/thread/resume": NativeThreadRecoverySnapshot;
   "zen/thread/read": { thread: ThreadSnapshot };
+  "zen/thread/delete": { threadId: string; deletionItemId: string };
+  "zen/thread/deleted/list": {
+    data: import("../../../../src/protocol/native/wire.js").DeletedThreadSummary[];
+  };
+  "zen/thread/restore": { thread: ThreadSnapshot };
   "zen/thread/create-child": { thread: ThreadSnapshot };
   "thread/read": { thread: Thread };
   "thread/list": {
@@ -352,9 +409,10 @@ export interface ServerRequestParams {
     itemId: string;
     startedAtMs: number;
     environmentId: null;
-    reason: null;
+    reason: string | null;
     command: string;
     approvalScope?: "once";
+    approvalTarget?: Readonly<{ key: string; label: string }>;
     toolName?: string;
     toolArguments?: Readonly<Record<string, unknown>>;
     cwd: string;
@@ -390,3 +448,8 @@ export type ConnectionStatus =
   | { type: "resubscribeFailed"; threadId: string; error: Error }
   | { type: "protocolError"; error: Error }
   | { type: "closed" };
+
+export type {
+  NativeHostWakeupParams,
+  NativeHostWakeupResult,
+} from "../../../../src/protocol/native/wire.js";

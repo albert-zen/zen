@@ -12,7 +12,7 @@ test("Reaction-heavy history pages retain complete text and cursor progress; quo
       onNotification: () => () => {},
       request: async (_method: any, params: any) => {
         dispatched = params;
-        return { turn: { id: "turn", status: "inProgress", items: [] } };
+        return { mode: "steer", turnId: "turn" };
       },
     } as any,
     {
@@ -85,9 +85,9 @@ test("Reaction-heavy history pages retain complete text and cursor progress; quo
     const op = `${regular.operationEpoch}:${randomUUID()}`;
     await service.prepareRoomMessage(regular.id, op, text, source.id);
     await service.postPreparedRoomMessage(regular.id, op, text);
-    assert(dispatched.input[0].text.includes(text));
+    assert(dispatched.text.includes(text));
     assert(
-      dispatched.input[0].text.includes(
+      dispatched.text.includes(
         "Reply to Agent (" + source.id + "): Original quote",
       ),
     );

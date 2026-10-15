@@ -1,9 +1,11 @@
+import { classifyMessageLink } from "../external-link-policy.js";
 import type {
   BrowserThreadRequest,
   BrowserThreadEvent,
   BrowserThreadListener,
 } from "./capabilities/browser-thread-observation.js";
 export interface BrowserLiveObservationSource {
+  readBrowserTargetUrl?(threadId: string, targetId: string): Promise<string>;
   observeBrowserLive(
     request: BrowserThreadRequest,
     listener: BrowserThreadListener,
@@ -24,7 +26,18 @@ export class BrowserLiveObservationIpcBridge {
   readonly #eventChannel: string;
   readonly #subscriptions = new Map<
     BrowserLiveObservationRenderer,
-    { id: string; stop: () => void; destroyed: () => void }
+    {
+      id: string;
+      request: BrowserThreadRequest;
+      selectedId?: string;
+      eligible: boolean;
+      blocked: boolean;
+      ready: boolean;
+      epoch: number;
+      opening: boolean;
+      stop: () => void;
+      destroyed: () => void;
+    }
   >();
   constructor(source: BrowserLiveObservationSource, eventChannel: string) {
     this.#source = source;
@@ -51,6 +64,13 @@ export class BrowserLiveObservationIpcBridge {
     this.unsubscribe(renderer);
     const subscription = {
       id: subscriptionId,
+      request: { ...request },
+      selectedId: undefined as string | undefined,
+      eligible: false,
+      blocked: false,
+      ready: false,
+      epoch: 0,
+      opening: false,
       stop: () => {},
       destroyed: () => this.unsubscribe(renderer),
     };
@@ -61,14 +81,80 @@ export class BrowserLiveObservationIpcBridge {
         if (
           this.#subscriptions.get(renderer) === subscription &&
           !renderer.isDestroyed()
-        )
+        ) {
+          if (event.type === "targets") {
+            if (subscription.selectedId !== event.selectedId)
+              subscription.epoch++;
+            subscription.selectedId = event.selectedId;
+            const target = event.targets.find(
+              (value) => value.id === event.selectedId,
+            );
+            subscription.eligible =
+              target?.canOpenExternally === true && !target.loading;
+          } else if (
+            event.type === "status" &&
+            ["connecting", "failed", "unavailable"].includes(event.status)
+          ) {
+            subscription.epoch++;
+            subscription.blocked = true;
+          } else if (
+            (event.type === "status" &&
+              (event.status === "live" || event.status === "idle")) ||
+            event.type === "snapshot"
+          ) {
+            subscription.blocked = false;
+          }
+          const ready = subscription.eligible && !subscription.blocked;
+          if (subscription.ready && !ready) subscription.epoch++;
+          subscription.ready = ready;
           renderer.send(this.#eventChannel, { subscriptionId, event });
+        }
       });
       subscription.stop = stop;
       if (this.#subscriptions.get(renderer) !== subscription) stop();
     } catch (error) {
       this.unsubscribe(renderer, subscriptionId);
       throw error;
+    }
+  }
+  async openExternal(
+    renderer: BrowserLiveObservationRenderer,
+    threadId: string,
+    targetId: string,
+    open: (url: string) => Promise<void>,
+  ): Promise<void> {
+    const subscription = this.#subscriptions.get(renderer);
+    if (
+      !subscription ||
+      renderer.isDestroyed() ||
+      !subscription.request.frames ||
+      subscription.request.threadId !== threadId ||
+      subscription.selectedId !== targetId ||
+      !subscription.ready ||
+      !this.#source.readBrowserTargetUrl
+    )
+      throw new Error("Browser page is not current");
+    if (subscription.opening)
+      throw new Error("Browser external opening is already pending");
+    subscription.opening = true;
+    const epoch = subscription.epoch;
+    try {
+      const raw = await this.#source.readBrowserTargetUrl(threadId, targetId);
+      if (
+        this.#subscriptions.get(renderer) !== subscription ||
+        renderer.isDestroyed() ||
+        subscription.epoch !== epoch ||
+        !subscription.ready
+      )
+        throw new Error("Browser page is no longer current");
+      const target = classifyMessageLink(raw);
+      if (target.kind !== "browser")
+        throw new Error(
+          "Only current HTTP(S) Browser pages can be opened externally",
+        );
+      await open(target.value);
+    } finally {
+      subscription.opening = false;
     }
   }
   unsubscribe(

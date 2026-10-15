@@ -20,8 +20,8 @@ The strict script policy is unchanged. LF/CRLF/CR inputs produce identical HTML
 and the hash matches the parsed script. See the [HTML preprocessing rule](https://html.spec.whatwg.org/multipage/parsing.html#preprocessing-the-input-stream)
 and [CSP hash matching](https://www.w3.org/TR/CSP3/#match-element-to-source-list).
 
-This is a confirmed source-level defect and a hypothesis for that particular
-hosted failure until a fresh Windows run completes. The harness now prints bounded
+This is a confirmed source-level defect. The initial hosted failure's exact cause
+was not independently established. The harness now prints bounded
 failure diagnostics (events/stdout/stderr), observes the startup page before image
 capture, and records renderer console/load errors. It does not relax the failure
 assertion or timeout.
@@ -42,10 +42,35 @@ signed release as the fixture. The script requires a new evidence directory and
 leaves JSON, logs and PNGs there. It removes only its temporary package/profile
 copies. It creates two isolated fake-provider profiles and makes no model calls.
 
-CI reuses the portable package already built by the Windows Project workspace
-smoke job. `zenx-windows-startup-evidence` is uploaded even if the startup step
+CI reuses the single portable package already built by the Windows bundled-provider
+smoke job and used by its Project workspace acceptance. It retains that job's
+same-run downstream provider digest and trust evidence; no second packaging job
+or provider build is introduced. `zenx-windows-startup-evidence` is uploaded even if the startup step
 fails. Inspect `report.json`, not just the green job. `workflowCommit` is the
 checkout commit (a PR workflow normally tests a merge ref).
+
+## Prior native evidence
+
+[PR #295 run 38267587608](https://github.com/albert-zen/zen/actions/runs/38267587608/job/114873549111)
+at head `75494349057942cb3d49c5266e74bf4909e97748` completed both native cases
+on Windows Server 2025 / Electron 43.2.0 / x64:
+
+- Success: 553.4ms to first visible HWND; actual gate held 3051ms; Host ready
+  and the mounted renderer retained the same sole HWND. Second launch restored
+  the window and changed foreground ownership to that HWND.
+- Failure: 529.3ms to first visible HWND; actual gate held 3021ms; the same sole
+  visible HWND exposed the exact synthetic failure as inert alert text. Second
+  launch restored it; foreground was already that HWND before the launch.
+- Raw event arithmetic matched the reported holds; cleanup, finalization, and
+  `nativeSampleGaps` arrays were empty. These are historical log/report receipts,
+  not a claim that screenshots were visually inspected or that the current
+  integration has already passed native CI.
+
+The earlier 1856.5ms sample remains a miss against the approximate one-second
+observation target. Earlier advertised three-second holds were invalidated by
+PowerShell timestamp stringification losing fractional seconds; the final run
+above used the corrected UTC DateTime conversion. Neither a single successful run
+nor these two samples establishes a universal timing guarantee.
 
 ## What is exercised
 

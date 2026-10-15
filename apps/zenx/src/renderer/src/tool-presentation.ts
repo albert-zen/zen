@@ -1,8 +1,10 @@
+import { IMPORTED_TOOL_RESULT_CONTENT_TYPE } from "../../../../../src/thread-import.js";
 import { i18n } from "./i18n.js";
 import type { IconName } from "./icons.js";
 import type { ThreadItem } from "../../protocol-client/index.js";
 
 export type CommandPhase =
+  | "imported"
   | "requested"
   | "admitting"
   | "queued"
@@ -55,12 +57,18 @@ export function commandTask(
   };
 }
 export function isTerminalCommandPhase(phase: CommandPhase): boolean {
-  return ["completed", "failed", "timed_out", "cancelled", "declined"].includes(
-    phase,
-  );
+  return [
+    "imported",
+    "completed",
+    "failed",
+    "timed_out",
+    "cancelled",
+    "declined",
+  ].includes(phase);
 }
 /** Task lifetime is independent of an enclosing call being aborted/declined. */
 export function commandPhase(item: CommandItem): CommandPhase {
+  if (item.contentType === IMPORTED_TOOL_RESULT_CONTENT_TYPE) return "imported";
   const receipt = commandTask(item);
   if (receipt !== null && receipt.phase !== "completed") return receipt.phase;
   if (item.status === "failed" || item.status === "declined")
@@ -71,6 +79,7 @@ export function commandPhase(item: CommandItem): CommandPhase {
 }
 export function commandPhaseLabel(phase: CommandPhase): string {
   const keys = {
+    imported: "importedHistory",
     requested: "requested",
     admitting: "admitting",
     queued: "queued",
@@ -79,7 +88,7 @@ export function commandPhaseLabel(phase: CommandPhase): string {
     cancel_requested: "cancelling",
     cancellation_unconfirmed: "cancellationUnconfirmed",
     completed: "completed",
-    failed: "failed",
+    failed: "toolEnded",
     timed_out: "timedOut",
     cancelled: "cancelled",
     declined: "declined",
@@ -203,7 +212,9 @@ export function toolPresentation(name: string): {
   icon: IconName;
   action?: string;
 } {
-  const key = name.replace(/^zenx_/u, "");
+  const key = name
+    .replace(/^zenx_/u, "")
+    .replace(/^browser_(?:workspace|connected)_/u, "browser_");
   if (/^view_image(?:\s|$)/u.test(key)) {
     return {
       category: i18n.t("shell:image"),
@@ -236,7 +247,11 @@ export function toolPresentation(name: string): {
   if (action)
     return {
       category: key.startsWith("browser_")
-        ? i18n.t("shell:browser")
+        ? /^((zenx_)?browser_workspace_)/u.test(name)
+          ? i18n.t("shell:workspaceBrowser")
+          : /^((zenx_)?browser_connected_)/u.test(name)
+            ? i18n.t("shell:externalBrowser")
+            : i18n.t("shell:browser")
         : i18n.t("shell:computer"),
       icon: key.startsWith("browser_") ? "browser" : "computer",
       action,
@@ -254,7 +269,9 @@ export function commandTitle(
   const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
   const args = item.toolArguments;
   const completed = commandPhase(item) === "completed";
-  const key = name.replace(/^zenx_/u, "");
+  const key = name
+    .replace(/^zenx_/u, "")
+    .replace(/^browser_(?:workspace|connected)_/u, "browser_");
   const completedAction =
     completed && item.toolName !== undefined
       ? Object.hasOwn(threadActions(), key)

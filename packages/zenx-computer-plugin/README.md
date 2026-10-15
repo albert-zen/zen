@@ -70,3 +70,47 @@ plugin manager (or uninstalls and reinstalls it). A bundled update selects the
 current App Resources package for the selected provider, even when the previous
 version's tarball is no longer present; the ordinary profile transaction owns
 the replacement and preserves plugin data.
+
+## Windows background capture boundary (1.1.3)
+
+Windows UIA discovery, inspection and semantic actions still use the pinned
+WinApp CLI. Screenshots use a fixed app-bundled PrintWindow helper launched via
+the system Windows PowerShell. WinApp 0.3.1's screenshot command can restore or
+activate windows on fallback, so it is not used by the background capture tool.
+
+The helper contains no window activation, restore or global input calls. It
+accepts an exact HWND/PID/title, rechecks identity and physical-pixel geometry,
+and returns a bounded PNG to the Host; only the Host writes the expiring artifact.
+Minimized, hidden, cloaked, protected, blank or unrendered client regions fail
+without takeover. A genuinely black client can be rejected as unverified.
+Potential sentinel-colored pixels are checked against a differently initialized
+second capture under the same timeout. Only those ambiguous positions must keep
+their color; unrelated animation is allowed. If they change, capture fails as
+unverified. The first frame is returned intact, with no cross-frame compositing. This
+supports PrintWindow-renderable windows, not arbitrary GPU surfaces or a
+separate desktop session. If system policy blocks PowerShell/Add-Type, capture
+reports the failure; UIA operations remain available. Update Computer in Plugin
+settings to receive the revised capture description and capability declaration.
+
+## Windows semantic focus boundary (1.1.5)
+
+WinApp 0.3.1 `set-value` and direct CUIAutomation8 `Invoke` were observed
+activating a background WinForms window.
+Its CUIAutomation8 client leaves `IUIAutomation2.AutoSetFocus` at its default;
+Microsoft documents that this setting can focus controls before `SetValue` and
+`Invoke`. Targeted UIA and no global input are not proof of focus isolation.
+
+This revision conservatively requires the existing, explicit Foreground computer
+control setting for both WinApp `computer_set_value` and `computer_press`, before resolving or
+consuming its observation. Revocation prevents subsequent dispatch and requests cancellation of launched work;
+termination requests remain pending until the child process and its pipes close.
+It cannot undo a UIA operation already delivered to an application.
+It never enables the setting, restores old focus, or substitutes global input.
+This is a temporary safety boundary, not a completed background-text-input fix.
+Both activating mutation paths stay gated while a verified background transport is developed.
+
+The native smoke includes fixture-only direct CUIAutomation8 `SetValue` and
+`Invoke` comparisons with default AutoSetFocus versus FALSE, with independent
+continuous focus/pointer samples, provider identity and complete Unicode checks.
+No experimental client is exposed as a production background-safe path. A green
+screenshot epoch does not certify semantic actions or other apps/providers.

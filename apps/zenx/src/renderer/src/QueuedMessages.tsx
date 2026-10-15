@@ -1,3 +1,5 @@
+import { MessageSourceLink } from "./message-source-navigation.js";
+import { HostMessageContent } from "./HostMessageContent.js";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { QueuedCancellationTarget } from "../../../../../src/app-server.js";
@@ -10,6 +12,11 @@ export interface QueuedMessagePreview {
   clientId: string;
   text: string;
   imageCount: number;
+  sender?: import("../../../../../src/item.js").ThreadMessageSender;
+  hostSource?: Pick<
+    import("../../../../../src/item.js").HostWakeupInput,
+    "source" | "sourceId"
+  >;
 }
 
 export interface QueuedMessagesProps {
@@ -444,7 +451,35 @@ function QueuedMessageRow({
         <div
           className={`queue-row-content${message.imageCount > 0 ? " has-images" : ""}`}
         >
-          {
+          {message.sender === undefined ? null : (
+            <MessageSourceLink
+              active={imagesVisible}
+              target={{
+                kind: "thread",
+                id: message.sender.threadId,
+                ...(message.sender.deviceId === undefined
+                  ? {}
+                  : { deviceId: message.sender.deviceId }),
+              }}
+              label={t(
+                message.sender.deviceId === undefined
+                  ? "threadMessageFrom"
+                  : "remoteThreadMessageFrom",
+                {
+                  name: message.sender.threadName ?? t("threadMessageUnnamed"),
+                },
+              )}
+            />
+          )}
+          {message.hostSource !== undefined ? (
+            <HostMessageContent
+              sourceNavigation
+              source={message.hostSource.source}
+              sourceId={message.hostSource.sourceId}
+              text={message.text}
+              onReadingChange={onReadingChange}
+            />
+          ) : (
             <div
               className={`queue-preview${expanded ? " is-expanded" : ""}${expandable ? " is-expandable" : ""}`}
               role={expandable ? "button" : undefined}
@@ -535,7 +570,7 @@ function QueuedMessageRow({
                 />
               ) : null}
             </div>
-          }
+          )}
           {message.imageCount > 0 ? (
             <QueuedImageStrip
               message={message}
@@ -549,7 +584,9 @@ function QueuedMessageRow({
           ) : null}
         </div>
         <div className="queue-row-actions">
-          {onEdit === undefined ? null : (
+          {onEdit === undefined ||
+          message.sender !== undefined ||
+          message.hostSource !== undefined ? null : (
             <button
               type="button"
               className={`queue-row-edit${editing ? " is-pending" : ""}`}

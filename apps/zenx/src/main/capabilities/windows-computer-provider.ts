@@ -24,6 +24,7 @@ import {
 } from "./computer-provider.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
 import { OBSERVATION_CAPTURE } from "./observation-capture.js";
+import { windowsBackgroundCaptureCommand } from "./windows-background-capture.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_WINAPP_STDOUT_BYTES = 2 * 1024 * 1024;
@@ -34,20 +35,20 @@ export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.2",
+  version: "1.1.5",
   description:
-    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and WGC capture stay background-safe; unsupported global input never silently substitutes for them.",
+    "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   provider: {
     id: "microsoft-winapp-cli",
     platforms: ["win32"],
-    interactionModes: ["background_safe"],
+    interactionModes: ["background_safe", "foreground_required"],
     capabilities: [
       "window.list",
       "uia.inspect",
       "uia.invoke",
       "uia.set_value",
       "uia.wait_for.verify",
-      "wgc.capture",
+      "printwindow.capture",
       "cancellable",
       "bounded_output",
     ],
@@ -64,7 +65,7 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
       return {
         ...permission,
         description:
-          "Capture one explicitly targeted HWND through WinApp CLI's background-safe default capture path.",
+          "Capture one explicitly targeted HWND without restoring or activating it. Unavailable background frames fail closed.",
       };
     }
     return permission;
@@ -85,22 +86,40 @@ export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
           return {
             ...tool,
             description:
-              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
-            capabilities: ["uia.invoke", "app_targeted", "no_global_input"],
+              "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
+            interactionMode: "foreground_required",
+            permissions: [...tool.permissions, "computer.foreground.control"],
+            capabilities: [
+              "uia.invoke",
+              "app_targeted",
+              "no_global_input",
+              "may_activate_target",
+            ],
           };
         case "computer_set_value":
           return {
             ...tool,
             description:
-              "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
-            capabilities: ["uia.set_value", "app_targeted", "no_global_input"],
+              "Set the supplied text on one opaque editable control through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
+            interactionMode: "foreground_required",
+            permissions: [...tool.permissions, "computer.foreground.control"],
+            capabilities: [
+              "uia.set_value",
+              "app_targeted",
+              "no_global_input",
+              "may_activate_target",
+            ],
           };
         case "computer_screenshot":
           return {
             ...tool,
             description:
-              "Capture one exact Windows HWND through WinApp CLI's default WGC/PrintWindow path to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
-            capabilities: ["wgc.capture", "app_targeted", "no_global_input"],
+              "Capture one exact Windows HWND through a strict background PrintWindow helper. Minimized, hidden, protected or blank windows fail without activation. Returns private five-minute PNG metadata/path, never pixels in the Thread journal.",
+            capabilities: [
+              "printwindow.capture",
+              "app_targeted",
+              "no_global_input",
+            ],
           };
         default:
           return tool;
@@ -121,7 +140,10 @@ export interface WinAppCliDiagnostic {
 
 export interface WinAppCliRunOptions {
   timeoutMs: number;
+  stdin?: string;
   signal?: AbortSignal;
+  onStopping?: () => void;
+  onSpawn?: (pid: number) => void;
   maxStdoutBytes?: number;
   maxStderrBytes?: number;
   redactions?: readonly string[];
@@ -191,6 +213,8 @@ interface WinAppScreenshotEnvelope {
   processId?: number;
   windowTitle?: string;
   hwnd?: unknown;
+  method?: string;
+  pngBase64?: string;
 }
 
 interface WinAppScreenshotImage {
@@ -227,6 +251,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   readonly #observations = new ComputerObservationLedger();
   readonly #platform: NodeJS.Platform;
   readonly #runner: WinAppCliRunner;
+  readonly #captureRunner: WinAppCliRunner;
   readonly #expectedVersion?: string;
   readonly #runtimeExecutable?: string;
   readonly #bindBeforeSpawn?: () => Promise<() => Promise<void>>;
@@ -239,6 +264,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       command?: string;
       platform?: NodeJS.Platform;
       runner?: WinAppCliRunner;
+      captureRunner?: WinAppCliRunner;
       expectedVersion?: string;
       runtimeExecutable?: string;
       bindBeforeSpawn?: () => Promise<() => Promise<void>>;
@@ -252,6 +278,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     this.#command = options.command ?? "winapp";
     this.#platform = options.platform ?? process.platform;
     this.#runner = options.runner ?? new SpawnWinAppCliRunner();
+    this.#captureRunner = options.captureRunner ?? new SpawnWinAppCliRunner();
     this.#expectedVersion = options.expectedVersion;
     this.#runtimeExecutable = options.runtimeExecutable;
     this.#bindBeforeSpawn = options.bindBeforeSpawn;
@@ -450,12 +477,13 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     target: ComputerTarget,
     control: ComputerControlSelector,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
   }> {
     this.#requireWindows();
-    const window = await this.#resolveWindow(target, signal);
+    const window = await this.#resolveWindow(target, signal, onStopping);
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
@@ -463,11 +491,19 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       winAppWindowIdentity(window),
     );
     const selector = requiredProviderSelector(fingerprint);
-    await this.#revalidateControl(window, fingerprint, "press", signal);
+    await this.#revalidateControl(
+      window,
+      fingerprint,
+      "press",
+      signal,
+      onStopping,
+    );
     const result = await this.#json<{ hwnd?: unknown }>(
       ["ui", "invoke", selector, "--window", String(window.hwnd), "--json"],
       10_000,
       signal,
+      undefined,
+      onStopping,
     );
     requireConfirmedHwnd(result.hwnd, window.hwnd, "invoke");
     return { target: resolvedTarget(window), control };
@@ -478,13 +514,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     control: ComputerControlSelector,
     value: string,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
   }> {
     this.#requireWindows();
-    const window = await this.#resolveWindow(target, signal);
+    const window = await this.#resolveWindow(target, signal, onStopping);
     const fingerprint = this.#observations.consume(
       computerTargetKey(target),
       control,
@@ -492,7 +529,13 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       winAppWindowIdentity(window),
     );
     const selector = requiredProviderSelector(fingerprint);
-    await this.#revalidateControl(window, fingerprint, "set_value", signal);
+    await this.#revalidateControl(
+      window,
+      fingerprint,
+      "set_value",
+      signal,
+      onStopping,
+    );
     const result = await this.#json<{ hwnd?: unknown }>(
       [
         "ui",
@@ -506,6 +549,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       10_000,
       signal,
       [value],
+      onStopping,
     );
     requireConfirmedHwnd(result.hwnd, window.hwnd, "set-value");
     const verification = await this.#json<{
@@ -528,6 +572,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       5_000,
       signal,
       [value],
+      onStopping,
     );
     if (
       verification.found !== true ||
@@ -540,7 +585,11 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
         "WinApp CLI set-value did not satisfy the bounded UI Automation value assertion",
       );
     }
-    const refreshedWindow = await this.#refreshWindow(window, signal);
+    const refreshedWindow = await this.#refreshWindow(
+      window,
+      signal,
+      onStopping,
+    );
     return {
       target: resolvedTarget(refreshedWindow),
       control,
@@ -568,19 +617,43 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     );
     let result: WinAppScreenshotEnvelope;
     try {
-      result = await this.#json<WinAppScreenshotEnvelope>(
-        [
-          "ui",
-          "screenshot",
-          "--window",
-          String(window.hwnd),
-          "--output",
-          artifactPath,
-          "--json",
-        ],
-        20_000,
-        signal,
+      const command = windowsBackgroundCaptureCommand();
+      const captured = await this.#captureRunner.run(
+        command.executable,
+        command.args,
+        {
+          timeoutMs: 20_000,
+          signal,
+          stdin: JSON.stringify({
+            hwnd: window.hwnd,
+            pid: window.processId,
+            title: window.title ?? "",
+          }),
+          maxStdoutBytes: 6 * 1024 * 1024,
+          maxStderrBytes: 16 * 1024,
+        },
       );
+      signal?.throwIfAborted();
+      result = JSON.parse(captured.stdout) as WinAppScreenshotEnvelope;
+      if (
+        result.method !== "strict-background-printwindow" ||
+        !sameHwnd(result.hwnd, window.hwnd) ||
+        result.processId !== window.processId ||
+        result.windowTitle !== (window.title ?? "")
+      ) {
+        throw new Error(
+          "Background capture did not confirm the exact target identity",
+        );
+      }
+      const png = decodeBackgroundPng(result);
+      // Refresh exact HWND/PID/title before publishing; never substitute a sibling window.
+      const current = await this.#refreshWindow(window, signal);
+      if (current.title !== window.title)
+        throw new Error("The captured window title changed; inspect again");
+      signal?.throwIfAborted();
+      await writeFile(artifactPath, png, { mode: 0o600 });
+      signal?.throwIfAborted();
+      result.filePath = artifactPath;
     } catch (error) {
       await rm(artifactPath, { force: true });
       throw error;
@@ -667,9 +740,27 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     );
   }
 
+  /** Host-only seam: preserve exact stock window resolution for the strict UIA client. */
+  async resolveWindowForStrictUia(
+    target: ComputerTarget,
+    signal?: AbortSignal,
+  ): Promise<{
+    hwnd: string;
+    pid: number;
+    target: ComputerInspection["target"];
+  }> {
+    const window = await this.#resolveWindow(target, signal);
+    return {
+      hwnd: BigInt(window.hwnd).toString(),
+      pid: window.processId,
+      target: resolvedTarget(window),
+    };
+  }
+
   async #resolveWindow(
     target: ComputerTarget,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<WinAppWindow> {
     if (target.windowTitle === undefined) {
       throw new Error(
@@ -685,6 +776,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       ["ui", "list-windows", "--app", String(app), "--json"],
       10_000,
       signal,
+      undefined,
+      onStopping,
     );
     if (!Array.isArray(result)) {
       throw new Error("WinApp CLI list-windows returned an invalid JSON shape");
@@ -712,11 +805,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   async #refreshWindow(
     previous: WinAppWindow,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<WinAppWindow> {
     const result = await this.#json<unknown>(
       ["ui", "list-windows", "--app", String(previous.processId), "--json"],
       10_000,
       signal,
+      undefined,
+      onStopping,
     );
     if (!Array.isArray(result)) {
       throw new Error("WinApp CLI list-windows returned an invalid JSON shape");
@@ -739,6 +835,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
   async #inspectWindow(
     window: WinAppWindow,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<NonNullable<WinAppInspectEnvelope["windows"]>[number]> {
     const envelope = await this.#json<WinAppInspectEnvelope>(
       [
@@ -754,6 +851,8 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       ],
       DEFAULT_TIMEOUT_MS,
       signal,
+      undefined,
+      onStopping,
     );
     validateInspectEnvelope(envelope);
     const inspectedWindow = envelope.windows?.find((candidate) =>
@@ -772,9 +871,14 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     expected: ComputerControlFingerprint,
     action: "press" | "set_value",
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void> {
     const selector = requiredProviderSelector(expected);
-    const inspectedWindow = await this.#inspectWindow(window, signal);
+    const inspectedWindow = await this.#inspectWindow(
+      window,
+      signal,
+      onStopping,
+    );
     const matches = flattenElements(inspectedWindow.elements ?? []).filter(
       (element) => element.selector === selector,
     );
@@ -815,6 +919,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     timeoutMs: number,
     signal?: AbortSignal,
     redactions?: readonly string[],
+    onStopping?: () => void,
   ): Promise<T> {
     const result = await this.#run(args, {
       timeoutMs,
@@ -822,6 +927,7 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       maxStdoutBytes: MAX_WINAPP_STDOUT_BYTES,
       maxStderrBytes: MAX_WINAPP_STDERR_BYTES,
       redactions,
+      onStopping,
     });
     try {
       return JSON.parse(result.stdout) as T;
@@ -871,13 +977,17 @@ export async function runBoundedProcess(
     const child = spawn(invocation.executable, invocation.args, {
       shell: false,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+    child.once("spawn", () => {
+      if (child.pid !== undefined) options.onSpawn?.(child.pid);
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
+    let failure: Error | undefined;
     const maxStdout = options.maxStdoutBytes ?? MAX_WINAPP_STDOUT_BYTES;
     const maxStderr = options.maxStderrBytes ?? MAX_WINAPP_STDERR_BYTES;
     const finish = (callback: () => void): void => {
@@ -885,12 +995,27 @@ export async function runBoundedProcess(
       settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
-      void Promise.resolve(releaseBinding?.()).catch(() => undefined);
-      callback();
+      void Promise.resolve()
+        .then(() => releaseBinding?.())
+        .catch(() => undefined)
+        .then(callback);
     };
     const failAndKill = (error: Error): void => {
-      child.kill("SIGKILL");
-      finish(() => reject(error));
+      if (settled || failure !== undefined) return;
+      failure = error;
+      try {
+        options.onStopping?.();
+      } catch {
+        /* Presentation cannot prevent termination. */
+      }
+      // Requesting termination does not prove it happened. Keep the invocation
+      // (and the host's foreground activity) live until actual child/pipe close.
+      // A failed kill must never become a falsely confirmed cancellation.
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* Preserve the original failure and wait for native close. */
+      }
     };
     const timer = setTimeout(() => {
       failAndKill(
@@ -908,6 +1033,7 @@ export async function runBoundedProcess(
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     child.stdout?.on("data", (chunk: Buffer) => {
+      if (failure !== undefined) return;
       stdoutBytes += chunk.length;
       if (stdoutBytes > maxStdout) {
         failAndKill(new Error("WinApp CLI stdout exceeded its bounded limit"));
@@ -916,6 +1042,7 @@ export async function runBoundedProcess(
       stdout.push(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
+      if (failure !== undefined) return;
       stderrBytes += chunk.length;
       if (stderrBytes > maxStderr) {
         failAndKill(new Error("WinApp CLI stderr exceeded its bounded limit"));
@@ -923,9 +1050,17 @@ export async function runBoundedProcess(
       }
       stderr.push(chunk);
     });
-    child.once("error", (error) => finish(() => reject(error)));
+    child.stdin?.on("error", (error) => failAndKill(error));
+    if (options.stdin !== undefined) child.stdin?.end(options.stdin, "utf8");
+    // Node emits close after a spawn error too. Do not confuse an error from
+    // a termination request with proof that an already-running child stopped.
+    child.once("error", failAndKill);
     child.once("close", (code, exitSignal) => {
       finish(() => {
+        if (failure !== undefined) {
+          reject(failure);
+          return;
+        }
         if (code === 0) {
           resolve({
             stdout: Buffer.concat(stdout).toString("utf8"),
@@ -1432,4 +1567,36 @@ function unsupportedForeground(): Error {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function decodeBackgroundPng(result: WinAppScreenshotEnvelope): Buffer {
+  const width = positiveInteger(result.width, "background capture width");
+  const height = positiveInteger(result.height, "background capture height");
+  const data = result.pngBase64;
+  if (
+    width > 8192 ||
+    height > 8192 ||
+    width * height > 16_000_000 ||
+    typeof data !== "string" ||
+    data.length > 5_592_408
+  ) {
+    throw new Error("Background capture returned an invalid or oversized PNG");
+  }
+  const png = Buffer.from(data, "base64");
+  if (
+    png.toString("base64") !== data ||
+    png.length < 33 ||
+    png.length > 4 * 1024 * 1024 ||
+    !png
+      .subarray(0, 8)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+    png.toString("ascii", 12, 16) !== "IHDR" ||
+    png.readUInt32BE(16) !== width ||
+    png.readUInt32BE(20) !== height
+  ) {
+    throw new Error(
+      "Background capture PNG dimensions or signature are invalid",
+    );
+  }
+  return png;
 }

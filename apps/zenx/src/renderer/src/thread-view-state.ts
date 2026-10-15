@@ -1,3 +1,4 @@
+import { textFromUserInput } from "../../../../../src/item.js";
 import type {
   ServerNotificationMethod,
   ServerNotificationParams,
@@ -18,6 +19,15 @@ function projectedQueue(
   items: readonly CanonicalItem[],
 ): NonNullable<Thread["queuedMessages"]> {
   return pendingQueuedMessages(items).map((item) => ({
+    ...(item.type === "thread_message_queued" ? { sender: item.sender } : {}),
+    ...(item.type === "host_message_queued"
+      ? {
+          hostSource: {
+            source: item.source,
+            ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+          },
+        }
+      : {}),
     id: item.id,
     clientId: item.clientId,
     text: userInputText(item.input),
@@ -96,7 +106,11 @@ export function applyNativeThreadEvent(
       ? { ...thread, name: event.name, updatedAt: nowSeconds }
       : thread;
   }
-  if (event.type === "thread_archived_updated") return thread;
+  if (
+    event.type === "thread_archived_updated" ||
+    event.type === "thread_deleted_updated"
+  )
+    return thread;
   if (event.type === "thread_settings_updated") {
     return event.threadId === thread.id
       ? {
@@ -121,6 +135,12 @@ export function applyNativeThreadEvent(
       updatedAt: seconds(event.item.createdAt),
     };
     if (
+      event.item.type === "host_message_queued" ||
+      event.item.type === "host_message_cancelled" ||
+      event.item.type === "host_message" ||
+      event.item.type === "thread_message_queued" ||
+      event.item.type === "thread_message_cancelled" ||
+      event.item.type === "thread_message" ||
       event.item.type === "user_message_queued" ||
       event.item.type === "user_message_queue_cancelled" ||
       event.item.type === "user_message_queue_edited" ||
@@ -220,6 +240,26 @@ export function applyNativeThreadEvent(
   }
   if (event.type === "item_completed") {
     if (event.item.type === "context_compaction") return thread;
+    if (event.item.type === "failure") {
+      // Failure Items project to null as ThreadItems; surface them through the
+      // turn error immediately instead of waiting for the next snapshot read.
+      const failure = event.item;
+      return {
+        ...thread,
+        turns: thread.turns.map((turn) =>
+          turn.id === failure.turnId
+            ? {
+                ...turn,
+                error: {
+                  message: failure.message,
+                  codexErrorInfo: null,
+                  additionalDetails: null,
+                },
+              }
+            : turn,
+        ),
+      };
+    }
     if (event.item.type === "tool_result") {
       return updateCommandResult(thread, event.item);
     }
@@ -619,6 +659,38 @@ function projectNativeItems(
 }
 
 function projectNativeCompletedItem(item: CanonicalItem): ThreadItem | null {
+  if (item.type === "host_message") {
+    return {
+      type: "hostMessage",
+      id: item.id,
+      clientId: item.clientId,
+      source: item.source,
+      ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+      text: item.text,
+      mode: item.mode,
+      ...(item.deliveryAfter === undefined
+        ? {}
+        : { deliveryAfter: item.deliveryAfter }),
+    };
+  }
+  if (item.type === "thread_message") {
+    return {
+      type: "threadMessage",
+      id: item.id,
+      clientId: item.clientId,
+      sender: item.sender,
+      content: [
+        {
+          type: "text",
+          text: textFromUserInput(item.content),
+          text_elements: [],
+        },
+      ],
+      ...(item.deliveryAfter === undefined
+        ? {}
+        : { deliveryAfter: item.deliveryAfter }),
+    };
+  }
   if (item.type === "user_message") {
     return {
       type: "userMessage",
@@ -691,7 +763,7 @@ function projectNativeCommandStarted(
   };
 }
 
-function projectNativeCommandCompleted(
+export function projectNativeCommandCompleted(
   call: ToolCallItem,
   result: ToolResultItem,
   cwd: string,

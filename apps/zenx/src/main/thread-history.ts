@@ -45,7 +45,14 @@ export function readThreadHistory(
       : thread.items.findIndex((item) => item.id === cursor.boundary);
   if (cursor.boundary !== null && boundaryIndex < 0)
     throw new Error("History cursor boundary no longer exists");
-  const snapshot = thread.items.slice(0, boundaryIndex + 1);
+  // Recovery controls are product lifecycle facts, not public agent history.
+  // Keep the canonical cursor boundary, but omit controls from every view.
+  const snapshot = thread.items
+    .slice(0, boundaryIndex + 1)
+    .filter(
+      (item) =>
+        item.type !== "thread_deleted" && item.type !== "thread_restored",
+    );
   const items = snapshot.filter(
     (item) => options.turnId === undefined || item.turnId === options.turnId,
   );
@@ -155,7 +162,7 @@ function previewItem(item: CanonicalItem): Record<string, unknown> {
   const raw = JSON.stringify(projected);
   const truncated = raw.length > 500;
   const text =
-    item.type === "agent_message"
+    item.type === "agent_message" || item.type === "host_message"
       ? item.text
       : item.type === "tool_result"
         ? item.output
@@ -164,6 +171,13 @@ function previewItem(item: CanonicalItem): Record<string, unknown> {
     ...(text === undefined
       ? {}
       : { text: text.slice(0, 500), textTruncated: text.length > 500 }),
+    ...(item.type === "host_message"
+      ? {
+          source: item.source,
+          ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+          mode: item.mode,
+        }
+      : {}),
     itemId: item.id,
     type: item.type,
     turnId: item.turnId ?? null,

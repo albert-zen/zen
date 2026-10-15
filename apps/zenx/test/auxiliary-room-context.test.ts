@@ -568,3 +568,45 @@ test("removing a Room resource Thread retains its selected custom tab and reject
     await h.unmount();
   }
 });
+
+test("Room expansion belongs to the conversation across shared, changed and absent resource Threads", async () => {
+  const room = (
+    roomId: string,
+    threadId?: string,
+  ): AuxiliaryConversationContext => ({
+    kind: "room",
+    roomId,
+    ...(threadId ? { resourceThread: { threadId, title: threadId } } : {}),
+  });
+  const h = await mount(room("expanded-room-a", "shared-resource"));
+  const expanded = () =>
+    document.querySelector(".auxiliary-panel")!.getAttribute("data-expanded");
+  try {
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          ".auxiliary-panel button[aria-pressed]:not(.workspace-add-tab)",
+        )!
+        .click(),
+    );
+    assert.equal(expanded(), "true");
+    await h.render(room("expanded-room-a", "other-resource"));
+    assert.equal(expanded(), "true");
+    await h.render(room("expanded-room-a"));
+    assert.equal(expanded(), "true");
+    await h.render(room("expanded-room-b", "shared-resource"));
+    assert.equal(expanded(), "false");
+    await h.render({ kind: "thread", threadId: "shared-resource" });
+    assert.equal(expanded(), "false");
+    await h.render(room("expanded-room-a", "shared-resource"));
+    assert.equal(expanded(), "true");
+  } finally {
+    await h.unmount();
+  }
+  const remounted = await mount(room("expanded-room-a", "new-resource"));
+  try {
+    assert.equal(expanded(), "true");
+  } finally {
+    await remounted.unmount();
+  }
+});

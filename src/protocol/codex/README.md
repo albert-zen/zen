@@ -60,9 +60,10 @@ Server request：`item/commandExecution/requestApproval`。
 
 - `turn/replace`
 - `thread/compact`
-- `thread/fork`：ZAS 的最近闭合 Turn、同目录复制；显式接受 `sourceThreadId`、`through: { type: "latest-complete" }`、`workspace: { type: "same-directory" }`，不声明兼容 CAS 同名方法的请求 shape。
+- `thread/fork`：ZAS 的最近闭合 Turn、同目录复制；显式接受 `sourceThreadId`、`through: { type: "latest-complete" }`、`workspace: { type: "same-directory" }`，不声明兼容 CAS 同名方法的请求 shape。精确 canonical `agent_message` 选择只由原生 `zen/thread/fork` 提供；此 adapter 拒绝 `through.type: "item"`。
 - `thread/permissions/update` accepts `{ threadId, sandbox }`, where sandbox is `read-only`, `workspace-write`, or `danger-full-access`. It changes the canonical file permission preset only when the Thread and its tool tasks are idle, then broadcasts `thread/settings/updated`. Defaults remain Full Access.
 - Approval requests may include native `approvalScope: "once"`. Such decisions never reuse or create session/capability grants, even when a client responds with `acceptForSession`.
+- Approval requests for Host-scoped tools additionally expose native `approvalTarget: { key, label }` for display. This metadata comes from the captured trusted runtime scope, not the command text or a client response. It is outside the pinned CAS compatibility claim. Legacy requests omit it and keep their existing shape and session behavior. Scoped requests bypass the legacy thread-wide session cache; `acceptForSession` approves only that invocation. The existing CAS `reason` text discloses this limit for clients displaying a session choice. ZenX describes exact tool/target memory, and CLI labels its session shortcut as approval for this call only.
 - `turn/start`、`turn/steer` 与 `turn/replace` input 的
   `{ type: "attachment", attachment: AttachmentRef }` variant
 - `commandExecution` item / approval 上可选的 `contentType`、`structuredContent`、
@@ -246,3 +247,7 @@ one notification through the same event projection, alongside its request result
 endpoint 上，从存储的开启引用的压缩边界分页回读公开 Thread 投影，最多 50 项，
 不返回 reasoning、排队输入或边界后内容；它不属于 remote-host workspace-scoped
 接口，也不因此赋予远端工作区读取权。原始 ItemList 本身不变。
+
+## Selected rollout imports
+
+`rollout-import.ts` is the version-pinned Codex rollout adapter for [selected-file import](../../../docs/session-import.md). It maps only supported source records to provider-neutral import history. The native `zen/thread/import/preview` and `zen/thread/import` methods do not add CAS import/resume claims. Historical tool results project a null exit code and an imported-result content type; CAS cannot express an unknown execution-status enum and gets a conservative terminal status, while ZenX presents the explicit historical/unknown label.

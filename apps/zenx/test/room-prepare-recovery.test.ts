@@ -152,7 +152,7 @@ async function scenario(
     await act(async () => root.render(React.createElement(RoomsPage, { sdk })));
     await act(async () =>
       [...document.querySelectorAll("button")]
-        .find((b) => b.textContent === "Reply")!
+        .find((b) => b.getAttribute("aria-label") === "Reply")!
         .click(),
     );
     await act(async () => {

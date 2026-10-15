@@ -15,6 +15,7 @@ import {
   selectBrowserProvider,
   selectBrowserProviderVariant,
   selectComputerProvider,
+  selectComputerProviderVariant,
 } from "../src/main/capabilities/provider-catalog.js";
 import {
   BrowserZenXCapabilityPackage,
@@ -282,16 +283,19 @@ test("packaged WinApp uses its verified launch binding as the single integrity c
     await writeFile(path.join(providers, "manifest.json"), manifestBytes);
     const runner = new BundledWinAppLaunchRunner();
 
-    const selection = await selectComputerProvider({
-      userDataDirectory: path.join(resourcesDirectory, "user-data"),
-      resourcesDirectory,
-      bundledProvidersOnly: true,
-      bundledManifestSha256: createHash("sha256")
-        .update(manifestBytes)
-        .digest("hex"),
-      platform: "win32",
-      winAppRunner: runner,
-    });
+    const selection = await selectComputerProviderVariant(
+      "microsoft-winapp-cli",
+      {
+        userDataDirectory: path.join(resourcesDirectory, "user-data"),
+        resourcesDirectory,
+        bundledProvidersOnly: true,
+        bundledManifestSha256: createHash("sha256")
+          .update(manifestBytes)
+          .digest("hex"),
+        platform: "win32",
+        winAppRunner: runner,
+      },
+    );
 
     assert.ok(selection.backend, JSON.stringify(selection.diagnostics));
     assert.equal(selection.diagnostics[0]?.status, "selected");
@@ -304,6 +308,24 @@ test("packaged WinApp uses its verified launch binding as the single integrity c
     // Restore only this disposable fixture's parent before removing its files.
     await chmod(path.join(resourcesDirectory, "providers"), 0o755);
     await rm(resourcesDirectory, { recursive: true, force: true });
+  }
+});
+
+test("Windows provider diagnostics scope focus guarantees to strict capture", async () => {
+  const selection = await selectComputerProvider({
+    userDataDirectory: "/tmp/zenx",
+    platform: "win32",
+    winAppRunner: new BundledWinAppLaunchRunner(),
+  });
+  try {
+    assert.ok(selection.backend, JSON.stringify(selection.diagnostics));
+    assert.equal(selection.diagnostics[0]?.status, "selected");
+    assert.equal(
+      selection.diagnostics[0]?.permissionSummary,
+      "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value and Invoke may activate their target and require explicit foreground permission. No global input injection.",
+    );
+  } finally {
+    await selection.backend?.close();
   }
 });
 

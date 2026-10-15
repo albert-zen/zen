@@ -31,6 +31,7 @@ import type {
   RoomSendOperation,
   RoomDeliveryView,
   TriggerSnapshot,
+  TriggerSidebarSnapshot,
   UpdateTriggerInput,
   AssistantWorkspace,
   UpdateAssistantWorkspaceInput,
@@ -558,6 +559,10 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     return this.#service.snapshot();
   }
 
+  sidebarFacts(): TriggerSidebarSnapshot {
+    return this.#service.sidebarFacts();
+  }
+
   async create(input: CreateTriggerInput) {
     return await this.#service.create(await this.#resolveInput(input));
   }
@@ -808,6 +813,20 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       replyToMessageId,
     );
   }
+  async prepareAssistantIntroduction(
+    roomId: string,
+    operationId: string,
+    language: "en" | "zh",
+  ) {
+    return this.#service.prepareAssistantIntroduction(
+      roomId,
+      operationId,
+      language,
+    );
+  }
+  async startAssistantIntroduction(roomId: string, operationId: string) {
+    return this.#service.startAssistantIntroduction(roomId, operationId);
+  }
   async postPreparedRoomMessage(
     roomId: string,
     operationId: string,
@@ -974,6 +993,11 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       name: input.name,
       members: [{ name: member.name, threadId: target.threadId }],
     });
+  }
+  async setAssistantDeliveryMode(roomId: string, mode: "steer" | "queue") {
+    if (!this.roomsAvailable())
+      throw new Error("Rooms are disabled or unavailable");
+    return await this.#service.setAssistantDeliveryMode(roomId, mode);
   }
   async setAssistantReplies(roomId: string, enabled: boolean) {
     if (!this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID))

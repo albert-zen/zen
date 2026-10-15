@@ -31,6 +31,14 @@ import {
   WinAppCliComputerBackend,
 } from "./windows-computer-provider.js";
 import type { WinAppCliRunner } from "./windows-computer-provider.js";
+import {
+  WinAppStrictUiaComputerBackend,
+  windowsStrictUiaCapabilityManifest,
+} from "./windows-strict-uia-provider.js";
+import {
+  STRICT_UIA_PROVIDER_ID,
+  STRICT_UIA_VERSION,
+} from "./windows-strict-uia-contract.js";
 import type {
   ZenXPluginManifestV2,
   ZenXCapabilityProviderDiagnostic,
@@ -387,7 +395,7 @@ function electronBrowserBackend(
   return options.electronBrowserFactory?.() ?? new ElectronBrowserBackend();
 }
 
-function userBrowserManifest(): ZenXPluginManifestV2 {
+export function userBrowserManifest(): ZenXPluginManifestV2 {
   const manifest = structuredClone(browserCapabilityManifest);
   return {
     ...manifest,
@@ -431,6 +439,29 @@ function userBrowserManifest(): ZenXPluginManifestV2 {
 export async function selectComputerProvider(
   options: ZenXCapabilityProviderCatalogOptions,
 ): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  return await selectComputerProviderForId(
+    options,
+    options.bundledProvidersOnly === true &&
+      (options.platform ?? process.platform) === "win32"
+      ? STRICT_UIA_PROVIDER_ID
+      : undefined,
+  );
+}
+
+/** Restore an exact committed Windows variant without redirecting its generation. */
+export async function selectComputerProviderVariant(
+  providerId: "microsoft-winapp-cli" | typeof STRICT_UIA_PROVIDER_ID,
+  options: ZenXCapabilityProviderCatalogOptions,
+): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  return await selectComputerProviderForId(options, providerId);
+}
+
+async function selectComputerProviderForId(
+  options: ZenXCapabilityProviderCatalogOptions,
+  providerId?: "microsoft-winapp-cli" | typeof STRICT_UIA_PROVIDER_ID,
+): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  if (providerId === STRICT_UIA_PROVIDER_ID)
+    return await selectStrictWindowsProvider(options);
   const runner = options.runner ?? new SystemExternalProviderProcessRunner();
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -461,8 +492,13 @@ export async function selectComputerProvider(
           unavailableDiagnostic(
             "computer",
             "microsoft-winapp-cli",
-            ["background_safe"],
-            ["uia.inspect", "uia.invoke", "uia.set_value", "wgc.capture"],
+            windowsComputerCapabilityManifest.provider.interactionModes,
+            [
+              "uia.inspect",
+              "uia.invoke",
+              "uia.set_value",
+              "printwindow.capture",
+            ],
             bundled?.reason ?? "Packaged WinApp provider is not provisioned",
           ),
         ],
@@ -493,8 +529,13 @@ export async function selectComputerProvider(
           unavailableDiagnostic(
             "computer",
             "microsoft-winapp-cli",
-            ["background_safe"],
-            ["uia.inspect", "uia.invoke", "uia.set_value", "wgc.capture"],
+            windowsComputerCapabilityManifest.provider.interactionModes,
+            [
+              "uia.inspect",
+              "uia.invoke",
+              "uia.set_value",
+              "printwindow.capture",
+            ],
             diagnostic.message,
             diagnostic.executable,
           ),
@@ -509,12 +550,13 @@ export async function selectComputerProvider(
           capabilityId: "computer",
           providerId: "microsoft-winapp-cli",
           status: "selected",
-          interactionModes: ["background_safe"],
+          interactionModes:
+            windowsComputerCapabilityManifest.provider.interactionModes,
           capabilities: [
             "uia.inspect",
             "uia.invoke",
             "uia.set_value",
-            "wgc.capture",
+            "printwindow.capture",
           ],
           executable: diagnostic.executable,
           ...(diagnostic.version === undefined
@@ -524,7 +566,7 @@ export async function selectComputerProvider(
             ? { integrity: "unverified" as const }
             : { integrity: "verified" as const }),
           permissionSummary:
-            "Exact-window UI Automation and WGC capture; no global input injection",
+            "Exact-window UI Automation; strict background PrintWindow capture performs no restore or activation. UIA set_value and Invoke may activate their target and require explicit foreground permission. No global input injection.",
         },
       ],
     };
@@ -731,8 +773,18 @@ export async function probePeekabooCli(
 function playwrightBrowserManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(browserCapabilityManifest),
+    version: "1.0.5",
     description:
       "A cross-platform isolated Playwright CLI browser session with bounded ARIA inspection and native auto-waiting actions.",
+    permissions: browserCapabilityManifest.permissions.map((permission) =>
+      permission.id === "browser.interact"
+        ? {
+            ...permission,
+            description:
+              "Click, type, or select an option in an explicitly targeted visible page element, or scroll the page viewport.",
+          }
+        : structuredClone(permission),
+    ),
     provider: {
       id: "playwright-cli",
       platforms: ["darwin", "win32", "linux"],
@@ -746,19 +798,24 @@ function playwrightBrowserManifest(): ZenXPluginManifestV2 {
         "dom.interact",
       ],
     },
-    tools: browserCapabilityManifest.tools.map((tool) => ({
-      ...structuredClone(tool),
-      interactionMode: "isolated",
-      capabilities: [
-        "playwright_cli",
-        "headless",
-        "browser_context",
-        ...tool.capabilities.filter(
-          (capability) =>
-            capability !== "dedicated_profile" && capability !== "cdp",
-        ),
-      ],
-    })),
+    tools: browserCapabilityManifest.tools
+      .filter(
+        (tool) =>
+          !["browser_pointer_click", "browser_key_press"].includes(tool.name),
+      )
+      .map((tool) => ({
+        ...structuredClone(tool),
+        interactionMode: "isolated",
+        capabilities: [
+          "playwright_cli",
+          "headless",
+          "browser_context",
+          ...tool.capabilities.filter(
+            (capability) =>
+              capability !== "dedicated_profile" && capability !== "cdp",
+          ),
+        ],
+      })),
   };
 }
 
@@ -929,6 +986,77 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function selectStrictWindowsProvider(
+  options: ZenXCapabilityProviderCatalogOptions,
+): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
+  const manifest = windowsStrictUiaCapabilityManifest;
+  const unavailable = (reason: string) => ({
+    manifest,
+    diagnostics: [
+      unavailableDiagnostic(
+        "computer",
+        STRICT_UIA_PROVIDER_ID,
+        manifest.provider.interactionModes,
+        manifest.provider.capabilities,
+        reason,
+      ),
+    ],
+  });
+  const platform = options.platform ?? process.platform;
+  if (
+    platform !== "win32" ||
+    options.bundledProvidersOnly !== true ||
+    !options.resourcesDirectory ||
+    !options.bundledManifestSha256
+  )
+    return unavailable(
+      "Strict UIA requires the verified Windows application bundle and compiled manifest trust anchor",
+    );
+  const resolved = await resolveBundledProvider(STRICT_UIA_PROVIDER_ID, {
+    resourcesDirectory: options.resourcesDirectory,
+    platform,
+    expectedManifestSha256: options.bundledManifestSha256,
+    expectedVersion: STRICT_UIA_VERSION,
+  });
+  const provider = resolved.provider;
+  if (!provider)
+    return unavailable(resolved.reason ?? "Strict UIA provider is unavailable");
+  const backend = new WinAppStrictUiaComputerBackend({
+    command: provider.executable,
+    platform,
+    runner: options.winAppRunner,
+    bindBeforeSpawn: async () =>
+      await bindBundledProviderLaunch(provider, {
+        resourcesDirectory: options.resourcesDirectory!,
+        platform,
+        verifyDirectoryAssets: true,
+      }),
+  });
+  const diagnostic = await backend.diagnose();
+  if (!diagnostic.ready) {
+    await backend.close();
+    return unavailable(diagnostic.message);
+  }
+  return {
+    backend,
+    manifest,
+    diagnostics: [
+      {
+        capabilityId: "computer",
+        providerId: STRICT_UIA_PROVIDER_ID,
+        status: "selected",
+        interactionModes: manifest.provider.interactionModes,
+        capabilities: manifest.provider.capabilities,
+        executable: provider.executable,
+        version: provider.version,
+        integrity: "verified",
+        permissionSummary:
+          "Verified downstream UIA client disables automatic focus and dispatches one exact native pattern. Target applications can still change focus themselves. Strict capture performs no restore or activation; no global input or selector fallback.",
+      },
+    ],
+  };
 }
 
 function requireBundledRuntime<

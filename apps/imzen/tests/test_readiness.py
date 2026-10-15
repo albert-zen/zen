@@ -282,3 +282,23 @@ def test_invalid_access_policy_is_blocked_without_echoing_policy(deployment, pol
     result = readiness.inspect(deployment)
     assert "channels_invalid" in result["codes"]
     assert "channels_ready" not in result["codes"]
+
+
+@pytest.mark.parametrize(
+    "revision",
+    ["7d5f1179365679d0f95abd5cb2ce76547238d05f", "main", "bb80550", "0" * 40],
+)
+def test_readiness_rejects_every_non_pinned_sdk_commit(deployment, monkeypatch, revision):
+    class OtherRevision:
+        def read_text(self, filename):
+            return json.dumps(
+                {
+                    "url": readiness.SDK_REPOSITORY,
+                    "vcs_info": {"vcs": "git", "commit_id": revision},
+                }
+            )
+
+    monkeypatch.setattr(readiness.importlib.metadata, "distribution", lambda name: OtherRevision())
+    codes = readiness.inspect(deployment)["codes"]
+    assert "sdk_unverified" in codes
+    assert "sdk_ready" not in codes

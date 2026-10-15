@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { deflateSync } from "node:zlib";
+import type { BrowserInputSnapshot } from "../../src/main/capabilities/browser-targeted-input.js";
 import { WebSocketServer, type WebSocket } from "ws";
 
 export function deferred<T>() {
@@ -78,8 +80,78 @@ export async function close(
   );
 }
 
-export async function createFakeCdpServer(): Promise<{
+export interface FakeCdpRequest {
+  id: number;
+  method: string;
+  params: Record<string, unknown>;
+  sessionId?: string;
+}
+
+export function fakeBrowserInputSnapshot(): BrowserInputSnapshot {
+  return {
+    documentKey:
+      "0123456789abcdef0123456789abcdef|https://example.test/account",
+    viewport: {
+      width: 800,
+      height: 600,
+      deviceScaleFactor: 1,
+      scrollX: 0,
+      scrollY: 0,
+      visualScale: 1,
+      visualOffsetX: 0,
+      visualOffsetY: 0,
+    },
+    focusId: "focused-1",
+    pointerHitId: "canvas-1",
+    focusNeedsShadowEvidence: true,
+    pointerNeedsShadowEvidence: true,
+    inputRevision: 0,
+    layoutRevision: 0,
+  };
+}
+
+export function fakeInputScreenshotData(): string {
+  const chunk = (name: string, data: Buffer) => {
+    const bytes = Buffer.concat([Buffer.from(name), data]);
+    let crc = 0xffffffff;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++)
+        crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    const result = Buffer.alloc(data.length + 12);
+    result.writeUInt32BE(data.length);
+    bytes.copy(result, 4);
+    result.writeUInt32BE((crc ^ 0xffffffff) >>> 0, result.length - 4);
+    return result;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(800);
+  header.writeUInt32BE(600, 4);
+  header[8] = 8;
+  header[9] = 2;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.alloc((800 * 3 + 1) * 600))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]).toString("base64");
+}
+
+export async function createFakeCdpServer(
+  options: { targetedInput?: boolean; createGrouping?: unknown } = {},
+): Promise<{
   endpoint: string;
+  inputSnapshot: BrowserInputSnapshot;
+  interceptRequests(
+    hook:
+      | ((
+          request: FakeCdpRequest,
+          emit: (event: Record<string, unknown>) => void,
+        ) => Promise<void> | void)
+      | undefined,
+  ): void;
+  commandRequests(): FakeCdpRequest[];
   count(method: string): number;
   methods(): string[];
   requests(method: string): Record<string, unknown>[];
@@ -133,11 +205,24 @@ export async function createFakeCdpServer(): Promise<{
   emitScreencastFrame(value: string, frameNumber: number): void;
   emitRawScreencastFrame(data: string, frameNumber: number): void;
   emitTargetInfoChanged(targetId: string, title: string, url: string): void;
+  emitSessionEvent(
+    method: string,
+    params: Record<string, unknown>,
+    sessionId?: string,
+  ): void;
   emitMainDocumentChange(): void;
   replaceMainDocument(url: string): void;
   close(): Promise<void>;
 }> {
   const sockets = new Set<WebSocket>();
+  const inputSnapshot = fakeBrowserInputSnapshot();
+  const commandRequests: FakeCdpRequest[] = [];
+  let requestHook:
+    | ((
+        request: FakeCdpRequest,
+        emit: (event: Record<string, unknown>) => void,
+      ) => Promise<void> | void)
+    | undefined;
   const methods: string[] = [];
   const requests: Array<{ method: string; params: Record<string, unknown> }> =
     [];
@@ -199,14 +284,17 @@ export async function createFakeCdpServer(): Promise<{
     | {
         socket: WebSocket;
         id: number;
+        sessionId?: string;
         response:
           { result: { sessionId: string } } | { error: { message: string } };
       }
     | undefined;
   let lateActionReply:
-    { socket: WebSocket; id: number; result: unknown } | undefined;
+    | { socket: WebSocket; id: number; sessionId?: string; result: unknown }
+    | undefined;
   let lateConfirmationReply:
-    { socket: WebSocket; id: number; result: unknown } | undefined;
+    | { socket: WebSocket; id: number; sessionId?: string; result: unknown }
+    | undefined;
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/json/list") {
@@ -239,7 +327,7 @@ export async function createFakeCdpServer(): Promise<{
   webSockets.on("connection", (socket) => {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
-    socket.on("message", (raw) => {
+    socket.on("message", async (raw) => {
       const request = JSON.parse(raw.toString()) as {
         id: number;
         method: string;
@@ -248,6 +336,16 @@ export async function createFakeCdpServer(): Promise<{
       };
       methods.push(request.method);
       requests.push({ method: request.method, params: request.params });
+      commandRequests.push(request);
+      await requestHook?.(request, (event) =>
+        socket.send(
+          JSON.stringify(
+            typeof event.id === "number"
+              ? { sessionId: request.sessionId, ...event }
+              : event,
+          ),
+        ),
+      );
       let result: unknown = {};
       if (request.method === "Target.getTargets") {
         result = {
@@ -270,13 +368,19 @@ export async function createFakeCdpServer(): Promise<{
           dropCreateReply = false;
           return;
         }
-        result = { targetId };
+        result = {
+          targetId,
+          ...(options.createGrouping === undefined
+            ? {}
+            : { grouping: options.createGrouping }),
+        };
       } else if (request.method === "Target.attachToTarget") {
         if (holdAttachErrorReply) {
           holdAttachErrorReply = false;
           lateAttachReply = {
             socket,
             id: request.id,
+            sessionId: request.sessionId,
             response: { error: { message: "known late attach failure" } },
           };
           return;
@@ -286,6 +390,7 @@ export async function createFakeCdpServer(): Promise<{
           socket.send(
             JSON.stringify({
               id: request.id,
+              sessionId: request.sessionId,
               error: { message: "known attach failure" },
             }),
           );
@@ -315,6 +420,7 @@ export async function createFakeCdpServer(): Promise<{
           lateAttachReply = {
             socket,
             id: request.id,
+            sessionId: request.sessionId,
             response: { result: { sessionId: latestSession } },
           };
           return;
@@ -325,6 +431,7 @@ export async function createFakeCdpServer(): Promise<{
           socket.send(
             JSON.stringify({
               id: request.id,
+              sessionId: request.sessionId,
               error: { message: "known enable failure" },
             }),
           );
@@ -340,6 +447,7 @@ export async function createFakeCdpServer(): Promise<{
           socket.send(
             JSON.stringify({
               id: request.id,
+              sessionId: request.sessionId,
               error: { message: "known Runtime.enable failure" },
             }),
           );
@@ -374,9 +482,22 @@ export async function createFakeCdpServer(): Promise<{
         if (holdLiveCapture) {
           holdLiveCapture = false;
           liveCaptureReply = () =>
-            socket.send(JSON.stringify({ id: request.id, result }));
+            socket.send(
+              JSON.stringify({
+                id: request.id,
+                sessionId: request.sessionId,
+                result,
+              }),
+            );
           return;
         }
+      } else if (
+        request.method === "Page.captureScreenshot" &&
+        options.targetedInput
+      ) {
+        result = { data: fakeInputScreenshotData() };
+      } else if (request.method.startsWith("Input.") && options.targetedInput) {
+        inputSnapshot.inputRevision += 1;
       } else if (request.method === "Page.getFrameTree") {
         result = {
           frameTree: {
@@ -399,7 +520,13 @@ export async function createFakeCdpServer(): Promise<{
             postBarrierInvalidation.event,
             runtimeEnabledSessions,
           );
-          socket.send(JSON.stringify({ id: request.id, result }));
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              sessionId: request.sessionId,
+              result,
+            }),
+          );
           return;
         }
         if (setupInvalidation?.phase === "before-frame-tree-response") {
@@ -415,7 +542,13 @@ export async function createFakeCdpServer(): Promise<{
         if (setupInvalidation?.phase === "after-frame-tree") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
-          socket.send(JSON.stringify({ id: request.id, result }));
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              sessionId: request.sessionId,
+              result,
+            }),
+          );
           emitSetupInvalidation(
             socket,
             request.sessionId,
@@ -446,7 +579,13 @@ export async function createFakeCdpServer(): Promise<{
         if (setupInvalidation?.phase === "after-isolated-world") {
           const invalidation = setupInvalidation;
           setupInvalidation = undefined;
-          socket.send(JSON.stringify({ id: request.id, result }));
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              sessionId: request.sessionId,
+              result,
+            }),
+          );
           emitSetupInvalidation(
             socket,
             request.sessionId,
@@ -455,6 +594,17 @@ export async function createFakeCdpServer(): Promise<{
           );
           return;
         }
+      } else if (request.method === "DOM.describeNode") {
+        result = {
+          node: {
+            backendNodeId:
+              request.params.backendNodeId ??
+              (String(request.params.objectId).includes("hitNode") ? 102 : 101),
+            nodeType: 1,
+            localName: "input",
+            attributes: ["type", "text"],
+          },
+        };
       } else if (request.method === "Runtime.evaluate") {
         const expression = String(request.params.expression ?? "");
         const isAction = expression.includes("const expected =");
@@ -482,34 +632,67 @@ export async function createFakeCdpServer(): Promise<{
           result: {
             value: expression.includes("const expected =")
               ? { ok: true }
-              : {
-                  visibleText: "Signed in as Alice",
-                  targets: [
-                    {
-                      selector: "#continue",
-                      tag: "input",
-                      role: "input",
-                      name: "Continue",
-                      type: "text",
-                      id: "continue",
-                      fieldName: "",
-                      autocomplete: "",
-                      href: "",
-                      actions: ["click", "type"],
-                    },
-                  ],
-                },
+              : options.targetedInput &&
+                  expression.includes("zenx-browser-targeted-input-v2") &&
+                  !expression.includes("visibleText:")
+                ? {
+                    ...structuredClone(inputSnapshot),
+                    ...(expression.includes("const hit = resolveHit")
+                      ? { pointerPoint: { x: 1, y: 1 } }
+                      : {}),
+                  }
+                : {
+                    ...(options.targetedInput
+                      ? { inputSnapshot: structuredClone(inputSnapshot) }
+                      : {}),
+                    visibleText: "Signed in as Alice",
+                    targets: [
+                      {
+                        selector: "#continue",
+                        tag: "input",
+                        role: "input",
+                        name: "Continue",
+                        type: "text",
+                        id: "continue",
+                        fieldName: "",
+                        autocomplete: "",
+                        href: "",
+                        actions: ["click", "type"],
+                      },
+                    ],
+                  },
           },
         };
+        if (
+          request.params.returnByValue === false &&
+          expression.includes("zenx-browser-targeted-input-v2")
+        ) {
+          result = {
+            result: {
+              subtype: "node",
+              objectId: `${request.sessionId}:${expression.includes("state?.hitNode") ? "hitNode" : "focusNode"}`,
+            },
+          };
+        }
         if (isAction && holdActionReply) {
           holdActionReply = false;
-          lateActionReply = { socket, id: request.id, result };
+          lateActionReply = {
+            socket,
+            id: request.id,
+            sessionId: request.sessionId,
+            result,
+          };
           heldActionStarted.resolve();
           return;
         }
         if (isConfirmation && holdConfirmationReply) {
           holdConfirmationReply = false;
-          lateConfirmationReply = { socket, id: request.id, result };
+          lateConfirmationReply = {
+            socket,
+            id: request.id,
+            sessionId: request.sessionId,
+            result,
+          };
           heldConfirmationStarted.resolve();
           return;
         }
@@ -528,13 +711,24 @@ export async function createFakeCdpServer(): Promise<{
         detachedSessionIds.push(sessionId);
         sessionTargets.delete(sessionId);
       }
-      socket.send(JSON.stringify({ id: request.id, result }));
+      socket.send(
+        JSON.stringify({
+          id: request.id,
+          sessionId: request.sessionId,
+          result,
+        }),
+      );
     });
   });
   const port = await listen(server);
   endpoint = `http://127.0.0.1:${String(port)}`;
   return {
     endpoint,
+    inputSnapshot,
+    interceptRequests: (hook) => {
+      requestHook = hook;
+    },
+    commandRequests: () => [...commandRequests],
     count: (method) =>
       methods.filter((candidate) => candidate === method).length,
     methods: () => [...methods],
@@ -619,7 +813,13 @@ export async function createFakeCdpServer(): Promise<{
       lateActionReply = undefined;
       actionResponseSent = true;
       if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
-        late.socket.send(JSON.stringify({ id: late.id, result: late.result }));
+        late.socket.send(
+          JSON.stringify({
+            id: late.id,
+            sessionId: late.sessionId,
+            result: late.result,
+          }),
+        );
       }
     },
     actionResponseSent: () => actionResponseSent,
@@ -632,7 +832,13 @@ export async function createFakeCdpServer(): Promise<{
       lateConfirmationReply = undefined;
       confirmationResponseSent = true;
       if (late !== undefined && late.socket.readyState === late.socket.OPEN) {
-        late.socket.send(JSON.stringify({ id: late.id, result: late.result }));
+        late.socket.send(
+          JSON.stringify({
+            id: late.id,
+            sessionId: late.sessionId,
+            result: late.result,
+          }),
+        );
       }
     },
     confirmationResponseSent: () => confirmationResponseSent,
@@ -765,6 +971,10 @@ export async function createFakeCdpServer(): Promise<{
             },
           }),
         );
+    },
+    emitSessionEvent: (method, params, sessionId = latestSession) => {
+      for (const socket of sockets)
+        socket.send(JSON.stringify({ method, params, sessionId }));
     },
     emitMainDocumentChange: () => {
       for (const socket of sockets) {

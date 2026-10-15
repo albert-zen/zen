@@ -16,8 +16,19 @@ export interface CurrentMetadata {
   approvalPolicy: ApprovalPolicy;
 }
 
+export interface ThreadMessageSummary {
+  id: string;
+  createdAt: string;
+  kind: "user" | "agent";
+}
+
 export interface ThreadSummary {
+  /** Canonical messages only; omitted on empty/legacy projections. */
+  lastMessage?: ThreadMessageSummary;
+  lastAgentMessage?: Omit<ThreadMessageSummary, "kind">;
   threadId: string;
+  /** Canonical delete fence; absent only on legacy or unavailable projections. */
+  lastItemId?: string;
   parentThreadId?: string;
   currentMetadata: CurrentMetadata;
   name?: string;
@@ -34,6 +45,7 @@ export interface ThreadSummary {
 
 export interface UnavailableThreadSummary {
   threadId: string;
+  lastItemId?: string;
   parentThreadId?: string;
   name?: string;
   archived: boolean;
@@ -139,6 +151,9 @@ export function isNativeThreadSummary(
       (typeof value.parentThreadId !== "string" ||
         value.parentThreadId.length === 0 ||
         value.parentThreadId === value.threadId)) ||
+    (value.lastItemId !== undefined &&
+      (typeof value.lastItemId !== "string" ||
+        value.lastItemId.length === 0)) ||
     typeof value.archived !== "boolean" ||
     (value.name !== undefined && typeof value.name !== "string") ||
     typeof value.preview !== "string"
@@ -158,12 +173,28 @@ export function isNativeThreadSummary(
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
     (value.turnSortAt === undefined || typeof value.turnSortAt === "string") &&
+    (value.lastMessage === undefined ||
+      (isMessageSummary(value.lastMessage) &&
+        (value.lastMessage.kind === "user" ||
+          value.lastMessage.kind === "agent"))) &&
+    (value.lastAgentMessage === undefined ||
+      isMessageSummary(value.lastAgentMessage)) &&
     (value.forkedFromThreadId === undefined ||
       typeof value.forkedFromThreadId === "string") &&
     (value.forkedFromTurnId === undefined ||
       typeof value.forkedFromTurnId === "string") &&
     value.error === undefined &&
     isCurrentMetadata(value.currentMetadata)
+  );
+}
+
+function isMessageSummary(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.createdAt === "string" &&
+    Number.isFinite(Date.parse(value.createdAt))
   );
 }
 

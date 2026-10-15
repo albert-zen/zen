@@ -1,3 +1,9 @@
+param(
+  [string] $PackagedExecutable,
+  [string] $Downstream,
+  [string] $DownstreamSha256
+)
+
 $ErrorActionPreference = "Stop"
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
@@ -118,18 +124,25 @@ try {
     approvalPolicy = "never"
   }
 
-  # Portable packaging builds its own isolated snapshot and prepares all resources.
-  $packageOutput = & node ./scripts/package-zenx-portable.mjs --app
-  if ($LASTEXITCODE -ne 0) { throw "ZenX portable packaging failed." }
-  $packageLines = @($packageOutput)
-  $jsonStart = 0
-  while ($jsonStart -lt $packageLines.Count -and $packageLines[$jsonStart].Trim() -ne "{") {
-    $jsonStart++
+  # CI reuses the real app already built from the same reviewed native input.
+  if ([string]::IsNullOrWhiteSpace($PackagedExecutable)) {
+    if ([string]::IsNullOrWhiteSpace($Downstream) -or [string]::IsNullOrWhiteSpace($DownstreamSha256)) {
+      throw "Pass -PackagedExecutable or the same-run -Downstream and -DownstreamSha256 build handoff."
+    }
+    $packageOutput = & node ./scripts/package-zenx-portable.mjs --app --downstream $Downstream --downstream-sha256 $DownstreamSha256
+    if ($LASTEXITCODE -ne 0) { throw "ZenX portable packaging failed." }
+    $packageLines = @($packageOutput)
+    $jsonStart = 0
+    while ($jsonStart -lt $packageLines.Count -and $packageLines[$jsonStart].Trim() -ne "{") {
+      $jsonStart++
+    }
+    if ($jsonStart -ge $packageLines.Count) {
+      throw "ZenX portable packaging did not report its artifact as JSON."
+    }
+    $package = ($packageLines[$jsonStart..($packageLines.Count - 1)] -join [Environment]::NewLine) | ConvertFrom-Json
+  } else {
+    $package = @{ executable = (Resolve-Path -LiteralPath $PackagedExecutable).Path }
   }
-  if ($jsonStart -ge $packageLines.Count) {
-    throw "ZenX portable packaging did not report its artifact as JSON."
-  }
-  $package = ($packageLines[$jsonStart..($packageLines.Count - 1)] -join [Environment]::NewLine) | ConvertFrom-Json
   if (-not (Test-Path -LiteralPath $package.executable -PathType Leaf)) {
     throw "Packaged ZenX executable is missing: $($package.executable)"
   }

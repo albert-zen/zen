@@ -651,6 +651,9 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
         ? {}
         : { canonicalToolCallId: invocation.canonicalToolCallId }),
       arguments: invocation.arguments,
+      ...(invocation.approvalScope === undefined
+        ? {}
+        : { approvalScope: invocation.approvalScope }),
       cwd: invocation.cwd,
       ...(invocation.threadId === undefined
         ? {}

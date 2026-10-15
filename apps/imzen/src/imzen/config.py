@@ -13,6 +13,7 @@ class ConfigurationError(ValueError):
 
 
 PermissionMode = Literal["full-access", "approval-required"]
+InputContinuation = Literal["steer", "queue"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,11 +21,13 @@ class Settings:
     app_server_url: str
     cwd: Path
     gateway_state_file: Path
+    workspace_id: str = "imzen-workspace"
     app_server_shared_filesystem_root: Path | None = None
     permission_mode: PermissionMode = "full-access"
     channels_config_file: Path | None = None
     app_server_auth_token_file: Path | None = None
     allow_unrestricted_full_access: bool = False
+    input_continuation: InputContinuation = "steer"
 
     @classmethod
     def from_env(
@@ -60,6 +63,9 @@ class Settings:
         )
         return cls(
             app_server_url=app_server_url,
+            workspace_id=_required(
+                values.get("IMZEN_WORKSPACE_ID") or "imzen-workspace", "IMZEN_WORKSPACE_ID"
+            ),
             cwd=cwd,
             gateway_state_file=gateway_state_file,
             app_server_shared_filesystem_root=shared_filesystem_root,
@@ -67,6 +73,7 @@ class Settings:
             allow_unrestricted_full_access=allow_unrestricted_full_access,
             channels_config_file=channels_file,
             app_server_auth_token_file=token_file,
+            input_continuation=_input_continuation(values.get("IMZEN_INPUT_CONTINUATION", "steer")),
         )
 
 
@@ -108,6 +115,14 @@ def _permission_mode(value: str | None) -> PermissionMode:
     if normalized not in {"full-access", "approval-required"}:
         raise ConfigurationError("IMZEN_PERMISSION_MODE must be full-access or approval-required")
     return normalized  # type: ignore[return-value]
+
+
+def _input_continuation(value: object) -> InputContinuation:
+    if value == "steer":
+        return "steer"
+    if value == "queue":
+        return "queue"
+    raise ConfigurationError("IMZEN_INPUT_CONTINUATION must be steer or queue")
 
 
 def _unrestricted_full_access_opt_in(value: str | None) -> bool:

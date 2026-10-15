@@ -1,3 +1,5 @@
+import { verifyForegroundActivityOverlay } from "./foreground-activity-smoke.js";
+import { verifyWindowsPackagedUiaSmoke } from "./windows-packaged-uia-smoke.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -15,6 +17,8 @@ import { packagedProviderSmokeExitCode } from "./packaged-provider-smoke-exit.js
 import { createHostedAppServer } from "../../../../apps/cli/src/host.js";
 import { ToolEnvironment, type ToolRuntime } from "../../../../src/tool.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
+
+app.on("window-all-closed", () => undefined);
 
 const portServer = createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
@@ -35,6 +39,12 @@ void app.whenReady().then(async () => {
     assert.ok(
       process.resourcesPath.length > 0,
       "packaged smoke must use process.resourcesPath",
+    );
+    console.log(
+      "Native foreground overlay fixture",
+      await verifyForegroundActivityOverlay(
+        path.join(__dirname, "../preload/foreground-activity.cjs"),
+      ),
     );
     const manifestPath = path.join(
       process.resourcesPath,
@@ -63,8 +73,8 @@ void app.whenReady().then(async () => {
         diagnostic.status === "selected",
     );
     assert.ok(
-      browser.backend,
-      `bundled Browser provider unavailable: ${JSON.stringify(browser.diagnostics)}`,
+      browser.backend && browserDiagnostic,
+      `bundled Playwright provider unavailable: ${JSON.stringify(browser.diagnostics)}`,
     );
     assert.equal(browserDiagnostic?.version, "0.1.18");
     assert.equal(browserDiagnostic?.integrity, "verified");
@@ -97,14 +107,14 @@ void app.whenReady().then(async () => {
     if (process.platform === "win32") {
       const computerDiagnostic = computer.diagnostics.find(
         (diagnostic) =>
-          diagnostic.providerId === "microsoft-winapp-cli" &&
+          diagnostic.providerId === "zenx-winapp-uia" &&
           diagnostic.status === "selected",
       );
       assert.ok(
         computer.backend,
         `bundled Computer provider unavailable: ${JSON.stringify(computer.diagnostics)}`,
       );
-      assert.equal(computerDiagnostic?.version, "0.3.1");
+      assert.equal(computerDiagnostic?.version, "0.3.1-zenx.af0.2");
       assert.equal(computerDiagnostic?.integrity, "verified");
       assert.equal(
         computerDiagnostic?.executable?.startsWith(process.resourcesPath),
@@ -112,6 +122,14 @@ void app.whenReady().then(async () => {
       );
       await computer.backend.close();
     }
+    const windowsUia =
+      process.platform === "win32"
+        ? await verifyWindowsPackagedUiaSmoke({
+            userDataDirectory: smokeUserDataDirectory,
+            resourcesDirectory: process.resourcesPath,
+            bundledManifestSha256: PACKAGED_PROVIDER_MANIFEST_SHA256,
+          })
+        : undefined;
     const programmaticTool = await runPackagedProgrammaticToolSmoke();
     console.log(
       JSON.stringify(
@@ -124,6 +142,7 @@ void app.whenReady().then(async () => {
           bundledOnly: true,
           syntheticFixtures: false,
           programmaticTool,
+          windowsUia,
         },
         null,
         2,

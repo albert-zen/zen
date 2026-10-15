@@ -252,6 +252,8 @@ export interface ZenXPluginSummary {
   lifecycle: "installed" | "enabled" | "uninstalled";
   enabled: boolean;
   available: boolean;
+  /** Opaque, process-local runtime admission identity; never persisted. */
+  admissionId?: string;
   /** Current load failure, separate from the user's saved enablement. */
   unavailableReason?: string;
   contributionCount: number;
@@ -316,6 +318,8 @@ export type ZenXPluginTarballSelectionResult =
     };
 
 export interface ZenXCapabilityHostSnapshot {
+  /** Trusted main-process connection catalog; presence enables exact instance admission. */
+  browserConnections?: import("../chrome-extension-bridge.js").BrowserConnectionSnapshot[];
   definitions: ModelTool[];
   /** Exposed exact-name runtimes whose authors declared text/JSON eligibility. */
   remoteToolNames?: string[];

@@ -1,18 +1,10 @@
-import {
-  history,
-  historyKeymap,
-  defaultKeymap,
-  invertedEffects,
-} from "@codemirror/commands";
+import { history, historyKeymap, defaultKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import {
   Compartment,
   EditorState,
-  StateEffect,
-  StateField,
   Transaction,
-  type ChangeSet,
   type SelectionRange,
 } from "@codemirror/state";
 import {
@@ -24,86 +16,25 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
+import { openSearchPanel, searchPanelOpen } from "@codemirror/search";
+import { fileContentSearch } from "./file-content-search.js";
 import { GFM } from "@lezer/markdown";
 import { useEffect, useRef } from "react";
 import { classifyZenXLink } from "../../external-link-policy.js";
+
+import {
+  normalizedSource,
+  rawSource,
+  preserveRawSource,
+  documentText,
+  setRawSource,
+} from "./editor-raw-source.js";
 
 const touches = (
   selection: readonly SelectionRange[],
   from: number,
   to: number,
 ) => selection.some((range) => range.from <= to && range.to >= from);
-
-const normalizedSource = (source: string) => source.replace(/\r\n?|\n/gu, "\n");
-
-function rawOffsetAt(source: string, normalizedOffset: number) {
-  let raw = 0;
-  let normalized = 0;
-  while (raw < source.length && normalized < normalizedOffset) {
-    raw += source[raw] === "\r" && source[raw + 1] === "\n" ? 2 : 1;
-    normalized += 1;
-  }
-  return raw;
-}
-
-const nearbyLineEnding = (source: string, from: number, to: number) => {
-  const removed = source.slice(from, to).match(/\r\n|\r|\n/u)?.[0];
-  if (removed) return removed;
-  const after = source.slice(to).match(/\r\n|\r|\n/u)?.[0];
-  const before = [...source.slice(0, from).matchAll(/\r\n|\r|\n/gu)].at(
-    -1,
-  )?.[0];
-  return after ?? before ?? "\n";
-};
-
-function applyChangesToRawSource(source: string, changes: ChangeSet) {
-  let output = "";
-  let cursor = 0;
-  changes.iterChanges((from, to, _fromNew, _toNew, inserted) => {
-    const rawFrom = rawOffsetAt(source, from);
-    const rawTo = rawOffsetAt(source, to);
-    const lineEnding = nearbyLineEnding(source, rawFrom, rawTo);
-    output += source.slice(cursor, rawFrom);
-    output += inserted.toString().replaceAll("\n", lineEnding);
-    cursor = rawTo;
-  });
-  return output + source.slice(cursor);
-}
-
-const setRawSource = StateEffect.define<string>();
-const rawSource = StateField.define<string>({
-  create: () => "",
-  update(value, transaction) {
-    for (const effect of transaction.effects)
-      if (effect.is(setRawSource)) value = effect.value;
-    return value;
-  },
-});
-
-const preserveRawSource = [
-  EditorState.transactionExtender.of((transaction) => {
-    if (
-      !transaction.docChanged ||
-      transaction.effects.some((effect) => effect.is(setRawSource))
-    )
-      return null;
-    return {
-      effects: setRawSource.of(
-        applyChangesToRawSource(
-          transaction.startState.field(rawSource),
-          transaction.changes,
-        ),
-      ),
-    };
-  }),
-  invertedEffects.of((transaction) =>
-    transaction.effects.some((effect) => effect.is(setRawSource))
-      ? [setRawSource.of(transaction.startState.field(rawSource))]
-      : [],
-  ),
-];
-
-const documentText = (state: EditorState) => state.field(rawSource);
 
 class MarkerWidget extends WidgetType {
   constructor(
@@ -128,6 +59,9 @@ function livePreviewDecorations(
   state: EditorState,
   editorFocused: boolean,
 ): DecorationSet {
+  // Find temporarily exposes the source so hidden URLs and formatting marks
+  // are searchable and visible. Closing Find restores the same live preview.
+  if (searchPanelOpen(state)) return Decoration.none;
   const ranges: ReturnType<Decoration["range"]>[] = [];
   const selection = state.selection.ranges;
   const hide = (from: number, to: number) => {
@@ -259,6 +193,7 @@ const livePreview = ViewPlugin.fromClass(
     }
     update(update: ViewUpdate) {
       if (
+        searchPanelOpen(update.startState) !== searchPanelOpen(update.state) ||
         update.docChanged ||
         update.selectionSet ||
         update.focusChanged ||
@@ -278,14 +213,17 @@ export function InlineMarkdownEditor({
   path,
   text,
   onChange,
+  findRequest = 0,
 }: {
   path: string;
   text: string;
   onChange(text: string): void;
+  findRequest?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const onChangeRef = useRef(onChange);
+  const previousFindRequest = useRef(findRequest);
   const applyingExternal = useRef(false);
   const historyCompartment = useRef(new Compartment());
   onChangeRef.current = onChange;
@@ -300,6 +238,7 @@ export function InlineMarkdownEditor({
         extensions: [
           rawSource.init(() => text),
           preserveRawSource,
+          fileContentSearch,
           markdown({ extensions: [GFM] }),
           historyCompartment.current.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -343,6 +282,12 @@ export function InlineMarkdownEditor({
       view.destroy();
     };
   }, [path]);
+
+  useEffect(() => {
+    if (findRequest !== previousFindRequest.current && viewRef.current)
+      openSearchPanel(viewRef.current);
+    previousFindRequest.current = findRequest;
+  }, [findRequest]);
 
   useEffect(() => {
     const view = viewRef.current;

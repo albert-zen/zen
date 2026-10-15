@@ -9,6 +9,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ZenXPluginHostSdkV1 } from "@zenx/plugin-sdk";
 
+const STATE_MIGRATION_BLOCKED =
+  "Existing IM state could not be upgraded safely. The original database and any backup are preserved. Check the original workspace and Zen host; do not reset or delete the state files.";
+
 export interface ImZenXHost {
   readonly dataDirectory: string;
   setRuntimeProject?(directory: string): void;
@@ -480,6 +483,7 @@ export class ImZenXRuntime {
             "gateway.sqlite3",
           ),
           IMZEN_PERMISSION_MODE: config.permissionMode,
+          IMZEN_INPUT_CONTINUATION: config.inputContinuation,
           IMZEN_ALLOW_UNRESTRICTED_FULL_ACCESS: String(
             config.allowUnrestrictedFullAccess,
           ),
@@ -501,8 +505,10 @@ export class ImZenXRuntime {
       // fixed startup failures belong in status or a tool's exception message.
       this.#error =
         error instanceof Error &&
-        error.message === "IM Gateway startup timed out"
-          ? "IM Gateway startup timed out"
+        ["IM Gateway startup timed out", STATE_MIGRATION_BLOCKED].includes(
+          error.message,
+        )
+          ? error.message
           : "IM Gateway failed to start. Check Python and channel configuration.";
       throw new Error(this.#error);
     }
@@ -537,7 +543,8 @@ export class ImZenXRuntime {
 function waitForReady(child: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((resolve, reject) => {
     let buffer = "";
-    const timer = setTimeout(
+    let statePreparation = false;
+    let timer = setTimeout(
       () => finish(new Error("IM Gateway startup timed out")),
       15000,
     );
@@ -558,13 +565,23 @@ function waitForReady(child: ChildProcessWithoutNullStreams): Promise<void> {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         try {
-          const value = JSON.parse(line) as { type?: string };
+          const value = JSON.parse(line) as { type?: string; code?: string };
+          if (value.type === "preparing-state" && !statePreparation) {
+            statePreparation = true;
+            clearTimeout(timer);
+            timer = setTimeout(
+              () => finish(new Error("IM Gateway startup timed out")),
+              120000,
+            );
+          }
           if (value.type === "ready") {
             finish();
             return;
           }
           if (value.type === "failed") {
-            failed();
+            if (value.code === "state_migration_blocked")
+              finish(new Error(STATE_MIGRATION_BLOCKED));
+            else failed();
             return;
           }
         } catch {

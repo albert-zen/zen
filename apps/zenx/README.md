@@ -286,6 +286,45 @@ Packaging does not migrate, delete, or redirect either profile. Pass
 `--user-data-dir=<new-path>` when you deliberately need an isolated profile for
 testing; never point that option at an existing browser or ZenX profile.
 
+### Embedded browser storage and restart behavior
+
+Workspace browser tabs use the shared persistent Electron partition
+`persist:zenx-workspace-browser`. Its on-disk location is
+`<Electron userData>/Partitions/zenx-workspace-browser`; Electron's `sessionData`
+root defaults to `userData`. For example, the portable Windows app stores this
+under `%APPDATA%\\zenx\\Partitions\\zenx-workspace-browser`, and portable macOS
+uses `~/Library/Application Support/zenx/Partitions/zenx-workspace-browser`.
+Linux uses `$XDG_CONFIG_HOME/zenx/Partitions/zenx-workspace-browser` (normally
+`~/.config/zenx/Partitions/zenx-workspace-browser`). `ZENX_DATA_DIR` and `~/.zen`
+select Zen runtime data, not this Electron browser profile.
+
+A subsequent launch with the same app identity and data root reuses that
+profile; moving/updating the portable executable does not itself change the
+root. Development and portable builds have the separate identities described
+above. No profile migration or cross-profile credential copying is performed.
+
+Persistent cookies and localStorage can survive a normal quit/relaunch.
+Session-only cookies expire with the browser session; sessionStorage is tied
+to its page. Website expiry, logout, revocation, and server-side session rules
+still apply, so disk persistence cannot promise permanent login. Detaching a
+Thread browser session does not clear the shared profile. Closing a tab loses
+that page's sessionStorage; the profile remains available to other/new tabs.
+The open tab directory and control ownership are currently in memory, so a
+relaunch does not restore tabs or replay previous page actions.
+
+This describes the visible Workspace backend. Explicit `ZENX_BROWSER_MODE=isolated`
+automation uses separate disposable provider sessions; it is not the Workspace
+profile. A connected external browser keeps its own existing profile in place.
+
+Run `npm --workspace apps/zenx run smoke:workspace-browser-persistence` on an
+interactive desktop to check the actual Workspace factory in independent
+Electron processes. It creates a new temporary profile and a loopback-only
+synthetic login page, verifies cookie/localStorage reuse, page/session teardown
+boundaries and fresh-process behavior, then removes only that fixture profile.
+It never reads existing user cookies or serializes login credentials. This
+smoke does not constitute a packaged-app update, crash-recovery, or real-site
+login acceptance test.
+
 ## External App Server clients
 
 While ZenX is running, its app-owned Host publishes
@@ -678,9 +717,24 @@ Microsoft's Public Preview `winapp` CLI 0.3.1 or newer. Install it explicitly wi
 --version` plus a read-only JSON schema probe at startup and does not expose the
 provider when it is missing, too old, or schema-incompatible. Packaged builds use only an application-bundled, version-pinned, SHA-256-verified WinApp asset; missing or offline provisioning is reported explicitly. The adapter resolves an exact title to one HWND with `ui list-windows
 --json`, maps bounded `ui inspect --json` results to ZenX opaque observation IDs,
-uses UIA `invoke` / `set-value`, and captures with the default WGC/PrintWindow
-path. It never passes `--focus` or `--capture-screen` and never silently falls
-back to `click`, `send-keys`, or other global input injection. WinApp command
+uses UIA `invoke` / `set-value`. Capture uses ZenX's fixed strict-background
+PrintWindow helper through the system Windows PowerShell, with source bundled
+in the application and request data on stdin. It never calls WinApp screenshot:
+WinApp 0.3.1 can restore minimized windows and activate blank-frame targets even
+without `--capture-screen`. The helper cannot activate, restore or inject input;
+minimized, hidden, cloaked, protected, unrendered or blank client areas fail closed.
+Only windows that PrintWindow can render are supported. A real all-black client
+can also be rejected as unverified. Potentially unpainted sentinel pixels are
+confirmed with a second differently initialized capture under the same timeout;
+only these ambiguous pixels must retain their color, so unrelated animation or
+caret changes are allowed. A change at one of those pixels is reported as
+unverified; the output remains the first frame, without pixel compositing.
+No foreground retry is attempted. The helper
+runs in an independently cancellable 20-second process, bounds physical-pixel
+geometry and PNG size, rechecks target identity, and returns pixels only to the
+Host, which owns the private artifact. No helper download or execution-policy
+change is required. Systems that block PowerShell/Add-Type report a capture
+failure while UIA remains available. WinApp command
 output, errors, duration, and artifacts are bounded; cancellation terminates the
 child process, and screenshots expire after five minutes. Set-value completion is
 confirmed by WinApp CLI's bounded native `wait-for --value` assertion without
@@ -710,8 +764,8 @@ mature external implementations while retaining a runnable bundled baseline:
   background validation contracts at <https://github.com/openclaw/Peekaboo/blob/main/docs/cli-command-reference.md>
   and <https://github.com/openclaw/Peekaboo/blob/main/docs/testing/background-computer-use.md>.
 - Windows uses a thin optional adapter over Microsoft's MIT-licensed, Public
-  Preview `winapp` CLI. UIA inspect/set-value/invoke and default WGC capture map
-  to background-safe semantic tools; provider-private HWND/UIA selectors are
+  Preview `winapp` CLI for UIA inspect/set-value/invoke. The separate strict
+  PrintWindow capture helper has no activation or input fallback; provider-private HWND/UIA selectors are
   translated to observation-scoped opaque ZenX target IDs/results. Startup pins
   the supported version/schema and required commands before registration.
   WinApp input-injecting verbs are deliberately not exposed by the current
@@ -913,8 +967,11 @@ with a real UIA-editable control and drives the real
 `WinAppCliComputerBackend` through the profile-managed Computer package and
 Runtime Supervisor, verifying exact PID/title→HWND resolution, bounded semantic
 inspection, UIA set-value with a bounded native value assertion, a post-action
-re-inspection, and WGC-default scoped capture without `--focus`
-or `--capture-screen`. GitHub CI runs that path on `windows-latest` with Microsoft's
+re-inspection, and strict background scoped capture while a second native
+window occludes the target and retains focus. A 5 ms native sampler checks focus
+and physical pointer throughout the run; minimized capture must fail without
+restoring the target. This sampling can detect transient interference but is not
+a proof against changes shorter than its sample interval. GitHub CI runs that path on `windows-latest` with Microsoft's
 official setup action. The cross-platform fixture suite validates the same WinApp
 0.3.1 JSON mapping, stale target rejection,
 pre-action semantic revalidation, startup version/schema diagnostics,
@@ -988,3 +1045,7 @@ Missing or inaccessible selections fail visibly and preserve the draft.
 For the standalone selector visual fixture, run from the repository root:
 `node node_modules/vite/bin/vite.js apps/zenx/test/fixtures/selector --host 127.0.0.1 --port 5189`.
 It uses the actual composer with fixture Host responses; it does not start ZAS.
+
+### Concurrent browsers
+
+The ordinary Browser settings now add an explicitly connected Chrome or Edge alongside the shared Workspace browser. Backend-qualified references and separate tool-name approvals prevent cross-routing. See [the concurrency contract](../../docs/browser-concurrency.md) for setup, migration, single-external-connection limits and validation boundaries.

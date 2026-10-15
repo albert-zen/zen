@@ -1,7 +1,7 @@
 import { i18n } from "./i18n.js";
 import { useTranslation } from "react-i18next";
 import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
-import { Select, Combobox } from "./ui/controls.js";
+import { Select, Combobox, Dialog } from "./ui/controls.js";
 import { SubscriptionUsageCard } from "./SubscriptionUsageCard.js";
 import { RtkSettingsCard } from "./RtkSettingsCard.js";
 import {
@@ -67,6 +67,8 @@ import {
   ProviderModelDiscoveryOption,
 } from "./ProviderModelAdmissionControls.js";
 
+import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wire.js";
+
 export type SettingsTab =
   | "account"
   | "models"
@@ -83,8 +85,14 @@ export function SettingsView({
   archivedError,
   archivedLoading,
   archivedThreads,
+  deletedThreads = [],
+  deletedError = null,
+  deletedLoading = false,
+  onDelete,
+  onRestoreDeleted,
   onOpenSidebar,
   onRetryArchived,
+  onImportSession,
   onTabChange,
   onUnarchive,
   showHeader = true,
@@ -96,8 +104,14 @@ export function SettingsView({
   archivedError: string | null;
   archivedLoading: boolean;
   archivedThreads: readonly NativeThreadSummary[];
+  deletedThreads?: readonly DeletedThreadSummary[];
+  deletedError?: string | null;
+  deletedLoading?: boolean;
+  onDelete?(thread: NativeThreadSummary): Promise<void>;
+  onRestoreDeleted?(thread: DeletedThreadSummary): Promise<void>;
   onOpenSidebar?(): void;
   onRetryArchived(): void;
+  onImportSession?(): void;
   onTabChange(tab: SettingsTab): void;
   onUnarchive(thread: NativeThreadSummary): Promise<void>;
   showHeader?: boolean;
@@ -501,7 +515,11 @@ export function SettingsView({
             {active && tab === "fleet" ? <FleetSettings /> : null}
             <Activity mode={active && tab === "general" ? "visible" : "hidden"}>
               <>
-                <GeneralPanel draft={draft} setDraft={setDraft} />
+                <GeneralPanel
+                  draft={draft}
+                  setDraft={setDraft}
+                  onImportSession={onImportSession}
+                />
                 <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
                 <RtkSettingsCard
                   draft={draft}
@@ -559,6 +577,11 @@ export function SettingsView({
                 loading={archivedLoading}
                 onRetry={onRetryArchived}
                 onUnarchive={onUnarchive}
+                onDelete={onDelete}
+                onRestoreDeleted={onRestoreDeleted}
+                deletedThreads={deletedThreads}
+                deletedError={deletedError}
+                deletedLoading={deletedLoading}
                 threads={archivedThreads}
                 providerLogoDataUrls={settings.providerLogoDataUrls}
                 providerProfiles={settings.profile.providerProfiles}
@@ -748,6 +771,11 @@ export function SettingsApplyBar({
 }
 
 export function ArchivedThreadsPanel({
+  onDelete,
+  onRestoreDeleted,
+  deletedThreads = [],
+  deletedError = null,
+  deletedLoading = false,
   error,
   loading,
   onRetry,
@@ -756,6 +784,11 @@ export function ArchivedThreadsPanel({
   providerLogoDataUrls,
   providerProfiles,
 }: {
+  onDelete?(thread: NativeThreadSummary): Promise<void>;
+  onRestoreDeleted?(thread: DeletedThreadSummary): Promise<void>;
+  deletedThreads?: readonly DeletedThreadSummary[];
+  deletedError?: string | null;
+  deletedLoading?: boolean;
   error: string | null;
   loading: boolean;
   onRetry(): void;
@@ -765,9 +798,16 @@ export function ArchivedThreadsPanel({
   providerProfiles?: readonly ZenXProviderProfile[];
 }) {
   const { t } = useTranslation("settings");
+  const [deleteTarget, setDeleteTarget] = useState<NativeThreadSummary | null>(
+    null,
+  );
+  const busyRef = useRef(false);
+  const deletedHeading = useRef<HTMLHeadingElement>(null);
   const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const unarchive = async (thread: NativeThreadSummary) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusyThreadId(thread.threadId);
     setActionError(null);
     try {
@@ -775,6 +815,42 @@ export function ArchivedThreadsPanel({
     } catch (reason) {
       setActionError(describeError(reason));
     } finally {
+      busyRef.current = false;
+      setBusyThreadId(null);
+    }
+  };
+  const deleteThread = async () => {
+    if (deleteTarget === null || onDelete === undefined || busyRef.current)
+      return;
+    busyRef.current = true;
+    setBusyThreadId(deleteTarget.threadId);
+    setActionError(null);
+    try {
+      await onDelete(deleteTarget);
+      setDeleteTarget(null);
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body)
+          deletedHeading.current?.focus({ preventScroll: true });
+      });
+    } catch (reason) {
+      setActionError(describeError(reason));
+    } finally {
+      busyRef.current = false;
+      setBusyThreadId(null);
+    }
+  };
+  const restoreDeleted = async (thread: DeletedThreadSummary) => {
+    if (onRestoreDeleted === undefined || busyRef.current) return;
+    busyRef.current = true;
+    setBusyThreadId(thread.threadId);
+    setActionError(null);
+    try {
+      await onRestoreDeleted(thread);
+      deletedHeading.current?.focus({ preventScroll: true });
+    } catch (reason) {
+      setActionError(describeError(reason));
+    } finally {
+      busyRef.current = false;
       setBusyThreadId(null);
     }
   };
@@ -842,22 +918,136 @@ export function ArchivedThreadsPanel({
                     </small>
                   )}
                 </div>
-                <button
-                  className="quiet-button"
-                  type="button"
-                  disabled={busyThreadId !== null}
-                  onClick={() => void unarchive(thread)}
-                >
-                  {busy
-                    ? t("settingsView.restoring")
-                    : t("settingsView.unarchive")}
-                </button>
+                <div className="archived-thread-actions">
+                  <button
+                    className="quiet-button"
+                    type="button"
+                    disabled={busyThreadId !== null}
+                    onClick={() => void unarchive(thread)}
+                  >
+                    {busy
+                      ? t("settingsView.restoring")
+                      : t("settingsView.unarchive")}
+                  </button>
+                  {onDelete === undefined ? null : (
+                    <button
+                      className="quiet-button danger"
+                      type="button"
+                      disabled={
+                        busyThreadId !== null ||
+                        thread.lastItemId === undefined ||
+                        thread.status === "active"
+                      }
+                      onClick={() => {
+                        setActionError(null);
+                        setDeleteTarget(thread);
+                      }}
+                    >
+                      {t("settingsView.deleteThread")}
+                    </button>
+                  )}
+                </div>
               </article>
             );
           })}
         </div>
       )}
-      {actionError === null ? null : (
+      {onRestoreDeleted === undefined ? null : (
+        <section
+          className="deleted-threads-section"
+          aria-labelledby="deleted-threads-heading"
+        >
+          <header>
+            <h3 id="deleted-threads-heading" ref={deletedHeading} tabIndex={-1}>
+              {t("settingsView.deletedThreads")}
+            </h3>
+            <p>{t("settingsView.deletedThreadsDescription")}</p>
+          </header>
+          {deletedLoading ? (
+            <p role="status">{t("settingsView.loadingDeletedThreads")}</p>
+          ) : deletedError !== null ? (
+            <div className="settings-error" role="alert">
+              {deletedError}
+              <button className="quiet-button" type="button" onClick={onRetry}>
+                {t("settingsView.tryAgain")}
+              </button>
+            </div>
+          ) : deletedThreads.length === 0 ? (
+            <p className="settings-empty">
+              {t("settingsView.noDeletedThreads")}
+            </p>
+          ) : (
+            <div className="archived-thread-list">
+              {deletedThreads.map((thread) => (
+                <article className="archived-thread-row" key={thread.threadId}>
+                  <div className="archived-thread-copy">
+                    <strong>
+                      {thread.name || t("settingsView.untitledDeletedThread")}
+                    </strong>
+                    <span title={thread.cwd}>{thread.cwd}</span>
+                  </div>
+                  <button
+                    className="quiet-button"
+                    type="button"
+                    disabled={busyThreadId !== null}
+                    onClick={() => void restoreDeleted(thread)}
+                  >
+                    {busyThreadId === thread.threadId
+                      ? t("settingsView.restoring")
+                      : t("settingsView.restoreDeletedThread")}
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+      <Dialog
+        open={deleteTarget !== null}
+        title={t("settingsView.deleteThreadTitle")}
+        onOpenChange={(open) => {
+          if (!open && !busyRef.current) {
+            setDeleteTarget(null);
+            setActionError(null);
+          }
+        }}
+      >
+        <p>
+          {t("settingsView.deleteThreadConfirmation", {
+            name: deleteTarget === null ? "" : threadTitle(deleteTarget),
+          })}
+        </p>
+        <p>{t("settingsView.deleteThreadScope")}</p>
+        {actionError === null ? null : (
+          <p className="settings-error" role="alert">
+            {actionError}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={busyThreadId !== null}
+            onClick={() => {
+              setDeleteTarget(null);
+              setActionError(null);
+            }}
+          >
+            {t("settingsView.cancelDeleteThread")}
+          </button>
+          <button
+            className="quiet-button danger"
+            type="button"
+            disabled={busyThreadId !== null}
+            onClick={() => void deleteThread()}
+          >
+            {busyThreadId === null
+              ? t("settingsView.deleteThread")
+              : t("settingsView.deletingThread")}
+          </button>
+        </div>
+      </Dialog>
+      {actionError === null || deleteTarget !== null ? null : (
         <div className="settings-error" role="alert">
           <Icon name="warning" />
           {actionError}
@@ -3309,9 +3499,11 @@ function AppearancePanel() {
 function GeneralPanel({
   draft,
   setDraft,
+  onImportSession,
 }: {
   draft: ZenXHostProfile;
   setDraft(value: ZenXHostProfile): void;
+  onImportSession?(): void;
 }) {
   const { t } = useTranslation("settings");
   const [maximumInput, setMaximumInput] = useState(
@@ -3329,6 +3521,22 @@ function GeneralPanel({
         <p>{t("settingsView.chooseHowZenxWorksWithYouAndYourProjects")}</p>
       </header>
       <LanguageSettings />
+      {onImportSession && (
+        <section className="page-card settings-card">
+          <h3>{t("settingsView.importConversations")}</h3>
+          <p className="settings-note">
+            {t("settingsView.importConversationsHelp")}
+          </p>
+          <button
+            className="secondary-button"
+            type="button"
+            aria-label={i18n.t("shell:importSession")}
+            onClick={onImportSession}
+          >
+            {i18n.t("shell:importSession")}
+          </button>
+        </section>
+      )}
       <section className="settings-card">
         <h3>{t("settingsView.interaction")}</h3>{" "}
         <label className="field">

@@ -1,3 +1,4 @@
+import { HostMessageContent } from "./HostMessageContent.js";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import "./i18n.js";
@@ -23,15 +24,37 @@ export function FleetHistory({ value }: { value: unknown }) {
                 item.text ?? item.output ?? item.message ?? item.summary,
               ) ||
               contentText(item.content, t);
-        const message = type === "user_message" || type === "agent_message";
+        const message =
+          type === "user_message" ||
+          type === "host_message" ||
+          type === "thread_message" ||
+          type === "agent_message";
+        const sender = record(row.sender ?? item.sender);
         const label =
-          type === "user_message"
-            ? t("fleetHistory.you")
-            : type === "agent_message"
-              ? t("fleetHistory.agent")
-              : Object.hasOwn(historyTypeKeys, type)
-                ? t(historyTypeKeys[type]!)
-                : type.replaceAll("_", " ") || t("fleetHistory.item");
+          type === "thread_message" ? (
+            <span
+              title={`${typeof sender.deviceId === "string" ? `${t("shell:threadMessageRemoteDetails")}\n` : ""}${JSON.stringify(sender)}`}
+            >
+              {t(
+                typeof sender.deviceId === "string"
+                  ? "shell:remoteThreadMessageFrom"
+                  : "shell:threadMessageFrom",
+                {
+                  name:
+                    string(sender.threadName) ||
+                    t("shell:threadMessageUnnamed"),
+                },
+              )}
+            </span>
+          ) : type === "user_message" ? (
+            t("fleetHistory.you")
+          ) : type === "agent_message" ? (
+            t("fleetHistory.agent")
+          ) : Object.hasOwn(historyTypeKeys, type) ? (
+            t(historyTypeKeys[type]!)
+          ) : (
+            type.replaceAll("_", " ") || t("fleetHistory.item")
+          );
         const detail =
           type === "tool_call"
             ? text || JSON.stringify(item.arguments ?? {}, null, 2)
@@ -55,7 +78,20 @@ export function FleetHistory({ value }: { value: unknown }) {
           row.truncated || row.textTruncated || detail.length > 16384;
         return (
           <article key={string(row.itemId ?? row.id ?? item.id) || index}>
-            {message ? (
+            {type === "host_message" ? (
+              <HostMessageContent
+                source={
+                  (row.source ?? item.source) === "trigger"
+                    ? "trigger"
+                    : (row.source ?? item.source) === "room"
+                      ? "room"
+                      : "bootstrap"
+                }
+                sourceId={string(row.sourceId ?? item.sourceId) || undefined}
+                text={text}
+                truncated={Boolean(row.truncated || row.textTruncated)}
+              />
+            ) : message ? (
               <>
                 <strong>{label}</strong>
                 <p className="fleet-history-text">

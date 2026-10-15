@@ -8,6 +8,8 @@ import {
   traceDisplayRows,
   traceSummary,
   summarizeTraceActivity,
+  createTraceObservationIndex,
+  observedCommandStatus,
 } from "../src/renderer/src/turn-projection.js";
 
 test("adjacent reasoning without public details has one honest row, not one per item", () => {
@@ -77,10 +79,13 @@ test("thread send and rename summaries report successful actions without redunda
   };
   assert.equal(traceSummary([sent]), "Sent message");
   assert.equal(traceSummary([renamed]), "Renamed thread");
-  assert.equal(traceSummary([sent, renamed]), "2 tool calls");
+  assert.equal(
+    traceSummary([sent, renamed]),
+    "2 tool calls · Renamed thread · Sent message",
+  );
   assert.equal(
     traceSummary([sent, { ...renamed, status: "failed" }]),
-    "2 tool calls",
+    "2 tool calls · Rename thread · ended · Sent message",
   );
 });
 
@@ -131,7 +136,7 @@ test("groups only consecutive reasoning and tool Items", () => {
       command("tool-b", "npm test"),
     ]),
   );
-  assert.equal(projection.userItems.length, 1);
+  assert.equal(projection.inputItems.length, 1);
   assert.deepEqual(
     projection.history.map((node) =>
       node.kind === "traceGroup" ? [node.kind, node.items.length] : [node.kind],
@@ -154,7 +159,7 @@ test("places a steered user message after its delivery anchor", () => {
   );
 
   assert.deepEqual(
-    projection.userItems.map((item) => item.id),
+    projection.inputItems.map((item) => item.id),
     ["request"],
   );
   assert.deepEqual(
@@ -164,7 +169,7 @@ test("places a steered user message after its delivery anchor", () => {
     [
       ["agent", "progress"],
       ["traceItem", "tool-a"],
-      ["user", "steer"],
+      ["input", "steer"],
       ["agent", "after-steer"],
     ],
   );
@@ -333,11 +338,126 @@ test("collapsed trace counts all calls without hiding earlier failures", () => {
     toolName: "shell",
     toolArguments: { command: `echo ${value}` },
   }));
-  assert.equal(traceSummary([reasoning("r", ""), ...items]), "4 tool calls");
+  assert.equal(
+    traceSummary([reasoning("r", ""), ...items]),
+    "4 tool calls · Ran · echo four · Ran · echo three · Ran · echo two",
+  );
   const activity = summarizeTraceActivity([
     { ...items[0]!, status: "failed" },
     ...items.slice(1),
   ]);
   assert.equal(activity.total, 4);
-  assert.equal(activity.failed, 1);
+});
+
+test("ended results remain ordinary calls while lifecycle phases stay intact", () => {
+  const shell = {
+    ...command("nonzero", "grep absent file"),
+    toolName: "shell",
+    status: "failed" as const,
+    exitCode: 1,
+  };
+  const task = {
+    ...shell,
+    id: "timeout",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "timeout",
+      tool_name: "shell",
+      status: "timed_out",
+      exit_code: 124,
+    },
+    exitCode: 124,
+  };
+  const other = { ...shell, id: "other", toolName: "other_tool" };
+  const cancelled = {
+    ...task,
+    id: "cancel",
+    structuredContent: {
+      ...task.structuredContent,
+      task_id: "cancel",
+      status: "cancelled",
+      exit_code: 130,
+    },
+    exitCode: 130,
+  };
+  const activity = summarizeTraceActivity([shell, task, other, cancelled]);
+  assert.equal(activity.total, 4);
+  assert.equal(activity.cancelled, 1);
+  assert.equal(activity.active, 0);
+  assert.equal("failed" in activity, false);
+  assert.equal("shellNonzero" in activity, false);
+  assert.match(traceSummary([shell]), /ended/);
+});
+
+test("later settlement updates earlier shell summaries without changing canonical items", () => {
+  const early = {
+    ...command("early", "grep absent file"),
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "shared",
+      tool_name: "shell",
+      status: "running",
+      exit_code: null,
+    },
+  };
+  const final = {
+    ...early,
+    id: "final",
+    toolName: "wait",
+    status: "failed" as const,
+    exitCode: 1,
+    structuredContent: {
+      ...early.structuredContent,
+      status: "failed",
+      exit_code: 1,
+    },
+  };
+  const items = [early, final];
+  const before = structuredClone(items);
+  assert.match(traceSummary([early], items), /ended/);
+  assert.doesNotMatch(traceSummary(items), /failed/i);
+  assert.deepEqual(items, before);
+});
+
+test("observed settlement preserves cancellation and timeout facts and cannot regress to running", () => {
+  const early = {
+    ...command("early", "grep absent file"),
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "shared",
+      tool_name: "shell",
+      status: "running",
+      exit_code: null,
+    },
+  };
+  const final = {
+    ...early,
+    id: "final",
+    toolName: "wait",
+    status: "failed" as const,
+    exitCode: 1,
+    structuredContent: {
+      ...early.structuredContent,
+      status: "failed",
+      exit_code: 1,
+    },
+  };
+  for (const [patch, label] of [
+    [{ status: "timed_out" }, "Timed out"],
+    [{ status: "cancelled" }, "Cancelled"],
+    [{ foreground_signal: "SIGTERM" }, "Ended"],
+    [{ tool_name: "other_tool" }, "Ended"],
+  ] as const) {
+    const index = createTraceObservationIndex([
+      early,
+      { ...final, structuredContent: { ...final.structuredContent, ...patch } },
+    ]);
+    assert.equal(observedCommandStatus(early, index), label);
+  }
+  const lateRunning = { ...early, id: "late-running" };
+  const index = createTraceObservationIndex([early, final, lateRunning]);
+  assert.equal(observedCommandStatus(early, index), "Ended");
+  assert.equal(observedCommandStatus(lateRunning, index), "Ended");
 });

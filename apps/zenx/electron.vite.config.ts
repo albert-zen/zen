@@ -135,6 +135,10 @@ export default defineConfig({
           ),
           "real-smoke": resolve(__dirname, "src/main/real-smoke.ts"),
           "provider-smoke": resolve(__dirname, "src/main/provider-smoke.ts"),
+          "workspace-browser-persistence-smoke": resolve(
+            __dirname,
+            "src/main/workspace-browser-persistence-smoke.ts",
+          ),
           "workspace-browser-smoke": resolve(
             __dirname,
             "src/main/workspace-browser-smoke.ts",
@@ -146,6 +150,13 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
+        input: {
+          index: resolve(__dirname, "src/preload/index.ts"),
+          "foreground-activity": resolve(
+            __dirname,
+            "src/preload/foreground-activity.ts",
+          ),
+        },
         output: {
           format: "cjs",
           entryFileNames: "[name].cjs",

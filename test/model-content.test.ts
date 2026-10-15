@@ -443,3 +443,35 @@ test("media explicitly emitted on wait is not also lifted into the original run_
   );
   assert.deepEqual(items, before);
 });
+
+test("failure items project a bounded first line into model context", () => {
+  const detail = `provider detail ${"x".repeat(900)}`;
+  const item: CanonicalItem = {
+    id: "failure-1",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    createdAt: new Date(0).toISOString(),
+    type: "failure",
+    code: "runtime_error",
+    message: `OpenAI-compatible model request failed with HTTP 400: ${detail}\nstack-ish second line`,
+  };
+  const messages = compileModelMessages([item]);
+  assert.equal(messages.length, 1);
+  const message = messages[0]!;
+  assert(message.role === "assistant" && "text" in message);
+  // The projection keeps the actionable head and drops bulk detail.
+  assert.match(
+    message.text,
+    /^\[failure: OpenAI-compatible model request failed with HTTP 400: provider detail x+/u,
+  );
+  assert(!message.text.includes("second line"));
+  assert(message.text.length < 400);
+  assert(message.text.endsWith("…]"));
+
+  const withDiagnostic = compileModelMessages([
+    { ...item, id: "failure-2", diagnosticId: "diag-123" },
+  ]);
+  const projected = withDiagnostic[0]!;
+  assert(projected.role === "assistant" && "text" in projected);
+  assert.match(projected.text, /\(diagnostic diag-123\)\]$/u);
+});

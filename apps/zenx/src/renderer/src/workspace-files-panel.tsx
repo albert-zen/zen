@@ -6,13 +6,14 @@ import React, {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { WorkspaceFileListing } from "../../main/workspace-files.js";
 import {
   WorkspaceFileDrafts,
   fileDraftKey,
   isFileDirty,
 } from "./workspace-file-drafts.js";
 import { InlineMarkdownEditor } from "./InlineMarkdownEditor.js";
+import { WorkspaceFileExplorer } from "./workspace-file-explorer.js";
+import { SourceEditor } from "./SourceEditor.js";
 import { Icon } from "./icons.js";
 
 export function WorkspaceFilesPanel({
@@ -30,16 +31,13 @@ export function WorkspaceFilesPanel({
 }) {
   useTranslation("panels");
   const entries = useSyncExternalStore(drafts.subscribe, drafts.snapshot);
-  const [directory, setDirectory] = useState(".");
-  const [listing, setListing] = useState<WorkspaceFileListing>();
   const [filePath, setFilePath] = useState<string | undefined>(initialPath);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [revision, setRevision] = useState(0);
   const [closePending, setClosePending] = useState<string>();
   const [discardPending, setDiscardPending] = useState(false);
-  const [pathInput, setPathInput] = useState("");
   const [editorEpoch, setEditorEpoch] = useState(0);
+  const [findRequest, setFindRequest] = useState(0);
   const sequence = useRef(0);
   const key =
     filePath === undefined ? undefined : fileDraftKey(threadId, filePath);
@@ -49,36 +47,16 @@ export function WorkspaceFilesPanel({
     ([key]) => JSON.parse(key)[0] === threadId,
   );
   useEffect(() => {
-    if (initialPath !== undefined) {
-      void read(initialPath);
-      return () => {
-        sequence.current++;
-      };
-    }
-    const request = ++sequence.current;
-    setLoading(true);
-    setError("");
-    setListing(undefined);
+    setLoading(false);
     setFilePath(undefined);
+    setError("");
+    setClosePending(undefined);
     setDiscardPending(false);
-    void window.zenx.workspaceFiles
-      .list(threadId, directory)
-      .then(
-        (value) => {
-          if (request === sequence.current) setListing(value);
-        },
-        (reason) => {
-          if (request === sequence.current)
-            setError(String(reason.message ?? reason));
-        },
-      )
-      .finally(() => {
-        if (request === sequence.current) setLoading(false);
-      });
+    if (initialPath !== undefined) void read(initialPath);
     return () => {
       sequence.current++;
     };
-  }, [threadId, directory, revision, initialPath]);
+  }, [threadId, initialPath]);
   const read = async (path: string, reload = false) => {
     const request = ++sequence.current;
     setError("");
@@ -134,14 +112,6 @@ export function WorkspaceFilesPanel({
   };
   const markdown =
     file !== undefined && /\.(md|markdown|mdx)$/i.test(file.base.path);
-  const crumbs = (filePath ?? directory)
-    .split("/")
-    .filter((value) => value !== ".");
-  const browse = (path: string) => {
-    setFilePath(undefined);
-    setDirectory(path);
-    setRevision((value) => value + 1);
-  };
   return (
     <section
       className="workspace-files-panel"
@@ -156,48 +126,6 @@ export function WorkspaceFilesPanel({
         }
       }}
     >
-      <nav
-        className="file-breadcrumbs"
-        aria-label={i18n.t("panels:filePath")}
-        hidden={standalone || !!file}
-      >
-        <button type="button" title={workspacePath} onClick={() => browse(".")}>
-          {workspacePath?.split(/[\\/]/).filter(Boolean).at(-1) ??
-            i18n.t("panels:workspace")}
-        </button>
-        {crumbs.map((name, index) => (
-          <React.Fragment key={index}>
-            <span aria-hidden="true">/</span>
-            <button
-              type="button"
-              title={crumbs.slice(0, index + 1).join("/")}
-              disabled={!!filePath && index === crumbs.length - 1}
-              onClick={() => browse(crumbs.slice(0, index + 1).join("/"))}
-            >
-              {name}
-            </button>
-          </React.Fragment>
-        ))}
-      </nav>
-      <form
-        hidden={standalone || !!file}
-        className="file-path-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (pathInput.trim())
-            void read(pathInput.trim().replaceAll("\\", "/"));
-        }}
-      >
-        <input
-          aria-label={i18n.t("panels:openWorkspaceRelativeFilePath")}
-          placeholder={i18n.t("panels:openFileByRelativePath")}
-          value={pathInput}
-          onChange={(event) => setPathInput(event.target.value)}
-        />
-        <button type="submit" disabled={!pathInput.trim()}>
-          {i18n.t("panels:open")}
-        </button>
-      </form>
       {!standalone && opened.length > 0 ? (
         <div
           className="file-open-tabs"
@@ -255,37 +183,69 @@ export function WorkspaceFilesPanel({
           ))}
         </div>
       ) : null}
-      <header className="file-toolbar" hidden={standalone}>
+      <header className="file-toolbar" hidden={standalone || !file}>
         <button
           type="button"
-          disabled={loading}
-          onClick={() =>
-            file
-              ? (setFilePath(undefined), setError(""), setDiscardPending(false))
-              : browse(
-                  directory.includes("/")
-                    ? directory.slice(0, directory.lastIndexOf("/"))
-                    : ".",
-                )
-          }
+          onClick={() => {
+            sequence.current++;
+            setLoading(false);
+            setFilePath(undefined);
+            setError("");
+            setDiscardPending(false);
+          }}
         >
-          {file ? i18n.t("panels:files") : i18n.t("panels:up")}
+          {i18n.t("panels:files")}
         </button>
-        <span title={filePath ?? directory}>{file ? null : directory}</span>
+        <span title={filePath}>{filePath}</span>
         <button
           type="button"
           disabled={loading || file?.saving}
-          onClick={() =>
-            file
-              ? dirty
-                ? setDiscardPending(true)
-                : void read(file.base.path, true)
-              : setRevision((value) => value + 1)
-          }
+          onClick={() => {
+            if (file)
+              dirty ? setDiscardPending(true) : void read(file.base.path, true);
+          }}
         >
           {i18n.t("panels:refresh")}
         </button>
       </header>
+      {standalone && file ? (
+        <div className="file-location">
+          <div
+            className="file-location-path"
+            title={file.base.path}
+            aria-label={file.base.path}
+          >
+            {file.base.path.split("/").map((part, index) => (
+              <React.Fragment key={index}>
+                {index > 0 ? (
+                  <Icon name="chevron-right" aria-hidden="true" />
+                ) : null}
+                <span>{part}</span>
+              </React.Fragment>
+            ))}
+          </div>
+          <span className="file-location-status">
+            {file.saving
+              ? i18n.t("panels:saving")
+              : file.conflict
+                ? i18n.t("panels:saveConflict")
+                : file.error
+                  ? i18n.t("panels:saveFailed")
+                  : dirty
+                    ? i18n.t("panels:waitingToSave")
+                    : i18n.t("panels:saved")}
+          </span>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={i18n.t("panels:findInFile")}
+            title={i18n.t("panels:findInFile") + " (⌘ / Ctrl F)"}
+            onClick={() => setFindRequest((value) => value + 1)}
+          >
+            <Icon name="search" />
+          </button>
+        </div>
+      ) : null}
       {closePending ? (
         <div role="alert" className="file-discard">
           {i18n.t("panels:discardChangesAndClose")} {closePending}?
@@ -367,6 +327,7 @@ export function WorkspaceFilesPanel({
             ) : null}
             {markdown ? (
               <InlineMarkdownEditor
+                findRequest={findRequest}
                 key={`${file.base.path}:${editorEpoch}`}
                 path={file.base.path}
                 text={file.text}
@@ -375,99 +336,30 @@ export function WorkspaceFilesPanel({
                 }
               />
             ) : (
-              <textarea
-                className="file-editor"
-                aria-label={i18n.t("panels:editFile", { path: file.base.path })}
-                spellCheck={false}
-                value={file.text}
-                onChange={(event) => {
-                  const text = file.base.text.includes("\r\n")
-                    ? event.target.value.replace(/\r?\n/g, "\r\n")
-                    : event.target.value;
-                  drafts.edit(key!, text, saver(file.base.path));
-                }}
+              <SourceEditor
+                findRequest={findRequest}
+                key={`${file.base.path}:${editorEpoch}`}
+                path={file.base.path}
+                text={file.text}
+                onChange={(text) =>
+                  drafts.edit(key!, text, saver(file.base.path))
+                }
               />
             )}
           </>
         ) : null}
-        {!loading && !file && listing ? (
-          <>
-            <ul className="file-list">
-              {listing.entries.map((entry) => (
-                <li key={entry.path}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      entry.kind === "directory"
-                        ? browse(entry.path)
-                        : void read(entry.path)
-                    }
-                  >
-                    <Icon
-                      name={entry.kind === "directory" ? "folder" : "file"}
-                    />
-                    <span>{entry.name}</span>
-                    {entry.kind === "directory" ? (
-                      <span aria-hidden="true">›</span>
-                    ) : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {listing.entries.length === 0 ? (
-              <p>{i18n.t("panels:thisDirectoryIsEmpty")}</p>
-            ) : null}
-            {listing.truncated ? (
-              <p role="status">{i18n.t("panels:directoryTruncated")}</p>
-            ) : null}
-          </>
+        {!loading && !file && !standalone ? (
+          <WorkspaceFileExplorer
+            threadId={threadId}
+            workspacePath={workspacePath}
+            onOpen={(path) => void read(path)}
+          />
         ) : null}
       </div>
     </section>
   );
 }
 
-// Highlight only common code tokens; React escapes every token, including HTML source.
 export function SourcePreview({ text, path }: { text: string; path: string }) {
-  useTranslation("panels");
-  const code =
-    /\.(?:[cm]?[jt]sx?|json|css|py|sh|ya?ml|toml|rs|go|java|c|cpp|h)$/i.test(
-      path,
-    );
-  const parts =
-    code && text.length <= 100_000
-      ? text.split(
-          /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/[^\n]*|#[^\n]*|\b(?:const|let|var|function|return|import|from|export|class|if|else|for|while|async|await|true|false|null|def|self|pub|fn|use)\b|\b\d+(?:\.\d+)?\b)/g,
-        )
-      : [text];
-  return (
-    <pre
-      className="file-source"
-      tabIndex={0}
-      aria-label={i18n.t("panels:sourceOfFile", { path })}
-    >
-      <code>
-        {parts.map((part, index) =>
-          index % 2 ? (
-            <span
-              key={index}
-              className={
-                /^["']/.test(part)
-                  ? "syntax-string"
-                  : /^(\/\/|#)/.test(part)
-                    ? "syntax-comment"
-                    : /^\d/.test(part)
-                      ? "syntax-number"
-                      : "syntax-keyword"
-              }
-            >
-              {part}
-            </span>
-          ) : (
-            part
-          ),
-        )}
-      </code>
-    </pre>
-  );
+  return <SourceEditor text={text} path={path} readOnly />;
 }

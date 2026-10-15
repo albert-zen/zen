@@ -39,6 +39,10 @@ export type ZenXProviderProfile = ZenXProviderConnection & {
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
   logoResource?: string;
+  /** The user has actively configured this Provider's model catalog (added
+   * or removed model IDs). Host then stops injecting built-in presets or the
+   * auto-configured subscription catalog; deletions survive restarts. */
+  modelsUserConfigured?: true;
 };
 
 export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault"> & {
@@ -63,7 +67,7 @@ export interface ZenXHostProfile {
   onboardingComplete: boolean;
   /** Missing in an older v3 profile means the high-impact tools stay off. */
   computerForegroundControlEnabled?: boolean;
-  /** Missing means the ordinary isolated browser provider. */
+  /** Legacy field: user-session now enables an external browser alongside Workspace. */
   browserMode?: "isolated" | "user-session";
   providerProfiles: ZenXProviderProfile[];
   defaultModel: ZenXModelReference;
@@ -355,9 +359,17 @@ export function validateHostProfile(
     value.composerSendMode === "queue" &&
     value.composerSendModeExplicit !== true &&
     migration === undefined;
-  const composerSendMode = ambiguousLegacyQueue
-    ? "soft"
-    : (value.composerSendMode ?? "soft");
+  if (
+    value.composerSendMode !== undefined &&
+    !["batch", "queue", "soft", "hard"].includes(
+      value.composerSendMode as string,
+    )
+  )
+    throw new Error("Invalid composer send mode");
+  const composerSendMode =
+    ambiguousLegacyQueue || value.composerSendModeExplicit === false
+      ? "soft"
+      : (value.composerSendMode ?? "soft");
   const composerSendModeMigration = ambiguousLegacyQueue
     ? {
         version: 1 as const,
@@ -729,6 +741,9 @@ function validateProviderProfile(value: unknown): ZenXProviderProfile {
     ...(value.logoResource === undefined
       ? {}
       : { logoResource: providerLogoResource(value.logoResource) }),
+    ...(value.modelsUserConfigured === true
+      ? { modelsUserConfigured: true as const }
+      : {}),
   };
 }
 
@@ -906,6 +921,9 @@ export function applyBuiltInModelCatalogPresets(
       };
     }
     if (provider.type !== "openai-subscription") return provider;
+    // A user-configured subscription catalog is authoritative: deleted
+    // presets must not come back on the next load, update, or repackaging.
+    if (provider.modelsUserConfigured === true) return provider;
     const existingById = new Map(
       provider.models.map((model) => [model.id, model]),
     );

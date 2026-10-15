@@ -1,3 +1,4 @@
+import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { useContext, useLayoutEffect } from "react";
@@ -5,6 +6,7 @@ import { RoomDraftContext } from "./room-drafts.js";
 import React, {
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -22,8 +24,14 @@ import {
   handleComposerSuggestionKey,
 } from "./ComposerSuggestions.js";
 import { useRoomComposerSelector } from "./use-room-composer-selector.js";
+import { readRoomHistory, type RoomHistoryPage } from "./room-history.js";
+import { DirectoryPicker } from "./DirectoryPicker.js";
 import { PluginRequirementsPreview } from "./PluginRequirementsPreview.js";
 import { PAW_PLUGIN_REQUIREMENTS } from "../../assistant-preset-requirements.js";
+import { RoomMessageSource, roomSenderName } from "./RoomMessageSource.js";
+import { RoomReplySetupNotice } from "./RoomReplySetupNotice.js";
+import { RoomMessageActions } from "./RoomMessageActions.js";
+import { RoomHeaderActions } from "./room-header.js";
 
 import type {
   TriggerKind,
@@ -73,11 +81,25 @@ interface RoomListResult {
   rooms: Array<
     Omit<ZenXRoom, "operations"> & {
       assistantRepliesEnabled?: boolean;
+      introduction?: {
+        operationId: string;
+        state:
+          | "prepared"
+          | "cancelled"
+          | "starting"
+          | "running"
+          | "completed"
+          | "failed"
+          | "unknown";
+        error: string | null;
+      };
       pendingCount?: number;
       operationEpoch?: string;
       messageCount?: number;
       nextCursor?: number | null;
       operations?: Array<{
+        kind?: "assistantIntroduction";
+        wakeupId?: string;
         id: string;
         text: string;
         messageId: string | null;
@@ -90,6 +112,8 @@ interface RoomListResult {
   >;
 }
 interface RoomDeliveryResult {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   receipt?: "delivered" | "unknown";
   readers?: Array<{
     threadId: string;
@@ -116,6 +140,8 @@ interface RoomDeliveryResult {
   }>;
 }
 interface RoomPendingSend {
+  kind?: "assistantIntroduction";
+  wakeupId?: string;
   id: string;
   text: string;
   revision: number | null;
@@ -139,6 +165,7 @@ export function registerBundledAutomationUi(
 }
 
 interface TriggerEditor {
+  deliveryMode?: "steer" | "queue";
   id?: string;
   threadId: string;
   kind: TriggerKind;
@@ -242,6 +269,7 @@ export function editorFromTrigger(trigger: ZenXTrigger): TriggerEditor {
   return {
     id: trigger.id,
     threadId: trigger.threadId,
+    deliveryMode: trigger.deliveryMode,
     kind: trigger.kind,
     label: trigger.label,
     prompt: trigger.prompt,
@@ -265,6 +293,9 @@ export function triggerEditorInput(editor: TriggerEditor) {
     kind: editor.kind,
     label: editor.label.trim(),
     prompt: editor.prompt.trim(),
+    ...(editor.deliveryMode === undefined
+      ? {}
+      : { deliveryMode: editor.deliveryMode }),
     ...(editor.id === undefined ? {} : { id: editor.id }),
   };
   if (!common.threadId || !common.label || !common.prompt)
@@ -424,8 +455,10 @@ function TriggerManager({
   sdk,
   scopedThreadId,
   setupIntent,
+  sourceTriggerId,
 }: {
   sdk: PluginUiSdkV1;
+  sourceTriggerId?: string;
   scopedThreadId?: string;
   setupIntent?: RoomReplySetupIntent;
 }) {
@@ -438,6 +471,23 @@ function TriggerManager({
   const [editing, setEditing] = useState(false);
   const [setupNotice, setSetupNotice] = useState("");
   const setupHandled = useRef(false);
+  const sourceHandled = useRef(false);
+  const selectedSourceCard = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (sourceTriggerId === undefined || !loaded || sourceHandled.current)
+      return;
+    sourceHandled.current = true;
+    const trigger = data.triggers.find((entry) => entry.id === sourceTriggerId);
+    if (!trigger) {
+      setError(i18n.t("shell:sourceTriggerUnavailable"));
+      return;
+    }
+    if (!trigger.program) {
+      setEditor(editorFromTrigger(trigger));
+      setEditing(true);
+    } else selectedSourceCard.current?.focus();
+  }, [sourceTriggerId, loaded, data, setError]);
+
   const [busy, setBusy] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [targetPreview, setTargetPreview] =
@@ -476,10 +526,15 @@ function TriggerManager({
     }
   }, [setupIntent, loaded, data, threads]);
   useEffect(() => {
-    if (editing && setupIntent && setupHandled.current)
+    if (
+      editing &&
+      ((setupIntent && setupHandled.current) ||
+        (sourceTriggerId && sourceHandled.current))
+    )
       createForm.current?.querySelector<HTMLInputElement>("input")?.focus();
   }, [
     editing,
+    sourceTriggerId,
     setupIntent?.roomId,
     setupIntent?.member,
     setupIntent?.threadId,
@@ -530,6 +585,8 @@ function TriggerManager({
     );
   }, [threads]);
   const invalidateDraft = () => {
+    // An explicit editor action retires a source route that is still loading.
+    sourceHandled.current = true;
     generation.current++;
     flight.current = null; // This retires UI writes, not a Host request already admitted.
     pendingTarget.current = null;
@@ -1138,6 +1195,19 @@ function TriggerManager({
               </>
             ) : null}
             <label className="field wide">
+              <span>{i18n.t("panels:wakeupDelivery")}</span>
+              <Select
+                value={editor.deliveryMode ?? "steer"}
+                aria-label={i18n.t("panels:wakeupDelivery")}
+                onValueChange={(value) =>
+                  change({ deliveryMode: value as "steer" | "queue" })
+                }
+              >
+                <option value="steer">{i18n.t("panels:wakeupSteer")}</option>
+                <option value="queue">{i18n.t("panels:wakeupQueue")}</option>
+              </Select>
+            </label>
+            <label className="field wide">
               <span>{i18n.t("panels:instructionsForTargetThread")}</span>
               <textarea
                 placeholder={
@@ -1181,7 +1251,17 @@ function TriggerManager({
         {visible.map((trigger) => {
           const last = history.find((entry) => entry.triggerId === trigger.id);
           return (
-            <article className="page-card trigger-card" key={trigger.id}>
+            <article
+              className="page-card trigger-card"
+              key={trigger.id}
+              tabIndex={sourceTriggerId === trigger.id ? -1 : undefined}
+              data-source-trigger={
+                sourceTriggerId === trigger.id ? "selected" : undefined
+              }
+              ref={
+                sourceTriggerId === trigger.id ? selectedSourceCard : undefined
+              }
+            >
               <div className="trigger-card-heading">
                 <h3>{trigger.label}</h3>
                 <span>
@@ -1406,7 +1486,14 @@ export function TriggersPage({ sdk }: PluginUiSurfaceProps) {
           threadId: query.get("threadId") ?? "",
         }
       : undefined;
-  return <TriggerManager key={route} sdk={sdk} setupIntent={setupIntent} />;
+  return (
+    <TriggerManager
+      key={route}
+      sdk={sdk}
+      setupIntent={setupIntent}
+      sourceTriggerId={query.get("triggerId") ?? undefined}
+    />
+  );
 }
 
 function threadLabel(threads: readonly ThreadCandidate[], id: string): string {
@@ -1523,6 +1610,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const initialRoomId = routeQuery(sdk.context?.route).get("roomId");
   const primaryNavigation = sdk.context?.primaryNavigation === true;
   const createIntent = routeQuery(sdk.context?.route).get("create");
+  const manageIntent = routeQuery(sdk.context?.route).get("manage");
+  const managedRoute = useRef<string | null>(null);
+  const [assistantProjectPicker, setAssistantProjectPicker] = useState(false);
+  const [assistantProjectSaving, setAssistantProjectSaving] = useState(false);
+  const assistantProjectOperation = useRef({ epoch: 0, pending: false });
   const viewEpoch = useRef(0);
   useLayoutEffect(() => {
     viewEpoch.current += 1;
@@ -1561,6 +1653,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     input: unknown;
   } | null>(null);
   const [assistantCreationFailed, setAssistantCreationFailed] = useState(false);
+  const greetingAdmission = useRef<{ cancelled: boolean } | null>(null);
   const assistantNameTooLong =
     new TextEncoder().encode(name.trim()).length > 128;
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
@@ -1583,6 +1676,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [busy, setBusy] = useState(false);
   const actionBusy = useRef(false);
   const sending = useRef<Record<string, boolean>>({});
+  const introductionOperations = useRef<Record<string, string>>({});
   const [sendingRooms, setSendingRooms] = useState<Record<string, boolean>>({});
   const selectedRef = useRef<string | null>(initialRoomId);
   const historyCache = useRef<
@@ -1596,6 +1690,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     >
   >({});
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const olderRequest = useRef<{ roomId: string } | null>(null);
+  const refreshAfterOlder = useRef(false);
+  const [historyErrors, setHistoryErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [roomErrors, setRoomErrors] = useState<Record<string, string>>({});
   const [pendingByRoom, setPendingByRoom] = useState<
     Record<string, RoomPendingSend>
@@ -1611,7 +1710,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const composer = useRef<HTMLTextAreaElement>(null);
   const dialogClose = useRef<HTMLButtonElement>(null);
   const dialogEpoch = useRef(0);
+  const nameComposing = useRef(false);
   useLayoutEffect(() => {
+    // A removed IME input may never dispatch compositionend.
+    nameComposing.current = false;
     dialogEpoch.current += 1;
   }, [panel]);
   const dialog = useRef<HTMLElement>(null);
@@ -1624,6 +1726,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     setSelected(initialRoomId);
     setError(null);
     setPanel(null);
+    setAssistantProjectPicker(false);
+    assistantProjectOperation.current.epoch += 1;
     if (createIntent === "room" || createIntent === "companion") {
       setAssistantMode(createIntent === "companion");
       setName(createIntent === "companion" ? "PAW" : "");
@@ -1638,7 +1742,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setAssistantCreationFailed(false);
       setPanel("create");
     }
-  }, [initialRoomId, primaryNavigation, createIntent]);
+  }, [initialRoomId, primaryNavigation, createIntent, manageIntent]);
   // SDK wrappers change on ordinary parent polling, without a new setup intent.
   useEffect(() => {
     if (panel !== "create" || !assistantMode) return;
@@ -1714,9 +1818,40 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     assistantSetupSession,
   ]);
   const feed = useRef<HTMLDivElement>(null);
-  const lastMessage = useRef<string | null>(null);
   const lastRoom = useRef<string | null>(null);
   const stickToBottom = useRef(true);
+  const lastScrollTop = useRef(0);
+  const feedAnchor = useRef<{
+    roomId: string;
+    messageId: string;
+    offset: number;
+  } | null>(null);
+  const preserveFeedAnchor = (roomId: string) => {
+    const element = feed.current;
+    if (!element || element.dataset.roomId !== roomId) return;
+    const top = element.getBoundingClientRect().top;
+    const message = Array.from(
+      element.querySelectorAll<HTMLElement>("[data-room-message-id]"),
+    ).find((entry) => entry.getBoundingClientRect().bottom > top);
+    if (message)
+      feedAnchor.current = {
+        roomId,
+        messageId: message.dataset.roomMessageId!,
+        offset: message.getBoundingClientRect().top - top,
+      };
+  };
+  useLayoutEffect(() => {
+    olderRequest.current = null;
+    refreshAfterOlder.current = false;
+    feedAnchor.current = null;
+    setLoadingOlder(false);
+    return () => {
+      olderRequest.current = null;
+      refreshAfterOlder.current = false;
+      feedAnchor.current = null;
+      refreshSequence.current += 1;
+    };
+  }, [selected, sdk.context?.route]);
   const setRoomPending = (roomId: string, value: RoomPendingSend | null) => {
     const next = { ...pendingRef.current };
     if (value === null) delete next[roomId];
@@ -1729,7 +1864,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     entry: RoomPendingSend,
     result: RoomDeliveryResult,
   ) => {
-    if (result.state !== "saved" || !result.messageId) return;
+    if (result.state !== "saved" || (!result.messageId && !result.wakeupId))
+      return;
     setRoomErrors((current) => ({ ...current, [roomId]: "" }));
     refreshSequence.current += 1;
     const revision =
@@ -1741,7 +1877,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     if (pendingRef.current[roomId]?.id === entry.id)
       setRoomPending(roomId, null);
     delete intentRevisions.current[entry.id];
-    // Confirmed receipts live on the message, not in the persistent chat rail.
+    // Successful sends settle silently; only failures and uncertainty need a rail.
     setFeedback((current) => ({ ...current, [roomId]: "" }));
     await sdk.commands
       .execute("ack-operation", { roomId, operationId: entry.id })
@@ -1763,7 +1899,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     delete intentRevisions.current[entry.id];
   };
   const refresh = async () => {
+    if (olderRequest.current?.roomId === selectedRef.current) {
+      refreshAfterOlder.current = true;
+      return;
+    }
     const sequence = ++refreshSequence.current;
+    const epoch = viewEpoch.current;
     const next: RoomListResult = { rooms: [] };
     let cursor: number | null = 0;
     while (cursor !== null && next.rooms.length < 128) {
@@ -1781,43 +1922,33 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       selectedRef.current = target?.id ?? null;
     if (target?.messageCount !== undefined) {
       const cached = historyCache.current[target.id];
-      const desired = Math.min(
-        target.messageCount,
-        Math.max(
-          4,
-          (cached?.messages.length ?? 0) +
-            Math.max(
-              0,
-              target.messageCount - (cached?.count ?? target.messageCount),
-            ),
-        ),
+      const page = await readRoomHistory(
+        async (cursor) =>
+          (await sdk.commands.execute("messages", {
+            roomId: target.id,
+            cursor,
+          })) as RoomHistoryPage,
+        {
+          oldestMessageId: cached?.messages[0]?.id,
+          isCurrent: () =>
+            sequence === refreshSequence.current &&
+            epoch === viewEpoch.current &&
+            selectedRef.current === target.id,
+          invalidCursorMessage: i18n.t("panels:roomHistoryCursorDidNotAdvance"),
+          changedHistoryMessage: i18n.t("panels:roomHistoryChangedRetry"),
+        },
       );
-      let cursor: number | null = 0;
-      let messages: ZenXRoom["messages"] = [];
-      do {
-        const page = (await sdk.commands.execute("messages", {
-          roomId: target.id,
-          cursor,
-        })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
-        if (
-          sequence !== refreshSequence.current ||
-          (selectedRef.current !== null && selectedRef.current !== target.id)
-        )
-          return;
-        messages = [...page.messages, ...messages];
-        if (page.nextCursor !== null && page.nextCursor <= cursor)
-          throw new Error(i18n.t("panels:roomHistoryCursorDidNotAdvance"));
-        cursor = page.nextCursor;
-      } while (cursor !== null && messages.length < desired);
+      if (!page) return;
       historyCache.current[target.id] = {
-        messages,
+        ...page,
         count: target.messageCount,
-        nextCursor: cursor,
       };
-      target.messages = messages;
-      target.nextCursor = cursor;
+      target.messages = page.messages;
+      target.nextCursor = page.nextCursor;
     }
-    if (sequence !== refreshSequence.current) return;
+    if (sequence !== refreshSequence.current || epoch !== viewEpoch.current)
+      return;
+    if (target && !stickToBottom.current) preserveFeedAnchor(target.id);
     setData({ ...next });
     setSelected((current) =>
       primaryNavigation ||
@@ -1833,8 +1964,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       // Only an exactly observed saved message and no outstanding Host
       // operation permit clearing a stale local success banner.
       if (
-        local?.messageId &&
-        room.messages.some((message) => message.id === local.messageId) &&
+        local &&
+        ((local.messageId &&
+          room.messages.some((message) => message.id === local.messageId)) ||
+          (local.wakeupId &&
+            room.introduction?.operationId === local.id &&
+            !["prepared", "cancelled"].includes(room.introduction.state))) &&
         !room.operations?.some((operation) => operation.id === local.id) &&
         room.pendingCount === 0
       )
@@ -1844,6 +1979,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       for (const operation of room.operations ?? []) {
         if (!merged[room.id] || merged[room.id]?.id === operation.id) {
           merged[room.id] = {
+            kind: operation.kind,
+            wakeupId: operation.wakeupId,
             id: operation.id,
             text: operation.text,
             revision:
@@ -1879,6 +2016,8 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       const merged = { ...pendingRef.current };
       if (!merged[active.id] && collected[0])
         merged[active.id] = {
+          kind: collected[0].kind,
+          wakeupId: collected[0].wakeupId,
           id: collected[0].id,
           text: collected[0].text,
           revision: intentRevisions.current[collected[0].id]?.revision ?? null,
@@ -1948,11 +2087,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   useEffect(() => {
     if (panel === "rename") dialog.current?.querySelector("input")?.focus();
     else if (panel !== null) dialogClose.current?.focus();
-  }, [panel]);
+  }, [panel, assistantMode, assistantProjectPicker]);
   const closeDialog = () => {
+    if (panel === "create" && assistantMode && greetingAdmission.current)
+      greetingAdmission.current.cancelled = true;
     dialogEpoch.current += 1;
     setPanel(null);
-    if (primaryNavigation && createIntent)
+    if (primaryNavigation && (createIntent || manageIntent))
       sdk.navigation.navigate(
         selected
           ? `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: selected })}`
@@ -1961,6 +2102,40 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     requestAnimationFrame(() => dialogInvoker.current?.focus());
   };
   const room = data.rooms.find((entry) => entry.id === selected);
+  const assistantThread = threads.find(
+    (thread) => thread.threadId === room?.assistant?.threadId,
+  );
+  const assistantCwd =
+    assistantThread && "currentMetadata" in assistantThread
+      ? assistantThread.currentMetadata.cwd
+      : undefined;
+  const inlineSetup = panel === "create" && assistantMode;
+  const assistantDialog =
+    panel === "create" ? assistantMode : Boolean(room?.assistant);
+  useEffect(() => {
+    const route = sdk.context?.route;
+    if (!primaryNavigation || typeof route !== "string" || !manageIntent) {
+      managedRoute.current = null;
+      return;
+    }
+    if (!room || room.id !== initialRoomId || managedRoute.current === route)
+      return;
+    if (manageIntent !== "rename" && manageIntent !== "settings") return;
+    managedRoute.current = route;
+    dialogInvoker.current =
+      document.activeElement instanceof window.HTMLElement
+        ? document.activeElement
+        : null;
+    setName(room.name);
+    setError(null);
+    setPanel(manageIntent === "rename" ? "rename" : "manage");
+  }, [
+    sdk.context?.route,
+    primaryNavigation,
+    manageIntent,
+    room,
+    initialRoomId,
+  ]);
   const draft = room === undefined ? "" : (drafts[room.id] ?? "");
   const changeRoomDraft = (text: string) => {
     if (!room) return;
@@ -1982,35 +2157,174 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const operationStateLabel = (operation: (typeof roomOperations)[number]) =>
     operation.cancelled
       ? "cancelled"
-      : operation.messageId
+      : operation.messageId || operation.wakeupId
         ? operation.acknowledged
           ? "saved · reviewed"
           : "saved"
         : "delivery unconfirmed";
-  const tail = room?.messages.at(-1)?.id ?? null;
-  useEffect(() => {
-    if (
-      selected !== lastRoom.current ||
-      (tail !== lastMessage.current && stickToBottom.current)
-    ) {
-      if (feed.current) feed.current.scrollTop = feed.current.scrollHeight;
+  const latestRoomAgentMessage = room?.messages.findLast(
+    (message) => message.kind === "agent",
+  );
+  const readRoomMessageOrder = useMemo(
+    () =>
+      room?.messages
+        .filter((message) => message.kind === "agent")
+        .map((message) => message.id),
+    [room?.messages],
+  );
+  useReadVisibleMessage({
+    scope: "rooms",
+    conversationId: room?.id,
+    message: latestRoomAgentMessage
+      ? {
+          id: latestRoomAgentMessage.id,
+          createdAt: latestRoomAgentMessage.createdAt,
+        }
+      : undefined,
+    messageOrder: readRoomMessageOrder,
+    viewport: feed,
+    enabled: panel === null,
+  });
+  useLayoutEffect(() => {
+    const element = feed.current;
+    const anchor = feedAnchor.current;
+    feedAnchor.current = null;
+    if (element && selected !== lastRoom.current) {
+      stickToBottom.current = true;
+      element.scrollTop = element.scrollHeight;
+    } else if (element && anchor?.roomId === selected) {
+      const message = Array.from(
+        element.querySelectorAll<HTMLElement>("[data-room-message-id]"),
+      ).find((entry) => entry.dataset.roomMessageId === anchor.messageId);
+      if (message)
+        element.scrollTop +=
+          message.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          anchor.offset;
+    } else if (element && stickToBottom.current) {
+      element.scrollTop = element.scrollHeight;
     }
+    lastScrollTop.current = element?.scrollTop ?? 0;
     lastRoom.current = selected;
-    lastMessage.current = tail;
-  }, [selected, tail]);
+  });
+  const introduce = async (
+    created: {
+      id: string;
+      operationEpoch?: string;
+    },
+    explicitRestart = false,
+  ) => {
+    if (sending.current[created.id]) return;
+    sending.current[created.id] = true;
+    setSendingRooms((current) => ({ ...current, [created.id]: true }));
+    const attemptKey = `${created.id}:${created.operationEpoch ?? "legacy"}`;
+    let operationId =
+      introductionOperations.current[attemptKey] ??
+      `${created.operationEpoch ?? "legacy"}:00000000-0000-4000-8000-000000000001`;
+    try {
+      if (explicitRestart) {
+        while (true) {
+          const previous = (await sdk.commands
+            .execute("operation", { roomId: created.id, operationId })
+            .catch(() => null)) as { state?: string } | null;
+          // Unknown outcomes retain this receipt. Confirmed cancellations have
+          // a deterministic successor so remounted/late continuations converge.
+          if (previous?.state !== "cancelled") break;
+          const digest = new Uint8Array(
+            await crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(
+                `paw-introduction:${created.id}:${operationId}`,
+              ),
+            ),
+          );
+          digest[6] = (digest[6]! & 0x0f) | 0x50;
+          digest[8] = (digest[8]! & 0x3f) | 0x80;
+          const hex = Array.from(digest.slice(0, 16), (byte) =>
+            byte.toString(16).padStart(2, "0"),
+          ).join("");
+          operationId = `${created.operationEpoch ?? "legacy"}:${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        }
+      }
+      // Retain the chosen receipt before any uncertain transport result. A retry
+      // must inspect this attempt, not the previously cancelled introduction.
+      introductionOperations.current[attemptKey] = operationId;
+      await sdk.commands.execute("prepare-introduction", {
+        roomId: created.id,
+        operationId,
+        language: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
+      });
+      await sdk.commands.execute("start-introduction", {
+        roomId: created.id,
+        operationId,
+      });
+      await sdk.commands.execute("ack-operation", {
+        roomId: created.id,
+        operationId,
+      });
+    } catch (reason) {
+      // Room creation already succeeded. Keep its receipt and open that Room;
+      // its existing operation recovery UI resolves uncertain delivery.
+      setRoomErrors((current) => ({
+        ...current,
+        [created.id]: `${i18n.t("panels:pawIntroductionFailed")} ${describeError(reason)}`,
+      }));
+    } finally {
+      sending.current[created.id] = false;
+      setSendingRooms((current) => ({ ...current, [created.id]: false }));
+    }
+  };
   const run = async (command: string, input: unknown) => {
     if (actionBusy.current) return false;
     const epoch = viewEpoch.current;
     const creation = command === "create" || command === "create-assistant";
     const dialogToken = dialogEpoch.current;
+    const greeting =
+      command === "create-assistant" ? { cancelled: false } : null;
+    if (greeting) greetingAdmission.current = greeting;
     const current = () =>
       epoch === viewEpoch.current &&
-      (!creation || dialogToken === dialogEpoch.current);
+      (!(creation || command === "rename") ||
+        dialogToken === dialogEpoch.current);
     actionBusy.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await sdk.commands.execute(command, input);
+      if (
+        creation &&
+        result &&
+        typeof result === "object" &&
+        "id" in result &&
+        typeof result.id === "string"
+      ) {
+        // Ordinary Rooms retain their existing refresh/retirement boundary.
+        // Only explicit PAW creation promises immediate chat admission.
+        if (command === "create") {
+          if (!current()) return false;
+          await refresh();
+        }
+        const ownsView = current();
+        if (ownsView) {
+          setSelected(result.id);
+          setPanel(null);
+          if (primaryNavigation)
+            sdk.navigation.navigate(
+              `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: result.id })}`,
+            );
+        }
+        if (greeting && !greeting.cancelled) {
+          // Publish the confirmed Room immediately. This explicit action owns
+          // the kickoff even if navigation changes while admission is pending;
+          // its completion must never navigate back over a newer user intent.
+          void introduce(result as { id: string; operationEpoch?: string })
+            .then(() => refresh())
+            .catch(() => {});
+        } else if (ownsView && command !== "create") {
+          void refresh().catch(() => {});
+        }
+        return ownsView;
+      }
       if (!current()) return false;
       try {
         await refresh();
@@ -2021,19 +2335,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           );
       }
       if (!current()) return false;
-      if (
-        creation &&
-        result &&
-        typeof result === "object" &&
-        "id" in result &&
-        typeof result.id === "string"
-      ) {
-        setSelected(result.id);
-        if (primaryNavigation)
-          sdk.navigation.navigate(
-            `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: result.id })}`,
-          );
-      }
       return true;
     } catch (reason) {
       if (!current()) return false;
@@ -2050,61 +2351,81 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       setBusy(false);
     }
   };
-  const loadEarlier = async (roomId: string, cursor: number) => {
-    if (loadingOlder) return;
+  const loadEarlier = async (roomId: string) => {
+    const cached = historyCache.current[roomId];
+    if (
+      olderRequest.current ||
+      selectedRef.current !== roomId ||
+      !cached ||
+      cached.nextCursor === null
+    )
+      return;
+    const request = { roomId };
+    const epoch = viewEpoch.current;
+    olderRequest.current = request;
+    const current = () =>
+      olderRequest.current === request &&
+      selectedRef.current === roomId &&
+      viewEpoch.current === epoch;
+    stickToBottom.current = false;
+    preserveFeedAnchor(roomId);
     setLoadingOlder(true);
+    setHistoryErrors((errors) => ({ ...errors, [roomId]: "" }));
     ++refreshSequence.current;
     try {
-      let offset: number | null = cursor;
-      let cache = historyCache.current[roomId];
-      for (let n = 0; n < 4 && offset !== null; n++) {
-        const page = (await sdk.commands.execute("messages", {
-          roomId,
-          cursor: offset,
-        })) as { messages: ZenXRoom["messages"]; nextCursor: number | null };
-        const known = new Set(
-          cache?.messages.map((message) => message.id) ?? [],
-        );
-        cache = {
-          messages: [
-            ...page.messages.filter((message) => !known.has(message.id)),
-            ...(cache?.messages ?? []),
-          ].slice(-256),
-          count: cache?.count ?? 0,
-          nextCursor: page.nextCursor,
-        };
-        offset = page.nextCursor;
-      }
-      if (cache) {
-        historyCache.current[roomId] = cache;
-        const height = feed.current?.scrollHeight ?? 0;
-        setData((current) => ({
-          ...current,
-          rooms: current.rooms.map((entry) =>
-            entry.id === roomId
-              ? {
-                  ...entry,
-                  messages: cache!.messages,
-                  nextCursor: cache!.nextCursor,
-                }
-              : entry,
-          ),
-        }));
-        requestAnimationFrame(() => {
-          if (feed.current)
-            feed.current.scrollTop += feed.current.scrollHeight - height;
-        });
-      }
+      const page = await readRoomHistory(
+        async (cursor) =>
+          (await sdk.commands.execute("messages", {
+            roomId,
+            cursor,
+          })) as RoomHistoryPage,
+        {
+          oldestMessageId: cached.messages[0]?.id,
+          earlierMessages: 16,
+          isCurrent: current,
+          invalidCursorMessage: i18n.t("panels:roomHistoryCursorDidNotAdvance"),
+          changedHistoryMessage: i18n.t("panels:roomHistoryChangedRetry"),
+        },
+      );
+      if (!page || !current()) return;
+      historyCache.current[roomId] = { ...page, count: cached.count };
+      preserveFeedAnchor(roomId);
+      setData((data) => ({
+        ...data,
+        rooms: data.rooms.map((entry) =>
+          entry.id === roomId ? { ...entry, ...page } : entry,
+        ),
+      }));
     } catch (reason) {
-      setRoomErrors((current) => ({
-        ...current,
+      if (!current()) return;
+      preserveFeedAnchor(roomId);
+      setHistoryErrors((errors) => ({
+        ...errors,
         [roomId]: i18n.t("panels:olderMessagesUnavailable", {
           error: describeError(reason),
         }),
       }));
     } finally {
-      setLoadingOlder(false);
+      if (current()) {
+        olderRequest.current = null;
+        setLoadingOlder(false);
+        if (refreshAfterOlder.current) {
+          refreshAfterOlder.current = false;
+          void refresh().catch((reason: unknown) =>
+            setError(describeError(reason)),
+          );
+        }
+      }
     }
+  };
+  const loadEarlierOnIntent = () => {
+    if (
+      room &&
+      feed.current &&
+      feed.current.scrollTop <= 120 &&
+      !historyErrors[room.id]
+    )
+      void loadEarlier(room.id);
   };
   const reacting = useRef(new Set<string>());
   const reactToMessage = async (
@@ -2232,7 +2553,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           roomId,
           operationId: entry.id,
         })) as RoomDeliveryResult;
-        if (status.state === "saved" && status.messageId)
+        if (status.state === "saved" && (status.messageId || status.wakeupId))
           await finishSaved(roomId, entry, status);
       } catch {
         /* Unknown remains unresolved across Room switches. */
@@ -2261,17 +2582,24 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           throw new Error(
             i18n.t("panels:pendingMessageTextIsUnavailableDoNot"),
           );
-        await sdk.commands.execute("post-message", {
-          roomId,
-          operationId: entry.id,
-          text: state.text,
-        });
+        await sdk.commands.execute(
+          state.kind === "assistantIntroduction"
+            ? "start-introduction"
+            : "post-message",
+          {
+            roomId,
+            operationId: entry.id,
+            ...(state.kind === "assistantIntroduction"
+              ? {}
+              : { text: state.text }),
+          },
+        );
         state = (await sdk.commands.execute("operation", {
           roomId,
           operationId: entry.id,
         })) as RoomDeliveryResult;
       }
-      if (state.state === "saved" && state.messageId)
+      if (state.state === "saved" && (state.messageId || state.wakeupId))
         await finishSaved(roomId, entry, state);
       else if (state.state === "cancelled") {
         finishCancelled(roomId, entry);
@@ -2297,11 +2625,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         roomId,
         operationId: entry.id,
       })) as RoomDeliveryResult;
-      if (exact.state === "saved" && exact.messageId) {
+      if (exact.state === "saved" && (exact.messageId || exact.wakeupId)) {
         await finishSaved(roomId, entry, exact);
         setRoomErrors((current) => ({
           ...current,
-          [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+          [roomId]: exact.wakeupId
+            ? i18n.t("panels:pawWelcomeAlreadyStarted")
+            : `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
         }));
         await refresh();
         return;
@@ -2332,11 +2662,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           await refresh();
           return;
         }
-        if (exact.state === "saved" && exact.messageId) {
+        if (exact.state === "saved" && (exact.messageId || exact.wakeupId)) {
           await finishSaved(roomId, entry, exact);
           setRoomErrors((current) => ({
             ...current,
-            [roomId]: `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
+            [roomId]: exact.wakeupId
+              ? i18n.t("panels:pawWelcomeAlreadyStarted")
+              : `Already saved as message ${exact.messageId}; cancellation cannot withdraw it.`,
           }));
           await refresh();
           return;
@@ -2350,6 +2682,58 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       }));
     }
   };
+  const roomActions = room ? (
+    <>
+      <button
+        type="button"
+        aria-label={i18n.t("panels:renameConversation")}
+        title={i18n.t("panels:renameConversation")}
+        onClick={(event) => {
+          dialogInvoker.current = event.currentTarget;
+          setName(room.name);
+          setPanel("rename");
+        }}
+      >
+        <Icon name="compose" size={16} />
+      </button>
+      {primaryNavigation ? (
+        <button
+          id="thread-browser-toggle"
+          data-room-id={room.id}
+          type="button"
+          aria-label={i18n.t("panels:openConversationWorkspace")}
+          title={i18n.t("panels:openConversationWorkspace")}
+          onClick={() =>
+            sdk.navigation.navigate(
+              `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
+            )
+          }
+        >
+          <Icon name="panel-right" size={16} />
+        </button>
+      ) : null}
+      <button
+        type="button"
+        aria-label={i18n.t("panels:conversationSettings")}
+        title={
+          room.responders?.some((entry) => !entry.configured)
+            ? `${i18n.t("panels:conversationSettings")} · ${i18n.t("panels:roomRepliesUnavailableCount", { count: room.responders.filter((entry) => !entry.configured).length })}`
+            : i18n.t("panels:conversationSettings")
+        }
+        onClick={(event) => {
+          dialogInvoker.current = event.currentTarget;
+          setName(room.name);
+          setPanel("manage");
+        }}
+      >
+        <Icon name="settings" size={16} />
+        {!room.assistant &&
+        room.responders?.some((entry) => !entry.configured) ? (
+          <span className="room-header-status-dot" aria-hidden="true" />
+        ) : null}
+      </button>
+    </>
+  ) : null;
   return (
     <div
       className={`rooms-chat${primaryNavigation ? " rooms-chat-primary" : ""}`}
@@ -2412,7 +2796,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           ))}
         </nav>
       ) : null}
-      <main className="rooms-chat-main">
+      <main className="rooms-chat-main" hidden={inlineSetup}>
         {loading ? (
           <p className="rooms-chat-empty" role="status">
             {i18n.t("panels:loadingRooms")}
@@ -2424,64 +2808,75 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           </div>
         ) : (
           <>
-            <header className="rooms-chat-header">
-              <div>
-                {!primaryNavigation ? (
-                  <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
-                ) : null}
-                {room.assistant && !room.assistantRepliesEnabled ? (
-                  <p className="room-assistant-state" role="status">
-                    {i18n.t("panels:repliesPaused")}
-                  </p>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                aria-label={i18n.t("panels:renameConversation")}
-                title={i18n.t("panels:renameConversation")}
-                onClick={(event) => {
-                  dialogInvoker.current = event.currentTarget;
-                  setName(room.name);
-                  setPanel("rename");
-                }}
-              >
-                <Icon name="compose" size={16} />
-              </button>
-              {primaryNavigation ? (
+            <RoomHeaderActions
+              roomId={room.id}
+              primary={primaryNavigation}
+              fallback={
+                <header className="rooms-chat-header">
+                  <div className="room-toolbar-summary">
+                    {!primaryNavigation ? (
+                      <h2>{room.assistant ? room.name : `#${room.name}`}</h2>
+                    ) : null}
+                    {room.assistant && !room.assistantRepliesEnabled ? (
+                      <p className="room-assistant-state" role="status">
+                        {i18n.t("panels:repliesPaused")}
+                      </p>
+                    ) : null}
+                  </div>
+                  {roomActions}
+                </header>
+              }
+            >
+              {roomActions}
+            </RoomHeaderActions>
+            {room.assistant &&
+            room.messages.length === 0 &&
+            room.introduction &&
+            !["prepared", "cancelled"].includes(room.introduction.state) ? (
+              <p className="paw-chat-introduction" role="status">
+                {room.introduction.state === "starting" ||
+                room.introduction.state === "running"
+                  ? i18n.t("panels:pawWelcomeStarting")
+                  : i18n.t("panels:pawWelcomeNoMessage")}
+                {room.introduction.error ? ` ${room.introduction.error}` : ""}
+              </p>
+            ) : null}
+            {room.assistant &&
+            room.messages.length === 0 &&
+            (room.pendingCount ?? 0) === 0 &&
+            (room.operations?.length ?? 0) === 0 &&
+            (!room.introduction || room.introduction.state === "cancelled") ? (
+              <div className="paw-chat-introduction">
+                <p>{i18n.t("panels:pawEmptyChat")}</p>
                 <button
-                  id="thread-browser-toggle"
-                  data-room-id={room.id}
                   type="button"
-                  aria-label={i18n.t("panels:openConversationWorkspace")}
-                  title={i18n.t("panels:openConversationWorkspace")}
-                  onClick={() =>
-                    sdk.navigation.navigate(
-                      `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
-                    )
-                  }
+                  disabled={busy || sendingRooms[room.id]}
+                  onClick={() => {
+                    if (actionBusy.current) return;
+                    actionBusy.current = true;
+                    setBusy(true);
+                    void introduce(room, true)
+                      .then(() => refresh())
+                      .catch((reason: unknown) =>
+                        setRoomErrors((current) => ({
+                          ...current,
+                          [room.id]: describeError(reason),
+                        })),
+                      )
+                      .finally(() => {
+                        actionBusy.current = false;
+                        setBusy(false);
+                      });
+                  }}
                 >
-                  <Icon name="panel-right" size={16} />
+                  {i18n.t("panels:pawStartIntroduction")}
                 </button>
-              ) : null}
-              <button
-                type="button"
-                aria-label={i18n.t("panels:conversationSettings")}
-                title={i18n.t("panels:conversationSettings")}
-                onClick={(event) => {
-                  dialogInvoker.current = event.currentTarget;
-                  setName(room.name);
-                  setPanel("manage");
-                }}
-              >
-                <Icon name="settings" size={16} />
-              </button>
-            </header>
+              </div>
+            ) : null}
             {error ||
             roomErrors[room.id] ||
             feedback[room.id] ||
             pending ||
-            (!room.assistant &&
-              room.responders?.some((entry) => !entry.configured)) ||
             (room.operations ?? []).some(
               (entry) => entry.id !== pendingByRoom[room.id]?.id,
             ) ? (
@@ -2495,45 +2890,6 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     {roomErrors[room.id] || error}
                   </p>
                 ) : null}
-                {!pending &&
-                (room.operations ?? []).length === 0 &&
-                !room.assistant &&
-                room.responders?.some((entry) => !entry.configured) ? (
-                  <p className="room-setup-note">
-                    {i18n.t("panels:automaticRepliesAreNotSetUpFor")}{" "}
-                    {room.responders
-                      .filter((entry) => !entry.configured)
-                      .map((entry) => `@${entry.name}`)
-                      .join(", ")}
-                    .{" "}
-                    {room.members
-                      .filter((member) =>
-                        room.responders?.some(
-                          (entry) =>
-                            entry.name === member.name && !entry.configured,
-                        ),
-                      )
-                      .map((member) => (
-                        <button
-                          key={member.threadId}
-                          type="button"
-                          onClick={() =>
-                            sdk.navigation.navigate(
-                              roomReplySetupRoute(
-                                room.id,
-                                member.name,
-                                member.threadId,
-                              ),
-                            )
-                          }
-                        >
-                          {i18n.t("panels:setupMemberReplies", {
-                            member: member.name,
-                          })}
-                        </button>
-                      ))}
-                  </p>
-                ) : null}
                 {feedback[room.id] ? (
                   <p role="status">{feedback[room.id]}</p>
                 ) : null}
@@ -2541,11 +2897,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   <div role="status" className="room-send-pending">
                     {pending.cancelled
                       ? i18n.t("panels:sendCancelledNoMessageWasSent")
-                      : pending.messageId
-                        ? i18n.t("panels:messageSavedCheckItsDeliveryStatus")
-                        : i18n.t(
-                            "panels:deliveryUnconfirmedCheckItsStatusBeforeSending",
-                          )}{" "}
+                      : pending.wakeupId
+                        ? i18n.t("panels:pawWelcomeAlreadyStarted")
+                        : pending.messageId
+                          ? i18n.t("panels:messageSavedCheckItsDeliveryStatus")
+                          : i18n.t(
+                              "panels:deliveryUnconfirmedCheckItsStatusBeforeSending",
+                            )}{" "}
                     <button
                       type="button"
                       onClick={() =>
@@ -2554,13 +2912,19 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     >
                       {i18n.t("panels:checkDelivery")}
                     </button>
-                    {!pending.messageId && !pending.cancelled ? (
+                    {!pending.messageId &&
+                    !pending.wakeupId &&
+                    !pending.cancelled ? (
                       <>
                         <button
                           type="button"
                           onClick={() => void cancelPrepared(room.id, pending)}
                         >
-                          {i18n.t("panels:cancelUnsentMessage")}
+                          {i18n.t(
+                            pending.kind === "assistantIntroduction"
+                              ? "panels:pawCancelWelcome"
+                              : "panels:cancelUnsentMessage",
+                          )}
                         </button>
                         <button
                           type="button"
@@ -2568,7 +2932,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                             void inspectPending(room.id, pending, true)
                           }
                         >
-                          {i18n.t("panels:sendPendingMessage")}
+                          {i18n.t(
+                            pending.kind === "assistantIntroduction"
+                              ? "panels:pawStartIntroduction"
+                              : "panels:sendPendingMessage",
+                          )}
                         </button>
                       </>
                     ) : null}
@@ -2582,15 +2950,23 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       key={operation.id}
                       role="status"
                     >
-                      {i18n.t("panels:pendingMessage")}{" "}
+                      {i18n.t(
+                        operation.kind === "assistantIntroduction"
+                          ? "panels:pawIntroductionPreview"
+                          : "panels:pendingMessage",
+                      )}{" "}
                       {operationStateLabel(operation)} ·{" "}
-                      {Array.from(operation.text).slice(0, 70).join("")}{" "}
+                      {operation.kind === "assistantIntroduction"
+                        ? ""
+                        : Array.from(operation.text).slice(0, 70).join("")}{" "}
                       <button
                         type="button"
                         onClick={() =>
                           void inspectPending(
                             room.id,
                             {
+                              kind: operation.kind,
+                              wakeupId: operation.wakeupId,
                               id: operation.id,
                               text: operation.text,
                               revision: null,
@@ -2602,7 +2978,9 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       >
                         {i18n.t("panels:checkDelivery")}
                       </button>
-                      {!operation.messageId && !operation.cancelled ? (
+                      {!operation.messageId &&
+                      !operation.wakeupId &&
+                      !operation.cancelled ? (
                         <>
                           <button
                             type="button"
@@ -2615,7 +2993,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               })
                             }
                           >
-                            {i18n.t("panels:cancelUnsentMessage")}
+                            {i18n.t(
+                              operation.kind === "assistantIntroduction"
+                                ? "panels:pawCancelWelcome"
+                                : "panels:cancelUnsentMessage",
+                            )}
                           </button>
                           <button
                             type="button"
@@ -2632,7 +3014,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                               )
                             }
                           >
-                            {i18n.t("panels:sendPendingMessage")}
+                            {i18n.t(
+                              operation.kind === "assistantIntroduction"
+                                ? "panels:pawStartIntroduction"
+                                : "panels:sendPendingMessage",
+                            )}
                           </button>
                         </>
                       ) : null}
@@ -2657,26 +3043,63 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
             <div
               className="rooms-chat-feed"
               ref={feed}
+              data-room-id={room.id}
               role="log"
+              tabIndex={0}
               aria-label={`${room.name} messages`}
               onScroll={(event) => {
                 const target = event.currentTarget;
+                const upward = target.scrollTop < lastScrollTop.current;
+                lastScrollTop.current = target.scrollTop;
                 stickToBottom.current =
+                  !upward &&
                   target.scrollHeight - target.scrollTop - target.clientHeight <
-                  80;
+                    80;
+                if (upward) loadEarlierOnIntent();
+              }}
+              onWheel={(event) => {
+                if (event.deltaY < 0 && event.currentTarget.scrollTop === 0)
+                  loadEarlierOnIntent();
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.target === event.currentTarget &&
+                  ["ArrowUp", "PageUp", "Home"].includes(event.key)
+                )
+                  loadEarlierOnIntent();
               }}
             >
-              {room.nextCursor !== null && room.nextCursor !== undefined ? (
-                <button
-                  type="button"
-                  className="room-load-earlier"
-                  disabled={loadingOlder}
-                  onClick={() => void loadEarlier(room.id, room.nextCursor!)}
-                >
-                  {loadingOlder
-                    ? i18n.t("panels:loading")
-                    : i18n.t("panels:loadEarlierMessages")}
-                </button>
+              {room.nextCursor !== undefined && room.messages.length > 0 ? (
+                <div className="room-history-edge">
+                  {historyErrors[room.id] ? (
+                    <span className="room-history-error" role="alert">
+                      {historyErrors[room.id]}
+                    </span>
+                  ) : null}
+                  {room.nextCursor !== null ? (
+                    <button
+                      type="button"
+                      className="room-load-earlier"
+                      disabled={loadingOlder}
+                      aria-label={
+                        historyErrors[room.id]
+                          ? i18n.t("panels:retryEarlierMessages")
+                          : i18n.t("panels:loadEarlierMessages")
+                      }
+                      onClick={() => void loadEarlier(room.id)}
+                    >
+                      {loadingOlder
+                        ? i18n.t("panels:loading")
+                        : historyErrors[room.id]
+                          ? i18n.t("panels:retryEarlierMessages")
+                          : i18n.t("panels:scrollForEarlierMessages")}
+                    </button>
+                  ) : (
+                    <span role="status">
+                      {i18n.t("panels:earliestRetainedMessages")}
+                    </span>
+                  )}
+                </div>
               ) : null}
               {room.messages.length === 0 ? (
                 <div className="rooms-chat-empty">
@@ -2692,181 +3115,91 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   </p>
                 </div>
               ) : null}
-              {room.messages.map((message) => (
-                <article
-                  className="room-message"
-                  data-kind={message.kind}
-                  key={message.id}
-                >
-                  <header>
-                    {message.author === roomRoleLabel(message.kind) ? null : (
-                      <span
-                        className={`room-role room-role-${message.kind}`}
-                        aria-label={i18n.t("panels:messageRole", {
-                          role: roomRoleLabel(message.kind),
+              {room.messages.map((message) => {
+                const senderName = roomSenderName(
+                  message,
+                  room.members,
+                  threads,
+                );
+                const quotedMessage = message.replyTo
+                  ? room.messages.find(
+                      (entry) => entry.id === message.replyTo!.messageId,
+                    )
+                  : undefined;
+                const quoteAuthor = quotedMessage
+                  ? roomSenderName(quotedMessage, room.members, threads)
+                  : message.replyTo?.author === "Agent"
+                    ? i18n.t("panels:roomUnknownSender")
+                    : message.replyTo?.author;
+                return (
+                  <article
+                    className="room-message"
+                    data-kind={message.kind}
+                    data-room-message-id={message.id}
+                    data-read-message-id={message.id}
+                    key={message.id}
+                  >
+                    <header>
+                      <RoomMessageSource
+                        message={message}
+                        members={room.members}
+                        rooms={data.rooms}
+                        threads={threads}
+                        navigate={(route) => sdk.navigation.navigate(route)}
+                      />
+                      <time
+                        dateTime={new Date(message.createdAt).toISOString()}
+                        title={new Date(message.createdAt).toLocaleString(
+                          i18n.resolvedLanguage,
+                        )}
+                      >
+                        {new Date(message.createdAt).toLocaleTimeString(
+                          i18n.resolvedLanguage,
+                          {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          },
+                        )}
+                      </time>
+                    </header>
+                    {message.replyTo ? (
+                      <div
+                        className="room-message-quote"
+                        aria-label={i18n.t("panels:replyToAuthor", {
+                          name: quoteAuthor,
                         })}
                       >
-                        {roomRoleLabel(message.kind)}
-                      </span>
-                    )}
-                    <strong>{message.author}</strong>
-                    <time
-                      dateTime={new Date(message.createdAt).toISOString()}
-                      title={new Date(message.createdAt).toLocaleString(
-                        i18n.resolvedLanguage,
-                      )}
-                    >
-                      {new Date(message.createdAt).toLocaleTimeString(
-                        i18n.resolvedLanguage,
-                        {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        },
-                      )}
-                    </time>
-                  </header>
-                  {message.replyTo ? (
-                    <div
-                      className="room-message-quote"
-                      aria-label={i18n.t("panels:replyToAuthor", {
-                        name: message.replyTo.author,
-                      })}
-                    >
-                      <strong>{message.replyTo.author}</strong>
-                      <p>{message.replyTo.text}</p>
-                    </div>
-                  ) : null}
-                  <Markdown text={message.text} />
-                  <div className="room-message-actions">
-                    <button
-                      type="button"
-                      disabled={Boolean(pending) || sendingRooms[room.id]}
-                      onClick={() => {
+                        <strong>{quoteAuthor}</strong>
+                        <p>{message.replyTo.text}</p>
+                      </div>
+                    ) : null}
+                    <Markdown text={message.text} />
+                    <RoomMessageActions
+                      message={message}
+                      disabled={
+                        Boolean(pending) || Boolean(sendingRooms[room.id])
+                      }
+                      operationId={deliveries[message.id]?.operationId}
+                      onReply={() => {
                         revisions.current[room.id] =
                           (revisions.current[room.id] ?? 0) + 1;
                         setReplies((current) => ({
                           ...current,
                           [room.id]: {
                             messageId: message.id,
-                            author: message.author,
+                            author: senderName,
                             text: message.text,
                           },
                         }));
                         composer.current?.focus();
                       }}
-                    >
-                      {i18n.t("panels:reply")}
-                    </button>
-                    <details>
-                      <summary>{i18n.t("panels:react")}</summary>
-                      <div
-                        className="room-reaction-options"
-                        aria-label={i18n.t("panels:chooseReaction")}
-                      >
-                        {["👍", "❤️", "🎉", "👀", "✅", "🤔"].map((emoji) => (
-                          <button
-                            key={emoji}
-                            type="button"
-                            aria-label={i18n.t("panels:reactEmoji", { emoji })}
-                            aria-pressed={
-                              message.reactions?.some(
-                                (reaction) =>
-                                  reaction.actorId === "user" &&
-                                  reaction.emoji === emoji,
-                              ) ?? false
-                            }
-                            onClick={() =>
-                              void reactToMessage(
-                                room.id,
-                                message.id,
-                                message.reactions?.some(
-                                  (reaction) =>
-                                    reaction.actorId === "user" &&
-                                    reaction.emoji === emoji,
-                                )
-                                  ? null
-                                  : emoji,
-                              )
-                            }
-                          >
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    </details>
-                    {message.reactions?.map((reaction) => (
-                      <span
-                        key={reaction.actorId}
-                        title={`${reaction.label}: ${reaction.emoji}`}
-                        aria-label={i18n.t("panels:reactedEmoji", {
-                          name: reaction.label,
-                          emoji: reaction.emoji,
-                        })}
-                      >
-                        {reaction.emoji}
-                      </span>
-                    ))}
-                  </div>
-                  {message.kind === "human" &&
-                  (deliveries[message.id]?.receipt === "delivered" ||
-                    deliveries[message.id]?.state === "saved") ? (
-                    <small
-                      className="room-delivery"
-                      title={i18n.t(
-                        "panels:deliveredSavedInThisRoomReadAdmitted",
-                      )}
-                    >
-                      {i18n.t("panels:deliveredToRoom")}{" "}
-                      {deliveries[message.id]?.readers
-                        ?.map((reader) =>
-                          i18n.t("panels:roomReplyStatus", {
-                            name: reader.name,
-                            status:
-                              reader.state === "read"
-                                ? i18n.t("panels:read")
-                                : reader.state === "unavailable"
-                                  ? i18n.t("panels:readStatusUnavailable")
-                                  : i18n.t("panels:readNotConfirmed"),
-                          }),
-                        )
-                        .join(" · ")}
-                      {deliveries[message.id]?.readers?.length
-                        ? ""
-                        : i18n.t("panels:readNotConfirmed")}
-                    </small>
-                  ) : message.kind === "human" &&
-                    deliveries[message.id]?.state === "unknown" ? (
-                    <small className="room-delivery">
-                      {i18n.t("panels:deliveredToRoomAgentReadResponseStatus")}
-                    </small>
-                  ) : null}
-                  {message.kind === "human" || message.originThreadId ? (
-                    <details className="room-message-details">
-                      <summary>{i18n.t("panels:messageDetails")}</summary>
-                      <span>
-                        {i18n.t("panels:messageId")} {message.id}
-                      </span>
-                      {message.originThreadId ? (
-                        <span>
-                          {i18n.t("panels:sourceConversation")}{" "}
-                          {message.originThreadId}
-                        </span>
-                      ) : null}
-                      {message.originTurnId ? (
-                        <span>
-                          {i18n.t("panels:turn")} {message.originTurnId}
-                        </span>
-                      ) : null}
-                      {deliveries[message.id]?.operationId ? (
-                        <span>
-                          {i18n.t("panels:operationId")}{" "}
-                          {deliveries[message.id]!.operationId}
-                        </span>
-                      ) : null}
-                    </details>
-                  ) : null}
-                </article>
-              ))}
+                      onReact={(emoji) =>
+                        reactToMessage(room.id, message.id, emoji)
+                      }
+                    />
+                  </article>
+                );
+              })}
             </div>
             <div className="rooms-chat-compose">
               <ComposerShell
@@ -2994,11 +3327,52 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
           </>
         )}
       </main>
-      {panel !== null ? (
+      {assistantProjectPicker ? (
+        <DirectoryPicker
+          onCancel={() => {
+            assistantProjectOperation.current.epoch += 1;
+            setAssistantProjectPicker(false);
+          }}
+          onSelect={(workspace) => {
+            if (assistantProjectOperation.current.pending) return;
+            const epoch = dialogEpoch.current;
+            const projectEpoch = assistantProjectOperation.current.epoch;
+            assistantProjectOperation.current.pending = true;
+            setAssistantProjectSaving(true);
+            void window.zenx.settings
+              .addWorkspace(workspace)
+              .then(() => {
+                if (
+                  epoch !== dialogEpoch.current ||
+                  projectEpoch !== assistantProjectOperation.current.epoch
+                )
+                  return;
+                setAssistantWorkspace(workspace);
+                setAssistantProjectPicker(false);
+                setAssistantSetupSession((session) => session + 1);
+              })
+              .catch((reason: unknown) => {
+                if (
+                  epoch !== dialogEpoch.current ||
+                  projectEpoch !== assistantProjectOperation.current.epoch
+                )
+                  return;
+                setAssistantProjectPicker(false);
+                setAssistantSetupError(describeError(reason));
+              })
+              .finally(() => {
+                assistantProjectOperation.current.pending = false;
+                setAssistantProjectSaving(false);
+              });
+          }}
+        />
+      ) : null}
+      {panel !== null && !assistantProjectPicker ? (
         <div
-          className="rooms-chat-overlay"
+          className={inlineSetup ? "paw-start-page" : "rooms-chat-overlay"}
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeDialog();
+            if (!inlineSetup && event.target === event.currentTarget)
+              closeDialog();
           }}
         >
           <section
@@ -3009,7 +3383,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 closeDialog();
                 return;
               }
-              if (event.key !== "Tab") return;
+              if (inlineSetup || event.key !== "Tab") return;
               const targets = [
                 ...(dialog.current?.querySelectorAll<HTMLElement>(
                   "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [role=combobox], summary, a[href]",
@@ -3026,24 +3400,24 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 first?.focus();
               }
             }}
-            role="dialog"
-            aria-modal="true"
+            role={inlineSetup ? "region" : "dialog"}
+            aria-modal={inlineSetup ? undefined : true}
             aria-label={
               panel === "create"
-                ? assistantMode
+                ? assistantDialog
                   ? i18n.t("panels:createPaw")
                   : i18n.t("panels:createRoom")
                 : panel === "rename"
                   ? i18n.t("panels:renameConversation")
                   : i18n.t("panels:conversationSettings")
             }
-            className="rooms-chat-dialog"
+            className={inlineSetup ? "paw-start-content" : "rooms-chat-dialog"}
           >
             <header>
               <h2>
                 {panel === "create"
-                  ? assistantMode
-                    ? i18n.t("panels:newPawConversation")
+                  ? assistantDialog
+                    ? i18n.t("panels:pawStartTitle")
                     : i18n.t("panels:newRoom")
                   : panel === "rename"
                     ? i18n.t("panels:renameConversation")
@@ -3052,101 +3426,128 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       })}
               </h2>
               <button ref={dialogClose} type="button" onClick={closeDialog}>
-                {panel === "rename"
-                  ? i18n.t("panels:cancel")
-                  : i18n.t("panels:close")}
+                {panel === "create" && assistantDialog
+                  ? i18n.t("panels:pawLater")
+                  : panel === "rename"
+                    ? i18n.t("panels:cancel")
+                    : i18n.t("panels:close")}
               </button>
             </header>
-            {panel === "create" && assistantMode ? (
-              <>
-                <p className="room-assistant-disclosure">
-                  {i18n.t("panels:pawWorkingConversationDisclosure")}
-                </p>
-                <PluginRequirementsPreview
-                  requirements={PAW_PLUGIN_REQUIREMENTS}
-                  purposeLabels={{
-                    "zenx-rooms": i18n.t("panels:pawChatAndMemory"),
-                    "zenx-triggers": i18n.t("panels:pawReplyToMessages"),
-                    "zenx-self-control": i18n.t(
-                      "panels:pawWorkWithConversations",
-                    ),
-                    "zenx-subagents": i18n.t("panels:pawDelegateWork"),
-                  }}
-                  onReady={setAssistantPluginsReady}
-                  openSettings={() => {
-                    closeDialog();
-                    sdk.navigation.navigate("settings");
-                  }}
+            {panel === "manage" &&
+            room &&
+            !room.assistant &&
+            room.responders?.some((entry) => !entry.configured) ? (
+              <div className="room-settings-replies">
+                <RoomReplySetupNotice
+                  members={room.members}
+                  responders={room.responders}
+                  configure={(member) =>
+                    sdk.navigation.navigate(
+                      roomReplySetupRoute(
+                        room.id,
+                        member.name,
+                        member.threadId,
+                      ),
+                    )
+                  }
                 />
-              </>
+              </div>
             ) : null}
-            <Field
-              label={
-                room?.assistant || assistantMode
-                  ? i18n.t("panels:name")
-                  : i18n.t("panels:roomName")
-              }
-              value={name}
-              onChange={setName}
-              disabled={
-                panel === "create" &&
-                assistantMode &&
-                (busy ||
-                  (assistantCreation.current !== null &&
-                    assistantCreationFailed))
-              }
-            />
-            {panel === "create" && assistantMode && assistantNameTooLong ? (
-              <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
+
+            {panel === "create" && assistantDialog ? (
+              <p className="paw-setup-description">
+                {i18n.t("panels:pawStartHelp")}
+              </p>
             ) : null}
-            {panel !== "create" ? (
-              <button
-                type="button"
-                disabled={busy || !name.trim() || name === room?.name}
-                onClick={() => {
-                  const epoch = dialogEpoch.current;
-                  void run("rename", { roomId: room?.id, name }).then((ok) => {
+            <form
+              className="room-name-form"
+              onCompositionStart={() => {
+                nameComposing.current = true;
+              }}
+              onCompositionEnd={() => {
+                nameComposing.current = false;
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  (nameComposing.current ||
+                    event.nativeEvent.isComposing ||
+                    event.keyCode === 229)
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (
+                  panel === "create" ||
+                  !room ||
+                  busy ||
+                  nameComposing.current ||
+                  !name.trim() ||
+                  name === room.name ||
+                  (Boolean(room.assistant) && assistantNameTooLong)
+                )
+                  return;
+                const epoch = dialogEpoch.current;
+                void run("rename", { roomId: room.id, name: name.trim() }).then(
+                  (ok) => {
                     if (ok && epoch === dialogEpoch.current) closeDialog();
-                  });
-                }}
-              >
-                {panel === "rename"
-                  ? i18n.t("panels:saveName")
-                  : i18n.t("panels:rename")}
-              </button>
-            ) : null}
+                  },
+                );
+              }}
+            >
+              {panel !== "create" || !assistantDialog ? (
+                <Field
+                  label={
+                    room?.assistant || assistantDialog
+                      ? i18n.t("panels:name")
+                      : i18n.t("panels:roomName")
+                  }
+                  value={name}
+                  onChange={setName}
+                  disabled={
+                    panel === "create" &&
+                    assistantDialog &&
+                    (busy ||
+                      (assistantCreation.current !== null &&
+                        assistantCreationFailed))
+                  }
+                />
+              ) : null}
+              {assistantDialog && assistantNameTooLong ? (
+                <p role="alert">{i18n.t("panels:pawNameTooLong")}</p>
+              ) : null}
+              {panel !== "create" ? (
+                <button
+                  type="submit"
+                  disabled={
+                    busy ||
+                    !name.trim() ||
+                    name === room?.name ||
+                    (Boolean(room?.assistant) && assistantNameTooLong)
+                  }
+                >
+                  {busy
+                    ? i18n.t("shell:saving")
+                    : panel === "rename"
+                      ? i18n.t("panels:saveName")
+                      : i18n.t("panels:rename")}
+                </button>
+              ) : null}
+            </form>
             {panel === "create" || (panel === "manage" && !room?.assistant) ? (
               <>
-                {!assistantMode ? (
+                {!assistantDialog ? (
                   <Field
                     label={i18n.t("panels:memberName")}
                     value={memberName}
                     onChange={setMemberName}
                   />
                 ) : null}
-                {assistantMode ? (
+                {assistantDialog ? (
                   <>
-                    <label className="field">
-                      <span>{i18n.t("panels:pawWorkingConversation")}</span>
-                      <Select
-                        aria-label={i18n.t("panels:pawWorkingConversation")}
-                        value={assistantTarget}
-                        onValueChange={(value) => {
-                          setAssistantTarget(value as "new" | "existing");
-                          if (value === "existing") {
-                            assistantCreation.current = null;
-                          }
-                        }}
-                        disabled={busy}
-                      >
-                        <option value="new">
-                          {i18n.t("panels:pawNewWorkingConversation")}
-                        </option>
-                        <option value="existing">
-                          {i18n.t("panels:pawExistingWorkingConversation")}
-                        </option>
-                      </Select>
-                    </label>
                     {assistantTarget === "new" ? (
                       <>
                         <label className="field">
@@ -3175,6 +3576,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                             ))}
                           </Select>
                         </label>
+                        <button
+                          type="button"
+                          className="quiet-button"
+                          disabled={
+                            busy ||
+                            assistantCreation.current !== null ||
+                            assistantProjectSaving
+                          }
+                          onClick={() => setAssistantProjectPicker(true)}
+                        >
+                          {i18n.t("shell:addProject")}
+                        </button>
                         {assistantTargetPreview?.workspace ===
                         assistantWorkspace ? (
                           <p
@@ -3224,20 +3637,38 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     ) : null}
                     {assistantSetupError !== null &&
                     assistantTarget === "new" ? (
-                      <p role="alert">{assistantSetupError}</p>
+                      <div role="alert">
+                        <p>{assistantSetupError}</p>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setAssistantSetupError(null);
+                            setAssistantSetupSession((session) => session + 1);
+                          }}
+                        >
+                          {i18n.t("panels:pawRetrySetup")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => sdk.navigation.navigate("settings")}
+                        >
+                          {i18n.t("shell:settings")}
+                        </button>
+                      </div>
                     ) : null}
                   </>
                 ) : null}
-                {!assistantMode || assistantTarget === "existing" ? (
+                {!assistantDialog || assistantTarget === "existing" ? (
                   <label className="field">
                     <span>
-                      {assistantMode
+                      {assistantDialog
                         ? i18n.t("panels:pawExistingConversation")
                         : i18n.t("panels:memberConversation")}
                     </span>
                     <Combobox
                       label={
-                        assistantMode
+                        assistantDialog
                           ? i18n.t("panels:pawExistingConversation")
                           : i18n.t("panels:memberConversation")
                       }
@@ -3245,7 +3676,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       onValueChange={setThreadId}
                       disabled={
                         panel === "create" &&
-                        assistantMode &&
+                        assistantDialog &&
                         (busy ||
                           (assistantCreation.current !== null &&
                             assistantCreationFailed))
@@ -3279,18 +3710,18 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 disabled={
                   busy ||
                   !name.trim() ||
-                  (assistantMode && assistantNameTooLong) ||
-                  (!assistantMode && !memberName.trim()) ||
-                  (assistantMode
+                  (assistantDialog && assistantNameTooLong) ||
+                  (!assistantDialog && !memberName.trim()) ||
+                  (assistantDialog
                     ? assistantTarget === "new"
                       ? !assistantTargetPreview ||
                         assistantTargetPreview.workspace !== assistantWorkspace
                       : !threadId
                     : !threadId) ||
-                  (assistantMode &&
+                  (assistantDialog &&
                     assistantTarget === "new" &&
                     assistantCreationFailed) ||
-                  (assistantMode && !assistantPluginsReady)
+                  (assistantDialog && !assistantPluginsReady)
                 }
                 onClick={() => {
                   const creationDialogToken = dialogEpoch.current;
@@ -3298,10 +3729,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   let input: unknown = {
                     name,
                     members: [
-                      { name: assistantMode ? name : memberName, threadId },
+                      { name: assistantDialog ? name : memberName, threadId },
                     ],
                   };
-                  if (assistantMode) {
+                  if (assistantDialog) {
                     assistantCreation.current ??= {
                       operationId: crypto.randomUUID(),
                       input: {
@@ -3326,7 +3757,7 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                     };
                   }
                   void run(
-                    assistantMode ? "create-assistant" : "create",
+                    assistantDialog ? "create-assistant" : "create",
                     input,
                   ).then((ok) => {
                     if (
@@ -3338,12 +3769,77 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   });
                 }}
               >
-                {assistantMode
-                  ? i18n.t("panels:createPaw")
+                {assistantDialog
+                  ? i18n.t("panels:pawCreateAndGreet")
                   : i18n.t("panels:createRoom")}
               </button>
             ) : panel === "manage" ? (
               <>
+                {room?.assistant ? (
+                  <label className="field">
+                    <span>{i18n.t("panels:roomMessageDelivery")}</span>
+                    <Select
+                      disabled={busy}
+                      value={room.assistant.deliveryMode ?? "steer"}
+                      aria-label={i18n.t("panels:roomMessageDelivery")}
+                      onValueChange={(value) =>
+                        void run("assistant-delivery", {
+                          roomId: room.id,
+                          deliveryMode: value,
+                        })
+                      }
+                    >
+                      <option value="steer">
+                        {i18n.t("panels:wakeupSteer")}
+                      </option>
+                      <option value="queue">
+                        {i18n.t("panels:wakeupQueue")}
+                      </option>
+                    </Select>
+                  </label>
+                ) : null}
+                {room?.assistant ? (
+                  <div className="paw-work-settings">
+                    <h3>{i18n.t("panels:pawWorkInstructions")}</h3>
+                    <code className="paw-work-directory">
+                      {assistantCwd ?? i18n.t("panels:unavailableWorkspace")}
+                    </code>
+                    <p>{i18n.t("panels:pawWorkInstructionsHelp")}</p>
+                    <button
+                      type="button"
+                      disabled={!assistantCwd}
+                      onClick={() => {
+                        setPanel(null);
+                        sdk.navigation.navigate(
+                          `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "instructions", request: crypto.randomUUID() })}`,
+                        );
+                      }}
+                    >
+                      {i18n.t("panels:pawOpenInstructions")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        sdk.navigation.navigate(
+                          `/threads/${encodeURIComponent(room.assistant!.threadId)}`,
+                        )
+                      }
+                    >
+                      {i18n.t("panels:openConversationWorkspace")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPanel(null);
+                        sdk.navigation.navigate(
+                          `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "open" })}`,
+                        );
+                      }}
+                    >
+                      {i18n.t("panels:openPawWorkspace")}
+                    </button>
+                  </div>
+                ) : null}
                 {room?.assistant ? (
                   <button
                     type="button"
@@ -3360,29 +3856,31 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       : i18n.t("panels:resumePaw")}
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  disabled={
-                    busy ||
-                    Boolean(room?.assistant) ||
-                    !memberName.trim() ||
-                    !threadId
-                  }
-                  onClick={() =>
-                    void run("add-member", {
-                      roomId: room?.id,
-                      name: memberName,
-                      threadId,
-                    }).then((ok) => {
-                      if (ok) {
-                        setMemberName("");
-                        setThreadId("");
-                      }
-                    })
-                  }
-                >
-                  {i18n.t("panels:addMember")}
-                </button>
+                {!room?.assistant ? (
+                  <button
+                    type="button"
+                    disabled={
+                      busy ||
+                      Boolean(room?.assistant) ||
+                      !memberName.trim() ||
+                      !threadId
+                    }
+                    onClick={() =>
+                      void run("add-member", {
+                        roomId: room?.id,
+                        name: memberName,
+                        threadId,
+                      }).then((ok) => {
+                        if (ok) {
+                          setMemberName("");
+                          setThreadId("");
+                        }
+                      })
+                    }
+                  >
+                    {i18n.t("panels:addMember")}
+                  </button>
+                ) : null}
                 <h3>{i18n.t("panels:members")}</h3>
                 {room?.members.map((member) => (
                   <div className="rooms-chat-member" key={member.threadId}>
@@ -3391,26 +3889,28 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       <summary>{i18n.t("panels:details")}</summary>
                       <code>{member.threadId}</code>
                     </details>
-                    <button
-                      type="button"
-                      disabled={busy || Boolean(room.assistant)}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            i18n.t("panels:removeMemberConfirm", {
-                              name: member.name,
-                              room: room.name,
-                            }),
+                    {!room.assistant ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              i18n.t("panels:removeMemberConfirm", {
+                                name: member.name,
+                                room: room.name,
+                              }),
+                            )
                           )
-                        )
-                          void run("remove-member", {
-                            roomId: room.id,
-                            threadId: member.threadId,
-                          });
-                      }}
-                    >
-                      {i18n.t("panels:remove")}
-                    </button>
+                            void run("remove-member", {
+                              roomId: room.id,
+                              threadId: member.threadId,
+                            });
+                        }}
+                      >
+                        {i18n.t("panels:remove")}
+                      </button>
+                    ) : null}
                   </div>
                 ))}
                 <button
@@ -3432,6 +3932,81 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                   {i18n.t("panels:deleteRoom")}
                 </button>
               </>
+            ) : null}
+            {inlineSetup ? (
+              <details
+                className="paw-advanced"
+                open={!assistantPluginsReady || assistantTarget === "existing"}
+              >
+                <summary>{i18n.t("panels:pawAdvancedSetup")}</summary>
+                <label className="field">
+                  <span>{i18n.t("panels:pawWorkingConversation")}</span>
+                  <Select
+                    aria-label={i18n.t("panels:pawWorkingConversation")}
+                    value={assistantTarget}
+                    onValueChange={(value) => {
+                      setAssistantTarget(value as "new" | "existing");
+                      if (value === "existing") {
+                        assistantCreation.current = null;
+                      }
+                    }}
+                    disabled={busy}
+                  >
+                    <option value="new">
+                      {i18n.t("panels:pawNewWorkingConversation")}
+                    </option>
+                    <option value="existing">
+                      {i18n.t("panels:pawExistingWorkingConversation")}
+                    </option>
+                  </Select>
+                </label>
+                {panel === "create" && assistantDialog ? (
+                  <details className="paw-start-request">
+                    <summary>{i18n.t("panels:pawIntroductionPreview")}</summary>
+                    <p>{i18n.t("panels:pawIntroductionRequest")}</p>
+                  </details>
+                ) : null}
+                {panel === "create" && assistantDialog ? (
+                  <details
+                    className="paw-setup-capabilities"
+                    open={!assistantPluginsReady}
+                  >
+                    <summary>{i18n.t("panels:pawCapabilities")}</summary>
+                    <p className="room-assistant-disclosure">
+                      {i18n.t("panels:pawWorkingConversationDisclosure")}
+                    </p>
+                    <PluginRequirementsPreview
+                      key={assistantSetupSession}
+                      requirements={PAW_PLUGIN_REQUIREMENTS}
+                      purposeLabels={{
+                        "zenx-rooms": i18n.t("panels:pawChatAndMemory"),
+                        "zenx-triggers": i18n.t("panels:pawReplyToMessages"),
+                        "zenx-self-control": i18n.t(
+                          "panels:pawWorkWithConversations",
+                        ),
+                        "zenx-subagents": i18n.t("panels:pawDelegateWork"),
+                      }}
+                      onReady={setAssistantPluginsReady}
+                      openSettings={() => {
+                        closeDialog();
+                        sdk.navigation.navigate("settings");
+                      }}
+                    />
+                    {!assistantPluginsReady ? (
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        disabled={busy}
+                        onClick={() =>
+                          setAssistantSetupSession((session) => session + 1)
+                        }
+                      >
+                        {i18n.t("panels:pawRetrySetup")}
+                      </button>
+                    ) : null}
+                  </details>
+                ) : null}
+              </details>
             ) : null}
             {error ? <p role="alert">{error}</p> : null}
           </section>
@@ -3463,12 +4038,6 @@ function Field({
       />
     </label>
   );
-}
-
-function roomRoleLabel(kind: ZenXRoom["messages"][number]["kind"]): string {
-  if (kind === "human") return i18n.t("panels:you");
-  if (kind === "agent") return i18n.t("panels:agent");
-  return i18n.t("panels:system");
 }
 
 function describeError(error: unknown): string {

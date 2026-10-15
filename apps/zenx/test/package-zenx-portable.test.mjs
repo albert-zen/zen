@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -42,12 +43,17 @@ import {
   publishPackagedArtifact,
   resolveMacOsSigningConfiguration,
   stagePackage,
+  stageShellPty,
   withPackagingTargetLock,
 } from "../scripts/package-zenx-portable.mjs";
 import {
   BUNDLED_PNPM_VERSION,
   resolveBundledPnpmCli,
 } from "../src/main/plugin-profile.js";
+
+import { prepareShellPty } from "../scripts/prepare-shell-pty.mjs";
+import { verifyShellPtyPatch } from "../scripts/shell-pty-patch.mjs";
+import { createRequire } from "node:module";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
 const run = promisify(execFile);
@@ -631,7 +637,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     const sourceDirectory = path.join(directory, "source", "plugins");
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(
-      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.6.tgz"),
+      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.7.tgz"),
       "rooms tarball",
     );
     const buildPath = path.join(
@@ -648,7 +654,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     });
     assert.equal(
       await readFile(
-        path.join(destination, "zenx-rooms-plugin-1.0.6.tgz"),
+        path.join(destination, "zenx-rooms-plugin-1.0.7.tgz"),
         "utf8",
       ),
       "rooms tarball",
@@ -776,6 +782,7 @@ test("concurrent app and smoke builds use complete private snapshots", async () 
         "sdk",
       ),
     ]);
+    await writePtyFixture(rootDirectory);
     const appBuild = createBuildSnapshot(appStaging, async (output) => {
       await writeBuildFixture(output, "app-partial");
       appStarted();
@@ -840,9 +847,48 @@ async function writeBuildFixture(output, result) {
     writeFile(path.join(output, "main", "integrity.js"), placeholder),
     writeFile(path.join(output, "main", "result"), result),
     writeFile(path.join(output, "preload", "index.cjs"), "preload"),
+    writeFile(
+      path.join(output, "preload", "foreground-activity.cjs"),
+      "foreground-preload",
+    ),
     writeFile(path.join(output, "renderer", "index.html"), "renderer"),
   ]);
 }
+
+test("foreground smoke stages only its dedicated preload, without the app IPC bridge", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-foreground-package-"),
+  );
+  try {
+    const output = path.join(directory, "build");
+    const destination = path.join(directory, "smoke");
+    await writeBuildFixture(output, "native-foreground");
+    await stagePackage({
+      target: "smoke",
+      outDirectory: output,
+      rootDirectory: directory,
+      appDirectory: destination,
+      manifestSha256: "fixture-digest",
+    });
+    assert.equal(
+      await readFile(
+        path.join(destination, "preload", "foreground-activity.cjs"),
+        "utf8",
+      ),
+      "foreground-preload",
+    );
+    await assert.rejects(
+      access(path.join(destination, "preload", "index.cjs")),
+      { code: "ENOENT" },
+    );
+    assert.equal(
+      await readFile(path.join(output, "main", "integrity.js"), "utf8"),
+      placeholder,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("stages the real app without modifying reusable build output", async () => {
   const fixture = await createFixture();
@@ -887,6 +933,7 @@ test("stages the real app without modifying reusable build output", async () => 
         dependencies: {
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
+          "node-pty": "1.1.0",
         },
       }),
       {
@@ -898,6 +945,7 @@ test("stages the real app without modifying reusable build output", async () => 
         dependencies: {
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
+          "node-pty": "1.1.0",
         },
       },
     );
@@ -924,6 +972,11 @@ test("stages only the provider smoke through the same digest path", async () => 
       "smoke-digest",
     );
     await access(path.join(appDirectory, "main", "code-runtime-worker.js"));
+    await access(path.join(appDirectory, "preload", "foreground-activity.cjs"));
+    await assert.rejects(
+      access(path.join(appDirectory, "preload", "index.cjs")),
+      { code: "ENOENT" },
+    );
     await assert.rejects(access(path.join(appDirectory, "out")), {
       code: "ENOENT",
     });
@@ -1477,6 +1530,10 @@ async function createFixture() {
       "worker",
     ),
     writeFile(path.join(outDirectory, "preload", "index.cjs"), "preload"),
+    writeFile(
+      path.join(outDirectory, "preload", "foreground-activity.cjs"),
+      "foreground-preload",
+    ),
     writeFile(path.join(outDirectory, "renderer", "index.html"), "renderer"),
     writeFile(path.join(rootDirectory, "node_modules", "ws", "index.js"), "ws"),
     writeFile(
@@ -1501,5 +1558,129 @@ async function createFixture() {
       "sdk",
     ),
   ]);
+  await writePtyFixture(rootDirectory);
   return { directory, rootDirectory, outDirectory, integrityFile };
 }
+
+test("Shell packaging retains platform native resources including Windows ConPTY and fails closed when missing", async () => {
+  const fixture = await createFixture();
+  try {
+    for (const platform of ["linux", "darwin", "win32"]) {
+      const destination = path.join(fixture.directory, platform);
+      await stageShellPty(fixture.rootDirectory, destination, platform, "x64");
+      const native = path.join(
+        destination,
+        "node_modules",
+        "node-pty",
+        "build",
+        "Release",
+      );
+      await access(
+        path.join(native, platform === "win32" ? "conpty.node" : "pty.node"),
+      );
+      if (platform === "darwin")
+        await access(path.join(native, "spawn-helper"));
+      if (platform === "win32") {
+        await access(path.join(native, "conpty", "OpenConsole.exe"));
+        await verifyShellPtyPatch(
+          path.join(destination, "node_modules", "node-pty"),
+        );
+      }
+    }
+    await rm(
+      path.join(fixture.rootDirectory, "node_modules", "node-pty", "build"),
+      { recursive: true },
+    );
+    await assert.rejects(
+      () =>
+        stageShellPty(
+          fixture.rootDirectory,
+          path.join(fixture.directory, "missing"),
+        ),
+      /native runtime is missing/,
+    );
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+async function writePtyFixture(rootDirectory) {
+  for (const name of ["xterm", "addon-fit"]) {
+    const directory = path.join(rootDirectory, "node_modules", "@xterm", name);
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "LICENSE"), "fixture license");
+  }
+
+  const pty = path.join(rootDirectory, "node_modules", "node-pty");
+  await mkdir(path.join(pty, "lib"), { recursive: true });
+  await writeFile(path.join(pty, "LICENSE"), "fixture license");
+  await mkdir(path.join(pty, "build", "Release", "conpty"), {
+    recursive: true,
+  });
+  await mkdir(path.join(rootDirectory, "node_modules", "node-addon-api"), {
+    recursive: true,
+  });
+  await writeFile(
+    path.join(pty, "package.json"),
+    JSON.stringify({ name: "node-pty", version: "1.1.0" }),
+  );
+  await writeFile(path.join(pty, "lib", "index.js"), "fixture");
+  const installed = path.dirname(
+    createRequire(import.meta.url).resolve("node-pty/package.json"),
+  );
+  await writeFile(
+    path.join(pty, "lib", "windowsPtyAgent.js"),
+    await readFile(path.join(installed, "lib", "windowsPtyAgent.js")),
+  );
+
+  for (const file of [
+    "pty.node",
+    "spawn-helper",
+    "conpty.node",
+    "conpty_console_list.node",
+    "conpty/conpty.dll",
+    "conpty/OpenConsole.exe",
+  ])
+    await writeFile(path.join(pty, "build", "Release", file), "fixture");
+}
+
+test("macOS PTY helper gets executable mode at install and packaging", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-pty-mode-"));
+  try {
+    const source = path.join(directory, "node_modules", "node-pty");
+    const native = path.join(source, "prebuilds", "darwin-arm64");
+    await mkdir(native, { recursive: true });
+    await mkdir(path.join(source, "lib"));
+    await mkdir(path.join(directory, "node_modules", "node-addon-api"));
+    for (const file of ["pty.node", "spawn-helper"])
+      await writeFile(path.join(native, file), "fixture");
+    for (const file of ["package.json", "LICENSE"])
+      await writeFile(path.join(source, file), "fixture");
+    const helper = path.join(native, "spawn-helper");
+    await chmod(helper, 0o644);
+    await prepareShellPty(source, "darwin", "arm64");
+    if (process.platform !== "win32")
+      assert.equal((await stat(helper)).mode & 0o777, 0o755);
+    await chmod(helper, 0o644);
+    const app = path.join(directory, "app");
+    await stageShellPty(directory, app, "darwin", "arm64");
+    if (process.platform !== "win32")
+      assert.equal(
+        (
+          await stat(
+            path.join(
+              app,
+              "node_modules",
+              "node-pty",
+              "prebuilds",
+              "darwin-arm64",
+              "spawn-helper",
+            ),
+          )
+        ).mode & 0o777,
+        0o755,
+      );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

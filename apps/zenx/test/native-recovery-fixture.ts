@@ -129,6 +129,48 @@ function canonicalItems(
       },
     ];
   }
+  if (item.type === "hostMessage") {
+    return [
+      {
+        id: item.id,
+        type: "host_message",
+        threadId,
+        turnId,
+        createdAt,
+        sender: "host",
+        clientId: item.clientId,
+        source: item.source,
+        ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+        text: item.text,
+        mode: item.mode,
+        ...(item.deliveryAfter === undefined
+          ? {}
+          : { deliveryAfter: item.deliveryAfter }),
+      },
+    ];
+  }
+  if (item.type === "threadMessage") {
+    return [
+      {
+        id: item.id,
+        type: "thread_message",
+        threadId,
+        turnId,
+        createdAt,
+        clientId: item.clientId,
+        sender: item.sender,
+        mode: "steer",
+        messageType: "guidance",
+        content: item.content.map((part) => ({
+          type: "text",
+          text: part.text,
+        })),
+        ...(item.deliveryAfter === undefined
+          ? {}
+          : { deliveryAfter: item.deliveryAfter }),
+      },
+    ];
+  }
   if (item.type === "agentMessage") {
     return [
       {

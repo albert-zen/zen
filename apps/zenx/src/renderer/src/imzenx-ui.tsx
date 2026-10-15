@@ -27,6 +27,7 @@ interface Configuration {
   sharedFilesystemRoot: string;
   permissionMode: "full-access" | "approval-required";
   allowUnrestrictedFullAccess: boolean;
+  inputContinuation: "steer" | "queue";
 }
 export interface ImZenXDraft {
   config: Configuration;
@@ -65,6 +66,7 @@ const empty: Configuration = {
   sharedFilesystemRoot: "",
   permissionMode: "approval-required",
   allowUnrestrictedFullAccess: false,
+  inputContinuation: "steer",
 };
 const stateKeys: Record<string, string> = {
   unconfigured: "notConfigured",
@@ -91,6 +93,7 @@ function configurationFrom(
     sharedFilesystemRoot: value?.sharedFilesystemRoot ?? "",
     permissionMode: value?.permissionMode ?? empty.permissionMode,
     allowUnrestrictedFullAccess: value?.allowUnrestrictedFullAccess ?? false,
+    inputContinuation: value?.inputContinuation ?? "steer",
   };
 }
 function sameConfiguration(
@@ -1027,6 +1030,27 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
                       {i18n.t("panels:requireApprovalBeforeExecution")}
                     </option>
                   </Select>
+                </label>
+                <label className="field">
+                  <span>{i18n.t("panels:imInputContinuation")}</span>
+                  <Select
+                    aria-label={i18n.t("panels:imInputContinuation")}
+                    value={config.inputContinuation}
+                    onValueChange={(value) => {
+                      if (value === "steer" || value === "queue")
+                        setConfig({ ...config, inputContinuation: value });
+                    }}
+                  >
+                    <option value="steer">
+                      {i18n.t("panels:imInputContinuationSteer")}
+                    </option>
+                    <option value="queue">
+                      {i18n.t("panels:imInputContinuationQueue")}
+                    </option>
+                  </Select>
+                  <small>
+                    {i18n.t("panels:imInputContinuationDescription")}
+                  </small>
                 </label>
                 <label className="imzenx-checkbox">
                   <input

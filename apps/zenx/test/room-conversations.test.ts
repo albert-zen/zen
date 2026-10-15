@@ -201,7 +201,8 @@ test("unrelated catalog subscriptions preserve Room rows, focus and disclosure w
   await withDom(async (root) => {
     const timers = controlledTimers();
     let calls = 0;
-    setExecute(async () => {
+    setExecute(async (plugin) => {
+      if (plugin === "zenx-triggers") return { triggers: [] };
       calls += 1;
       return { rooms: [storedRoom("one")], nextCursor: null };
     });
@@ -545,6 +546,61 @@ test("advancing empty pages also stop at the bounded page limit", async () => {
   });
 });
 
+test("Room unread query waits for runtime capability, then follows read preference on the existing refresh loop", async () => {
+  await withDom(async (root) => {
+    const timers = controlledTimers();
+    const calls: unknown[][] = [];
+    setExecute(async (...args) => {
+      calls.push(args);
+      return {
+        readCursorVersion: 1,
+        rooms: [
+          storedRoom("one", {
+            lastMessage: { id: "reply", createdAt: 150, kind: "agent" },
+            lastAgentMessage: { id: "reply", createdAt: 150 },
+            ...((args[2] as { readSince?: number }).readSince === undefined
+              ? {}
+              : { unreadCount: 4 }),
+          }),
+        ],
+        nextCursor: null,
+      };
+    });
+    await act(async () => root.render(React.createElement(Discovery)));
+    assert.deepEqual(calls[0], ["zenx-rooms", "list", { cursor: 0 }]);
+    assert.equal(discoveryState().rooms[0]?.unreadCount, undefined);
+    await act(async () => timers.fire());
+    assert.equal(
+      typeof (calls[1]?.[2] as { readSince?: number }).readSince,
+      "number",
+    );
+    assert.equal(discoveryState().rooms[0]?.unreadCount, 4);
+    assert.equal(timers.pending.size, 1, "no additional polling loop");
+  });
+});
+
+test("Room navigation renders exact accessible unread count and bounded visible badge", async () => {
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        React.createElement(
+          Sidebar,
+          sidebarProps({
+            roomConversations: {
+              rooms: [{ ...room, unreadCount: 120 }],
+              loading: false,
+              error: null,
+            },
+          }),
+        ),
+      ),
+    );
+    const badge = document.querySelector(".room-unread-count")!;
+    assert.equal(badge.textContent, "99+");
+    assert.equal(badge.getAttribute("aria-label"), "120 unread messages");
+  });
+});
+
 function Discovery({
   enabled = true,
   revision,
@@ -701,3 +757,85 @@ async function withDom(run: (root: Root) => Promise<void>) {
     dom.window.close();
   }
 }
+
+test("PAW sidebar offers visible, context-menu and keyboard management without creating a Thread", async () => {
+  await withDom(async (root) => {
+    const opened: string[] = [];
+    await act(async () =>
+      root.render(
+        React.createElement(
+          Sidebar,
+          sidebarProps({
+            roomConversations: {
+              rooms: [companion],
+              error: null,
+              loading: false,
+            },
+            onOpenContribution: (route: string) => opened.push(route),
+          }),
+        ),
+      ),
+    );
+    const more = button("Manage Daily companion");
+    assert.ok(more);
+    await act(async () => more.click());
+    const rename =
+      document.querySelector<HTMLButtonElement>('[role="menuitem"]');
+    assert.equal(rename?.textContent, "Rename PAW");
+    await act(async () => rename!.click());
+    assert.equal(
+      new URLSearchParams(opened.at(-1)!.split("?")[1]).get("manage"),
+      "rename",
+    );
+    const row = button("Open PAW Daily companion");
+    await act(async () =>
+      row.dispatchEvent(
+        new window.MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.ok(document.querySelector('[role="menu"]'));
+  });
+});
+
+test("first-use welcome can be postponed and resumed, while existing PAWs keep their identity", async () => {
+  await withDom(async (root) => {
+    const opened: string[] = [];
+    const props = sidebarProps({
+      roomConversations: { rooms: [], error: null, loading: false },
+      onOpenContribution: (route: string) => opened.push(route),
+    });
+    await act(async () => root.render(React.createElement(Sidebar, props)));
+    assert.ok(document.querySelector(".paw-welcome"));
+    const later = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Later")!;
+    await act(async () => later.click());
+    assert.equal(document.querySelector(".paw-welcome"), null);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".paw-setup-link")!.click(),
+    );
+    assert.equal(opened.at(-1), `${ROOM_ROUTE}?create=companion`);
+    await act(async () =>
+      root.render(React.createElement("p", null, "Elsewhere")),
+    );
+    await act(async () => root.render(React.createElement(Sidebar, props)));
+    assert.equal(document.querySelector(".paw-welcome"), null);
+    await act(async () =>
+      root.render(
+        React.createElement(Sidebar, {
+          ...props,
+          roomConversations: {
+            rooms: [companion],
+            error: null,
+            loading: false,
+          },
+        }),
+      ),
+    );
+    assert.ok(button("Open PAW Daily companion"));
+    assert.equal(document.querySelector(".paw-setup-link"), null);
+  });
+});

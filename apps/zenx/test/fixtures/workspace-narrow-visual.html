@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZenX synthetic narrow workspace</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #e5e5e5;
+      }
+      iframe {
+        display: block;
+        width: 390px;
+        height: 600px;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe title="Production ZenX App at 390 by 600 pixels"></iframe>
+    <script type="module">
+      const params = new URLSearchParams(location.search);
+      params.set("launchers", "1");
+      params.set("lang", params.get("lang") ?? "zh-CN");
+      document.querySelector("iframe").src =
+        `./workspace-visual.html?${params}`;
+    </script>
+  </body>
+</html>

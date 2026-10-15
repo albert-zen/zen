@@ -1,18 +1,18 @@
 {
   "id": "computer",
-  "version": "1.1.2",
-  "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and WGC capture stay background-safe; unsupported global input never silently substitutes for them.",
+  "version": "1.1.5",
+  "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   "provider": {
     "id": "microsoft-winapp-cli",
     "platforms": ["win32"],
-    "interactionModes": ["background_safe"],
+    "interactionModes": ["background_safe", "foreground_required"],
     "capabilities": [
       "window.list",
       "uia.inspect",
       "uia.invoke",
       "uia.set_value",
       "uia.wait_for.verify",
-      "wgc.capture",
+      "printwindow.capture",
       "cancellable",
       "bounded_output"
     ]
@@ -33,7 +33,7 @@
     {
       "id": "computer.window.capture",
       "title": "Capture a targeted window",
-      "description": "Capture one explicitly targeted HWND through WinApp CLI's background-safe default capture path.",
+      "description": "Capture one explicitly targeted HWND without restoring or activating it. Unavailable background frames fail closed.",
       "scope": "local-device"
     },
     {
@@ -123,7 +123,7 @@
     },
     {
       "name": "computer_press",
-      "description": "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
+      "description": "Invoke one opaque control from the latest computer_inspect through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action immediately before invoking.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -174,13 +174,21 @@
         "required": ["target", "control"],
         "additionalProperties": false
       },
-      "permissions": ["computer.accessibility.act"],
-      "interactionMode": "background_safe",
-      "capabilities": ["uia.invoke", "app_targeted", "no_global_input"]
+      "permissions": [
+        "computer.accessibility.act",
+        "computer.foreground.control"
+      ],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "uia.invoke",
+        "app_targeted",
+        "no_global_input",
+        "may_activate_target"
+      ]
     },
     {
       "name": "computer_set_value",
-      "description": "Set the supplied text on one opaque editable control through Windows UI Automation. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
+      "description": "Set the supplied text on one opaque editable control through Windows UI Automation. This path may activate the target window and requires Foreground computer control permission before execution. The provider revalidates selector, semantics, geometry, and action; host/model policy owns credential decisions.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -234,13 +242,21 @@
         "required": ["target", "control", "value"],
         "additionalProperties": false
       },
-      "permissions": ["computer.accessibility.act"],
-      "interactionMode": "background_safe",
-      "capabilities": ["uia.set_value", "app_targeted", "no_global_input"]
+      "permissions": [
+        "computer.accessibility.act",
+        "computer.foreground.control"
+      ],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "uia.set_value",
+        "app_targeted",
+        "no_global_input",
+        "may_activate_target"
+      ]
     },
     {
       "name": "computer_screenshot",
-      "description": "Capture one exact Windows HWND through WinApp CLI's default WGC/PrintWindow path to a private five-minute PNG artifact. Returns metadata/path, never pixels in the Thread journal.",
+      "description": "Capture one exact Windows HWND through a strict background PrintWindow helper. Minimized, hidden, protected or blank windows fail without activation. Returns private five-minute PNG metadata/path, never pixels in the Thread journal.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -280,7 +296,11 @@
       },
       "permissions": ["computer.window.capture"],
       "interactionMode": "background_safe",
-      "capabilities": ["wgc.capture", "app_targeted", "no_global_input"],
+      "capabilities": [
+        "printwindow.capture",
+        "app_targeted",
+        "no_global_input"
+      ],
       "maxOutputBytes": 4096
     }
   ],

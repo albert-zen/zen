@@ -21,8 +21,8 @@ test(
     const resources = path.join(root, "resources");
     await mkdir(path.join(resources, "plugins"), { recursive: true });
     await copyFile(
-      path.resolve("resources/plugins/zenx-triggers-plugin-1.0.0.tgz"),
-      path.join(resources, "plugins", "zenx-triggers-plugin-1.0.0.tgz"),
+      path.resolve("resources/plugins/zenx-triggers-plugin-1.0.1.tgz"),
+      path.join(resources, "plugins", "zenx-triggers-plugin-1.0.1.tgz"),
     );
     const projection = new ZenXProjectProjection();
     await projection.updateConfiguration([process.cwd()], process.cwd());
@@ -64,9 +64,6 @@ test(
         appServer: {
           request: (method, params) => manager.request(method, params),
           onNotification: (fn) => manager.onNotification(fn),
-          enqueue: async (params) => {
-            await manager.request("turn/queue", params);
-          },
         },
         threadTargets: {
           projectProjection: projection,
@@ -228,13 +225,13 @@ test(
         threadId: target.threadId,
         includeTurns: true,
       });
-      const canonical = read.thread.turns
-        .flatMap((turn) => turn.items)
-        .filter(
-          (item) =>
-            item.type === "userMessage" &&
-            item.clientId === entry.clientUserMessageId,
-        );
+      const canonical = (
+        await manager.request("zen/thread/read", { threadId: target.threadId })
+      ).thread.items.filter(
+        (item) =>
+          item.type === "host_message" &&
+          item.clientId === entry.clientUserMessageId,
+      );
       assert.equal(canonical.length, 1);
       console.log(
         "canonical",
@@ -365,9 +362,6 @@ test(
         appServer: {
           request: (method, params) => manager.request(method, params),
           onNotification: (fn) => manager.onNotification(fn),
-          enqueue: async (params) => {
-            await manager.request("turn/queue", params);
-          },
         },
         threadTargets: {
           projectProjection: projection,

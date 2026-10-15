@@ -73,21 +73,120 @@ const m = (id: string, kind = "human") => ({
   originThreadId: null,
   originTurnId: null,
 });
-test("Room social review regressions: receipts, refreshed reactions, and failed quote prepare", async () => {
-  {
+test("successful Room receipts stay out of message footers after load and refresh", async () => {
+  for (const state of ["saved", "unknown"]) {
     const s = await setup([m("m1")], {
       delivery: async () => ({
-        state: "unknown",
+        state,
         receipt: "delivered",
         messageId: "m1",
         mentions: [],
         readers: [{ threadId: "worker", name: "Worker", state: "read" }],
       }),
     });
-    const label = document.querySelector(".room-delivery")?.textContent;
-    assert.match(label!, /@Worker: Read/);
+    try {
+      assert.ok(s.calls.some((call) => call.id === "delivery"));
+      assert.ok(
+        !document.querySelector(".room-delivery"),
+        "successful receipt must not create a footer",
+      );
+      assert.doesNotMatch(
+        document.querySelector(".room-message")!.textContent!,
+        /Delivered|Read|Message details/,
+      );
+      await s.tick();
+      assert.ok(
+        !document.querySelector(".room-delivery"),
+        "successful receipt must not create a footer",
+      );
+      assert.equal(document.querySelector(".rooms-chat-status"), null);
+    } finally {
+      await s.close();
+    }
+  }
+});
+
+test("a newly posted message settles without receipt footer while failed prepare stays visible and retryable", async () => {
+  let failPrepare = false;
+  const s = await setup([], {
+    "prepare-message": async (input: any) => {
+      if (failPrepare) throw Error("Synthetic preparation failure");
+      return { id: input.operationId };
+    },
+    "post-message": async (input: any, room: any) => {
+      room.messages.push({ ...m("posted"), text: input.text });
+      return { messageId: "posted" };
+    },
+    operation: async () => ({
+      state: "saved",
+      receipt: "delivered",
+      messageId: "posted",
+      mentions: [],
+    }),
+    "ack-operation": async () => ({}),
+  });
+  const send = async (text: string) => {
+    await act(async () => {
+      const editor =
+        document.querySelector<HTMLTextAreaElement>("#room-chat-input")!;
+      Object.getOwnPropertyDescriptor(
+        s.dom.window.HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(editor, text);
+      editor.dispatchEvent(new s.dom.window.Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".rooms-chat-compose .action-orb")!
+        .click(),
+    );
+  };
+  try {
+    await send("Newly posted message");
+    assert.match(
+      document.querySelector('[data-room-message-id="posted"]')!.textContent!,
+      /Newly posted message/,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#room-chat-input")!.value,
+      "",
+    );
+    assert.ok(
+      !document.querySelector(".room-delivery"),
+      "successful receipt must not create a footer",
+    );
+    assert.equal(document.querySelector(".rooms-chat-status"), null);
+    await s.tick();
+    assert.ok(
+      !document.querySelector(".room-delivery"),
+      "successful receipt must not create a footer",
+    );
+    failPrepare = true;
+    await send("Preserve this failed draft");
+    assert.match(
+      document.querySelector('[role="alert"]')!.textContent!,
+      /preparation failed.*Synthetic preparation failure/,
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#room-chat-input")!.value,
+      "Preserve this failed draft",
+    );
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(
+        ".rooms-chat-compose .action-orb",
+      )!.disabled,
+      false,
+    );
+    assert.equal(
+      s.calls.filter((call) => call.id === "post-message").length,
+      1,
+    );
+  } finally {
     await s.close();
   }
+});
+
+test("Room social review regressions: receipts, refreshed reactions, and failed quote prepare", async () => {
   {
     const messages = Array.from({ length: 8 }, (_, i) => m("m" + i, "agent"));
     const s = await setup(messages, {
@@ -121,7 +220,8 @@ test("Room social review regressions: receipts, refreshed reactions, and failed 
     await s.tick();
     assert(
       [...document.querySelectorAll(".room-message [aria-label]")].some(
-        (element) => element.getAttribute("aria-label") === "Worker reacted 👀",
+        (element) =>
+          element.getAttribute("aria-label")?.includes("👀 · 1 · Worker"),
       ),
     );
     await s.close();
@@ -139,7 +239,7 @@ test("Room social review regressions: receipts, refreshed reactions, and failed 
     });
     await act(async () =>
       [...document.querySelectorAll("button")]
-        .find((b) => b.textContent === "Reply")!
+        .find((b) => b.getAttribute("aria-label") === "Reply")!
         .click(),
     );
     await act(async () => {

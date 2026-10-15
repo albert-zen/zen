@@ -11,9 +11,18 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  STRICT_UIA_PROVIDER_ID,
+  STRICT_UIA_BUILD,
+  STRICT_UIA_UPSTREAM,
+  STRICT_UIA_VERSION,
+  type StrictUiaBuildMetadata,
+} from "./windows-strict-uia-contract.js";
+
 import { parseWindowsNpmShimEntry } from "./external-provider.js";
 
-export type PinnedProviderId = "playwright-cli" | "microsoft-winapp-cli";
+export type PinnedProviderId =
+  "playwright-cli" | "microsoft-winapp-cli" | typeof STRICT_UIA_PROVIDER_ID;
 
 export interface BundledProvider {
   providerId: PinnedProviderId;
@@ -25,6 +34,7 @@ export interface BundledProvider {
   companion?: { path: string; sha256: string };
   runtime?: { path: string; sha256: string; version?: string };
   assets?: BundledProviderAsset[];
+  downstream?: StrictUiaBuildMetadata;
 }
 
 export interface BundledProviderAsset {
@@ -47,6 +57,7 @@ interface ProviderManifestEntry {
   companion?: { path: string; sha256: string };
   runtime?: { path: string; sha256: string; version?: string };
   assets?: BundledProviderAsset[];
+  downstream?: StrictUiaBuildMetadata;
 }
 
 interface ProviderManifest {
@@ -69,6 +80,14 @@ export async function resolveBundledProvider(
     verifyDirectoryAssets?: boolean;
   },
 ): Promise<BundledProviderResolution> {
+  if (
+    providerId === STRICT_UIA_PROVIDER_ID &&
+    !/^[a-f0-9]{64}$/u.test(options.expectedManifestSha256 ?? "")
+  ) {
+    return {
+      reason: "Strict UIA provider requires the compiled manifest trust anchor",
+    };
+  }
   let providerRoot: string;
   let manifestPath: string;
   try {
@@ -258,7 +277,9 @@ export async function resolveBundledProvider(
         if (!isWithin(providerRoot, assetRealPath))
           throw new Error("asset resolves outside its resource directory");
         const assetSha256 =
-          kind === "directory" && options.verifyDirectoryAssets !== false
+          kind === "directory" &&
+          (providerId === STRICT_UIA_PROVIDER_ID ||
+            options.verifyDirectoryAssets !== false)
             ? await hashBundledDirectoryAsset(assetRealPath, asset.ignoredPaths)
             : kind === "file"
               ? await hashBundledFileAsset(assetRealPath)
@@ -330,6 +351,9 @@ export async function resolveBundledProvider(
       ...(companion === undefined ? {} : { companion }),
       ...(runtime === undefined ? {} : { runtime }),
       ...(assets === undefined ? {} : { assets }),
+      ...(manifest.downstream === undefined
+        ? {}
+        : { downstream: structuredClone(manifest.downstream) }),
     },
   };
 }
@@ -345,6 +369,9 @@ export async function verifyBundledProvider(
 ): Promise<void> {
   const resolved = await resolveBundledProvider(selected.providerId, {
     ...options,
+    ...(selected.providerId === STRICT_UIA_PROVIDER_ID
+      ? { verifyDirectoryAssets: true }
+      : {}),
     expectedVersion: selected.version,
     expectedManifestSha256: selected.manifestSha256,
   });
@@ -355,7 +382,8 @@ export async function verifyBundledProvider(
   if (
     verified.executable !== selected.executable ||
     verified.sha256 !== selected.sha256 ||
-    verified.version !== selected.version
+    verified.version !== selected.version ||
+    JSON.stringify(verified.downstream) !== JSON.stringify(selected.downstream)
   ) {
     throw new Error(
       "Bundled provider changed after selection; refusing to launch",
@@ -589,7 +617,8 @@ function parseManifest(
         typeof entry.companion.sha256 !== "string" ||
         !/^[a-f0-9]{64}$/u.test(entry.companion.sha256))) ||
     (entry.assets !== undefined &&
-      (entry.assets.length > 64 ||
+      (!Array.isArray(entry.assets) ||
+        entry.assets.length > 64 ||
         !entry.assets.every(
           (asset) =>
             typeof asset === "object" &&
@@ -613,7 +642,72 @@ function parseManifest(
   ) {
     return undefined;
   }
+  if (providerId === STRICT_UIA_PROVIDER_ID && !validStrictUiaEntry(entry))
+    return undefined;
+  if (providerId !== STRICT_UIA_PROVIDER_ID && entry.downstream !== undefined)
+    return undefined;
   return entry;
+}
+
+function validStrictUiaEntry(entry: ProviderManifestEntry): boolean {
+  const contract = entry.downstream;
+  const prefix = `${STRICT_UIA_PROVIDER_ID}/`;
+  if (
+    !contract ||
+    typeof contract !== "object" ||
+    Array.isArray(contract) ||
+    Object.keys(contract).sort().join(",") !==
+      "contractVersion,dependencyLockSha256,patchSha256,providerBuild,schemaVersion,sourceLockSha256,upstreamCommit" ||
+    contract.schemaVersion !== 1 ||
+    contract.contractVersion !== 1 ||
+    contract.providerBuild !== STRICT_UIA_BUILD ||
+    contract.upstreamCommit !== STRICT_UIA_UPSTREAM ||
+    entry.version !== STRICT_UIA_VERSION ||
+    entry.executable.replaceAll("\\", "/") !== `${prefix}bin/winapp.exe` ||
+    entry.platforms.length !== 1 ||
+    entry.platforms[0] !== "win32" ||
+    entry.runtime !== undefined ||
+    entry.companion !== undefined ||
+    !entry.assets
+  )
+    return false;
+  const assets = new Map(
+    entry.assets.map((asset) => [asset.path.replaceAll("\\", "/"), asset]),
+  );
+  if (
+    assets.size !== entry.assets.length ||
+    entry.assets.some(
+      (asset) =>
+        !asset.path.replaceAll("\\", "/").startsWith(prefix) ||
+        asset.ignoredPaths !== undefined,
+    )
+  )
+    return false;
+  const bin = assets.get(`${prefix}bin`);
+  if (bin?.kind !== "directory") return false;
+  for (const [file, digest] of [
+    ["bin/winapp.exe", entry.sha256],
+    ["downstream.patch", contract.patchSha256],
+    ["source.lock.json", contract.sourceLockSha256],
+    ["packages.lock.json", contract.dependencyLockSha256],
+  ]) {
+    const asset = assets.get(`${prefix}${file}`);
+    if (
+      !digest ||
+      !/^[a-f0-9]{64}$/u.test(digest) ||
+      asset?.sha256 !== digest ||
+      asset.kind === "directory"
+    )
+      return false;
+  }
+  return [
+    "bin/libSkiaSharp.dll",
+    "provenance.json",
+    "UPSTREAM-LICENSE.txt",
+  ].every((file) => {
+    const asset = assets.get(`${prefix}${file}`);
+    return asset !== undefined && asset.kind !== "directory";
+  });
 }
 
 function isSafeRelativeAssetPath(value: unknown): value is string {

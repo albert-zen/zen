@@ -1,3 +1,4 @@
+import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -20,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { packZenXFirstPartyPlugins } from "./pack-first-party-plugins.mjs";
 import ts from "typescript";
+import { downstreamAssemblyArguments } from "../../../scripts/assemble-zenx-providers.mjs";
 
 const run = promisify(execFile);
 const zenx = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -34,6 +36,10 @@ export const MACOS_CODESIGN_MODE_ENV = "ZENX_CODESIGN_MODE";
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
 async function packageZenX(arguments_) {
+  const downstreamArguments = downstreamAssemblyArguments(
+    arguments_,
+    process.platform,
+  );
   const target = arguments_.includes("--app") ? "app" : "smoke";
   const productName = target === "app" ? "ZenX" : "ZenXProviderSmoke";
   const targetDirectory = `${productName}-${process.platform}-${process.arch}`;
@@ -53,6 +59,7 @@ async function packageZenX(arguments_) {
             resources,
             "--cache",
             artifactCache,
+            ...downstreamArguments,
           ])
         ).stdout,
       );
@@ -762,6 +769,20 @@ export async function stagePackage(options) {
       ? path.join(options.appDirectory, "out", "main")
       : path.join(options.appDirectory, "main");
   if (options.target === "app") {
+    await stageShellPty(options.rootDirectory, options.appDirectory);
+    const licenseDirectory = path.join(options.appDirectory, "licenses");
+    await mkdir(licenseDirectory, { recursive: true });
+    for (const name of ["xterm", "addon-fit"])
+      await cp(
+        path.join(
+          options.rootDirectory,
+          "node_modules",
+          "@xterm",
+          name,
+          "LICENSE",
+        ),
+        path.join(licenseDirectory, `xterm-${name}.txt`),
+      );
     await cp(options.outDirectory, path.join(options.appDirectory, "out"), {
       recursive: true,
     });
@@ -798,8 +819,88 @@ export async function stagePackage(options) {
     await cp(path.join(options.outDirectory, "main"), stagedMain, {
       recursive: true,
     });
+    // The native overlay smoke uses its isolated preload, never the app bridge.
+    const preloadDirectory = path.join(options.appDirectory, "preload");
+    await mkdir(preloadDirectory, { recursive: true });
+    await cp(
+      path.join(options.outDirectory, "preload", "foreground-activity.cjs"),
+      path.join(preloadDirectory, "foreground-activity.cjs"),
+    );
   }
   await injectProviderManifestDigest(stagedMain, options.manifestSha256);
+}
+
+/** Stage the official Node-API PTY and only this target's native files. */
+export async function stageShellPty(
+  rootDirectory,
+  appDirectory,
+  platform = process.platform,
+  arch = process.arch,
+) {
+  const source = path.join(rootDirectory, "node_modules", "node-pty");
+  const destination = path.join(appDirectory, "node_modules", "node-pty");
+  const candidates = ["build/Release", `prebuilds/${platform}-${arch}`];
+  let nativeDirectory;
+  const required =
+    platform === "win32"
+      ? [
+          "conpty.node",
+          "conpty_console_list.node",
+          "conpty/conpty.dll",
+          "conpty/OpenConsole.exe",
+        ]
+      : platform === "darwin"
+        ? ["pty.node", "spawn-helper"]
+        : ["pty.node"];
+  for (const candidate of candidates) {
+    if (
+      (
+        await Promise.all(
+          required.map((file) =>
+            stat(path.join(source, candidate, file)).then(
+              (s) => s.isFile(),
+              () => false,
+            ),
+          ),
+        )
+      ).every(Boolean)
+    ) {
+      nativeDirectory = candidate;
+      break;
+    }
+  }
+  if (!nativeDirectory)
+    throw new Error(
+      `node-pty native runtime is missing for ${platform}-${arch}`,
+    );
+  await mkdir(destination, { recursive: true });
+  await cp(path.join(source, "LICENSE"), path.join(destination, "LICENSE"));
+  await cp(
+    path.join(source, "package.json"),
+    path.join(destination, "package.json"),
+  );
+  await cp(path.join(source, "lib"), path.join(destination, "lib"), {
+    recursive: true,
+  });
+  await cp(
+    path.join(source, nativeDirectory),
+    path.join(destination, nativeDirectory),
+    {
+      recursive: true,
+      filter: (filename) =>
+        !filename.endsWith(".pdb") &&
+        !filename.split(path.sep).includes("obj.target") &&
+        !filename.endsWith(".a"),
+    },
+  );
+  if (platform === "win32") await applyShellPtyPatch(destination);
+  if (platform === "darwin")
+    await chmod(path.join(destination, nativeDirectory, "spawn-helper"), 0o755);
+  await cp(
+    path.join(rootDirectory, "node_modules", "node-addon-api"),
+    path.join(appDirectory, "node_modules", "node-addon-api"),
+    { recursive: true },
+  );
 }
 
 export async function copyPackagedProviderResources(options) {
@@ -883,6 +984,7 @@ export function packageManifest(target, zenxPackage) {
         dependencies: {
           "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
           ws: zenxPackage.dependencies.ws,
+          "node-pty": zenxPackage.dependencies["node-pty"],
         },
       }
     : {

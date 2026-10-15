@@ -145,6 +145,43 @@ test("keeps interrupted history from thread/resume as terminal history", () => {
   assert.equal(resumed.turns[0]?.items[1]?.type, "agentMessage");
 });
 
+test("a completed failure item sets the turn error before turn completion", () => {
+  let current = thread();
+  current = applyThreadViewNotification(
+    current,
+    "turn/started",
+    { threadId: current.id, turn: turn("turn-1", "inProgress") },
+    20,
+  );
+  current = applyNativeThreadEvent(current, {
+    type: "item_completed",
+    item: {
+      id: "failure-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      createdAt: new Date(21_000).toISOString(),
+      type: "failure",
+      code: "runtime_error",
+      message: "OpenAI-compatible model request failed with HTTP 400",
+    },
+  });
+  assert.equal(
+    current.turns[0]?.error?.message,
+    "OpenAI-compatible model request failed with HTTP 400",
+  );
+  current = applyNativeThreadEvent(current, {
+    type: "turn_completed",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    status: "failed",
+  });
+  assert.equal(current.turns[0]?.status, "failed");
+  assert.equal(
+    current.turns[0]?.error?.message,
+    "OpenAI-compatible model request failed with HTTP 400",
+  );
+});
+
 test("streams agent text in memory and replaces it with the completed item", () => {
   let current = thread();
   const running = turn("turn-1", "inProgress");

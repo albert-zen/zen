@@ -250,7 +250,7 @@ test("wake failure retains exact committed message and repeated key never re-wak
   const first = await service.postPreparedRoomMessage(room.id, id, "@Bot test");
   const result = service.roomOperation(room.id, id);
   assert.equal(result.messageId, first.messageId);
-  assert.equal(result.mentions[0]?.deliveries[0]?.status, "failed");
+  assert.equal(result.mentions[0]?.deliveries[0]?.status, "unknown");
   assert.equal(
     (await service.postPreparedRoomMessage(room.id, id, "@Bot test")).messageId,
     first.messageId,

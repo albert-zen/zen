@@ -1,3 +1,4 @@
+import "./shell-thread-panel.css";
 import { initializeLanguage } from "./language.js";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -10,6 +11,7 @@ import "./agent-readiness-notice.css";
 import "./trigger-ui.css";
 import "./skills.css";
 import "./rooms-layout.css";
+import "./room-message-actions.css";
 import "./room-conversations.css";
 import "./companion-workspace.css";
 
