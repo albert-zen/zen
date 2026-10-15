@@ -3608,3 +3608,23 @@ test("changing Settings tabs starts the new panel at its heading", async () => {
     await unmount(harness);
   }
 });
+
+test("Settings Plugins uses the plug icon while Context compaction retains compression artwork", async () => {
+  const harness = await mountSettings("general");
+  try {
+    const plugins = document.getElementById("settings-tab-plugins")!;
+    assert.equal(plugins.textContent, "Plugins");
+    assert.equal(
+      plugins.querySelector("svg")?.getAttribute("data-icon"),
+      "plug",
+    );
+    assert.equal(
+      document
+        .querySelector("#settings-tab-compaction svg")
+        ?.getAttribute("data-icon"),
+      "compress",
+    );
+  } finally {
+    await unmount(harness);
+  }
+});

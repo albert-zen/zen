@@ -40,6 +40,7 @@ import {
 } from "../src/main/capabilities/self-control-package.js";
 import type { ZenXCapabilityHost } from "../src/main/capabilities/types.js";
 import { AppServerManager } from "../src/main/app-server-manager.js";
+import { cleanupSelfControlHostFixture } from "./fixtures/self-control-host-cleanup.js";
 import {
   ZenXProtocolClient,
   type ClientRequestMethod,
@@ -160,7 +161,7 @@ test("self-control reads and updates the same workflow configuration port", asyn
   assert.equal(updated.commands[0]?.name, "review");
 });
 
-test("real ZenX host control tools make active semantics explicit", async () => {
+test("real ZenX host control tools make active semantics explicit", async (context) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-control-host-"));
   const requestPort = new MutableAppServerRequestPort();
   const capabilities = await grantedSelfControl(directory, requestPort);
@@ -182,6 +183,51 @@ setTimeout(() => process.exit(1), 30000);
 `,
   );
   let observedThreadId: string | undefined;
+  context.after(async () => {
+    // Read the existing task authority before stopping the Host, whose nested
+    // cleanup failure may otherwise hide the exact cancellation receipt.
+    if (observedThreadId !== undefined) {
+      try {
+        const listed = await manager.shellPanelRequest({
+          operation: "list",
+          threadId: observedThreadId,
+        });
+        if (listed && "sessions" in listed) {
+          for (const session of listed.sessions) {
+            if (
+              ![
+                "queued",
+                "running",
+                "cancel_requested",
+                "cancellation_unconfirmed",
+              ].includes(session.status)
+            )
+              continue;
+            const receipt = await manager.shellPanelRequest({
+              operation: "read",
+              threadId: observedThreadId,
+              taskId: session.taskId,
+            });
+            console.error(
+              "Self-control fixture pending Shell cleanup",
+              JSON.stringify(receipt),
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Self-control fixture cleanup observation failed", error);
+      }
+    }
+    await cleanupSelfControlHostFixture({
+      directory,
+      stop: () => manager.stop(),
+      release: () => writeFile(replacementRelease, "release"),
+      closeCapabilities: () => capabilities.close(),
+      removeDirectory: () => rm(directory, { recursive: true, force: true }),
+      report: (message, error) =>
+        console.error(message, ...(error === undefined ? [] : [error])),
+    });
+  });
   await requestPort.attach(manager, directory);
   try {
     await manager.start();
@@ -382,48 +428,11 @@ setTimeout(() => process.exit(1), 30000);
       }),
       /Unexpected argument: mode/u,
     );
-  } finally {
-    // Read the existing task authority before stopping the Host, whose nested
-    // cleanup failure may otherwise hide the exact cancellation receipt.
-    if (observedThreadId !== undefined) {
-      try {
-        const listed = await manager.shellPanelRequest({
-          operation: "list",
-          threadId: observedThreadId,
-        });
-        if (listed && "sessions" in listed) {
-          for (const session of listed.sessions) {
-            if (
-              !["cancel_requested", "cancellation_unconfirmed"].includes(
-                session.status,
-              )
-            )
-              continue;
-            const receipt = await manager.shellPanelRequest({
-              operation: "read",
-              threadId: observedThreadId,
-              taskId: session.taskId,
-            });
-            console.error(
-              "Self-control fixture pending Shell cleanup",
-              JSON.stringify(receipt),
-            );
-          }
-        }
-      } catch (error) {
-        console.error("Self-control fixture cleanup observation failed", error);
-      }
-    }
-    // Give native cleanup its full owned join before fallback release. Releasing
-    // earlier could make the child exit while its initial snapshot is pending.
-    // This cannot turn an unconfirmed Stop into successful Host cleanup.
-    try {
-      await manager.stop();
-    } finally {
-      await writeFile(replacementRelease, "release");
-    }
-    await capabilities.close();
-    await rm(directory, { recursive: true, force: true });
+  } catch (error) {
+    // Report before teardown; node:test retains this body failure even when the
+    // after hook also fails, while the hook reports every independent error.
+    console.error("Self-control Host fixture body failed", error);
+    throw error;
   }
 });
 

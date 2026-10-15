@@ -15,6 +15,8 @@
 
 - **ZenX 界面语言** — Renderer 的本地语言偏好（system/en/zh-CN）只拥有展示选择；集中式 i18next 词条按功能分组，通过 React 订阅即时更新，系统模式按 Electron 返回的有序语言列表解析，原生菜单同步展示语言，不改写 canonical 内容、Host 配置或插件语义。
 
+- **ZenX login-shell PATH** — After opening the static startup window, a bounded, cancellable macOS GUI-startup probe captures only the login shell’s framed PATH before Host initialization; a pipe-held supervisor pins the owned process group until cleanup, including helpers surviving login-shell exit, without persistent state. PATH semantics are preserved, failure retains the inherited environment, and the existing tool-environment whitelist remains the disclosure boundary. Native CI observes the same bootstrap and Host tool composition through fail-closed pre-sign instrumentation in an isolated acceptance app; a fixture-only authenticated worker can terminate only its own process when the main loop hangs, while unconfirmed or abnormal shutdown retains evidence and blocks later smoke work. Normal packaging and production runtime gain no observer hook. A fixture-only Host shell observation retains bounded monotonic control-event timing and allowlisted result facts (never output, IPC payloads, or environment), without changing execution, cancellation, or startup deadlines.
+
 ## 核心概念
 
 - **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
@@ -381,6 +383,7 @@
   开启可撤销的 foreground computer control 后才可用，旧 permission grants 不构成授权；foreground helper
   从准备到实际进程 spawn 的每个边界都重验当前 consent，已撤销的 signal 绝不启动全局输入 helper。
 - **ZenXForegroundActivity** — Electron main projects only admitted, validated foreground Computer calls into disposable, non-activating native indicators across current displays; an indicator must be visible before input, remains until provider settlement, and its exact-owner Stop reuses cancellation/Turn interruption. It grants no consent, owns no scheduler or durable state, and never marks background-safe work as global control. A Host-owned global Escape registration exists only while foreground owners remain and uses the same exact-owner Stop boundary; failed registration is presented honestly with the button fallback.
+- Foreground overlay smoke diagnostics passively retain bounded display geometry/events and phase-relative timing, remove their listeners after the owned fixture, and never admit input or weaken the production display-change cancellation guard. On Darwin, the owned fixture shares its existing seven-second focus setup budget with a read-only, 500ms display-quiescence precondition before its single activity invocation; timeout fails before admission and every display event during activity still cancels normally.
 - **ZenXCapabilityObservation** — ZenX provider 用短时、目标域绑定的 opaque ID 连接 observe→act，执行前按语义指纹
   重验且在导航、关闭、新观察或动作后失效；它是产品侧瞬时状态，不进入 Zen Core 或 durable journal。
   Browser 在候选截断前排除无动作节点；Computer 各后端共用有界选择，优先保留可用语义动作，再以剩余名额保留文字上下文，返回仍按原观察顺序。
@@ -439,6 +442,8 @@
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
 - Windows packaged UIA smoke 的文件观察 helper 仅在既有观察期限内重读 owned fixture 的 ENOENT/EBUSY，不重放 UIA 动作；文本匹配与文件可读性共用同一观察期限。
+- Windows foreground smoke 的 guard 启动诊断只记录本次自有 helper 的定额阶段、PID 与各进程单调相对时间；失败 artifact 经过固定字段白名单投影，不上传原始目录或用户内容，不改变输入、期限、失败结果，也不把直接子进程关闭当作整棵进程树清理证明。
+- Windows foreground smoke 的预编译 guard 只从本次已 stage 的 JS 提取唯一 C# 原文，编译到同次私有 staging 并把源码与程序集摘要绑定到 smoke bundle；运行子进程只加载摘要匹配的实际字节，无现场编译回退，不进入产品 app、发布产物或共享缓存，所有输入与期限合同不变。
 - **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并在完整 staging 后发布稳定产物；Windows 上仅对 staging 发布 rename 的 EPERM 做有界退避，每次失败先回滚旧产物，跨等待以 no-follow 目录身份核对源与目标、异常即失败且保留可恢复备份；目录身份预检不构成抵抗非合作写者在检查与 rename 间竞态的 OS 级原子保证；它不复制 release pipeline。
 - **ZenXMacLocalSigningProfile** — macOS portable packaging 可从 host-local `signing.json` 读取稳定自签名证书指纹，并以无 Apple Team ID 的空 entitlements、非 hardened-runtime 参数统一签署 app、Electron nested code 与原生 helper；显式环境变量优先，配置或签名错误 fail closed，证书与私钥不进入仓库、Core 或 ItemList。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 profile-managed Plugin Runtime 暴露 Project/Thread 自控工具，
@@ -1333,3 +1338,5 @@ Browser coordinate click and named-key input are transient, observation-bound CD
 `ModelRequestDebugStore` is a Host-owned, session-only, bounded observation buffer: it records final serialized adapter request bodies at each HTTP dispatch boundary, using passive Thread/Turn/sample/boundary identities supplied by Runtime (or a separately identified compaction sample), and cannot supply or restore conversation or execution state. Canonical ItemList remains the sole authority. The local ZenX diagnostic IPC is separate from model tools, native/codex thread protocols and Fleet: it exposes an explicit opt-in, clear/disable, search and paginated inspection only to the local UI, never uploads data, never persists request content and starts disabled after Host restart. Whole old captures are evicted; oversized bodies are explicitly marked truncated. Credential redaction happens before bounding; observer failures cannot change model execution. Unsupported adapters expose only a labeled sampling-time input projection, never a claimed transport capture. Title generation and capability probes outside the conversation Host are not captured.
 
 The embedded Agent debugger reads canonicalItems directly in append order, reusing message and tool presentation without creating a second trace authority; opt-in local transport observations are a separate actual-requests tab.
+
+ZenX CI aggregate 的被动 test:dequeue reporter 只在共享字节预算内增量记录测试位置、名称和接收时钟，区分以文件路径命名的 file wrapper 与 case；Node 22 的并发后续文件 case 事件仍可能缓冲，最后一条记录不等于最后执行位置，原 TAP、测试选择、执行限制与 check 顺序不变，诊断不可用或缺少结束记录不代表测试成功，runner 丢失时 artifact 上传不保证完成。
