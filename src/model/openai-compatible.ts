@@ -1,7 +1,15 @@
+import {
+  safeProviderErrorIdentity,
+  safeProviderErrorParameter,
+  providerRecoveryBlocked,
+  recordMediaPaths,
+  rejectedMediaParts,
+} from "../loop-recovery.js";
 import { observeRequestBody } from "./request-observation.js";
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import {
   fetchModelResponse,
+  retryAfterMilliseconds,
   isTransientTransportError,
 } from "./request-retry.js";
 import { randomUUID } from "node:crypto";
@@ -50,7 +58,14 @@ export class OpenAiCompatibleModelError extends Error {
   readonly status: number | undefined;
   readonly requestId: string | undefined;
   readonly retryable: boolean;
+  readonly modelRecoveryBlocked: boolean;
+  readonly recoveryDelayMs: number;
+  readonly recoveryOutputLimit: boolean;
+  recoveryRedact: ((text: string) => string) | undefined;
+  recoveryRejectedMediaParts: readonly object[];
   readonly explicitlyRejectsImageInput: boolean;
+  readonly recoveryDetails:
+    { code?: string; type?: string; param?: string } | undefined;
   /** Set once the failure's raw context has been persisted to diagnostics. */
   diagnosticId: string | undefined;
 
@@ -61,8 +76,13 @@ export class OpenAiCompatibleModelError extends Error {
       status?: number;
       requestId?: string;
       retryable?: boolean;
+      modelRecoveryBlocked?: boolean;
+      recoveryDelayMs?: number;
+      recoveryOutputLimit?: boolean;
+      recoveryRejectedMediaParts?: readonly object[];
       explicitlyRejectsImageInput?: boolean;
       diagnosticId?: string;
+      recoveryDetails?: { code?: string; type?: string; param?: string };
     } = {},
   ) {
     super(message);
@@ -71,9 +91,14 @@ export class OpenAiCompatibleModelError extends Error {
     this.status = options.status;
     this.requestId = options.requestId;
     this.retryable = options.retryable ?? false;
+    this.modelRecoveryBlocked = options.modelRecoveryBlocked ?? false;
+    this.recoveryDelayMs = options.recoveryDelayMs ?? 0;
+    this.recoveryOutputLimit = options.recoveryOutputLimit ?? false;
+    this.recoveryRejectedMediaParts = options.recoveryRejectedMediaParts ?? [];
     this.explicitlyRejectsImageInput =
       options.explicitlyRejectsImageInput ?? false;
     this.diagnosticId = options.diagnosticId;
+    this.recoveryDetails = options.recoveryDetails;
   }
 }
 
@@ -116,6 +141,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       defaultParams: this.#defaultParams,
     });
     const messages: Readonly<Record<string, unknown>>[] = [];
+    const mediaPaths = new Map<string, object>();
     let pendingReasoning = "";
     for (const message of request.messages) {
       if (message.role === "reasoning") {
@@ -145,8 +171,19 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         }
         pendingReasoning = "";
       }
+      if (message.role === "user")
+        recordMediaPaths(
+          mediaPaths,
+          `messages[${messages.length}]`,
+          modelUserContent(message),
+        );
       messages.push(encoded);
       if (message.role === "tool" && message.modelContent !== undefined) {
+        recordMediaPaths(
+          mediaPaths,
+          `messages[${messages.length}]`,
+          message.modelContent,
+        );
         messages.push(
           await toChatUserContent(message.modelContent, this.#attachments),
         );
@@ -268,6 +305,19 @@ export class OpenAiCompatibleModel implements ModelAdapter {
           ...(requestId === undefined ? {} : { requestId }),
           retryable: isRetryableStatus(response.status),
           ...(diagnosticId === undefined ? {} : { diagnosticId }),
+          ...(providerError.recoveryDetails === undefined
+            ? {}
+            : { recoveryDetails: providerError.recoveryDetails }),
+          modelRecoveryBlocked: providerRecoveryBlocked(
+            providerError.recoveryDetails,
+          ),
+          recoveryRejectedMediaParts: rejectedMediaParts(
+            mediaPaths,
+            providerError.recoveryDetails?.param,
+          ),
+          recoveryDelayMs: retryAfterMilliseconds(
+            response.headers.get("retry-after") ?? "",
+          ),
           explicitlyRejectsImageInput:
             providerError.explicitlyRejectsImageInput,
         },
@@ -325,6 +375,16 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             },
       );
     } catch (error) {
+      if (error instanceof OpenAiCompatibleModelError)
+        error.recoveryRejectedMediaParts = rejectedMediaParts(
+          mediaPaths,
+          error.recoveryDetails?.param,
+        );
+      if (
+        error instanceof OpenAiCompatibleModelError &&
+        error.recoveryOutputLimit
+      )
+        error.recoveryRedact = (text) => redactProviderText(text, this.#apiKey);
       if (!request.signal.aborted && this.#onStreamFailure !== undefined) {
         diagnostic.failure =
           error instanceof OpenAiCompatibleModelError
@@ -523,6 +583,7 @@ async function readProviderError(
   apiKey: string,
 ): Promise<{
   explicitlyRejectsImageInput: boolean;
+  recoveryDetails?: { code?: string; type?: string; param?: string };
   message?: string;
   body: string;
   truncated: boolean;
@@ -548,6 +609,7 @@ async function readProviderError(
       code?: unknown;
       type?: unknown;
       message?: unknown;
+      param?: unknown;
     };
     const code =
       typeof value.code === "string"
@@ -562,6 +624,17 @@ async function readProviderError(
         : undefined;
     const detail = `${code ?? ""} ${message ?? ""}`.toLowerCase();
     return {
+      recoveryDetails: {
+        ...(safeProviderErrorIdentity(value.code) === undefined
+          ? {}
+          : { code: safeProviderErrorIdentity(value.code)! }),
+        ...(safeProviderErrorIdentity(value.type) === undefined
+          ? {}
+          : { type: safeProviderErrorIdentity(value.type)! }),
+        ...(safeProviderErrorParameter(value.param) === undefined
+          ? {}
+          : { param: safeProviderErrorParameter(value.param)! }),
+      },
       explicitlyRejectsImageInput:
         /image|vision|multimodal|content[_ -]?type/u.test(detail) &&
         /not supported|unsupported|does not accept|invalid.*(?:image|content[_ -]?type)/u.test(
@@ -945,9 +1018,24 @@ async function* consumePayload(
   const chunk = parseChunk(payload);
   if ("error" in chunk) {
     diagnosticField(diagnostic, "error", chunk.error);
-    throw modelError(
+    const error =
+      typeof chunk.error === "object" && chunk.error !== null
+        ? (chunk.error as Record<string, unknown>)
+        : {};
+    const code = safeProviderErrorIdentity(error.code);
+    const type = safeProviderErrorIdentity(error.type);
+    const param = safeProviderErrorParameter(error.param);
+    throw new OpenAiCompatibleModelError(
       "protocol",
       "OpenAI-compatible provider reported a streaming error",
+      {
+        recoveryDetails: {
+          ...(code === undefined ? {} : { code }),
+          ...(type === undefined ? {} : { type }),
+          ...(param === undefined ? {} : { param }),
+        },
+        modelRecoveryBlocked: providerRecoveryBlocked({ code, type }),
+      },
     );
   }
 
@@ -1087,9 +1175,13 @@ async function* consumePayload(
         finishReason !== "tool_calls" &&
         finishReason !== "function_call"
       ) {
-        throw modelError(
+        throw new OpenAiCompatibleModelError(
           "protocol",
           "OpenAI-compatible model response was incomplete",
+          {
+            modelRecoveryBlocked: finishReason === "content_filter",
+            recoveryOutputLimit: finishReason === "length",
+          },
         );
       }
       state.finishReason = finishReason;

@@ -107,6 +107,25 @@ test("ordinary discovery history progressively exposes one plugin and routes its
   });
   assert.equal(fixture.invocations, 1);
   const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.equal(
+    snapshot.items.some((item) => item.type === "failure"),
+    false,
+  );
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "turn_started").length,
+    1,
+  );
+  assert.equal(
+    snapshot.items.filter(
+      (item) => item.type === "tool_call" && item.callId === "invoke",
+    ).length,
+    1,
+  );
+  assert.equal(
+    snapshot.items.findLast((item) => item.type === "agent_message")?.text,
+    "done",
+  );
   const results = snapshot.items.filter((item) => item.type === "tool_result");
   assert.equal(results.at(-1)?.output, exactOutput);
   assert.equal(results.at(-1)?.exitCode, 7);
@@ -350,7 +369,15 @@ class DiscoveryFlowModel implements ModelAdapter {
       yield toolCall("discover", "zenx_plugin", { operation: "discover" });
       return;
     }
+    if (latest.callId === "invoke") {
+      assert.equal(latest.text, exactOutput);
+      assert.equal(latest.exitCode, 7);
+      yield { type: "text_delta", delta: "done" };
+      return;
+    }
+    assert(["discover", "read"].includes(latest.callId));
     const result = parseRecord(latest.text);
+    assert.equal(result.operation, latest.callId);
     if (result.operation === "discover") {
       yield toolCall("read", "zenx_plugin", {
         operation: "read",

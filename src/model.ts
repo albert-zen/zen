@@ -1,3 +1,4 @@
+import { projectRecoveryMedia, recoveryContext } from "./loop-recovery.js";
 import type { ImportedToolCallOrigin } from "./thread-import.js";
 import type { WorkspaceInstructionFile } from "./item.js";
 import { deduplicateMediaContent } from "./media-content.js";
@@ -209,6 +210,7 @@ export function compileModelMessages(
   targetSelection?: CanonicalProviderSelection,
   workspaceInstructions?: readonly WorkspaceInstructionFile[],
 ): ModelMessage[] {
+  items = projectRecoveryMedia(items);
   const snapshot = items.findLast(
     (item) =>
       (item.type === "turn_started" || item.type === "context_compaction") &&
@@ -536,6 +538,13 @@ function compileCanonicalModelMessages(
       }
       case "failure":
         {
+          if (item.recovery !== undefined) {
+            messages.push({
+              role: "user",
+              text: recoveryContext(item.recovery, item.message),
+            });
+            break;
+          }
           // The journal keeps the full provider message; the model only needs
           // the actionable head — long bodies would tax every later sample.
           const firstLine = item.message.split("\n", 1)[0] ?? "";

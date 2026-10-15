@@ -1227,9 +1227,10 @@ function ThreadViewContent({
                           ) ?? false
                         }
                         failureDetail={
-                          thread?.canonicalItems?.find(
+                          thread?.canonicalItems?.findLast(
                             (item): item is FailureItem =>
                               item.type === "failure" &&
+                              item.recovery === undefined &&
                               item.turnId === row.turn.id,
                           ) ?? null
                         }

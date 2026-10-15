@@ -1120,7 +1120,7 @@ export class CodexConnection {
             codexErrorInfo: null,
             additionalDetails: null,
           },
-          willRetry: false,
+          willRetry: item.recovery !== undefined,
           threadId: item.threadId,
           turnId: item.turnId,
         },
