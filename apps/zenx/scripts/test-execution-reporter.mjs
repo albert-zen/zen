@@ -1,5 +1,5 @@
 // CI-only, passive execution-order evidence. TAP remains the result reporter.
-import { openSync, writeSync, closeSync } from "node:fs";
+import { openSync, readSync, writeSync, closeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +10,127 @@ export const EXECUTION_TRACE_LIMITS = Object.freeze({
   fieldBytes: 256,
   finalBytes: 1024,
 });
+// Separate additive budget: original dequeue evidence keeps its entire budget.
+export const RESOURCE_TRACE_LIMITS = Object.freeze({
+  intervalMs: 15_000,
+  records: 32,
+  combinedBytes: 32 * 1024,
+});
+const RESOURCE_PATHS = Object.freeze({
+  meminfo: "/proc/meminfo",
+  v2: "/sys/fs/cgroup/cgroup.controllers",
+  current: "/sys/fs/cgroup/memory.current",
+  max: "/sys/fs/cgroup/memory.max",
+  events: "/sys/fs/cgroup/memory.events",
+});
+
+function readBoundedSystemFile(file, limit) {
+  const fd = openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    if (length > limit) throw new Error("Resource input exceeds bound");
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      buffer.subarray(0, length),
+    );
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function numeric(value) {
+  if (typeof value !== "string" || !/^[0-9]+$/u.test(value)) return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number : null;
+}
+
+function field(text, key, unit = "") {
+  if (text === null) return null;
+  const lines = text
+    .split("\n")
+    .filter((line) => line.startsWith(`${key}${unit ? ":" : " "}`));
+  if (lines.length !== 1) return null;
+  const pattern = unit
+    ? new RegExp(`^${key}:\\s+([0-9]+) ${unit}\\s*$`, "u")
+    : new RegExp(`^${key} ([0-9]+)\\s*$`, "u");
+  return numeric(pattern.exec(lines[0])?.[1]);
+}
+
+/** Event-driven system totals; never a per-child or job RSS measurement. */
+export function createResourceObservation({
+  platform = process.platform,
+  read = readBoundedSystemFile,
+  monotonic = () => performance.now(),
+  utc = () => new Date().toISOString(),
+  started = monotonic(),
+  emit,
+  canEmit = () => true,
+}) {
+  let lastAttempt = -Infinity;
+  let samples = 0;
+  return () => {
+    if (
+      platform !== "linux" ||
+      samples >= RESOURCE_TRACE_LIMITS.records ||
+      !canEmit()
+    )
+      return;
+    const now = monotonic();
+    if (
+      !Number.isFinite(now) ||
+      now - lastAttempt < RESOURCE_TRACE_LIMITS.intervalMs
+    )
+      return;
+    lastAttempt = now; // Failures also consume the interval; no catch-up reads.
+    const bounded = (file, limit) => {
+      try {
+        const text = read(file, limit);
+        return typeof text === "string" && Buffer.byteLength(text) <= limit
+          ? text
+          : null;
+      } catch {
+        return null;
+      }
+    };
+    const info = bounded(RESOURCE_PATHS.meminfo, 16 * 1024);
+    const v2 = bounded(RESOURCE_PATHS.v2, 4096) !== null;
+    const current = v2 ? bounded(RESOURCE_PATHS.current, 128) : null;
+    const max = v2 ? bounded(RESOURCE_PATHS.max, 128) : null;
+    const events = v2 ? bounded(RESOURCE_PATHS.events, 4096) : null;
+    const maxText = max?.trim();
+    const maxBytes = numeric(maxText);
+    samples += 1;
+    emit({
+      kind: "resource",
+      sequence: samples,
+      utc: utc(),
+      elapsedMs: Math.round((now - started) * 1000) / 1000,
+      scope: "host-visible-and-visible-cgroup-root",
+      cgroupVersion: v2 ? 2 : null,
+      memTotalKiB: field(info, "MemTotal", "kB"),
+      memAvailableKiB: field(info, "MemAvailable", "kB"),
+      swapTotalKiB: field(info, "SwapTotal", "kB"),
+      swapFreeKiB: field(info, "SwapFree", "kB"),
+      currentBytes: numeric(current?.trim()),
+      maxBytes,
+      limitState:
+        maxText === "max"
+          ? "unlimited"
+          : maxBytes === null
+            ? "unavailable"
+            : "bounded",
+      oom: field(events, "oom"),
+      oomKill: field(events, "oom_kill"),
+      oomGroupKill: field(events, "oom_group_kill"),
+    });
+  };
+}
+
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const increment = (value) => Math.min(Number.MAX_SAFE_INTEGER, value + 1);
 
@@ -52,6 +173,9 @@ export function createExecutionTrace({
   close = closeSync,
   utc = () => new Date().toISOString(),
   monotonic = () => performance.now(),
+  resourceObservation = false,
+  resourceRead = readBoundedSystemFile,
+  resourcePlatform = process.platform,
 }) {
   let descriptor;
   let fileAvailable = false;
@@ -63,6 +187,7 @@ export function createExecutionTrace({
   let ignored = 0;
   let dropped = 0;
   let allocatedBytes = 0;
+  let resourceBytes = 0;
   const started = monotonic();
 
   function writeAll(fd, buffer) {
@@ -79,7 +204,7 @@ export function createExecutionTrace({
     }
   }
 
-  function emit(value, final = false) {
+  function emit(value, final = false, resource = false) {
     const buffer = Buffer.from(`${JSON.stringify(value)}\n`);
     // One shared budget counts both sinks, even when one is unavailable.
     const bytes = buffer.length * 2;
@@ -88,10 +213,13 @@ export function createExecutionTrace({
       (final ? 0 : EXECUTION_TRACE_LIMITS.finalBytes);
     if (
       buffer.length > EXECUTION_TRACE_LIMITS.recordBytes ||
-      allocatedBytes + bytes > ceiling
+      (resource
+        ? resourceBytes + bytes > RESOURCE_TRACE_LIMITS.combinedBytes
+        : allocatedBytes + bytes > ceiling)
     )
       return false;
-    allocatedBytes += bytes;
+    if (resource) resourceBytes += bytes;
+    else allocatedBytes += bytes;
     if (fileAvailable) {
       try {
         writeAll(descriptor, buffer);
@@ -139,6 +267,20 @@ export function createExecutionTrace({
   });
   reportUnavailable();
 
+  const observeResource = resourceObservation
+    ? createResourceObservation({
+        platform: resourcePlatform,
+        read: resourceRead,
+        utc,
+        monotonic,
+        started,
+        canEmit: () =>
+          resourceBytes + 2 * EXECUTION_TRACE_LIMITS.recordBytes <=
+          RESOURCE_TRACE_LIMITS.combinedBytes,
+        emit: (value) => emit(value, false, true),
+      })
+    : undefined;
+
   return {
     observe(event) {
       if (stopped || event.type !== "test:dequeue") return;
@@ -179,6 +321,12 @@ export function createExecutionTrace({
         exhaust();
       } else recorded += 1;
       reportUnavailable();
+      // Resource IO is gated by time and a separate budget, after dequeue output.
+      try {
+        if (!truncated) observeResource?.();
+      } catch {
+        /* Observations cannot fail the suite. */
+      }
     },
     unavailable() {
       if (unavailableReported) return;
@@ -219,7 +367,7 @@ export default async function* executionReporter(source) {
   let trace;
   const file = process.env.ZENX_TEST_EXECUTION_TRACE_FILE;
   try {
-    if (file) trace = createExecutionTrace({ file });
+    if (file) trace = createExecutionTrace({ file, resourceObservation: true });
     for await (const event of source) {
       try {
         trace?.observe(event);

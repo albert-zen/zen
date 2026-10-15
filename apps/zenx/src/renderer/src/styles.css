@@ -9793,6 +9793,11 @@ button:disabled {
   :root:is([data-platform="linux"], [data-platform="win32"]) .sidebar {
     top: var(--native-titlebar-height);
   }
+  /* Absolute controls do not inherit the surface's titlebar padding. */
+  :root:is([data-platform="linux"], [data-platform="win32"])
+    .new-thread-draft-mobile {
+    top: calc(var(--native-titlebar-height) + 8px);
+  }
 }
 
 /* Drawers must not put their Close action beneath OS caption controls. */
