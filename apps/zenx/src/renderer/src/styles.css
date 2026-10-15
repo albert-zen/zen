@@ -10315,6 +10315,108 @@ button:disabled {
   border-radius: 5px 15px 15px 15px;
 }
 
+.original-history-reference,
+.original-history-unavailable {
+  margin: 8px 0 12px 30px;
+}
+.original-history-unavailable {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.original-history-reader {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  min-width: 0;
+}
+.original-history-reader h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.original-history-reader p {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.original-history-locator {
+  display: grid;
+  gap: 4px;
+}
+.original-history-locator code,
+.original-history-item-toggle code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.original-history-items {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.original-history-items > li {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.original-history-items pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 35vh;
+  overflow-y: auto;
+}
+.original-history-items small {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.original-history-item-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+.original-history-item-toggle strong {
+  font-size: 12px;
+}
+.original-history-pages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.original-history-item-toggle time,
+.original-history-item-toggle > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: normal;
+}
+.original-history-item-toggle > span {
+  margin-left: auto;
+}
+.original-history-locator summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.original-history-locator code {
+  display: block;
+  margin-top: 6px;
+}
+.original-history-item-detail {
+  margin-top: 10px;
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+
 .workspace-plugin-choice {
   position: relative;
   display: flex;
