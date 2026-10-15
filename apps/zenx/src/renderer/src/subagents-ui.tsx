@@ -301,7 +301,7 @@ function CreateSideChat({
               <Select
                 aria-label={i18n.t("panels:childReasoningEffort")}
                 value={effort}
-                disabled={efforts.length === 0}
+                disabled={efforts.length === 0 && effort === ""}
                 onValueChange={setEffort}
               >
                 <option value="">

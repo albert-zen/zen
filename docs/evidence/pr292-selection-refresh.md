@@ -36,3 +36,15 @@ All models, conversations and receipts there are synthetic; it makes no model
 calls. Actual screenshots, independent final integration review and exact-head
 hosted CI remain separate merge gates. This does not claim native-platform GUI
 validation or an aggregate full-suite pass.
+
+## Final R3 bounded correction
+
+The third independent review found one UI recovery defect: an effort-only
+choice could become impossible to clear after its inherited model lost all
+reasoning choices. The effort selector now stays enabled while a nonempty
+choice exists, retaining the user's explicit override until they clear it.
+Creation remains blocked until the choice is valid or explicitly reset.
+
+The reviewer's exact regression failed before the one-line correction and
+passed afterward. Final UI plus capability tests passed 31/31 (17 UI, 14
+capability). This is a bounded correction after R3, not a fourth review round.

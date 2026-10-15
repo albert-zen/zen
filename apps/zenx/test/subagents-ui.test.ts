@@ -708,3 +708,30 @@ test("an inherited effort invalidated by a catalog refresh cannot silently fall 
     await f.close();
   }
 });
+
+test("clear an effort-only override after its model loses selectable efforts", async () => {
+  const f = await fixture();
+  f.modelCatalog.models = [
+    { ...creationModel("fake", "fake", ["low", "high"]), isDefault: true },
+  ];
+  try {
+    await f.render("parent", "panel", [summary("parent")]);
+    await f.click(f.button("Side chat model settings"));
+    await chooseCreationOption(f, "Reasoning effort", "high");
+    f.modelCatalog.models = [
+      { ...creationModel("fake", "fake", []), isDefault: true },
+    ];
+    await f.render("parent", "panel", [summary("parent")]);
+    assert.equal(f.button("New side chat").disabled, true);
+    assert.equal(f.button("Reasoning effort").dataset.value, "high");
+    assert.equal(
+      f.button("Reasoning effort").disabled,
+      false,
+      "the stale effort must remain clearable to inheritance",
+    );
+    await chooseCreationOption(f, "Reasoning effort", "");
+    assert.equal(f.button("New side chat").disabled, false);
+  } finally {
+    await f.close();
+  }
+});
