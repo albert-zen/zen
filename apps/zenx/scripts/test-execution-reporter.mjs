@@ -28,9 +28,9 @@ function boundedField(value) {
   return result;
 }
 
-function relativeLocation(root, value) {
+function relativeLocation(root, cwd, value) {
   if (typeof value !== "string" || value.length > 4096) return undefined;
-  const relative = path.relative(root, path.resolve(value));
+  const relative = path.relative(root, path.resolve(cwd, value));
   if (
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative) ||
@@ -45,6 +45,7 @@ function relativeLocation(root, value) {
 /** Exported for bounded sink tests; production uses only the fixed limits above. */
 export function createExecutionTrace({
   root = repoRoot,
+  cwd = process.cwd(),
   file,
   open = openSync,
   write = writeSync,
@@ -146,14 +147,13 @@ export function createExecutionTrace({
         return;
       }
       const data = event.data;
-      const relative = relativeLocation(root, data.file);
+      const relative = relativeLocation(root, cwd, data.file);
       if (relative === undefined || typeof data.name !== "string") {
         ignored = increment(ignored);
         return;
       }
       let name = data.name;
-      const fileDequeue =
-        name === data.file || name === path.resolve(data.file);
+      const fileDequeue = relativeLocation(root, cwd, name) === relative;
       if (fileDequeue) name = relative;
       else if (path.isAbsolute(name) || /^[A-Za-z]:[\\/]|^file:/u.test(name))
         name = "[non-repository test name]";
@@ -161,8 +161,9 @@ export function createExecutionTrace({
       const projectedName = boundedField(name);
       const value = {
         kind: "dequeue",
-        // File wrappers use their location as name. Node 22 can buffer case
-        // events from later concurrent files: these are receipt timestamps.
+        // File wrappers can name their location relative to the runner cwd.
+        // Compare only normalized eligible repository paths, never emit cwd.
+        // Node 22 can buffer later-file cases: these are receipt timestamps.
         scope: fileDequeue ? "file" : "case",
         sequence: recorded + 1,
         file: projectedFile,

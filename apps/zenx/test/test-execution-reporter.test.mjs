@@ -103,6 +103,29 @@ test("execution reporter projects only dequeue fields and repository-relative fi
   assert.equal(h.records().at(-1).ignored, 1);
 });
 
+test("execution reporter identifies the actual Node 22 workspace-relative file wrapper", () => {
+  const ciRoot = "/home/runner/work/zen/zen";
+  const ciFile = `${ciRoot}/apps/zenx/test/imzenx-setup-service.test.ts`;
+  const h = harness({ root: ciRoot, cwd: `${ciRoot}/apps/zenx` });
+  h.trace.observe(event("test/imzenx-setup-service.test.ts", ciFile));
+  h.trace.observe(event("./test/imzenx-setup-service.test.ts", ciFile));
+  h.trace.observe(event("../zenx/test/imzenx-setup-service.test.ts", ciFile));
+  h.trace.observe(event("explicit runtime preparation", ciFile));
+  h.trace.observe(event("/private/outside.test.ts", ciFile));
+  h.trace.observe(event("../../outside.test.ts", ciFile));
+  h.trace.finish();
+  const rows = h.records().filter((row) => row.kind === "dequeue");
+  assert.deepEqual(
+    rows.map((row) => row.scope),
+    ["file", "file", "file", "case", "case", "case"],
+  );
+  for (const row of rows.slice(0, 3)) {
+    assert.equal(row.name, "apps/zenx/test/imzenx-setup-service.test.ts");
+    assert.equal(row.file, row.name);
+  }
+  assert.doesNotMatch(h.output(7).toString(), /\/home\/runner|\/private\//u);
+});
+
 test("execution reporter bounds escaped fields and Unicode without broken UTF-8", () => {
   for (const name of [
     '"\\\n'.repeat(5000),
@@ -245,7 +268,7 @@ async function fixture(t, source) {
   await writeFile(file, source);
   return { file, evidence, trace: path.join(evidence, "trace.ndjson") };
 }
-function run(file, trace, observed = true, extraArgs = []) {
+function run(file, trace, observed = true, extraArgs = [], cwd) {
   const options = observed
     ? [
         "--test-reporter=tap",
@@ -260,6 +283,7 @@ function run(file, trace, observed = true, extraArgs = []) {
     process.execPath,
     ["--test", ...options, ...extraArgs, file],
     {
+      cwd,
       env: environment,
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -311,6 +335,39 @@ for (const failing of [false, true])
       /original fixture failure/,
     );
   });
+
+test("execution reporter classifies wrappers from a workspace-relative CLI invocation", async (t) => {
+  const f = await fixture(
+    t,
+    "import test from 'node:test'; test('fixture-workspace-case',()=>{});",
+  );
+  const cwd = path.join(root, "apps/zenx");
+  const relativeFile = path.relative(cwd, f.file);
+  const result = await run(relativeFile, f.trace, true, [], cwd).done;
+  assert.equal(result.code, 0);
+  const rows = (await readFile(f.trace, "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  const wrapper = rows.find(
+    (row) => row.kind === "dequeue" && row.scope === "file",
+  );
+  assert(wrapper);
+  assert.equal(
+    wrapper.name,
+    path.relative(root, f.file).split(path.sep).join("/"),
+  );
+  assert.equal(wrapper.file, wrapper.name);
+  assert.equal(
+    rows.find((row) => row.name === "fixture-workspace-case").scope,
+    "case",
+  );
+  assert.equal(rows.at(-1).kind, "end");
+  assert.doesNotMatch(
+    await readFile(f.trace, "utf8"),
+    /\/tmp\/|\/home\/runner/u,
+  );
+});
 
 test("execution reporter file error keeps an originally successful suite successful", async (t) => {
   const f = await fixture(
