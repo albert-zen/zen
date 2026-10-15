@@ -1999,6 +1999,10 @@ while ($null -ne ($line = [Console]::ReadLine())) {
 }
 `;
 
+// Reused by the one-shot owned focus diagnostic; ordinary smoke logic is unchanged.
+export { Rpc, startNative, stopOwnedChild };
+export type { NativeState };
+
 // Imported by the Windows smoke for the shared contract fixture only.
 if (
   process.argv[1] &&

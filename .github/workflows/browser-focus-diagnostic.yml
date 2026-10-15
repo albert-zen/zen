@@ -1,0 +1,62 @@
+name: Browser focus boundary (single experiment)
+
+on:
+  pull_request:
+    types: [opened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  owned-focus-comparison:
+    name: Owned Chrome capture and insert focus comparison (diagnostic only)
+    if: >-
+      github.repository == 'albert-zen/zen' &&
+      github.event.pull_request.head.repo.full_name == 'albert-zen/zen' &&
+      github.event.pull_request.head.ref == 'diagnostic/browser-focus-boundary-20261015' &&
+      github.event.pull_request.draft == true &&
+      github.run_attempt == 1
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check the exact single-dispatch path
+        timeout-minutes: 1
+        run: node --import tsx --test apps/zenx/test/browser-focus-diagnostic.test.ts
+      - name: Prepare the same pinned headed Chrome fixture
+        run: |
+          fixture="$RUNNER_TEMP/zenx-focus-diagnostic-browser"
+          npm install --prefix "$fixture" --no-package-lock --no-audit --no-fund playwright@1.63.0
+          node "$fixture/node_modules/playwright/cli.js" install chromium
+          browser=$(node -e "process.stdout.write(require(process.argv[1]).chromium.executablePath())" "$fixture/node_modules/playwright")
+          test -f "$browser"
+          echo "ZENX_USER_BROWSER_EXECUTABLE=$browser" >> "$GITHUB_ENV"
+      - name: Observe each operation once in a fresh owned profile
+        timeout-minutes: 5
+        env:
+          CI: "1"
+          ZENX_FOCUS_ARTIFACT_DIR: ${{ runner.temp }}/zenx-focus-diagnostic-evidence
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          export ZENX_DIAGNOSTIC_HEAD=$(git rev-parse HEAD)
+          export ZENX_DIAGNOSTIC_TREE=$(git rev-parse 'HEAD^{tree}')
+          for operation in capture-only insert-only; do
+            ZENX_FOCUS_OPERATION="$operation" \
+              node --import tsx apps/zenx/src/main/browser-focus-diagnostic.ts
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-browser-focus-boundary
+          path: ${{ runner.temp }}/zenx-focus-diagnostic-evidence
+          if-no-files-found: warn

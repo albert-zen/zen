@@ -159,3 +159,37 @@ ownership stubs, then compiles the full AppKit helper and performs ordinary real
 input acceptance. A pass still requires the foreground native layer to report
 `passed` with positive `nativeSettlementReads`; a skipped layer or one green
 workflow cannot close every intermittent startup problem.
+
+## Single-use background focus comparison (diagnostic branch only)
+
+The exact-head #387 run 38703434208 passed the foreground native input layer
+(18 settlement reads, 17 concurrent batches, 58 characters, 250ms idle AX policy)
+but then rejected a new user-window focus event in the behind-sentinel CDP layer.
+That layer concurrently sends fixture `Input.insertText` to the user page; its
+old transport trace omitted that socket, so the last agent screenshot command
+alone cannot establish causality. Chromium's
+[InputHandler implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/devtools/protocol/input_handler.cc)
+calls widget focus before committing inserted text. This source-level lead is not yet
+a native macOS reproduction of the isolated operation.
+
+The separate `browser-focus-diagnostic.yml` workflow runs only on opening its
+named same-repository draft branch, attempt 1, with an exact-head checkout and
+read-only repository permissions. It runs capture-only then insert-only, each in
+a new process and disposable browser profile, using the unchanged native helper.
+It requires existing Accessibility trust and never requests permission. Normal
+fixture setup activates only owned windows, then waits for the sentinel to own
+keyboard focus and the user's actual renderer focus to be false before recording
+the baseline. Each case sends exactly one subject command, records all browser,
+user and agent CDP method/reply timing, and reads both page event histories and
+native ownership immediately and after 200ms. Screenshot pixels are discarded.
+
+Any rejected or outcome-unknown command stops that case and the pair without
+replay or advancing to the other operation. Known focus/ownership changes remain
+reported evidence, never acceptance. The report saves its baseline and each
+completed after-read incrementally, including when a later read fails; the error
+marks that evidence incomplete without discarding it or issuing more reads.
+Cleanup confirms both owned child processes
+exited before removing their temporary directory; unconfirmed cleanup is a
+failure and retains it. Reports include checked-out head/tree, browser version,
+fresh profile identity and cleanup status. This workflow does not replace or
+weaken #387's existing background/native acceptance, and must not be merged.
