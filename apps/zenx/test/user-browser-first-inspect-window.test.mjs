@@ -779,7 +779,7 @@ for (const failure of ["timeout", "abort", "document"]) {
 }
 
 for (const failure of ["abort", "document", "deadline"]) {
-  test(`world predispatch ${failure} rejects without sending or reclaiming`, async () => {
+  test(`world predispatch ${failure} rejects without sending`, async () => {
     const f = fixture();
     const controller = new AbortController();
     f.hook((event) => {
@@ -807,9 +807,15 @@ for (const failure of ["abort", "document", "deadline"]) {
       0,
     );
     assert.equal(f.main().length, 0);
-    assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+    assert.equal(
+      f.client.testEpoch().firstInspectClaimed,
+      failure !== "document",
+    );
     const next = await start(f);
-    assert.equal(next.request.timer.ms, 2_000);
+    assert.equal(
+      next.request.timer.ms,
+      failure === "document" ? 10_000 : 2_000,
+    );
     f.complete(next.request);
     await next.result;
   });
@@ -829,3 +835,198 @@ for (const invalidation of ["context", "detach"]) {
     assert.equal(f.main().length, 0);
   });
 }
+
+async function rejectInitialLifecycle(f) {
+  f.hook((event) => {
+    if (event.kind !== "timer-armed" || event.method !== "Page.getFrameTree")
+      return;
+    f.hook(undefined);
+    f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+  });
+  await assert.rejects(
+    f.inspect(),
+    (error) =>
+      error instanceof UserBrowserDocumentChangedBeforeDispatchError &&
+      /pending lifecycle Page.frameStartedLoading/.test(error.message),
+  );
+  assert.equal(f.main().length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+  assert.equal(f.client.testEpoch().firstInspectClaimed, false);
+  assert.equal(f.client.testEpoch().firstInspectGrantedDeadline, 10_100);
+  assert.equal(f.client.testEpoch().firstInspectReservation, undefined);
+}
+
+test("known initial lifecycle rejection returns only its original undispatched reservation", async () => {
+  const f = fixture({
+    delay: (r) => (r.method === "Page.getFrameTree" ? 100 : 0),
+  });
+  await rejectInitialLifecycle(f);
+  f.advance(50);
+  const next = await start(f);
+  const world = f.sends.find((r) => r.method === "Page.createIsolatedWorld");
+  assert.equal(world.timer.due, 10_100);
+  assert.equal(world.timer.ms, 9_650);
+  assert.equal(next.request.timer.due, 10_100);
+  assert.equal(next.request.timer.ms, 9_550);
+  f.complete(next.request);
+  await next.result;
+  assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+  assert.equal(f.client.testEpoch().firstInspectReservation, undefined);
+});
+
+for (const elapsed of [8_500, 10_000, 10_001]) {
+  test(`reclaim after ${elapsed}ms preserves granted deadline without ordinary fallback`, async () => {
+    const f = fixture();
+    await rejectInitialLifecycle(f);
+    f.advance(elapsed);
+    if (elapsed < 10_000) {
+      const next = await start(f);
+      assert.equal(next.request.timer.ms, 1_500);
+      assert.equal(next.request.timer.due, 10_100);
+      const world = f.sends.find(
+        (r) => r.method === "Page.createIsolatedWorld",
+      );
+      assert.equal(world.timer.ms, 1_500);
+      assert.equal(world.timer.due, 10_100);
+      f.complete(next.request);
+      await next.result;
+    } else {
+      const frameCount = f.sends.filter(
+        (r) => r.method === "Page.getFrameTree",
+      ).length;
+      await assert.rejects(f.inspect(), /deadline elapsed before dispatch/);
+      assert.equal(f.main().length, 0);
+      assert.equal(
+        f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+        0,
+      );
+      assert.equal(
+        f.sends.filter((r) => r.method === "Page.getFrameTree").length,
+        frameCount,
+      );
+    }
+    assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+    assert.equal(f.client.testEpoch().firstInspectReservation, undefined);
+  });
+}
+
+test("repeated explicit lifecycle stabilization never renews the granted deadline", async () => {
+  const f = fixture();
+  await rejectInitialLifecycle(f);
+  f.advance(4_000);
+  await rejectInitialLifecycle(f);
+  f.advance(4_500);
+  const next = await start(f);
+  assert.equal(next.request.timer.ms, 1_500);
+  assert.equal(next.request.timer.due, 10_100);
+  f.complete(next.request);
+  await next.result;
+});
+
+test("a concurrent nonholder cannot return a newer exclusive reservation", async () => {
+  let holdFrames = true;
+  const f = fixture({
+    hold: (r) => holdFrames && r.method === "Page.getFrameTree",
+  });
+  const frames = () => f.sends.filter((r) => r.method === "Page.getFrameTree");
+  const frameResult = {
+    frameTree: {
+      frame: {
+        id: "frame-1",
+        loaderId: "loader-1",
+        url: "https://owned.test/fixture",
+      },
+    },
+  };
+  const first = f.inspect();
+  const nonholder = f.inspect();
+  void first.catch(() => undefined);
+  void nonholder.catch(() => undefined);
+  await until(() => frames().length === 2);
+  f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+  f.reply(frames()[0], frameResult);
+  await assert.rejects(first, UserBrowserDocumentChangedBeforeDispatchError);
+  assert.equal(f.client.testEpoch().firstInspectClaimed, false);
+  const successor = f.inspect();
+  void successor.catch(() => undefined);
+  await until(() => frames().length === 3);
+  const successorToken = f.client.testEpoch().firstInspectReservation;
+  assert.ok(successorToken);
+  f.reply(frames()[1], frameResult);
+  await assert.rejects(
+    nonholder,
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  assert.equal(f.client.testEpoch().firstInspectClaimed, true);
+  assert.equal(f.client.testEpoch().firstInspectReservation, successorToken);
+  holdFrames = false;
+  f.reply(frames()[2], frameResult);
+  const concurrent = f.inspect();
+  await until(() => f.main().length === 2);
+  assert.deepEqual(
+    f.sends
+      .filter((r) => r.method === "Page.createIsolatedWorld")
+      .map((r) => r.timer.ms)
+      .sort((a, b) => a - b),
+    [2_000, 10_000],
+  );
+  assert.deepEqual(
+    f
+      .main()
+      .map((r) => r.timer.ms)
+      .sort((a, b) => a - b),
+    [2_000, 10_000],
+  );
+  f.main().forEach(f.complete);
+  await Promise.all([successor, concurrent]);
+});
+
+for (const failure of ["abort", "owner", "detach", "timeout", "protocol"]) {
+  test(`pre-world ${failure} cannot return its reserved grant`, async () => {
+    const f = fixture({ hold: (r) => r.method === "Page.getFrameTree" });
+    const controller = new AbortController();
+    const result = f.inspect(controller.signal);
+    void result.catch(() => undefined);
+    await until(() => f.sends.some((r) => r.method === "Page.getFrameTree"));
+    const frame = f.sends.find((r) => r.method === "Page.getFrameTree");
+    const epoch = f.client.testEpoch();
+    if (failure === "abort")
+      controller.abort(new Error("abort reserved preflight"));
+    if (failure === "owner") epoch.logicalSessionIncarnation++;
+    if (failure === "detach") await f.client.detachTarget("target-1", owner);
+    if (failure === "timeout") f.fire(frame.timer);
+    if (failure === "protocol") f.protocolError(frame);
+    else if (failure === "owner" || failure === "detach") f.reply(frame, {});
+    await assert.rejects(result);
+    assert.equal(epoch.firstInspectClaimed, true);
+    assert.equal(epoch.firstInspectReservation, undefined);
+    assert.equal(
+      f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+      0,
+    );
+    assert.equal(f.main().length, 0);
+  });
+}
+
+test("refund compares the captured owner fence, not a subsequently mutated caller object", async () => {
+  const f = fixture({ hold: (r) => r.method === "Page.getFrameTree" });
+  const callerOwner = { ...owner };
+  const result = f.inspect(undefined, undefined, callerOwner);
+  void result.catch(() => undefined);
+  await until(() => f.sends.some((r) => r.method === "Page.getFrameTree"));
+  const epoch = f.client.testEpoch();
+  epoch.logicalSessionIncarnation++;
+  callerOwner.logicalSessionIncarnation++;
+  const frame = f.sends.find((r) => r.method === "Page.getFrameTree");
+  f.reply(frame, {});
+  await assert.rejects(result, UserBrowserDocumentChangedBeforeDispatchError);
+  assert.equal(epoch.firstInspectClaimed, true);
+  assert.equal(epoch.firstInspectReservation, undefined);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+});
