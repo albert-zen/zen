@@ -434,6 +434,9 @@ function AppContent() {
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
+  const endNotificationsRef = useRef<ReturnType<
+    typeof createThreadEndNotificationObserver
+  > | null>(null);
   const [debugThreadId, setDebugThreadId] = useState<string | null>(null);
   const messageForkRequests = useRef(new Map<string, Promise<void>>());
   const messageForkNavigation = useRef(0);
@@ -1076,6 +1079,7 @@ function AppContent() {
           throw new Error(i18n.t("shell:importOpenSuperseded"));
         return;
       }
+      endNotificationsRef.current?.recover(threadId, result);
       const pending = pendingResumeProjectionRef.current;
       const notifications =
         pending?.epoch === epoch && pending.threadId === threadId
@@ -1198,6 +1202,7 @@ function AppContent() {
       conversationReadStore(),
       () => window.zenx.protocol.request("zen/initialize", {}),
     );
+    endNotificationsRef.current = endNotifications;
     void endNotifications.connect();
     const loadModels = async () => {
       const epoch = ++modelCatalogLoadEpoch.current;
@@ -1540,6 +1545,8 @@ function AppContent() {
     return () => {
       active = false;
       endNotifications.disconnect();
+      if (endNotificationsRef.current === endNotifications)
+        endNotificationsRef.current = null;
       disposeStatus();
       disposeNotifications();
       disposeApprovals();
@@ -2817,6 +2824,9 @@ function AppContent() {
   const renderSideConversation = (id: string) => (
     <ThreadConversationViewport
       queueEditStore={queueEditStore}
+      onRecovery={(threadId, snapshot) =>
+        endNotificationsRef.current?.recover(threadId, snapshot)
+      }
       key={id}
       threadId={id}
       composer={composerStates[id] ?? emptyComposerState()}

@@ -1,7 +1,10 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { NativeProjectedThreadEvent } from "../../../src/protocol/native/recovery.js";
+import type {
+  NativeProjectedThreadEvent,
+  NativeThreadRecoverySnapshot,
+} from "../../../src/protocol/native/recovery.js";
 import { createConversationReadStore } from "../src/renderer/src/conversation-read-state.js";
 import { createThreadEndNotificationObserver } from "../src/renderer/src/thread-end-notifications.js";
 
@@ -131,4 +134,80 @@ test("disconnect retires pending handshakes; new epochs reject historical notifi
   observer.disconnect();
   observer.observe(ended(8, "new"));
   assert.equal(store.getSnapshot().pendingThreadEnds.thread?.id, "end-1");
+});
+
+test("resume barrier envelopes fence epoch, requested Thread and watermark without scanning history", async () => {
+  const store = createConversationReadStore(disk(), 200);
+  const observer = createThreadEndNotificationObserver(store, async () => ({
+    processEpoch: "current",
+  }));
+  await observer.connect();
+  const snapshot = (event = ended(0)): NativeThreadRecoverySnapshot => ({
+    processEpoch: event.processEpoch,
+    threadId: "thread",
+    watermark: event.watermark,
+    thread: {
+      id: "thread",
+      items: [],
+    } as unknown as NativeThreadRecoverySnapshot["thread"],
+    events: [event],
+  });
+  observer.recover("other", snapshot());
+  observer.recover("thread", snapshot(ended(0, "retired")));
+  observer.recover("thread", { ...snapshot(), watermark: 0 });
+  observer.recover("thread", { ...snapshot(), processEpoch: "retired" });
+  observer.recover("thread", {
+    ...snapshot(),
+    thread: { ...snapshot().thread, id: "other" },
+  });
+  const historical = ended(0).event;
+  assert(historical.type === "item_completed");
+  observer.recover("thread", {
+    ...snapshot(),
+    events: [],
+    thread: { ...snapshot().thread, items: [historical.item] },
+  });
+  assert.deepEqual(store.getSnapshot().pendingThreadEnds, {});
+  observer.recover("thread", snapshot());
+  assert.equal(store.getSnapshot().pendingThreadEnds.thread?.id, "end-0");
+  observer.disconnect();
+});
+
+test("ready during a pending failed handshake is consumed once without a retry loop", async () => {
+  const store = createConversationReadStore(disk(), 200);
+  const attempts: Array<{
+    resolve(value: { processEpoch: string }): void;
+    reject(error: Error): void;
+  }> = [];
+  const observer = createThreadEndNotificationObserver(
+    store,
+    () =>
+      new Promise((resolve, reject) => {
+        attempts.push({ resolve, reject });
+      }),
+  );
+  const first = observer.connect();
+  await Promise.resolve();
+  void observer.connect();
+  observer.observe(ended(0));
+  attempts[0]!.reject(new Error("Earlier IPC not ready"));
+  for (let index = 0; index < 10 && attempts.length < 2; index++)
+    await Promise.resolve();
+  assert.equal(attempts.length, 2);
+  attempts[1]!.resolve({ processEpoch: "current" });
+  await first;
+  assert.equal(store.getSnapshot().pendingThreadEnds.thread?.id, "end-0");
+  observer.disconnect();
+  const failure = observer.connect();
+  await Promise.resolve();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    attempts[2]!.reject(new Error("No successor ready signal"));
+    await failure;
+    assert.equal(attempts.length, 3, "failure alone cannot retry");
+  } finally {
+    console.warn = warn;
+    observer.disconnect();
+  }
 });

@@ -1353,6 +1353,49 @@ test("App records live execution ends below the install timestamp without treati
   }
 });
 
+test("App observes a terminal event transferred in a valid resume response", async () => {
+  const snapshot = nativeRecoveryForThread(
+    threadWithMessage("Synthetic reply"),
+    { processEpoch: "live-epoch", watermark: 20 },
+  );
+  const end = snapshot.thread.items.find(
+    (item) => item.type === "turn_completed",
+  )!;
+  end.createdAt = new Date(150).toISOString();
+  snapshot.events = [
+    {
+      processEpoch: snapshot.processEpoch,
+      threadId: snapshot.threadId,
+      watermark: 20,
+      event: { type: "item_completed", item: end, turnEndPosition: 0 },
+    },
+  ];
+  const harness = await mountApp({
+    request: async (method) => {
+      if (method === "zen/initialize")
+        return { processEpoch: snapshot.processEpoch };
+      if (method === "zen/thread/resume") return snapshot;
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    assert.deepEqual(
+      conversationReadStore().getSnapshot().pendingThreadEnds,
+      {},
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    assert.equal(
+      conversationReadStore().getSnapshot().pendingThreadEnds[snapshot.threadId]
+        ?.id,
+      end.id,
+    );
+  } finally {
+    await harness.unmount();
+  }
+});
+
 interface MountOptions {
   titles?: typeof window.zenx.titles;
   readFile?(threadId: string, path: string): Promise<never>;
