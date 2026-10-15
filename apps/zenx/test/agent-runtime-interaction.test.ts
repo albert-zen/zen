@@ -37,6 +37,18 @@ test("native wait receipt stays static despite successful outer call; parallel r
       document
         .querySelector(".turn-running-label .activity-text")
         ?.getAttribute("data-active"),
+      "false",
+    );
+    assert.equal(
+      document
+        .querySelector(".turn-running-label")
+        ?.getAttribute("data-compact"),
+      "true",
+    );
+    assert.equal(
+      document
+        .querySelector(".trace-toggle .activity-text")
+        ?.getAttribute("data-active"),
       "true",
     );
   });
@@ -51,6 +63,77 @@ test("empty recovered turn without start evidence does not advertise running ani
       document
         .querySelector(".turn-running-label .activity-text")
         ?.getAttribute("data-active"),
+      "false",
+    );
+  });
+});
+
+test("action-set headers keep one mounted disclosure and metadata while current work changes", async () => {
+  await withRuntimeDom(async (h) => {
+    const first = runtimeTask("first", "task-one", "running");
+    const second = {
+      ...runtimeCommand("second", "browser_inspect"),
+      toolName: "browser_inspect",
+    };
+    await h.render(runtimeThread([first, second]));
+    const toggle = document.querySelector<HTMLButtonElement>(".trace-toggle")!;
+    const metadata = document.querySelector(".turn-running-label")!;
+    const title = document.querySelector(".trace-activity-title")!;
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(metadata.getAttribute("data-compact"), "true");
+    assert.ok(metadata.querySelector('[role="status"].sr-only'));
+    assert.ok(metadata.querySelector(".turn-duration"));
+    assert.equal(toggle.querySelector(".trace-counts")?.textContent, "");
+    await h.click(".trace-toggle");
+    await h.render(
+      runtimeThread([runtimeTask("first", "task-one", "completed"), second]),
+    );
+    assert.equal(document.querySelector(".trace-toggle"), toggle);
+    assert.equal(document.querySelector(".trace-activity-title"), title);
+    assert.equal(document.querySelector(".turn-running-label"), metadata);
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(title.textContent, "Run command ×1 · Inspect page ×1");
+    assert.equal(title.getAttribute("title"), title.textContent);
+    assert.equal(
+      title.querySelector(".activity-text")?.getAttribute("data-active"),
+      "false",
+    );
+    assert.equal(
+      metadata.getAttribute("data-compact"),
+      "false",
+      "model-only continuation retains its honest status",
+    );
+  });
+});
+
+test("waiting and approval retain visible static metadata rather than duplicate activity", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(
+      runtimeThread([runtimeWait("wait", "waiting"), runtimeCommand("done")]),
+    );
+    const label = document.querySelector(".turn-running-label")!;
+    assert.equal(label.getAttribute("data-compact"), "false");
+    assert.equal(label.querySelector(".sr-only"), null);
+    assert.equal(
+      document
+        .querySelector(".trace-toggle .activity-text")
+        ?.getAttribute("data-active"),
+      "false",
+    );
+    assert.equal(
+      document.querySelector(".trace-activity-title")?.textContent,
+      "Waiting for task",
+    );
+    await h.render(
+      runtimeThread([
+        runtimeCommand("approval-call", "run_code", "inProgress"),
+      ]),
+      { approvals: [runtimeApproval] },
+    );
+    assert.equal(label.getAttribute("data-phase"), "approval");
+    assert.equal(label.getAttribute("data-compact"), "false");
+    assert.equal(
+      label.querySelector(".activity-text")?.getAttribute("data-active"),
       "false",
     );
   });

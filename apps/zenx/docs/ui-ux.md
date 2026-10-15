@@ -189,7 +189,7 @@ Trace sequence projection 按 Item 顺序生成：
 
 用户显式选择的 Turn、Trace Group 与 Tool row 展开/收起状态按精确 Thread / Turn / Item 身份保留；切换会话、进入 Settings 或 loading 重挂载后返回仍沿用该选择。它们仅存在于本次 renderer 内存，不写入历史或 Host 配置，也不常驻隐藏会话 DOM。
 
-Trace Group 默认收起，只显示轻量摘要、Item 数量和 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
+Trace Group 默认收起，主标题显示动作集合摘要；调用总数与 Item 数量降为可访问详情，保留 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
 Tool 展示动作、执行进度和中性的已结束状态；超时、取消、拒绝、审批与取消未确认保留具体事实标签，不另设通用失败标签或计数。状态更新同一个稳定 Item，不创建重复 row；原始结果、输出与退出码保留在详情，长 payload 在摘要截断，在详情内换行或局部滚动。
 
@@ -203,7 +203,7 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 以下是 visual guidance，不是协议或状态要求：
 
 - 用户消息使用右对齐气泡；Agent Message 左侧自然排版，不使用气泡或重复头像轨道。
-- Conversation stream 中的 Agent Message 不显示重复的 assistant logo/avatar + “ZenX” identity row；Completed Turn 的 **Worked for** disclosure 或 Running Turn 的 **Working** 状态直接成为首条 metadata，正文与 inline Trace / Tool affordance 紧随其后。此规则不影响产品壳/Sidebar 的 ZenX 品牌，也不影响 Thread row 的 Provider logo + model identity。
+- Conversation stream 中的 Agent Message 不显示重复的 assistant logo/avatar + “ZenX” identity row；Completed Turn 的 **Worked for** disclosure 或 Running Turn 的状态/时长成为首条 metadata，正文与 inline Trace / Tool affordance 紧随其后；当前 trace 已表达真实运行/思考时，顶部不再重复泛化状态文字，但保留可访问状态和时长，审批、停止与等待仍明确可见。此规则不影响产品壳/Sidebar 的 ZenX 品牌，也不影响 Thread row 的 Provider logo + model identity。
 - Agent Message 与 Trace Group 位于 Turn 的同一一级流中，不制造错误缩进。
 - 正文优先可读宽度、行高和段落节奏；Trace 比正文更小、更弱。
 - Trace Group 保持轻量，不使用厚边框或每一步一个大卡片。
@@ -584,9 +584,9 @@ Reuse the shared switch visual and native hover title; the stable accessible lab
 
 Only the terminal Agent response exposes Copy and Fork in its hover/focus action row. Intermediate commentary, tool-adjacent replies, and in-progress responses never expose this action row, even when their canonical Items are durable. The existing terminal-response selection remains authoritative (the final completed reply, or the last non-empty reply on a failed/interrupted Turn). Fork appears directly after Copy when that response has a durable canonical Item. The action binds the source Thread and exact canonical Agent Item ID; streaming-only messages cannot be fork boundaries. It uses the native Core fork with the inclusive prefix, never later Items, historical tool replay or an automatic new Turn. The original Thread is unchanged. Pending repeated clicks share one request across viewport remounts; errors remain visible and retryable. Success opens the new Thread unless newer navigation or a newer fork action superseded that intent. Touch/no-hover actions remain visible with 44px targets and keyboard focus is explicit. The thread-level action uses the same Fork icon and localized Fork label while retaining its latest-complete-Turn boundary and the same working directory. Shared Fork artwork stays within the 16×16 icon viewBox, including all three endpoint strokes.
 
-### 2026-10-14: Compact activity context
+### Compact activity context
 
-Settled multi-tool disclosures retain the call count and the latest three action summaries, newest first, rather than reducing their title to the count alone. Cancellation counts remain explicit; generic failure and nonzero-result counts are omitted, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
+Settled multi-tool disclosures lead with at most two known action kinds and an exact remainder of other operations, plus the actual names of unknown tools. Counts describe calls per action, never unique files, success, or work inferred from arbitrary shell/code text. The total call count remains available to assistive technology; duplicate category counts are omitted. Mixed groups use the existing list-detail icon, while same-action groups retain their semantic icon. Canonical chronological members and stable disclosures are unchanged. Active groups name the observed current operation in the same single-line row; genuine waits stay static. A running/thinking trace removes only the duplicate visual Turn-level generic status, retaining the metadata row height, elapsed time and accessible status. Model-only continuation, approval, stopping and waiting remain visible. Cancellation counts remain explicit; generic failure and nonzero-result counts are omitted, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
 
 ### 2026-10-14: Codex conversation import in Settings
 
@@ -645,6 +645,10 @@ Items remains the default debugger tab in canonical order. Tool call arguments,
 tool result content and tool images start collapsed and mount only after an
 explicit disclosure. Exact Item JSON and the existing full-content controls stay
 available; debug mode does not add conversation copy/fork actions.
+
+### 2026-10-15: Consistent interface icon semantics
+
+Triggers use the existing clock artwork throughout navigation, workspace tabs and launchers, Marketplace, and delivered or queued message sources. The public plugin icon key `trigger` remains supported as an alias of `clock`, so plugin contributions cannot reintroduce a different Trigger glyph. Settings → Plugins uses the existing plug. Thread message source actions use the existing conversation bubble, including remote/unavailable sources, while trace/list controls retain their own icons. File tabs use the file icon and the file-tree visibility toggle uses the folder icon; neither uses context-compaction artwork. These changes reuse the existing icon sizes, strokes, containers and localized labels, without altering source navigation, Trigger execution or file disclosure behavior.
 
 ### 2026-10-15: Side chat creation settings
 

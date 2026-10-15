@@ -136,6 +136,26 @@ for (const existingInstructions of [false, true]) {
         false,
       );
       assert.ok(calls.every((c) => c === "workspace" || c === "list"));
+      await act(async () =>
+        root.render(
+          React.createElement(CompanionWorkspace, {
+            ...props,
+            section: "automations",
+          }),
+        ),
+      );
+      const triggersTab = document.getElementById(
+        "aux-tab-custom:automations",
+      )!;
+      assert.equal(triggersTab.textContent, "Triggers");
+      assert.equal(
+        triggersTab.querySelector("svg")?.getAttribute("data-icon"),
+        "trigger",
+      );
+      assert.ok(
+        triggersTab.querySelector("circle"),
+        "PAW Triggers tab uses the clock face",
+      );
       const fileReads: Array<[string, string]> = [];
       Object.assign(window.zenx, {
         workspaceFiles: {

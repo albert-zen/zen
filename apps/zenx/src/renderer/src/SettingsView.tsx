@@ -327,7 +327,7 @@ export function SettingsView({
     {
       id: "plugins",
       label: i18n.t("settings:settingsView.plugins"),
-      icon: "trigger",
+      icon: "plug",
     },
     {
       id: "appearance",

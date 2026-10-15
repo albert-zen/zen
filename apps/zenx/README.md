@@ -895,11 +895,43 @@ npm --workspace apps/zenx run check
 npm run check
 npm --workspace apps/zenx run smoke:capabilities
 npm --workspace apps/zenx run smoke:external-zas # packaged macOS app + external client
+# macOS only: real LaunchServices startup and existing provider smoke, one build:
+node apps/zenx/scripts/smoke-macos-launch-path.mjs --capabilities
 # Windows only, after installing Microsoft WinApp CLI:
 npm --workspace apps/zenx run smoke:windows-computer
 npm --workspace apps/zenx run smoke:windows-user-browser
 npm --workspace apps/zenx run smoke:providers
 ```
+
+The macOS CI LaunchServices check packages the ordinary app into an owned
+scratch directory with an observer inserted into the staged JavaScript before
+existing ad-hoc signing. It verifies the signature before and after execution;
+normal packaging has no observer. `/usr/bin/open --env` must be available. Each
+launch explicitly receives a sparse PATH and temporary HOME, ZDOTDIR, user data,
+and Zen data. A temporary `.zprofile` adds a fixture executable and synthetic
+secret exports. The check observes sparse PATH before the real bootstrap, restored
+PATH afterward, and the first shell command through the real Host's existing tool
+composition. Neither the app nor its tool may import the synthetic secrets.
+
+The mounted renderer invokes its real `settings.safeRestart` preload IPC, which
+must produce a new Host PID and a successful first shell command. After normal
+`app.quit`, a second `/usr/bin/open` launch must produce a new app PID and repeat
+the checks. This covers LaunchServices GUI activation, Host safe restart, and
+normal app reopening. It does not click Finder or test an updater: the product
+has no `app.relaunch`/updater path. Per-stage receipts and an independent report
+are retained in the CI `macos-launch-path-<sha>` artifact, with source HEAD/tree
+and a digest of the signed app bundle. A staging-only independent worker exposes
+a private Unix socket authenticated by a per-launch secret kept outside uploaded
+evidence. External cleanup verifies the exact executable, PID, process start
+identity, and instance marker, then asks that worker to terminate only its own
+process if the main loop is hung. There is no numeric-PID kill fallback. Missing
+identity, unavailable control, unconfirmed exit, forced termination, or a real
+Host lifecycle shutdown failure preserves the fixture and blocks later provider
+smoke. Forced termination never counts as normal Host cleanup. The macOS job
+runs real hung-main/forged-identity cleanup tests without a macOS skip.
+A provider-browser smoke failure remains a separate failure. Cross-platform observer/unit tests do not
+count as native acceptance. No user profile, global launch environment,
+certificate configuration, quarantine, or Gatekeeper setting is changed.
 
 Reusable browser/computer task prompts and offline fixtures are documented in
 [the evaluation guide](evals/browser-computer/README.md). Browser 1.0.2 adds

@@ -422,7 +422,7 @@ export function CompanionWorkspace({
           {
             id: "automations",
             title: i18n.t("panels:automations"),
-            icon: "layers" as const,
+            icon: "trigger" as const,
             render: () => (
               <div className="companion-content">
                 <h3>{i18n.t("panels:checksAndTriggers")}</h3>
