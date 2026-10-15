@@ -296,10 +296,29 @@ Object.assign(zenx, {
 if (params.has("launchers")) {
   Object.assign(zenx.plugins, {
     get: async () => workspaceLauncherSnapshot,
-    executeCommand: async (_pluginId: string, command: string) => {
-      if (command === "list") return { threads: [] };
-      if (command === "create") return { threadId: "synthetic-side-chat" };
-      return { triggers: [], history: [], rooms: [] };
+    executeCommand: async (pluginId: string, command: string) => {
+      if (pluginId === "zenx-subagents") {
+        if (command === "list") return { threads: [] };
+        if (command === "create") return { threadId: "synthetic-side-chat" };
+      }
+      if (pluginId === "zenx-triggers") {
+        if (command === "threads")
+          return {
+            threads: [
+              {
+                threadId: "thread-1",
+                shortId: "thread-1",
+                name: "Thread one",
+                cwd: "/work/zen",
+                archived: false,
+                status: "idle",
+              },
+            ],
+          };
+        if (command === "workspaces") return { workspaces: [] };
+        if (command === "list") return { triggers: [], history: [], rooms: [] };
+      }
+      throw new Error(`Unsupported synthetic command: ${pluginId}/${command}`);
     },
     readHandle: async () => null,
   });
@@ -322,8 +341,8 @@ function summary(
       approvalPolicy: "never",
     },
     archived: false,
-    createdAt: new Date(1_000).toISOString(),
-    updatedAt: new Date(2_000).toISOString(),
+    createdAt: "2026-10-15T03:00:00.000Z",
+    updatedAt: "2026-10-15T03:01:00.000Z",
     name,
     preview: "",
     status: "idle",
@@ -340,8 +359,8 @@ function thread(threadId = "thread-1"): Thread {
     ephemeral: false,
     isPinned: false,
     modelProvider: "fake",
-    createdAt: 1,
-    updatedAt: 2,
+    createdAt: 1792033200,
+    updatedAt: 1792033260,
     recencyAt: null,
     status: { type: "idle" },
     path: null,
@@ -364,7 +383,7 @@ function runningTurn(): Thread["turns"][number] {
     itemsView: "full",
     status: "inProgress",
     error: null,
-    startedAt: 10,
+    startedAt: 1792033200,
     completedAt: null,
     durationMs: null,
   };
@@ -377,7 +396,7 @@ function threadWithMessage(text: string): Thread {
       {
         ...runningTurn(),
         status: "completed",
-        completedAt: 20,
+        completedAt: 1792033210,
         durationMs: 10,
         items: [
           {
