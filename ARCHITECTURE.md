@@ -441,6 +441,8 @@
 - **ZenXPackagedProviderSmoke** — ZenX 构建验证用真实 resources/providers manifest、asset hash、version pin 与 bundled-only catalog path 检查离线 packaged provisioning；它是一次性测试流程，不是运行时 coordinator 或 durable state。
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
 - Windows packaged UIA smoke 的文件观察 helper 仅在既有观察期限内重读 owned fixture 的 ENOENT/EBUSY，不重放 UIA 动作；文本匹配与文件可读性共用同一观察期限。
+- Windows foreground smoke 的 guard 启动诊断只记录本次自有 helper 的定额阶段、PID 与各进程单调相对时间；失败 artifact 经过固定字段白名单投影，不上传原始目录或用户内容，不改变输入、期限、失败结果，也不把直接子进程关闭当作整棵进程树清理证明。
+- Windows foreground smoke 的预编译 guard 只从本次已 stage 的 JS 提取唯一 C# 原文，编译到同次私有 staging 并把源码与程序集摘要绑定到 smoke bundle；运行子进程只加载摘要匹配的实际字节，无现场编译回退，不进入产品 app、发布产物或共享缓存，所有输入与期限合同不变。
 - **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并在完整 staging 后发布稳定产物；Windows 上仅对 staging 发布 rename 的 EPERM 做有界退避，每次失败先回滚旧产物，跨等待以 no-follow 目录身份核对源与目标、异常即失败且保留可恢复备份；目录身份预检不构成抵抗非合作写者在检查与 rename 间竞态的 OS 级原子保证；它不复制 release pipeline。
 - **ZenXMacLocalSigningProfile** — macOS portable packaging 可从 host-local `signing.json` 读取稳定自签名证书指纹，并以无 Apple Team ID 的空 entitlements、非 hardened-runtime 参数统一签署 app、Electron nested code 与原生 helper；显式环境变量优先，配置或签名错误 fail closed，证书与私钥不进入仓库、Core 或 ItemList。
 - **ZenXSelfControlCapabilityPackage** — ZenX 产品层通过 profile-managed Plugin Runtime 暴露 Project/Thread 自控工具，
