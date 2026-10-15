@@ -400,6 +400,9 @@ jobs:
           CI: "1"
           ZENX_REQUIRE_PLAYWRIGHT: "1"
         run: npm --workspace apps/zenx run smoke:providers
+      - name: Verify Workspace browser storage across fresh Electron processes
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/workspace-browser-persistence-smoke.mjs
       - name: Exercise Workspace background capture and targeted input
         timeout-minutes: 3
         working-directory: apps/zenx

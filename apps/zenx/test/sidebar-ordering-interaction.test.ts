@@ -47,7 +47,7 @@ const threads = [
   summary("other", "idle", 10, "/work/b"),
 ];
 
-test("detailed active row keeps Working text and a distinct trailing spinner", async () => {
+test("detailed active row uses one accessible trailing running indicator", async () => {
   await withDom(async (root) => {
     await act(async () => root.render(createElement(StaticSidebar)));
     const row = requiredElement<HTMLElement>(
@@ -60,14 +60,12 @@ test("detailed active row keeps Working text and a distinct trailing spinner", a
     assert.equal(row.querySelectorAll(":scope > .thread-model").length, 1);
     assert.equal(row.querySelector(":scope > .thread-state-label"), null);
     assert.equal(
-      row
-        .querySelector(".thread-model > .thread-state-inline")
-        ?.textContent?.trim(),
-      "Working",
+      row.querySelector(".thread-model > .thread-state-inline"),
+      null,
     );
     assert.ok(
       row.parentElement?.querySelector(
-        ".thread-status-rail .thread-running-spinner",
+        '.thread-status-rail .thread-running-spinner[aria-label="Running"]',
       ),
     );
   });

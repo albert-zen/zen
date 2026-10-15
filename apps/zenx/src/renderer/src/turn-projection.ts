@@ -2,6 +2,7 @@ import { i18n } from "./i18n.js";
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 import {
   commandSummary,
+  commandStatus,
   commandPhaseLabel,
   commandPhase,
   commandTask,
@@ -301,7 +302,10 @@ export function createTraceObservationIndex(
       !isTerminalCommandPhase(task.phase)
     )
       continue;
-    tasks.set(task.id, { itemId: item.id, phase: task.phase });
+    tasks.set(task.id, {
+      itemId: item.id,
+      phase: task.phase,
+    });
   }
   return { tasks };
 }
@@ -314,11 +318,28 @@ export function observedCommandPhase(
   if (task === null || isTerminalCommandPhase(phase)) return phase;
   return observations.tasks.get(task.id)?.phase ?? phase;
 }
+export function observedCommandStatus(
+  item: CommandItem,
+  observations: TraceObservationIndex,
+): string {
+  const phase = observedCommandPhase(item, observations);
+  return phase === commandPhase(item)
+    ? commandStatus(item)
+    : commandPhaseLabel(phase);
+}
+function observedCommandSummary(
+  item: CommandItem,
+  observations: TraceObservationIndex,
+): string {
+  return observedCommandPhase(item, observations) === commandPhase(item)
+    ? commandSummary(item)
+    : `${commandTitle(item)} · ${observedCommandStatus(item, observations).toLowerCase()}`;
+}
+
 export interface TraceActivity {
   total: number;
   active: number;
   outstanding: number;
-  failed: number;
   cancelled: number;
   unconfirmed: number;
   pending: number;
@@ -339,7 +360,6 @@ export function summarizeTraceActivity(
     total: 0,
     active: 0,
     outstanding: 0,
-    failed: 0,
     cancelled: 0,
     unconfirmed: 0,
     pending: 0,
@@ -357,7 +377,6 @@ export function summarizeTraceActivity(
     const category = toolPresentation(item.toolName ?? item.command).category;
     categories.set(category, (categories.get(category) ?? 0) + 1);
     const phase = commandPhase(item);
-    if (phase === "failed" || phase === "timed_out") result.failed += 1;
     if (phase === "cancelled" || phase === "declined") result.cancelled += 1;
     const task = commandTask(item);
     const observed = task === null ? null : observations.tasks.get(task.id);
@@ -421,14 +440,19 @@ export function traceSummary(
   );
   if (commands.length === 1) {
     const item = commands[0]!;
-    const phase = observedCommandPhase(item, index);
-    return phase === commandPhase(item)
-      ? commandSummary(item)
-      : `${commandTitle(item)} · ${commandPhaseLabel(phase).toLowerCase()}`;
+    return observedCommandSummary(item, index);
   }
   if (activity.current) return commandTitle(activity.current);
   if (activity.total === 0) return i18n.t("shell:thoughts");
-  return i18n.t("shell:toolCalls", { count: activity.total });
+  // Keep the recent action context after settlement, without presenting the
+  // call count as successful work. Full chronological detail stays in the fold.
+  return [
+    i18n.t("shell:toolCalls", { count: activity.total }),
+    ...commands
+      .slice(-3)
+      .reverse()
+      .map((item) => observedCommandSummary(item, index)),
+  ].join(" · ");
 }
 
 export function commandLabel(command: string): string {

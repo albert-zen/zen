@@ -1,3 +1,4 @@
+import { MessageSourceLink } from "./message-source-navigation.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -482,8 +483,29 @@ function QueuedMessageRow({
         <div
           className={`queue-row-content${message.imageCount > 0 ? " has-images" : ""}`}
         >
+          {message.sender === undefined ? null : (
+            <MessageSourceLink
+              active={imagesVisible}
+              target={{
+                kind: "thread",
+                id: message.sender.threadId,
+                ...(message.sender.deviceId === undefined
+                  ? {}
+                  : { deviceId: message.sender.deviceId }),
+              }}
+              label={t(
+                message.sender.deviceId === undefined
+                  ? "threadMessageFrom"
+                  : "remoteThreadMessageFrom",
+                {
+                  name: message.sender.threadName ?? t("threadMessageUnnamed"),
+                },
+              )}
+            />
+          )}
           {message.hostSource !== undefined ? (
             <HostMessageContent
+              sourceNavigation
               source={message.hostSource.source}
               sourceId={message.hostSource.sourceId}
               text={message.text}
@@ -529,24 +551,6 @@ function QueuedMessageRow({
             >
               {hasText ? (
                 <span ref={textRef} id={textId} className="queue-preview-text">
-                  {message.sender === undefined ? null : (
-                    <small
-                      className="thread-message-sender"
-                      title={`${message.sender.deviceId === undefined ? "" : `${t("threadMessageRemoteDetails")}\n`}${JSON.stringify(message.sender)}`}
-                    >
-                      {t(
-                        message.sender.deviceId === undefined
-                          ? "threadMessageFrom"
-                          : "remoteThreadMessageFrom",
-                        {
-                          name:
-                            message.sender.threadName ??
-                            t("threadMessageUnnamed"),
-                        },
-                      )}
-                      <br />
-                    </small>
-                  )}
                   {message.text}
                 </span>
               ) : null}

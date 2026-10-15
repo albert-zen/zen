@@ -133,7 +133,7 @@ test("singleton promotion preserves stable trace identity", () => {
   assert.ok("id" in first && "id" in promoted);
   assert.equal(first.id, promoted.id);
 });
-test("mixed categories count actual calls and retain failures after later success", () => {
+test("mixed categories count actual calls independently of their outcomes", () => {
   const browser = {
     ...runtimeCommand("browser"),
     toolName: "browser_inspect",
@@ -149,7 +149,7 @@ test("mixed categories count actual calls and retain failures after later succes
   ];
   const activity = summarizeTraceActivity(items);
   assert.equal(activity.total, 4);
-  assert.equal(activity.failed, 1);
+  assert.equal("failed" in activity, false);
   assert.equal(activity.running, 1);
   assert.equal(
     activity.categories.reduce((n, x) => n + x.count, 0),

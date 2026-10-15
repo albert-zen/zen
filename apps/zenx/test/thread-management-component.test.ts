@@ -36,7 +36,7 @@ test("sidebar announces active Thread loading", () => {
   assert.match(html, /Loading active Threads…/u);
 });
 
-test("active Thread menu offers copy at the latest complete boundary", () => {
+test("active Thread menu offers Fork at the latest complete boundary", () => {
   const html = renderToStaticMarkup(
     createElement(ThreadItemMenu, {
       archived: false,
@@ -58,14 +58,62 @@ test("active Thread menu offers copy at the latest complete boundary", () => {
   );
   assert.match(html, /role="menu"/u);
   assert.match(html, />Rename</u);
-  assert.match(html, />Copy thread</u);
-  assert.match(html, /data-thread-action="copy"/u);
+  assert.match(html, />Fork thread</u);
+  assert.match(
+    html,
+    /data-thread-action="fork"[^>]*>[\s\S]*?data-icon="fork"/u,
+  );
   assert.match(html, />Pin<\/button>/u);
   assert.match(
     html,
     /role="menuitem"[^>]*disabled=""[^>]*>[\s\S]*?Archive<\/button>/u,
   );
   assert.match(html, /Wait for the active Turn to finish before archiving/u);
+});
+
+test("Fork menu uses localized labels, progress and boundary help", async () => {
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  try {
+    for (const [language, label, progress, boundary] of [
+      ["en", "Fork thread", "Forking thread…", "latest complete Turn"],
+      ["zh-CN", "分叉线程", "正在分叉线程…", "最近完成的轮次"],
+    ]) {
+      await i18n.changeLanguage(language);
+      for (const busyAction of [null, "fork"] as const) {
+        const html = renderToStaticMarkup(
+          createElement(ThreadItemMenu, {
+            archived: false,
+            busyAction,
+            error: null,
+            hasActiveTurn: false,
+            open: true,
+            pinned: false,
+            renaming: false,
+            renameDraft: "Synthetic",
+            onArchive: noop,
+            onBeginRename: noop,
+            onCancelRename: noop,
+            onDraftChange: noop,
+            onPin: noop,
+            onRename: noop,
+            onUnarchive: noop,
+          }),
+        );
+        const { JSDOM } = await import("jsdom");
+        const button = new JSDOM(
+          html,
+        ).window.document.querySelector<HTMLButtonElement>(
+          '[data-thread-action="fork"]',
+        )!;
+        assert.equal(button.textContent, busyAction ? progress : label);
+        assert.equal(button.disabled, busyAction !== null);
+        assert(button.title.includes(boundary!));
+        assert.equal(button.querySelector("svg")?.dataset.icon, "fork");
+      }
+    }
+  } finally {
+    await i18n.changeLanguage("en");
+  }
 });
 
 test("archived Thread menu offers Unarchive without inventing Delete", () => {
@@ -158,3 +206,33 @@ function summary(archived: boolean): NativeThreadSummary {
     status: "idle",
   };
 }
+
+test("debug stays last and uses a quiet toggle instead of a checkmark", () => {
+  const html = renderToStaticMarkup(
+    createElement(ThreadItemMenu, {
+      archived: false,
+      busyAction: null,
+      error: null,
+      hasActiveTurn: false,
+      open: true,
+      pinned: false,
+      renaming: false,
+      renameDraft: "Synthetic",
+      debugging: true,
+      onToggleDebug: noop,
+      onArchive: noop,
+      onBeginRename: noop,
+      onCancelRename: noop,
+      onDraftChange: noop,
+      onPin: noop,
+      onRename: noop,
+      onUnarchive: noop,
+    }),
+  );
+  assert.deepEqual(
+    [...html.matchAll(/data-thread-action="([^"]+)"/g)].map((m) => m[1]),
+    ["rename", "fork", "pin", "archive", "debug"],
+  );
+  assert.match(html, /class="thread-debug-menu-switch"/);
+  assert.doesNotMatch(html, /✓/);
+});

@@ -81,11 +81,13 @@ test("side-panel and tab-close names translate live while raw titles, child stat
           onSelectTab: (value) => selections.push(value),
           openedTabs: [`thread:${childId}`],
           onTabsChange: (value) => tabChanges.push(value),
-          conversation: {
-            threadId: childId,
-            title: childTitle,
-            render: () => React.createElement(Conversation),
-          },
+          conversations: [
+            {
+              threadId: childId,
+              title: childTitle,
+              render: () => React.createElement(Conversation),
+            },
+          ],
         }),
       );
     });

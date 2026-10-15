@@ -629,3 +629,112 @@ test("RemoteHost omitted mode steers independently and explicit remote follow-up
     await q.turn.done;
   }
 });
+
+test("promotion during interrupted image validation starts once after the predecessor settles", async () => {
+  const attachments = new InMemoryAttachmentStore();
+  const q = await runningQueue({ attachments });
+  const entered = deferred();
+  const release = deferred();
+  try {
+    const ref = await q.server.importImageBytes(png1x1());
+    await q.server.queueMessage(
+      q.threadId,
+      [{ type: "image", attachment: ref }],
+      "interrupted-image",
+    );
+    const queued = pendingQueuedMessages((await q.read()).items)[0]!;
+    const original = (await q.read()).items.find(
+      (item) => item.id === queued.id,
+    );
+    const read = attachments.read.bind(attachments);
+    let block = true;
+    attachments.read = async (attachment) => {
+      if (block) {
+        block = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return read(attachment);
+    };
+    const promoted = q.server.steerQueuedMessage(
+      q.threadId,
+      steerTarget(queued),
+    );
+    await entered.promise;
+    const interrupted = q.server.interruptTurn(q.threadId, q.turn.id);
+    q.release.resolve();
+    release.resolve();
+    await interrupted;
+    const result = await promoted;
+    assert.notEqual(result.turnId, q.turn.id);
+    const snapshot = await q.read();
+    const delivered = snapshot.items.filter(
+      (item) =>
+        item.type === "user_message" && item.clientId === queued.clientId,
+    );
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0]!.turnId, result.turnId);
+    assert.deepEqual(
+      snapshot.items.find((item) => item.id === queued.id),
+      original,
+    );
+    assert.equal(pendingQueuedMessages(snapshot.items).length, 0);
+  } finally {
+    q.release.resolve();
+    release.resolve();
+    await q.turn.done;
+  }
+});
+
+test("active Host promotion preserves source and leaves explicitly queued siblings untouched", async () => {
+  const q = await runningQueue();
+  try {
+    await q.server.wakeTurn(
+      q.threadId,
+      {
+        clientId: "host-selected",
+        text: "Selected Host update",
+        source: "trigger",
+        sourceId: "synthetic-trigger",
+      },
+      { mode: "queue" },
+    );
+    await q.server.queueMessage(
+      q.threadId,
+      "Explicit follow-up",
+      "human-sibling",
+      { deliveryMode: "batch-next" },
+    );
+    const before = await q.read();
+    const queued = pendingQueuedMessages(before.items);
+    const host = queued.find((item) => item.clientId === "host-selected")!;
+    const sibling = queued.find((item) => item.clientId === "human-sibling")!;
+    const result = await q.server.steerQueuedMessage(
+      q.threadId,
+      steerTarget(host),
+    );
+    assert.equal(result.status, "steered");
+    const after = await q.read();
+    const delivered = after.items.find(
+      (item) => item.type === "host_message" && item.clientId === host.clientId,
+    );
+    assert(delivered?.type === "host_message");
+    assert.equal(delivered.sender, "host");
+    assert.equal(delivered.source, "trigger");
+    assert.equal(delivered.sourceId, "synthetic-trigger");
+    assert.equal(delivered.text, "Selected Host update");
+    assert.equal(delivered.turnId, q.turn.id);
+    assert.equal(delivered.mode, "steer");
+    assert.deepEqual(pendingQueuedMessages(after.items), [sibling]);
+    assert.equal(
+      after.items.filter(
+        (item) =>
+          item.type === "user_message" && item.clientId === host.clientId,
+      ).length,
+      0,
+    );
+  } finally {
+    q.release.resolve();
+    await q.turn.done;
+  }
+});

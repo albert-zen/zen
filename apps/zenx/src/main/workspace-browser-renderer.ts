@@ -338,18 +338,52 @@ export class WorkspaceBrowserRenderer {
   }
 }
 
-/** Bounds a read-only native capture; a late native reply is never published. */
+/** Bounds a fresh read-only native capture; late replies never dispatch or publish. */
 export async function captureWorkspacePage(
   view: WebContentsView,
   invalidate: () => void,
   timeoutMs = 10_000,
+  assertCurrent: () => void = () => undefined,
 ): Promise<NativeImage> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let expired = false;
+  const capture = async () => {
+    const web = view.webContents;
+    const bounds = view.getBounds();
+    const debuggerApi = web.debugger;
+    if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+    // Frame subscriptions can start with the previously submitted surface.
+    // Chromium's screenshot path requests a renderer redraw/new surface and
+    // acknowledges its copy. Its disposable JPEG is never retained. Preserve
+    // capturePage's NativeImage/DIP rounding contract only after that causal
+    // fence; do not count frames or sleep.
+    await debuggerApi.sendCommand("Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 0,
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    if (expired)
+      throw new Error("Browser native capture timed out; inspect again");
+    assertCurrent();
+    if (web.isDestroyed())
+      throw new Error("Browser tab closed during rendering; inspect again");
+    const currentBounds = view.getBounds();
+    if (
+      currentBounds.x !== bounds.x ||
+      currentBounds.y !== bounds.y ||
+      currentBounds.width !== bounds.width ||
+      currentBounds.height !== bounds.height
+    )
+      throw new Error("Browser view changed during rendering; inspect again");
+    return await web.capturePage();
+  };
   try {
     return await Promise.race([
-      view.webContents.capturePage(),
+      capture(),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          expired = true;
           invalidate();
           reject(new Error("Browser native capture timed out; inspect again"));
         }, timeoutMs);

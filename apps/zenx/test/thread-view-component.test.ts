@@ -381,7 +381,8 @@ test("context pressure above the configured window keeps the real percent in its
   assert.match(html, /stroke-dasharray="1 1"/u);
 });
 
-test("context hover remains open across a real gap corridor above and below the ring, then closes outside or on Escape", async () => {
+test("context hover remains open across a real gap corridor above and below the ring, then closes outside or on Escape", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   for (const placement of ["above", "below"] as const) {
     await withDom(async (root) => {
       const anchorTop = placement === "above" ? 300 : 4;
@@ -449,6 +450,10 @@ test("context hover remains open across a real gap corridor above and below the 
           }),
         ),
       );
+      assert.ok(document.querySelector('[role="dialog"]'));
+      await act(async () => t.mock.timers.tick(199));
+      assert.ok(document.querySelector('[role="dialog"]'));
+      await act(async () => t.mock.timers.tick(1));
       assert.equal(document.querySelector('[role="dialog"]'), null);
       await act(async () => ring.focus());
       assert.ok(document.querySelector('[role="dialog"]'));
@@ -463,6 +468,77 @@ test("context hover remains open across a real gap corridor above and below the 
       assert.equal(document.querySelector('[role="dialog"]'), null);
     });
   }
+});
+
+test("context hover grace cancels on re-entry, preserves focused actions, and dismisses immediately", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await withDom(async (root) => {
+    let compactions = 0;
+    await act(async () =>
+      root.render(
+        createElement(ContextUsageIndicator, {
+          context: usageProjection().context,
+          onCompact: async () => {
+            compactions += 1;
+          },
+        }),
+      ),
+    );
+    const ring = requiredButton(".context-usage-trigger");
+    const enter = async (element: HTMLElement) =>
+      act(async () => {
+        element.dispatchEvent(
+          new window.MouseEvent("mouseover", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        );
+      });
+    const leave = async (element: HTMLElement) =>
+      act(async () => {
+        element.dispatchEvent(
+          new window.MouseEvent("mouseout", {
+            bubbles: true,
+            relatedTarget: document.body,
+          }),
+        );
+      });
+    await enter(ring);
+    for (let i = 0; i < 3; i += 1) {
+      await leave(ring);
+      await act(async () => t.mock.timers.tick(150));
+      await enter(requiredElement<HTMLElement>(".context-usage-popover"));
+      await act(async () => t.mock.timers.tick(250));
+      assert.ok(document.querySelector('[role="dialog"]'));
+    }
+    const compact = requiredButton(".context-usage-compact");
+    await act(async () => compact.focus());
+    await leave(compact);
+    await act(async () => t.mock.timers.tick(250));
+    assert.ok(document.querySelector('[role="dialog"]'));
+    await act(async () => compact.click());
+    assert.equal(compactions, 1);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await leave(ring);
+    await act(async () =>
+      document.body.dispatchEvent(
+        new window.MouseEvent("mousedown", { bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await leave(ring);
+    await act(async () =>
+      ring.dispatchEvent(
+        new window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+      ),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await enter(ring);
+    await act(async () => t.mock.timers.tick(250));
+    assert.ok(document.querySelector('[role="dialog"]'));
+  });
 });
 
 test("compaction progress is a transcript item and completed items reveal exact effective messages", async () => {
@@ -2901,7 +2977,7 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
       ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
       ["wait", "cancelled", "Cancelled"],
       ["wait", "timed_out", "Timed out"],
-      ["wait", "failed", "Failed"],
+      ["wait", "failed", "Ended"],
       ["wait", "completed", "Waited"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
@@ -3777,7 +3853,7 @@ test("native Agent input displays its sender separately from human input, includ
     assert.doesNotMatch(row.textContent ?? "", /worker-thread/);
     assert.match(
       row.querySelector(".thread-message-sender")?.getAttribute("title") ?? "",
-      /worker-thread/,
+      /Research worker/,
     );
     assert.equal(dom.window.document.querySelector(".queue-row-edit"), null);
     assert.ok(
@@ -3850,10 +3926,11 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
     assert.ok(
       labels
         .filter((label) => label.textContent?.includes("Remote:"))
-        .every(
-          (label) =>
-            label.getAttribute("title")?.includes("peer-reported") &&
-            label.getAttribute("title")?.includes("uuid-peer"),
+        .every((label) =>
+          label.classList.contains("message-source-link")
+            ? label.getAttribute("title")?.includes("verified return route")
+            : label.getAttribute("title")?.includes("peer-reported") &&
+              label.getAttribute("title")?.includes("uuid-peer"),
         ),
     );
   } finally {
@@ -3874,4 +3951,146 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
   assert.notEqual(localHtml, remoteHtml);
   assert.match(remoteHtml, /Remote: Research worker/);
   assert.match(remoteHtml, /peer-reported/);
+});
+
+test("singleton activity highlight follows actual receipt and turn lifetime", () => {
+  const base = commandItem("activity-call", "sleep 2");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  for (const turnStatus of [
+    "inProgress",
+    "completed",
+    "failed",
+    "interrupted",
+  ] as const) {
+    for (const phase of [
+      "running",
+      "completed",
+      "failed",
+      "cancelled",
+      "cancel_requested",
+      "cancellation_unconfirmed",
+      "queued",
+    ] as const) {
+      const html = renderTurns([
+        turnWithItems(turnStatus, [
+          {
+            ...base,
+            toolName: "shell",
+            contentType: "application/vnd.zen.tool-task+json",
+            structuredContent: { task_id: "activity-task", status: phase },
+          },
+        ]),
+      ]);
+      const dom = new JSDOM(html);
+      assert.equal(
+        dom.window.document
+          .querySelector(".trace-singleton .activity-text")
+          ?.getAttribute("data-active") === "true",
+        turnStatus === "inProgress" && phase === "running",
+        `${turnStatus}/${phase}`,
+      );
+      dom.window.close();
+    }
+  }
+});
+
+test("tool results use neutral ended labels without failure or nonzero rollups", () => {
+  const base = commandItem("shell-nonzero", "grep absent file");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  const shell = {
+    ...base,
+    toolName: "shell",
+    status: "failed" as const,
+    exitCode: 1,
+    aggregatedOutput: "",
+  };
+  const other = {
+    ...base,
+    id: "other-failure",
+    toolName: "other_tool",
+    status: "failed" as const,
+    exitCode: 1,
+  };
+  const dom = new JSDOM(
+    renderTurns([turnWithItems("completed", [shell, other])]),
+  );
+  try {
+    const doc = dom.window.document;
+    assert.equal(doc.querySelector(".trace-nonzero, .trace-failed"), null);
+    assert.doesNotMatch(
+      doc.querySelector(".trace-toggle")?.textContent ?? "",
+      /failed|nonzero/i,
+    );
+    const singleton = new JSDOM(
+      renderTurns([turnWithItems("inProgress", [shell])]),
+    );
+    try {
+      assert.match(
+        singleton.window.document.querySelector(".tool-status.ended")
+          ?.textContent ?? "",
+        /Ended/,
+      );
+      assert.equal(
+        singleton.window.document.querySelector(
+          ".tool-status.failed, .tool-status.shell-nonzero",
+        ),
+        null,
+      );
+    } finally {
+      singleton.window.close();
+    }
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("earlier shell rows inherit neutral settlement across separated trace groups", () => {
+  const base = commandItem("early-shell", "grep absent file");
+  assert.equal(base.type, "commandExecution");
+  if (base.type !== "commandExecution") return;
+  const early = {
+    ...base,
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: {
+      task_id: "shared",
+      tool_name: "shell",
+      status: "running",
+      exit_code: null,
+    },
+  };
+  const final = {
+    ...early,
+    id: "final-wait",
+    toolName: "wait",
+    status: "failed" as const,
+    exitCode: 1,
+    structuredContent: {
+      ...early.structuredContent,
+      status: "failed",
+      exit_code: 1,
+    },
+  };
+  const separator: ThreadItem = {
+    type: "agentMessage",
+    id: "separator",
+    text: "Waiting for search.",
+    phase: "final_answer",
+    memoryCitation: null,
+  };
+  const dom = new JSDOM(
+    renderTurns([turnWithItems("inProgress", [early, separator, final])]),
+  );
+  try {
+    const marks = [...dom.window.document.querySelectorAll(".tool-status")];
+    assert.equal(marks.length, 2);
+    for (const mark of marks) {
+      assert.equal(mark.textContent, "Ended");
+      assert.equal(mark.className, "tool-status ended");
+    }
+  } finally {
+    dom.window.close();
+  }
 });

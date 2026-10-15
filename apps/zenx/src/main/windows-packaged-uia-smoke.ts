@@ -18,10 +18,10 @@ import {
   type WinAppCliRunOptions,
   type WinAppCliRunner,
 } from "./capabilities/windows-computer-provider.js";
+import { waitForFile, waitForText } from "./windows-packaged-uia-files.js";
 import { WINDOWS_PACKAGED_UIA_FIXTURE } from "./windows-packaged-uia-fixture.js";
 import {
   assertWindowsPackagedUiaFocusEvidence,
-  describeWindowsFixtureTextMismatch,
   type WindowsPackagedUiaFocusEvidence,
 } from "./windows-packaged-uia-evidence.js";
 
@@ -666,28 +666,6 @@ function startFixture(script: string, args: string[]): FixtureProcess {
   };
 }
 
-async function waitForFile(
-  directory: string,
-  name: string,
-  signal: AbortSignal,
-  fixtures: FixtureProcess[],
-): Promise<string> {
-  const deadline = Date.now() + 20_000;
-  while (true) {
-    signal.throwIfAborted();
-    fixtures.forEach((fixture) => fixture.assertRunning());
-    try {
-      return await readFile(path.join(directory, name), "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    assert.ok(
-      Date.now() < deadline,
-      `Native fixture did not produce ${name}: ${fixtures.map((fixture) => fixture.diagnostic()).join("\n")}`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
 async function readFixture<T>(
   directory: string,
   name: string,
@@ -700,24 +678,6 @@ async function readFixture<T>(
       "",
     ),
   ) as T;
-}
-async function waitForText(
-  directory: string,
-  name: string,
-  expected: string,
-  signal: AbortSignal,
-  fixtures: FixtureProcess[],
-): Promise<void> {
-  const deadline = Date.now() + 20_000;
-  while (true) {
-    const value = await waitForFile(directory, name, signal, fixtures);
-    if (value === expected) return;
-    assert.ok(
-      Date.now() < deadline,
-      `Native ${name} effect did not match complete expected text: ${JSON.stringify(describeWindowsFixtureTextMismatch(value, expected))}`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
 }
 async function assertMissing(directory: string, name: string): Promise<void> {
   await assert.rejects(access(path.join(directory, name)), { code: "ENOENT" });

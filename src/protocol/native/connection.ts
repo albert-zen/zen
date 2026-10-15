@@ -21,6 +21,7 @@ import {
   NATIVE_THREAD_RESUME_METHOD,
   NATIVE_THREAD_READ_METHOD,
   NATIVE_THREAD_CREATE_CHILD_METHOD,
+  NATIVE_THREAD_FORK_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
   NATIVE_QUEUE_EDIT_METHOD,
   NATIVE_QUEUE_STEER_METHOD,
@@ -418,6 +419,75 @@ export class NativeConnection {
                 };
         }
         if (!this.#closed) this.#send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          this.#send({
+            id: message.id,
+            error: {
+              code: error instanceof AppServerError ? -32602 : -32603,
+              message: error instanceof Error ? error.message : String(error),
+              ...(error instanceof AppServerError
+                ? { data: { zenCode: error.code } }
+                : {}),
+            },
+          });
+      }
+      return;
+    }
+    if (message.method === NATIVE_THREAD_FORK_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          Object.keys(params).some(
+            (key) => !["sourceThreadId", "through", "workspace"].includes(key),
+          ) ||
+          typeof params.sourceThreadId !== "string" ||
+          !params.sourceThreadId.trim() ||
+          params.sourceThreadId.length > 512 ||
+          !isRecord(params.through) ||
+          (params.through.type !== "latest-complete" &&
+            params.through.type !== "item") ||
+          (params.through.type === "item"
+            ? Object.keys(params.through).some(
+                (key) => key !== "type" && key !== "itemId",
+              )
+            : Object.keys(params.through).some((key) => key !== "type")) ||
+          (params.through.type === "item" &&
+            typeof params.through.itemId !== "string") ||
+          !isRecord(params.workspace) ||
+          params.workspace.type !== "same-directory" ||
+          Object.keys(params.workspace).some((key) => key !== "type")
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "An exact Thread, copy boundary and same-directory workspace are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Native Thread copies are unavailable",
+          );
+        const through =
+          params.through.type === "latest-complete"
+            ? { type: "latest-complete" as const }
+            : {
+                type: "item" as const,
+                itemId: params.through.itemId as string,
+              };
+        const thread = await this.#appServer.forkThread({
+          sourceThreadId: params.sourceThreadId,
+          through,
+          workspace: { type: "same-directory" },
+        });
+        if (!this.#closed) this.#send({ id: message.id, result: { thread } });
       } catch (error) {
         if (!this.#closed)
           this.#send({

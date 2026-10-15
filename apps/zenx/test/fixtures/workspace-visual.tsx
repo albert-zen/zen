@@ -1,6 +1,17 @@
+import "../../src/renderer/src/shell-thread-panel.css";
+import "../../src/renderer/src/agent-readiness-notice.css";
+import "../../src/renderer/src/trigger-ui.css";
+import "../../src/renderer/src/skills.css";
+import "../../src/renderer/src/rooms-layout.css";
+import "../../src/renderer/src/room-message-actions.css";
+import "../../src/renderer/src/room-conversations.css";
+import "../../src/renderer/src/companion-workspace.css";
+import { i18n } from "../../src/renderer/src/i18n.js";
+import { workspaceLauncherSnapshot } from "../workspace-launcher-snapshot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
+import type { ThreadTitleSnapshot } from "../../src/main/thread-title-types.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App } from "../../src/renderer/src/App.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
@@ -19,12 +30,23 @@ let compactions = 0;
 let previewTabs: import("../../src/main/workspace-browser.js").WorkspaceBrowserTab[] =
   [];
 
+const sideConversations = [
+  { ...summary("design-child", "Design review"), parentThreadId: "thread-1" },
+  { ...summary("test-child", "Test coverage"), parentThreadId: "thread-1" },
+];
+const fixtureTitles: ThreadTitleSnapshot = {};
+let titleVersion = 0;
 const options = {
-  request: async (method: string) => {
+  request: async (method: string, request?: unknown) => {
     if (method === "zen/thread/resume") {
+      const threadId =
+        (request as { threadId?: string } | undefined)?.threadId ?? "thread-1";
       const recovery = resumed(
         threadWithMessage(
-          "已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。\n\n### 下一步\n\n- 统一浏览器和文件工作区\n- 在同一页面与 Agent 协作\n- 查看上下文压缩结果",
+          threadId === "thread-1"
+            ? "已检查工作区。你可以在右侧阅读和编辑计划，同时保留当前对话。\n\n### 下一步\n\n- 统一浏览器和文件工作区\n- 在同一页面与 Agent 协作\n- 查看上下文压缩结果"
+            : `Synthetic ${sideConversations.find((entry) => entry.threadId === threadId)?.name ?? "side chat"}. This conversation has its own draft and reading state.`,
+          threadId,
         ),
       );
       if (compactions)
@@ -56,6 +78,19 @@ const options = {
   },
 };
 const zenx = {
+  computerReadiness: {
+    get: async () => ({
+      platform: params.get("platform") ?? "win32",
+      accessibility: "granted",
+      screenRecording: "granted",
+    }),
+  },
+  chromeBridge: {
+    get: async () => ({
+      effectiveMode: "user-session",
+      connection: { state: "connected" },
+    }),
+  },
   workspaceBrowser: {
     command: async (
       threadId: string,
@@ -98,7 +133,7 @@ const zenx = {
     getPendingApprovals: async () => [],
     request: async (method: string, params?: unknown) => {
       if (method === "model/list") return { data: [model()], nextCursor: null };
-      return await options.request(method);
+      return await options.request(method, params);
     },
     respondToApproval: async () => undefined,
     onApprovalRequest: () => () => undefined,
@@ -108,7 +143,12 @@ const zenx = {
   },
   threads: {
     list: async ({ archived }: { archived: boolean }) =>
-      archived ? [] : [summary()],
+      archived
+        ? []
+        : [
+            summary(),
+            ...(params.has("conversationTabs") ? sideConversations : []),
+          ],
   },
   imageAttachments: {
     pick: async () => [],
@@ -136,7 +176,12 @@ const zenx = {
           workspace: "/work/zen",
           configured: true,
           isDefault: true,
-          threadIds: ["thread-1"],
+          threadIds: [
+            "thread-1",
+            ...(params.has("conversationTabs")
+              ? sideConversations.map((entry) => entry.threadId)
+              : []),
+          ],
         },
       ],
       unavailableThreadIds: [],
@@ -178,7 +223,19 @@ const zenx = {
     }),
   },
   titles: {
-    get: async () => ({}),
+    get: async () => ({ ...fixtureTitles }),
+    rename: async (threadId: string, title: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const projection = {
+        threadId,
+        title,
+        status: "manual" as const,
+        source: "user" as const,
+        version: ++titleVersion,
+      };
+      fixtureTitles[threadId] = projection;
+      return projection;
+    },
     onChange: () => () => undefined,
   },
   triggers: {
@@ -269,8 +326,43 @@ Object.assign(zenx, {
     },
   },
 });
+// Launcher mode mounts the real admitted Subagents/Triggers UI on a synthetic bridge.
+if (params.has("launchers") || params.has("conversationTabs")) {
+  Object.assign(zenx.plugins, {
+    get: async () => workspaceLauncherSnapshot,
+    executeCommand: async (pluginId: string, command: string) => {
+      if (pluginId === "zenx-subagents") {
+        if (command === "list")
+          return {
+            threads: params.has("conversationTabs") ? sideConversations : [],
+          };
+        if (command === "create") return { threadId: "synthetic-side-chat" };
+      }
+      if (pluginId === "zenx-triggers") {
+        if (command === "threads")
+          return {
+            threads: [
+              {
+                threadId: "thread-1",
+                shortId: "thread-1",
+                name: "Thread one",
+                cwd: "/work/zen",
+                archived: false,
+                status: "idle",
+              },
+            ],
+          };
+        if (command === "workspaces") return { workspaces: [] };
+        if (command === "list") return { triggers: [], history: [], rooms: [] };
+      }
+      throw new Error(`Unsupported synthetic command: ${pluginId}/${command}`);
+    },
+    readHandle: async () => null,
+  });
+}
 Object.defineProperty(window, "zenx", { value: zenx });
 localStorage.setItem("zenx-sidebar-mode", "inbox");
+await i18n.changeLanguage(params.get("lang") ?? "en");
 createRoot(document.getElementById("root")!).render(<App />);
 function summary(
   threadId = "thread-1",
@@ -286,8 +378,8 @@ function summary(
       approvalPolicy: "never",
     },
     archived: false,
-    createdAt: new Date(1_000).toISOString(),
-    updatedAt: new Date(2_000).toISOString(),
+    createdAt: "2026-10-15T03:00:00.000Z",
+    updatedAt: "2026-10-15T03:01:00.000Z",
     name,
     preview: "",
     status: "idle",
@@ -304,8 +396,8 @@ function thread(threadId = "thread-1"): Thread {
     ephemeral: false,
     isPinned: false,
     modelProvider: "fake",
-    createdAt: 1,
-    updatedAt: 2,
+    createdAt: 1792033200,
+    updatedAt: 1792033260,
     recencyAt: null,
     status: { type: "idle" },
     path: null,
@@ -328,20 +420,20 @@ function runningTurn(): Thread["turns"][number] {
     itemsView: "full",
     status: "inProgress",
     error: null,
-    startedAt: 10,
+    startedAt: 1792033200,
     completedAt: null,
     durationMs: null,
   };
 }
 
-function threadWithMessage(text: string): Thread {
+function threadWithMessage(text: string, threadId = "thread-1"): Thread {
   return {
-    ...thread(),
+    ...thread(threadId),
     turns: [
       {
         ...runningTurn(),
         status: "completed",
-        completedAt: 20,
+        completedAt: 1792033210,
         durationMs: 10,
         items: [
           {

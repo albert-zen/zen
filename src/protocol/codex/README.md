@@ -60,7 +60,7 @@ Server request：`item/commandExecution/requestApproval`。
 
 - `turn/replace`
 - `thread/compact`
-- `thread/fork`：ZAS 的最近闭合 Turn、同目录复制；显式接受 `sourceThreadId`、`through: { type: "latest-complete" }`、`workspace: { type: "same-directory" }`，不声明兼容 CAS 同名方法的请求 shape。
+- `thread/fork`：ZAS 的最近闭合 Turn、同目录复制；显式接受 `sourceThreadId`、`through: { type: "latest-complete" }`、`workspace: { type: "same-directory" }`，不声明兼容 CAS 同名方法的请求 shape。精确 canonical `agent_message` 选择只由原生 `zen/thread/fork` 提供；此 adapter 拒绝 `through.type: "item"`。
 - `thread/permissions/update` accepts `{ threadId, sandbox }`, where sandbox is `read-only`, `workspace-write`, or `danger-full-access`. It changes the canonical file permission preset only when the Thread and its tool tasks are idle, then broadcasts `thread/settings/updated`. Defaults remain Full Access.
 - Approval requests may include native `approvalScope: "once"`. Such decisions never reuse or create session/capability grants, even when a client responds with `acceptForSession`.
 - Approval requests for Host-scoped tools additionally expose native `approvalTarget: { key, label }` for display. This metadata comes from the captured trusted runtime scope, not the command text or a client response. It is outside the pinned CAS compatibility claim. Legacy requests omit it and keep their existing shape and session behavior. Scoped requests bypass the legacy thread-wide session cache; `acceptForSession` approves only that invocation. The existing CAS `reason` text discloses this limit for clients displaying a session choice. ZenX describes exact tool/target memory, and CLI labels its session shortcut as approval for this call only.

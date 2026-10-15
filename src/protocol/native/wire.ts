@@ -1,6 +1,7 @@
 import type { AppServerEvent } from "../../app-server.js";
 import type {
   CreateChildThreadInput,
+  ForkThreadInput,
   ThreadSnapshot,
   QueuedInputAdmission,
 } from "../../app-server.js";
@@ -53,6 +54,11 @@ export const NATIVE_TURN_SEND_UNARCHIVED_METHOD = "zen/turn/send-unarchived";
 
 export const NATIVE_INITIALIZE_METHOD = "zen/initialize";
 export const NATIVE_THREAD_READ_METHOD = "zen/thread/read";
+export const NATIVE_THREAD_FORK_METHOD = "zen/thread/fork";
+export type NativeForkThreadParams = ForkThreadInput;
+export interface NativeForkThreadResult {
+  thread: ThreadSnapshot;
+}
 export const NATIVE_THREAD_CREATE_CHILD_METHOD = "zen/thread/create-child";
 export type NativeCreateChildThreadParams = CreateChildThreadInput;
 export interface NativeCreateChildThreadResult {

@@ -553,7 +553,7 @@ export class AgentRuntime {
     const maxAttempts = this.#sampleRetryMaxAttempts;
     for (let attempt = 1; ; attempt += 1) {
       options.signal.throwIfAborted();
-      const result = await this.#runModelOnce(turnId, options, attempt > 1);
+      const result = await this.#runModelOnce(turnId, options, attempt);
       if (!("error" in result)) return result;
       options.signal.throwIfAborted();
       if (
@@ -586,7 +586,7 @@ export class AgentRuntime {
   async #runModelOnce(
     turnId: string,
     options: RunTurnOptions,
-    isSamplingRetry: boolean,
+    sampleAttempt: number,
   ): Promise<ModelSampleResult | { error: unknown }> {
     const itemId = this.#id();
     let started = false;
@@ -677,7 +677,15 @@ export class AgentRuntime {
         ),
         signal: options.signal,
         sessionId: options.thread.id,
-        ...(isSamplingRetry ? { isSamplingRetry: true } : {}),
+        ...(sampleAttempt > 1 ? { isSamplingRetry: true } : {}),
+        debugContext: {
+          threadId: options.thread.id,
+          purpose: "turn",
+          turnId,
+          sampleId: itemId,
+          contextBoundaryItemId,
+          sampleAttempt,
+        },
       })) {
         if (event.type === "text_delta") {
           if (!started) {

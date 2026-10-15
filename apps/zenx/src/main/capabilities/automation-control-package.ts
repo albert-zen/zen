@@ -233,11 +233,11 @@ const manifest: ZenXPluginManifestV2 = {
   name: "ZenX Triggers and Rooms",
   version: "1.0.0",
   description:
-    "Inspect and manage Trigger wakeups and collaborative Rooms through the existing ZenX service.",
+    "Inspect and manage Triggers and collaborative Rooms through the existing ZenX service.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/automation-control" },
   mainDocument:
-    "Use the installed Triggers or Rooms plugin for automation and collaboration.",
+    "Use the installed Triggers or Rooms plugin for triggers and collaboration.",
   provider: {
     id: "zenx-automation-service",
     platforms: ["*"],
@@ -270,7 +270,7 @@ const manifest: ZenXPluginManifestV2 = {
     ),
     tool(
       "zenx_triggers_workspaces",
-      "List configured Project workspaces eligible for a new automation Thread.",
+      "List configured Project workspaces eligible for a new trigger Thread.",
       {},
       [],
       false,
@@ -284,7 +284,7 @@ const manifest: ZenXPluginManifestV2 = {
     ),
     tool(
       "zenx_triggers_create_target",
-      "Create an idle dedicated automation Thread only after confirming current Host defaults and workspace.",
+      "Create an idle dedicated trigger Thread only after confirming current Host defaults and workspace.",
       {
         workspace: { type: "string", maxLength: 4096 },
         preview: targetPreviewSchema,
@@ -587,20 +587,20 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
       id: ZENX_TRIGGERS_CAPABILITY_ID,
       version: "1.0.1",
       displayName: "Triggers",
-      description: "Schedule and inspect ZenX Trigger wakeups.",
+      description: "Schedule and inspect ZenX Triggers.",
       toolPrefix: "zenx_triggers_",
       providerCapability: "zenx.triggers.manage",
       readPermission: ZENX_TRIGGERS_READ_PERMISSION,
       writePermission: ZENX_TRIGGERS_WRITE_PERMISSION,
       page: {
         id: "triggers",
-        title: "Automations",
+        title: "Triggers",
         route: "/plugins/zenx-triggers/triggers",
         surfaceId: "triggers-page",
       },
       sidebar: {
         id: "triggers",
-        label: "Automations",
+        label: "Triggers",
         icon: "clock",
         pageId: "triggers",
         order: 10,
@@ -609,7 +609,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
       surfaceId: "triggers-page",
       panel: {
         id: "thread-wakeups",
-        title: "Trigger wakeups",
+        title: "Trigger",
         surfaceId: "trigger-panel",
       },
     });

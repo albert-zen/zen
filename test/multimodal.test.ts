@@ -279,10 +279,17 @@ test("runs typed image input through AttachmentRef to provider and replays it af
     await turnCompleted.promise;
     connection.close();
 
+    const firstUser = (await first.readThread(thread.id)).items.find(
+      (item) => item.type === "user_message",
+    )!;
     assert.equal(bodies.length, 1);
     assert.deepEqual(
       (bodies[0]?.messages as Array<Record<string, unknown>>)[0]?.content,
       [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(firstUser.createdAt)}]`,
+        },
         { type: "text", text: "describe this" },
         {
           type: "image_url",
@@ -607,7 +614,7 @@ test("legacy text-only user messages still compile after restart", async () => {
     text: "legacy text",
   };
   assert.deepEqual(compileModelMessages([item]), [
-    { role: "user", text: "legacy text" },
+    { role: "user", text: "legacy text", userTimestamp: item.createdAt },
   ]);
 });
 
@@ -700,6 +707,9 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
     const projectedBefore = compileModelMessages(beforeRestart.items);
     assert.deepEqual(projectedBefore[0], {
       role: "user",
+      userTimestamp: beforeRestart.items.find(
+        (item) => item.type === "user_message",
+      )?.createdAt,
       content: [
         { type: "text", text: "remember this image" },
         { type: "image", attachment: ref },
@@ -742,7 +752,13 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
     ).done;
     assert.deepEqual(requests.at(-1), [
       ...projectedBefore,
-      { role: "user", content: [{ type: "text", text: "continue" }] },
+      {
+        role: "user",
+        content: [{ type: "text", text: "continue" }],
+        userTimestamp: (await restarted.readThread(thread.id)).items.findLast(
+          (item) => item.type === "user_message",
+        )?.createdAt,
+      },
     ]);
   } finally {
     await rm(root, { recursive: true, force: true });

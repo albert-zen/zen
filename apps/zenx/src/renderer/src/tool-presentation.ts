@@ -88,7 +88,7 @@ export function commandPhaseLabel(phase: CommandPhase): string {
     cancel_requested: "cancelling",
     cancellation_unconfirmed: "cancellationUnconfirmed",
     completed: "completed",
-    failed: "failed",
+    failed: "toolEnded",
     timed_out: "timedOut",
     cancelled: "cancelled",
     declined: "declined",

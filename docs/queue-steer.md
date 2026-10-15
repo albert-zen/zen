@@ -36,6 +36,8 @@ cancelling and resending text.
 - The delivered Item preserves the original client identity, input/images, and
   Agent/Host provenance; its own timestamp records actual admission.
 - Duplicate requests, response loss and reload use that canonical receipt.
+  Confirmation requires the exact queued/client identity and a valid Turn.
+  Canonical recovery also matches the original message source kind.
 - A stale edited revision is rejected; a cancelled item is never revived.
 - Turn completion and queue-drain races either use the existing delivery or start
   the selected input once. Waiting for initial admission never waits for the whole
