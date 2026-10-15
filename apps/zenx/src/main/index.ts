@@ -7,6 +7,7 @@ import {
 } from "./foreground-activity-owner.js";
 import { registerDiagnosticsFolderIpc } from "./diagnostics-folder-ipc.js";
 import { validateShellPanelRequest } from "../shell-panel.js";
+import { restoreLoginShellPath } from "./login-shell-environment.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { FleetSettingsService } from "./fleet-settings.js";
@@ -234,6 +235,7 @@ const projectProjection = new ZenXProjectProjection();
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 const bootstrapFence = new ZenXBootstrapFence();
+const loginShellAbort = new AbortController();
 const ownsSingleInstance =
   !nativeHostMode &&
   secondInstanceDisposition(app.requestSingleInstanceLock()) ===
@@ -242,7 +244,10 @@ const hostLifecycle = new ZenXHostLifecycle({
   platform: desktopPlatform(process.platform),
   windowCount: () => appWindows().length,
   createWindow,
-  cancelBootstrap: () => bootstrapFence.cancelAndJoin(),
+  cancelBootstrap: () => {
+    loginShellAbort.abort();
+    return bootstrapFence.cancelAndJoin();
+  },
   stopHost: stopZenXHost,
   finishQuit: () => app.quit(),
   reportStopFailure: (error) =>
@@ -365,6 +370,17 @@ function createWindow(): BrowserWindow {
 async function bootstrapZenX(): Promise<void> {
   if (!ownsSingleInstance) return;
   bootstrapFence.throwIfCancelled();
+  // The static startup window is already loading before this bounded wait.
+  // Host construction and its first tool execution must see the recovered PATH.
+  const shellPath = await restoreLoginShellPath({
+    environment: process.env,
+    signal: loginShellAbort.signal,
+  });
+  bootstrapFence.throwIfCancelled();
+  if (shellPath !== "restored" && shellPath !== "skipped")
+    console.warn(
+      `ZenX login-shell PATH unavailable (${shellPath}); using inherited PATH`,
+    );
   const userDataDirectory = app.getPath("userData");
   imZenXSetupService = new ImZenXSetupService({
     directory: join(userDataDirectory, "plugin-data", "imzenx", "setup"),
