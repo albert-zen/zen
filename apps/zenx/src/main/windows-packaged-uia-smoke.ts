@@ -201,7 +201,9 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       hwnd: string;
       title: string;
       editorHwnd: string;
+      messageLoopReady: boolean;
     }>(directory, "target.json", signal, fixtures);
+    assert.equal(target.messageLoopReady, true);
     fixtures.push(
       startFixture(script, [
         "-Mode",
