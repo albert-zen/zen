@@ -818,7 +818,7 @@ function processTableFailureAfterInitialIdentity(
             pid: rootPid,
             parentPid: process.pid,
             processGroupId: rootPid,
-            sessionId: null,
+            sessionId: process.platform === "linux" ? rootPid : null,
             startTime: "fixture-root",
           },
         ],

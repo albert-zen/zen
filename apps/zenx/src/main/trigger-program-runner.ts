@@ -127,6 +127,10 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let settled = false;
+      const terminationScope: PosixTerminationScope = {
+        isActive: () => !settled,
+        deadline: Number.POSITIVE_INFINITY,
+      };
       let collecting = true;
       let requested: TriggerProgramRunResult | null = null;
       let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
@@ -158,6 +162,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       const forceAndFinish = async (): Promise<void> => {
         if (settled || requested === null || forceStarted) return;
         forceStarted = true;
+        terminationScope.deadline = Date.now() + PROGRAM_FORCE_SETTLEMENT_MS;
         if (forceTimer !== undefined) {
           clearTimeout(forceTimer);
           forceTimer = undefined;
@@ -165,11 +170,15 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         if (
           process.platform !== "win32" &&
           capturedTree === undefined &&
-          child.exitCode !== null
+          (child.exitCode !== null || child.signalCode !== null)
         ) {
-          const exited = await verifyExitedChild(
-            child,
-            this.processOperations.captureProcessTable,
+          const exited = await withDeadline(
+            verifyExitedChild(
+              child,
+              this.processOperations.captureProcessTable,
+            ),
+            Math.max(0, terminationScope.deadline - Date.now()),
+            inactivePosixTermination(),
           );
           if (settled || requested === null) return;
           if (exited.ok) {
@@ -185,6 +194,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
             true,
             capturedTree,
             this.processOperations,
+            terminationScope,
           );
           if (
             !softTermination.ok &&
@@ -204,7 +214,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         try {
           terminationResult = await withDeadline(
             containment,
-            PROGRAM_FORCE_SETTLEMENT_MS,
+            Math.max(0, terminationScope.deadline - Date.now()),
             {
               ok: false,
               error: "bounded process-tree termination deadline expired",
@@ -236,6 +246,11 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
           }),
         );
         termination = treeAtTermination.then(async (snapshot) => {
+          if (
+            process.platform !== "win32" &&
+            posixTerminationExpired(terminationScope)
+          )
+            return inactivePosixTermination();
           if (snapshot.tree !== undefined) {
             capturedTree = snapshot.tree;
             return await terminateProcessTree(
@@ -243,6 +258,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
               false,
               snapshot.tree,
               this.processOperations,
+              terminationScope,
             );
           }
           await terminateProcessTree(
@@ -250,10 +266,13 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
             false,
             undefined,
             this.processOperations,
+            terminationScope,
           );
           // A failed Windows ownership capture cannot be repaired by an empty
           // later PID/PPID snapshot: an ambiguous lineage may already be gone.
           if (process.platform !== "win32") {
+            if (posixTerminationExpired(terminationScope))
+              return inactivePosixTermination();
             const exited = await verifyExitedChild(
               child,
               this.processOperations.captureProcessTable,
@@ -455,6 +474,28 @@ type ProcessIdentity = WindowsProcessIdentity;
 type ProcessTableSnapshot = WindowsProcessTableSnapshot;
 type ProcessTreeSnapshot = WindowsProcessTreeSnapshot;
 
+interface PosixTerminationScope {
+  isActive(): boolean;
+  deadline: number;
+}
+
+function posixTerminationExpired(scope?: PosixTerminationScope): boolean {
+  return (
+    scope !== undefined && (!scope.isActive() || Date.now() >= scope.deadline)
+  );
+}
+
+function inactivePosixTermination(): TerminationResult {
+  return {
+    ok: false,
+    error: "process-tree termination scope expired; containment was not proven",
+  };
+}
+
+function isPositiveProcessId(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 interface TerminationResult {
   ok: boolean;
   error: string;
@@ -465,13 +506,14 @@ function terminateProcessTree(
   force: boolean,
   tree?: ProcessTreeSnapshot,
   processOperations: WindowsProcessOperations = realWindowsProcessOperations,
+  scope?: PosixTerminationScope,
 ): Promise<TerminationResult> {
   if (child.pid === undefined)
     return Promise.resolve({
       ok: false,
       error: "the child process did not expose a PID",
     });
-  if (!force && child.exitCode !== null)
+  if (!force && (child.exitCode !== null || child.signalCode !== null))
     return Promise.resolve({ ok: true, error: "" });
   if (process.platform === "win32")
     return terminateWindowsProcessTree(child, force, tree, processOperations);
@@ -480,6 +522,7 @@ function terminateProcessTree(
     force,
     tree,
     processOperations.captureProcessTable,
+    scope,
   );
 }
 
@@ -517,24 +560,29 @@ async function terminatePosixProcessTree(
   force: boolean,
   tree?: ProcessTreeSnapshot,
   capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
+  scope?: PosixTerminationScope,
 ): Promise<TerminationResult> {
-  if (child.pid === undefined)
+  if (posixTerminationExpired(scope)) return inactivePosixTermination();
+  if (child.pid === undefined || !isPositiveProcessId(child.pid))
     return { ok: false, error: "the child process did not expose a PID" };
-  if (!force) return sendPosixSignal(-child.pid, "SIGTERM");
+  if (!force) return sendPosixSignal(child.pid, "SIGTERM", scope, true);
   if (tree === undefined)
     return {
       ok: false,
       error:
         "process-tree identity was unavailable; containment was not proven",
     };
-  return await verifyAndTerminatePosix(child.pid, tree, capture);
+  return await verifyAndTerminatePosix(child.pid, tree, capture, scope);
 }
 
 async function verifyExitedChild(
   child: ChildProcessWithoutNullStreams,
   capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
 ): Promise<TerminationResult> {
-  if (child.pid === undefined || child.exitCode === null)
+  if (
+    child.pid === undefined ||
+    (child.exitCode === null && child.signalCode === null)
+  )
     return {
       ok: false,
       error: "the child process identity was unavailable before termination",
@@ -656,17 +704,28 @@ async function verifyAndTerminatePosix(
   rootPid: number,
   tree: ProcessTreeSnapshot,
   capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
+  scope?: PosixTerminationScope,
 ): Promise<TerminationResult> {
   let stableAbsentPasses = 0;
-  const deadline = Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS;
+  const deadline = Math.min(
+    Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS,
+    scope?.deadline ?? Number.POSITIVE_INFINITY,
+  );
+  const verificationScope: PosixTerminationScope = {
+    isActive: () => !posixTerminationExpired(scope),
+    deadline,
+  };
   let tracked = [tree.root, ...tree.descendants];
-  while (Date.now() < deadline) {
+  while (!posixTerminationExpired(verificationScope)) {
     let table: ProcessTableSnapshot;
     try {
       table = await capture();
     } catch (error) {
       return processTableDiscoveryFailure(error);
     }
+    // A table can arrive after either the verifier or its caller has settled.
+    if (posixTerminationExpired(verificationScope))
+      return inactivePosixTermination();
     const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
     if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
     tracked = addDescendants(tracked, table.entries);
@@ -687,7 +746,12 @@ async function verifyAndTerminatePosix(
           .filter((value): value is number => value !== null),
       );
       for (const groupId of groupIds) {
-        const groupResult = sendPosixSignal(-groupId, "SIGKILL");
+        const groupResult = sendPosixSignal(
+          groupId,
+          "SIGKILL",
+          verificationScope,
+          true,
+        );
         if (!groupResult.ok) return groupResult;
       }
       for (const identity of live) {
@@ -699,7 +763,11 @@ async function verifyAndTerminatePosix(
             ok: false,
             error: `PID ${String(identity.pid)} identity changed; containment was not proven`,
           };
-        const result = sendPosixSignal(identity.pid, "SIGKILL");
+        const result = sendPosixSignal(
+          identity.pid,
+          "SIGKILL",
+          verificationScope,
+        );
         if (!result.ok)
           return {
             ok: false,
@@ -726,9 +794,19 @@ function processTableDiscoveryFailure(error: unknown): TerminationResult {
 function sendPosixSignal(
   pid: number,
   signal: NodeJS.Signals,
+  scope?: PosixTerminationScope,
+  group = false,
 ): TerminationResult {
+  if (posixTerminationExpired(scope)) return inactivePosixTermination();
+  // Keep individual IDs distinct from group targets. kill(0) targets our own
+  // group and kill(-1) broadcasts to every process we are allowed to signal.
+  if (!isPositiveProcessId(pid) || (group && pid === 1))
+    return {
+      ok: false,
+      error: "invalid process or process-group ID; containment was not proven",
+    };
   try {
-    process.kill(pid, signal);
+    process.kill(group ? -pid : pid, signal);
     return { ok: true, error: "" };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -1052,26 +1130,51 @@ if (!$matched) { exit 3 }
   });
 }
 
-function captureProcessTree(
+async function captureProcessTree(
   child: ChildProcess,
   capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
 ): Promise<ProcessTreeSnapshot> {
   if (process.platform === "win32")
     return captureWindowsProcessTree(child, capture);
   const pid = child.pid;
-  if (pid === undefined)
-    return Promise.reject(new Error("the child process did not expose a PID"));
-  return capture().then((table) => {
+  if (pid === undefined || !isPositiveProcessId(pid))
+    throw new Error("the child process did not expose a valid PID");
+  let exited = child.exitCode !== null || child.signalCode !== null;
+  const onExit = (): void => {
+    exited = true;
+  };
+  child.once("exit", onExit);
+  const requireLiveChild = (): void => {
+    if (exited || child.exitCode !== null || child.signalCode !== null)
+      throw new Error(
+        "the owned root exited before its process identity was captured; containment was not proven",
+      );
+  };
+  try {
+    requireLiveChild();
+    const table = await capture();
+    requireLiveChild();
     const root = table.entries.find((entry) => entry.pid === pid);
     if (root === undefined || root.startTime === null)
       throw new Error("root process identity was unavailable");
+    // A POSIX detached child is the leader of its own process group/session.
+    if (
+      root.parentPid !== process.pid ||
+      root.processGroupId !== pid ||
+      (process.platform === "linux" && root.sessionId !== pid)
+    )
+      throw new Error(
+        "root process ownership did not match the live detached child; containment was not proven",
+      );
     const descendants = addDescendants([root], table.entries).filter(
       (entry) => entry.pid !== root.pid,
     );
     if (descendants.some((entry) => entry.startTime === null))
       throw new Error("descendant process identity was unavailable");
     return { root, descendants };
-  });
+  } finally {
+    child.removeListener("exit", onExit);
+  }
 }
 
 /** Bind the initial Windows snapshot to the still-live child we spawned. */
