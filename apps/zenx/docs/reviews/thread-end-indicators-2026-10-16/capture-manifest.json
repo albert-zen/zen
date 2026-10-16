@@ -1,0 +1,71 @@
+{
+  "source_tree": "059b53d38cdc3021ee402c029edd1d9d78c057f0",
+  "images": [
+    {
+      "file": "01-light-jade.jpg",
+      "sha256": "67c332763dd9c8fe5300877af085dda2c08599e4354b107008820bd7f58eebfd",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "02-dark-jade.jpg",
+      "sha256": "f9961994de64fb0e48ea2cfe01f8f6b25f2d5c76ea63246f56d1eaa89d6e832f",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "03-dark-iris.jpg",
+      "sha256": "336e741dc80d048300f5c8aa0c59c54b76a1a29a2a0238f08d3df0c1c67d4d6f",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "04-light-iris.jpg",
+      "sha256": "db3332bbb3d94d3b576c21c2ece820f95dcede4cc5e7b684bf25709eb4c3ed7b",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "05-light-azure.jpg",
+      "sha256": "a0a1f8f0f583ed7e211759a0797e9302d9d9fc502b230a7a9e8fa99c778e2749",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "06-dark-azure.jpg",
+      "sha256": "816d29117191ec461bf94362b3851270c34f6e86ccc1b9cee65af3779c857e67",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "07-dark-red-token-test.jpg",
+      "sha256": "421e52b1b9734e5680f376b389916504d9571f468d8c4457199466c1a9841fb6",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "08-light-red-token-test.jpg",
+      "sha256": "5ba930fc24ced230e2431927e9373166c25c2a7fd3827a79d798e6d48c575aea",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "09-selected-failure-retains-marker.jpg",
+      "sha256": "1382c85c45ea94d5ee8a7d196d88d4e3d4fba88b3d11ea00e40b15237820af5e",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "10-synthetic-viewed-clears-failure.jpg",
+      "sha256": "b9866cfd4c544e7a8f45a305ec83bdf1f34dee90eb6849d7f6b8330658232c5e",
+      "width": 1180,
+      "height": 757
+    },
+    {
+      "file": "11-dark-azure-compact-keyboard.jpg",
+      "sha256": "0cc73cdeb6182679478674e8f95b30a9451c73c72f5adb061480bb3c9f86268a",
+      "width": 1180,
+      "height": 757
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "source_base": "2a227f88445c9ec6ccc2dc97e2cf464f7125a948",
+  "source_staged_tree": "059b53d38cdc3021ee402c029edd1d9d78c057f0",
+  "source_status": "staged frozen tree, no commit authored",
+  "source_files": {
+    "ARCHITECTURE.md": "7091cde75b318d8f30f55f4b82958bd472eb2dfb4522b2d62cb00a48f2b3018e",
+    "apps/zenx/src/renderer/src/Sidebar.tsx": "1aa9d396668d444a4ac6768b5f30c0c40a8bda7d837c2adb919bcc082a9f795f",
+    "apps/zenx/src/renderer/src/i18n/shell.ts": "8e8984aff3d7b27d1c3b9438e5c734823e4222cf25f0e165ff79a47c813f1b9c",
+    "apps/zenx/src/renderer/src/styles.css": "9ac7c7ace1c274b7d01ce76a584f3cd6c3de4127f68389cf64d8ce4d281bed07",
+    "apps/zenx/test/fixtures/thread-end-indicators-visual.README.md": "f3254e77ac2e1b807ebc99a37f6873f824adab1bc5d3426c069c379634aacad7",
+    "apps/zenx/test/fixtures/thread-end-indicators-visual.html": "225fa409dd4a04c36a287e86377bdc3a6cb0033750b284a2be94264f85615ac8",
+    "apps/zenx/test/fixtures/thread-end-indicators-visual.tsx": "9bd2f8e2f0e3c91c046e3365cb02ab1950cb6036a0f49a647e5b0970a2f4854f",
+    "apps/zenx/test/fixtures/thread-end-sidebar.ts": "d4d8ab9409032b7ddd7d09568a46cba18aff5a72708678b064833a65a8e231c2",
+    "apps/zenx/test/fixtures/thread-end-unread.tsx": "51472df1bfa0ff04c5554cd6354178ade5d110d02cb47ad50b1b882e3e299021",
+    "apps/zenx/test/sidebar-information-interaction.test.ts": "af9b3f13f10fb50086ae8c3145dcc443b6a5c310656446f9e0c17b8c77ad26cc",
+    "apps/zenx/test/thread-end-unread.test.ts": "6b0383e9fdb6575878ecd3dc4e41d6cc9f172149c54c5a6a0c9ae579709738df",
+    "src/app-server.ts": "11fd99403aaded07b2cf2e0678c294f106381d1efa5b5e2ce107952b2d7cc678",
+    "src/thread-summary.ts": "e5ad31274173738a516bbab25bd6d35955cb10ebd6a95ecea15db77e4a8e4a65",
+    "test/thread-summary.test.ts": "606bca4f76f7233f144e4717386bcfecc7e6e0c8ea3bd375495c63a28bcdaa0b"
+  },
+  "build_sha256": {
+    "index.html": "0fcfd07e87fa0f0969e15dd6b65736c794f3acf1716ebefb75920d340d4e778e",
+    "thread-end-indicators-visual.css": "80ea45f19c93da3e4dcd0419314c92fa315c6559b96b380c558a0f47ff52357c",
+    "thread-end-indicators-visual.js": "93c1126121616e39be25523d48670e5400e1b0a8ab5ba6b91a08500c9c311ea3"
+  },
+  "bundle": "author-provided production Sidebar + synthetic summary props",
+  "capture_browser": "cloud Chrome; not user computer",
+  "captured_at": "2026-10-16"
+}
