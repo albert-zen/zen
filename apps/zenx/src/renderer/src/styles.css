@@ -10158,9 +10158,21 @@ button:disabled {
     transform: rotate(360deg);
   }
 }
+.thread-unread-dot,
+.thread-unread-failed {
+  display: block;
+  width: 10px;
+  height: 10px;
+}
+.thread-unread-failed {
+  color: var(--color-status-danger);
+}
+.thread-unread-failed > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .thread-unread-dot {
-  width: 6px;
-  height: 6px;
   border-radius: 50%;
   background: var(--color-accent);
 }
@@ -10273,6 +10285,9 @@ button:disabled {
   }
   .thread-unread-dot {
     background: Highlight;
+  }
+  .thread-unread-failed {
+    color: CanvasText;
   }
   .thread-status-rail,
   .thread-row-shell:is(:hover, :focus-within, [data-menu-open="true"])

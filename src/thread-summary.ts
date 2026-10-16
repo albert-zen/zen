@@ -32,6 +32,8 @@ export interface ThreadSummary {
     turnId: string;
     createdAt: string;
     position: number;
+    /** Absent only on older projections; never infer failure from message text. */
+    status?: "completed" | "failed" | "aborted";
   };
   threadId: string;
   /** Canonical delete fence; absent only on legacy or unavailable projections. */
@@ -191,7 +193,11 @@ export function isNativeThreadSummary(
         typeof value.lastTurnEnd.turnId === "string" &&
         value.lastTurnEnd.turnId.length > 0 &&
         Number.isSafeInteger(value.lastTurnEnd.position) &&
-        (value.lastTurnEnd.position as number) >= 0)) &&
+        (value.lastTurnEnd.position as number) >= 0 &&
+        (value.lastTurnEnd.status === undefined ||
+          value.lastTurnEnd.status === "completed" ||
+          value.lastTurnEnd.status === "failed" ||
+          value.lastTurnEnd.status === "aborted"))) &&
     (value.forkedFromThreadId === undefined ||
       typeof value.forkedFromThreadId === "string") &&
     (value.forkedFromTurnId === undefined ||

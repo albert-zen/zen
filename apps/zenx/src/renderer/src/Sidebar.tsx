@@ -2029,6 +2029,10 @@ function ThreadRow({
     !hasActiveTurn &&
     !pendingApproval &&
     (information?.unreadThreadIds.has(thread.threadId) ?? false);
+  const unreadFailed =
+    unread &&
+    thread.status !== "systemError" &&
+    thread.lastTurnEnd?.status === "failed";
   const statusCount =
     Number(boundTriggers.length > 0) +
     Number(hasActiveTurn || pendingApproval || watching) +
@@ -2329,10 +2333,37 @@ function ThreadRow({
         ) : null}
         {unread ? (
           <span className="thread-status-slot">
-            <span
-              className="thread-unread-dot"
-              aria-label={i18n.t("shell:threadUnseenEnd")}
-            />
+            {unreadFailed ? (
+              <span
+                className="thread-unread-failed"
+                role="img"
+                aria-label={i18n.t("shell:threadUnseenFailure")}
+              >
+                <svg viewBox="0 0 12 12" aria-hidden="true">
+                  <circle
+                    cx="6"
+                    cy="6"
+                    r="5.25"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  />
+                  <path
+                    d="M6 3.1v3.2"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                  <circle cx="6" cy="8.65" r="0.8" fill="currentColor" />
+                </svg>
+              </span>
+            ) : (
+              <span
+                className="thread-unread-dot"
+                role="img"
+                aria-label={i18n.t("shell:threadUnseenEnd")}
+              />
+            )}
           </span>
         ) : null}
         <button

@@ -147,6 +147,7 @@ export const en = {
   threadAutomationCount_one: "{{count}} trigger",
   threadAutomationCount_other: "{{count}} triggers",
   threadUnseenEnd: "Thread ended, not yet viewed",
+  threadUnseenFailure: "Thread failed, not yet viewed",
   renameThreadNamed: "Rename {{title}}",
   importSourceModel: "Original provider / model (reference only)",
   importCheckpointWarning:
@@ -1048,6 +1049,7 @@ export const zhCN = {
   threadAutomationCount_one: "{{count}} 个触发器",
   threadAutomationCount_other: "{{count}} 个触发器",
   threadUnseenEnd: "线程已结束，尚未查看",
+  threadUnseenFailure: "线程执行失败，尚未查看",
   renameThreadNamed: "重命名 {{title}}",
   importSourceModel: "原 Provider / 模型（仅供参考）",
   importCheckpointWarning:

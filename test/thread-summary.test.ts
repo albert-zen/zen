@@ -16,7 +16,10 @@ import {
 } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { JsonlThreadMetadataStore } from "../src/thread-metadata.js";
-import { JsonThreadSummaryProjection } from "../src/thread-summary.js";
+import {
+  JsonThreadSummaryProjection,
+  isNativeThreadSummary,
+} from "../src/thread-summary.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 import { isTurnEndItem, turnEndPosition } from "../src/turn-end.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
@@ -174,6 +177,7 @@ test("a real tool turn publishes canonical end evidence only after it stops", as
     const terminal = completedItems.at(-1)!;
     assert.equal(terminal.type, "turn_completed");
     assert.deepEqual(completed.lastTurnEnd, {
+      status: "completed",
       id: terminal.id,
       turnId: turn.id,
       createdAt: terminal.createdAt,
@@ -207,10 +211,18 @@ for (const outcome of [
       entered = resolve;
     });
     let samples = 0;
+    let currentServer: ZenAppServer | undefined;
     const model: ModelAdapter = {
       provider: "fake",
       async *stream(request) {
         entered();
+        const [sampling] = await currentServer!.listThreadSummaries();
+        assert(sampling && sampling.status === "active");
+        assert.equal(
+          sampling.lastTurnEnd,
+          undefined,
+          "every model attempt, including automatic recovery retries, remains non-terminal",
+        );
         if (outcome === "normal") yield { type: "text_delta", delta: "Done." };
         if (outcome === "partial-failure" || outcome === "abort") {
           yield { type: "text_delta", delta: "Partial text only" };
@@ -241,6 +253,7 @@ for (const outcome of [
     try {
       const journal = new JsonlThreadJournal(path.join(directory, "threads"));
       const server = createServer(directory, journal, model);
+      currentServer = server;
       const recovery = new NativeRecoveryProjection(server, {
         processEpoch: "test-epoch",
       });
@@ -331,11 +344,33 @@ for (const outcome of [
         const [summary] = await server.listThreadSummaries();
         assert(summary && summary.status === "idle");
         assert.deepEqual(summary.lastTurnEnd, {
+          status:
+            outcome === "abort"
+              ? "aborted"
+              : outcome.includes("failure")
+                ? "failed"
+                : "completed",
           id: terminal.id,
           turnId: turn.id,
           createdAt: terminal.createdAt,
           position: turnEndPosition(snapshot.items, terminal),
         });
+        assert.equal(isNativeThreadSummary(summary), true);
+        const legacy = structuredClone(summary);
+        delete legacy.lastTurnEnd!.status;
+        assert.equal(
+          isNativeThreadSummary(legacy),
+          true,
+          "old summaries remain readable without an outcome",
+        );
+        assert.equal(
+          isNativeThreadSummary({
+            ...summary,
+            lastTurnEnd: { ...summary.lastTurnEnd, status: "retrying" },
+          }),
+          false,
+          "transient recovery is not a terminal outcome",
+        );
         const terminalEvent = terminalEvents[0]!;
         assert(terminalEvent.type === "item_completed");
         assert.equal(
