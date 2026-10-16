@@ -514,7 +514,9 @@
   Trigger 历史中的明确 outcome；它不是 sandbox、队列、重试器或第二个 Runtime。
 - **ZenXTransientProcessContainment** — ZenX 本地程序 runner 以 OS-specific process identity、
   bounded termination 与反复 quiescence 证明约束瞬时子进程树；它不进入 durable state、scheduler 或 retry system，
-  无法证明 containment 时只产生明确失败。
+  无法证明 containment 时只产生明确失败。POSIX runner 的瞬态终止 scope 在结算或绝对截止后禁止继续向目标进程树发送终止信号，
+  初始快照必须绑定仍存活的自有 detached root，最终信号边界拒绝无效 PID/PGID 与 `kill(0)`/`kill(-1)` 特殊广播目标；
+  这些边界不构成对历史进程组归属或秒级 identity 下 PID 复用的完整证明。
 - **ZenXBundledAutomationPluginService** — 两个 bundled Plugin Package 共享仅承载 Room mention、reply route
   与 Trigger wakeup 真实交叉约束的第一方 domain service；Catalog runtime admission 分别控制各 package，
   Trigger/Room durable document 分居各自 namespace，只有显式唤醒继续调用既有 App Server port。

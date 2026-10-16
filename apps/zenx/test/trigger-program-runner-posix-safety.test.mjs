@@ -1,0 +1,238 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
+import test from "node:test";
+import vm from "node:vm";
+import ts from "typescript";
+
+// Every signal and spawn reference in the production module is replaced before
+// evaluation. These tests cannot send signals to the test runner or the host.
+const source = readFileSync(
+  new URL("../src/main/trigger-program-runner.ts", import.meta.url),
+  "utf8",
+);
+const compiled = ts.transpileModule(`${source}\nexport { sendPosixSignal };`, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+const root = {
+  pid: 20001,
+  parentPid: 10001,
+  processGroupId: 20001,
+  sessionId: 20001,
+  startTime: "Fri Oct 16 01:00:00 2026",
+};
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function fixture(capture, options = {}) {
+  const calls = [];
+  let completed = false;
+  let captures = 0;
+  const child = Object.assign(new EventEmitter(), {
+    pid: root.pid,
+    exitCode: options.exitCode ?? null,
+    signalCode: options.signalCode ?? null,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: (signal) => {
+      calls.push({ kind: "child", signal, afterCompletion: completed });
+      return true;
+    },
+  });
+  const module = { exports: {} };
+  vm.runInNewContext(compiled, {
+    module,
+    exports: module.exports,
+    Buffer,
+    DOMException,
+    setTimeout,
+    clearTimeout,
+    process: {
+      pid: root.parentPid,
+      platform: "linux",
+      env: {},
+      cwd: () => "/mock",
+      kill: (pid, signal) => {
+        calls.push({
+          kind: "process",
+          pid,
+          signal,
+          afterCompletion: completed,
+        });
+        return true;
+      },
+    },
+    require: (name) => {
+      if (name === "node:child_process") return { spawn: () => child };
+      if (name === "./trigger-limits.js")
+        return { MAX_PROGRAM_TIMEOUT_MS: 60_000 };
+      if (name === "./owned-child-process.js")
+        return {
+          observeOwnedChild: () => {
+            throw new Error("Unexpected helper");
+          },
+        };
+      throw new Error(`Unexpected import: ${name}`);
+    },
+  });
+  const runner = new module.exports.ZenXTriggerProgramRunner({
+    captureProcessTable: async () => ({
+      entries: await capture(++captures, child),
+    }),
+    terminateProcessIdentity: () => {
+      throw new Error("Unexpected Windows termination");
+    },
+  });
+  return {
+    calls,
+    child,
+    signal: module.exports.sendPosixSignal,
+    run: async () => {
+      const result = await runner.run(
+        { command: "mock-only", timeoutMs: 1 },
+        { invocationId: "safety", stage: "action", event: {} },
+        new AbortController().signal,
+      );
+      completed = true;
+      return result;
+    },
+  };
+}
+
+test("POSIX signal boundary rejects zero, broadcast, and invalid IDs", () => {
+  const f = fixture(() => []);
+  for (const id of [
+    0,
+    -0,
+    -1,
+    -42,
+    NaN,
+    Infinity,
+    2.5,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    assert.equal(f.signal(id, "SIGKILL").ok, false);
+    assert.equal(f.signal(id, "SIGKILL", undefined, true).ok, false);
+  }
+  assert.equal(f.signal(1, "SIGKILL", undefined, true).ok, false);
+  assert.equal(
+    f.signal(20001, "SIGKILL", { isActive: () => false, deadline: Infinity })
+      .ok,
+    false,
+  );
+  assert.equal(
+    f.signal(20001, "SIGKILL", { isActive: () => true, deadline: 0 }).ok,
+    false,
+  );
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.signal(20001, "SIGTERM", undefined, true).ok, true);
+  assert.deepEqual(
+    f.calls.map(({ pid }) => pid),
+    [-20001],
+  );
+});
+
+test("POSIX valid owned root and descendant cleanup still reaches quiescence", async () => {
+  const descendant = { ...root, pid: 20002, parentPid: root.pid };
+  const f = fixture((n) => (n <= 2 ? [root, descendant] : []));
+  const result = await f.run();
+  assert.equal(result.status, "timed_out");
+  assert.doesNotMatch(result.error, /containment/u);
+  assert(
+    f.calls.some((call) => call.pid === -root.pid && call.signal === "SIGTERM"),
+  );
+  assert(
+    f.calls.some(
+      (call) => call.pid === descendant.pid && call.signal === "SIGKILL",
+    ),
+  );
+});
+
+test("POSIX initial capture rejects an already-exited root generation", async () => {
+  for (const state of [{ exitCode: 0 }, { signalCode: "SIGTERM" }]) {
+    const replacement = { ...root, parentPid: 40004, processGroupId: 40004 };
+    const f = fixture(() => [replacement], state);
+    await f.run();
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.child.listenerCount("exit"), 0);
+  }
+});
+
+test("POSIX initial capture detects root exit while the table is pending", async () => {
+  const f = fixture((n, child) => {
+    if (n === 1) {
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+    }
+    return [{ ...root, parentPid: 40004, processGroupId: 40004 }];
+  });
+  await f.run();
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.child.listenerCount("exit"), 0);
+});
+
+test("POSIX initial capture rejects mismatched owner, group, or Linux session", async () => {
+  for (const changed of [
+    { parentPid: 40004 },
+    { processGroupId: 40004 },
+    { sessionId: 40004 },
+    { processGroupId: 0 },
+  ]) {
+    const f = fixture(() => [{ ...root, ...changed }]);
+    const result = await f.run();
+    assert.match(result.error, /containment was not proven/u);
+    assert(!f.calls.some((call) => call.signal === "SIGKILL"));
+    assert(
+      !f.calls.some((call) => call.pid === -40004 || Object.is(call.pid, -0)),
+    );
+  }
+});
+
+test("POSIX slow successful tables cannot signal after settlement", async () => {
+  const f = fixture(async () => {
+    await pause(700);
+    return [root];
+  });
+  const result = await f.run();
+  assert.match(result.error, /deadline expired/u);
+  const callsAtSettlement = f.calls.length;
+  await pause(600);
+  assert.equal(f.calls.length, callsAtSettlement);
+  assert(!f.calls.some((call) => call.afterCompletion));
+});
+
+test("POSIX delayed capture failure cannot signal via soft fallback", async () => {
+  const f = fixture(async () => {
+    await pause(1800);
+    throw new Error("delayed discovery failure");
+  });
+  const result = await f.run();
+  assert.match(result.error, /deadline expired/u);
+  await pause(200);
+  assert.equal(f.calls.length, 0);
+});
+
+test("POSIX verifier checks its own deadline after capture even before outer settlement", async () => {
+  const f = fixture(async (n) => {
+    if (n === 2) await pause(950);
+    return [root];
+  });
+  const result = await f.run();
+  assert.match(result.error, /scope expired/u);
+  assert(!f.calls.some((call) => call.signal === "SIGKILL"));
+});
+
+// This preflight runs before the ordinary containment withDeadline call.
+test(
+  "POSIX exited-child preflight shares the force settlement budget",
+  { timeout: 4000 },
+  async () => {
+    const f = fixture(() => new Promise(() => {}), { exitCode: 0 });
+    const result = await f.run();
+    assert.match(result.error, /deadline expired/u);
+    assert.equal(f.calls.length, 0);
+  },
+);
