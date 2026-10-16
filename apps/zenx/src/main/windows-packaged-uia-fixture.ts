@@ -77,7 +77,6 @@ public static class ZenXPackagedFixture {
     strip.Items.Add(virtualButton); form.Controls.Add(strip);
     Write("invoke-count", "0");
     form.Show(); form.Hide(); form.Show();
-    Json("target.json", new { pid = Process.GetCurrentProcess().Id, hwnd = form.Handle.ToInt64().ToString(), title = title, editorHwnd = editor.Handle.ToInt64().ToString(), buttonHwnd = button.Handle.ToInt64().ToString() });
     // WM_SETTEXT does not send EN_CHANGE for a multiline edit. Read the actual
     // target control on its own UI thread, independently of the UIA receipt.
     // null ensures the first observed empty value creates a real evidence file.
@@ -111,6 +110,12 @@ public static class ZenXPackagedFixture {
         if (duplicate != null) duplicate.Close(); form.Close();
       }
     };
+    // A created HWND does not prove that its owning UI thread is pumping messages.
+    // Publish only after this posted callback is dispatched. This does not claim
+    // that UIA acquisition has succeeded; the first real inspect still proves that.
+    form.BeginInvoke(new MethodInvoker(delegate {
+      Json("target.json", new { pid = Process.GetCurrentProcess().Id, hwnd = form.Handle.ToInt64().ToString(), title = title, editorHwnd = editor.Handle.ToInt64().ToString(), buttonHwnd = button.Handle.ToInt64().ToString(), messageLoopReady = true });
+    }));
     timer.Start(); Application.Run(form); timer.Dispose();
   }
   [StructLayout(LayoutKind.Sequential)] struct Point { public int X, Y; }

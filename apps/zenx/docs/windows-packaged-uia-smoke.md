@@ -40,6 +40,14 @@ before the remaining negative cases run.
 
 ## Refusal and cancellation evidence
 
+The target's atomic `target.json` receipt is published from a posted
+`BeginInvoke` callback, after the owning UI thread dispatches it. The parent
+requires that dispatch evidence before starting the guard. This proves message
+processing, not UIA provider availability; the first production inspect still
+has to succeed without warm-up calls, retries, or a changed timeout. The Windows
+readiness contract test compiles the actual callback registration with a paused
+synthetic dispatcher. It proves publication ordering, not native UIA behavior.
+
 - A pre-aborted package call must cause no subprocess launch or editor effect.
 - A fixture-only editor blocks inside the real native `WM_SETTEXT` operation.
   Cancellation starts only after that native entry marker appears. The actual
