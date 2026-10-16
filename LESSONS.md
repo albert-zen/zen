@@ -106,3 +106,16 @@
   什么"。Git 历史已经是档案，仓库里只放当前事实。
 - **第二套"事实"必然漂移。** ProjectCoordinationItem 与 kernel Item 并存，
   就意味着系统有两条累加事实链。权威状态只能有一条。
+
+## DOM 测试断言必须有界
+
+- React/JSDOM 的元素 identity/null 检查先求值为布尔值，再用带固定说明的
+  `assert.ok` 断言；不要把元素对象直接传给 `assert.equal`/`deepEqual`。
+  Node 22 的严格断言失败会深度 inspect 元素可达的 React Fiber 图，并为
+  文本差异保留 Myers trace；即使提供自定义 message，仍可能分配大量内存。
+- 独立小型合成界面已验证：不同元素的布尔 identity 断言立即产生
+  `ERR_ASSERTION`，直接元素断言在错误构造返回前触发外部内存采样阈值。
+  这证明失败诊断存在放大机制，不证明任何具体 CI 运行的焦点错位原因。
+  常规回归只检查源码约束及有界 mock 的成功/失败语义，不运行危险的 DOM diff。
+- React `act` 不保证 Radix 卸载时的焦点恢复 timer 已执行；测试应等待实际
+  focus 事件并设置有界失败期限，不用固定 sleep，也不放宽 identity 断言。
