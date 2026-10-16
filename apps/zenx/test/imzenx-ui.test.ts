@@ -1,4 +1,5 @@
 import "./dom-primitives.js";
+import { waitForFocus } from "./wait-for-focus.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import React, { act } from "react";
@@ -367,7 +368,10 @@ test("IM preparation checks only selected paths and saves without connecting or 
       harness.calls.map((call) => call.command),
       ["status", "readiness", "prepare"],
     );
-    assert.equal(document.querySelector('input[type="password"]'), null);
+    assert.ok(
+      document.querySelector('input[type="password"]') === null,
+      "Preparation does not expose password inputs",
+    );
     assert.equal(
       document.querySelectorAll('input:not([type="checkbox"])').length,
       4,
@@ -411,8 +415,15 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
     );
     await click(button("Cancel", dialog));
-    assert.equal(document.querySelector('[role="dialog"]'), null);
-    assert.equal(document.activeElement, trigger);
+    assert.ok(
+      document.querySelector('[role="dialog"]') === null,
+      "Cancel closes the connection dialog",
+    );
+    await act(async () => waitForFocus(trigger));
+    assert.ok(
+      document.activeElement === trigger,
+      "Cancel restores focus to the connection trigger",
+    );
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
       false,
@@ -432,7 +443,10 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
         }),
       );
     });
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.ok(
+      document.querySelector('[role="dialog"]') === null,
+      "Escape closes the connection dialog",
+    );
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
       false,
@@ -460,7 +474,10 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
         },
       ],
     );
-    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.ok(
+      document.querySelector('[role="dialog"]') === null,
+      "Submitting connection closes the confirmation dialog",
+    );
     connection.resolve({
       state: "connected",
       configuration: preparedConfig,
@@ -559,7 +576,10 @@ test("IM readiness results cannot authorize an edited configuration", async () =
     await act(async () => {
       await inspection.promise;
     });
-    assert.equal(document.querySelector(".imzenx-checks"), null);
+    assert.ok(
+      document.querySelector(".imzenx-checks") === null,
+      "Editing configuration discards stale readiness checks",
+    );
     assert.match(
       document.body.textContent ?? "",
       /Configuration changed; check readiness again/,
@@ -598,7 +618,10 @@ test("IM readiness may inspect an unsaved draft but connection waits for save-on
     assert.equal(button("Confirm connection…").disabled, true);
     await click(button("Save preparation"));
     assert.equal(button("Confirm connection…").disabled, true);
-    assert.equal(document.querySelector(".imzenx-checks"), null);
+    assert.ok(
+      document.querySelector(".imzenx-checks") === null,
+      "Saving preparation clears previous readiness checks",
+    );
     await click(button("Check readiness"));
     assert.equal(button("Confirm connection…").disabled, false);
     assert.deepEqual(
@@ -607,7 +630,10 @@ test("IM readiness may inspect an unsaved draft but connection waits for save-on
     );
     await changeInput(harness.dom, "Working directory", "/another-work");
     assert.equal(button("Confirm connection…").disabled, true);
-    assert.equal(document.querySelector(".imzenx-checks"), null);
+    assert.ok(
+      document.querySelector(".imzenx-checks") === null,
+      "Editing the saved configuration clears readiness checks",
+    );
   } finally {
     await harness.close();
   }
@@ -634,7 +660,10 @@ test("IM readiness errors remain recoverable and never implicitly connect", asyn
     );
     assert.equal(button("Confirm connection…").disabled, true);
     await click(button("Check readiness"));
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.ok(
+      document.querySelector('[role="alert"]') === null,
+      "A successful readiness retry clears the error alert",
+    );
     assert.equal(button("Confirm connection…").disabled, false);
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
@@ -687,7 +716,10 @@ test("late IM background status cannot replace saved status or an edited draft",
       document.querySelector(".imzenx-status")?.getAttribute("data-state"),
       "prepared",
     );
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.ok(
+      document.querySelector('[role="alert"]') === null,
+      "A stale background status does not show an error alert",
+    );
     assert.equal(harness.drafts.current.imzenx?.config.cwd, "/draft-work");
   } finally {
     background.resolve({ state: "prepared", configuration: preparedConfig });
@@ -825,9 +857,8 @@ test("native IM form uses declared fields and sends write-only credentials only 
       document.body.textContent ?? "",
       /Channel settings saved securely; the connection has not started/,
     );
-    assert.equal(
-      document.querySelector('input[type="password"]'),
-      null,
+    assert.ok(
+      document.querySelector('input[type="password"]') === null,
       "saved secrets are never returned into an input",
     );
     assert.equal(
@@ -964,7 +995,10 @@ test("native IM encryption failure prevents save and safe recovery preserves non
         .disabled,
       false,
     );
-    assert.equal(document.querySelector(".imzenx-storage-warning"), null);
+    assert.ok(
+      document.querySelector(".imzenx-storage-warning") === null,
+      "Reloading available secure storage clears its warning",
+    );
   } finally {
     await harness.close();
   }
@@ -1130,8 +1164,14 @@ test("IM stale server revision rejection clears consent and requires a fresh che
       dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!,
     );
     await click(button("Connect", dialog));
-    assert.equal(document.querySelector('[role="dialog"]'), null);
-    assert.equal(document.querySelector(".imzenx-checks"), null);
+    assert.ok(
+      document.querySelector('[role="dialog"]') === null,
+      "A stale server revision closes the connection dialog",
+    );
+    assert.ok(
+      document.querySelector(".imzenx-checks") === null,
+      "A stale server revision clears readiness checks",
+    );
     assert.equal(button("Confirm connection…").disabled, true);
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
@@ -1210,8 +1250,14 @@ test("IM background status revision changes invalidate an open same-path consent
     );
     revision = "externally-edited-revision";
     await act(async () => poll());
-    assert.equal(document.querySelector('[role="dialog"]'), null);
-    assert.equal(document.querySelector(".imzenx-checks"), null);
+    assert.ok(
+      document.querySelector('[role="dialog"]') === null,
+      "A background revision change closes the connection dialog",
+    );
+    assert.ok(
+      document.querySelector(".imzenx-checks") === null,
+      "A background revision change clears readiness checks",
+    );
     assert.equal(button("Confirm connection…").disabled, true);
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
@@ -1389,8 +1435,15 @@ test("IM continuation keyboard edits preserve a newer draft across late Save and
     const popup = document.querySelector<HTMLElement>('[role="listbox"]');
     assert(popup);
     await key(popup, "Escape");
-    assert.equal(document.querySelector('[role="listbox"]'), null);
-    assert.equal(document.activeElement, selector());
+    assert.ok(
+      document.querySelector('[role="listbox"]') === null,
+      "Escape closes the continuation listbox",
+    );
+    await act(async () => waitForFocus(selector()));
+    assert.ok(
+      document.activeElement === selector(),
+      "Escape restores focus to the continuation selector",
+    );
     assert.equal(harness.drafts.current.imzenx?.dirty, false);
     await choose("queue");
     assert.equal(
