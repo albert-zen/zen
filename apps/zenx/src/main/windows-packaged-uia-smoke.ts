@@ -25,6 +25,11 @@ import {
   type WindowsPackagedUiaFocusEvidence,
 } from "./windows-packaged-uia-evidence.js";
 
+import {
+  parseAcquisitionDiagnostic,
+  reportAcquisitionFailure,
+} from "./windows-packaged-uia-acquisition.js";
+
 interface NativeControl {
   hwnd: string;
   runtimeId: number[];
@@ -74,6 +79,9 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
   const signal = controller.signal;
   const fixtures: FixtureProcess[] = [];
   const runner = new SpawnWinAppCliRunner();
+  const acquisitionDiagnosticsEnabled =
+    process.env.ZENX_UIA_ACQUISITION_DIAGNOSTIC === "1";
+  let nativeAcquisitionDiagnostic: Record<string, unknown> | undefined;
   let nativeLaunch: NativeLaunch | undefined;
   let nativeInspection: NativeReceipt | undefined;
   let nativeSetValue: NativeReceipt | undefined;
@@ -98,6 +106,13 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
           },
         });
         if (args.includes("--zenx-uia-strict")) {
+          if (acquisitionDiagnosticsEnabled) {
+            const observation = parseAcquisitionDiagnostic(
+              result.stderr,
+              "native",
+            );
+            if (observation) nativeAcquisitionDiagnostic = observation;
+          }
           const receipt = JSON.parse(result.stdout) as NativeReceipt;
           if (
             receipt.operation === "inspect" &&
@@ -587,6 +602,15 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       scope:
         "Observed fixture epoch only; target-owned side effects and races prevent a global focus guarantee",
     };
+  } catch (error) {
+    await reportAcquisitionFailure({
+      enabled: acquisitionDiagnosticsEnabled,
+      native: nativeAcquisitionDiagnostic,
+      readFixture: () =>
+        readFile(path.join(directory, "uia-acquisition-fixture.json"), "utf8"),
+      emit: (text) => console.error(text),
+    });
+    throw error;
   } finally {
     clearTimeout(timeout);
     controller.abort(new Error("Packaged UIA smoke cleanup"));

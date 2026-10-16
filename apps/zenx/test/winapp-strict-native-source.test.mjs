@@ -242,3 +242,36 @@ test("unexpected native failures expose only a controlled phase, category, and H
     "phases must be source-defined labels",
   );
 });
+
+test("opt-in acquisition diagnostics preserve one native call and original throw", () => {
+  assert.match(
+    added,
+    /GetEnvironmentVariable\("ZENX_UIA_ACQUISITION_DIAGNOSTIC"\) != "1"/u,
+  );
+  assert.match(
+    added,
+    /if \(operation == "inspect"\) acquisitionDiagnostic = AcquisitionDiagnostic.TryBegin\(\)/u,
+  );
+  assert.match(
+    added,
+    /catch \(Exception acquisitionError\)\s*\{\s*acquisitionDiagnostic\?\.AfterAcquire\(request, acquisitionError\);\s*throw;/u,
+  );
+  assert.match(added, /CoGetApartmentType\(out var type, out var qualifier\)/u);
+  assert.doesNotMatch(
+    added,
+    /put_ConnectionTimeout|put_TransactionTimeout|Thread\.Sleep|SendMessage.*WM_GETOBJECT/u,
+  );
+  const diagnostic = added.slice(
+    added.indexOf("private sealed class AcquisitionDiagnostic"),
+    added.indexOf("private static string ProviderError"),
+  );
+  assert.doesNotMatch(
+    diagnostic,
+    /WriteString\("(?:pid|hwnd|className|startTicks|elapsed|path)"/iu,
+  );
+  assert.match(diagnostic, /buffer.Length <= 2048/u);
+  assert.match(
+    diagnostic,
+    /catch \{ \/\* Preserve the already-written primary response/u,
+  );
+});

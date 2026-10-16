@@ -80,3 +80,56 @@ The evidence proves this disposable fixture epoch, not a universal focus
 promise: an application's own behavior and target changes around final
 validation can still affect focus. Linux unit checks validate the evidence
 checker only; Windows packaged CI is required for the native claims above.
+
+## Opt-in first-acquisition diagnostic candidate
+
+`ZENX_UIA_ACQUISITION_DIAGNOSTIC=1` enables a diagnostic-only experiment. The
+candidate does not retry, warm up UIA, send WM_GETOBJECT, change COM apartments,
+change focus, or change any native/parent timeout. It is disabled otherwise.
+
+Counterevidence: after the message-loop readiness change in #443, integrated
+[#442 run 38912838291](https://github.com/albert-zen/zen/actions/runs/38912838291/job/117012710811)
+passed readiness tests and again failed initial inspect with
+`provider_error_inspect_element_com_h80131505`, `not_dispatched` (smoke line 489).
+Thus readiness is a valid prerequisite correction, not a UIA timeout root-cause fix.
+The separate main-push startup harness PowerShell timeout is outside this candidate.
+
+The native observer queries actual `CoGetApartmentType` before client construction
+and before `ElementFromHandle`, records AutoSetFocus and connection/transaction
+budget categories, and compares the native owner around acquisition without
+publishing identity. Only fixed enums, booleans, schema constants and fixed-width
+HRESULTs are emitted, after the original stdout receipt. Original exceptions are
+rethrown unchanged. Native response bytes and transport options remain unchanged.
+The parent keeps a strictly validated summary on failure before fixture cleanup.
+No process IDs, handles, creation times, class names, titles, paths, memory values,
+live numeric timeout values, or elapsed times are added to the diagnostic summary.
+
+The fixture observes naturally received root-window WM_GETOBJECT messages using
+DWORD-normalized UIA-root/MSAA-client/other categories. The UI thread updates
+atomic flags and queues bounded background publications; it performs no diagnostic
+file writes, synchronous stderr writes, provider calls, or waits. A background
+snapshot is atomic and serialized. It is lower-bound evidence: even an existing
+file may lag, and a write failure may prevent `observerFailed` from being persisted.
+Missing data is unavailable, never proof of no message. Messages cannot be
+attributed to this client; a nonzero return does not prove provider correctness.
+Message-loop ticks do not prove provider readiness or continuous responsiveness.
+Native timeout/abort before receipt settlement may leave no native observation.
+
+Observer work can perturb scheduling and consumes time within unchanged existing
+budgets. Exception isolation is not a claim of timing neutrality. This is an
+instrumentation candidate, not a fix or evidence of a recoverable transient error.
+
+Validation before a Windows experiment: exact-schema/privacy rejection tests,
+disabled observer no-I/O test, read/sink fault isolation, original exception
+identity, source-lock integrity, and synthetic Windows C# tests compiling the
+actual fixture observer and dispatched-ready callback. Windows must also build the
+patched native provider, verify the real CoGetApartmentType interop signature,
+and run every existing packaged UIA acceptance operation unchanged. One explicitly
+approved diagnostic-enabled Windows run can distinguish observed apartment,
+owner mismatch, or message-entry-without-observed-return cases; success alone
+cannot establish causality. No blind rerun or automatic retry is authorized.
+
+Primary references: [UIA error codes](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-error-codes),
+[CoGetApartmentType](https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cogetapartmenttype),
+[WM_GETOBJECT](https://learn.microsoft.com/en-us/windows/win32/winauto/wm-getobject),
+[UIA threading](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-threading).

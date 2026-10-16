@@ -190,10 +190,11 @@ jobs:
       - name: Validate the same-build Windows smoke guard assembly
         run: node --import tsx --test --test-timeout=120000 apps/zenx/test/windows-smoke-guard-build.test.mjs
       - name: Validate native fixture readiness dispatch ordering
-        run: node --test apps/zenx/test/windows-packaged-uia-readiness.test.mjs
+        run: node --test apps/zenx/test/windows-packaged-uia-readiness.test.mjs apps/zenx/test/windows-packaged-uia-acquisition-fixture.test.mjs
       - name: Package and diagnose Windows smoke publication
         env:
           ZENX_PACKAGE_DIAG: "1"
+          ZENX_UIA_ACQUISITION_DIAGNOSTIC: "1"
           ZENX_NATIVE_GUARD_DIAGNOSTICS_DIR: ${{ runner.temp }}/zenx-native-guard-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
         run: npm --workspace apps/zenx run smoke:packaged -- --downstream "${{ runner.temp }}/zenx-winapp-downstream" --downstream-sha256 "${{ steps.build-downstream.outputs.provenance-sha256 }}"
       - name: Retain only this run's sanitized native guard failure receipts

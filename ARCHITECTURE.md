@@ -1385,3 +1385,5 @@ does not imply delivery or permit client-side cancel/resend. This is a one-messa
 action; it does not rewrite any ingress preference or an explicitly queued sibling.
 
 ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按单调钟至少间隔 15 秒读取固定 host-visible 内存与 visible-cgroup-root v2 数值；它不是 job/child 内存归因，不探索成员或挂载路径，无 timer/进程/信号修改，独立双 sink 32 KiB/32 样本上限不占用原 4 MiB trace 预算，缺值为 null，停事件或预算耗尽后最后样本会陈旧。
+
+The opt-in Windows packaged UIA acquisition observer is disposable diagnostic evidence only: actual client COM apartment and fixed categorical acquisition results are separate from the strict native receipt; the fixture records naturally delivered root WM_GETOBJECT transitions asynchronously. Failure summaries accept exact enum/bool/HRESULT schemas and cannot authorize actions, retries, readiness, or cancellation. Missing or stale observations remain inconclusive; no timeout or mutation budget is changed.

@@ -36,6 +36,77 @@ public static class ZenXPackagedFixture {
     else if (mode == "guard") new Guard(targetPid, new IntPtr(Int64.Parse(targetHwnd))).Run();
     else throw new InvalidOperationException("Unknown fixture role");
   }
+  // Diagnostic-only observer for naturally delivered messages on the disposable root.
+  // The flags cannot identify the caller, and an absent file is unavailable evidence.
+  public sealed class AcquisitionObserver {
+    public const int ReadyDispatched = 1, MessageLoopTickObserved = 2;
+    public const int UiaRootEntered = 4, UiaRootReturned = 8, UiaRootNonzero = 16;
+    public const int MsaaClientEntered = 32, MsaaClientReturned = 64, MsaaClientNonzero = 128;
+    public const int OtherEntered = 256, OtherReturned = 512, OtherNonzero = 1024;
+    public const int ObserverFailed = 2048;
+    int flags;
+    readonly object publicationGate = new object();
+    public static int Category(IntPtr objectId) {
+      // WM_GETOBJECT object identifiers are DWORDs, including sign-extended LPARAMs.
+      uint normalized = unchecked((uint)objectId.ToInt64());
+      if (normalized == unchecked((uint)-25)) return UiaRootEntered;
+      if (normalized == unchecked((uint)-4)) return MsaaClientEntered;
+      return OtherEntered;
+    }
+    bool Add(int bits) {
+      int previous, next;
+      do {
+        previous = Interlocked.CompareExchange(ref flags, 0, 0);
+        next = previous | bits;
+        if (next == previous) return false;
+      } while (Interlocked.CompareExchange(ref flags, next, previous) != previous);
+      return true;
+    }
+    public void Mark(int bits) {
+      try {
+        // Only first transitions queue work: at most twelve callbacks per instance.
+        // No UI-thread lock, file/console IO, provider calls, or waits.
+        if (Add(bits) && !ThreadPool.QueueUserWorkItem(Publish)) Add(ObserverFailed);
+      } catch { Add(ObserverFailed); }
+    }
+    void Publish(object unused) {
+      try {
+        lock (publicationGate) {
+          // Read under the publication lock, never capture a stale queued snapshot.
+          int snapshot = Interlocked.CompareExchange(ref flags, 0, 0);
+          Json("uia-acquisition-fixture.json", new {
+            schemaVersion = 1,
+            readyDispatched = (snapshot & ReadyDispatched) != 0,
+            messageLoopTickObserved = (snapshot & MessageLoopTickObserved) != 0,
+            uiaRootEntered = (snapshot & UiaRootEntered) != 0,
+            uiaRootReturned = (snapshot & UiaRootReturned) != 0,
+            uiaRootNonzero = (snapshot & UiaRootNonzero) != 0,
+            msaaClientEntered = (snapshot & MsaaClientEntered) != 0,
+            msaaClientReturned = (snapshot & MsaaClientReturned) != 0,
+            msaaClientNonzero = (snapshot & MsaaClientNonzero) != 0,
+            otherEntered = (snapshot & OtherEntered) != 0,
+            otherReturned = (snapshot & OtherReturned) != 0,
+            otherNonzero = (snapshot & OtherNonzero) != 0,
+            observerFailed = (snapshot & ObserverFailed) != 0
+          });
+        }
+      } catch { Add(ObserverFailed); }
+    }
+  }
+  public sealed class AcquisitionForm : Form {
+    readonly AcquisitionObserver observer;
+    public AcquisitionForm(AcquisitionObserver value) { observer = value; }
+    protected override void WndProc(ref Message message) {
+      int category = 0;
+      if (message.Msg == 0x003D && observer != null) {
+        category = AcquisitionObserver.Category(message.LParam);
+        observer.Mark(category);
+      }
+      // Do not catch the real provider's exception or change its return value.
+      base.WndProc(ref message);
+      if (category != 0) observer.Mark((category << 1) | (message.Result != IntPtr.Zero ? category << 2 : 0));
+    }
+  }
   public sealed class BlockingEditor : TextBox {
     protected override void WndProc(ref Message message) {
       // A real ValuePattern.SetValue must enter the native edit operation. This
@@ -59,7 +130,8 @@ public static class ZenXPackagedFixture {
     return editor;
   }
   static void Target(string title) {
-    var form = new Form();
+    var observation = Environment.GetEnvironmentVariable("ZENX_UIA_ACQUISITION_DIAGNOSTIC") == "1" ? new AcquisitionObserver() : null;
+    Form form = observation == null ? new Form() : new AcquisitionForm(observation);
     form.Text = title; form.SetBounds(40, 40, 620, 320); form.StartPosition = FormStartPosition.Manual;
     BlockingEditor editor = Editor(form);
     var button = new Button();
@@ -86,6 +158,7 @@ public static class ZenXPackagedFixture {
     var lifetime = Stopwatch.StartNew();
     var timer = new System.Windows.Forms.Timer(); timer.Interval = 10;
     timer.Tick += delegate {
+      if (observation != null) observation.Mark(AcquisitionObserver.MessageLoopTickObserved);
       string currentEditorValue = editor.Text;
       if (!string.Equals(observedEditorValue, currentEditorValue, StringComparison.Ordinal)) {
         Write("editor-value", currentEditorValue);
@@ -114,6 +187,7 @@ public static class ZenXPackagedFixture {
     // Publish only after this posted callback is dispatched. This does not claim
     // that UIA acquisition has succeeded; the first real inspect still proves that.
     form.BeginInvoke(new MethodInvoker(delegate {
+      if (observation != null) observation.Mark(AcquisitionObserver.ReadyDispatched);
       Json("target.json", new { pid = Process.GetCurrentProcess().Id, hwnd = form.Handle.ToInt64().ToString(), title = title, editorHwnd = editor.Handle.ToInt64().ToString(), buttonHwnd = button.Handle.ToInt64().ToString(), messageLoopReady = true });
     }));
     timer.Start(); Application.Run(form); timer.Dispose();

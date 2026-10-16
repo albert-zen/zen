@@ -20,7 +20,7 @@ const target = fixture.slice(
 );
 function registration() {
   const match = target.match(
-    /form\.BeginInvoke\(new MethodInvoker\(delegate \{\s*Json\("target\.json",[^\n]+\);\s*\}\)\);/u,
+    /form\.BeginInvoke\(new MethodInvoker\(delegate \{\s*if \(observation != null\) observation\.Mark\(AcquisitionObserver\.ReadyDispatched\);\s*Json\("target\.json",[^\n]+\);\s*\}\)\);/u,
   );
   assert.ok(
     match,
@@ -68,6 +68,10 @@ sealed class Dispatcher {
   public void BeginInvoke(MethodInvoker callback) { Pending = callback; }
   public void Pump() { var callback = Pending; Pending = null; callback(); }
 }
+sealed class AcquisitionObserver {
+  public const int ReadyDispatched = 1;
+  public void Mark(int flag) {}
+}
 public static class ReadinessContract {
   static int writes;
   static object receipt;
@@ -77,6 +81,7 @@ public static class ReadinessContract {
   }
   public static void Run() {
     var form = new Dispatcher(); var editor = new Dispatcher(); var button = new Dispatcher();
+    AcquisitionObserver observation = null;
     string title = "synthetic readiness fixture";
     ${registration()}
     if (writes != 0 || form.Pending == null) throw new Exception("Ready escaped before dispatch");
