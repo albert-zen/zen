@@ -73,7 +73,10 @@ function data(
       id: `${id}-user`,
       type: "user_message",
       content: [
-        { type: "text", text: "合成验收任务：验证执行结束后才出现绿点。" },
+        {
+          type: "text",
+          text: "合成验收任务：验证执行结束后才出现主题色圆点或失败标记。",
+        },
       ],
     },
   ];
@@ -147,6 +150,7 @@ function data(
             turnId: end.turnId,
             createdAt: end.createdAt,
             position: turnEndPosition(items, end),
+            status: end.type === "turn_aborted" ? "aborted" : end.status,
           },
         }
       : {

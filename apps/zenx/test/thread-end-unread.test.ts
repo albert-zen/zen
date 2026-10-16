@@ -28,6 +28,8 @@ import {
   projectNativeRecovery,
 } from "../src/renderer/src/thread-view-state.js";
 
+import { Sidebar } from "../src/renderer/src/Sidebar.js";
+import { threadEndSidebarProps } from "./fixtures/thread-end-sidebar.js";
 const noop = async () => {};
 function bounds(top: number, bottom: number): DOMRect {
   return {
@@ -45,7 +47,7 @@ function bounds(top: number, bottom: number): DOMRect {
 
 for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
   test(`actual ${outcome} execution end is unread until its visible Turn tail is read`, async () => {
-    const dom = new JSDOM('<div id="root"></div>', {
+    const dom = new JSDOM('<div id="root"></div><div id="sidebar"></div>', {
       url: "http://localhost",
       pretendToBeVisual: true,
     });
@@ -139,6 +141,7 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
       live = applyNativeThreadEvent(live, event);
     });
     const root = createRoot(document.getElementById("root")!);
+    const sidebarRoot = createRoot(document.getElementById("sidebar")!);
     const flush = async () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -159,6 +162,18 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
         ),
       );
       await flush();
+      const summaries = await server.listThreadSummaries();
+      await act(async () =>
+        sidebarRoot.render(
+          React.createElement(
+            Sidebar,
+            threadEndSidebarProps(
+              summaries,
+              unreadThreadIds(summaries, conversationReadStore().getSnapshot()),
+            ),
+          ),
+        ),
+      );
     };
     const seen = () =>
       conversationReadStore().getSnapshot().threads[started.id];
@@ -218,6 +233,14 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
         terminal.id,
       );
       assert.equal(seen(), undefined, "opening while unfocused does not read");
+      assert.equal(
+        document.querySelectorAll(".thread-unread-failed").length,
+        outcome === "failed" ? 1 : 0,
+      );
+      assert.equal(
+        document.querySelectorAll(".thread-unread-dot").length,
+        outcome === "failed" ? 0 : 1,
+      );
       focused = true;
       hidden = true;
       window.dispatchEvent(new dom.window.Event("focus"));
@@ -245,13 +268,21 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
       live = snapshot;
       await render();
       assert.equal(
+        document.querySelector(".thread-unread-failed, .thread-unread-dot"),
+        null,
+        "reading the real terminal Turn clears the production Sidebar marker after recovery",
+      );
+      assert.equal(
         seen()?.id,
         terminal.id,
         "reload keeps the same read watermark",
       );
     } finally {
       release();
-      await act(async () => root.unmount());
+      await act(async () => {
+        root.unmount();
+        sidebarRoot.unmount();
+      });
       unsubscribe();
       recovery.close();
       dom.window.close();

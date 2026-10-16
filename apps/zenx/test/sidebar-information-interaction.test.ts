@@ -540,6 +540,72 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
       "explicitly showing the child reveals its original unseen end",
     );
     assert.ok(dot("b"));
+    // A canonical failed end replaces the ordinary unread dot, including after
+    // navigation or reconnect. A new running Turn suppresses the previous end.
+    const ended = stopped as typeof stopped & {
+      lastTurnEnd?: {
+        id: string;
+        turnId: string;
+        createdAt: string;
+        position: number;
+        status: string;
+      };
+    };
+    ended.lastTurnEnd = {
+      id: "failed-end",
+      turnId: "failed-turn",
+      createdAt: stopped.updatedAt,
+      position: 0,
+      status: "failed",
+    };
+    const failure = () =>
+      document.querySelector('[data-thread-id="b"] .thread-unread-failed');
+    await render();
+    assert.ok(failure());
+    assert.equal(dot("b"), null);
+    assert.equal(
+      failure()?.getAttribute("aria-label"),
+      "Thread failed, not yet viewed",
+    );
+    props.selectedThreadId = "b";
+    props.serverStatus = { type: "ready", reconnected: true };
+    await render();
+    assert.ok(failure(), "selection and reconnect alone do not consume an end");
+    props.unreadThreadIds = new Set(["child"]);
+    await render();
+    assert.equal(
+      failure(),
+      null,
+      "reading the actual end clears its failure marker",
+    );
+    props.unreadThreadIds = unread;
+    stopped.status = "active";
+    await render();
+    assert.equal(
+      failure(),
+      null,
+      "running or retrying suppresses the old failure",
+    );
+    assert.equal(dot("b"), null);
+    stopped.status = "idle";
+    ended.lastTurnEnd = {
+      ...ended.lastTurnEnd,
+      id: "cancelled-end",
+      turnId: "cancelled-turn",
+      position: 1,
+      status: "aborted",
+    };
+    await render();
+    assert.equal(failure(), null, "active cancellation is not failure");
+    assert.ok(dot("b"));
+    ended.lastTurnEnd = {
+      ...ended.lastTurnEnd,
+      id: "completed-end",
+      position: 2,
+      status: "completed",
+    };
+    await render();
+    assert.ok(dot("b"), "a later successful end uses the ordinary marker");
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

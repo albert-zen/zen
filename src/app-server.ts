@@ -4822,6 +4822,8 @@ export class ZenAppServer {
               turnId: turnEnd.turnId,
               createdAt: turnEnd.createdAt,
               position: turnEndPosition(items, turnEnd),
+              status:
+                turnEnd.type === "turn_aborted" ? "aborted" : turnEnd.status,
             },
           }),
       ...(lastMessage === undefined
