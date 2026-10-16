@@ -181,9 +181,9 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
       const turn = await server.startTurn(started.id, "Synthetic request");
       await entered;
       await render();
-      assert.equal(
-        document.querySelector("section.turn[data-read-message-id]"),
-        null,
+      assert.ok(
+        document.querySelector("section.turn[data-read-message-id]") === null,
+        "An active execution has no terminal read marker",
       );
       assert.equal(seen(), undefined);
       assert.equal(
@@ -267,9 +267,9 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
       );
       live = snapshot;
       await render();
-      assert.equal(
-        document.querySelector(".thread-unread-failed, .thread-unread-dot"),
-        null,
+      assert.ok(
+        document.querySelector(".thread-unread-failed, .thread-unread-dot") ===
+          null,
         "reading the real terminal Turn clears the production Sidebar marker after recovery",
       );
       assert.equal(

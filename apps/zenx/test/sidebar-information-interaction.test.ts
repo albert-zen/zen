@@ -153,7 +153,7 @@ test("details retain focus, title directly renames, and late save cannot close a
     });
     let hoverPane = document.querySelector<HTMLElement>(".thread-information");
     assert.ok(hoverPane, "hover opens details after the deliberate delay");
-    assert.equal(document.activeElement, document.body, "hover does not focus");
+    assert.ok(document.activeElement === document.body, "hover does not focus");
     await act(async () => {
       row.dispatchEvent(
         new dom.window.MouseEvent("pointerout", {
@@ -182,15 +182,13 @@ test("details retain focus, title directly renames, and late save cannot close a
       );
       await new Promise((resolve) => setTimeout(resolve, 220));
     });
-    assert.equal(
-      document.querySelector(".thread-information"),
-      null,
+    assert.ok(
+      document.querySelector(".thread-information") === null,
       "leaving both surfaces dismisses details",
     );
     await act(async () => row.focus());
-    assert.equal(
-      document.activeElement,
-      row,
+    assert.ok(
+      document.activeElement === row,
       "opening information does not steal focus",
     );
     const details = document.querySelector<HTMLElement>(".thread-information")!;
@@ -225,9 +223,9 @@ test("details retain focus, title directly renames, and late save cannot close a
     )!;
     assert.ok(status.querySelector('[aria-label="1 trigger"]'));
     assert.ok(status.querySelector('[aria-label="Running"]'));
-    assert.equal(
-      document.querySelector('[data-thread-id="a"] .thread-state-inline'),
-      null,
+    assert.ok(
+      document.querySelector('[data-thread-id="a"] .thread-state-inline') ===
+        null,
       "running status is not duplicated beside the model",
     );
     assert.deepEqual(
@@ -247,7 +245,10 @@ test("details retain focus, title directly renames, and late save cannot close a
       status.querySelector(".thread-running-spinner circle[stroke-dasharray]"),
     );
 
-    assert.equal(status.querySelector(".live-dot"), null);
+    assert.ok(
+      status.querySelector(".live-dot") === null,
+      "Running status has no duplicate live dot",
+    );
     assert.ok(
       document.querySelector(
         '[data-thread-id="b"] [aria-label="Thread ended, not yet viewed"]',
@@ -258,12 +259,14 @@ test("details retain focus, title directly renames, and late save cannot close a
         .querySelector<HTMLButtonElement>(".thread-information-title")!
         .click(),
     );
-    assert.equal(
-      document.querySelector(".thread-information"),
-      details,
+    assert.ok(
+      document.querySelector(".thread-information") === details,
       "hover title edits inside the original information panel",
     );
-    assert.equal(document.querySelector(".thread-item-menu"), null);
+    assert.ok(
+      document.querySelector(".thread-item-menu") === null,
+      "Editing information does not open a thread menu",
+    );
     assert.ok(details.querySelector(".thread-information-facts"));
     let input = document.querySelector<HTMLInputElement>(
       ".thread-menu-rename input",
@@ -304,12 +307,14 @@ test("details retain focus, title directly renames, and late save cannot close a
         React.createElement(Sidebar, { ...props, selectedThreadId: "b" }),
       );
     });
-    assert.equal(
-      document.querySelector(".thread-menu-rename"),
-      null,
+    assert.ok(
+      document.querySelector(".thread-menu-rename") === null,
       "new selection retires the old editor even without an outside pointer event",
     );
-    assert.equal(document.activeElement, nextRow);
+    assert.ok(
+      document.activeElement === nextRow,
+      "Changing selection preserves focus on the new row",
+    );
     await act(async () =>
       document
         .querySelector<HTMLButtonElement>(
@@ -334,9 +339,8 @@ test("details retain focus, title directly renames, and late save cannot close a
         ?.value,
       "new draft",
     );
-    assert.equal(
-      document.activeElement,
-      input,
+    assert.ok(
+      document.activeElement === input,
       "late receipt does not move focus",
     );
     await change(input, "error");
@@ -351,12 +355,16 @@ test("details retain focus, title directly renames, and late save cannot close a
     );
     assert.equal(input.value, "error");
     await act(async () => input.dispatchEvent(event("Escape")));
-    assert.equal(document.querySelector(".thread-menu-rename"), null);
-    assert.equal(
-      document.activeElement,
-      document.querySelector(
-        ".thread-menu-information .thread-information-title",
-      ),
+    assert.ok(
+      document.querySelector(".thread-menu-rename") === null,
+      "Escape closes the name editor",
+    );
+    assert.ok(
+      document.activeElement ===
+        document.querySelector(
+          ".thread-menu-information .thread-information-title",
+        ),
+      "Escape restores focus to the information title",
     );
     assert.ok(
       document.querySelector(".thread-item-menu"),
@@ -365,9 +373,10 @@ test("details retain focus, title directly renames, and late save cannot close a
     await act(async () =>
       document.activeElement!.dispatchEvent(event("Escape")),
     );
-    assert.equal(
-      document.activeElement,
-      document.querySelector('[data-thread-id="b"] .thread-menu-trigger'),
+    assert.ok(
+      document.activeElement ===
+        document.querySelector('[data-thread-id="b"] .thread-menu-trigger'),
+      "Closing information restores focus to its menu trigger",
     );
     await act(async () => row.focus());
     const pane = document.querySelector<HTMLElement>(".thread-information")!;
@@ -375,12 +384,14 @@ test("details retain focus, title directly renames, and late save cannot close a
       pane.querySelector<HTMLButtonElement>("button")!.focus(),
     );
     await act(async () => pane.dispatchEvent(event("Escape")));
-    assert.equal(
-      document.querySelector(".thread-information"),
-      null,
+    assert.ok(
+      document.querySelector(".thread-information") === null,
       "Escape stays dismissed after restoring row focus",
     );
-    assert.equal(document.activeElement, row);
+    assert.ok(
+      document.activeElement === row,
+      "Escape restores focus to the thread row",
+    );
     const openNameEditor = async () => {
       if (!document.querySelector(".thread-item-menu"))
         await act(async () =>
@@ -412,11 +423,11 @@ test("details retain focus, title directly renames, and late save cannot close a
       ),
     );
     await act(async () => resolve!());
-    assert.equal(
-      document.activeElement,
-      document.querySelector(
-        ".thread-menu-information .thread-information-title",
-      ),
+    assert.ok(
+      document.activeElement ===
+        document.querySelector(
+          ".thread-menu-information .thread-information-title",
+        ),
       "successful Enter restores owned focus to the title in the same panel",
     );
     input = await openNameEditor();
@@ -504,22 +515,23 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
     document.querySelector(`[data-thread-id="${id}"] .thread-unread-dot`);
   try {
     await render();
-    assert.equal(
-      dot("a"),
-      null,
+    assert.ok(
+      dot("a") === null,
       "a pinned running row never shows an old end dot",
     );
     assert.ok(dot("b"), "a pinned stopped row retains its unseen end");
-    assert.equal(document.querySelector('[data-thread-id="child"]'), null);
+    assert.ok(
+      document.querySelector('[data-thread-id="child"]') === null,
+      "Hidden child is absent from the sidebar",
+    );
     assert.ok(
       unread.has("child"),
       "hiding a child does not consume its unseen end",
     );
     props.pendingApprovalThreadIds = new Set(["b"]);
     await render();
-    assert.equal(
-      dot("b"),
-      null,
+    assert.ok(
+      dot("b") === null,
       "approval state suppresses even a stale idle summary",
     );
     props.pendingApprovalThreadIds = new Set();
@@ -527,9 +539,8 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
       typeof Sidebar
     >["threads"];
     await render();
-    assert.equal(
-      document.querySelector('[data-thread-id="child"]'),
-      null,
+    assert.ok(
+      document.querySelector('[data-thread-id="child"]') === null,
       "pinning does not change a hidden child's sidebar visibility",
     );
     assert.ok(unread.has("child"), "pinning preserves the hidden unseen end");
@@ -562,7 +573,7 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
       document.querySelector('[data-thread-id="b"] .thread-unread-failed');
     await render();
     assert.ok(failure());
-    assert.equal(dot("b"), null);
+    assert.ok(dot("b") === null, "Failed end replaces the ordinary unread dot");
     assert.equal(
       failure()?.getAttribute("aria-label"),
       "Thread failed, not yet viewed",
@@ -573,20 +584,18 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
     assert.ok(failure(), "selection and reconnect alone do not consume an end");
     props.unreadThreadIds = new Set(["child"]);
     await render();
-    assert.equal(
-      failure(),
-      null,
+    assert.ok(
+      failure() === null,
       "reading the actual end clears its failure marker",
     );
     props.unreadThreadIds = unread;
     stopped.status = "active";
     await render();
-    assert.equal(
-      failure(),
-      null,
+    assert.ok(
+      failure() === null,
       "running or retrying suppresses the old failure",
     );
-    assert.equal(dot("b"), null);
+    assert.ok(dot("b") === null, "Running suppresses the ordinary unread dot");
     stopped.status = "idle";
     ended.lastTurnEnd = {
       ...ended.lastTurnEnd,
@@ -596,7 +605,7 @@ test("pinned and hidden child rows preserve unseen ends while running and approv
       status: "aborted",
     };
     await render();
-    assert.equal(failure(), null, "active cancellation is not failure");
+    assert.ok(failure() === null, "active cancellation is not failure");
     assert.ok(dot("b"));
     ended.lastTurnEnd = {
       ...ended.lastTurnEnd,
