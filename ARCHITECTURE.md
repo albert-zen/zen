@@ -516,7 +516,10 @@
   bounded termination 与反复 quiescence 证明约束瞬时子进程树；它不进入 durable state、scheduler 或 retry system，
   无法证明 containment 时只产生明确失败。POSIX runner 的瞬态终止 scope 在结算或绝对截止后禁止继续向目标进程树发送终止信号，
   初始快照必须绑定仍存活的自有 detached root，最终信号边界拒绝无效 PID/PGID 与 `kill(0)`/`kill(-1)` 特殊广播目标；
-  这些边界不构成对历史进程组归属或秒级 identity 下 PID 复用的完整证明。
+  组广播只由当前仍存活且绑定的自有 root 授权，不从历史后代 PGID 推导；root 退出后不再向该正负 PID 发信号，
+  新后代只沿当前匹配的存活父身份收编，已捕获后代可在 reparent 后继续有界逐 PID 清理。
+  具体组覆盖或身份歧义保持 containment 未证明；失去 root 组广播权限本身不改变正常已跟踪树的退出验收。
+  逐 PID 清理仍受秒级 identity 与检查后发信号竞态限制，不构成完整 PID 复用安全证明。
 - **ZenXBundledAutomationPluginService** — 两个 bundled Plugin Package 共享仅承载 Room mention、reply route
   与 Trigger wakeup 真实交叉约束的第一方 domain service；Catalog runtime admission 分别控制各 package，
   Trigger/Room durable document 分居各自 namespace，只有显式唤醒继续调用既有 App Server port。
