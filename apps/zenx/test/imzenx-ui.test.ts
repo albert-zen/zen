@@ -12,6 +12,92 @@ import type {
 import { i18n } from "../src/renderer/src/i18n.js";
 import { IM_CHANNEL_SCHEMAS } from "../../../packages/zenx-imzenx-plugin/src/channel-schema.js";
 
+import { createImzenxCaseWriter } from "../scripts/imzenx-case-observation.mjs";
+
+const imzenxCaseWriter = createImzenxCaseWriter();
+const imzenxCaseIds = new Map<string, number>([
+  [
+    "background parent updates preserve the open IM settings and do not reload its draft",
+    1,
+  ],
+  [
+    "IM preparation checks only selected paths and saves without connecting or installing",
+    2,
+  ],
+  [
+    "IM connect requires fresh saved preparation and explicit single-consumer confirmation; Cancel and Escape are inert",
+    3,
+  ],
+  [
+    "IM save races preserve newer drafts, reject duplicate submits and do not replace the active configuration",
+    4,
+  ],
+  ["IM readiness results cannot authorize an edited configuration", 5],
+  [
+    "IM readiness may inspect an unsaved draft but connection waits for save-only preparation",
+    6,
+  ],
+  ["IM readiness errors remain recoverable and never implicitly connect", 7],
+  [
+    "late IM background status cannot replace saved status or an edited draft",
+    8,
+  ],
+  [
+    "native IM form uses declared fields and sends write-only credentials only through its local API",
+    9,
+  ],
+  [
+    "native IM Cancel, channel changes and route unmount discard unsaved credentials",
+    10,
+  ],
+  [
+    "native IM encryption failure prevents save and safe recovery preserves nonsecret drafts",
+    11,
+  ],
+  [
+    "native runtime preparation is explicit and preserves a channel form being filled",
+    12,
+  ],
+  [
+    "native secret-save failure clears inputs and never echoes credential-bearing errors",
+    13,
+  ],
+  [
+    "same-path managed IM edits show the explicit pending gate while the old consumer is running",
+    14,
+  ],
+  ["IM ready paths without a server revision cannot authorize connection", 15],
+  [
+    "IM stale server revision rejection clears consent and requires a fresh check and confirmation",
+    16,
+  ],
+  [
+    "IM background status revision changes invalidate an open same-path consent",
+    17,
+  ],
+  [
+    "live IM localization preserves provider-declared fields, transient credentials and local drafts",
+    18,
+  ],
+  [
+    "IM continuation defaults independently and shows saved versus active queue configuration",
+    19,
+  ],
+  [
+    "IM continuation keyboard edits preserve a newer draft across late Save and never connect",
+    20,
+  ],
+]);
+test.beforeEach((context) => {
+  imzenxCaseWriter.record(imzenxCaseIds.get(context.name), "case-start");
+});
+test.afterEach((context) => {
+  imzenxCaseWriter.record(imzenxCaseIds.get(context.name), "case-complete");
+});
+test.after(() => {
+  imzenxCaseWriter.close();
+});
+
 test("background parent updates preserve the open IM settings and do not reload its draft", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
   const keys = [

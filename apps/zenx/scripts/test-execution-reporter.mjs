@@ -1,6 +1,11 @@
 // CI-only, passive execution-order evidence. TAP remains the result reporter.
 import { openSync, readSync, writeSync, closeSync } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+  createImzenxCaseReader,
+  IMZENX_CASE_LIMITS,
+} from "./imzenx-case-observation.mjs";
 import {
   observeOwnedProcesses,
   OWNED_PROCESS_LIMITS,
@@ -197,6 +202,9 @@ export function createExecutionTrace({
   resourceObservation = false,
   resourceRead = readBoundedSystemFile,
   resourcePlatform = process.platform,
+  imzenxCaseObservation = false,
+  caseRead,
+  traceRunId = randomUUID(),
   ownedProcessObservation = false,
   ownedProcesses = observeOwnedProcesses,
   completionObservation = false,
@@ -223,6 +231,14 @@ export function createExecutionTrace({
     completion: { limits: COMPLETION_TRACE_LIMITS, bytes: 0, records: 0 },
     process: { limits: PROCESS_TRACE_LIMITS, bytes: 0, records: 0 },
     descendants: { limits: OWNED_PROCESS_LIMITS, bytes: 0, records: 0 },
+    imzenx: {
+      limits: {
+        ...IMZENX_CASE_LIMITS,
+        records: IMZENX_CASE_LIMITS.outputRecords,
+      },
+      bytes: 0,
+      records: 0,
+    },
   };
 
   function writeAll(fd, buffer) {
@@ -309,6 +325,7 @@ export function createExecutionTrace({
   }
   emit({
     kind: "start",
+    ...(imzenxCaseObservation ? { runId: traceRunId } : {}),
     utc: utc(),
     elapsedMs: 0,
     timeBasis: "reporter-receipt",
@@ -376,6 +393,20 @@ export function createExecutionTrace({
     );
   }
 
+  const observeImzenx = imzenxCaseObservation
+    ? createImzenxCaseReader({
+        file,
+        runId: traceRunId,
+        read: caseRead,
+        emit: (row) => emit(row, false, "imzenx"),
+        canRead: (remaining) =>
+          fileAvailable &&
+          extra.imzenx.records + remaining + 1 <= extra.imzenx.limits.records &&
+          extra.imzenx.bytes + (remaining + 1) * 2 * 512 <=
+            extra.imzenx.limits.combinedBytes,
+      })
+    : undefined;
+
   const observeResource = resourceObservation
     ? createResourceObservation({
         platform: resourcePlatform,
@@ -398,20 +429,22 @@ export function createExecutionTrace({
                 budget.bytes + 2 * budget.limits.recordBytes <=
                   budget.limits.combinedBytes
               ) {
+                const owned = ownedProcesses({
+                  pid: reporterPid,
+                  mainThread: reporterMainThread,
+                  platform: resourcePlatform,
+                });
                 emit(
                   {
                     kind: "owned-processes",
                     utc: utc(),
                     elapsedMs: value.elapsedMs,
-                    ...ownedProcesses({
-                      pid: reporterPid,
-                      mainThread: reporterMainThread,
-                      platform: resourcePlatform,
-                    }),
+                    ...owned,
                   },
                   false,
                   "descendants",
                 );
+                observeImzenx?.(owned.nodes);
               }
             } catch {}
           }
@@ -533,6 +566,7 @@ export default async function* executionReporter(source) {
       trace = createExecutionTrace({
         file,
         resourceObservation: true,
+        imzenxCaseObservation: true,
         ownedProcessObservation: true,
         completionObservation: true,
         processObservation: true,
