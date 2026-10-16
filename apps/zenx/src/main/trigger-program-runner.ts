@@ -127,8 +127,15 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let settled = false;
+      let rootExited = child.exitCode !== null || child.signalCode !== null;
+      const observeRootExit = (): void => {
+        rootExited = true;
+      };
+      child.once("exit", observeRootExit);
       const terminationScope: PosixTerminationScope = {
         isActive: () => !settled,
+        rootIsLive: () =>
+          !rootExited && child.exitCode === null && child.signalCode === null,
         deadline: Number.POSITIVE_INFINITY,
       };
       let collecting = true;
@@ -142,6 +149,7 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
         if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
         if (forceTimer !== undefined) clearTimeout(forceTimer);
         signal.removeEventListener("abort", abort);
+        child.removeListener("exit", observeRootExit);
       };
       const stopCollection = (): void => {
         if (!collecting) return;
@@ -181,8 +189,22 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
             inactivePosixTermination(),
           );
           if (settled || requested === null) return;
+          if (posixTerminationExpired(terminationScope)) {
+            finish(
+              containmentFailure(
+                requested,
+                "bounded process-tree termination deadline expired",
+              ),
+            );
+            return;
+          }
           if (exited.ok) {
-            finish(requested);
+            finish(
+              containmentFailure(
+                requested,
+                "the root exited before its process tree was captured",
+              ),
+            );
             return;
           }
         }
@@ -268,17 +290,8 @@ export class ZenXTriggerProgramRunner implements TriggerProgramRunner {
             this.processOperations,
             terminationScope,
           );
-          // A failed Windows ownership capture cannot be repaired by an empty
-          // later PID/PPID snapshot: an ambiguous lineage may already be gone.
-          if (process.platform !== "win32") {
-            if (posixTerminationExpired(terminationScope))
-              return inactivePosixTermination();
-            const exited = await verifyExitedChild(
-              child,
-              this.processOperations.captureProcessTable,
-            );
-            if (exited.ok) return exited;
-          }
+          // An empty later table cannot repair missing initial ownership:
+          // exited descendants may have reparented or changed groups already.
           return {
             ok: false as const,
             error: `process-tree snapshot unavailable: ${snapshot.error ?? "unknown discovery failure"}; containment was not proven`,
@@ -476,6 +489,7 @@ type ProcessTreeSnapshot = WindowsProcessTreeSnapshot;
 
 interface PosixTerminationScope {
   isActive(): boolean;
+  rootIsLive?(): boolean;
   deadline: number;
 }
 
@@ -555,6 +569,30 @@ async function terminateWindowsProcessTree(
   );
 }
 
+function ownedPosixRootIsLive(
+  child: ChildProcess,
+  scope?: PosixTerminationScope,
+): boolean {
+  return (
+    child.exitCode === null &&
+    child.signalCode === null &&
+    (scope?.rootIsLive?.() ?? true)
+  );
+}
+
+function posixRootBindingMatches(
+  child: ChildProcess,
+  root: ProcessIdentity | undefined,
+): boolean {
+  return (
+    root !== undefined &&
+    root.pid === child.pid &&
+    root.parentPid === process.pid &&
+    root.processGroupId === child.pid &&
+    (process.platform !== "linux" || root.sessionId === child.pid)
+  );
+}
+
 async function terminatePosixProcessTree(
   child: ChildProcessWithoutNullStreams,
   force: boolean,
@@ -565,14 +603,30 @@ async function terminatePosixProcessTree(
   if (posixTerminationExpired(scope)) return inactivePosixTermination();
   if (child.pid === undefined || !isPositiveProcessId(child.pid))
     return { ok: false, error: "the child process did not expose a PID" };
-  if (!force) return sendPosixSignal(child.pid, "SIGTERM", scope, true);
+  if (!force) {
+    if (!ownedPosixRootIsLive(child, scope)) return { ok: true, error: "" };
+    if (tree !== undefined && posixRootBindingMatches(child, tree.root))
+      return sendPosixSignal(child.pid, "SIGTERM", scope, true);
+    // Discovery failure grants no group authority. The owned child handle can
+    // still receive TERM; the caller must preserve the missing-tree diagnostic.
+    try {
+      if (posixTerminationExpired(scope)) return inactivePosixTermination();
+      if (ownedPosixRootIsLive(child, scope)) child.kill("SIGTERM");
+    } catch (error) {
+      return { ok: false, error: describeError(error) };
+    }
+    return {
+      ok: false,
+      error: "root-group ownership was unavailable; containment was not proven",
+    };
+  }
   if (tree === undefined)
     return {
       ok: false,
       error:
         "process-tree identity was unavailable; containment was not proven",
     };
-  return await verifyAndTerminatePosix(child.pid, tree, capture, scope);
+  return await verifyAndTerminatePosix(child, tree, capture, scope);
 }
 
 async function verifyExitedChild(
@@ -701,11 +755,12 @@ export const realWindowsProcessOperations: WindowsProcessOperations = {
 };
 
 async function verifyAndTerminatePosix(
-  rootPid: number,
+  child: ChildProcessWithoutNullStreams,
   tree: ProcessTreeSnapshot,
   capture: () => Promise<ProcessTableSnapshot> = captureProcessTable,
   scope?: PosixTerminationScope,
 ): Promise<TerminationResult> {
+  const rootPid = tree.root.pid;
   let stableAbsentPasses = 0;
   const deadline = Math.min(
     Date.now() + PROGRAM_QUIESCENCE_TIMEOUT_MS,
@@ -716,6 +771,14 @@ async function verifyAndTerminatePosix(
     deadline,
   };
   let tracked = [tree.root, ...tree.descendants];
+  let uncertainty = tree.descendants.some((identity) =>
+    outsideOwnedRootGroup(identity, rootPid),
+  )
+    ? "a captured descendant was outside the owned root group/session"
+    : null;
+  const uncertain = (message: string): void => {
+    uncertainty ??= message;
+  };
   while (!posixTerminationExpired(verificationScope)) {
     let table: ProcessTableSnapshot;
     try {
@@ -723,38 +786,100 @@ async function verifyAndTerminatePosix(
     } catch (error) {
       return processTableDiscoveryFailure(error);
     }
-    // A table can arrive after either the verifier or its caller has settled.
     if (posixTerminationExpired(verificationScope))
       return inactivePosixTermination();
-    const beforeExpansion = validateTrackedIdentities(tracked, table.entries);
-    if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
-    tracked = addDescendants(tracked, table.entries);
-    const identityError = validateTrackedIdentities(tracked, table.entries);
-    if (identityError !== null) return { ok: false, error: identityError };
-    const live = tracked.filter((identity) =>
-      table.entries.some((candidate) => candidate.pid === identity.pid),
+    const rootLive = ownedPosixRootIsLive(child, scope);
+    // Observed death of our root generation is stronger than an equal lstart
+    // string on a later row. Never adopt or signal that root PID again.
+    const eligible = tracked.filter(
+      (identity) => identity.pid !== rootPid || rootLive,
     );
-    if (live.length === 0) {
+    const beforeExpansion = validateTrackedIdentities(eligible, table.entries);
+    if (beforeExpansion !== null) return { ok: false, error: beforeExpansion };
+    const expansion = addVerifiedPosixDescendants(
+      tracked,
+      table.entries,
+      rootPid,
+      rootLive,
+    );
+    tracked = expansion.tracked;
+    if (expansion.uncertainty !== null) uncertain(expansion.uncertainty);
+    const currentRoot = table.entries.find((entry) => entry.pid === rootPid);
+    const rootGroupAuthorized =
+      rootLive &&
+      identityMatches(tree.root, currentRoot) &&
+      posixRootBindingMatches(child, currentRoot);
+    if (
+      rootLive &&
+      currentRoot !== undefined &&
+      !posixRootBindingMatches(child, currentRoot)
+    )
+      uncertain("the current root ownership no longer matched the bound child");
+    if (
+      !rootGroupAuthorized &&
+      table.entries.some(
+        (entry) =>
+          entry.processGroupId === rootPid &&
+          !tracked.some(
+            (identity) =>
+              identity.pid === entry.pid && identityMatches(identity, entry),
+          ),
+      )
+    )
+      uncertain(
+        "untracked members remain in the original root group after group authority ended",
+      );
+    const live = tracked.filter(
+      (identity) =>
+        (identity.pid !== rootPid || rootLive) &&
+        table.entries.some((candidate) => candidate.pid === identity.pid),
+    );
+    const identityError = validateTrackedIdentities(live, table.entries);
+    if (identityError !== null) return { ok: false, error: identityError };
+    for (const identity of live) {
+      if (identity.pid === rootPid) continue;
+      const current = table.entries.find(
+        (entry) => entry.pid === identity.pid,
+      )!;
+      if (outsideOwnedRootGroup(current, rootPid))
+        uncertain(
+          "a tracked descendant moved outside the owned root group/session",
+        );
+    }
+    // A snapshot crossing the owned root's exit can still contain its old
+    // row, or a same-PID replacement. Neither grants signal authority nor
+    // proves absence. Wait for an actually absent row (or the deadline).
+    const exitedRootRowPresent = !rootLive && currentRoot !== undefined;
+    if (live.length === 0 && !exitedRootRowPresent) {
       stableAbsentPasses += 1;
       if (stableAbsentPasses >= PROGRAM_QUIESCENCE_PASSES)
-        return { ok: true, error: "" };
+        return uncertainty === null
+          ? { ok: true, error: "" }
+          : {
+              ok: false,
+              error: `${uncertainty}; containment was not proven`,
+            };
     } else {
       stableAbsentPasses = 0;
-      const groupIds = new Set(
-        live
-          .map((identity) => identity.processGroupId)
-          .filter((value): value is number => value !== null),
-      );
-      for (const groupId of groupIds) {
+      // A historical descendant PGID never grants broadcast authority. Only
+      // the currently live, bound owned root may authorize its own group.
+      let rootGroupSignalled = false;
+      if (rootGroupAuthorized && ownedPosixRootIsLive(child, scope)) {
         const groupResult = sendPosixSignal(
-          groupId,
+          rootPid,
           "SIGKILL",
           verificationScope,
           true,
         );
         if (!groupResult.ok) return groupResult;
+        rootGroupSignalled = true;
       }
       for (const identity of live) {
+        if (
+          identity.pid === rootPid &&
+          (rootGroupSignalled || !ownedPosixRootIsLive(child, scope))
+        )
+          continue;
         const current = table.entries.find(
           (candidate) => candidate.pid === identity.pid,
         );
@@ -763,6 +888,8 @@ async function verifyAndTerminatePosix(
             ok: false,
             error: `PID ${String(identity.pid)} identity changed; containment was not proven`,
           };
+        // This positive-PID fallback is bounded best effort, not a stable OS
+        // handle: second-resolution lstart and check-then-signal races remain.
         const result = sendPosixSignal(
           identity.pid,
           "SIGKILL",
@@ -777,11 +904,56 @@ async function verifyAndTerminatePosix(
     }
     await delay(PROGRAM_QUIESCENCE_POLL_MS);
   }
-  return {
-    ok: false,
-    error:
-      "process-tree quiescence could not be proven before the bounded deadline",
-  };
+  return quiescenceDeadlineFailure();
+}
+
+function outsideOwnedRootGroup(
+  identity: ProcessIdentity,
+  rootPid: number,
+): boolean {
+  return (
+    identity.processGroupId !== rootPid ||
+    (process.platform === "linux" && identity.sessionId !== rootPid)
+  );
+}
+
+function addVerifiedPosixDescendants(
+  tracked: readonly ProcessIdentity[],
+  entries: readonly ProcessIdentity[],
+  rootPid: number,
+  rootLive: boolean,
+): { tracked: ProcessIdentity[]; uncertainty: string | null } {
+  const result = [...tracked];
+  const known = new Set(result.map((identity) => identity.pid));
+  let uncertainty: string | null = null;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const entry of entries) {
+      if (known.has(entry.pid)) continue;
+      const parent = result.find(
+        (identity) => identity.pid === entry.parentPid,
+      );
+      if (parent === undefined) continue;
+      const currentParent = entries.find(
+        (candidate) => candidate.pid === parent.pid,
+      );
+      if (
+        (parent.pid === rootPid && !rootLive) ||
+        !identityMatches(parent, currentParent) ||
+        !isPositiveProcessId(entry.pid) ||
+        entry.startTime === null
+      ) {
+        uncertainty ??=
+          "a newly observed descendant lacked a matching live parent identity";
+        continue;
+      }
+      result.push(entry);
+      known.add(entry.pid);
+      changed = true;
+    }
+  }
+  return { tracked: result, uncertainty };
 }
 
 function processTableDiscoveryFailure(error: unknown): TerminationResult {
@@ -1158,11 +1330,7 @@ async function captureProcessTree(
     if (root === undefined || root.startTime === null)
       throw new Error("root process identity was unavailable");
     // A POSIX detached child is the leader of its own process group/session.
-    if (
-      root.parentPid !== process.pid ||
-      root.processGroupId !== pid ||
-      (process.platform === "linux" && root.sessionId !== pid)
-    )
+    if (!posixRootBindingMatches(child, root))
       throw new Error(
         "root process ownership did not match the live detached child; containment was not proven",
       );

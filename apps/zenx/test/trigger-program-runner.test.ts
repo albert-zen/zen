@@ -582,7 +582,9 @@ test(
       );
       await waitForFile(ready);
       controller.abort(new Error("cooperative fixture"));
-      assert.equal((await running).status, "cancelled");
+      const outcome = await running;
+      assert.equal(outcome.status, "cancelled");
+      assert.doesNotMatch(outcome.error ?? "", /containment/u);
       assert.equal(await waitForFile(terminated), "term");
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -609,7 +611,9 @@ test(
       );
       const pid = Number(await waitForFile(ready));
       controller.abort(new Error("hard-kill fixture"));
-      assert.equal((await running).status, "cancelled");
+      const outcome = await running;
+      assert.equal(outcome.status, "cancelled");
+      assert.doesNotMatch(outcome.error ?? "", /containment/u);
       await waitForProcessExit(pid);
       await assert.rejects(stat(marker), { code: "ENOENT" });
     } finally {
@@ -643,6 +647,7 @@ test("program runner contains a descendant after cancellation", async () => {
     controller.abort(new Error("cancel fixture"));
     const result = await running;
     assert.equal(result.status, "cancelled");
+    assert.doesNotMatch(result.error ?? "", /containment/u);
     assert.equal(result.output, null);
     await waitForProcessExit(descendantPid);
     await assert.rejects(stat(marker), { code: "ENOENT" });
@@ -674,7 +679,9 @@ test("program runner contains descendants when the direct child exits", async ()
     const descendantPid = Number(await waitForFile(ready));
     assert(Number.isInteger(descendantPid) && descendantPid > 0);
     controller.abort(new Error("tree close fixture"));
-    assert.equal((await running).status, "cancelled");
+    const outcome = await running;
+    assert.equal(outcome.status, "cancelled");
+    assert.doesNotMatch(outcome.error ?? "", /containment/u);
     await waitForProcessExit(descendantPid);
     await assert.rejects(stat(marker), { code: "ENOENT" });
   } finally {

@@ -52,7 +52,7 @@ function fixture(capture, options = {}) {
     clearTimeout,
     process: {
       pid: root.parentPid,
-      platform: "linux",
+      platform: options.platform ?? "linux",
       env: {},
       cwd: () => "/mock",
       kill: (pid, signal) => {
@@ -62,6 +62,7 @@ function fixture(capture, options = {}) {
           signal,
           afterCompletion: completed,
         });
+        options.onSignal?.(pid, signal, child);
         return true;
       },
     },
@@ -236,3 +237,213 @@ test(
     assert.equal(f.calls.length, 0);
   },
 );
+
+function exitRoot(child) {
+  child.exitCode = 0;
+  child.emit("exit", 0, null);
+}
+const childIdentity = { ...root, pid: 20002, parentPid: root.pid };
+
+test("POSIX never broadcasts to a descendant's old or current group", async () => {
+  const original = { ...childIdentity, processGroupId: 30003 };
+  const moved = { ...original, processGroupId: 40004 };
+  const f = fixture((n) =>
+    n === 1 ? [root, original] : n === 2 ? [root, moved] : [],
+  );
+  const result = await f.run();
+  assert.match(result.error, /outside the owned root group/u);
+  assert(!f.calls.some((c) => c.pid === -30003 || c.pid === -40004));
+  assert(
+    f.calls.some((c) => c.pid === childIdentity.pid && c.signal === "SIGKILL"),
+  );
+});
+
+test("POSIX cleanup of captured reparented descendants does not become unknown merely because root exits", async () => {
+  const f = fixture((n, child) => {
+    if (n === 1) return [root, childIdentity];
+    if (n === 2) {
+      exitRoot(child);
+      return [{ ...childIdentity, parentPid: 1 }];
+    }
+    return [];
+  });
+  const result = await f.run();
+  assert.doesNotMatch(result.error, /containment/u);
+  assert(
+    f.calls.some((c) => c.pid === childIdentity.pid && c.signal === "SIGKILL"),
+  );
+  assert(
+    !f.calls.some(
+      (c) => c.signal === "SIGKILL" && (c.pid === root.pid || c.pid < 0),
+    ),
+  );
+});
+
+test("POSIX observed root exit forbids positive and negative root signals despite equal replacement lstart", async () => {
+  const f = fixture((n, child) => {
+    if (n === 1) return [root, childIdentity];
+    if (n === 2) {
+      exitRoot(child);
+      return [
+        { ...root, parentPid: 40004, processGroupId: 40004 },
+        childIdentity,
+      ];
+    }
+    return [];
+  });
+  await f.run();
+  assert(
+    !f.calls.some(
+      (c) => c.signal === "SIGKILL" && (c.pid === root.pid || c.pid < 0),
+    ),
+  );
+  assert(f.calls.some((c) => c.pid === childIdentity.pid));
+});
+
+test("POSIX root exit during group dispatch prevents a subsequent root PID signal", async () => {
+  const f = fixture((n) => (n <= 2 ? [root, childIdentity] : []), {
+    onSignal: (pid, signal, child) => {
+      if (pid === -root.pid && signal === "SIGKILL") exitRoot(child);
+    },
+  });
+  await f.run();
+  assert(f.calls.some((c) => c.pid === -root.pid && c.signal === "SIGKILL"));
+  assert(!f.calls.some((c) => c.pid === root.pid));
+});
+
+test("POSIX untracked original-group members after root exit stay unknown and are never adopted", async () => {
+  const stranger = { ...root, pid: 20003, parentPid: 1 };
+  const f = fixture((n, child) => {
+    if (n === 1) return [root, childIdentity];
+    if (n === 2) {
+      exitRoot(child);
+      return [childIdentity, stranger];
+    }
+    return [];
+  });
+  const result = await f.run();
+  assert.match(result.error, /untracked members/u);
+  assert(!f.calls.some((c) => c.pid === stranger.pid));
+  assert(!f.calls.some((c) => c.signal === "SIGKILL" && c.pid < 0));
+});
+
+test("POSIX a new child of an absent tracked parent does not expand positive PID targets", async () => {
+  const newcomer = {
+    ...childIdentity,
+    pid: 20003,
+    parentPid: childIdentity.pid,
+    processGroupId: 30003,
+  };
+  const f = fixture((n) =>
+    n === 1 ? [root, childIdentity] : n === 2 ? [root, newcomer] : [],
+  );
+  const result = await f.run();
+  assert.match(result.error, /matching live parent/u);
+  assert(!f.calls.some((c) => c.pid === newcomer.pid || c.pid === -30003));
+});
+
+test("POSIX late child of a matching live parent remains eligible for cleanup", async () => {
+  const newcomer = {
+    ...childIdentity,
+    pid: 20003,
+    parentPid: childIdentity.pid,
+  };
+  const f = fixture((n) =>
+    n === 1
+      ? [root, childIdentity]
+      : n === 2
+        ? [root, childIdentity, newcomer]
+        : [],
+  );
+  const result = await f.run();
+  assert.doesNotMatch(result.error, /containment/u);
+  assert(f.calls.some((c) => c.pid === newcomer.pid && c.signal === "SIGKILL"));
+});
+
+test("POSIX missing initial ownership is not repaired by an empty later table", async () => {
+  const f = fixture(() => [], { exitCode: 0 });
+  const result = await f.run();
+  assert.match(result.error, /containment/u);
+  assert.equal(f.calls.length, 0);
+});
+
+test("POSIX failed initial discovery signals only the exact owned child, never a guessed group", async () => {
+  const f = fixture(() => {
+    throw new Error("discovery unavailable");
+  });
+  const result = await f.run();
+  assert.match(result.error, /containment/u);
+  assert(f.calls.some((c) => c.kind === "child" && c.signal === "SIGTERM"));
+  assert(!f.calls.some((c) => c.kind === "process"));
+});
+
+test("POSIX cooperative root exit and an absent tracked tree preserve the normal result", async () => {
+  const f = fixture((n) => (n === 1 ? [root, childIdentity] : []), {
+    onSignal: (_pid, signal, child) => {
+      if (signal === "SIGTERM") exitRoot(child);
+    },
+  });
+  const result = await f.run();
+  assert.doesNotMatch(result.error, /containment/u);
+  assert(!f.calls.some((c) => c.signal === "SIGKILL"));
+});
+
+test("POSIX migration uncertainty remains after the observed descendant disappears", async () => {
+  const f = fixture((n) =>
+    n === 1
+      ? [root, childIdentity]
+      : n === 2
+        ? [root, { ...childIdentity, processGroupId: 30003, sessionId: 30003 }]
+        : [],
+  );
+  const result = await f.run();
+  assert.match(result.error, /moved outside/u);
+  assert(!f.calls.some((c) => c.pid === -30003));
+  assert(f.calls.some((c) => c.pid === childIdentity.pid));
+});
+
+test("POSIX never admits a new child of a reused captured parent", async () => {
+  const newcomer = {
+    ...childIdentity,
+    pid: 20003,
+    parentPid: childIdentity.pid,
+  };
+  const f = fixture((n) =>
+    n === 1
+      ? [root, childIdentity]
+      : [root, { ...childIdentity, startTime: "replacement" }, newcomer],
+  );
+  const result = await f.run();
+  assert.match(result.error, /identity changed/u);
+  assert(!f.calls.some((c) => c.signal === "SIGKILL"));
+});
+
+test("Darwin retains only the live bound root group without requiring a Linux SID", async () => {
+  const darwinRoot = { ...root, sessionId: null };
+  const f = fixture((n) => (n <= 2 ? [darwinRoot] : []), {
+    platform: "darwin",
+  });
+  const result = await f.run();
+  assert.doesNotMatch(result.error, /containment/u);
+  assert(f.calls.some((c) => c.pid === -root.pid && c.signal === "SIGKILL"));
+});
+
+test("POSIX a persistent same-second root replacement cannot count as proven absence", async () => {
+  const f = fixture((n, child) => {
+    if (n === 2) exitRoot(child);
+    return [root];
+  });
+  const result = await f.run();
+  assert.match(result.error, /containment/u);
+  assert(!f.calls.some((c) => c.signal === "SIGKILL"));
+});
+
+test("POSIX a stale root row crossing exit can disappear without a false containment failure", async () => {
+  const f = fixture((n, child) => {
+    if (n === 2) exitRoot(child);
+    return n <= 2 ? [root] : [];
+  });
+  const result = await f.run();
+  assert.doesNotMatch(result.error, /containment/u);
+  assert(!f.calls.some((c) => c.signal === "SIGKILL"));
+});
