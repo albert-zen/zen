@@ -250,7 +250,7 @@ test("opt-in acquisition diagnostics preserve one native call and original throw
   );
   assert.match(
     added,
-    /if \(operation == "inspect"\) acquisitionDiagnostic = AcquisitionDiagnostic.TryBegin\(\)/u,
+    /if \(operation == "inspect"\) \{ acquisitionDiagnostic = AcquisitionDiagnostic.TryBegin\(\)/u,
   );
   assert.match(
     added,

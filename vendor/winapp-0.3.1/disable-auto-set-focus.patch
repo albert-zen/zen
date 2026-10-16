@@ -79,7 +79,7 @@ new file mode 100644
 index 0000000..83e6b3d
 --- /dev/null
 +++ b/src/winapp-CLI/WinApp.Cli/Services/ZenXStrictUiaCommand.cs
-@@ -0,0 +1,733 @@
+@@ -0,0 +1,737 @@
 +// Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 +// Licensed under the MIT License.
 +
@@ -145,7 +145,7 @@ index 0000000..83e6b3d
 +        {
 +            var request = ParseRequest();
 +            operation = request.Operation;
-+            if (operation == "inspect") acquisitionDiagnostic = AcquisitionDiagnostic.TryBegin();
++            if (operation == "inspect") { acquisitionDiagnostic = AcquisitionDiagnostic.TryBegin(); }
 +            phase = "resolve_service";
 +            var service = resolveService();
 +            var automation = service.ZenXStrictClient;
@@ -238,7 +238,7 @@ index 0000000..83e6b3d
 +        {
 +            try
 +            {
-+                if (Environment.GetEnvironmentVariable("ZENX_UIA_ACQUISITION_DIAGNOSTIC") != "1") return null;
++                if (Environment.GetEnvironmentVariable("ZENX_UIA_ACQUISITION_DIAGNOSTIC") != "1") { return null; }
 +                var diagnostic = new AcquisitionDiagnostic();
 +                diagnostic.ReadApartment(out diagnostic.beforeApartment, out diagnostic.beforeApartmentHresult);
 +                return diagnostic;
@@ -284,10 +284,12 @@ index 0000000..83e6b3d
 +                var hwnd = Handle(request.Hwnd!, false);
 +                if (!PInvoke.IsWindow(hwnd) || PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOT) != hwnd
 +                    || !PInvoke.IsWindowVisible(hwnd) || PInvoke.IsIconic(hwnd) || NativePid(hwnd) != request.Pid)
++                {
 +                    return "mismatched";
++                }
 +                using var process = Process.GetProcessById(request.Pid);
 +                var ticks = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
-+                if (process.HasExited) return "mismatched";
++                if (process.HasExited) { return "mismatched"; }
 +                owner = new NativeOwner(request.Pid, ticks, NativeClass(hwnd));
 +                return "matched";
 +            }
@@ -303,7 +305,9 @@ index 0000000..83e6b3d
 +                hresult = error is null ? "h00000000" : Hresult(error.HResult);
 +                ownerAfter = ReadOwner(request, out var current);
 +                if (ownerAfter == "matched")
++                {
 +                    ownerAfter = initialOwner is null ? "unavailable" : initialOwner == current ? "matched" : "mismatched";
++                }
 +            }
 +            catch { observerFailed = true; }
 +        }
@@ -338,7 +342,7 @@ index 0000000..83e6b3d
 +                    writer.WriteBoolean("observerFailed", observerFailed);
 +                    writer.WriteEndObject();
 +                }
-+                if (buffer.Length <= 2048) Console.Error.WriteLine(Encoding.UTF8.GetString(buffer.ToArray()));
++                if (buffer.Length <= 2048) { Console.Error.WriteLine(Encoding.UTF8.GetString(buffer.ToArray())); }
 +            }
 +            catch { /* Preserve the already-written primary response. */ }
 +        }
