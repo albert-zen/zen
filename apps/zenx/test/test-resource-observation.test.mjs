@@ -9,7 +9,7 @@ import {
 
 const values = {
   "/proc/meminfo":
-    "MemTotal: 1000 kB\nMemAvailable: 500 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\nSecret: NEVER_EMIT\n",
+    "MemTotal: 1000 kB\nMemAvailable: 500 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\nAnonPages: 300 kB\nShmem: 10 kB\nSlab: 20 kB\nSUnreclaim: 5 kB\nSecret: NEVER_EMIT\n",
   "/sys/fs/cgroup/cgroup.controllers": "memory cpu\n",
   "/sys/fs/cgroup/memory.current": "1200\n",
   "/sys/fs/cgroup/memory.max": "max\n",
@@ -52,6 +52,10 @@ test("resource sampling uses fixed numeric projection and no payloads", () => {
   );
   const row = h.rows[0];
   assert.equal(row.memAvailableKiB, 500);
+  assert.equal(row.anonPagesKiB, 300);
+  assert.equal(row.shmemKiB, 10);
+  assert.equal(row.slabKiB, 20);
+  assert.equal(row.sunreclaimKiB, 5);
   assert.equal(row.swapFreeKiB, 0);
   assert.equal(row.cgroupVersion, 2);
   assert.equal(row.currentBytes, 1200);
@@ -74,6 +78,10 @@ test("resource sampling uses fixed numeric projection and no payloads", () => {
     "memAvailableKiB",
     "swapTotalKiB",
     "swapFreeKiB",
+    "anonPagesKiB",
+    "shmemKiB",
+    "slabKiB",
+    "sunreclaimKiB",
     "currentBytes",
     "maxBytes",
     "limitState",
