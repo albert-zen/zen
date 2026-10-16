@@ -189,6 +189,8 @@ jobs:
           node --import tsx --test --test-name-pattern="publishes a complete|publishing retries|exhausted EPERM|non-EPERM publication|missing source|publish rejects|rollback failure|publish preserves backup|Windows publishes|concurrent packaging" apps/zenx/test/package-zenx-portable.test.mjs
       - name: Validate the same-build Windows smoke guard assembly
         run: node --import tsx --test --test-timeout=120000 apps/zenx/test/windows-smoke-guard-build.test.mjs
+      - name: Validate native fixture readiness dispatch ordering
+        run: node --test apps/zenx/test/windows-packaged-uia-readiness.test.mjs
       - name: Package and diagnose Windows smoke publication
         env:
           ZENX_PACKAGE_DIAG: "1"
