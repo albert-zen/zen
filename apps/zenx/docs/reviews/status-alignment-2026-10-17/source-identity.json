@@ -1,0 +1,15 @@
+{
+  "sourceHead": "e70440b1da06c2c5ae42251678328f57b3918bd3",
+  "sourceTree": "2a3c7645e5cc0b27515e7afd9558e2a11ff5530f",
+  "sourceStatus": "",
+  "bundle": {
+    "app.js": "07a909ed98d7d42b744a77f9fb62b5c5aa25aa3b73487e593dafe5fe8a5eaf68",
+    "matrix.html": "a545e1247f9165a196ef3217400071a92bde2d17db1becf53184912427a25dbb",
+    "app.css": "e416922eaef126ff13535e54c0c93abbde4079d59e06a31998069af040cdb99a",
+    "matrix-narrow.html": "ace73d3ac29f4d8872f98b4737e07509b40befcd3e6590dcb16e2625cbf868f4",
+    "index.html": "ea6a67d4d5ea4b87055db9a132232174a27418249df1c72afff2ac3a09c5007d"
+  },
+  "productionFixture": "apps/zenx/test/fixtures/retry-ui-visual.tsx",
+  "matrix": "external iframe shell; narrow frames exactly390 CSS pixels; product DOM/CSS unmodified",
+  "capture": "cloud Chrome via supported CUA; production ThreadView with synthetic transport/native event projection; not full App/Electron E2E"
+}
