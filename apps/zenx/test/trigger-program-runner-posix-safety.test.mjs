@@ -48,8 +48,9 @@ function fixture(capture, options = {}) {
     exports: module.exports,
     Buffer,
     DOMException,
-    setTimeout,
-    clearTimeout,
+    setTimeout: options.clock?.setTimeout ?? setTimeout,
+    clearTimeout: options.clock?.clearTimeout ?? clearTimeout,
+    ...(options.clock ? { Date: { now: options.clock.now } } : {}),
     process: {
       pid: root.parentPid,
       platform: options.platform ?? "linux",
@@ -226,17 +227,106 @@ test("POSIX verifier checks its own deadline after capture even before outer set
   assert(!f.calls.some((call) => call.signal === "SIGKILL"));
 });
 
+// Drive the VM's wall clock and timers separately: a timer callback can reach
+// the preflight guard just before Date.now crosses the absolute deadline.
+function deadlineClock() {
+  let now = 0;
+  let nextId = 0;
+  let reads = [];
+  const timers = new Map();
+  const scheduled = [];
+  return {
+    scheduled,
+    timers,
+    now: () => {
+      if (reads.length) now = reads.shift();
+      return now;
+    },
+    setTimeout: (callback, milliseconds) => {
+      const timer = { callback, milliseconds, due: now + milliseconds };
+      const id = ++nextId;
+      scheduled.push(timer);
+      timers.set(id, timer);
+      return id;
+    },
+    clearTimeout: (id) => timers.delete(id),
+    fire: async (expectedDelay, clockReads = []) => {
+      const [id, timer] = [...timers].sort((a, b) => a[1].due - b[1].due)[0];
+      assert.equal(timer.milliseconds, expectedDelay);
+      timers.delete(id);
+      now = timer.due;
+      reads = [...clockReads];
+      timer.callback();
+      // Flush all promise continuations without advancing the VM timers.
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(reads.length, 0, "Expected deadline guards were reached");
+    },
+  };
+}
+
 // This preflight runs before the ordinary containment withDeadline call.
-test(
-  "POSIX exited-child preflight shares the force settlement budget",
-  { timeout: 4000 },
-  async () => {
-    const f = fixture(() => new Promise(() => {}), { exitCode: 0 });
-    const result = await f.run();
-    assert.match(result.error, /deadline expired/u);
+for (const ordering of ["preflight", "forced-entry"]) {
+  test(`POSIX exited-child preflight shares the force budget (${ordering} guard)`, async () => {
+    const clock = deadlineClock();
+    let captures = 0;
+    let releaseCapture;
+    const f = fixture(
+      () => {
+        captures++;
+        return new Promise((resolve) => {
+          releaseCapture = resolve;
+        });
+      },
+      { exitCode: 0, clock },
+    );
+    let settled = false;
+    const running = f.run().then((result) => {
+      settled = true;
+      return result;
+    });
+    await clock.fire(1); // Program timeout; initial ownership is unavailable.
+    assert.equal(captures, 0);
+    assert.equal(settled, false);
+    await clock.fire(250); // TERM grace ends; the single force budget begins.
+    assert.equal(captures, 1);
+    assert.equal(settled, false);
+    // At the boundary, either the preflight guard wins, or its remaining-budget
+    // read precedes the forced-entry guard observing the very same deadline.
+    await clock.fire(
+      1500,
+      ordering === "forced-entry" ? [1750, 1750, 1751] : [],
+    );
+    assert.equal(settled, true, "No second force budget may be needed");
+    const result = await running;
+    assert.equal(result.status, "timed_out");
+    const initial =
+      "Program timed out after 1ms; process-tree containment was not proven: ";
+    assert.equal(
+      result.error,
+      ordering === "preflight"
+        ? initial + "bounded process-tree termination deadline expired"
+        : initial +
+            "process-tree snapshot unavailable: the owned root exited before its process identity was captured; containment was not proven; containment was not proven; process-tree termination scope expired; containment was not proven",
+    );
+    assert.deepEqual(
+      clock.scheduled.map(({ due }) => due),
+      ordering === "preflight" ? [1, 251, 1751] : [1, 251, 1751, 1751],
+      "Preflight and containment must share one absolute force deadline",
+    );
+    assert.equal(clock.timers.size, 0);
+    assert.equal(f.child.listenerCount("exit"), 0);
     assert.equal(f.calls.length, 0);
-  },
-);
+    releaseCapture([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(captures, 1);
+    assert.equal(
+      f.calls.length,
+      0,
+      "Late capture must not signal after settlement",
+    );
+    assert.equal(clock.timers.size, 0);
+  });
+}
 
 function exitRoot(child) {
   child.exitCode = 0;

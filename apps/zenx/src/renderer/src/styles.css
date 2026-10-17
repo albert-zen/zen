@@ -9908,34 +9908,151 @@ button:disabled {
 .turn-toggle > svg {
   flex: 0 0 auto;
 }
+.workflow-status {
+  --workflow-status-height: 38px;
+  --workflow-status-control-height: 28px;
+  --workflow-status-line-height: 20px;
+  min-height: var(--workflow-status-height);
+  font-size: 12px;
+  line-height: var(--workflow-status-line-height);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-wash);
+}
 .turn-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
   margin-top: 12px;
-  padding: 12px 0 0;
-  border-top: 1px solid var(--border);
+  padding: 4px 8px;
   color: var(--text-3);
   font-size: 12px;
+  min-width: 0;
+}
+/* Expanded diagnostics are a readable panel, never a tall oval. */
+.turn-outcome:has(.turn-outcome-details, .turn-retry-error),
+.turn-outcome.uncertain {
+  border-radius: 16px;
 }
 .turn-outcome-heading {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   color: var(--text-2);
 }
+.turn-outcome-heading > svg {
+  flex-shrink: 0;
+}
 .turn-outcome-heading strong {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
 }
 .turn-outcome p {
-  margin: 7px 0;
+  margin: 0;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.turn-outcome > p {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.turn-outcome-failure {
+  display: contents;
 }
 .turn-outcome .quiet-button {
-  min-height: 32px;
-  padding: 0 8px;
-  margin-left: -8px;
+  min-height: var(--workflow-status-control-height);
+  line-height: var(--workflow-status-line-height);
+  padding: 3px 7px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.turn-outcome > .turn-outcome-primary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  order: 4;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-inline: 12px;
+  border-radius: 999px;
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  background: var(--surface-control);
+}
+@media (max-width: 480px) {
+  .workflow-status {
+    /* Single rows remain pills; longer translations wrap into a calm panel. */
+    border-radius: 20px;
+  }
+  .turn-outcome,
+  .turn-status-footer.workflow-status {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+  .turn-outcome .quiet-button {
+    padding-inline: 5px;
+  }
+  .turn-outcome > .turn-outcome-primary-action {
+    padding-inline: 10px;
+  }
+}
+.turn-outcome > .turn-outcome-primary-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.turn-outcome-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.turn-outcome-retried {
+  color: var(--text-3);
+  font-size: 11px;
+}
+.turn-outcome-details {
+  order: 5;
+  flex-basis: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border);
+}
+.turn-outcome-details p {
+  white-space: pre-wrap;
+}
+.turn-outcome-details p + p {
+  margin-top: 6px;
+}
+.turn-outcome.failed .turn-outcome-heading > svg {
+  color: var(--warn);
 }
 .turn-outcome.uncertain .turn-outcome-heading {
   color: var(--warn);
+}
+.turn-outcome > .turn-retry-error {
+  order: 6;
+  flex-basis: 100%;
+  color: var(--danger);
+}
+.turn-status-footer {
+  display: flex;
+  align-items: center;
+  margin-top: 12px;
+  padding: 4px 8px;
+}
+.turn-status-footer .turn-running-label {
+  margin: 0;
+  padding: 0;
+  min-height: var(--workflow-status-control-height, 28px);
+  gap: 6px;
+  line-height: var(--workflow-status-line-height, 20px);
+}
+.turn-status-footer .turn-running-label > [role="status"],
+.turn-status-footer .activity-text {
+  display: inline-flex;
+  align-items: center;
+  line-height: var(--workflow-status-line-height, 20px);
 }
 .queued-cancel-confirmation {
   width: min(480px, calc(100vw - 48px));
@@ -11418,4 +11535,31 @@ button:disabled {
 }
 .fleet-message-source-settings button {
   min-height: 44px;
+}
+
+.turn-running-label[data-phase="recovering"] {
+  color: var(--text-2);
+}
+.turn-recovery-attempt {
+  font-size: 11px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 7px;
+  line-height: 1.4;
+}
+
+.turn-outcome-actions .quiet-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+@media (pointer: coarse) {
+  .turn-outcome .quiet-button {
+    min-height: 44px;
+  }
+}
+
+.turn-outcome-review {
+  justify-self: start;
 }

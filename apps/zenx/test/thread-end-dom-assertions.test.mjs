@@ -97,6 +97,53 @@ for (const [name, count] of [
     }
   });
 }
+test("subagents visibility retry keeps all three focus failures bounded", () => {
+  const source = readFileSync(
+    new URL("./subagents-ui.test.ts", import.meta.url),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "fixture.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const name =
+    "child visibility retry preserves same-panel model and effort creation choices";
+  const cases = parsed.statements.filter(
+    (statement) =>
+      ts.isExpressionStatement(statement) &&
+      ts.isCallExpression(statement.expression) &&
+      statement.expression.expression.getText(parsed) === "test" &&
+      ts.isStringLiteral(statement.expression.arguments[0]) &&
+      statement.expression.arguments[0].text === name,
+  );
+  assert.equal(
+    cases.length,
+    1,
+    "The guarded visibility retry case must exist exactly once",
+  );
+  const { file, direct, guards } = inspect(cases[0].getText(parsed));
+  assert.equal(
+    direct.length,
+    0,
+    "DOM objects must not enter equality failure formatting",
+  );
+  assert.equal(guards.length, 3);
+  for (const call of guards) {
+    const condition = call.arguments[0];
+    assert.equal(condition.left.getText(file), "document.activeElement");
+    assert.equal(condition.right.getText(file), "toggle");
+    assert.ok(
+      ts.isStringLiteral(call.arguments[1]) &&
+        call.arguments[1].text.length > 0,
+      "Focus guards need fixed readable failure messages",
+    );
+    // Restore each unsafe assertion in source only; never format a real DOM.
+    const mutant = `assert.equal(${condition.left.getText(file)}, ${condition.right.getText(file)})`;
+    assert.equal(inspect(mutant).direct.length, 1);
+  }
+});
 test("DOM contract permits scalar projections and detects selector helpers", () => {
   const scalar = `assert.equal(document.querySelector('input')?.value, 'draft'); assert.equal(document.querySelectorAll('span').length, 1); assert.equal(failure()?.getAttribute('aria-label'), 'Failed'); assert.equal(document.activeElement === row, true);`;
   assert.equal(inspect(scalar).direct.length, 0);

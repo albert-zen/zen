@@ -910,13 +910,19 @@ test("child visibility retry preserves same-panel model and effort creation choi
     assert.equal(attempts, 1);
     assert.equal(toggle.disabled, false);
     assert.equal(toggle.getAttribute("aria-disabled"), "true");
-    assert.equal(document.activeElement, toggle);
+    assert.ok(
+      document.activeElement === toggle,
+      "Visibility save keeps focus on the child sidebar switch",
+    );
     await act(async () => reject(new Error("Visibility save failed")));
     assert.match(
       document.querySelector('[role="alert"]')?.textContent ?? "",
       /Visibility save failed/,
     );
-    assert.equal(document.activeElement, toggle);
+    assert.ok(
+      document.activeElement === toggle,
+      "Failed visibility save keeps focus on the child sidebar switch",
+    );
     await f.click(toggle);
     await f.render("parent", "panel", children);
     assert.deepEqual(sidebar.visibleSubagentThreadIds, ["child-a"]);
@@ -924,7 +930,10 @@ test("child visibility retry preserves same-panel model and effort creation choi
       f.button("Show in sidebar: child-b").getAttribute("aria-checked"),
       "false",
     );
-    assert.equal(document.activeElement, toggle);
+    assert.ok(
+      document.activeElement === toggle,
+      "Successful visibility retry keeps focus on the child sidebar switch",
+    );
     await f.click(f.button("Side chat model settings"));
     assert.equal(f.button("Child model").dataset.value, model.id);
     assert.equal(f.button("Reasoning effort").dataset.value, "high");

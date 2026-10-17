@@ -1,3 +1,4 @@
+import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import {
   TRIGGER_SOURCE_ROUTE,
   triggerSourceRoute,
@@ -3435,6 +3436,16 @@ function AppContent() {
                   }))
                 }
                 onReadAttachment={readAttachment}
+                onRetryTurn={async (turnId) => {
+                  if (
+                    threadDetail === null ||
+                    archivingThreadIdsRef.current.has(threadDetail.id)
+                  )
+                    throw new Error(
+                      i18n.t("shell:manualRetryNoLongerAvailable"),
+                    );
+                  await requestManualTurnRetry(threadDetail, turnId);
+                }}
                 onInterrupt={async (turnId) => {
                   if (threadDetail === null)
                     throw new Error(i18n.t("shell:noThreadSelected"));
@@ -3897,6 +3908,7 @@ function AgentSurface({
   onNewThreadProjectChange,
   onAddNewThreadProject,
   onInterrupt,
+  onRetryTurn,
   onModelChange,
   onPermissionChange,
   onNewThreadPermissionChange,
@@ -3967,6 +3979,7 @@ function AgentSurface({
   onNewThreadProjectChange(workspace: string): void;
   onAddNewThreadProject(): void;
   onInterrupt(turnId: string): Promise<void>;
+  onRetryTurn(turnId: string): Promise<void>;
   onPermissionChange(mode: FilePermissionMode): void;
   onNewThreadPermissionChange(mode: FilePermissionMode): void;
   permissionError: string | null;
@@ -4286,6 +4299,7 @@ function AgentSurface({
             onPickImages={() => onPickImages(threadDetail.id)}
             onReadAttachment={onReadAttachment}
             onRemoveImage={(imageId) => onRemoveImage(threadDetail.id, imageId)}
+            onRetryTurn={onRetryTurn}
             onInterrupt={onInterrupt}
             onModelChange={onModelChange}
             onReasoningChange={onReasoningChange}

@@ -34,6 +34,18 @@ export interface NativeHostWakeupResult {
   queued?: boolean;
 }
 
+/** Dedicated method makes older Hosts reject rather than ignore retry fencing. */
+export const NATIVE_TURN_RETRY_METHOD = "zen/turn/retry";
+export interface NativeTurnRetryParams {
+  threadId: string;
+  expectedTurnId: string;
+  clientUserMessageId: string;
+  language: "zh-CN" | "en";
+}
+export interface NativeTurnRetryResult {
+  turnId: string;
+}
+
 export interface NativeTurnSendParams {
   threadId: string;
   /** Omitted means soft steer active work, or start when idle. */

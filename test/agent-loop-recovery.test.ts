@@ -1288,3 +1288,134 @@ test("a structured non-media identity cannot let incidental error prose withhold
     [1, 1],
   );
 });
+
+for (const ending of ["continue", "stop", "fail"] as const) {
+  test(`live recovery observation clears on ${ending} and survives reconnect only while active`, async () => {
+    const { NativeRecoveryProjection } =
+      await import("../src/protocol/native/recovery.js");
+    const enteredRepair = recoveryGate();
+    const releaseRepair = recoveryGate();
+    const enteredNormal = recoveryGate();
+    const releaseNormal = recoveryGate();
+    let calls = 0;
+    const f = fixture(async function* () {
+      if (++calls === 1) throw new Error("repairable sample failure");
+      if (calls === 2) {
+        enteredRepair.resolve();
+        await releaseRepair.promise;
+        if (ending === "fail")
+          throw Object.assign(new Error("permanent failure"), {
+            modelRecoveryBlocked: true,
+          });
+        yield {
+          type: "tool_call",
+          callId: "write-after-repair",
+          name: "write_once",
+          arguments: {},
+        };
+        return;
+      }
+      enteredNormal.resolve();
+      await releaseNormal.promise;
+      yield { type: "text_delta", delta: "Done" };
+    });
+    const projection = new NativeRecoveryProjection(f.server);
+    const events: import("../src/app-server.js").AppServerEvent[] = [];
+    const unsubscribe = f.server.subscribe((event) => events.push(event));
+    const thread = await f.server.startThread();
+    const handle = await f.server.startTurn(thread.id, "finish this");
+    const current = async () =>
+      (await projection.resume(thread.id)).events
+        .map(({ event }) => event)
+        .filter((event) => event.type === "turn_recovery");
+    try {
+      await enteredRepair.promise;
+      const active = await current();
+      assert.equal(active.length, 1);
+      assert.equal(active[0]?.recovery?.attempt, 1);
+      const coldProjection = new NativeRecoveryProjection(f.server);
+      assert.equal(
+        (await coldProjection.resume(thread.id)).events.length,
+        0,
+        "historical repair intent alone must not fabricate current recovery",
+      );
+      coldProjection.close();
+      if (ending === "stop") {
+        const stopped = f.server.interruptTurn(thread.id, handle.id);
+        releaseRepair.resolve();
+        await stopped;
+      } else {
+        releaseRepair.resolve();
+      }
+      if (ending === "continue") {
+        await enteredNormal.promise;
+        assert.equal(
+          (await current()).at(-1)?.recovery,
+          null,
+          "ordinary sampling after repair must no longer display recovery",
+        );
+        assert.equal(f.writes(), 1);
+        releaseNormal.resolve();
+      }
+      await handle.done;
+      assert.deepEqual(await current(), []);
+      const observations = events.filter(
+        (event) => event.type === "turn_recovery",
+      );
+      assert.equal(observations.at(-1)?.recovery, null);
+    } finally {
+      releaseRepair.resolve();
+      releaseNormal.resolve();
+      unsubscribe();
+      projection.close();
+    }
+  });
+}
+
+test("after-tools repair status clears before ordinary tool progress continues", async () => {
+  let calls = 0;
+  const events: import("../src/app-server.js").AppServerEvent[] = [];
+  const f = fixture(
+    async function* () {
+      if (++calls === 1) {
+        yield {
+          type: "tool_call",
+          callId: "first-write",
+          name: "write_once",
+          arguments: {},
+        };
+        return;
+      }
+      assert.equal(
+        events.filter((event) => event.type === "turn_recovery").at(-1)
+          ?.recovery?.phase,
+        "after_tools",
+      );
+      yield { type: "text_delta", delta: "Continued from settled receipt" };
+    },
+    undefined,
+    new Error("post-tool preparation failed"),
+  );
+  const unsubscribe = f.server.subscribe((event) => events.push(event));
+  try {
+    const thread = await f.server.startThread();
+    await (
+      await f.server.startTurn(thread.id, "write once")
+    ).done;
+    assert.equal(f.writes(), 1);
+    assert.equal(
+      events.filter((event) => event.type === "turn_recovery").at(-1)?.recovery,
+      null,
+    );
+  } finally {
+    unsubscribe();
+  }
+});
+
+function recoveryGate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

@@ -191,6 +191,8 @@ export type ThreadConfigurationChangedItem =
 export interface TurnStartedItem extends ItemBase {
   type: "turn_started";
   turnId: string;
+  /** Explicit human continuation of this canonical failed/stopped Turn. */
+  retryOfTurnId?: string;
   /** First-message repository snapshot; absent on later and historical Turns. */
   workspaceInstructions?: WorkspaceInstructionFile[];
   /** Frozen provider selection used by this Turn; absent on legacy Items. */
@@ -983,6 +985,8 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     }
     case "turn_started":
       requireTurnId(item, type);
+      if (item.retryOfTurnId !== undefined)
+        requireNonEmptyString(item.retryOfTurnId, "turn_started.retryOfTurnId");
       if (item.selection !== undefined) {
         validateSelection(
           requireRecord(item.selection, "turn_started.selection"),

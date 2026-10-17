@@ -238,6 +238,7 @@ interface ThreadViewProps {
   onRemoveImage?(imageId: string): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
+  onRetryTurn?(turnId: string): Promise<void>;
   onCompact?(): Promise<void>;
   onDismissCompaction?(): void;
   onModelChange?(model: string): void;
@@ -391,6 +392,7 @@ function ThreadViewContent({
   onReasoningChange,
   onRespondToApproval,
   onSubmit,
+  onRetryTurn,
   onOpenMessageLink,
 }: ThreadViewProps) {
   useTranslation("shell");
@@ -1290,11 +1292,13 @@ function ThreadViewContent({
                               item.turnId === row.turn.id,
                           ) ?? null
                         }
-                        onContinue={() =>
-                          composerTextareaRef.current?.focus({
-                            preventScroll: true,
-                          })
+                        canRetry={
+                          !composerDisabled &&
+                          !submitting &&
+                          runningTurn === null &&
+                          thread?.turns.at(-1)?.id === row.turn.id
                         }
+                        onRetry={onRetryTurn}
                         usage={threadUsage?.turns[row.turn.id]}
                         wakeups={wakeups}
                         attachments={threadAttachments}
@@ -2197,13 +2201,15 @@ function RunningTurnLabel({
   activity,
   stopping,
   approval,
-  activityRepresented,
+  compact,
+  recovery,
 }: {
+  recovery: Turn["liveRecovery"];
   startedAt: number | null;
   activity: TraceActivity;
   stopping: boolean;
   approval: boolean;
-  activityRepresented: boolean;
+  compact: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -2214,22 +2220,28 @@ function RunningTurnLabel({
     ? "stopping"
     : approval
       ? "approval"
-      : activity.phase === "idle" && startedAt === null
-        ? "admitting"
-        : activity.phase;
+      : recovery
+        ? "recovering"
+        : activity.phase === "idle" && startedAt === null
+          ? "admitting"
+          : activity.phase;
   const label =
     phase === "stopping"
       ? i18n.t("shell:stopping")
       : phase === "approval"
         ? i18n.t("shell:approvalRequired")
-        : phase === "thinking" || phase === "idle"
-          ? i18n.t("shell:working")
-          : phase === "requested"
-            ? i18n.t("shell:awaitingToolResult")
-            : commandPhaseLabel(phase);
-  const busy = phase === "running" || phase === "thinking" || phase === "idle";
-  const compact =
-    activityRepresented && (phase === "running" || phase === "thinking");
+        : phase === "recovering"
+          ? i18n.t("shell:recoveringTask")
+          : phase === "thinking" || phase === "idle"
+            ? i18n.t("shell:working")
+            : phase === "requested"
+              ? i18n.t("shell:awaitingToolResult")
+              : commandPhaseLabel(phase);
+  const busy =
+    phase === "running" ||
+    phase === "thinking" ||
+    phase === "idle" ||
+    phase === "recovering";
   return (
     <div
       className="turn-running-label"
@@ -2254,6 +2266,11 @@ function RunningTurnLabel({
       >
         <ActivityText active={busy && !compact}>{label}</ActivityText>
       </span>
+      {phase === "recovering" && recovery ? (
+        <span className="turn-recovery-attempt">
+          {i18n.t("shell:recoveryAttempt", { count: recovery.attempt })}
+        </span>
+      ) : null}
       {startedAt === null ? null : (
         <span className="turn-duration" aria-hidden="true">
           {formatDuration(now - startedAt * 1000)}
@@ -2297,7 +2314,8 @@ function TurnBlock({
   stopping,
   approvals,
   confirmedStopped,
-  onContinue,
+  onRetry,
+  canRetry,
   index,
   wakeups,
   attachments,
@@ -2313,7 +2331,8 @@ function TurnBlock({
   stopping: boolean;
   approvals: readonly ApprovalCardState[];
   confirmedStopped: boolean;
-  onContinue(): void;
+  onRetry?: ((turnId: string) => Promise<void>) | undefined;
+  canRetry: boolean;
   index: number;
   wakeups: readonly TriggerHistoryEntry[];
   attachments: ZenXThreadAttachmentProjection;
@@ -2342,6 +2361,23 @@ function TurnBlock({
     [turn.items, observations, activeI18n.resolvedLanguage],
   );
   const sectionRef = useRef<HTMLElement>(null);
+  const retryInFlight = useRef(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const retry = async () => {
+    if (!onRetry || !canRetry || retryInFlight.current) return;
+    retryInFlight.current = true;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      await onRetry(turn.id);
+    } catch (error) {
+      setRetryError(describeError(error));
+    } finally {
+      retryInFlight.current = false;
+      setRetrying(false);
+    }
+  };
   const historyId = useId();
   const [expandedOverride, setExpanded] = useReadingDisclosure(
     disclosureKey("turn", turn.id),
@@ -2374,6 +2410,12 @@ function TurnBlock({
         turn.status === "interrupted" ||
         inspecting));
   const complete = turn.status !== "inProgress";
+  const compactRunningStatus =
+    !turn.liveRecovery &&
+    !stopping &&
+    approvals.length === 0 &&
+    ((activity.phase === "running" && activity.active > 0) ||
+      activity.phase === "thinking");
   useEffect(() => {
     const preserve = () => {
       const active = document.activeElement;
@@ -2459,24 +2501,14 @@ function TurnBlock({
           }}
         >
           <span>
-            {confirmedStopped
-              ? i18n.t("shell:stopped")
+            {turn.status === "failed" || confirmedStopped
+              ? i18n.t("shell:turnActivityHistory")
               : completedTurnLabel(turn)}
           </span>
           <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
-      ) : (
-        <RunningTurnLabel
-          startedAt={turn.startedAt}
-          activity={activity}
-          stopping={stopping}
-          approval={approvals.length > 0}
-          activityRepresented={projection.history.some(
-            (node) => node.kind === "traceItem" || node.kind === "traceGroup",
-          )}
-        />
-      )}
+      ) : null}
       {!complete || expanded ? (
         <div className="turn-history" id={historyId}>
           {projection.history.map((node) =>
@@ -2522,14 +2554,33 @@ function TurnBlock({
             usage={usage}
           />
         </div>
-      ) : projection.terminalFallback === null ? null : (
+      ) : null}
+      {!complete ? (
         <div
-          className={`turn-outcome${activity.outstanding > 0 ? " uncertain" : ""}`}
+          className={`turn-status-footer${compactRunningStatus ? "" : " workflow-status"}`}
+        >
+          <RunningTurnLabel
+            recovery={turn.liveRecovery}
+            startedAt={turn.liveRecovery ? null : turn.startedAt}
+            activity={activity}
+            stopping={stopping}
+            approval={approvals.length > 0}
+            compact={compactRunningStatus}
+          />
+        </div>
+      ) : null}
+      {projection.terminalFallback === null ? null : (
+        <div
+          className={`turn-outcome workflow-status${activity.outstanding > 0 ? " uncertain" : turn.status === "failed" ? " failed" : ""}`}
           role="status"
         >
           <div className="turn-outcome-heading">
             <Icon
-              name={activity.outstanding > 0 ? "warning" : "stop"}
+              name={
+                activity.outstanding > 0 || turn.status === "failed"
+                  ? "warning"
+                  : "stop"
+              }
               size={14}
             />
             <strong>
@@ -2538,7 +2589,11 @@ function TurnBlock({
                 : confirmedStopped
                   ? i18n.t("shell:stopped")
                   : turn.status === "failed"
-                    ? i18n.t("shell:failed")
+                    ? i18n.t(
+                        failureDetail?.retried
+                          ? "shell:automaticRetryStopped"
+                          : "shell:executionStopped",
+                      )
                     : i18n.t("shell:interrupted")}
             </strong>
           </div>
@@ -2548,7 +2603,12 @@ function TurnBlock({
             <p>{i18n.t("shell:stoppedNote")}</p>
           ) : turn.status === "failed" ? (
             <TurnFailureOutcome
-              text={projection.terminalFallback ?? ""}
+              text={
+                failureDetail?.message ??
+                turn.error?.message ??
+                projection.terminalFallback ??
+                ""
+              }
               retried={failureDetail?.retried}
               diagnosticId={failureDetail?.diagnosticId}
             />
@@ -2560,25 +2620,39 @@ function TurnBlock({
               {turn.error.message}
             </p>
           ) : null}
+          {activity.outstanding > 0 ? (
+            <button
+              type="button"
+              className="quiet-button turn-outcome-review"
+              onClick={reviewActivity}
+            >
+              {i18n.t("shell:reviewActivity")}
+            </button>
+          ) : null}
           <button
             type="button"
-            className="quiet-button"
-            onClick={activity.outstanding > 0 ? reviewActivity : onContinue}
+            className="quiet-button turn-outcome-primary-action"
+            disabled={!canRetry || !onRetry || retrying}
+            aria-busy={retrying}
+            onClick={() => void retry()}
           >
-            {i18n.t(
-              activity.outstanding > 0
-                ? "shell:reviewActivity"
-                : "shell:continueWriting",
-            )}
+            {retrying ? (
+              <span className="mini-spinner" aria-hidden="true" />
+            ) : null}
+            {i18n.t("shell:retryTask")}
           </button>
+          {retryError ? (
+            <p className="turn-retry-error" role="alert">
+              {retryError}
+            </p>
+          ) : null}
         </div>
       )}
     </section>
   );
 }
 
-/** Failed turns show the actionable first line up front; the full provider
- * message, retry count and diagnostics entry stay one click away. */
+/** Retry metadata stays compact; technical errors are available on demand. */
 function TurnFailureOutcome({
   text,
   retried,
@@ -2590,27 +2664,18 @@ function TurnFailureOutcome({
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState(false);
-  const firstLine = text.split("\n", 1)[0] ?? "";
-  const summary =
-    firstLine.length > 240 ? `${firstLine.slice(0, 240)}…` : firstLine;
-  const hasMore = text !== summary;
-  const hasDetails = hasMore || diagnosticId !== undefined;
+  const hasDetails = text.length > 0 || diagnosticId !== undefined;
+  const detailsId = useId();
   return (
     <div className="turn-outcome-failure">
-      <p>
-        {summary}
-        {hasMore && !showDetails ? " …" : ""}
-        {retried !== undefined ? (
-          <span className="turn-outcome-retried">
-            {` · ${i18n.t("shell:failureRetriedNote", { count: retried })}`}
-          </span>
-        ) : null}
-      </p>
+      {retried !== undefined && retried > 0 ? (
+        <span className="turn-outcome-retried">
+          {i18n.t("shell:failureRetriedNote", { count: retried })}
+        </span>
+      ) : null}
       {showDetails ? (
-        <div>
-          <p className="turn-outcome-error" role="alert">
-            {text}
-          </p>
+        <div className="turn-outcome-details" id={detailsId}>
+          <p className="turn-outcome-error">{text}</p>
           {diagnosticId !== undefined ? (
             <p>{i18n.t("shell:failureDiagnosticId", { id: diagnosticId })}</p>
           ) : null}
@@ -2625,14 +2690,19 @@ function TurnFailureOutcome({
             type="button"
             className="quiet-button"
             aria-expanded={showDetails}
+            aria-controls={detailsId}
             onClick={() => setShowDetails(!showDetails)}
           >
+            <Icon
+              name={showDetails ? "chevron-down" : "chevron-right"}
+              size={12}
+            />
             {showDetails
               ? i18n.t("shell:hideFailureDetails")
               : i18n.t("shell:showFailureDetails")}
           </button>
         ) : null}
-        {diagnosticId !== undefined ? (
+        {diagnosticId !== undefined && showDetails ? (
           <button
             type="button"
             className="quiet-button"

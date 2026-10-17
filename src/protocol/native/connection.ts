@@ -36,6 +36,7 @@ import {
   NATIVE_TURN_WAKE_METHOD,
   type NativeQueueEditParams,
   NATIVE_TURN_SEND_UNARCHIVED_METHOD,
+  NATIVE_TURN_RETRY_METHOD,
   type NativeTurnSendResult,
 } from "./wire.js";
 
@@ -777,6 +778,75 @@ export class NativeConnection {
                   "Queue cancellation outcome is unconfirmed. Read the Thread before retrying.",
               };
         this.#send({ id: message.id, error: reason });
+      }
+      return;
+    }
+    if (message.method === NATIVE_TURN_RETRY_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        this.#send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          this.#appServer === undefined ||
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId ||
+          typeof params.expectedTurnId !== "string" ||
+          !params.expectedTurnId ||
+          typeof params.clientUserMessageId !== "string" ||
+          !params.clientUserMessageId ||
+          (params.language !== "zh-CN" && params.language !== "en") ||
+          Object.keys(params).some(
+            (key) =>
+              ![
+                "threadId",
+                "expectedTurnId",
+                "clientUserMessageId",
+                "language",
+              ].includes(key),
+          )
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Retry requires exact thread, terminal Turn, client message identity and language",
+          );
+        const turn = await this.#appServer.retryTurn(
+          params.threadId,
+          params.expectedTurnId,
+          params.language,
+          {
+            clientId: params.clientUserMessageId,
+            ...(this.#requestApproval === undefined
+              ? {}
+              : { requestApproval: this.#requestApproval }),
+          },
+        );
+        this.#subscriptions.add(params.threadId);
+        void turn.done.catch(() => undefined);
+        this.#send({ id: message.id, result: { turnId: turn.id } });
+      } catch (error) {
+        const unknown = error instanceof ThreadJournalAppendOutcomeUnknownError;
+        this.#send({
+          id: message.id,
+          error: {
+            code: unknown ? -32603 : -32602,
+            message: unknown
+              ? "Input admission outcome is unconfirmed. Read the Thread before retrying."
+              : error instanceof Error
+                ? error.message
+                : String(error),
+            ...(unknown
+              ? { data: { zenCode: "admission_outcome_unknown" } }
+              : error instanceof AppServerError
+                ? { data: { zenCode: error.code } }
+                : {}),
+          },
+        });
       }
       return;
     }

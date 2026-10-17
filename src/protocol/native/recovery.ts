@@ -125,6 +125,14 @@ export class NativeRecoveryProjection {
       event: structuredClone(event),
     };
     state.watermark = projected.watermark;
+    if (event.type === "turn_recovery") {
+      // Only the newest live observation matters; canonical repair diagnostics
+      // remain in the journal independently of this bounded display tail.
+      state.events = state.events.filter(
+        ({ event: previous }) =>
+          previous.type !== "turn_recovery" || previous.turnId !== event.turnId,
+      );
+    }
     state.events.push(projected);
     for (const listener of this.#listeners) {
       listener({ type: "thread_event", event: projected });
@@ -224,6 +232,7 @@ function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
     case "item_completed":
     case "turn_completed":
       return true;
+    case "turn_recovery":
     case "item_started":
     case "item_delta":
     case "reasoning_summary_delta":
@@ -274,6 +283,7 @@ function eventRepresentedInSnapshot(
       return snapshot.items.some(
         (item) => item.type === "turn_started" && item.turnId === event.turnId,
       );
+    case "turn_recovery":
     case "turn_completed":
       return snapshot.items.some(
         (item) =>

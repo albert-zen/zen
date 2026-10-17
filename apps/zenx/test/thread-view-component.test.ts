@@ -64,6 +64,36 @@ test("native recovery keeps one live Turn until completion and terminal failure 
         assert.equal(document.querySelector(".turn-outcome"), null);
         assert.equal(document.querySelector(".turn-final"), null);
       }
+      if (["running", "recovering", "continuing"].includes(phase)) {
+        const footer = requiredElement(".turn-status-footer");
+        const history = requiredElement(".turn-history");
+        assert.ok(
+          history.compareDocumentPosition(footer) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+        assert.ok(
+          document.querySelector(".turn > .turn-running-label") === null,
+        );
+        if (phase === "recovering" || phase === "continuing")
+          assert.ok(footer.classList.contains("workflow-status"));
+        if (phase === "continuing") {
+          const label = requiredElement(".turn-running-label");
+          assert.equal(label.getAttribute("data-compact"), "false");
+          assert.match(label.textContent ?? "", /Working/u);
+        }
+      }
+      if (phase === "recovering") {
+        assert.match(
+          requiredElement(".turn-running-label").textContent ?? "",
+          /Retrying/u,
+        );
+        assert.match(
+          requiredElement(".turn-recovery-attempt").textContent ?? "",
+          /Attempt 1/u,
+        );
+      } else {
+        assert.ok(document.querySelector(".turn-recovery-attempt") === null);
+      }
       if (phase === "completed") {
         assert.equal(document.querySelector(".turn-outcome"), null);
         assert.match(
@@ -73,8 +103,9 @@ test("native recovery keeps one live Turn until completion and terminal failure 
       }
       if (phase === "failed") {
         const text = requiredElement(".turn-outcome").textContent ?? "";
-        assert.match(text, /bounded recovery budget/);
-        assert.match(text, /Auto-retried 2 times/);
+        assert.match(text, /Retry unsuccessful/);
+        assert.doesNotMatch(text, /bounded recovery budget/);
+        assert.match(text, /Retried 2×/);
       }
       if (phase === "stopped") {
         assert.equal(section.classList.contains("interrupted"), true);
@@ -366,8 +397,9 @@ test("failed turns show a concise banner with expandable detail, retry count and
 
     const banner = requiredElement(".turn-outcome");
     const initialText = banner.textContent ?? "";
-    assert.match(initialText, /HTTP 400: provider detail/u);
-    assert.match(initialText, /Auto-retried 2 times/u);
+    assert.match(initialText, /Retry unsuccessful/u);
+    assert.doesNotMatch(initialText, /HTTP 400: provider detail/u);
+    assert.match(initialText, /Retried 2×/u);
     assert(!initialText.includes("second line of provider detail"));
 
     const buttons = [
@@ -375,7 +407,7 @@ test("failed turns show a concise banner with expandable detail, retry count and
         ".turn-outcome-actions .quiet-button",
       ),
     ];
-    assert.equal(buttons.length, 2);
+    assert.equal(buttons.length, 1);
     const detailsToggle = buttons[0]!;
     assert.equal(detailsToggle.getAttribute("aria-expanded"), "false");
     await act(async () => detailsToggle.click());
@@ -383,7 +415,9 @@ test("failed turns show a concise banner with expandable detail, retry count and
     assert.match(banner.textContent ?? "", /second line of provider detail/u);
     assert.match(banner.textContent ?? "", /Diagnostic ID: diag-1/u);
 
-    await act(async () => buttons[1]!.click());
+    await act(async () =>
+      requiredButton(".turn-outcome-actions button:nth-child(2)").click(),
+    );
     assert.equal(openedFolders, 1);
     assert.match(
       banner.textContent ?? "",
@@ -418,6 +452,137 @@ test("a 241-character failure remains fully accessible through Details", async (
       requiredElement(".turn-outcome-error").textContent ?? "",
       /Z$/u,
     );
+  });
+});
+
+test("failure outcome remains visible alongside retained partial output", async () => {
+  await withDom(async (root) => {
+    const partial = agent("Retained result");
+    const failed = {
+      ...turnWithItems("failed", [partial]),
+      error: {
+        message: "Synthetic recovery exhausted",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: thread([failed]),
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    assert.match(
+      requiredElement(".turn-history").textContent ?? "",
+      /Retained result/u,
+    );
+    assert.match(
+      requiredElement(".turn-outcome").textContent ?? "",
+      /Execution interrupted/u,
+    );
+    assert.equal(document.querySelectorAll(".turn-outcome").length, 1);
+  });
+});
+
+test("manual retry keeps drafts and attachments, coalesces clicks and reports errors", async () => {
+  await withDom(async (root) => {
+    const composer = addComposerImages(
+      editComposer(emptyComposerState(), "Keep my draft"),
+      [
+        {
+          id: "kept-image",
+          name: "kept.png",
+          attachment: {
+            type: "attachment",
+            sha256: "a".repeat(64),
+            mediaType: "image/png",
+            byteLength: 4,
+            width: 1,
+            height: 1,
+          },
+        },
+      ],
+    );
+    let sends = 0,
+      edits = 0,
+      retries = 0;
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, fail) => {
+      reject = fail;
+    });
+    const failed = {
+      ...turnWithItems("failed", []),
+      error: {
+        message: "Synthetic connection interrupted",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    };
+    const render = async (disabled: boolean) =>
+      act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer,
+            composerDisabled: disabled,
+            thread: thread([failed]),
+            onDraftChange: () => {
+              edits += 1;
+            },
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: async () => {
+              sends += 1;
+            },
+            onRetryTurn: async (turnId: string) => {
+              assert.equal(turnId, failed.id);
+              retries += 1;
+              await pending;
+            },
+          }),
+        ),
+      );
+    await render(false);
+    const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
+    textarea.setSelectionRange(2, 5);
+    const action = requiredButton(".turn-outcome-primary-action");
+    assert.match(action.textContent ?? "", /^Retry$/u);
+    await act(async () => {
+      action.click();
+      action.click();
+    });
+    assert.equal(retries, 1);
+    assert.ok(action.disabled);
+    assert.equal(action.getAttribute("aria-busy"), "true");
+    assert.equal(textarea.value, "Keep my draft");
+    assert.ok(
+      document.querySelector(
+        '.composer-images button[aria-label="Remove kept.png"]',
+      ),
+    );
+    assert.equal(textarea.selectionStart, 2);
+    assert.equal(textarea.selectionEnd, 5);
+    assert.equal(edits, 0);
+    assert.equal(sends, 0);
+    await act(async () => reject(new Error("Synthetic admission unavailable")));
+    assert.match(
+      requiredElement(".turn-retry-error").textContent ?? "",
+      /admission unavailable/u,
+    );
+    assert.ok(!action.disabled);
+    await render(true);
+    assert.ok(requiredButton(".turn-outcome-primary-action").disabled);
+    await act(async () =>
+      requiredButton(".turn-outcome-primary-action").click(),
+    );
+    assert.equal(retries, 1);
   });
 });
 
@@ -1164,6 +1329,15 @@ test("one running orb switches between Stop and send without losing attachment-o
       assert.equal(orb.disabled, calls.length > 0);
       assert.ok(orb.classList.contains("stop"));
       await act(async () => orb.click());
+      assert.equal(
+        requiredElement(".turn-running-label").getAttribute("data-phase"),
+        "stopping",
+      );
+      assert.ok(
+        requiredElement(".turn-status-footer").classList.contains(
+          "workflow-status",
+        ),
+      );
     }
     composer = editComposer(composer, "new direction");
     await act(async () => show());
@@ -1540,6 +1714,8 @@ test("pending approvals render in the bottom zone next to the composer", () => {
   const html = render(true, [approval]);
   assert.match(html, /class="bottom-zone[^"]*"/u);
   assert.match(html, /class="approval-request-card"/u);
+  assert.match(html, /turn-status-footer workflow-status/u);
+  assert.match(html, /data-phase="approval" data-compact="false"/u);
   assert.match(html, /Allow tool access\?/u);
   assert.match(
     html,
@@ -1950,6 +2126,37 @@ test("assistant messages retain running reasoning and tool disclosure affordance
     html,
     /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*rg ThreadView[\s\S]*2 items/u,
   );
+});
+
+test("ongoing footer avoids duplicating active traces but shows work after settled history", () => {
+  const activeCommand = {
+    ...commandItem("active-no-task", "read file"),
+    status: "inProgress",
+  } as ThreadItem;
+  const activeReasoning = {
+    ...reasoningItem("active-reasoning", ["Inspecting"], []),
+    status: "inProgress",
+  } as ThreadItem;
+  const commandHtml = renderTurns([
+    turnWithItems("inProgress", [activeCommand]),
+  ]);
+  assert.match(commandHtml, /turn-status-footer workflow-status/u);
+  assert.match(commandHtml, /data-phase="requested"/u);
+  for (const item of [activeReasoning]) {
+    const html = renderTurns([turnWithItems("inProgress", [item])]);
+    assert.match(html, /class="turn-status-footer"/u);
+    assert.match(html, /data-compact="true"/u);
+    assert.doesNotMatch(html, /turn-status-footer workflow-status/u);
+  }
+  const settled = renderTurns([
+    turnWithItems("inProgress", [
+      command("finished read"),
+      reasoning("Done thinking"),
+    ]),
+  ]);
+  assert.match(settled, /turn-status-footer workflow-status/u);
+  assert.match(settled, /data-compact="false"/u);
+  assert.match(settled, /Working/u);
 });
 
 test("renders one trace Item directly and wraps only a sequence of two or more", () => {
@@ -2818,7 +3025,13 @@ test("failed turn opens received trace and preserves the error without a final a
   assert.equal(document.querySelector(".turn-final"), null);
   assert.match(
     document.querySelector(".turn-outcome")?.textContent ?? "",
-    /invalid tool call id/u,
+    /Execution interrupted/u,
+  );
+  assert.equal(
+    document
+      .querySelector(".turn-outcome-actions button")
+      ?.getAttribute("aria-expanded"),
+    "false",
   );
 });
 
@@ -2940,6 +3153,15 @@ test("yielded shell work reports the actual task receipt phase", async () => {
       aggregatedOutput: "Command is still running",
     };
     await renderInteractive(root, turnWithItems("inProgress", [running]));
+    assert.equal(
+      requiredElement(".turn-running-label").getAttribute("data-compact"),
+      "true",
+    );
+    assert.ok(
+      !requiredElement(".turn-status-footer").classList.contains(
+        "workflow-status",
+      ),
+    );
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
     );

@@ -106,7 +106,21 @@ export interface PreparedModelSample {
   contextBoundaryItemId: string;
 }
 
+/** Transient execution observation, never recovered from historical failure Items. */
+export interface LiveTurnRecovery {
+  failureItemId: string;
+  attempt: number;
+  sampleAttempt: number;
+  phase: "model" | "after_tools";
+}
+
 export type RuntimeEvent =
+  | {
+      type: "turn_recovery";
+      threadId: string;
+      turnId: string;
+      recovery: LiveTurnRecovery | null;
+    }
   | { type: "turn_started"; threadId: string; turnId: string }
   | {
       type: "item_started";
@@ -154,6 +168,7 @@ export type RuntimeEvent =
     };
 
 export interface RunTurnOptions {
+  retryOfTurnId?: string;
   thread: Thread;
   workspaceInstructions?: WorkspaceInstructionFile[];
   reloadWorkspaceInstructions?: () => Promise<WorkspaceInstructionFile[]>;
@@ -352,6 +367,9 @@ export class AgentRuntime {
       turnId,
       createdAt: this.#now(),
       type: "turn_started",
+      ...(options.retryOfTurnId === undefined
+        ? {}
+        : { retryOfTurnId: options.retryOfTurnId }),
       ...(options.workspaceInstructions === undefined
         ? {}
         : { workspaceInstructions: options.workspaceInstructions }),
@@ -514,6 +532,12 @@ export class AgentRuntime {
         }
       }
     } catch (error) {
+      options.emit({
+        type: "turn_recovery",
+        threadId: options.thread.id,
+        turnId,
+        recovery: null,
+      });
       if (!initialInputCommitted) throw error;
       if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
       if (
@@ -610,7 +634,15 @@ export class AgentRuntime {
           throw error;
         result = { error };
       }
-      if (!("error" in result)) return result;
+      if (!("error" in result)) {
+        options.emit({
+          type: "turn_recovery",
+          threadId: options.thread.id,
+          turnId,
+          recovery: null,
+        });
+        return result;
+      }
       options.signal.throwIfAborted();
       // Control outcomes keep their identity even after an earlier repair.
       if (recoveryIsBlocked(result.error) || isAbortError(result.error))
@@ -725,6 +757,17 @@ export class AgentRuntime {
     };
     await this.#completeItem(failure, options);
     options.signal.throwIfAborted();
+    options.emit({
+      type: "turn_recovery",
+      threadId: options.thread.id,
+      turnId,
+      recovery: {
+        failureItemId: failure.id,
+        attempt: prior.length + 1,
+        sampleAttempt,
+        phase,
+      },
+    });
     return true;
   }
 

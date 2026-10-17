@@ -424,6 +424,11 @@ export class ZenAppServer {
       deliveryAnchorId?: string;
       initialInputCommitted: boolean;
       ready: Promise<void>;
+      retryIdentity?: {
+        clientId: string;
+        expectedTurnId: string;
+        input: string;
+      };
       contextCompactionNotice: string | undefined;
       contextCompactionNoticeIssued: boolean;
     }
@@ -2959,6 +2964,30 @@ export class ZenAppServer {
     return await this.#launchTurn(threadId, input, options);
   }
 
+  /** Explicit continuation, never replay of a previous Turn or tool call. */
+  async retryTurn(
+    threadId: string,
+    expectedTurnId: string,
+    language: "zh-CN" | "en",
+    options: { clientId: string; requestApproval?: ApprovalHandler },
+  ): Promise<TurnHandle> {
+    if (
+      !expectedTurnId ||
+      !options.clientId ||
+      (language !== "zh-CN" && language !== "en")
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Retry identity and language are required",
+      );
+    return await this.#launchTurn(
+      threadId,
+      [{ type: "text", text: language === "zh-CN" ? "继续" : "Go on" }],
+      { ...options, requireUnarchived: true },
+      { expectedTerminalTurnId: expectedTurnId },
+    );
+  }
+
   async compactThread(
     threadId: string,
     options: CompactThreadOptions = {},
@@ -3081,6 +3110,8 @@ export class ZenAppServer {
     },
     internal: {
       preparedInput?: boolean;
+      /** Explicit retry fence, evaluated under the same admission lock. */
+      expectedTerminalTurnId?: string;
       turnId?: string;
       replacementClientId?: string;
       initialMessages?: readonly InitialInputMessage[];
@@ -3092,7 +3123,31 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
-      if (options.requireUnarchived === true)
+      const admitting = this.#activeTurns.get(threadId);
+      if (
+        internal.expectedTerminalTurnId !== undefined &&
+        admitting !== undefined &&
+        admitting.retryIdentity !== undefined &&
+        admitting.retryIdentity.clientId === options.clientId
+      ) {
+        if (
+          admitting.retryIdentity.expectedTurnId !==
+            internal.expectedTerminalTurnId ||
+          admitting.retryIdentity.input !== JSON.stringify(requestedInput)
+        )
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Retry client id belongs to different input",
+          );
+        return {
+          handle: { id: admitting.turnId, done: admitting.done },
+          ready: admitting.ready,
+        };
+      }
+      if (
+        options.requireUnarchived === true &&
+        internal.expectedTerminalTurnId === undefined
+      )
         await this.#requireUnarchived(threadId);
       if (
         internal.queuedAdmission !== undefined &&
@@ -3120,6 +3175,39 @@ export class ZenAppServer {
             item.type === "user_message" && item.clientId === options.clientId,
         );
         if (duplicate !== undefined) {
+          if (internal.expectedTerminalTurnId !== undefined) {
+            const startIndex = thread.items.findIndex(
+              (item) =>
+                item.type === "turn_started" &&
+                item.turnId === duplicate.turnId,
+            );
+            const previousEnd = latestTurnEnd(
+              thread.items.slice(0, startIndex),
+            );
+            const forkIndex = thread.items.findLastIndex(
+              (item) => item.type === "thread_forked",
+            );
+            const metadata = thread.items.find(
+              (item) => item.type === "thread_metadata",
+            );
+            const localBoundary =
+              forkIndex >= 0
+                ? forkIndex
+                : (metadata?.importedFrom?.historyItemCount ?? -1);
+            const start = thread.items[startIndex];
+            if (
+              startIndex <= localBoundary ||
+              start?.type !== "turn_started" ||
+              start.retryOfTurnId !== internal.expectedTerminalTurnId ||
+              previousEnd?.turnId !== internal.expectedTerminalTurnId ||
+              (previousEnd.type === "turn_completed" &&
+                previousEnd.status !== "failed")
+            )
+              throw new AppServerError(
+                "idempotency_conflict",
+                "Retry client id belongs to a different terminal Turn",
+              );
+          }
           if (
             !matchesSkillInputSnapshot(
               requestedInput,
@@ -3163,6 +3251,35 @@ export class ZenAppServer {
             );
           }
         }
+      }
+      if (internal.expectedTerminalTurnId !== undefined) {
+        await this.#requireUnarchived(threadId);
+        const end = latestTurnEnd(thread.items);
+        if (
+          end?.turnId !== internal.expectedTerminalTurnId ||
+          (end.type === "turn_completed" && end.status !== "failed")
+        )
+          throw new AppServerError(
+            "retry_target_changed",
+            "Retry requires the latest failed or stopped Turn",
+          );
+        if (pendingQueuedMessages(thread.items).length > 0)
+          throw new AppServerError(
+            "queue_pending",
+            "Queued input must be resolved before retrying",
+          );
+        if (
+          thread.items.some(
+            (item) =>
+              (item.type === "user_message_queued" ||
+                item.type === "turn_replacement_requested") &&
+              item.clientId === options.clientId,
+          )
+        )
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Retry client id is reserved by another input operation",
+          );
       }
       if (options.requirePermissions !== undefined) {
         const actual = thread.effectiveConfiguration();
@@ -3304,6 +3421,9 @@ export class ZenAppServer {
           void (async () => {
             try {
               await this.#runtime.runTurn({
+                ...(internal.expectedTerminalTurnId === undefined
+                  ? {}
+                  : { retryOfTurnId: internal.expectedTerminalTurnId }),
                 ...(workspaceInstructions === undefined
                   ? {}
                   : { workspaceInstructions }),
@@ -3606,6 +3726,15 @@ export class ZenAppServer {
         inputModalities: resolved.model.inputModalities,
         initialInputCommitted: false,
         ready: ready.promise,
+        ...(internal.expectedTerminalTurnId === undefined
+          ? {}
+          : {
+              retryIdentity: {
+                clientId: options.clientId!,
+                expectedTurnId: internal.expectedTerminalTurnId,
+                input: JSON.stringify(requestedInput),
+              },
+            }),
         contextCompactionNotice: undefined,
         contextCompactionNoticeIssued: false,
       });
