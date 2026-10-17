@@ -664,7 +664,7 @@ export const en = {
     "This Thread is being archived. Try again if archiving fails.",
   thisTurnEndedWithoutAFinalResponse:
     "This turn ended without a final response.",
-  failureRetriedNote: "Auto-retried {{count}} times before failing",
+  failureRetriedNote: "Retried {{count}} times",
   showFailureDetails: "Error details",
   hideFailureDetails: "Hide details",
   openDiagnosticsFolder: "Open diagnostics folder",
@@ -1549,7 +1549,7 @@ export const zhCN = {
   thisThreadIsBeingArchivedTryAgainIfArchivingFails:
     "此会话正在归档。如果归档失败，请重试。",
   thisTurnEndedWithoutAFinalResponse: "此轮次结束时没有最终回复。",
-  failureRetriedNote: "已自动重试 {{count}} 次",
+  failureRetriedNote: "重试 {{count}} 次",
   showFailureDetails: "错误详情",
   hideFailureDetails: "收起详情",
   openDiagnosticsFolder: "打开诊断文件夹",

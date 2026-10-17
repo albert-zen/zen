@@ -9912,9 +9912,9 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  gap: 4px 6px;
   margin-top: 12px;
-  padding: 4px 10px;
+  padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface-wash);
@@ -9970,6 +9970,18 @@ button:disabled {
   color: var(--text-1);
   border: 1px solid var(--border);
   background: var(--surface-control);
+}
+@media (max-width: 480px) {
+  .turn-outcome {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+  .turn-outcome .quiet-button {
+    padding-inline: 5px;
+  }
+  .turn-outcome > .turn-outcome-primary-action {
+    padding-inline: 10px;
+  }
 }
 .turn-outcome > .turn-outcome-primary-action:disabled {
   opacity: 0.45;
