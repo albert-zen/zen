@@ -238,6 +238,7 @@ interface ThreadViewProps {
   onRemoveImage?(imageId: string): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
   onInterrupt(turnId: string): Promise<void>;
+  onRetryTurn?(turnId: string): Promise<void>;
   onCompact?(): Promise<void>;
   onDismissCompaction?(): void;
   onModelChange?(model: string): void;
@@ -391,6 +392,7 @@ function ThreadViewContent({
   onReasoningChange,
   onRespondToApproval,
   onSubmit,
+  onRetryTurn,
   onOpenMessageLink,
 }: ThreadViewProps) {
   useTranslation("shell");
@@ -1290,13 +1292,13 @@ function ThreadViewContent({
                               item.turnId === row.turn.id,
                           ) ?? null
                         }
-                        canContinue={!composerDisabled}
-                        onContinue={() => {
-                          const textarea = composerTextareaRef.current;
-                          if (!textarea || textarea.disabled) return;
-                          textarea.scrollIntoView?.({ block: "nearest" });
-                          textarea.focus({ preventScroll: true });
-                        }}
+                        canRetry={
+                          !composerDisabled &&
+                          !submitting &&
+                          runningTurn === null &&
+                          thread?.turns.at(-1)?.id === row.turn.id
+                        }
+                        onRetry={onRetryTurn}
                         usage={threadUsage?.turns[row.turn.id]}
                         wakeups={wakeups}
                         attachments={threadAttachments}
@@ -2314,8 +2316,8 @@ function TurnBlock({
   stopping,
   approvals,
   confirmedStopped,
-  onContinue,
-  canContinue,
+  onRetry,
+  canRetry,
   index,
   wakeups,
   attachments,
@@ -2331,8 +2333,8 @@ function TurnBlock({
   stopping: boolean;
   approvals: readonly ApprovalCardState[];
   confirmedStopped: boolean;
-  onContinue(): void;
-  canContinue: boolean;
+  onRetry?: ((turnId: string) => Promise<void>) | undefined;
+  canRetry: boolean;
   index: number;
   wakeups: readonly TriggerHistoryEntry[];
   attachments: ZenXThreadAttachmentProjection;
@@ -2361,6 +2363,23 @@ function TurnBlock({
     [turn.items, observations, activeI18n.resolvedLanguage],
   );
   const sectionRef = useRef<HTMLElement>(null);
+  const retryInFlight = useRef(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const retry = async () => {
+    if (!onRetry || !canRetry || retryInFlight.current) return;
+    retryInFlight.current = true;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      await onRetry(turn.id);
+    } catch (error) {
+      setRetryError(describeError(error));
+    } finally {
+      retryInFlight.current = false;
+      setRetrying(false);
+    }
+  };
   const historyId = useId();
   const [expandedOverride, setExpanded] = useReadingDisclosure(
     disclosureKey("turn", turn.id),
@@ -2485,9 +2504,9 @@ function TurnBlock({
           <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
-      ) : (
+      ) : turn.liveRecovery ? null : (
         <RunningTurnLabel
-          recovery={turn.liveRecovery}
+          recovery={null}
           startedAt={turn.startedAt}
           activity={activity}
           stopping={stopping}
@@ -2543,8 +2562,19 @@ function TurnBlock({
           />
         </div>
       ) : null}
-      {projection.terminalFallback === null &&
-      turn.status !== "failed" ? null : (
+      {!complete && turn.liveRecovery ? (
+        <div className="turn-recovery-footer">
+          <RunningTurnLabel
+            recovery={turn.liveRecovery}
+            startedAt={null}
+            activity={activity}
+            stopping={stopping}
+            approval={approvals.length > 0}
+            activityRepresented={false}
+          />
+        </div>
+      ) : null}
+      {projection.terminalFallback === null ? null : (
         <div
           className={`turn-outcome${activity.outstanding > 0 ? " uncertain" : turn.status === "failed" ? " failed" : ""}`}
           role="status"
@@ -2564,7 +2594,11 @@ function TurnBlock({
                 : confirmedStopped
                   ? i18n.t("shell:stopped")
                   : turn.status === "failed"
-                    ? i18n.t("shell:taskNotCompleted")
+                    ? i18n.t(
+                        failureDetail?.retried
+                          ? "shell:automaticRetryStopped"
+                          : "shell:executionStopped",
+                      )
                     : i18n.t("shell:interrupted")}
             </strong>
           </div>
@@ -2591,26 +2625,39 @@ function TurnBlock({
               {turn.error.message}
             </p>
           ) : null}
+          {activity.outstanding > 0 ? (
+            <button
+              type="button"
+              className="quiet-button turn-outcome-review"
+              onClick={reviewActivity}
+            >
+              {i18n.t("shell:reviewActivity")}
+            </button>
+          ) : null}
           <button
             type="button"
             className="quiet-button turn-outcome-primary-action"
-            disabled={activity.outstanding === 0 && !canContinue}
-            onClick={activity.outstanding > 0 ? reviewActivity : onContinue}
+            disabled={!canRetry || !onRetry || retrying}
+            aria-busy={retrying}
+            onClick={() => void retry()}
           >
-            {i18n.t(
-              activity.outstanding > 0
-                ? "shell:reviewActivity"
-                : "shell:continueWriting",
-            )}
+            {retrying ? (
+              <span className="mini-spinner" aria-hidden="true" />
+            ) : null}
+            {i18n.t("shell:retryTask")}
           </button>
+          {retryError ? (
+            <p className="turn-retry-error" role="alert">
+              {retryError}
+            </p>
+          ) : null}
         </div>
       )}
     </section>
   );
 }
 
-/** Failed turns show the actionable first line up front; the full provider
- * message, retry count and diagnostics entry stay one click away. */
+/** Retry metadata stays compact; technical errors are available on demand. */
 function TurnFailureOutcome({
   text,
   retried,
@@ -2626,18 +2673,11 @@ function TurnFailureOutcome({
   const detailsId = useId();
   return (
     <div className="turn-outcome-failure">
-      <p>
-        {i18n.t(
-          retried !== undefined && retried > 0
-            ? "shell:recoveryExhaustedSummary"
-            : "shell:executionInterruptedSummary",
-        )}
-        {retried !== undefined && retried > 0 ? (
-          <span className="turn-outcome-retried">
-            {i18n.t("shell:failureRetriedNote", { count: retried })}
-          </span>
-        ) : null}
-      </p>
+      {retried !== undefined && retried > 0 ? (
+        <span className="turn-outcome-retried">
+          {i18n.t("shell:failureRetriedNote", { count: retried })}
+        </span>
+      ) : null}
       {showDetails ? (
         <div className="turn-outcome-details" id={detailsId}>
           <p className="turn-outcome-error">{text}</p>
@@ -2667,7 +2707,7 @@ function TurnFailureOutcome({
               : i18n.t("shell:showFailureDetails")}
           </button>
         ) : null}
-        {diagnosticId !== undefined ? (
+        {diagnosticId !== undefined && showDetails ? (
           <button
             type="button"
             className="quiet-button"

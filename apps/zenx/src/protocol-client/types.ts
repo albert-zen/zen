@@ -176,6 +176,7 @@ export interface ClientRequestParams {
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
+  "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryParams;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/thread/queue/cancel": {
@@ -279,6 +280,7 @@ export interface ClientRequestResults {
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
+  "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryResult;
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/thread/queue/cancel": {

@@ -1,6 +1,10 @@
 /** Synthetic acceptance scene using the production ThreadView and native projection. */
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  createManualTurnRetryRequester,
+  type ManualTurnRetryParams,
+} from "../../src/renderer/src/manual-turn-retry.js";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import {
   emptyComposerState,
@@ -26,6 +30,31 @@ function Fixture() {
     editComposer(emptyComposerState(), params.get("draft") ?? ""),
   );
   const [sends, setSends] = useState(0);
+  const [retrySends, setRetrySends] = useState(0);
+  const [lastRequest, setLastRequest] = useState<ManualTurnRetryParams | null>(
+    null,
+  );
+  const release = useRef<(() => void) | null>(null);
+  const rejectReceipt = useRef<(() => void) | null>(null);
+  const [requestRetry] = useState(() =>
+    createManualTurnRetryRequester((params) => {
+      setRetrySends((n) => n + 1);
+      setLastRequest(params);
+      return new Promise((resolve, reject) => {
+        rejectReceipt.current = () => {
+          reject(new Error("合成请求未确认，请重试。"));
+          release.current = null;
+          rejectReceipt.current = null;
+        };
+        release.current = () => {
+          setPhase("continuing");
+          resolve({ turnId: "synthetic-manual-continuation" });
+          release.current = null;
+          rejectReceipt.current = null;
+        };
+      });
+    }),
+  );
   const [startedAt] = useState(() => Math.floor(Date.now() / 1000) - 30);
   const view = recoveryScenario(phase, phase === "stopped" ? "reload" : "live");
   view.turns = view.turns.map((turn) => ({
@@ -33,6 +62,18 @@ function Fixture() {
     startedAt,
     completedAt: turn.status === "inProgress" ? null : startedAt + 30,
     durationMs: turn.status === "inProgress" ? null : 30_000,
+    items: params.has("long")
+      ? [
+          ...turn.items,
+          ...Array.from({ length: 18 }, (_, index) => ({
+            type: "agentMessage" as const,
+            id: `synthetic-progress-${index}`,
+            phase: "commentary" as const,
+            text: `合成检查进度 ${index + 1}：已核对这一项并保留结果。继续检查剩余页面与响应行为。`,
+            memoryCitation: null,
+          })),
+        ]
+      : turn.items,
   }));
   return (
     <main
@@ -79,7 +120,23 @@ function Fixture() {
           />
           禁止输入
         </label>
-        <span>发送次数：{sends}</span>
+        <span>
+          普通发送：{sends} · 合成重试请求：{retrySends}
+        </span>
+        <button onClick={() => release.current?.()} disabled={!release.current}>
+          确认合成回执
+        </button>
+        <button
+          onClick={() => rejectReceipt.current?.()}
+          disabled={!rejectReceipt.current}
+        >
+          拒绝合成回执
+        </button>
+        {lastRequest ? (
+          <span>
+            请求文本：{lastRequest.language === "zh-CN" ? "继续" : "Go on"}
+          </span>
+        ) : null}
       </aside>
       <ThreadView
         approvals={[]}
@@ -89,6 +146,7 @@ function Fixture() {
         onDraftChange={(text) =>
           setComposer((value) => editComposer(value, text))
         }
+        onRetryTurn={(turnId) => requestRetry(view, turnId)}
         onSubmit={async () => {
           setSends((n) => n + 1);
         }}

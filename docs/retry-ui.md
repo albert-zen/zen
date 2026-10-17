@@ -1,31 +1,50 @@
 # Retry presentation
 
-ZenX shows a lightweight **Recovering task** status and the actual attempt while
-an automatic recovery sample is active. It uses the current native
-`turn_recovery` observation, not old failure Items. Successful sampling, terminal
-completion, disconnect and interruption clear the observation. A cold journal
-snapshot does not claim that a historical recovery is still running. There is
-no invented countdown or extra durable recovery state.
+The recovery status stays at the end of the Turn, after its received output and
+activity. Automatic recovery and the terminal outcome occupy the same place, so
+following the newest content keeps recovery feedback visible. There is no second
+recovery label at the top of a long Turn.
 
-A terminal failure is one compact, localized outcome card. Technical error
-text and diagnostic identifiers remain available under **Details**, collapsed
-by default. Already received output stays available in the activity history.
-An explicit user stop remains distinct from failure; unconfirmed background
-operations keep the existing receipt-review action and warning.
+The default outcome is a compact, unboxed single row: status, retry metadata,
+the optional **Details** disclosure and a pill-shaped **Retry** button. Narrow
+viewports may wrap without hiding essential text or overflowing. Full technical errors and diagnostic identifiers appear only when
+requested. User stops and unconfirmed background operations keep their distinct
+meaning and receipts. The background-activity review link remains available.
 
-**Add instructions** scrolls to and focuses the existing composer. It preserves
-text, selection and images and never submits a message or replays an operation.
-The action is disabled when the composer is unavailable. There is deliberately
-no button that pretends focusing the composer resumes execution. Existing
-recovery budgets, cancellation, approval and unknown-mutation fences are
-unchanged.
+**Retry** actually sends a separate localized continuation message (`继续` or
+`Go on`). The native Host atomically admits it only against the exact latest
+failed/aborted Turn using its existing admission lock. Stable request identity
+and canonical retry provenance reconcile an uncertain acknowledgement rather
+than starting another execution. The new agent Turn sees the original history
+and actual tool receipts; no tool operation is replayed by the retry button.
+Composer draft text, images and selection are not read, submitted or cleared.
+Repeated clicks share a pending request, with visible busy/disabled feedback.
+
+Automatic recovery uses only the current native `turn_recovery` observation,
+not historical failure Items. Sampling success, terminal completion, disconnect
+and interruption clear the live observation. Cold journal snapshots do not
+claim that old retries are running. There is no invented countdown or additional
+durable recovery state machine.
+
+## Design rationale
+
+Button wording describes the actual action, following the
+[GOV.UK button guidance](https://design-system.service.gov.uk/components/button/).
+Timely feedback follows the
+[visibility-of-system-status principle](https://www.nngroup.com/articles/visibility-system-status/),
+and error details use progressive disclosure alongside an actionable recovery
+path, informed by [error-message guidance](https://www.nngroup.com/articles/error-message-guidelines/).
+The bottom placement and single-row default are explicit product requirements,
+not a claim that those sources prescribe an exact visual layout.
 
 ## Visual acceptance fixture
 
 `apps/zenx/test/fixtures/retry-ui-visual.tsx` renders the production ThreadView
 with synthetic native-projected events and a visibly separate QA control strip.
 It supports `theme=light|dark`, `phase=running|recovering|continuing|completed|failed|stopped`,
-`lang=zh-CN|en`, `draft=...` and `disabled=1` URL parameters. Relative timestamps
-are fixed at mount. It is component-browser acceptance, not Electron end-to-end
-validation. Capture light/dark terminal cards, active recovery, stopped state,
-details, focus and disabled boundaries, plus a narrow viewport before merging.
+`lang=zh-CN|en`, `draft=...`, `disabled=1` and `long=1`. Relative timestamps are
+fixed at mount. The manual request uses the production request helper with an
+explicitly synthetic transport and acknowledgement control. This is component
+browser acceptance, not Electron or real-server end-to-end validation. Capture
+light/dark outcomes, long-history bottom recovery, stopped state, details,
+manual request/loading, draft preservation and narrow viewport before merging.

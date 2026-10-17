@@ -61,6 +61,7 @@ const inputAdmissionMethods = new Set<string>([
   "turn/replace",
   "turn/queue",
   "zen/turn/send",
+  "zen/turn/retry",
   "zen/turn/wake",
 ]);
 

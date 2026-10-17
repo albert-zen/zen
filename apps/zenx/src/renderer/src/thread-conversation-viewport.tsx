@@ -1,3 +1,4 @@
+import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import { requestQueuedSteer } from "./queue-steer-request.js";
 import { i18n } from "./i18n.js";
 import React, { useEffect, useRef, useState } from "react";
@@ -476,6 +477,13 @@ export function ThreadConversationViewport({
             });
             reload();
           })
+        }
+        onRetryTurn={
+          archived
+            ? undefined
+            : async (turnId) => {
+                await requestManualTurnRetry(thread, turnId);
+              }
         }
         onInterrupt={async (turnId) => {
           await window.zenx.protocol.request("turn/interrupt", {

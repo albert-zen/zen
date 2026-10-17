@@ -168,6 +168,7 @@ export type RuntimeEvent =
     };
 
 export interface RunTurnOptions {
+  retryOfTurnId?: string;
   thread: Thread;
   workspaceInstructions?: WorkspaceInstructionFile[];
   reloadWorkspaceInstructions?: () => Promise<WorkspaceInstructionFile[]>;
@@ -366,6 +367,9 @@ export class AgentRuntime {
       turnId,
       createdAt: this.#now(),
       type: "turn_started",
+      ...(options.retryOfTurnId === undefined
+        ? {}
+        : { retryOfTurnId: options.retryOfTurnId }),
       ...(options.workspaceInstructions === undefined
         ? {}
         : { workspaceInstructions: options.workspaceInstructions }),

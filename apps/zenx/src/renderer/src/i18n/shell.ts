@@ -302,16 +302,18 @@ export const en = {
   stopUnconfirmedNote:
     "Stopping this conversation does not confirm that the background action stopped. Review its latest receipt before continuing.",
   stoppedNote:
-    "Your partial results are kept. You can send a new message when you are ready.",
+    "Your partial results are kept. Retry when you are ready to continue.",
   interruptedNote:
     "This conversation is no longer being followed. Its final state has not been confirmed.",
   reviewActivity: "Review activity",
-  continueWriting: "Add instructions",
+  automaticRetryStopped: "Automatic recovery stopped",
+  executionStopped: "Execution interrupted",
+  retryTask: "Retry",
+  manualRetryNoLongerAvailable:
+    "This turn can no longer be retried. Refresh the conversation to see its current state.",
+  manualRetryUnconfirmed:
+    "Retry acknowledgement is unconfirmed. Retry again to check the same request.",
   turnActivityHistory: "Activity",
-  taskNotCompleted: "Task not completed",
-  recoveryExhaustedSummary: "Automatic recovery could not resume this task.",
-  executionInterruptedSummary:
-    "Execution was interrupted. Your partial results are kept.",
   pin: "Pin",
 
   accessibility: "Accessibility",
@@ -663,7 +665,7 @@ export const en = {
   thisTurnEndedWithoutAFinalResponse:
     "This turn ended without a final response.",
   failureRetriedNote: "Auto-retried {{count}} times before failing",
-  showFailureDetails: "Details",
+  showFailureDetails: "Error details",
   hideFailureDetails: "Hide details",
   openDiagnosticsFolder: "Open diagnostics folder",
   failureDiagnosticId: "Diagnostic ID: {{id}}",
@@ -716,7 +718,7 @@ export const en = {
   watching: "Watching",
   worked: "Worked",
   working: "Working",
-  recoveringTask: "Recovering task",
+  recoveringTask: "Retrying",
   recoveryAttempt: "Attempt {{count}}",
   workspaceFiles: "Workspace files",
   workspaceLibrary: "Workspace library",
@@ -1197,14 +1199,15 @@ export const zhCN = {
   stopUnconfirmed: "后台操作可能仍在运行",
   stopUnconfirmedNote:
     "停止对话并不表示后台操作已停止。继续前请先查看最新回执。",
-  stoppedNote: "部分结果已保留。准备好后可以发送新消息。",
+  stoppedNote: "已有内容已保留，点击重试可以继续任务。",
   interruptedNote: "此对话已断开跟随，最终状态尚未确认。",
   reviewActivity: "查看运行过程",
-  continueWriting: "补充说明",
+  automaticRetryStopped: "自动重试未成功",
+  executionStopped: "执行已中断",
+  retryTask: "重试",
+  manualRetryNoLongerAvailable: "此轮执行已无法重试，请刷新会话查看当前状态。",
+  manualRetryUnconfirmed: "尚未确认重试是否已接收。再次点击将核对同一请求。",
   turnActivityHistory: "运行过程",
-  taskNotCompleted: "任务未完成",
-  recoveryExhaustedSummary: "自动重试后仍未恢复。",
-  executionInterruptedSummary: "本次执行已中断，已生成的内容已保留。",
 
   pin: "固定",
 
@@ -1547,7 +1550,7 @@ export const zhCN = {
     "此会话正在归档。如果归档失败，请重试。",
   thisTurnEndedWithoutAFinalResponse: "此轮次结束时没有最终回复。",
   failureRetriedNote: "已自动重试 {{count}} 次",
-  showFailureDetails: "详情",
+  showFailureDetails: "错误详情",
   hideFailureDetails: "收起详情",
   openDiagnosticsFolder: "打开诊断文件夹",
   failureDiagnosticId: "诊断 ID：{{id}}",
@@ -1597,7 +1600,7 @@ export const zhCN = {
   watching: "观察中",
   worked: "已完成",
   working: "正在工作",
-  recoveringTask: "正在恢复任务",
+  recoveringTask: "正在重试",
   recoveryAttempt: "第 {{count}} 次重试",
   workspaceFiles: "工作区文件",
   workspaceLibrary: "工作区目录",

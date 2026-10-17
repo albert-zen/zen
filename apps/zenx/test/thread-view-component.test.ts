@@ -65,9 +65,18 @@ test("native recovery keeps one live Turn until completion and terminal failure 
         assert.equal(document.querySelector(".turn-final"), null);
       }
       if (phase === "recovering") {
+        const footer = requiredElement(".turn-recovery-footer");
+        const history = requiredElement(".turn-history");
+        assert.ok(
+          history.compareDocumentPosition(footer) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+        assert.ok(
+          document.querySelector(".turn > .turn-running-label") === null,
+        );
         assert.match(
           requiredElement(".turn-running-label").textContent ?? "",
-          /Recovering task/u,
+          /Retrying/u,
         );
         assert.match(
           requiredElement(".turn-recovery-attempt").textContent ?? "",
@@ -85,7 +94,7 @@ test("native recovery keeps one live Turn until completion and terminal failure 
       }
       if (phase === "failed") {
         const text = requiredElement(".turn-outcome").textContent ?? "";
-        assert.match(text, /Automatic recovery could not resume/);
+        assert.match(text, /Automatic recovery stopped/);
         assert.doesNotMatch(text, /bounded recovery budget/);
         assert.match(text, /Auto-retried 2 times/);
       }
@@ -379,7 +388,7 @@ test("failed turns show a concise banner with expandable detail, retry count and
 
     const banner = requiredElement(".turn-outcome");
     const initialText = banner.textContent ?? "";
-    assert.match(initialText, /Automatic recovery could not resume/u);
+    assert.match(initialText, /Automatic recovery stopped/u);
     assert.doesNotMatch(initialText, /HTTP 400: provider detail/u);
     assert.match(initialText, /Auto-retried 2 times/u);
     assert(!initialText.includes("second line of provider detail"));
@@ -389,7 +398,7 @@ test("failed turns show a concise banner with expandable detail, retry count and
         ".turn-outcome-actions .quiet-button",
       ),
     ];
-    assert.equal(buttons.length, 2);
+    assert.equal(buttons.length, 1);
     const detailsToggle = buttons[0]!;
     assert.equal(detailsToggle.getAttribute("aria-expanded"), "false");
     await act(async () => detailsToggle.click());
@@ -397,7 +406,9 @@ test("failed turns show a concise banner with expandable detail, retry count and
     assert.match(banner.textContent ?? "", /second line of provider detail/u);
     assert.match(banner.textContent ?? "", /Diagnostic ID: diag-1/u);
 
-    await act(async () => buttons[1]!.click());
+    await act(async () =>
+      requiredButton(".turn-outcome-actions button:nth-child(2)").click(),
+    );
     assert.equal(openedFolders, 1);
     assert.match(
       banner.textContent ?? "",
@@ -465,13 +476,13 @@ test("failure outcome remains visible alongside retained partial output", async 
     );
     assert.match(
       requiredElement(".turn-outcome").textContent ?? "",
-      /Execution was interrupted/u,
+      /Execution interrupted/u,
     );
     assert.equal(document.querySelectorAll(".turn-outcome").length, 1);
   });
 });
 
-test("outcome instructions reveal the composer without changing drafts or sending", async () => {
+test("manual retry keeps drafts and attachments, coalesces clicks and reports errors", async () => {
   await withDom(async (root) => {
     const composer = addComposerImages(
       editComposer(emptyComposerState(), "Keep my draft"),
@@ -490,9 +501,13 @@ test("outcome instructions reveal the composer without changing drafts or sendin
         },
       ],
     );
-    let sends = 0;
-    let edits = 0;
-    let scrolled = 0;
+    let sends = 0,
+      edits = 0,
+      retries = 0;
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, fail) => {
+      reject = fail;
+    });
     const failed = {
       ...turnWithItems("failed", []),
       error: {
@@ -517,41 +532,48 @@ test("outcome instructions reveal the composer without changing drafts or sendin
             onSubmit: async () => {
               sends += 1;
             },
+            onRetryTurn: async (turnId: string) => {
+              assert.equal(turnId, failed.id);
+              retries += 1;
+              await pending;
+            },
           }),
         ),
       );
     await render(false);
     const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
     textarea.setSelectionRange(2, 5);
-    textarea.scrollIntoView = () => {
-      scrolled += 1;
-    };
     const action = requiredButton(".turn-outcome-primary-action");
-    assert.match(action.textContent ?? "", /Add instructions/u);
-    await act(async () => action.click());
-    assert.ok(
-      document.activeElement === textarea,
-      "instruction action focuses composer",
-    );
+    assert.match(action.textContent ?? "", /^Retry$/u);
+    await act(async () => {
+      action.click();
+      action.click();
+    });
+    assert.equal(retries, 1);
+    assert.ok(action.disabled);
+    assert.equal(action.getAttribute("aria-busy"), "true");
     assert.equal(textarea.value, "Keep my draft");
     assert.ok(
       document.querySelector(
         '.composer-images button[aria-label="Remove kept.png"]',
       ),
     );
-    assert.equal(composer.draft.images.length, 1);
     assert.equal(textarea.selectionStart, 2);
     assert.equal(textarea.selectionEnd, 5);
-    assert.equal(scrolled, 1);
     assert.equal(edits, 0);
     assert.equal(sends, 0);
+    await act(async () => reject(new Error("Synthetic admission unavailable")));
+    assert.match(
+      requiredElement(".turn-retry-error").textContent ?? "",
+      /admission unavailable/u,
+    );
+    assert.ok(!action.disabled);
     await render(true);
     assert.ok(requiredButton(".turn-outcome-primary-action").disabled);
     await act(async () =>
       requiredButton(".turn-outcome-primary-action").click(),
     );
-    assert.equal(scrolled, 1);
-    assert.equal(sends, 0);
+    assert.equal(retries, 1);
   });
 });
 
@@ -2952,7 +2974,7 @@ test("failed turn opens received trace and preserves the error without a final a
   assert.equal(document.querySelector(".turn-final"), null);
   assert.match(
     document.querySelector(".turn-outcome")?.textContent ?? "",
-    /Execution was interrupted/u,
+    /Execution interrupted/u,
   );
   assert.equal(
     document
