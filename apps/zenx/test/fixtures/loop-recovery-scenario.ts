@@ -157,12 +157,36 @@ export function recoveryScenarioSnapshot(phase: RecoveryPhase): ThreadSnapshot {
   };
 }
 
-export function projectRecoverySnapshot(snapshot: ThreadSnapshot): Thread {
+const recoveryEvent: Extract<AppServerEvent, { type: "turn_recovery" }> = {
+  type: "turn_recovery",
+  threadId,
+  turnId,
+  recovery: {
+    failureItemId: syntheticRecovery.id,
+    attempt: 1,
+    sampleAttempt: 2,
+    phase: "model",
+  },
+};
+
+export function projectRecoverySnapshot(
+  snapshot: ThreadSnapshot,
+  liveRecovery = false,
+): Thread {
   return projectNativeRecovery({
     processEpoch: "synthetic-host",
     threadId: snapshot.id,
-    watermark: 0,
-    events: [],
+    watermark: liveRecovery ? 1 : 0,
+    events: liveRecovery
+      ? [
+          {
+            processEpoch: "synthetic-host",
+            threadId: snapshot.id,
+            watermark: 1,
+            event: recoveryEvent,
+          },
+        ]
+      : [],
     thread: snapshot,
   });
 }
@@ -172,7 +196,10 @@ export function recoveryScenario(
   mode: "live" | "reload" = "live",
 ): Thread {
   if (mode === "reload")
-    return projectRecoverySnapshot(recoveryScenarioSnapshot(phase));
+    return projectRecoverySnapshot(
+      recoveryScenarioSnapshot(phase),
+      phase === "recovering",
+    );
   let view = projectRecoverySnapshot(recoveryScenarioSnapshot("running"));
   const apply = (event: AppServerEvent) => {
     view = applyNativeThreadEvent(
@@ -184,6 +211,8 @@ export function recoveryScenario(
   if (phase === "running") return view;
   apply({ type: "item_completed", item: receipt });
   apply({ type: "item_completed", item: syntheticRecovery });
+  apply(recoveryEvent);
+  if (phase !== "recovering") apply({ ...recoveryEvent, recovery: null });
   if (phase === "continuing" || phase === "completed") {
     apply({
       type: "item_started",

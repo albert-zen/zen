@@ -75,6 +75,7 @@ export function markThreadViewAwaitingRecovery(thread: Thread): Thread {
         ? {
             ...turn,
             status: "interrupted",
+            liveRecovery: null,
             completedAt: null,
             durationMs: null,
             items: turn.items.map((item) =>
@@ -123,6 +124,16 @@ export function applyNativeThreadEvent(
   const threadId =
     event.type === "item_completed" ? event.item.threadId : event.threadId;
   if (threadId !== thread.id || event.type === "token_usage") return thread;
+  if (event.type === "turn_recovery") {
+    return {
+      ...thread,
+      turns: thread.turns.map((turn) =>
+        turn.id === event.turnId && turn.status === "inProgress"
+          ? { ...turn, liveRecovery: event.recovery }
+          : turn,
+      ),
+    };
+  }
   if (
     event.type === "item_completed" &&
     (thread.canonicalItems !== undefined ||
@@ -459,6 +470,7 @@ export function applyThreadViewNotification(
     const existing = thread.turns.find((turn) => turn.id === event.turn.id);
     const completed = {
       ...event.turn,
+      liveRecovery: null,
       items: (existing?.items ?? event.turn.items).map((item) =>
         item.type === "reasoning" && item.status === "inProgress"
           ? { ...item, status: "interrupted" as const }

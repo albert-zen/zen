@@ -36,7 +36,11 @@ export type Thread = Omit<
     }
   >;
 };
-export type Turn = Omit<CodexTurn, "items"> & { items: ThreadItem[] };
+export type Turn = Omit<CodexTurn, "items"> & {
+  items: ThreadItem[];
+  /** Current-epoch native observation, never inferred from historical failures. */
+  liveRecovery?: import("../../../../src/runtime.js").LiveTurnRecovery | null;
+};
 export type ThreadItem =
   | CodexThreadItem
   | {

@@ -64,6 +64,18 @@ test("native recovery keeps one live Turn until completion and terminal failure 
         assert.equal(document.querySelector(".turn-outcome"), null);
         assert.equal(document.querySelector(".turn-final"), null);
       }
+      if (phase === "recovering") {
+        assert.match(
+          requiredElement(".turn-running-label").textContent ?? "",
+          /Recovering task/u,
+        );
+        assert.match(
+          requiredElement(".turn-recovery-attempt").textContent ?? "",
+          /Attempt 1/u,
+        );
+      } else {
+        assert.ok(document.querySelector(".turn-recovery-attempt") === null);
+      }
       if (phase === "completed") {
         assert.equal(document.querySelector(".turn-outcome"), null);
         assert.match(
@@ -73,7 +85,8 @@ test("native recovery keeps one live Turn until completion and terminal failure 
       }
       if (phase === "failed") {
         const text = requiredElement(".turn-outcome").textContent ?? "";
-        assert.match(text, /bounded recovery budget/);
+        assert.match(text, /Automatic recovery could not resume/);
+        assert.doesNotMatch(text, /bounded recovery budget/);
         assert.match(text, /Auto-retried 2 times/);
       }
       if (phase === "stopped") {
@@ -366,7 +379,8 @@ test("failed turns show a concise banner with expandable detail, retry count and
 
     const banner = requiredElement(".turn-outcome");
     const initialText = banner.textContent ?? "";
-    assert.match(initialText, /HTTP 400: provider detail/u);
+    assert.match(initialText, /Automatic recovery could not resume/u);
+    assert.doesNotMatch(initialText, /HTTP 400: provider detail/u);
     assert.match(initialText, /Auto-retried 2 times/u);
     assert(!initialText.includes("second line of provider detail"));
 
@@ -418,6 +432,126 @@ test("a 241-character failure remains fully accessible through Details", async (
       requiredElement(".turn-outcome-error").textContent ?? "",
       /Z$/u,
     );
+  });
+});
+
+test("failure outcome remains visible alongside retained partial output", async () => {
+  await withDom(async (root) => {
+    const partial = agent("Retained result");
+    const failed = {
+      ...turnWithItems("failed", [partial]),
+      error: {
+        message: "Synthetic recovery exhausted",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer: emptyComposerState(),
+          thread: thread([failed]),
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    assert.match(
+      requiredElement(".turn-history").textContent ?? "",
+      /Retained result/u,
+    );
+    assert.match(
+      requiredElement(".turn-outcome").textContent ?? "",
+      /Execution was interrupted/u,
+    );
+    assert.equal(document.querySelectorAll(".turn-outcome").length, 1);
+  });
+});
+
+test("outcome instructions reveal the composer without changing drafts or sending", async () => {
+  await withDom(async (root) => {
+    const composer = addComposerImages(
+      editComposer(emptyComposerState(), "Keep my draft"),
+      [
+        {
+          id: "kept-image",
+          name: "kept.png",
+          attachment: {
+            type: "attachment",
+            sha256: "a".repeat(64),
+            mediaType: "image/png",
+            byteLength: 4,
+            width: 1,
+            height: 1,
+          },
+        },
+      ],
+    );
+    let sends = 0;
+    let edits = 0;
+    let scrolled = 0;
+    const failed = {
+      ...turnWithItems("failed", []),
+      error: {
+        message: "Synthetic connection interrupted",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    };
+    const render = async (disabled: boolean) =>
+      act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer,
+            composerDisabled: disabled,
+            thread: thread([failed]),
+            onDraftChange: () => {
+              edits += 1;
+            },
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: async () => {
+              sends += 1;
+            },
+          }),
+        ),
+      );
+    await render(false);
+    const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
+    textarea.setSelectionRange(2, 5);
+    textarea.scrollIntoView = () => {
+      scrolled += 1;
+    };
+    const action = requiredButton(".turn-outcome-primary-action");
+    assert.match(action.textContent ?? "", /Add instructions/u);
+    await act(async () => action.click());
+    assert.ok(
+      document.activeElement === textarea,
+      "instruction action focuses composer",
+    );
+    assert.equal(textarea.value, "Keep my draft");
+    assert.ok(
+      document.querySelector(
+        '.composer-images button[aria-label="Remove kept.png"]',
+      ),
+    );
+    assert.equal(composer.draft.images.length, 1);
+    assert.equal(textarea.selectionStart, 2);
+    assert.equal(textarea.selectionEnd, 5);
+    assert.equal(scrolled, 1);
+    assert.equal(edits, 0);
+    assert.equal(sends, 0);
+    await render(true);
+    assert.ok(requiredButton(".turn-outcome-primary-action").disabled);
+    await act(async () =>
+      requiredButton(".turn-outcome-primary-action").click(),
+    );
+    assert.equal(scrolled, 1);
+    assert.equal(sends, 0);
   });
 });
 
@@ -2818,7 +2952,13 @@ test("failed turn opens received trace and preserves the error without a final a
   assert.equal(document.querySelector(".turn-final"), null);
   assert.match(
     document.querySelector(".turn-outcome")?.textContent ?? "",
-    /invalid tool call id/u,
+    /Execution was interrupted/u,
+  );
+  assert.equal(
+    document
+      .querySelector(".turn-outcome-actions button")
+      ?.getAttribute("aria-expanded"),
+    "false",
   );
 });
 

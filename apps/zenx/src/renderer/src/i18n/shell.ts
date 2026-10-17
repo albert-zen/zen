@@ -306,7 +306,12 @@ export const en = {
   interruptedNote:
     "This conversation is no longer being followed. Its final state has not been confirmed.",
   reviewActivity: "Review activity",
-  continueWriting: "Write a message",
+  continueWriting: "Add instructions",
+  turnActivityHistory: "Activity",
+  taskNotCompleted: "Task not completed",
+  recoveryExhaustedSummary: "Automatic recovery could not resume this task.",
+  executionInterruptedSummary:
+    "Execution was interrupted. Your partial results are kept.",
   pin: "Pin",
 
   accessibility: "Accessibility",
@@ -711,6 +716,8 @@ export const en = {
   watching: "Watching",
   worked: "Worked",
   working: "Working",
+  recoveringTask: "Recovering task",
+  recoveryAttempt: "Attempt {{count}}",
   workspaceFiles: "Workspace files",
   workspaceLibrary: "Workspace library",
   workspaceNavigation: "Workspace navigation",
@@ -1193,7 +1200,11 @@ export const zhCN = {
   stoppedNote: "部分结果已保留。准备好后可以发送新消息。",
   interruptedNote: "此对话已断开跟随，最终状态尚未确认。",
   reviewActivity: "查看运行过程",
-  continueWriting: "继续输入",
+  continueWriting: "补充说明",
+  turnActivityHistory: "运行过程",
+  taskNotCompleted: "任务未完成",
+  recoveryExhaustedSummary: "自动重试后仍未恢复。",
+  executionInterruptedSummary: "本次执行已中断，已生成的内容已保留。",
 
   pin: "固定",
 
@@ -1586,6 +1597,8 @@ export const zhCN = {
   watching: "观察中",
   worked: "已完成",
   working: "正在工作",
+  recoveringTask: "正在恢复任务",
+  recoveryAttempt: "第 {{count}} 次重试",
   workspaceFiles: "工作区文件",
   workspaceLibrary: "工作区目录",
   workspaceNavigation: "工作区导航",

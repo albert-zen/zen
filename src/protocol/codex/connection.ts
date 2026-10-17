@@ -995,7 +995,7 @@ export class CodexConnection {
       });
       return;
     }
-    if (event.type === "token_usage") {
+    if (event.type === "token_usage" || event.type === "turn_recovery") {
       return;
     }
     if (event.type === "item_completed") {
@@ -1405,6 +1405,7 @@ function eventRepresentedInSnapshot(
     case "reasoning_summary_delta":
     case "reasoning_content_delta":
       return snapshot.items.some((item) => item.id === event.itemId);
+    case "turn_recovery": // Native-only transient observation.
     case "token_usage":
     case "model_catalog_updated":
       return true;
