@@ -1,0 +1,50 @@
+{
+  "head": "83751a64c1242a130c1917d7a8fa5f002a600781",
+  "tree": "a715ad37922e4cca62e0a42e27ecb759fb12495b",
+  "prior_behavior_source": "3403c73411aa0938cb00aad5a262548e81700710",
+  "scope": "CSS + docs only; prior behavior receipts retain original identity",
+  "bundle_sha256": {
+    "app.js": "5abc341d9919ed7c8a38811f42a26298485b5869ec70091c691034d6c7c389b4",
+    "app.css": "967b2b2d10ae14c7d9a1c4a146c0b66b277c113d5c1cafee7d256857cf1d0a37",
+    "index.html": "ea6a67d4d5ea4b87055db9a132232174a27418249df1c72afff2ac3a09c5007d"
+  },
+  "status": "Latest revised candidate; user visual feedback and CI gate remain separate",
+  "browser": "Cloud Chrome, supported CUA",
+  "images": [
+    {
+      "file": "01-light-single-line-pill-retry.jpg",
+      "sha256": "ca1b88bfa9bb4b265003d58aec2a4b7c3f32b5d3e145b7b01cc03be61b4d7475"
+    },
+    {
+      "file": "02-dark-single-line-pill-retry.jpg",
+      "sha256": "99151fb3e5ad145500a990a8874ec88c9cfeb3f039446816ccafd54c56594c23"
+    },
+    {
+      "file": "03-dark-expanded-details.jpg",
+      "sha256": "0c6eb275d46bdd7dc27ab222afb881f454573627873061d1c0f7b54ee7a67559"
+    },
+    {
+      "file": "04-dark-pill-pending.jpg",
+      "sha256": "fee7322f2de3d7ed3f5c8cbf5ee580a354363e00a481cc75276acd2ff0723d1d"
+    },
+    {
+      "file": "05-narrow-dark-single-line-pill.jpg",
+      "sha256": "e075e5ebbebbe2da1cb5ee7af00b3707288ca3ef20edaa9ff9a88b5f7cbe3c44"
+    },
+    {
+      "file": "06-narrow-dark-expanded-details.jpg",
+      "sha256": "a8b4497de5c5137316989d707fffbcec992f196549b60413d2eba4734d10d00f"
+    },
+    {
+      "file": "07-dark-long-history-active-retry.jpg",
+      "sha256": "fe36f05dc2dbe7d35e7077b56a95880aac87040862a7a7b717fc37e40b6676aa"
+    },
+    {
+      "file": "08-light-stopped-pill-retry.jpg",
+      "sha256": "8ab10e7f64348d40f099fb7b21721c44706914891ca5bc2a27385f9231afd91d"
+    }
+  ],
+  "remote_head": "b3113792f0cfb0b03a55e26a17aad10654ca25c2",
+  "remote_tree": "a715ad37922e4cca62e0a42e27ecb759fb12495b",
+  "remote_bridge": "Exact tree equality with actual screenshot source 83751a64"
+}
