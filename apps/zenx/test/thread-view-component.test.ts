@@ -792,11 +792,31 @@ test("compaction progress is a transcript item and completed items reveal exact 
     );
 
     const event = requiredElement(".context-compaction-event");
+    const compactionToggle = requiredButton(".context-compaction-toggle");
+    assert(compactionToggle.classList.contains("workflow-status"));
+    assert.equal(compactionToggle.getAttribute("aria-expanded"), "false");
     assert.match(event.textContent ?? "", /Context compacted/u);
     assert.match(event.textContent ?? "", /Human initiated/u);
-    assert.match(event.textContent ?? "", /Full input size unknown/u);
     assert.doesNotMatch(event.textContent ?? "", /effective messages/u);
     await act(async () => requiredButton(".context-compaction-toggle").click());
+    assert.equal(compactionToggle.getAttribute("aria-expanded"), "true");
+    assert.match(
+      requiredElement(".context-compaction-metadata").textContent ?? "",
+      /Full input size unknown/u,
+    );
+    assert.match(
+      requiredElement(".context-compaction-metadata").textContent ?? "",
+      /summary characters/u,
+    );
+    assert.equal(
+      requiredElement(".context-compaction-detail").id,
+      compactionToggle.getAttribute("aria-controls"),
+    );
+    assert(
+      !requiredElement(".context-compaction-detail").classList.contains(
+        "workflow-status",
+      ),
+    );
     assert.match(event.textContent ?? "", /Keep this request/u);
     assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
@@ -833,6 +853,15 @@ test("compaction progress is a transcript item and completed items reveal exact 
     assert.match(
       requiredElement(".context-compaction-progress").textContent ?? "",
       /Compacting context/u,
+    );
+    assert(
+      requiredElement(
+        ".context-compaction-progress-summary",
+      ).classList.contains("workflow-status"),
+    );
+    assert.equal(
+      requiredElement(".context-compaction-progress").getAttribute("role"),
+      "status",
     );
     assert.equal(document.querySelector(".composer-command-status"), null);
   });
@@ -1030,12 +1059,36 @@ test("compaction error is a keyboard-reachable context notice with plain details
       );
     await act(async () => renderView());
     const alert = requiredElement('[role="alert"].context-compaction-progress');
+    const statusSummary = requiredElement(
+      ".context-compaction-progress-summary",
+    );
+    assert(statusSummary.classList.contains("workflow-status"));
+    assert.ok(
+      statusSummary.querySelector("details") === null,
+      "Diagnostics stay outside the status header",
+    );
+    assert.ok(
+      requiredElement(".context-compaction-error-detail").closest(
+        ".workflow-status",
+      ) === null,
+      "Expanded diagnostics are not inside a capsule",
+    );
+    assert(
+      statusSummary.contains(
+        requiredButton('[aria-label="Dismiss compaction error"]'),
+      ),
+    );
+    assert.equal(
+      requiredElement(".context-compaction-mark").getAttribute("aria-hidden"),
+      "true",
+    );
     assert.equal(alert.closest(".messages-inner"), null);
     assert.equal(alert.closest(".composer-error"), null);
     const details = requiredElement<HTMLDetailsElement>(
       ".context-compaction-error-detail",
     );
     assert.equal(details.open, false);
+    assert.equal(details.querySelector("p")?.tabIndex, 0);
     const summary = requiredElement<HTMLElement>(
       ".context-compaction-error-detail summary",
     );
