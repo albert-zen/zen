@@ -1,0 +1,73 @@
+{
+  "head": "d8e83c8806a84ec88ea32eed333e427a54c42b26",
+  "tree": "631d2732bffaa446dba04589f96f3b79e0c15c49",
+  "prior_behavior_source": "3403c73411aa0938cb00aad5a262548e81700710",
+  "delta_since_behavior_source": [
+    "apps/zenx/src/renderer/src/i18n/shell.ts",
+    "apps/zenx/src/renderer/src/styles.css",
+    "apps/zenx/test/thread-view-component.test.ts",
+    "docs/retry-ui.md"
+  ],
+  "bundle_sha256": {
+    "app.js": "aab3853b99163f35a874a796cefe42e2b77bd08a84dab4c7cc5bf94ea44aadfb",
+    "app.css": "6ab122bcaedeb2106e0c8d57dad62353ed630dcf2c6656fb602cec7eee7d5655",
+    "index.html": "ea6a67d4d5ea4b87055db9a132232174a27418249df1c72afff2ac3a09c5007d"
+  },
+  "status": "Current whole-row capsule candidate; user feedback/CI separate",
+  "browser": "Cloud Chrome via supported CUA",
+  "viewport": {
+    "wide": [
+      1188,
+      761
+    ],
+    "narrow_css_iframe": [
+      390,
+      710
+    ]
+  },
+  "images": [
+    {
+      "file": "01-light-whole-row-pill.jpg",
+      "sha256": "adc384eaef3f6649cbdae955342836383f32e84ebd146a0daa86aaa9a133b39f"
+    },
+    {
+      "file": "02-dark-whole-row-pill.jpg",
+      "sha256": "38c0a58c49b6415f6c2b869b23cfe37fba59e3e9e57cb806f06f21f33ca40ec6"
+    },
+    {
+      "file": "03-dark-expanded-details.jpg",
+      "sha256": "c81085f77ca93f3370269ed126f042a40c08a782f4a6192bda26ea891f48099f"
+    },
+    {
+      "file": "04-narrow-dark-single-row-pill.jpg",
+      "sha256": "0e947d47a90a14b6a6e22233dffcb2cf4a300c396f3c3f2c205339bbcba6d72c"
+    },
+    {
+      "file": "05-narrow-dark-expanded-details.jpg",
+      "sha256": "99baec77740cbaa788843444b8d985c267e9417167c063ed693be2da9e02aa01"
+    },
+    {
+      "file": "06-dark-long-history-active-pill.jpg",
+      "sha256": "ac841e5d8cb123193251cef89fe5d4c30e9b52ca63341f6a1d35e1508aaffd6a"
+    },
+    {
+      "file": "07-dark-pill-pending.jpg",
+      "sha256": "a4cc22f6b10a02d0c5c8c79f5ce58260ce670e5474af03b6736af33fb1961463"
+    },
+    {
+      "file": "08-dark-request-rejected.jpg",
+      "sha256": "4009bac7011d3874662d59e14884ba3d965d1780975c8eab7fdba3c94a5dfad3"
+    },
+    {
+      "file": "09-dark-request-acknowledged.jpg",
+      "sha256": "e522668ec2d7159577d2aacd8a98f07b0f0193d1e5639fdb4b18b65ef7ed70ea"
+    },
+    {
+      "file": "10-light-stopped-pill.jpg",
+      "sha256": "c1768f65e911831f35777b56e6dc71aa041e1e8893543a1933b5133d9cb1faf6"
+    }
+  ],
+  "remote_head": "35e8f1d28b0ae0c6342f12ee8d7239e992657bce",
+  "remote_tree": "631d2732bffaa446dba04589f96f3b79e0c15c49",
+  "remote_bridge": "Exact tree equality with actual screenshot source d8e83c88"
+}
