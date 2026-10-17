@@ -301,12 +301,11 @@ export const en = {
   stopUnconfirmed: "Background action may still be running",
   stopUnconfirmedNote:
     "Stopping this conversation does not confirm that the background action stopped. Review its latest receipt before continuing.",
-  stoppedNote:
-    "Your partial results are kept. Retry when you are ready to continue.",
+  stoppedNote: "Progress kept.",
   interruptedNote:
     "This conversation is no longer being followed. Its final state has not been confirmed.",
   reviewActivity: "Review activity",
-  automaticRetryStopped: "Automatic recovery stopped",
+  automaticRetryStopped: "Retry unsuccessful",
   executionStopped: "Execution interrupted",
   retryTask: "Retry",
   manualRetryNoLongerAvailable:
@@ -664,8 +663,8 @@ export const en = {
     "This Thread is being archived. Try again if archiving fails.",
   thisTurnEndedWithoutAFinalResponse:
     "This turn ended without a final response.",
-  failureRetriedNote: "Retried {{count}} times",
-  showFailureDetails: "Error details",
+  failureRetriedNote: "Retried {{count}}×",
+  showFailureDetails: "Details",
   hideFailureDetails: "Hide details",
   openDiagnosticsFolder: "Open diagnostics folder",
   failureDiagnosticId: "Diagnostic ID: {{id}}",
@@ -1199,7 +1198,7 @@ export const zhCN = {
   stopUnconfirmed: "后台操作可能仍在运行",
   stopUnconfirmedNote:
     "停止对话并不表示后台操作已停止。继续前请先查看最新回执。",
-  stoppedNote: "已有内容已保留，点击重试可以继续任务。",
+  stoppedNote: "已有内容已保留",
   interruptedNote: "此对话已断开跟随，最终状态尚未确认。",
   reviewActivity: "查看运行过程",
   automaticRetryStopped: "自动重试未成功",

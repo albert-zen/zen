@@ -103,9 +103,9 @@ test("native recovery keeps one live Turn until completion and terminal failure 
       }
       if (phase === "failed") {
         const text = requiredElement(".turn-outcome").textContent ?? "";
-        assert.match(text, /Automatic recovery stopped/);
+        assert.match(text, /Retry unsuccessful/);
         assert.doesNotMatch(text, /bounded recovery budget/);
-        assert.match(text, /Retried 2 times/);
+        assert.match(text, /Retried 2×/);
       }
       if (phase === "stopped") {
         assert.equal(section.classList.contains("interrupted"), true);
@@ -397,9 +397,9 @@ test("failed turns show a concise banner with expandable detail, retry count and
 
     const banner = requiredElement(".turn-outcome");
     const initialText = banner.textContent ?? "";
-    assert.match(initialText, /Automatic recovery stopped/u);
+    assert.match(initialText, /Retry unsuccessful/u);
     assert.doesNotMatch(initialText, /HTTP 400: provider detail/u);
-    assert.match(initialText, /Retried 2 times/u);
+    assert.match(initialText, /Retried 2×/u);
     assert(!initialText.includes("second line of provider detail"));
 
     const buttons = [

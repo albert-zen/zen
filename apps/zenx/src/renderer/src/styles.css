@@ -9981,7 +9981,12 @@ button:disabled {
   background: var(--surface-control);
 }
 @media (max-width: 480px) {
-  .turn-outcome {
+  .workflow-status {
+    /* Single rows remain pills; longer translations wrap into a calm panel. */
+    border-radius: 20px;
+  }
+  .turn-outcome,
+  .turn-status-footer.workflow-status {
     gap: 4px;
     padding-inline: 6px;
   }
