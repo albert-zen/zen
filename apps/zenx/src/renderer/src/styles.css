@@ -9908,6 +9908,17 @@ button:disabled {
 .turn-toggle > svg {
   flex: 0 0 auto;
 }
+.workflow-status {
+  --workflow-status-height: 38px;
+  --workflow-status-control-height: 28px;
+  --workflow-status-line-height: 20px;
+  min-height: var(--workflow-status-height);
+  font-size: 12px;
+  line-height: var(--workflow-status-line-height);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-wash);
+}
 .turn-outcome {
   display: flex;
   flex-wrap: wrap;
@@ -9915,9 +9926,6 @@ button:disabled {
   gap: 4px 6px;
   margin-top: 12px;
   padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-wash);
   color: var(--text-3);
   font-size: 12px;
   min-width: 0;
@@ -9953,7 +9961,8 @@ button:disabled {
   display: contents;
 }
 .turn-outcome .quiet-button {
-  min-height: 28px;
+  min-height: var(--workflow-status-control-height);
+  line-height: var(--workflow-status-line-height);
   padding: 3px 7px;
   font-size: 12px;
   border-radius: 6px;
@@ -10021,16 +10030,24 @@ button:disabled {
   flex-basis: 100%;
   color: var(--danger);
 }
-.turn-recovery-footer {
+.turn-status-footer {
+  display: flex;
+  align-items: center;
   margin-top: 12px;
-  padding: 8px 10px;
-  min-height: 38px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-wash);
+  padding: 4px 8px;
 }
-.turn-recovery-footer .turn-running-label {
+.turn-status-footer .turn-running-label {
   margin: 0;
+  padding: 0;
+  min-height: var(--workflow-status-control-height, 28px);
+  gap: 6px;
+  line-height: var(--workflow-status-line-height, 20px);
+}
+.turn-status-footer .turn-running-label > [role="status"],
+.turn-status-footer .activity-text {
+  display: inline-flex;
+  align-items: center;
+  line-height: var(--workflow-status-line-height, 20px);
 }
 .queued-cancel-confirmation {
   width: min(480px, calc(100vw - 48px));

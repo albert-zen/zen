@@ -64,8 +64,8 @@ test("native recovery keeps one live Turn until completion and terminal failure 
         assert.equal(document.querySelector(".turn-outcome"), null);
         assert.equal(document.querySelector(".turn-final"), null);
       }
-      if (phase === "recovering") {
-        const footer = requiredElement(".turn-recovery-footer");
+      if (["running", "recovering", "continuing"].includes(phase)) {
+        const footer = requiredElement(".turn-status-footer");
         const history = requiredElement(".turn-history");
         assert.ok(
           history.compareDocumentPosition(footer) &
@@ -74,6 +74,15 @@ test("native recovery keeps one live Turn until completion and terminal failure 
         assert.ok(
           document.querySelector(".turn > .turn-running-label") === null,
         );
+        if (phase === "recovering" || phase === "continuing")
+          assert.ok(footer.classList.contains("workflow-status"));
+        if (phase === "continuing") {
+          const label = requiredElement(".turn-running-label");
+          assert.equal(label.getAttribute("data-compact"), "false");
+          assert.match(label.textContent ?? "", /Working/u);
+        }
+      }
+      if (phase === "recovering") {
         assert.match(
           requiredElement(".turn-running-label").textContent ?? "",
           /Retrying/u,
@@ -1320,6 +1329,15 @@ test("one running orb switches between Stop and send without losing attachment-o
       assert.equal(orb.disabled, calls.length > 0);
       assert.ok(orb.classList.contains("stop"));
       await act(async () => orb.click());
+      assert.equal(
+        requiredElement(".turn-running-label").getAttribute("data-phase"),
+        "stopping",
+      );
+      assert.ok(
+        requiredElement(".turn-status-footer").classList.contains(
+          "workflow-status",
+        ),
+      );
     }
     composer = editComposer(composer, "new direction");
     await act(async () => show());
@@ -1696,6 +1714,8 @@ test("pending approvals render in the bottom zone next to the composer", () => {
   const html = render(true, [approval]);
   assert.match(html, /class="bottom-zone[^"]*"/u);
   assert.match(html, /class="approval-request-card"/u);
+  assert.match(html, /turn-status-footer workflow-status/u);
+  assert.match(html, /data-phase="approval" data-compact="false"/u);
   assert.match(html, /Allow tool access\?/u);
   assert.match(
     html,
@@ -2106,6 +2126,37 @@ test("assistant messages retain running reasoning and tool disclosure affordance
     html,
     /class="trace-toggle"[^>]*aria-expanded="false"[\s\S]*rg ThreadView[\s\S]*2 items/u,
   );
+});
+
+test("ongoing footer avoids duplicating active traces but shows work after settled history", () => {
+  const activeCommand = {
+    ...commandItem("active-no-task", "read file"),
+    status: "inProgress",
+  } as ThreadItem;
+  const activeReasoning = {
+    ...reasoningItem("active-reasoning", ["Inspecting"], []),
+    status: "inProgress",
+  } as ThreadItem;
+  const commandHtml = renderTurns([
+    turnWithItems("inProgress", [activeCommand]),
+  ]);
+  assert.match(commandHtml, /turn-status-footer workflow-status/u);
+  assert.match(commandHtml, /data-phase="requested"/u);
+  for (const item of [activeReasoning]) {
+    const html = renderTurns([turnWithItems("inProgress", [item])]);
+    assert.match(html, /class="turn-status-footer"/u);
+    assert.match(html, /data-compact="true"/u);
+    assert.doesNotMatch(html, /turn-status-footer workflow-status/u);
+  }
+  const settled = renderTurns([
+    turnWithItems("inProgress", [
+      command("finished read"),
+      reasoning("Done thinking"),
+    ]),
+  ]);
+  assert.match(settled, /turn-status-footer workflow-status/u);
+  assert.match(settled, /data-compact="false"/u);
+  assert.match(settled, /Working/u);
 });
 
 test("renders one trace Item directly and wraps only a sequence of two or more", () => {
@@ -3102,6 +3153,15 @@ test("yielded shell work reports the actual task receipt phase", async () => {
       aggregatedOutput: "Command is still running",
     };
     await renderInteractive(root, turnWithItems("inProgress", [running]));
+    assert.equal(
+      requiredElement(".turn-running-label").getAttribute("data-compact"),
+      "true",
+    );
+    assert.ok(
+      !requiredElement(".turn-status-footer").classList.contains(
+        "workflow-status",
+      ),
+    );
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
     );

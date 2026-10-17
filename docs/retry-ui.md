@@ -1,15 +1,17 @@
 # Retry presentation
 
 The recovery status stays at the end of the Turn, after its received output and
-activity. Automatic recovery and the terminal outcome occupy the same place, so
+activity. Automatic recovery, resumed normal work and the terminal outcome occupy the same place, so
 following the newest content keeps recovery feedback visible. There is no second
 recovery label at the top of a long Turn.
 
 The default outcome is a compact single-row capsule with a light surface and thin border: status, retry metadata,
 the optional **Details** disclosure and a pill-shaped **Retry** button. Narrow
 viewports may wrap without hiding essential text or overflowing. Active recovery
-uses the same capsule treatment; expanded diagnostics use a modest corner radius
-instead of stretching the capsule into a tall oval. Full technical errors and diagnostic identifiers appear only when
+and noncompact ongoing work use the same capsule treatment; expanded diagnostics use a modest corner radius
+instead of stretching the capsule into a tall oval. Shared capsule/control/line-box
+metrics keep the status icon, text and action vertically aligned, including the
+animated activity text. Full technical errors and diagnostic identifiers appear only when
 requested. User stops and unconfirmed background operations keep their distinct
 meaning and receipts. The background-activity review link remains available.
 

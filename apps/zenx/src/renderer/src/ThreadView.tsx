@@ -2201,7 +2201,7 @@ function RunningTurnLabel({
   activity,
   stopping,
   approval,
-  activityRepresented,
+  compact,
   recovery,
 }: {
   recovery: Turn["liveRecovery"];
@@ -2209,7 +2209,7 @@ function RunningTurnLabel({
   activity: TraceActivity;
   stopping: boolean;
   approval: boolean;
-  activityRepresented: boolean;
+  compact: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -2242,8 +2242,6 @@ function RunningTurnLabel({
     phase === "thinking" ||
     phase === "idle" ||
     phase === "recovering";
-  const compact =
-    activityRepresented && (phase === "running" || phase === "thinking");
   return (
     <div
       className="turn-running-label"
@@ -2412,6 +2410,12 @@ function TurnBlock({
         turn.status === "interrupted" ||
         inspecting));
   const complete = turn.status !== "inProgress";
+  const compactRunningStatus =
+    !turn.liveRecovery &&
+    !stopping &&
+    approvals.length === 0 &&
+    ((activity.phase === "running" && activity.active > 0) ||
+      activity.phase === "thinking");
   useEffect(() => {
     const preserve = () => {
       const active = document.activeElement;
@@ -2504,18 +2508,7 @@ function TurnBlock({
           <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
-      ) : turn.liveRecovery ? null : (
-        <RunningTurnLabel
-          recovery={null}
-          startedAt={turn.startedAt}
-          activity={activity}
-          stopping={stopping}
-          approval={approvals.length > 0}
-          activityRepresented={projection.history.some(
-            (node) => node.kind === "traceItem" || node.kind === "traceGroup",
-          )}
-        />
-      )}
+      ) : null}
       {!complete || expanded ? (
         <div className="turn-history" id={historyId}>
           {projection.history.map((node) =>
@@ -2562,21 +2555,23 @@ function TurnBlock({
           />
         </div>
       ) : null}
-      {!complete && turn.liveRecovery ? (
-        <div className="turn-recovery-footer">
+      {!complete ? (
+        <div
+          className={`turn-status-footer${compactRunningStatus ? "" : " workflow-status"}`}
+        >
           <RunningTurnLabel
             recovery={turn.liveRecovery}
-            startedAt={null}
+            startedAt={turn.liveRecovery ? null : turn.startedAt}
             activity={activity}
             stopping={stopping}
             approval={approvals.length > 0}
-            activityRepresented={false}
+            compact={compactRunningStatus}
           />
         </div>
       ) : null}
       {projection.terminalFallback === null ? null : (
         <div
-          className={`turn-outcome${activity.outstanding > 0 ? " uncertain" : turn.status === "failed" ? " failed" : ""}`}
+          className={`turn-outcome workflow-status${activity.outstanding > 0 ? " uncertain" : turn.status === "failed" ? " failed" : ""}`}
           role="status"
         >
           <div className="turn-outcome-heading">
