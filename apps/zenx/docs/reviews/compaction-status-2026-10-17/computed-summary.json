@@ -1,0 +1,986 @@
+[
+  {
+    "case": "dark-zh",
+    "stateIndex": 0,
+    "label": "\u6b63\u5728\u5de5\u4f5c30 \u79d2",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "dark-zh",
+    "stateIndex": 1,
+    "label": "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29Agent \u53d1\u8d77",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "dark-zh",
+    "stateIndex": 2,
+    "label": "\u6b63\u5728\u91cd\u8bd5\u7b2c 1 \u6b21\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "dark-zh",
+    "stateIndex": 3,
+    "label": "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587\u2026",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "dark-zh",
+    "stateIndex": 4,
+    "label": "\u6267\u884c\u5df2\u4e2d\u65ad\u9519\u8bef\u8be6\u60c5\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": []
+  },
+  {
+    "case": "dark-zh",
+    "stateIndex": 5,
+    "label": "\u65e0\u6cd5\u786e\u8ba4\u4e0a\u4e0b\u6587\u538b\u7f29\u3002\u5173\u95ed",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-zh",
+    "stateIndex": 0,
+    "label": "\u6b63\u5728\u5de5\u4f5c30 \u79d2",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-zh",
+    "stateIndex": 1,
+    "label": "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29Agent \u53d1\u8d77",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-zh",
+    "stateIndex": 2,
+    "label": "\u6b63\u5728\u91cd\u8bd5\u7b2c 1 \u6b21\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-zh",
+    "stateIndex": 3,
+    "label": "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587\u2026",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-zh",
+    "stateIndex": 4,
+    "label": "\u6267\u884c\u5df2\u4e2d\u65ad\u9519\u8bef\u8be6\u60c5\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": []
+  },
+  {
+    "case": "390-dark-zh",
+    "stateIndex": 5,
+    "label": "\u65e0\u6cd5\u786e\u8ba4\u4e0a\u4e0b\u6587\u538b\u7f29\u3002\u5173\u95ed",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-en",
+    "stateIndex": 0,
+    "label": "Working30s",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-en",
+    "stateIndex": 1,
+    "label": "Context compactedAgent initiated",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-en",
+    "stateIndex": 2,
+    "label": "RetryingAttempt 1",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-en",
+    "stateIndex": 3,
+    "label": "Compacting context\u2026",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-en",
+    "stateIndex": 4,
+    "label": "Execution interruptedDetailsRetry",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": []
+  },
+  {
+    "case": "desktop-light-en",
+    "stateIndex": 5,
+    "label": "Could not confirm context compaction.Dismiss",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-zh",
+    "stateIndex": 0,
+    "label": "\u6b63\u5728\u5de5\u4f5c30 \u79d2",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-zh",
+    "stateIndex": 1,
+    "label": "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29Agent \u53d1\u8d77",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-zh",
+    "stateIndex": 2,
+    "label": "\u6b63\u5728\u91cd\u8bd5\u7b2c 1 \u6b21\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-zh",
+    "stateIndex": 3,
+    "label": "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587\u2026",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-light-zh",
+    "stateIndex": 4,
+    "label": "\u6267\u884c\u5df2\u4e2d\u65ad\u9519\u8bef\u8be6\u60c5\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": []
+  },
+  {
+    "case": "desktop-light-zh",
+    "stateIndex": 5,
+    "label": "\u65e0\u6cd5\u786e\u8ba4\u4e0a\u4e0b\u6587\u538b\u7f29\u3002\u5173\u95ed",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-dark-en",
+    "stateIndex": 0,
+    "label": "Working30s",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-dark-en",
+    "stateIndex": 1,
+    "label": "Context compactedAgent initiated",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-dark-en",
+    "stateIndex": 2,
+    "label": "RetryingAttempt 1",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-dark-en",
+    "stateIndex": 3,
+    "label": "Compacting context\u2026",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "desktop-dark-en",
+    "stateIndex": 4,
+    "label": "Execution interruptedDetailsRetry",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": []
+  },
+  {
+    "case": "desktop-dark-en",
+    "stateIndex": 5,
+    "label": "Could not confirm context compaction.Dismiss",
+    "viewport": {
+      "scrollWidth": 1178,
+      "width": 1178
+    },
+    "height": 38,
+    "width": 840,
+    "radius": "999px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-en",
+    "stateIndex": 0,
+    "label": "Working30s",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-en",
+    "stateIndex": 1,
+    "label": "Context compactedAgent initiated",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-en",
+    "stateIndex": 2,
+    "label": "RetryingAttempt 1",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-en",
+    "stateIndex": 3,
+    "label": "Compacting context\u2026",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-en",
+    "stateIndex": 4,
+    "label": "Execution interruptedDetailsRetry",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": []
+  },
+  {
+    "case": "390-light-en",
+    "stateIndex": 5,
+    "label": "Could not confirm context compaction.Dismiss",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-zh",
+    "stateIndex": 0,
+    "label": "\u6b63\u5728\u5de5\u4f5c30 \u79d2",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-zh",
+    "stateIndex": 1,
+    "label": "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29Agent \u53d1\u8d77",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-zh",
+    "stateIndex": 2,
+    "label": "\u6b63\u5728\u91cd\u8bd5\u7b2c 1 \u6b21\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-zh",
+    "stateIndex": 3,
+    "label": "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587\u2026",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-light-zh",
+    "stateIndex": 4,
+    "label": "\u6267\u884c\u5df2\u4e2d\u65ad\u9519\u8bef\u8be6\u60c5\u91cd\u8bd5",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": []
+  },
+  {
+    "case": "390-light-zh",
+    "stateIndex": 5,
+    "label": "\u65e0\u6cd5\u786e\u8ba4\u4e0a\u4e0b\u6587\u538b\u7f29\u3002\u5173\u95ed",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-en",
+    "stateIndex": 0,
+    "label": "Working30s",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-en",
+    "stateIndex": 1,
+    "label": "Context compactedAgent initiated",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-en",
+    "stateIndex": 2,
+    "label": "RetryingAttempt 1",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "activity-text",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "turn-recovery-attempt",
+        "offsetPx": -0.0078,
+        "lineHeight": "15.4px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-en",
+    "stateIndex": 3,
+    "label": "Compacting context\u2026",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  },
+  {
+    "case": "390-dark-en",
+    "stateIndex": 4,
+    "label": "Execution interruptedDetailsRetry",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": []
+  },
+  {
+    "case": "390-dark-en",
+    "stateIndex": 5,
+    "label": "Could not confirm context compaction.Dismiss",
+    "viewport": {
+      "scrollWidth": 390,
+      "width": 390
+    },
+    "height": 38,
+    "width": 332,
+    "radius": "20px",
+    "centerOffsets": [
+      {
+        "className": "context-compaction-mark",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      },
+      {
+        "className": "context-compaction-progress-content",
+        "offsetPx": 0,
+        "lineHeight": "20px"
+      }
+    ]
+  }
+]

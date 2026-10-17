@@ -1,0 +1,22 @@
+{
+  "sourceHead": "73a106f201799c0f4ce49cf8608bae2c6d6265eb",
+  "sourceTree": "c7a0e93d0daa0ae6c6271ebbb6812a8aaaeaf861",
+  "trackedStatus": "",
+  "build": {
+    "SOURCE.txt": "43461f9c393fa7879002de48a666d41bdc671e98a6d02308e3932c6d83fdeb2c",
+    "assets/compaction-status-visual-B9KGYvV5.js": "be12abf7e6fca5c2356d5b6f07c87ced753b99db485a87a2f39578319a8c50dd",
+    "assets/compaction-status-visual-BJMAbajH.css": "24d9d1391c4fc9daa89eb55e85e5eedfd8c75863f011f19d99691f1f6213bda2",
+    "apps/zenx/test/fixtures/compaction-status-visual.html": "96d59b8b7932408e232ed8fb16b90eccf336452bd7627b286013014ec6700064"
+  },
+  "fixture": "apps/zenx/test/fixtures/compaction-status-visual.html",
+  "scope": "real production ThreadView; synthetic data and explicitly unavailable history bridge; cloud Chrome component QA not native App/Host E2E",
+  "publishedHead": "4cb8cc99e79be93f49d479e2b54eae08d1194497",
+  "publishedTree": "37305c4f584a21b50140b650d23e2478d6e6b43f",
+  "bridge": {
+    "localFinal": "fc99bee38a9c0b4c87361eda2de62b07f36b920f",
+    "changedPathsFromCapture": [
+      "apps/zenx/test/thread-view-component.test.ts"
+    ],
+    "productionAndFixtureUnchanged": true
+  }
+}
