@@ -2017,35 +2017,36 @@ function ContextCompactionProgress({
       className={`context-compaction-progress${failed ? " is-error" : ""}`}
       role={failed ? "alert" : "status"}
     >
-      {failed ? (
-        <Icon name="warning" size={15} />
-      ) : (
-        <span className="mini-spinner" aria-hidden="true" />
-      )}
-      <div className="context-compaction-progress-content">
-        <span>{state.message}</span>
-        {failed ? (
-          <div className="context-compaction-error-actions">
-            {state.detail ? (
-              <details className="context-compaction-error-detail">
-                <summary tabIndex={0}>
-                  {i18n.t("shell:technicalDetails")}
-                </summary>
-                <p>{state.detail}</p>
-              </details>
-            ) : null}
-            {onDismiss ? (
-              <button
-                type="button"
-                onClick={onDismiss}
-                aria-label={i18n.t("shell:dismissCompactionError")}
-              >
-                {i18n.t("shell:dismiss")}
-              </button>
-            ) : null}
-          </div>
+      <div className="context-compaction-progress-summary workflow-status">
+        <span className="context-compaction-mark" aria-hidden="true">
+          {failed ? (
+            <Icon name="warning" size={14} />
+          ) : (
+            <span className="mini-spinner" />
+          )}
+        </span>
+        <span className="context-compaction-progress-content">
+          {state.message}
+        </span>
+        {failed && onDismiss ? (
+          <button
+            type="button"
+            className="context-compaction-dismiss"
+            onClick={onDismiss}
+            aria-label={i18n.t("shell:dismissCompactionError")}
+          >
+            {i18n.t("shell:dismiss")}
+          </button>
         ) : null}
       </div>
+      {failed && state.detail ? (
+        <div className="context-compaction-error-actions">
+          <details className="context-compaction-error-detail">
+            <summary tabIndex={0}>{i18n.t("shell:technicalDetails")}</summary>
+            <p tabIndex={0}>{state.detail}</p>
+          </details>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2058,36 +2059,38 @@ export function ContextCompactionEvent({
   const [expanded, setExpanded] = useState(false);
   const { item, effectiveMessages } = projection;
   const [copyState, setCopyState] = useState("");
+  const detailId = useId();
   return (
     <section
       className="context-compaction-event"
       aria-label={i18n.t("shell:contextCompacted")}
     >
       <button
-        className="context-compaction-toggle"
+        className="context-compaction-toggle workflow-status"
         type="button"
         aria-expanded={expanded}
+        aria-controls={detailId}
         onClick={() => setExpanded((current) => !current)}
       >
         <span className="context-compaction-mark" aria-hidden="true">
           <Icon name="compress" size={14} />
         </span>
-        <span>
+        <span className="context-compaction-label">
           <strong>{i18n.t("shell:contextCompacted")}</strong>
-          <small>
-            {compactionInitiatorLabel(item)} ·{" "}
-            {i18n.t("shell:summaryCharacters", {
-              count: new Intl.NumberFormat(i18n.resolvedLanguage).format(
-                Array.from(item.summary).length,
-              ),
-            })}
-          </small>
+          <small>{compactionInitiatorLabel(item)}</small>
         </span>
         <Icon name="chevron-down" size={13} />
       </button>
       <OriginalHistoryReference key={item.id} item={item} />
       {expanded ? (
-        <div className="context-compaction-detail">
+        <div className="context-compaction-detail" id={detailId}>
+          <p className="context-compaction-metadata">
+            {i18n.t("shell:summaryCharacters", {
+              count: new Intl.NumberFormat(i18n.resolvedLanguage).format(
+                Array.from(item.summary).length,
+              ),
+            })}
+          </p>
           <div className="compaction-summary-heading">
             <h3>{i18n.t("shell:savedSummary")}</h3>
             <button
