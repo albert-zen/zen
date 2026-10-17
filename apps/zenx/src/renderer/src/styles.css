@@ -9912,12 +9912,20 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
+  gap: 4px 8px;
   margin-top: 12px;
-  padding: 4px 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-wash);
   color: var(--text-3);
   font-size: 12px;
   min-width: 0;
+}
+/* Expanded diagnostics are a readable panel, never a tall oval. */
+.turn-outcome:has(.turn-outcome-details, .turn-retry-error),
+.turn-outcome.uncertain {
+  border-radius: 16px;
 }
 .turn-outcome-heading {
   display: inline-flex;
@@ -10003,7 +10011,11 @@ button:disabled {
 }
 .turn-recovery-footer {
   margin-top: 12px;
-  padding: 6px 0;
+  padding: 8px 10px;
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-wash);
 }
 .turn-recovery-footer .turn-running-label {
   margin: 0;
