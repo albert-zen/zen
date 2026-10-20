@@ -1,0 +1,145 @@
+{
+  "source": "Production components with synthetic native-message projection; no Provider or Host calls.",
+  "scenes": [
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 1280,
+      "height": 1000,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 28,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。08:58",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"quotes\":[{\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 1280,
+      "height": 1000,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 28,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。08:58",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"quotes\":[{\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 28,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。08:58",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"quotes\":[{\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "touch",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "capabilities": {
+        "fine": false,
+        "hover": false,
+        "anyFine": false,
+        "anyHover": false,
+        "coarse": true,
+        "noHover": true
+      },
+      "draft": {
+        "height": 48,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 48,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。08:58",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"quotes\":[{\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    }
+  ]
+}
