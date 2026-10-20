@@ -4,7 +4,9 @@ This fixture exercises the production `Sidebar`, `ContextUsageIndicator`, `Compo
 
 ## Build and verify
 
-Run `node apps/zenx/scripts/build-approved-ui-preview.mjs OUTPUT`, then `node apps/zenx/scripts/capture-approved-ui-preview.mjs OUTPUT` on a machine with existing Chrome. The helper never downloads a browser. CI installs `fonts-noto-cjk` from the official Ubuntu package repository for readable Chinese labels; no application dependency changes.
+Run `node apps/zenx/scripts/build-approved-ui-preview.mjs OUTPUT`, then `xvfb-run -a env ZENX_PREVIEW_HEADFUL=1 node apps/zenx/scripts/capture-approved-ui-preview.mjs OUTPUT` on a machine with existing Chrome and Xvfb. The helper never downloads a browser. CI installs `fonts-noto-cjk` from the official Ubuntu package repository for readable Chinese labels; no application dependency changes.
+
+This capture opts into headful Chrome on the Linux CI runner's existing virtual display and asserts actual `(hover: hover)` and `(pointer: fine)` media-query results before each page. The helper's headless default remains unchanged for other callers. No product CSS, media-query stubs, Blink capability overrides or new runtime package installs are used. Earlier headless captures without this opt-in exercise the no-hover/touch fallback and must be labeled separately.
 
 The Sidebar baseline reverses only the approved shortcut CSS patch and checks its original blob hash. The context baseline omits only the new motion stylesheet. Both variants use the same current production components. Generated HTML is self-contained and can be opened without a server; the capture helper serves only these fixtures on an ephemeral loopback port.
 
@@ -15,4 +17,4 @@ The Sidebar baseline reverses only the approved shortcut CSS patch and checks it
 - Context: before/after, 900/390 px viewports, light/dark, above/below placement, hover bridge traversal, focused Escape dismissal, unchanged usage label and hit target, pressed feedback, two opacity-fade samples and reduced motion.
 - `measurements.json` and `source.json` bind the screenshots to their source and measured states. Runtime exceptions fail capture.
 
-The screenshots are real Chrome layout of production components with synthetic data, not mockup images. The platform attribute exercises platform-specific rendering; it does not claim physical macOS/Windows keyboard or native Electron window validation. Review actual screenshots before accepting the visual result. Keep the PR draft until the user approves proceeding.
+The screenshots are real Chrome layout of production components with synthetic data, not mockup images. Linux virtual-display Chrome and the platform attribute exercise browser/platform-specific rendering; they do not claim physical macOS/Windows hardware, keyboard or native Electron window validation. Review actual screenshots before accepting the visual result. Keep the PR draft until the user approves proceeding.

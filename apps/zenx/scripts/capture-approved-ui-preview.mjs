@@ -5,7 +5,7 @@ import { delay, withPreviewBrowser } from "./preview-browser.mjs";
 const directory = path.resolve(process.argv[2] ?? ".approved-ui-preview");
 const evidence = {
   source:
-    "Real production components and CSS; synthetic fixtures only; no Host actions or private data.",
+    "Real production components and CSS; synthetic fixtures only; Chrome on a Linux CI virtual display, not physical macOS/Windows input; no Host actions or private data.",
   sidebar: [],
   context: [],
 };
@@ -30,9 +30,20 @@ await withPreviewBrowser(
         deviceScaleFactor: 1,
         mobile: false,
       });
-      await send("Page.navigate", {
-        url: `${url}/${name}.html?${new URLSearchParams(query)}`,
-      });
+      const destination = `${url}/${name}.html?${new URLSearchParams(query)}`;
+      await send("Page.navigate", { url: destination });
+      await waitFor(
+        `location.href===${JSON.stringify(destination)} && document.readyState==='complete'`,
+      );
+      const capabilities = await evaluate(
+        "({hover:matchMedia('(hover: hover)').matches, fine:matchMedia('(pointer: fine)').matches, anyHover:matchMedia('(any-hover: hover)').matches, anyFine:matchMedia('(any-pointer: fine)').matches})",
+      );
+      assert.deepEqual(
+        capabilities,
+        { hover: true, fine: true, anyHover: true, anyFine: true },
+        `${name}: actual browser desktop-input media capabilities`,
+      );
+      evidence.inputCapabilities = capabilities;
     };
     const move = async (x, y) => {
       await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
@@ -84,10 +95,23 @@ await withPreviewBrowser(
           }
         await screenshot(`${name}.png`);
         if (variant === "after") {
+          assert.ok(
+            await evaluate(
+              "[...document.querySelectorAll('.thread-status-rail .thread-menu-trigger')].every(e=>e.getBoundingClientRect().width===0)",
+            ),
+            `${name}: desktop actions are hidden until hover`,
+          );
           // Hover the actual More target, not a synthetic CSS class.
           const row = held[0];
           await move(row.rail.right - 14, row.row.y + row.row.height / 2);
           await delay(180);
+          assert.equal(
+            await evaluate(
+              "document.querySelector('.thread-status-rail .thread-menu-trigger').getBoundingClientRect().width",
+            ),
+            28,
+            `${name}: actual hover reveals the desktop More target`,
+          );
           const hover = await evaluate(sidebarMeasure);
           assert.ok(
             hover[0].paintedRight <= hover[0].hintLeft + 0.5,
@@ -219,6 +243,7 @@ await withPreviewBrowser(
           await delay(150);
           const pressed = await evaluate(contextMeasure);
           assert.equal(Number(pressed.scale), 0.96);
+          await screenshot(`${name}-pressed.png`);
           await send("Input.dispatchMouseEvent", {
             type: "mouseReleased",
             button: "left",

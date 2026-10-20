@@ -49,7 +49,8 @@ export async function withPreviewBrowser(directory, run) {
   const child = spawn(
     chrome,
     [
-      "--headless=new",
+      // Capture may opt into the CI runner's existing virtual display.
+      ...(process.env.ZENX_PREVIEW_HEADFUL === "1" ? [] : ["--headless=new"]),
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--no-first-run",
