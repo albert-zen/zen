@@ -1,0 +1,322 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  height: auto;
+  overflow: auto;
+}
+body {
+  margin: 0;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+}
+.layout-comparison {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 34px 32px 28px;
+  font-family: var(--font-sans, sans-serif);
+}
+.comparison-heading {
+  position: relative;
+  margin-bottom: 24px;
+}
+.comparison-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--color-text-muted);
+  margin-bottom: 10px;
+}
+.comparison-heading h1 {
+  margin: 0;
+  font-size: 25px;
+  line-height: 1.4;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.comparison-heading p {
+  margin: 9px 0 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.comparison-heading label {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.comparison-heading input {
+  accent-color: var(--color-text-primary);
+}
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.layout-option {
+  min-width: 0;
+  padding: 23px;
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  background: var(--color-surface-elevated);
+}
+.option-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.option-letter {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.option-heading h2 {
+  margin: 2px 0 7px;
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: 650;
+}
+.option-heading p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.layout-stage {
+  margin-top: 28px;
+  min-width: 0;
+}
+.stage-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.stage-label span {
+  font-weight: 400;
+  font-size: 10px;
+}
+.draft-stage {
+  min-height: 178px;
+}
+.sent-stage {
+  min-height: 156px;
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: 22px;
+  margin-top: 14px;
+}
+.adjunct-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-bottom: 9px;
+}
+.layout-asset {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  max-width: 100%;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-wash);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.layout-asset > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.layout-asset > svg {
+  flex: none;
+}
+.layout-asset button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.layout-asset button:hover {
+  background: var(--color-surface-hover);
+}
+.layout-comparison .message-quote-card {
+  max-width: 100%;
+}
+.comparison-composer.composer {
+  display: block;
+  padding: 12px 13px 10px;
+  border-radius: 15px;
+  background: var(--color-surface-main);
+  box-shadow: none;
+  width: 100%;
+  margin: 0;
+}
+.comparison-composer textarea {
+  width: 100%;
+  padding: 0;
+  min-height: 45px;
+  font-size: 13px;
+  line-height: 1.7;
+  resize: none;
+  margin: 0;
+  cursor: default;
+}
+.comparison-composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--color-text-muted);
+  margin-top: 12px;
+  font-size: 11px;
+}
+.layout-send-marker {
+  display: inline-flex;
+  width: 27px;
+  height: 27px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--color-surface-elevated);
+  background: var(--color-text-primary);
+  margin-left: auto;
+}
+.comparison-user-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding-left: 20px;
+}
+.comparison-user-row .adjunct-rail {
+  justify-content: flex-end;
+}
+.comparison-user-row .user-bubble {
+  padding: 11px 14px;
+  font-size: 13px;
+  box-shadow: none;
+}
+.inline-sequence {
+  line-height: 36px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.inline-sequence > .message-quote-card {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-block: 2px;
+}
+.inline-sequence > .layout-asset {
+  margin-block: 2px;
+}
+.inline-sequence .message-quote-card[data-expanded="true"] {
+  display: flex;
+}
+.layout-inline .comparison-composer {
+  min-height: 137px;
+}
+.option-note {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+  margin-top: 16px;
+}
+.payload-details {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 18px;
+}
+.payload-details summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.payload-details p {
+  line-height: 1.7;
+}
+.payload-details pre,
+.source-preview pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  font-size: 11px;
+}
+.source-preview {
+  padding: 12px;
+  margin-top: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  font-size: 12px;
+}
+.source-preview > div {
+  display: flex;
+  justify-content: space-between;
+}
+.source-preview button,
+.restore-sample {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.restore-sample {
+  margin-top: 10px;
+  font-size: 11px;
+}
+.comparison-footnote {
+  margin: 17px 2px 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+}
+@media (max-width: 880px) {
+  .comparison-grid {
+    grid-template-columns: 1fr;
+  }
+  .layout-comparison {
+    padding: 24px 18px;
+  }
+  .comparison-heading label {
+    position: static;
+    margin-top: 14px;
+  }
+  .layout-option {
+    padding: 20px;
+  }
+}
+@media (pointer: coarse), (hover: none) {
+  .layout-asset {
+    min-height: 48px;
+  }
+  .layout-asset button {
+    width: 44px;
+    height: 44px;
+  }
+  .inline-sequence {
+    line-height: 54px;
+  }
+}

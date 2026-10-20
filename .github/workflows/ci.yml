@@ -62,6 +62,10 @@ jobs:
         run: |
           node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
           node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+      - name: Build and capture synthetic quote layout alternatives
+        run: |
+          node apps/zenx/scripts/build-quote-layout-preview.mjs "${{ runner.temp }}/zenx-quote-preview/layout-comparison"
+          node apps/zenx/scripts/capture-quote-layout-preview.mjs "${{ runner.temp }}/zenx-quote-preview/layout-comparison"
       - name: Retain synthetic quote visual evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
