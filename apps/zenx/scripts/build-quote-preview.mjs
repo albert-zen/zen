@@ -24,13 +24,30 @@ const style = html.match(
 );
 if (!script || !style)
   throw new Error("Expected one preview script and stylesheet");
+const javascript = await readFile(
+  path.join(build, "assets", path.basename(script[1])),
+  "utf8",
+);
+const css = await readFile(
+  path.join(build, "assets", path.basename(style[1])),
+  "utf8",
+);
+// Replacement callbacks preserve literal $&, $`, $' sequences in bundled code.
 html = html.replace(
   script[0],
-  `<script type="module">${(await readFile(path.join(build, "assets", path.basename(script[1])), "utf8")).replaceAll("</script", "<\\/script")}</script>`,
+  () =>
+    `<script type="module">${javascript.replaceAll("</script", "<\\/script")}</script>`,
 );
-html = html.replace(
-  style[0],
-  `<style>${await readFile(path.join(build, "assets", path.basename(style[1])), "utf8")}</style>`,
-);
+html = html.replace(style[0], () => `<style>${css}</style>`);
+const inlinedScript = html.match(
+  /<script type="module">([\s\S]*?)<\/script>/u,
+)?.[1];
+if (!inlinedScript) throw new Error("Expected one inlined preview script");
+execFileSync(process.execPath, ["--input-type=module", "--check"], {
+  input: inlinedScript,
+  stdio: ["pipe", "inherit", "inherit"],
+});
 await writeFile(path.join(directory, "quote-frame.html"), html);
-console.log("Self-contained synthetic quote preview created.");
+console.log(
+  "Self-contained synthetic quote preview created and syntax checked.",
+);
