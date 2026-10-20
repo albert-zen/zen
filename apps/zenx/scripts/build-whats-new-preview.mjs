@@ -103,8 +103,10 @@ Screenshots are browser-rendered production components, not a live Electron app.
 Keyboard and pointer checks use Chrome CDP input, not physical native OS input.
 See source.json for the checked-out commit and exact component source hashes.
 See measurements.json for executed assertions, viewport geometry and failures.
-CI uses its existing Chrome and fonts without installing dependencies or
-disabling the browser sandbox. Missing Chrome or CJK fonts is an explicit failure.
+CI uses its existing Chrome and the official Ubuntu fonts-noto-cjk package.
+No browser or application dependency is installed by this fixture, and the
+browser sandbox stays enabled. Missing Chrome or CJK fonts is an explicit failure.
+Fontless Chinese screenshots are named font-unverified and cannot pass acceptance.
 `,
 );
 console.log(`Built self-contained What's New preview at ${directory}`);

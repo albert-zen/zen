@@ -79,7 +79,7 @@ try {
     encoding: "utf8",
     timeout: 10_000,
   }).trim();
-  // Do not install fonts, packages, permissions or change host security settings.
+  // Inspect CI's fonts; this process never installs packages or changes security.
   evidence.cjkFonts = execFileSync("fc-list", [":lang=zh", "family"], {
     encoding: "utf8",
     timeout: 10_000,
@@ -198,14 +198,19 @@ try {
     throw new Error(`Fixture condition timed out: ${expression}`);
   };
   const key = async (key, code, windowsVirtualKeyCode, modifiers = 0) => {
-    for (const type of ["keyDown", "keyUp"])
-      await send("Input.dispatchKeyEvent", {
-        type,
-        key,
-        code,
-        windowsVirtualKeyCode,
-        modifiers,
-      });
+    const parameters = { key, code, windowsVirtualKeyCode, modifiers };
+    // Match the established production browser-targeted-input.ts semantics.
+    // Chromium needs Enter's character payload for native button activation;
+    // a keyDown lacking text can report the key without generating the click.
+    await send("Input.dispatchKeyEvent", {
+      ...parameters,
+      type: key === "Enter" ? "keyDown" : "rawKeyDown",
+      ...(key === "Enter" ? { text: "\r", unmodifiedText: "\r" } : {}),
+    });
+    await send("Input.dispatchKeyEvent", {
+      ...parameters,
+      type: "keyUp",
+    });
   };
   const click = async (x, y) => {
     await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
@@ -241,21 +246,7 @@ try {
 
   for (const options of [
     { name: "desktop-en", lang: "en", theme: "dark", width: 1100, height: 760 },
-    {
-      name: "desktop-zh",
-      lang: "zh-CN",
-      theme: "light",
-      width: 1100,
-      height: 760,
-    },
     { name: "narrow-en", lang: "en", theme: "light", width: 390, height: 640 },
-    {
-      name: "narrow-zh",
-      lang: "zh-CN",
-      theme: "dark",
-      width: 390,
-      height: 640,
-    },
     {
       name: "short-en",
       lang: "en",
@@ -263,10 +254,28 @@ try {
       width: 390,
       height: 320,
     },
+    {
+      name: "desktop-zh",
+      lang: "zh-CN",
+      theme: "light",
+      width: 1100,
+      height: 760,
+    },
+    {
+      name: "narrow-zh",
+      lang: "zh-CN",
+      theme: "dark",
+      width: 390,
+      height: 640,
+    },
   ]) {
     const receipt = { ...options, checks: [] };
     receipt.visualFontSupport =
       options.lang === "en" || evidence.cjkFonts.length > 0;
+    const capture = (state) =>
+      screenshot(
+        `${options.name}${receipt.visualFontSupport ? "" : "-font-unverified"}-${state}.png`,
+      );
     evidence.cases.push(receipt);
     await send("Emulation.setDeviceMetricsOverride", {
       width: options.width,
@@ -298,9 +307,13 @@ try {
       tabCount++;
     }
     assert.ok((await evaluate(measure)).focusOnTrigger, "Tab reaches entry.");
+    // Traversing a Thread opens its information on focus. Allow the real
+    // 180 ms blur-dismissal to settle; do not click away or remove its DOM.
+    await waitFor("!document.querySelector('.thread-information')");
+    assert.ok((await evaluate(measure)).focusOnTrigger, "Entry keeps focus.");
     receipt.tabCount = tabCount;
     receipt.checks.push("keyboard-reachable");
-    await screenshot(`${options.name}-entry.png`);
+    await capture("entry");
     await open();
     receipt.open = await evaluate(measure);
     assert.equal(receipt.open.expanded, "true");
@@ -337,7 +350,7 @@ try {
       "Release-note content does not overflow horizontally.",
     );
     receipt.checks.push("enter-opens", "localized-content", "viewport-fit");
-    await screenshot(`${options.name}-open.png`);
+    await capture("open");
 
     // Both focusable elements (close and scrolling list) stay in the modal.
     for (let step = 0; step < 4; step++) {
@@ -377,13 +390,13 @@ try {
       receipt.scrollTop = await evaluate(
         "document.querySelector('.whats-new-list').scrollTop",
       );
-      await screenshot(`${options.name}-scrolled.png`);
+      await capture("scrolled");
       receipt.checks.push("keyboard-scrolls-release-list");
     }
     await key("Escape", "Escape", 27);
     await closedWithFocus();
     receipt.checks.push("escape-closes", "escape-restores-entry-focus");
-    await screenshot(`${options.name}-escape.png`);
+    await capture("escape");
 
     await open();
     receipt.checks.push("keyboard-reopens");
@@ -401,7 +414,7 @@ try {
     await closedWithFocus();
     receipt.checks.push("close-button-closes", "button-restores-entry-focus");
     await open();
-    await screenshot(`${options.name}-reopened.png`);
+    await capture("reopened");
     receipt.checks.push("reopens-after-all-dismissals");
     await key("Escape", "Escape", 27);
     await closedWithFocus();
@@ -411,7 +424,8 @@ try {
     await waitFor("document.body.dataset.previewReady==='true'");
     assert.equal((await evaluate(measure)).dialog, null);
     receipt.checks.push("still-closed-after-reload");
-    receipt.status = "passed";
+    receipt.interactionStatus = "passed";
+    receipt.status = receipt.visualFontSupport ? "passed" : "visual-blocked";
   }
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");
   assert.equal(evidence.externalRequests.length, 0, "No external requests.");

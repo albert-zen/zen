@@ -53,7 +53,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+        id: zenx-dependencies
+      - name: Install official Ubuntu CJK fonts for synthetic UI acceptance
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
       - name: Build and capture What's New actual-component preview
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-whats-new-preview.mjs "${{ runner.temp }}/zenx-whats-new-preview"
@@ -67,6 +71,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Check ZenX with bounded execution-order evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         env:
           ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
         run: npm --workspace apps/zenx run check:observed
