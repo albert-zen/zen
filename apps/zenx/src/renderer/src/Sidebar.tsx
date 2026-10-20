@@ -25,6 +25,7 @@ import type {
 } from "../../main/host-profile.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
+import { WhatsNew } from "./WhatsNew.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
 import {
@@ -752,6 +753,7 @@ export function Sidebar({
         </div>
 
         <footer className="sidebar-footer">
+          <WhatsNew />
           <button
             className="settings-nav-row"
             type="button"

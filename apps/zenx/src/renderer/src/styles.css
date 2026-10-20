@@ -11563,3 +11563,69 @@ button:disabled {
 .turn-outcome-review {
   justify-self: start;
 }
+
+.ui-dialog.whats-new-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(560px, calc(100dvh - 32px));
+  overflow: hidden;
+  padding: 0;
+}
+.whats-new-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 16px 14px 20px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.whats-new-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.whats-new-header p {
+  margin: 5px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.whats-new-header .icon-button {
+  flex-shrink: 0;
+}
+.whats-new-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px 20px 16px;
+}
+.whats-new-list section {
+  padding-top: 16px;
+}
+.whats-new-list section + section {
+  margin-top: 16px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.whats-new-list h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.whats-new-list ul {
+  margin: 10px 0 0;
+  padding-left: 16px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .whats-new-trigger,
+  .whats-new-header .icon-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

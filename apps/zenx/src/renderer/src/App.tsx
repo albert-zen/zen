@@ -1651,7 +1651,7 @@ function AppContent() {
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       if (projectPickerIntent !== null) closeProjectPicker();
       else if (sidebarOpen) setSidebarOpen(false);
     };
