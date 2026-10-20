@@ -684,6 +684,20 @@ Remote source actions read the canonical receiving message's explicit return bin
 
 ### 2026-10-20: Process styling correction
 
-The process header stays before history through completion. The live duration has an explicit total-elapsed label. Header contents still use the existing phase, approval, stopping, recovery and compact inputs. Tool/reasoning grouping, chronology, raw details, focus protection and default folding are unchanged.
+The process header stays before history through completion. The work-duration label is explicit rather than bare digits; its exact wording and icon treatment are specified below. Header state still uses the existing phase, approval, stopping, recovery and compact inputs. Tool/reasoning grouping, chronology, raw details, focus protection and default folding are unchanged.
 
 The presentation reference is T3 Code's [shared icon/text overlay](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/chat/MessagesTimeline.tsx#L3479-L3489) and [activity sweep](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/index.css#L540-L610), checked 2026-10-20: a clipped decorative copy, 4.5rem band, 2.2s steps(30), offscreen/hidden pause, and static reduced-motion/forced-colors fallback. ZenX adapts this into the existing ActivityText component, preserving its activity inputs and readable base content. Icons and text share one sweep rather than independently flashing. The icon-to-label gap is 6px; a one-icon group no longer reserves a phantom second-icon column. Existing ZenX capability naming and icon mapping are retained rather than importing T3's execution/group model.
+
+### Work-duration header reference correction (2026-10-20)
+
+The normal turn header follows T3 Code commit
+[`90c3f835`](https://github.com/pingdotgg/t3code/blob/90c3f8350d777f09c7afdf643db63bf8135161e6/apps/web/src/components/chat/MessagesTimeline.tsx#L3610-L3639):
+`Working for …` during a turn, `Worked for …` after normal completion, both
+localized as `已工作 …`. There is no leading activity glyph in this header in
+any active phase. Phase feedback remains accessible, and actual activity labels
+remain on their original rows. Do not combine a top waiting/thinking prefix with
+a separate total-duration label. The completed header retains the existing fold
+control as a trailing right/down chevron, consistent with T3's
+[TurnFoldTimelineRow](https://github.com/pingdotgg/t3code/blob/90c3f8350d777f09c7afdf643db63bf8135161e6/apps/web/src/components/chat/MessagesTimeline.tsx#L2635-L2654).
+Error/retry actions and exceptional terminal feedback remain separate and intact. Live recovery keeps its visible retry/attempt feedback alongside, not inside, the work-duration label. Missing timing inputs use Working/Worked without an invented duration.
+Runtime phase calculations, chronology, grouping and fold behavior do not change.

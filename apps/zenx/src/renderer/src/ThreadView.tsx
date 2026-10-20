@@ -2237,47 +2237,37 @@ function RunningTurnLabel({
             : phase === "requested"
               ? i18n.t("shell:awaitingToolResult")
               : commandPhaseLabel(phase);
-  const busy =
-    phase === "running" ||
-    phase === "thinking" ||
-    phase === "idle" ||
-    phase === "recovering";
   return (
     <div
       className="turn-running-label"
       data-phase={phase}
       data-compact={compact}
     >
-      <Icon
-        name={
-          phase === "approval"
-            ? "lock"
-            : phase === "stopping"
-              ? "stop"
-              : "reasoning"
-        }
-        size={14}
-      />
       <span
-        className={compact ? "sr-only" : undefined}
+        className="sr-only"
         role="status"
         aria-live="polite"
         aria-atomic="true"
       >
-        <ActivityText active={busy && !compact}>{label}</ActivityText>
+        {label}
+      </span>
+      <span className="turn-work-label">
+        {startedAt === null ? (
+          i18n.t("shell:working")
+        ) : (
+          <span className="turn-duration">
+            {i18n.t("shell:workingFor", {
+              duration: formatDuration(now - startedAt * 1000),
+            })}
+          </span>
+        )}
       </span>
       {phase === "recovering" && recovery ? (
         <span className="turn-recovery-attempt">
+          {i18n.t("shell:recoveringTask")} ·{" "}
           {i18n.t("shell:recoveryAttempt", { count: recovery.attempt })}
         </span>
       ) : null}
-      {startedAt === null ? null : (
-        <span className="turn-duration" aria-hidden="true">
-          {i18n.t("shell:turnTotalDuration", {
-            duration: formatDuration(now - startedAt * 1000),
-          })}
-        </span>
-      )}
     </div>
   );
 }
@@ -2502,7 +2492,7 @@ function TurnBlock({
             setExpanded(!expanded);
           }}
         >
-          <span>
+          <span className="turn-work-label">
             {turn.status === "failed" || confirmedStopped
               ? i18n.t("shell:turnActivityHistory")
               : completedTurnLabel(turn)}
@@ -3949,6 +3939,8 @@ function completedTurnLabel(turn: Turn): string {
         ? i18n.t("shell:interrupted")
         : i18n.t("shell:failed");
   if (duration === null) return result;
+  if (turn.status === "completed")
+    return i18n.t("shell:workedFor", { duration: formatDuration(duration) });
   return i18n.t("shell:statusForDuration", {
     status: result,
     duration: formatDuration(duration),

@@ -30,10 +30,10 @@ screenshots; no browser download or production dependency is added:
 node apps/zenx/scripts/capture-process-style-preview.mjs /tmp/process-style-preview
 ```
 
-The artifact includes the offline HTML, four full scene captures, two captured
+The artifact includes the offline HTML, fourteen full scene captures across six active phases in Chinese and English (plus narrow light/dark views), two captured
 animation phases for thinking, reduced-motion captures, same-turn completed
 captures, measurements and browser stderr. Assertions fail if metadata moves
 from its top position, a total appears inside history, the group icon/text gap
 is not 6px, narrow document overflow occurs, reduced motion leaves the sweep
-visible, or the renderer throws. A DOM-only smoke pass is not visual evidence.
+visible, the work-duration label gains a leading icon or phase prefix, the text anchor changes on completion, or the renderer throws. The normal header uses 已工作 / Working for / Worked for; live recovery retains separate visible retry feedback and does not fabricate missing timing. A DOM-only smoke pass is not visual evidence.
 Screenshots remain synthetic fixture evidence, not a live-Host product session.

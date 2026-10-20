@@ -1782,11 +1782,12 @@ button:disabled {
   color: var(--text-2);
   background: var(--surface-wash);
 }
-.turn-toggle svg {
+.turn-toggle > svg:last-child {
+  transform: rotate(-90deg);
   transition: transform 180ms ease;
 }
-.turn-toggle[aria-expanded="true"] svg {
-  transform: rotate(180deg);
+.turn-toggle[aria-expanded="true"] > svg:last-child {
+  transform: rotate(0);
 }
 .turn-history {
   width: 100%;
@@ -9844,22 +9845,11 @@ button:disabled {
   line-height: 1.5;
 }
 
-/* Turn metadata remains above history through the terminal transition. */
-.turn-running-label {
-  color: var(--text-2);
-}
-.turn-running-label > [role="status"],
-.turn-running-label .activity-text {
-  display: inline-flex;
-  align-items: center;
-  line-height: 20px;
-}
+/* T3-style work-duration heading: no phase-dependent leading glyph or prefix. */
+.turn-work-label,
 .turn-duration {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
-}
-.turn-running-label[data-compact="true"] > svg {
-  display: none;
 }
 .trace-group,
 .trace-singleton {

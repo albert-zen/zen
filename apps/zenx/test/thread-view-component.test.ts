@@ -1780,7 +1780,7 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
   assert.match(
     html,
-    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span class="turn-work-label">Worked for 1s<\/span>/u,
   );
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
@@ -2053,7 +2053,7 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
   assert.match(
     html,
-    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span class="turn-work-label">Worked for 1s<\/span>/u,
   );
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
@@ -3519,8 +3519,8 @@ test("running and completed durations share second, minute and hour formatting",
       t.mock.timers.setTime(10_000 + duration);
       await renderInteractive(root, turnWithItems("inProgress", []));
       assert.equal(
-        requiredElement(".turn-running-label").textContent,
-        `WorkingTotal elapsed ${label}`,
+        requiredElement(".turn-running-label .turn-work-label").textContent,
+        `Working for ${label}`,
       );
       await renderInteractive(root, turnWithItems("completed", [], duration));
       assert.equal(
@@ -3536,23 +3536,23 @@ test("running duration ticks from turn start and stops on completion", async (t)
   await withDom(async (root) => {
     await renderInteractive(root, turnWithItems("inProgress", []));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "WorkingTotal elapsed 12s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 12s",
     );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "WorkingTotal elapsed 14s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 14s",
     );
     await act(async () => t.mock.timers.tick(46_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "WorkingTotal elapsed 1m 0s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 1m 0s",
     );
     await act(async () => t.mock.timers.tick(3_540_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "WorkingTotal elapsed 1h 0m 0s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
     assert.equal(document.querySelector(".turn-running-label"), null);

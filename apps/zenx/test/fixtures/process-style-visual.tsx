@@ -22,7 +22,7 @@ import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
-void i18n.changeLanguage("zh-CN");
+void i18n.changeLanguage(params.get("lang") === "en" ? "en" : "zh-CN");
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 const startedAt = Math.floor(Date.now() / 1000) - 164;
 export const scenes = [
@@ -166,10 +166,7 @@ function complete(thread: Thread): Thread {
             exitCode: 0,
           };
         }),
-        runtimeMessage(
-          "answer",
-          "检查完成。计时仍在本轮顶部，已有操作与展开状态不迁移。",
-        ),
+        runtimeMessage("answer", "检查完成。这是合成回放，没有连接真实 Host。"),
       ],
     })),
   };

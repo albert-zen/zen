@@ -4,6 +4,7 @@ import test from "node:test";
 import type { ThreadItem } from "../src/protocol-client/index.js";
 import { act, withRuntimeDom } from "./agent-runtime-dom.js";
 import {
+  runtimeApproval,
   runtimeCommand,
   runtimeIntro,
   runtimeMessage,
@@ -11,6 +12,9 @@ import {
   runtimeThread,
   runtimeWait,
 } from "./fixtures/agent-runtime-data.js";
+import { emptyComposerState } from "../src/renderer/src/composer-state.js";
+import { recoveryScenario } from "./fixtures/loop-recovery-scenario.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 const thinking: ThreadItem = {
   type: "reasoning",
   id: "thinking",
@@ -19,7 +23,7 @@ const thinking: ThreadItem = {
   content: [],
 };
 for (const theme of ["light", "dark"]) {
-  test(`${theme}: explicit total stays above history across active phases`, async () => {
+  test(`${theme}: T3 work-duration header stays icon-free above history across active phases`, async () => {
     await withRuntimeDom(async (h) => {
       document.documentElement.dataset.appearance = theme;
       for (const [phase, item] of [
@@ -41,7 +45,16 @@ for (const theme of ["light", "dark"]) {
         assert.equal(turn.querySelectorAll(".turn-duration").length, 1);
         assert.match(
           metadata.querySelector(".turn-duration")!.textContent!,
-          /Total elapsed/u,
+          /^Working for /u,
+        );
+        assert.equal(
+          metadata.querySelector("svg"),
+          null,
+          "No phase-dependent leading glyph",
+        );
+        assert.equal(
+          metadata.querySelector('[role="status"]')?.className,
+          "sr-only",
         );
         assert.equal(history.querySelector(".turn-duration"), null);
         assert.equal(turn.querySelector(".turn-status-footer"), null);
@@ -140,4 +153,116 @@ test("shared shimmer mask is valid when inherited from the root theme", async ()
   // would make the entire inherited mask invalid and leave a solid overlay.
   assert.doesNotMatch(mask, /var\(--activity-band\)/u);
   assert.match(mask, /transparent 4\.5rem/u);
+});
+
+test("approval and stopping retain the same visible work-duration header", async () => {
+  await withRuntimeDom(async (h) => {
+    const thread = runtimeThread([
+      runtimeCommand("approval-call", "echo ready", "inProgress"),
+    ]);
+    await h.render(thread, { approvals: [runtimeApproval] });
+    let header = document.querySelector(".turn-running-label")!;
+    assert.equal(header.getAttribute("data-phase"), "approval");
+    assert.match(
+      header.querySelector(".turn-work-label")!.textContent!,
+      /^Working for /u,
+    );
+    assert.equal(header.querySelector("svg"), null);
+    assert.ok(
+      document.querySelector(".approval-request-allow"),
+      "Approval action stays separate",
+    );
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await h.render(thread, {
+      composer: emptyComposerState(),
+      onInterrupt: () => pending,
+    });
+    await h.click(".action-orb");
+    header = document.querySelector(".turn-running-label")!;
+    assert.equal(header.getAttribute("data-phase"), "stopping");
+    assert.match(
+      header.querySelector(".turn-work-label")!.textContent!,
+      /^Working for /u,
+    );
+    assert.equal(header.querySelector("svg"), null);
+    await act(async () => release());
+  });
+});
+test("Chinese active and completed headers both use 已工作 at the same text anchor", async () => {
+  await i18n.changeLanguage("zh-CN");
+  try {
+    await withRuntimeDom(async (h) => {
+      await h.render(runtimeThread([thinking]));
+      assert.match(
+        document.querySelector(".turn-running-label .turn-work-label")!
+          .textContent!,
+        /^已工作 /u,
+      );
+      await h.render(
+        runtimeThread([{ ...thinking, status: undefined }], "completed"),
+      );
+      const header = document.querySelector(".turn-toggle")!;
+      assert.equal(header.firstElementChild?.className, "turn-work-label");
+      assert.match(header.firstElementChild!.textContent!, /^已工作 /u);
+      assert.equal(
+        header.lastElementChild?.tagName.toLowerCase(),
+        "svg",
+        "Only trailing fold glyph remains",
+      );
+    });
+  } finally {
+    await i18n.changeLanguage("en");
+  }
+});
+
+test("unknown start/end and recovery never invent a work duration", async () => {
+  for (const language of ["en", "zh-CN"]) {
+    await i18n.changeLanguage(language);
+    try {
+      await withRuntimeDom(async (h) => {
+        const active = runtimeThread([thinking]);
+        active.turns[0]!.startedAt = null;
+        await h.render(active);
+        assert.equal(document.querySelector(".turn-duration"), null);
+        assert.equal(
+          document.querySelector(".turn-work-label")!.textContent,
+          i18n.t("shell:working"),
+        );
+        await h.render(recoveryScenario("recovering"));
+        assert.equal(document.querySelector(".turn-duration"), null);
+        assert.equal(
+          document.querySelector(".turn-work-label")!.textContent,
+          i18n.t("shell:working"),
+        );
+        assert.match(
+          document.querySelector('[role="status"].sr-only')!.textContent!,
+          language === "en" ? /Retrying/u : /正在重试/u,
+        );
+        const recovery = document.querySelector(".turn-recovery-attempt")!;
+        assert.equal(recovery.closest(".sr-only"), null);
+        assert.equal(recovery.closest(".turn-work-label"), null);
+        assert.match(
+          recovery.textContent!,
+          language === "en" ? /Retrying.*Attempt 1/u : /正在重试.*第 1 次/u,
+        );
+        const done = runtimeThread(
+          [runtimeMessage("answer", "done")],
+          "completed",
+        );
+        done.turns[0]!.startedAt = null;
+        done.turns[0]!.completedAt = null;
+        done.turns[0]!.durationMs = null;
+        await h.render(done);
+        assert.equal(
+          document.querySelector(".turn-work-label")!.textContent,
+          i18n.t("shell:worked"),
+        );
+      });
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  }
 });
