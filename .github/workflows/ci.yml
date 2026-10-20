@@ -53,6 +53,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install Chinese font for synthetic visual evidence
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-match 'sans:lang=zh-cn'
       - name: Build and capture synthetic process-style preview
         run: |
           node apps/zenx/scripts/build-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"

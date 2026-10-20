@@ -22,7 +22,9 @@ containing a shell call can keep its terminal glyph while its current activity
 label says thinking. The shared sweep and 6px content spacing, not that semantic
 mapping or any execution architecture, take inspiration from T3 Code.
 
-CI uses the runner's existing Chrome, no new browser download or dependency:
+CI uses the runner's existing Chrome. The ephemeral Ubuntu runner installs only
+`fonts-noto-cjk` from its official package repository for legible Chinese
+screenshots; no browser download or production dependency is added:
 
 ```
 node apps/zenx/scripts/capture-process-style-preview.mjs /tmp/process-style-preview
