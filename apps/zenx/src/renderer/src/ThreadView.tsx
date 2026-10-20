@@ -2273,7 +2273,9 @@ function RunningTurnLabel({
       ) : null}
       {startedAt === null ? null : (
         <span className="turn-duration" aria-hidden="true">
-          {formatDuration(now - startedAt * 1000)}
+          {i18n.t("shell:turnTotalDuration", {
+            duration: formatDuration(now - startedAt * 1000),
+          })}
         </span>
       )}
     </div>
@@ -2508,7 +2510,16 @@ function TurnBlock({
           <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
-      ) : null}
+      ) : (
+        <RunningTurnLabel
+          recovery={turn.liveRecovery}
+          startedAt={turn.liveRecovery ? null : turn.startedAt}
+          activity={activity}
+          stopping={stopping}
+          approval={approvals.length > 0}
+          compact={compactRunningStatus}
+        />
+      )}
       {!complete || expanded ? (
         <div className="turn-history" id={historyId}>
           {projection.history.map((node) =>
@@ -2552,20 +2563,6 @@ function TurnBlock({
             showActions
             turn={turn}
             usage={usage}
-          />
-        </div>
-      ) : null}
-      {!complete ? (
-        <div
-          className={`turn-status-footer${compactRunningStatus ? "" : " workflow-status"}`}
-        >
-          <RunningTurnLabel
-            recovery={turn.liveRecovery}
-            startedAt={turn.liveRecovery ? null : turn.startedAt}
-            activity={activity}
-            stopping={stopping}
-            approval={approvals.length > 0}
-            compact={compactRunningStatus}
           />
         </div>
       ) : null}
@@ -3199,16 +3196,20 @@ function TraceSequence({
           aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <span className="trace-tool-icons" aria-hidden="true">
-            {traceGroupIcons(node.items).map((name) => (
-              <Icon key={name} name={name} size={15} />
-            ))}
-          </span>
           <span
             className="trace-activity-title"
             title={traceSummary(node.items, observations)}
           >
-            <ActivityText active={busy}>
+            <ActivityText
+              active={busy}
+              leading={
+                <span className="trace-tool-icons" aria-hidden="true">
+                  {traceGroupIcons(node.items).map((name) => (
+                    <Icon key={name} name={name} size={15} />
+                  ))}
+                </span>
+              }
+            >
               {traceSummary(node.items, observations)}
             </ActivityText>
           </span>
@@ -3408,21 +3409,27 @@ function TraceItemHeader({
       : observedCommandPhase(item, observations) === "running");
   return (
     <>
-      <Icon
-        name={
-          item.type === "reasoning"
-            ? "reasoning"
-            : toolPresentation(item.toolName ?? item.command).icon
-        }
-        size={14}
-      />
-      {item.type === "reasoning" ? null : (
-        <strong>
-          {toolPresentation(item.toolName ?? item.command).category}
-        </strong>
-      )}
-      <span title={traceItemLabel(item)}>
-        <ActivityText active={active}>{traceItemLabel(item)}</ActivityText>
+      <span className="trace-item-label" title={traceItemLabel(item)}>
+        <ActivityText
+          active={active}
+          leading={
+            <Icon
+              name={
+                item.type === "reasoning"
+                  ? "reasoning"
+                  : toolPresentation(item.toolName ?? item.command).icon
+              }
+              size={14}
+            />
+          }
+          prefix={
+            item.type === "reasoning"
+              ? undefined
+              : toolPresentation(item.toolName ?? item.command).category
+          }
+        >
+          {traceItemLabel(item)}
+        </ActivityText>
       </span>
       <span className="trace-item-status">
         {approvalPending ? (

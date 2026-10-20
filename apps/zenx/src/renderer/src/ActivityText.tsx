@@ -1,14 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-/** A text-only activity cue. The caller owns whether work is actually running. */
+/** A presentation-only icon/text sweep. The caller owns actual activity. */
 export function ActivityText({
   children,
   active,
   className = "",
+  leading,
+  prefix,
 }: {
   children: string;
   active: boolean;
   className?: string;
+  leading?: ReactNode;
+  prefix?: string;
 }) {
   const element = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(false);
@@ -41,7 +45,27 @@ export function ActivityText({
       data-active={active}
       data-animating={active && visible && onScreen}
     >
-      {children}
+      <span className="activity-content">
+        {leading}
+        {prefix ? <strong>{prefix}</strong> : null}
+        <span className="activity-label">{children}</span>
+      </span>
+      {active ? (
+        <span className="activity-sweep" aria-hidden="true" inert>
+          <span className="activity-sweep-counter">
+            <span className="activity-sweep-aligned">
+              <span className="activity-content">
+                {leading}
+                {prefix ? <strong data-activity-copy={prefix} /> : null}
+                <span
+                  className="activity-label"
+                  data-activity-copy={children}
+                />
+              </span>
+            </span>
+          </span>
+        </span>
+      ) : null}
     </span>
   );
 }
