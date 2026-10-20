@@ -101,3 +101,20 @@ test("canonical queue admission/recovery retains the bound client ID and payload
   );
   assert.equal(thread.queuedMessages?.length, 0);
 });
+
+test("duplicate keys and noncanonical JSON whitespace stay visible in full", () => {
+  const sent = referenceMessage("Unicode 问题\nnext line", quotes, "client-a");
+  for (const text of [
+    sent.replace('"version":1', '"version":0,"version":1'),
+    sent.replace('"version":1', '"version": 1'),
+    sent + "\n",
+  ]) {
+    assert.deepEqual(parseSentReferenceMessage(text, "client-a"), {
+      text,
+      quotes: [],
+    });
+  }
+  const parsed = parseSentReferenceMessage(sent, "client-a");
+  assert.equal(parsed.text, "Unicode 问题\nnext line");
+  assert.equal(parsed.quotes[0]?.excerpt, quotes[0]!.excerpt);
+});

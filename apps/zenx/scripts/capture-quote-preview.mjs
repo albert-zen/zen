@@ -1,0 +1,119 @@
+import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { withPreviewBrowser, delay } from "./preview-browser.mjs";
+const directory = path.resolve(process.argv[2] ?? ".quote-preview");
+const evidence = {
+  source:
+    "Production components with synthetic native-message projection; no Provider or Host calls.",
+  scenes: [],
+};
+await withPreviewBrowser(
+  directory,
+  async ({ send, evaluate, url, screenshot }) => {
+    const waitFor = async (expression) => {
+      for (let i = 0; i < 200; i++) {
+        if (await evaluate(expression)) return;
+        await delay(50);
+      }
+      throw new Error(`Fixture condition timed out: ${expression}`);
+    };
+    const settle = () =>
+      evaluate(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
+    for (const entry of [
+      { theme: "light", width: 1280, height: 1000 },
+      { theme: "dark", width: 1280, height: 1000 },
+      { theme: "light", width: 420, height: 900 },
+    ]) {
+      const name = `quote-${entry.theme}-${entry.width}`;
+      await send("Emulation.setDeviceMetricsOverride", {
+        width: entry.width,
+        height: entry.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await send("Page.navigate", {
+        url: `${url}/quote-frame.html?theme=${entry.theme}${entry.width < 600 ? "&narrow" : ""}`,
+      });
+      await waitFor(
+        `Boolean(window.quoteFixture && document.querySelector('[data-sent-message-id="message-synthetic-example"]') && document.documentElement.dataset.appearance === '${entry.theme}')`,
+      );
+      await evaluate("document.fonts.ready");
+      await settle();
+      await screenshot(`${name}-initial-sent.png`);
+      // Use an actual DOM Range; the production selectionchange listener owns the toolbar.
+      await evaluate(
+        `(() => {const body=document.querySelector('[data-quote-item-id="synthetic-answer"] p');if(!body)throw new Error('Source absent');body.scrollIntoView({block:'center'});const range=document.createRange();range.setStart(body.firstChild,0);range.setEnd(body.firstChild,3);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'));})()`,
+      );
+      await waitFor(
+        "document.querySelector('.message-selection-actions') !== null",
+      );
+      await settle();
+      await screenshot(`${name}-selection-toolbar.png`);
+      await evaluate(
+        "[...document.querySelectorAll('.message-selection-actions button')].find(button=>button.textContent==='引用').click()",
+      );
+      await waitFor("window.quoteFixture.getDraft().references.length === 1");
+      assert.equal(
+        await evaluate("window.quoteFixture.getSent().length"),
+        0,
+        "Quote never sends",
+      );
+      await send("Input.insertText", { text: "请解释这三个字。" });
+      await waitFor(
+        "window.quoteFixture.getDraft().text === '请解释这三个字。'",
+      );
+      await evaluate(
+        "document.querySelector('#thread-composer').scrollIntoView({block:'end'})",
+      );
+      await settle();
+      const draft = await evaluate(
+        `(() => {const pill=document.querySelector('.composer-references .message-quote-pill');const rect=pill.getBoundingClientRect();return {height:rect.height,radius:getComputedStyle(pill).borderRadius,excerpt:document.querySelector('.composer-references .message-quote-excerpt').textContent,disclosure:!!document.querySelector('.composer-references .message-quote-expand'),overflow:document.documentElement.scrollWidth>innerWidth};})()`,
+      );
+      assert.equal(draft.radius, "999px");
+      assert.ok(draft.height <= 48);
+      assert.equal(draft.disclosure, false);
+      assert.equal(draft.overflow, false);
+      await screenshot(`${name}-draft.png`);
+      await send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await waitFor(
+        "window.quoteFixture.getSent().length === 1 && document.querySelector('[data-sent-message-id=\"message-synthetic-send-1\"]') !== null",
+      );
+      await evaluate(
+        "document.querySelector('[data-sent-message-id=\"message-synthetic-send-1\"]').scrollIntoView({block:'center'})",
+      );
+      await settle();
+      const sent = await evaluate(
+        `(() => {const row=document.querySelector('[data-sent-message-id="message-synthetic-send-1"]');return {text:row.textContent,excerpt:row.querySelector('.message-quote-excerpt').textContent,remove:!!row.querySelector('.message-quote-remove'),draft:window.quoteFixture.getDraft(),raw:window.quoteFixture.getSent()[0],overflow:document.documentElement.scrollWidth>innerWidth};})()`,
+      );
+      assert.equal(sent.excerpt, draft.excerpt);
+      assert.match(sent.text, /请解释这三个字/);
+      assert.equal(sent.remove, false);
+      assert.equal(sent.draft.references.length, 0);
+      assert.equal(sent.draft.text, "");
+      assert.equal(sent.overflow, false);
+      await screenshot(`${name}-sent.png`);
+      evidence.scenes.push({ ...entry, draft, sent });
+    }
+  },
+);
+await writeFile(
+  path.join(directory, "measurements.json"),
+  JSON.stringify(evidence, null, 2) + "\n",
+);
+console.log(
+  "Captured real-browser selection, rounded draft and native projected sent states in light/dark/narrow scenes.",
+);

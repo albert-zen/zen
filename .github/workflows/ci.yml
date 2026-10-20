@@ -57,6 +57,18 @@ jobs:
         env:
           ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
         run: npm --workspace apps/zenx run check:observed
+      - name: Build and capture synthetic quote draft and sent states
+        run: |
+          node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+          node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+      - name: Retain synthetic quote visual evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-quote-preview-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-quote-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Retain partial ZenX execution-order evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

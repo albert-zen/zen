@@ -97,6 +97,9 @@ export function parseSentReferenceMessage(
     if (!value || typeof value !== "object" || Array.isArray(value))
       return ordinary;
     const envelope = value as Record<string, unknown>;
+    // Only our exact wire form opts in. JSON.parse otherwise hides duplicate
+    // keys or normalizes noncanonical text that was never emitted by this sender.
+    if (SENT_QUOTE_PREFIX + JSON.stringify(value) !== text) return ordinary;
     if (
       Object.keys(envelope).sort().join(",") !==
         "clientId,quotes,text,version" ||
