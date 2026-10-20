@@ -8,13 +8,17 @@ import { i18n } from "../../src/renderer/src/i18n.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 
-document.documentElement.dataset.appearance = "light";
+const options = new URLSearchParams(location.search);
+const initialTheme = options.get("theme") === "dark" ? "dark" : "light";
+document.documentElement.dataset.appearance = initialTheme;
 document.documentElement.dataset.platform = "darwin";
-void i18n.changeLanguage("en");
+void i18n.changeLanguage(options.get("lang") === "zh-CN" ? "zh-CN" : "en");
 
 function Fixture() {
-  const [theme, setTheme] = useState("light");
-  const [placement, setPlacement] = useState("above");
+  const [theme, setTheme] = useState(initialTheme);
+  const [placement, setPlacement] = useState(
+    options.get("placement") === "below" ? "below" : "above",
+  );
   const [pressure, setPressure] = useState(false);
   const [mode, setMode] = useState<ComposerSendMode>("soft");
   const [action, setAction] = useState("No action");
