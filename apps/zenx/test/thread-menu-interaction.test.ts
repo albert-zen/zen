@@ -358,15 +358,95 @@ test("Thread menu manages keyboard focus through close and row removal", async (
   }
 });
 
+/** Opens the row menu and returns the exact value its rename editor starts from. */
+async function openRenameValue(
+  threads: NativeThreadSummary[],
+): Promise<string> {
+  const dom = new JSDOM(
+    "<!doctype html><html><body><div id=root></div></body></html>",
+    { url: "http://localhost" },
+  );
+  const previousGlobals = {
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+    window: globalThis.window,
+  };
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    window: dom.window,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.assign(dom.window.HTMLElement.prototype, {
+    attachEvent: () => undefined,
+    detachEvent: () => undefined,
+  });
+  const container = document.getElementById("root");
+  assert.ok(container);
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        createElement(TestSidebar, {
+          onForkThread: async () => undefined,
+          onRenameThread: async () => undefined,
+          threads,
+        }),
+      ),
+    );
+    await act(async () =>
+      requiredElement<HTMLButtonElement>(".thread-menu-trigger").click(),
+    );
+    await act(async () =>
+      requiredElement<HTMLButtonElement>(
+        '[data-thread-action="rename"]',
+      ).click(),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    return requiredElement<HTMLInputElement>(".thread-menu-rename input").value;
+  } finally {
+    await act(async () => root.unmount());
+    Object.assign(globalThis, previousGlobals, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    dom.window.close();
+  }
+}
+
+test("rename starts from the Thread's own name, not its wakeup preview", async () => {
+  assert.equal(await openRenameValue([namedWakeupThread()]), "PAW");
+});
+
+test("rename starts from a legacy raw-wakeup name, not its disclosure label", async () => {
+  const thread = {
+    ...activeSummary(),
+    threadId: "legacy-wakeup-thread",
+    name: wakeupPrompt("source-thread-123"),
+  };
+  const value = await openRenameValue([thread]);
+  assert.doesNotMatch(value, /Relay from/iu);
+  // A single-line rename input strips newlines from the exact stored name.
+  assert.equal(
+    value,
+    wakeupPrompt("source-thread-123").replace(/[\r\n]/gu, ""),
+  );
+});
+
 function TestSidebar({
   onForkThread,
   onRenameThread,
+  threads: initialThreads,
 }: {
   onForkThread(threadId: string): Promise<void>;
   onRenameThread(): Promise<void>;
+  threads?: NativeThreadSummary[];
 }) {
   const [threads, setThreads] = useState<NativeThreadSummary[]>([
-    activeSummary(),
+    ...(initialThreads ?? [activeSummary()]),
   ]);
   return createElement(Sidebar, {
     mode: "projects",
@@ -431,6 +511,29 @@ function activeSummary(): NativeThreadSummary {
     updatedAt: new Date(2_000).toISOString(),
     preview: "Thread preview",
     status: "idle",
+  };
+}
+
+/** A PAW/Room working Thread: its first message is the wakeup that created it. */
+function wakeupPrompt(sourceThreadId: string): string {
+  return [
+    "[ZenX trigger wakeup]",
+    "Trigger ID: trigger-a",
+    "Reason: Room #PAW mention from You: hi",
+    `Source Thread: ${sourceThreadId}`,
+    "Registered trigger: PAW",
+    "",
+    "Injected prompt:",
+    "You are the user's ongoing personal assistant in ZenX.",
+  ].join("\n");
+}
+
+function namedWakeupThread(): NativeThreadSummary {
+  return {
+    ...activeSummary(),
+    threadId: "paw-thread",
+    name: "PAW",
+    preview: wakeupPrompt("source-thread-123"),
   };
 }
 
