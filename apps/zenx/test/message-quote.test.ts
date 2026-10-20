@@ -599,7 +599,15 @@ test("quote styling keeps a compact round pill, distinct bounded expansion and a
   );
   assert.match(
     css,
-    /\.message-quote-pill\s*\{[^}]*height: 32px;[^}]*border-radius: 999px;/su,
+    /\.message-quote-pill\s*\{[^}]*height: 28px;[^}]*border-radius: 999px;/su,
+  );
+  assert.match(
+    css,
+    /\.message-quote-pill > button\s*\{[^}]*width: 24px;[^}]*height: 24px;/su,
+  );
+  assert.match(
+    css,
+    /\.message-quote-excerpt\s*\{[^}]*height: 18px;[^}]*line-height: 18px;/su,
   );
   assert.match(
     css,

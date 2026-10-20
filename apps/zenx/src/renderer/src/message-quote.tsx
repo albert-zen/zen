@@ -400,7 +400,7 @@ export function MessageQuoteCard({
           aria-label={t("showQuoteSource")}
           onClick={source}
         >
-          <Icon name="quote" size={14} />
+          <Icon name="quote" size={12} />
         </button>
         <span className="message-quote-excerpt" id={excerptId} ref={text}>
           {reference.excerpt}
@@ -415,7 +415,7 @@ export function MessageQuoteCard({
             aria-controls={excerptId}
             onClick={() => setExpanded((value) => !value)}
           >
-            <Icon name="chevron-down" size={14} />
+            <Icon name="chevron-down" size={12} />
           </button>
         ) : null}
         {onRemove ? (
@@ -426,7 +426,7 @@ export function MessageQuoteCard({
             aria-label={t("removeQuote")}
             onClick={onRemove}
           >
-            <Icon name="x" size={12} />
+            <Icon name="x" size={10} />
           </button>
         ) : null}
       </div>

@@ -8,26 +8,36 @@ const evidence = {
     "Production components with synthetic native-message projection; no Provider or Host calls.",
   scenes: [],
 };
-await withPreviewBrowser(
-  directory,
-  async ({ send, evaluate, url, screenshot }) => {
-    const waitFor = async (expression) => {
-      for (let i = 0; i < 200; i++) {
-        if (await evaluate(expression)) return;
-        await delay(50);
+for (const entry of [
+  { inputMode: "desktop", theme: "light", width: 1280, height: 1000 },
+  { inputMode: "desktop", theme: "dark", width: 1280, height: 1000 },
+  { inputMode: "desktop", theme: "light", width: 420, height: 900 },
+  { inputMode: "touch", theme: "light", width: 420, height: 900 },
+]) {
+  if (entry.inputMode === "desktop")
+    process.env.ZENX_PREVIEW_DESKTOP_INPUT = "1";
+  else delete process.env.ZENX_PREVIEW_DESKTOP_INPUT;
+  await withPreviewBrowser(
+    directory,
+    async ({ send, evaluate, url, screenshot }) => {
+      const waitFor = async (expression) => {
+        for (let i = 0; i < 200; i++) {
+          if (await evaluate(expression)) return;
+          await delay(50);
+        }
+        throw new Error(`Fixture condition timed out: ${expression}`);
+      };
+      const settle = () =>
+        evaluate(
+          "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        );
+      const name = `quote-${entry.inputMode}-${entry.theme}-${entry.width}`;
+      if (entry.inputMode === "touch") {
+        await send("Emulation.setTouchEmulationEnabled", {
+          enabled: true,
+          maxTouchPoints: 1,
+        });
       }
-      throw new Error(`Fixture condition timed out: ${expression}`);
-    };
-    const settle = () =>
-      evaluate(
-        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-      );
-    for (const entry of [
-      { theme: "light", width: 1280, height: 1000 },
-      { theme: "dark", width: 1280, height: 1000 },
-      { theme: "light", width: 420, height: 900 },
-    ]) {
-      const name = `quote-${entry.theme}-${entry.width}`;
       await send("Emulation.setDeviceMetricsOverride", {
         width: entry.width,
         height: entry.height,
@@ -39,6 +49,27 @@ await withPreviewBrowser(
       });
       await waitFor(
         `Boolean(window.quoteFixture && document.querySelector('[data-sent-message-id="message-synthetic-example"]') && document.documentElement.dataset.appearance === '${entry.theme}')`,
+      );
+      const capabilities = await evaluate(`({
+        fine: matchMedia('(pointer: fine)').matches,
+        hover: matchMedia('(hover: hover)').matches,
+        anyFine: matchMedia('(any-pointer: fine)').matches,
+        anyHover: matchMedia('(any-hover: hover)').matches,
+        coarse: matchMedia('(pointer: coarse)').matches,
+        noHover: matchMedia('(hover: none)').matches
+      })`);
+      const desktop = entry.inputMode === "desktop";
+      assert.deepEqual(
+        capabilities,
+        {
+          fine: desktop,
+          hover: desktop,
+          anyFine: desktop,
+          anyHover: desktop,
+          coarse: !desktop,
+          noHover: !desktop,
+        },
+        "Input capabilities must match the screenshot label",
       );
       await evaluate("document.fonts.ready");
       await settle();
@@ -57,9 +88,25 @@ await withPreviewBrowser(
       );
       await settle();
       await screenshot(`${name}-selection-toolbar.png`);
-      await evaluate(
-        "[...document.querySelectorAll('.message-selection-actions button')].find(button=>button.textContent==='引用').click()",
+      const quoteAction = await evaluate(
+        "(() => {const button=[...document.querySelectorAll('.message-selection-actions button')].find(button=>button.textContent==='引用');const r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()",
       );
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        ...quoteAction,
+      });
+      await send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        button: "left",
+        clickCount: 1,
+        ...quoteAction,
+      });
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        button: "left",
+        clickCount: 1,
+        ...quoteAction,
+      });
       await waitFor("window.quoteFixture.getDraft().references.length === 1");
       assert.equal(
         await evaluate("window.quoteFixture.getSent().length"),
@@ -78,7 +125,7 @@ await withPreviewBrowser(
         `(() => {const pill=document.querySelector('.composer-references .message-quote-pill');const rect=pill.getBoundingClientRect();return {height:rect.height,radius:getComputedStyle(pill).borderRadius,excerpt:document.querySelector('.composer-references .message-quote-excerpt').textContent,disclosure:!!document.querySelector('.composer-references .message-quote-expand'),overflow:document.documentElement.scrollWidth>innerWidth};})()`,
       );
       assert.equal(draft.radius, "999px");
-      assert.ok(draft.height <= 48);
+      assert.equal(draft.height, desktop ? 28 : 48);
       assert.equal(draft.disclosure, false);
       assert.equal(draft.overflow, false);
       await screenshot(`${name}-draft.png`);
@@ -102,8 +149,10 @@ await withPreviewBrowser(
       );
       await settle();
       const sent = await evaluate(
-        `(() => {const row=document.querySelector('[data-sent-message-id="message-synthetic-send-1"]');return {text:row.textContent,excerpt:row.querySelector('.message-quote-excerpt').textContent,remove:!!row.querySelector('.message-quote-remove'),draft:window.quoteFixture.getDraft(),raw:window.quoteFixture.getSent()[0],overflow:document.documentElement.scrollWidth>innerWidth};})()`,
+        `(() => {const row=document.querySelector('[data-sent-message-id="message-synthetic-send-1"]');return {height:row.querySelector('.message-quote-pill').getBoundingClientRect().height,radius:getComputedStyle(row.querySelector('.message-quote-pill')).borderRadius,text:row.textContent,excerpt:row.querySelector('.message-quote-excerpt').textContent,remove:!!row.querySelector('.message-quote-remove'),draft:window.quoteFixture.getDraft(),raw:window.quoteFixture.getSent()[0],overflow:document.documentElement.scrollWidth>innerWidth};})()`,
       );
+      assert.equal(sent.height, draft.height);
+      assert.equal(sent.radius, "999px");
       assert.equal(sent.excerpt, draft.excerpt);
       assert.match(sent.text, /请解释这三个字/);
       assert.equal(sent.remove, false);
@@ -122,14 +171,14 @@ await withPreviewBrowser(
         "Local preview must not imply a failed backend send",
       );
       await screenshot(`${name}-sent.png`);
-      evidence.scenes.push({ ...entry, draft, sent });
-    }
-  },
-);
+      evidence.scenes.push({ ...entry, capabilities, draft, sent });
+    },
+  );
+}
 await writeFile(
   path.join(directory, "measurements.json"),
   JSON.stringify(evidence, null, 2) + "\n",
 );
 console.log(
-  "Captured real-browser selection, rounded draft and native projected sent states in light/dark/narrow scenes.",
+  "Captured real-browser selection, compact desktop draft/sent states and separate touch-capability sizing with verified media queries.",
 );
