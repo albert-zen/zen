@@ -57,6 +57,11 @@ jobs:
         env:
           ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
         run: npm --workspace apps/zenx run check:observed
+      - name: Install Chinese fonts for synthetic quote screenshots
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-match "sans:lang=zh-cn"
       - name: Build and capture synthetic quote draft and sent states
         run: |
           node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
