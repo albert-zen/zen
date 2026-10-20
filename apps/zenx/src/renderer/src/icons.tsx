@@ -44,6 +44,7 @@ export type IconName =
   | "panel-right"
   | "pin"
   | "pin-off"
+  | "quote"
   | "reasoning"
   | "reply"
   | "restore"
@@ -256,6 +257,11 @@ const paths: Record<IconName, ReactNode> = {
   "pin-off": (
     <>
       <path d="M5.4 2.4h5.2M8 2.4v2M6.2 4.4h3.6l1.8 4.6H4.4ZM8 9v2.1M2.6 13.4 13.4 2.6" />
+    </>
+  ),
+  quote: (
+    <>
+      <path d="M6.5 7.5H2.5V4h4v4.5c0 2-1.1 3.2-3.1 3.7M13.5 7.5h-4V4h4v4.5c0 2-1.1 3.2-3.1 3.7" />
     </>
   ),
   reasoning: (

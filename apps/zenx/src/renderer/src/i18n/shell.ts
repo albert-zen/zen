@@ -1,4 +1,18 @@
 export const en = {
+  quoteSelectionActions: "Selected text actions",
+  copySelection: "Copy",
+  selectionCopied: "Copied",
+  selectionCopyFailed: "Couldn’t copy. Use your system copy shortcut.",
+  quoteSelection: "Quote",
+  quoteSelectionShortcut: "Quote selected text (Alt+Enter)",
+  showQuoteSource: "Go to the source message",
+  removeQuote: "Remove quoted passage",
+  expandQuote: "Show full quote",
+  collapseQuote: "Collapse quote",
+  quoteSourceUnavailable:
+    "Source unavailable here. The exact quoted text is preserved.",
+  quotedPassages: "Quoted passages",
+
   debugItemPaging: "Item pages",
   debugItemRange: "{{start}}–{{end}} of {{count}} Items",
   debugPreviousItems: "Previous",
@@ -915,6 +929,19 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  quoteSelectionActions: "选中文字操作",
+  copySelection: "复制",
+  selectionCopied: "已复制",
+  selectionCopyFailed: "复制失败，请使用系统复制快捷键。",
+  quoteSelection: "引用",
+  quoteSelectionShortcut: "引用选中文字（Alt+Enter）",
+  showQuoteSource: "返回原消息",
+  removeQuote: "移除引用段落",
+  expandQuote: "展开完整引用",
+  collapseQuote: "收起引用",
+  quoteSourceUnavailable: "当前无法定位原消息，完整引用仍保留。",
+  quotedPassages: "引用内容",
+
   outputRate: "输出 {{rate}} tok/s（按 Turn 时长）",
   outputRateUnknown: "输出速度未知",
   debugItemPaging: "Item 分页",

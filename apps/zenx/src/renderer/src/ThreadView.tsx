@@ -1,3 +1,12 @@
+import {
+  MessageSelectionActions,
+  MessageQuoteCard,
+  addMessageQuote,
+} from "./message-quote.js";
+import {
+  parseSentReferenceMessage,
+  type SentMessageQuote,
+} from "./reference-draft.js";
 import { OriginalHistoryReference } from "./OriginalHistory.js";
 import { ThreadDebugger } from "./ThreadDebugger.js";
 import {
@@ -43,7 +52,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
-import type { FailureItem } from "../../../../../src/item.js";
+import type { CanonicalItem, FailureItem } from "../../../../../src/item.js";
 import {
   isTurnEndItem,
   latestTurnEnd,
@@ -171,11 +180,36 @@ export function ThreadViewActionsProvider({
   );
 }
 
+// A read-only projection of canonical input parts preserves boundaries such as
+// Host-added skill snapshots; it never changes or replaces the journal payload.
+const CanonicalInputContentContext = createContext<
+  ReadonlyMap<string, Extract<CanonicalItem, { type: "user_message" }>>
+>(new Map());
+
 const CanonicalMessageForkContext = createContext<{
   threadId: string;
   items: Map<string, string | undefined>;
   isCurrent(itemId: string): boolean;
 } | null>(null);
+
+function goToMessageQuoteSource(
+  viewport: Element | null,
+  quote: SentMessageQuote,
+): boolean {
+  const source = Array.from(
+    viewport?.querySelectorAll<HTMLElement>(
+      "[data-quote-thread-id][data-quote-item-id]",
+    ) ?? [],
+  ).find(
+    (element) =>
+      element.dataset.quoteThreadId === quote.threadId &&
+      element.dataset.quoteItemId === quote.id,
+  );
+  if (!source) return false;
+  source.scrollIntoView({ block: "center", behavior: "auto" });
+  source.focus({ preventScroll: true });
+  return true;
+}
 
 interface ThreadViewProps {
   localModelDebug?: boolean;
@@ -264,6 +298,15 @@ export function ThreadView(props: ThreadViewProps) {
       items === undefined ? undefined : projectThreadAttachmentItems(items),
     [items],
   );
+  const canonicalInputs = useMemo(
+    () =>
+      new Map(
+        (items ?? []).flatMap((item) =>
+          item.type === "user_message" ? [[item.id, item] as const] : [],
+        ),
+      ),
+    [items],
+  );
   const forkSource = useMemo(
     () =>
       props.thread === null
@@ -310,30 +353,34 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <ThreadReadingContext.Provider value={readingState}>
-      <CanonicalMessageForkContext.Provider value={forkContext}>
-        <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
-          <div className="thread-conversation-surface">
-            {debugging && props.thread && items !== undefined ? (
-              <ThreadDebugger
-                key={props.thread.id}
-                thread={props.thread}
-                items={items}
-                localModelDebug={props.localModelDebug}
-                onExit={props.onExitDebug}
-                onOpenMessageLink={props.onOpenMessageLink}
-                onReadAttachment={props.onReadAttachment}
-              />
-            ) : (
-              <ThreadViewContent
-                {...props}
-                threadAttachments={
-                  canonicalAttachments ?? props.threadAttachments
-                }
-              />
-            )}
-          </div>
-        </MessageSourceViewportContext.Provider>
-      </CanonicalMessageForkContext.Provider>
+      <CanonicalInputContentContext.Provider value={canonicalInputs}>
+        <CanonicalMessageForkContext.Provider value={forkContext}>
+          <MessageSourceViewportContext.Provider
+            value={props.thread?.id ?? null}
+          >
+            <div className="thread-conversation-surface">
+              {debugging && props.thread && items !== undefined ? (
+                <ThreadDebugger
+                  key={props.thread.id}
+                  thread={props.thread}
+                  items={items}
+                  localModelDebug={props.localModelDebug}
+                  onExit={props.onExitDebug}
+                  onOpenMessageLink={props.onOpenMessageLink}
+                  onReadAttachment={props.onReadAttachment}
+                />
+              ) : (
+                <ThreadViewContent
+                  {...props}
+                  threadAttachments={
+                    canonicalAttachments ?? props.threadAttachments
+                  }
+                />
+              )}
+            </div>
+          </MessageSourceViewportContext.Provider>
+        </CanonicalMessageForkContext.Provider>
+      </CanonicalInputContentContext.Provider>
     </ThreadReadingContext.Provider>
   );
 }
@@ -1324,6 +1371,33 @@ function ThreadViewContent({
         </MessageLinkContext.Provider>
       </div>
 
+      <MessageSelectionActions
+        viewport={scrollRef}
+        threadId={thread?.id}
+        disabled={composerDisabled || submitting}
+        onQuote={(selection) => {
+          if (
+            !thread ||
+            selection.threadId !== thread.id ||
+            !thread.canonicalItems?.some(
+              (item) =>
+                item.type === "agent_message" &&
+                item.id === selection.id &&
+                item.threadId === thread.id,
+            )
+          )
+            return;
+          onDraftChange(
+            addMessageQuote(composer.draft.text, {
+              ...selection,
+              kind: "message",
+              name: "ZenX",
+              cwd: thread.cwd,
+            }),
+          );
+          composerTextareaRef.current?.focus({ preventScroll: true });
+        }}
+      />
       {atLive ? null : (
         <button
           className="back-live"
@@ -1564,33 +1638,65 @@ function ThreadViewContent({
               className="composer-skills composer-references"
               aria-label={i18n.t("shell:referencesToSend")}
             >
-              {skillDraft.references.map((reference, index) => (
-                <span
-                  className="composer-skill"
-                  key={index}
-                  title={`${reference.cwd} · ${reference.kind === "file" ? reference.path : reference.id}`}
-                >
-                  <Icon name={reference.kind === "file" ? "file" : "thread"} />
-                  <span>{reference.name}</span>
-                  <button
-                    type="button"
-                    aria-label={i18n.t("shell:removeReference", {
-                      name: reference.name,
-                    })}
-                    onClick={() =>
+              {skillDraft.references.map((reference, index) =>
+                reference.kind === "message" ? (
+                  <MessageQuoteCard
+                    key={JSON.stringify([
+                      reference.threadId,
+                      reference.id,
+                      reference.excerpt,
+                    ])}
+                    reference={reference}
+                    onSource={() => {
+                      pauseFollowing();
+                      return goToMessageQuoteSource(
+                        scrollRef.current,
+                        reference,
+                      );
+                    }}
+                    onRemove={() => {
                       onDraftChange(
                         withSkillDraft(
                           skillDraft.text,
                           skillDraft.skills,
                           skillDraft.references.filter((_, i) => i !== index),
                         ),
-                      )
-                    }
+                      );
+                      composerTextareaRef.current?.focus({
+                        preventScroll: true,
+                      });
+                    }}
+                  />
+                ) : (
+                  <span
+                    className="composer-skill"
+                    key={index}
+                    title={`${reference.cwd} · ${reference.kind === "file" ? reference.path : reference.id}`}
                   >
-                    <Icon name="x" />
-                  </button>
-                </span>
-              ))}
+                    <Icon
+                      name={reference.kind === "file" ? "file" : "thread"}
+                    />
+                    <span>{reference.name}</span>
+                    <button
+                      type="button"
+                      aria-label={i18n.t("shell:removeReference", {
+                        name: reference.name,
+                      })}
+                      onClick={() =>
+                        onDraftChange(
+                          withSkillDraft(
+                            skillDraft.text,
+                            skillDraft.skills,
+                            skillDraft.references.filter((_, i) => i !== index),
+                          ),
+                        )
+                      }
+                    >
+                      <Icon name="x" />
+                    </button>
+                  </span>
+                ),
+              )}
             </div>
           )}
           <WorkflowCommandMenu
@@ -3604,8 +3710,28 @@ function InputMessage({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
   const text = item.content.map((content) => content.text).join("\n");
+  const article = useRef<HTMLElement>(null);
+  const canonical = useContext(CanonicalInputContentContext).get(item.id);
+  const parts = canonical
+    ? canonical.text !== undefined
+      ? [canonical.text]
+      : canonical.content.flatMap((part) =>
+          part.type === "text" ? [part.text] : [],
+        )
+    : item.content.map((part) => part.text);
+  const clientId = canonical ? canonical.clientId : item.clientId;
+  const presentation =
+    item.type === "userMessage"
+      ? parts.map((part) => parseSentReferenceMessage(part, clientId))
+      : [{ text, quotes: [] }];
+  const presented = {
+    text: presentation.map((part) => part.text).join("\n"),
+    quotes: presentation.flatMap((part) => part.quotes),
+  };
   return (
     <article
+      ref={article}
+      data-sent-message-id={item.id}
       className={
         item.type === "threadMessage"
           ? "user-row thread-message-row"
@@ -3654,7 +3780,31 @@ function InputMessage({
       )}
       {text.length === 0 ? null : (
         <div className="user-bubble">
-          <Markdown text={text} />
+          {presented.quotes.length > 0 && (
+            <div
+              className="sent-message-quotes"
+              aria-label={i18n.t("shell:quotedPassages")}
+            >
+              {presented.quotes.map((quote, index) => (
+                <MessageQuoteCard
+                  key={index}
+                  reference={{
+                    ...quote,
+                    kind: "message",
+                    name: "ZenX",
+                    cwd: "",
+                  }}
+                  onSource={() =>
+                    goToMessageQuoteSource(
+                      article.current?.closest(".thread-view") ?? null,
+                      quote,
+                    )
+                  }
+                />
+              ))}
+            </div>
+          )}
+          {presented.text.length > 0 && <Markdown text={presented.text} />}
         </div>
       )}
       <MessageActions
@@ -3736,8 +3886,18 @@ function AgentMessage({
       ? { sourceThreadId: source.threadId, itemId: item.id }
       : undefined;
   return (
-    <article className="agent-copy" data-read-message-id={item.id}>
-      <Markdown text={item.text} />
+    <article
+      className="agent-copy"
+      data-read-message-id={item.id}
+      data-quote-thread-id={
+        source?.items.has(item.id) ? source.threadId : undefined
+      }
+      data-quote-item-id={source?.items.has(item.id) ? item.id : undefined}
+      tabIndex={-1}
+    >
+      <div data-message-quote-body>
+        <Markdown text={item.text} />
+      </div>
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
       {showActions ? (
         <MessageActions

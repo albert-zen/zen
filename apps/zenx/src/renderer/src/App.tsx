@@ -1861,6 +1861,7 @@ function AppContent() {
     const messageText = referenceMessage(
       skillDraft.text,
       skillDraft.references,
+      submission.clientUserMessageId,
     );
     if (submission.text.length > 0)
       await window.zenx.titles

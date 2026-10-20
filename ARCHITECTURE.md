@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **ZenX selected-message references** — Exact rendered excerpts and source Thread/Item IDs live in the existing Composer draft until explicit send. Message references serialize once into a versioned text envelope bound to that submission client ID; matching canonical user input renders a read-only quote projection, while invalid or missing-ID formats remain complete ordinary text. The ID match is a presentation discriminator, not authentication; raw input remains the sole conversation authority. No Core schema, protocol field, durable annotation store, or alternative send state is introduced.
+
 - **Explicit manual continuation** — Native turn retry admits one localized human continuation message only against the exact latest failed/aborted Turn under the existing admission lock; a stable client message identity plus canonical retryOfTurnId provenance reconciles uncertain replies, preserves canonical history and tool receipts, and never replays a tool or consumes a Composer draft. Forked history preserves original Turn IDs, but inherited retry provenance cannot authorize a local retry.
 
 - **Live Turn recovery observation** — Runtime emits a transient native repair-sampling status after canonical recovery intent commits and clears it when sampling resumes successfully or exits; the existing epoch/watermark projection retains only the latest observation per active Turn, never deriving live execution from historical failure Items or adding durable recovery authority.
