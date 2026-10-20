@@ -679,3 +679,7 @@ The Run on machine picker has room for device names independently of its compact
 ### Verified remote message sources
 
 Remote source actions read the canonical receiving message's explicit return binding and open a read-only, bounded source dialog naming the exact Host, workspace and Thread. They preserve local main/side selection and Composer drafts. Nested source navigation stays on that pinned Host/workspace; unbound cross-host sources remain unavailable. Trigger source settings are read on the viewed Host by exact Trigger and owner Thread IDs, never the local Trigger editor. Removed, revoked, changed and offline sources keep explicit errors; close, newer navigation and newer source actions retire old results. The dialog keeps keyboard/focus handling and reachable 44px controls at narrow widths.
+
+### 2026-10-20: Thread title authority over wakeup first messages
+
+A Thread's own name is the single source of its displayed title, whether it comes from staged automatic naming or from the user's explicit rename. The first-message preview is used only while that Thread has no name at all. A Room or Trigger wakeup that happens to be a Thread's first message never substitutes for a name, in the sidebar, the conversation title bar, the PAW workspace or anywhere else; a name that is itself an unmodified raw wakeup prompt keeps the short disclosure label. Thread rename inputs start from the Thread's exact current name, so submitting an untouched editor can never rewrite that name.

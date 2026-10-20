@@ -300,10 +300,13 @@ export function moveSidebarThread(
 
 export function threadTitle(thread: NativeThreadSummary): string {
   const named = thread.name?.trim() ?? "";
-  const preview = thread.preview.trim();
-  const wakeup = wakeupLabel(named) ?? wakeupLabel(preview);
+  // The Thread's own name is authoritative: a generated or user-set title is
+  // never replaced by the first-message preview. Only a name that is itself a
+  // raw wakeup prompt (legacy automatic naming) keeps its short disclosure.
+  const wakeup = wakeupLabel(named);
   if (wakeup !== null) return wakeup;
   if (named.length > 0) return named;
+  const preview = thread.preview.trim();
   if (preview.length > 0) return preview;
   return thread.status === "systemError"
     ? i18n.t("shell:unavailableThreadNamed", {

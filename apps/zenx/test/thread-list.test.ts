@@ -345,6 +345,30 @@ test("presents trigger wakeups without leaking raw system prompts", () => {
   );
 });
 
+test("keeps the Thread's own name when only its first message is a wakeup", () => {
+  const wakeup = [
+    "[ZenX trigger wakeup]",
+    "Trigger ID: trigger-a",
+    "Reason: Room #PAW mention from You: hi",
+    "Source Room: 63c6c01d-5989-4d55-bf78-03e714189d3e",
+  ].join("\n");
+  const named = summary("paw", "idle", 20);
+  named.name = "PAW";
+  named.preview = wakeup;
+  assert.equal(threadTitle(named), "PAW");
+});
+
+test("falls back to the first-message preview for an unnamed wakeup Thread", () => {
+  const wakeup = [
+    "[ZenX trigger wakeup]",
+    "Trigger ID: trigger-a",
+    "Source Room: 63c6c01d-5989-4d55-bf78-03e714189d3e",
+  ].join("\n");
+  const value = summary("paw", "idle", 20);
+  value.preview = wakeup;
+  assert.equal(threadTitle(value), wakeup);
+});
+
 test("shows only logo category and friendly model identity", () => {
   const openai = summary("openai", "idle", 20);
   openai.currentMetadata.model = "gpt-5.6-sol";
