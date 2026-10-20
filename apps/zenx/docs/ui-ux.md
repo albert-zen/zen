@@ -680,7 +680,6 @@ The Run on machine picker has room for device names independently of its compact
 
 Remote source actions read the canonical receiving message's explicit return binding and open a read-only, bounded source dialog naming the exact Host, workspace and Thread. They preserve local main/side selection and Composer drafts. Nested source navigation stays on that pinned Host/workspace; unbound cross-host sources remain unavailable. Trigger source settings are read on the viewed Host by exact Trigger and owner Thread IDs, never the local Trigger editor. Removed, revoked, changed and offline sources keep explicit errors; close, newer navigation and newer source actions retire old results. The dialog keeps keyboard/focus handling and reachable 44px controls at narrow widths.
 
-
 ## Selected-message Copy / Quote and sent presentation (2026-10-20 prototype)
 
 Select text inside a single canonical Agent message to reveal Copy and Quote. Copy only changes the clipboard; Quote appends an exact reference to the existing draft and focuses the ordinary Composer. Neither starts a Turn or sends. Cross-message/control selections are rejected; IME Enter never quotes or sends.
