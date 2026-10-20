@@ -1,3 +1,7 @@
+# Superseded no-hover / touch-fallback sizing experiment
+
+These 48px captures used headless Chrome's default no-hover fallback. They are not desktop-input acceptance evidence and were superseded after feedback that the reference was too large. Preserve them only as the earlier sizing experiment. Current verified 28px desktop-input emulation evidence: https://github.com/albert-zen/zen/blob/e4970dc0466a5439ec8410f4b60bafedb44069f1/apps/zenx/docs/evidence/quote-373c3de0/README.md
+
 # Quote reference visual evidence
 
 Synthetic data only. No private messages, user screenshots, live Provider calls, or Host calls.
