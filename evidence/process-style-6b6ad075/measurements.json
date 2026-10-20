@@ -1,0 +1,273 @@
+{
+  "source": "Synthetic data; production Sidebar, ThreadView, ActivityText and CSS. No Host actions.",
+  "scenes": [
+    {
+      "scene": "thinking",
+      "theme": "light",
+      "width": 1280,
+      "height": 900,
+      "before": {
+        "text": "正在工作总耗时 2 分 44 秒",
+        "header": {
+          "x": 352,
+          "y": 171.6875,
+          "width": 102.734375,
+          "height": 34
+        },
+        "history": {
+          "x": 352,
+          "y": 213.6875,
+          "width": 840,
+          "height": 69.515625
+        },
+        "row": {
+          "x": 352,
+          "y": 249.203125,
+          "width": 840,
+          "height": 34
+        },
+        "icon": {
+          "x": 358,
+          "y": 259.0625,
+          "width": 16,
+          "height": 16
+        },
+        "label": {
+          "x": 380,
+          "y": 257.0625,
+          "width": 36.015625,
+          "height": 20
+        },
+        "gap": 6,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "activeSweep": "true",
+        "sweepMask": "linear-gradient(to right, rgba(0, 0, 0, 0) 0px, rgba(0, 0, 0, 0.12) 10.8px, rgba(0, 0, 0, 0.55) 25.2px, rgb(0, 0, 0) 36px, rgba(0, 0, 0, 0.55) 46.8px, rgba(0, 0, 0, 0.12) 61.2px, rgba(0, 0, 0, 0) 72px, rgba(0, 0, 0, 0) 100%)",
+        "sweepDisplay": "block"
+      },
+      "after": {
+        "text": "已完成，用时 2 分 44 秒",
+        "header": {
+          "x": 352,
+          "y": 171.6875,
+          "width": 168.734375,
+          "height": 34
+        },
+        "history": null,
+        "row": null,
+        "icon": null,
+        "label": null,
+        "gap": null,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "sweepMask": null,
+        "sweepDisplay": null
+      }
+    },
+    {
+      "scene": "waiting",
+      "theme": "dark",
+      "width": 1280,
+      "height": 900,
+      "before": {
+        "text": "等待中总耗时 2 分 44 秒",
+        "header": {
+          "x": 352,
+          "y": 171.6875,
+          "width": 168.75,
+          "height": 34
+        },
+        "history": {
+          "x": 352,
+          "y": 213.6875,
+          "width": 840,
+          "height": 69.515625
+        },
+        "row": {
+          "x": 352,
+          "y": 249.203125,
+          "width": 840,
+          "height": 34
+        },
+        "icon": {
+          "x": 358,
+          "y": 259.0625,
+          "width": 32,
+          "height": 16
+        },
+        "label": {
+          "x": 396,
+          "y": 257.0625,
+          "width": 72.015625,
+          "height": 20
+        },
+        "gap": 6,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "activeSweep": "false",
+        "sweepMask": null,
+        "sweepDisplay": null
+      },
+      "after": {
+        "text": "已完成，用时 2 分 44 秒",
+        "header": {
+          "x": 352,
+          "y": 171.6875,
+          "width": 168.734375,
+          "height": 34
+        },
+        "history": null,
+        "row": null,
+        "icon": null,
+        "label": null,
+        "gap": null,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "sweepMask": null,
+        "sweepDisplay": null
+      }
+    },
+    {
+      "scene": "thinking",
+      "theme": "dark",
+      "width": 420,
+      "height": 900,
+      "before": {
+        "text": "正在工作总耗时 2 分 44 秒",
+        "header": {
+          "x": 16,
+          "y": 162.140625,
+          "width": 102.734375,
+          "height": 44
+        },
+        "history": {
+          "x": 16,
+          "y": 214.140625,
+          "width": 388,
+          "height": 77.828125
+        },
+        "row": {
+          "x": 16,
+          "y": 247.96875,
+          "width": 388,
+          "height": 44
+        },
+        "icon": {
+          "x": 22,
+          "y": 258.515625,
+          "width": 16,
+          "height": 16
+        },
+        "label": {
+          "x": 44,
+          "y": 256.515625,
+          "width": 36.015625,
+          "height": 20
+        },
+        "gap": 6,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "activeSweep": "true",
+        "sweepMask": "linear-gradient(to right, rgba(0, 0, 0, 0) 0px, rgba(0, 0, 0, 0.12) 10.8px, rgba(0, 0, 0, 0.55) 25.2px, rgb(0, 0, 0) 36px, rgba(0, 0, 0, 0.55) 46.8px, rgba(0, 0, 0, 0.12) 61.2px, rgba(0, 0, 0, 0) 72px, rgba(0, 0, 0, 0) 100%)",
+        "sweepDisplay": "block"
+      },
+      "after": {
+        "text": "已完成，用时 2 分 44 秒",
+        "header": {
+          "x": 16,
+          "y": 162.140625,
+          "width": 168.734375,
+          "height": 44
+        },
+        "history": null,
+        "row": null,
+        "icon": null,
+        "label": null,
+        "gap": null,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "sweepMask": null,
+        "sweepDisplay": null
+      }
+    },
+    {
+      "scene": "waiting",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "before": {
+        "text": "等待中总耗时 2 分 44 秒",
+        "header": {
+          "x": 16,
+          "y": 162.140625,
+          "width": 168.75,
+          "height": 44
+        },
+        "history": {
+          "x": 16,
+          "y": 214.140625,
+          "width": 388,
+          "height": 77.828125
+        },
+        "row": {
+          "x": 16,
+          "y": 247.96875,
+          "width": 388,
+          "height": 44
+        },
+        "icon": {
+          "x": 22,
+          "y": 258.515625,
+          "width": 32,
+          "height": 16
+        },
+        "label": {
+          "x": 60,
+          "y": 256.515625,
+          "width": 72.015625,
+          "height": 20
+        },
+        "gap": 6,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "activeSweep": "false",
+        "sweepMask": null,
+        "sweepDisplay": null
+      },
+      "after": {
+        "text": "已完成，用时 2 分 44 秒",
+        "header": {
+          "x": 16,
+          "y": 162.140625,
+          "width": 168.734375,
+          "height": 44
+        },
+        "history": null,
+        "row": null,
+        "icon": null,
+        "label": null,
+        "gap": null,
+        "headerIndex": 1,
+        "totalInsideHistory": false,
+        "footer": false,
+        "overflow": false,
+        "sweepMask": null,
+        "sweepDisplay": null
+      }
+    }
+  ]
+}

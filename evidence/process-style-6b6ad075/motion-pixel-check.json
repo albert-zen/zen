@@ -1,0 +1,12 @@
+[
+  {
+    "scene": "thinking-light-1280",
+    "iconChangedPixels": 142,
+    "labelChangedPixels": 221
+  },
+  {
+    "scene": "thinking-dark-420",
+    "iconChangedPixels": 136,
+    "labelChangedPixels": 217
+  }
+]
