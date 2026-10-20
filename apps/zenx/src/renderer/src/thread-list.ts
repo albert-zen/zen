@@ -300,10 +300,13 @@ export function moveSidebarThread(
 
 export function threadTitle(thread: NativeThreadSummary): string {
   const named = thread.name?.trim() ?? "";
-  const preview = thread.preview.trim();
-  const wakeup = wakeupLabel(named) ?? wakeupLabel(preview);
+  // The Thread's own name is authoritative: a generated or user-set title is
+  // never replaced by the first-message preview. Only a name that is itself a
+  // raw wakeup prompt (legacy automatic naming) keeps its short disclosure.
+  const wakeup = wakeupLabel(named);
   if (wakeup !== null) return wakeup;
   if (named.length > 0) return named;
+  const preview = thread.preview.trim();
   if (preview.length > 0) return preview;
   return thread.status === "systemError"
     ? i18n.t("shell:unavailableThreadNamed", {
@@ -318,6 +321,22 @@ export function threadPreview(thread: NativeThreadSummary): string {
   return wakeup === null
     ? preview
     : i18n.t("shell:systemWakeupPreview", { wakeup });
+}
+
+/**
+ * The value a rename editor starts from: the Thread's exact current name.
+ * A provisional first-message preview is offered only when it is ordinary
+ * context; a machine wakeup envelope is never offered as a name to save.
+ */
+export function threadEditTitle(thread: NativeThreadSummary): string {
+  const named = thread.name?.trim() ?? "";
+  if (named.length > 0) return named;
+  // Nothing to edit when the provisional title is machine text or a
+  // placeholder: an untouched submit must never turn those into a name.
+  return thread.preview.trim().length > 0 &&
+    wakeupLabel(thread.preview) === null
+    ? threadTitle(thread)
+    : "";
 }
 
 export function threadProject(thread: NativeThreadSummary): string {

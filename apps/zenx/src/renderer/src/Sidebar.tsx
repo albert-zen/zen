@@ -32,6 +32,7 @@ import {
   deriveSidebarThreads,
   deriveProjectGroups,
   EMPTY_SIDEBAR_ORDER,
+  threadEditTitle,
   threadModelIdentity,
   threadHasActiveTurn,
   threadProject,
@@ -1920,7 +1921,7 @@ function ThreadRow({
   const initialMenuFocusRef = useRef<"first" | "last">("first");
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
-  const [renameDraft, setRenameDraft] = useState(threadTitle(thread));
+  const [renameDraft, setRenameDraft] = useState(threadEditTitle(thread));
   const [busyAction, setBusyAction] = useState<
     "rename" | "fork" | "pin" | "unpin" | "archive" | "unarchive" | null
   >(null);
@@ -2063,7 +2064,7 @@ function ThreadRow({
     renameOrigin.current = origin ?? (document.activeElement as HTMLElement);
     menuEpoch.current += 1;
     setMenuError(null);
-    setRenameDraft(threadTitle(thread));
+    setRenameDraft(threadEditTitle(thread));
     setRenaming(true);
     if (!detailsOpen) setMenuOpen(true);
   };
@@ -2393,7 +2394,7 @@ function ThreadRow({
             initialMenuFocusRef.current = "first";
             setMenuError(null);
             setRenaming(false);
-            setRenameDraft(threadTitle(thread));
+            setRenameDraft(threadEditTitle(thread));
             setMenuOpen(true);
           }}
           onKeyDown={(event) => {
@@ -2408,7 +2409,7 @@ function ThreadRow({
               event.key === "ArrowUp" ? "last" : "first";
             setMenuError(null);
             setRenaming(false);
-            setRenameDraft(threadTitle(thread));
+            setRenameDraft(threadEditTitle(thread));
             setMenuOpen(true);
           }}
         >

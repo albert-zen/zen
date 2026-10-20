@@ -2434,12 +2434,31 @@ for (const listed of [false, true]) {
       commands: [],
       menus: [],
     } as ZenXPluginSnapshot;
+    // A PAW/Room working Thread starts with the wakeup that admitted its first
+    // Turn; that first message must never become the displayed title.
+    const workingWakeup = [
+      "[ZenX trigger wakeup]",
+      "Trigger ID: paw-trigger",
+      "Reason: Room #PAW mention from You: hi",
+      "Source Room: 63c6c01d-5989-4d55-bf78-03e714189d3e",
+      "Registered trigger: PAW",
+      "",
+      "Injected prompt:",
+      "You are the user's ongoing personal assistant in ZenX.",
+    ].join("\n");
     let rejectOnce = true;
     const calls: string[] = [];
     const harness = await mountApp({
       pluginSnapshot: snapshot,
       threads: async (archived) =>
-        archived || !listed ? [] : [summary(workingId, "Working conversation")],
+        archived || !listed
+          ? []
+          : [
+              {
+                ...summary(workingId, "Working conversation"),
+                preview: workingWakeup,
+              },
+            ],
       request: async (method, params) => {
         assert.equal(method, "zen/thread/resume");
         assert.deepEqual(params, { threadId: workingId });
@@ -2493,6 +2512,11 @@ for (const listed of [false, true]) {
         await act(async () => openThread.click());
       }
       const scope = listed ? ".companion-content" : ".workspace-header";
+      const shownTitle = () =>
+        document.querySelector(`${scope} .thread-title-line strong`)
+          ?.textContent ?? "";
+      await waitFor(() => shownTitle() === "Working conversation");
+      assert.doesNotMatch(shownTitle(), /Room wakeup/u);
       const rename = await waitFor(() =>
         document.querySelector<HTMLButtonElement>(
           `${scope} .thread-title-rename`,
