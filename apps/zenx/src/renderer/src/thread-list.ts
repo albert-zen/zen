@@ -323,6 +323,17 @@ export function threadPreview(thread: NativeThreadSummary): string {
     : i18n.t("shell:systemWakeupPreview", { wakeup });
 }
 
+/**
+ * The value a rename editor starts from: the Thread's exact current name.
+ * A provisional first-message preview is offered only when it is ordinary
+ * context; a machine wakeup envelope is never offered as a name to save.
+ */
+export function threadEditTitle(thread: NativeThreadSummary): string {
+  const named = thread.name?.trim() ?? "";
+  if (named.length > 0) return named;
+  return wakeupLabel(thread.preview) === null ? threadTitle(thread) : "";
+}
+
 export function threadProject(thread: NativeThreadSummary): string {
   if (thread.status === "systemError")
     return i18n.t("shell:unavailableJournal");

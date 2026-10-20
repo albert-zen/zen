@@ -358,7 +358,10 @@ test("Thread menu manages keyboard focus through close and row removal", async (
   }
 });
 
-test("rename starts from the Thread's own name, not its wakeup preview", async () => {
+/** Opens the row menu and returns the exact value its rename editor starts from. */
+async function openRenameValue(
+  threads: NativeThreadSummary[],
+): Promise<string> {
   const dom = new JSDOM(
     "<!doctype html><html><body><div id=root></div></body></html>",
     { url: "http://localhost" },
@@ -389,7 +392,7 @@ test("rename starts from the Thread's own name, not its wakeup preview", async (
         createElement(TestSidebar, {
           onForkThread: async () => undefined,
           onRenameThread: async () => undefined,
-          threads: [namedWakeupThread()],
+          threads,
         }),
       ),
     );
@@ -404,10 +407,7 @@ test("rename starts from the Thread's own name, not its wakeup preview", async (
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
     });
-    assert.equal(
-      requiredElement<HTMLInputElement>(".thread-menu-rename input").value,
-      "PAW",
-    );
+    return requiredElement<HTMLInputElement>(".thread-menu-rename input").value;
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previousGlobals, {
@@ -415,6 +415,25 @@ test("rename starts from the Thread's own name, not its wakeup preview", async (
     });
     dom.window.close();
   }
+}
+
+test("rename starts from the Thread's own name, not its wakeup preview", async () => {
+  assert.equal(await openRenameValue([namedWakeupThread()]), "PAW");
+});
+
+test("rename starts from a legacy raw-wakeup name, not its disclosure label", async () => {
+  const thread = {
+    ...activeSummary(),
+    threadId: "legacy-wakeup-thread",
+    name: wakeupPrompt("source-thread-123"),
+  };
+  const value = await openRenameValue([thread]);
+  assert.doesNotMatch(value, /Relay from/iu);
+  // A single-line rename input strips newlines from the exact stored name.
+  assert.equal(
+    value,
+    wakeupPrompt("source-thread-123").replace(/[\r\n]/gu, ""),
+  );
 });
 
 function TestSidebar({
@@ -496,21 +515,25 @@ function activeSummary(): NativeThreadSummary {
 }
 
 /** A PAW/Room working Thread: its first message is the wakeup that created it. */
+function wakeupPrompt(sourceThreadId: string): string {
+  return [
+    "[ZenX trigger wakeup]",
+    "Trigger ID: trigger-a",
+    "Reason: Room #PAW mention from You: hi",
+    `Source Thread: ${sourceThreadId}`,
+    "Registered trigger: PAW",
+    "",
+    "Injected prompt:",
+    "You are the user's ongoing personal assistant in ZenX.",
+  ].join("\n");
+}
+
 function namedWakeupThread(): NativeThreadSummary {
   return {
     ...activeSummary(),
     threadId: "paw-thread",
     name: "PAW",
-    preview: [
-      "[ZenX trigger wakeup]",
-      "Trigger ID: trigger-a",
-      "Reason: Room #PAW mention from You: hi",
-      "Source Room: 63c6c01d-5989-4d55-bf78-03e714189d3e",
-      "Registered trigger: PAW",
-      "",
-      "Injected prompt:",
-      "You are the user's ongoing personal assistant in ZenX.",
-    ].join("\n"),
+    preview: wakeupPrompt("source-thread-123"),
   };
 }
 

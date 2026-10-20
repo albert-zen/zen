@@ -11,7 +11,7 @@ import type {
 import type { RoomConversation } from "./room-conversations.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import { ThreadTitleEditor } from "./thread-title-editor.js";
-import { threadTitle } from "./thread-list.js";
+import { threadEditTitle, threadTitle } from "./thread-list.js";
 
 export interface CompanionViewState {
   selected: string;
@@ -230,6 +230,7 @@ export function CompanionWorkspace({
           {workingThread && onRenameThread ? (
             <ThreadTitleEditor
               key={workingThread.threadId}
+              editTitle={threadEditTitle(workingThread)}
               title={threadTitle(workingThread)}
               editable={
                 !workingThread.archived &&

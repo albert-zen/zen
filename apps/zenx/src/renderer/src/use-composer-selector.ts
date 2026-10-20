@@ -10,6 +10,7 @@ import {
 } from "./workflow-commands.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 import { isCompactCommand } from "./compact-command.js";
+import { threadTitle } from "./thread-list.js";
 import {
   replaceTrigger,
   selectorTrigger,
@@ -137,7 +138,10 @@ export function useComposerSelector({
           );
           for (const thread of available) {
             const generatedUntitled = !thread.name && !thread.preview;
-            const name = thread.name || thread.preview || "Untitled thread";
+            // Thread naming, wakeup disclosure and unavailable text all come
+            // from one helper so a reference cannot show a different identity
+            // than the Sidebar, the title bar or the PAW workspace.
+            const name = threadTitle(thread);
             const cwd =
               thread.status === "systemError" ? "" : thread.currentMetadata.cwd;
             if (
@@ -155,7 +159,7 @@ export function useComposerSelector({
                 other.threadId !== thread.threadId &&
                 other.status !== "systemError" &&
                 other.currentMetadata.cwd === cwd &&
-                (other.name || other.preview || "Untitled thread") === name,
+                threadTitle(other) === name,
             );
             rows.push({
               key: `thread:${thread.threadId}`,

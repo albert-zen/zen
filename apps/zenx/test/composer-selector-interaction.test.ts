@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import test from "node:test";
 import type { Thread } from "../src/protocol-client/index.js";
 import type { WorkspaceFileSearch } from "../src/main/workspace-files.js";
+import { threadTitle } from "../src/renderer/src/thread-list.js";
 import {
   editComposer,
   emptyComposerState,
@@ -151,7 +152,7 @@ async function withView(
         list: () => Promise<
           Array<{
             threadId: string;
-            name: string;
+            name: string | null;
             preview: string;
             status: string;
             currentMetadata: { cwd: string };
@@ -217,7 +218,7 @@ async function withView(
       list: async (): Promise<
         Array<{
           threadId: string;
-          name: string;
+          name: string | null;
           preview: string;
           status: string;
           currentMetadata: { cwd: string };
@@ -369,6 +370,70 @@ test("duplicate thread names select canonical ID with keyboard, preserve tail, f
     assert.equal(getDraft().text, "Ask  after");
     assert.equal(document.activeElement, textarea());
     assert.deepEqual(sends, []);
+  });
+});
+
+test("Thread references share the Thread title and disclose a wakeup first message", async () => {
+  await withView(async ({ api, getDraft }) => {
+    const wakeup = [
+      "[ZenX trigger wakeup]",
+      "Trigger ID: trigger-a",
+      "Source Room: 63c6c01d-5989-4d55-bf78-03e714189d3e",
+    ].join("\n");
+    api.threads.list = async () => [
+      {
+        threadId: "named-paw",
+        name: "PAW",
+        preview: wakeup,
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
+      {
+        threadId: "unnamed-paw",
+        name: wakeup,
+        preview: "",
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
+    ];
+    await input("@");
+    await settleSearch();
+    const labels = options().map((row) => row.textContent ?? "");
+    assert.equal(labels.length, 2);
+    // A named Thread never shows its wakeup first message here either.
+    assert.match(labels[0]!, /PAW/u);
+    assert.doesNotMatch(labels[0]!, /Trigger ID/u);
+    // A legacy raw-wakeup name follows the exact same disclosure rule as the
+    // Sidebar instead of leaking the prompt into the picker and the reference.
+    assert.equal(
+      labels[1]!.startsWith(
+        threadTitle({
+          threadId: "unnamed-paw",
+          name: wakeup,
+          preview: "",
+          archived: false,
+          createdAt: new Date(1_000).toISOString(),
+          updatedAt: new Date(2_000).toISOString(),
+          currentMetadata: {
+            model: "fake",
+            provider: "fake",
+            cwd: "C:/workspace",
+            sandbox: "danger-full-access",
+            approvalPolicy: "never",
+          },
+          status: "idle",
+        }),
+      ),
+      true,
+    );
+    assert.doesNotMatch(labels[1]!, /Trigger ID|ZenX trigger wakeup/u);
+    await key("Enter");
+    const reference = getDraft().references[0];
+    assert.equal(reference?.kind, "thread");
+    assert.doesNotMatch(
+      (reference as { name?: string }).name ?? "",
+      /Trigger ID/u,
+    );
   });
 });
 

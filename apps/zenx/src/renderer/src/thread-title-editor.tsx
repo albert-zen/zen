@@ -7,18 +7,22 @@ import type { ThreadTitleProjection } from "../../main/thread-title-types.js";
 export function ThreadTitleEditor({
   editable,
   title,
+  editTitle = title,
   projection,
   onRename,
   onRetry,
 }: {
   editable: boolean;
+  /** Displayed title; may be a disclosure stand-in rather than the saved name. */
   title: string;
+  /** Text the editor starts from; the Thread's exact current name. */
+  editTitle?: string;
   projection?: ThreadTitleProjection;
   onRename(title: string): Promise<void>;
   onRetry?(): Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title);
+  const [draft, setDraft] = useState(editTitle);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
@@ -55,8 +59,8 @@ export function ThreadTitleEditor({
     [],
   );
   useEffect(() => {
-    if (!editing) setDraft(title);
-  }, [editing, title]);
+    if (!editing) setDraft(editTitle);
+  }, [editing, editTitle]);
   useLayoutEffect(() => {
     composing.current = false;
     if (!editing && restoreFocus.current) {

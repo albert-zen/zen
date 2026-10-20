@@ -14,6 +14,7 @@ import {
   lastUsedProjectWorkspace,
   threadModelIdentity,
   threadPreview,
+  threadEditTitle,
   threadTitle,
   writeSidebarMode,
 } from "../src/renderer/src/thread-list.js";
@@ -367,6 +368,35 @@ test("falls back to the first-message preview for an unnamed wakeup Thread", () 
   const value = summary("paw", "idle", 20);
   value.preview = wakeup;
   assert.equal(threadTitle(value), wakeup);
+});
+
+test("a rename editor starts from the exact name, never from machine text", () => {
+  const wakeup = [
+    "[ZenX trigger wakeup]",
+    "Trigger ID: trigger-a",
+    "Source Room: 63c6c01d-5989-4d55-bf78-03e714189d3e",
+  ].join("\n");
+  const named = summary("paw", "idle", 20);
+  named.name = "PAW";
+  named.preview = wakeup;
+  assert.equal(threadEditTitle(named), "PAW");
+
+  // A legacy name that is the raw prompt displays as a disclosure label but
+  // must still be edited as the exact value it holds.
+  const legacy = summary("legacy", "idle", 20);
+  legacy.name = wakeup;
+  assert.equal(threadTitle(legacy), "Room wakeup · 63c6c01d");
+  assert.equal(threadEditTitle(legacy), wakeup);
+
+  // An unnamed wakeup Thread offers no name to save; its provisional title is
+  // machine text, not a title a user should commit unchanged.
+  const unnamed = summary("unnamed", "idle", 20);
+  unnamed.preview = wakeup;
+  assert.equal(threadEditTitle(unnamed), "");
+
+  const provisional = summary("plain", "idle", 20);
+  provisional.preview = "帮我看看构建";
+  assert.equal(threadEditTitle(provisional), "帮我看看构建");
 });
 
 test("shows only logo category and friendly model identity", () => {
