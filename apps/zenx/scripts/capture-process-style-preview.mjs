@@ -18,7 +18,7 @@ const measure = `(() => {
   const label = content?.querySelector('.activity-label');
   const icon = content?.querySelector('.trace-tool-icons, svg');
   const rect = element => element ? { x: element.getBoundingClientRect().x, y: element.getBoundingClientRect().y, width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height } : null;
-  return { text: header?.textContent, header: rect(header), history: rect(history), row: rect(row), icon: rect(icon), label: rect(label), gap: icon && label ? label.getBoundingClientRect().left - icon.getBoundingClientRect().right : null, headerIndex: turn && header ? [...turn.children].indexOf(header) : -1, totalInsideHistory: !!history?.querySelector('.turn-duration'), footer: !!document.querySelector('.turn-status-footer'), overflow: document.documentElement.scrollWidth > innerWidth, activeSweep: row?.querySelector('.activity-text')?.dataset.animating, sweepDisplay: row?.querySelector('.activity-sweep') ? getComputedStyle(row.querySelector('.activity-sweep')).display : null };
+  return { text: header?.textContent, header: rect(header), history: rect(history), row: rect(row), icon: rect(icon), label: rect(label), gap: icon && label ? label.getBoundingClientRect().left - icon.getBoundingClientRect().right : null, headerIndex: turn && header ? [...turn.children].indexOf(header) : -1, totalInsideHistory: !!history?.querySelector('.turn-duration'), footer: !!document.querySelector('.turn-status-footer'), overflow: document.documentElement.scrollWidth > innerWidth, activeSweep: row?.querySelector('.activity-text')?.dataset.animating, sweepMask: row?.querySelector('.activity-sweep') ? getComputedStyle(row.querySelector('.activity-sweep')).maskImage : null, sweepDisplay: row?.querySelector('.activity-sweep') ? getComputedStyle(row.querySelector('.activity-sweep')).display : null };
 })()`;
 const evidence = {
   source:
@@ -54,6 +54,9 @@ await withPreviewBrowser(
       await evaluate(
         "document.getAnimations().forEach(a => { a.pause(); a.currentTime = 700; })",
       );
+      await evaluate(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
       const before = await evaluate(measure);
       assert.ok(before.header && before.history, `${name}: header and history`);
       assert.ok(
@@ -67,11 +70,38 @@ await withPreviewBrowser(
       if (entry.scene === "thinking") {
         assert.equal(before.gap, 6);
         assert.equal(before.activeSweep, "true");
+        assert.ok(
+          before.sweepMask && before.sweepMask !== "none",
+          `${name}: computed sweep mask is valid`,
+        );
       }
       await screenshot(`${name}.png`);
       if (entry.scene === "thinking") {
+        const clip = {
+          x: before.row.x,
+          y: before.row.y,
+          width: before.row.width,
+          height: before.row.height,
+          scale: 1,
+        };
+        const earlyFrame = await send("Page.captureScreenshot", {
+          format: "png",
+          clip,
+        });
         await evaluate(
           "document.getAnimations().forEach(a => { a.currentTime = 1100; })",
+        );
+        await evaluate(
+          "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        );
+        const laterFrame = await send("Page.captureScreenshot", {
+          format: "png",
+          clip,
+        });
+        assert.notEqual(
+          earlyFrame.data,
+          laterFrame.data,
+          `${name}: actual icon/text pixels change across the sweep`,
         );
         await screenshot(`${name}-sweep-later.png`);
         await send("Emulation.setEmulatedMedia", {

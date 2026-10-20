@@ -128,3 +128,16 @@ test("icon sweep is stroke-only, visibility-gated and reduced-motion safe", asyn
     /@media \(prefers-reduced-motion: reduce\), \(forced-colors: active\)\s*\{\s*\.activity-sweep\s*\{\s*display: none;/su,
   );
 });
+
+test("shared shimmer mask is valid when inherited from the root theme", async () => {
+  const theme = await readFile(
+    new URL("../src/renderer/src/theme.css", import.meta.url),
+    "utf8",
+  );
+  const mask = theme.match(/--activity-shimmer-mask: ([\s\S]*?);/u)?.[1];
+  assert.ok(mask);
+  // Root custom properties resolve before inheritance. A child-only variable here
+  // would make the entire inherited mask invalid and leave a solid overlay.
+  assert.doesNotMatch(mask, /var\(--activity-band\)/u);
+  assert.match(mask, /transparent 4\.5rem/u);
+});
