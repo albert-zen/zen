@@ -148,6 +148,7 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 - Archive 在 active Turn 期间禁用。Thread 切换后也必须先恢复权威 running state，不能因本地选择变化短暂放开 Archive。
 - Sidebar 只有 active Threads，因此 Unarchive 的 row 位于 Settings → Archived Threads；它可以复用同一管理模式。
 - Escape 只在菜单或弹层确实打开时关闭并归还焦点，不得在无菜单时抢走当前焦点。
+- 按住平台切换修饰键（macOS Cmd，其它平台 Ctrl）时，线程快捷键提示独占行尾空间；标题为该提示预留宽度，运行、Trigger、未读状态和 hover/focus 操作区整体左移，不能与提示重叠。松开修饰键或窗口失焦后恢复普通布局。
 - Thread title、ellipsis 与状态在紧凑宽度下不得重叠。异步 summary/read 结果必须有 freshness fence，旧结果不能覆盖较新的 Thread 选择。
 - 当前菜单不暴露未定义的永久 Delete；未来是否提供以及它的产品合同仍为 **TBD**。
 - Projects mode 中 Project 标题与 owning Project 内的非 Pinned Thread row 可直接拖动；标题按钮显式启用 native draggable，行内动作按钮不启动排序。
