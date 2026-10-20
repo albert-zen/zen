@@ -5,7 +5,7 @@ import { delay, withPreviewBrowser } from "./preview-browser.mjs";
 const directory = path.resolve(process.argv[2] ?? ".approved-ui-preview");
 const evidence = {
   source:
-    "Real production components and CSS; synthetic fixtures only; Chrome on a Linux CI virtual display, not physical macOS/Windows input; no Host actions or private data.",
+    "Real production components and CSS; synthetic fixtures only; Chrome desktop-input emulation on Linux CI, not physical macOS/Windows input; no Host actions or private data.",
   sidebar: [],
   context: [],
 };
@@ -36,11 +36,22 @@ await withPreviewBrowser(
         `location.href===${JSON.stringify(destination)} && document.readyState==='complete'`,
       );
       const capabilities = await evaluate(
-        "({hover:matchMedia('(hover: hover)').matches, fine:matchMedia('(pointer: fine)').matches, anyHover:matchMedia('(any-hover: hover)').matches, anyFine:matchMedia('(any-pointer: fine)').matches})",
+        "({hover:matchMedia('(hover: hover)').matches, fine:matchMedia('(pointer: fine)').matches, anyHover:matchMedia('(any-hover: hover)').matches, anyFine:matchMedia('(any-pointer: fine)').matches, hoverNone:matchMedia('(hover: none)').matches, pointerNone:matchMedia('(pointer: none)').matches, coarse:matchMedia('(pointer: coarse)').matches, anyCoarse:matchMedia('(any-pointer: coarse)').matches, anyPointerNone:matchMedia('(any-pointer: none)').matches, anyHoverNone:matchMedia('(any-hover: none)').matches})",
       );
       assert.deepEqual(
         capabilities,
-        { hover: true, fine: true, anyHover: true, anyFine: true },
+        {
+          hover: true,
+          fine: true,
+          anyHover: true,
+          anyFine: true,
+          hoverNone: false,
+          pointerNone: false,
+          coarse: false,
+          anyCoarse: false,
+          anyPointerNone: false,
+          anyHoverNone: false,
+        },
         `${name}: actual browser desktop-input media capabilities`,
       );
       evidence.inputCapabilities = capabilities;

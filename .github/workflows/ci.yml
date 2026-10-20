@@ -58,8 +58,7 @@ jobs:
       - name: Build and capture approved UI previews
         run: |
           node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
-          command -v xvfb-run
-          xvfb-run -a env ZENX_PREVIEW_HEADFUL=1 node apps/zenx/scripts/capture-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
+          ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
       - name: Retain approved synthetic UI evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
