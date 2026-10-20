@@ -105,3 +105,17 @@ test("notes open only on request, close by Escape and button, restore focus and 
     dom.window.close();
   }
 });
+
+test("shell Escape respects a dialog-consumed event before closing the narrow sidebar", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(
+    new URL("../src/renderer/src/App.tsx", import.meta.url),
+    "utf8",
+  );
+  // Source contract for the App integration; dialog keyboard/focus behavior is
+  // separately exercised above and by the actual-component browser fixture.
+  assert.match(
+    source,
+    /const close = \(event: KeyboardEvent\) => \{\s*if \(event\.key !== "Escape" \|\| event\.defaultPrevented\) return;\s*if \(projectPickerIntent !== null\) closeProjectPicker\(\);\s*else if \(sidebarOpen\) setSidebarOpen\(false\);/,
+  );
+});

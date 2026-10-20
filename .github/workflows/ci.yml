@@ -53,6 +53,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Build and capture What's New actual-component preview
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-whats-new-preview.mjs "${{ runner.temp }}/zenx-whats-new-preview"
+          node apps/zenx/scripts/capture-whats-new-preview.mjs "${{ runner.temp }}/zenx-whats-new-preview"
+      - name: Retain What's New synthetic UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-whats-new-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-whats-new-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check ZenX with bounded execution-order evidence
         env:
           ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
