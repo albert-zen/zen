@@ -701,3 +701,11 @@ control as a trailing right/down chevron, consistent with T3's
 [TurnFoldTimelineRow](https://github.com/pingdotgg/t3code/blob/90c3f8350d777f09c7afdf643db63bf8135161e6/apps/web/src/components/chat/MessagesTimeline.tsx#L2635-L2654).
 Error/retry actions and exceptional terminal feedback remain separate and intact. Live recovery keeps its visible retry/attempt feedback alongside, not inside, the work-duration label. Missing timing inputs use Working/Worked without an invented duration.
 Runtime phase calculations, chronology, grouping and fold behavior do not change.
+
+### Activity sweep contrast correction (2026-10-20)
+
+Pinned reference: T3 Code `90c3f8350d777f09c7afdf643db63bf8135161e6`, `MessagesTimeline.tsx` (`ActivityShimmerOverlay`, `LiveActivityRow`, `LiveActivityContent`), `WorkLog.tsx`, `index.css`, and `packages/shared/src/themePalettes.ts`. T3's shared overlay traverses the icon and full activity label, not the row background or trailing controls. Its normal active tool-label path also uses `live-tool-shine`; not every T3 row uses the shared overlay.
+
+ZenX already matched the 4.5rem alpha mask, 2.2s steps(30), and cancelling translation geometry. The mismatch was base contrast: group text/icons inherited secondary text, and tool-category prefixes had their own secondary override. Active base icon, category and full label now consistently use muted text; the decorative copy remains foreground. Inactive rows, counts/status/chevrons, duration header, runtime predicates, order, grouping and disclosure are unchanged.
+
+At normal contrast, T3 default light base/crest are #71717b/#27272a (3.09:1 luminance ratio); dark #818181/#f5f5f5 (3.57:1). ZenX retains its own accessible palette: light #616878/#1c2029 (2.92:1, previously 2.12:1 for group text), dark #898c96/#f0f1f3 (2.97:1, previously 1.79:1). These are solid-color base-to-crest ratios, not an assertion that anti-aliased motion has been visually accepted. The browser capture checks the actual computed icon, full-label and overlay colors as well as separate sweep phases. This is contrast-role parity, not pixel-identical T3 typography or a whole-row pulse.

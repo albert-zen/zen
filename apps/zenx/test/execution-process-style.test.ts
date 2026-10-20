@@ -142,6 +142,18 @@ test("icon sweep is stroke-only, visibility-gated and reduced-motion safe", asyn
   );
 });
 
+test("active base icon, prefix and label use muted contrast below the foreground sweep", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/activity-text.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.activity-text\[data-active="true"\] > \.activity-content,\s*\.activity-text\[data-active="true"\] > \.activity-content > strong\s*\{\s*color: var\(--text-3\);/u,
+  );
+  assert.match(css, /\.activity-sweep\s*\{[^}]*color: var\(--text\);/su);
+});
+
 test("shared shimmer mask is valid when inherited from the root theme", async () => {
   const theme = await readFile(
     new URL("../src/renderer/src/theme.css", import.meta.url),

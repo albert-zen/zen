@@ -15,6 +15,12 @@
   min-width: 0;
   gap: 6px;
 }
+/* Like T3 secondary-label/icon-muted, the base must stay below foreground.
+   Scope to the real content, so the decorative copy keeps its bright crest. */
+.activity-text[data-active="true"] > .activity-content,
+.activity-text[data-active="true"] > .activity-content > strong {
+  color: var(--text-3);
+}
 .activity-content > svg,
 .activity-content > strong {
   flex: none;

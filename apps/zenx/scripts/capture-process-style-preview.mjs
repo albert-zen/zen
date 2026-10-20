@@ -34,7 +34,7 @@ const measure = `(() => {
   const label = content?.querySelector('.activity-label');
   const icon = content?.querySelector('.trace-tool-icons, svg');
   const rect = element => element ? { x: element.getBoundingClientRect().x, y: element.getBoundingClientRect().y, width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height } : null;
-  return { text: header?.textContent, workLabel: header?.querySelector('.turn-work-label')?.textContent, workLabelX: header?.querySelector('.turn-work-label')?.getBoundingClientRect().x, headerIcons: header?.querySelectorAll('svg').length, phase: header?.getAttribute('data-phase'), header: rect(header), history: rect(history), row: rect(row), icon: rect(icon), label: rect(label), gap: icon && label ? label.getBoundingClientRect().left - icon.getBoundingClientRect().right : null, headerIndex: turn && header ? [...turn.children].indexOf(header) : -1, totalInsideHistory: !!history?.querySelector('.turn-duration'), footer: !!document.querySelector('.turn-status-footer'), overflow: document.documentElement.scrollWidth > innerWidth, activeSweep: row?.querySelector('.activity-text')?.dataset.animating, sweepMask: row?.querySelector('.activity-sweep') ? getComputedStyle(row.querySelector('.activity-sweep')).maskImage : null, sweepDisplay: row?.querySelector('.activity-sweep') ? getComputedStyle(row.querySelector('.activity-sweep')).display : null };
+  return { baseColor: content ? getComputedStyle(content).color : null, iconColor: icon ? getComputedStyle(icon).color : null, labelColor: label ? getComputedStyle(label).color : null, sweepColor: row?.querySelector(".activity-sweep") ? getComputedStyle(row.querySelector(".activity-sweep")).color : null, text: header?.textContent, workLabel: header?.querySelector('.turn-work-label')?.textContent, workLabelX: header?.querySelector('.turn-work-label')?.getBoundingClientRect().x, headerIcons: header?.querySelectorAll('svg').length, phase: header?.getAttribute('data-phase'), header: rect(header), history: rect(history), row: rect(row), icon: rect(icon), label: rect(label), gap: icon && label ? label.getBoundingClientRect().left - icon.getBoundingClientRect().right : null, headerIndex: turn && header ? [...turn.children].indexOf(header) : -1, totalInsideHistory: !!history?.querySelector('.turn-duration'), footer: !!document.querySelector('.turn-status-footer'), overflow: document.documentElement.scrollWidth > innerWidth, activeSweep: row?.querySelector('.activity-text')?.dataset.animating, sweepMask: row?.querySelector('.activity-sweep') ? getComputedStyle(row.querySelector('.activity-sweep')).maskImage : null, sweepDisplay: row?.querySelector('.activity-sweep') ? getComputedStyle(row.querySelector('.activity-sweep')).display : null };
 })()`;
 const evidence = {
   source:
@@ -104,6 +104,24 @@ await withPreviewBrowser(
       if (entry.scene === "thinking") {
         assert.equal(before.gap, 6);
         assert.equal(before.activeSweep, "true");
+        // Measure the real cascade, not merely different animation pixels.
+        const expectedBase =
+          entry.theme === "dark" ? "rgb(137, 140, 150)" : "rgb(97, 104, 120)";
+        const expectedCrest =
+          entry.theme === "dark" ? "rgb(240, 241, 243)" : "rgb(28, 32, 41)";
+        assert.equal(before.baseColor, expectedBase, `${name}: muted base`);
+        assert.equal(before.iconColor, expectedBase, `${name}: muted icon`);
+        assert.equal(
+          before.labelColor,
+          expectedBase,
+          `${name}: muted full label`,
+        );
+        assert.equal(
+          before.sweepColor,
+          expectedCrest,
+          `${name}: foreground crest`,
+        );
+
         assert.ok(
           before.sweepMask && before.sweepMask !== "none",
           `${name}: computed sweep mask is valid`,
