@@ -397,6 +397,10 @@ test("a rename editor starts from the exact name, never from machine text", () =
   const provisional = summary("plain", "idle", 20);
   provisional.preview = "帮我看看构建";
   assert.equal(threadEditTitle(provisional), "帮我看看构建");
+
+  const empty = summary("empty", "idle", 20);
+  empty.preview = "";
+  assert.equal(threadEditTitle(empty), "");
 });
 
 test("shows only logo category and friendly model identity", () => {

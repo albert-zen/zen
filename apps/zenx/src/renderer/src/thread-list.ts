@@ -331,7 +331,12 @@ export function threadPreview(thread: NativeThreadSummary): string {
 export function threadEditTitle(thread: NativeThreadSummary): string {
   const named = thread.name?.trim() ?? "";
   if (named.length > 0) return named;
-  return wakeupLabel(thread.preview) === null ? threadTitle(thread) : "";
+  // Nothing to edit when the provisional title is machine text or a
+  // placeholder: an untouched submit must never turn those into a name.
+  return thread.preview.trim().length > 0 &&
+    wakeupLabel(thread.preview) === null
+    ? threadTitle(thread)
+    : "";
 }
 
 export function threadProject(thread: NativeThreadSummary): string {
