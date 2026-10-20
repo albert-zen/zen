@@ -289,7 +289,7 @@ try {
     })}`;
     await send("Page.navigate", { url: destination });
     await waitFor(
-      `location.href===${JSON.stringify(destination)} && document.body.dataset.previewReady==='true'`,
+      `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true'`,
     );
     await delay(250);
     receipt.initial = await evaluate(measure);
@@ -421,7 +421,7 @@ try {
 
     await evaluate("delete document.body.dataset.previewReady");
     await send("Page.reload", { ignoreCache: true });
-    await waitFor("document.body.dataset.previewReady==='true'");
+    await waitFor("document.body?.dataset.previewReady==='true'");
     assert.equal((await evaluate(measure)).dialog, null);
     receipt.checks.push("still-closed-after-reload");
     receipt.interactionStatus = "passed";
