@@ -29,14 +29,18 @@ const evidence = {
 const measure = `(() => {
   const rect = (e) => { if (!e) return null; const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; };
   const trigger=document.querySelector('.whats-new-trigger');
+  const settings=document.querySelector('.settings-nav-row');
+  const footer=document.querySelector('.sidebar-footer');
   const dialog=document.querySelector('.whats-new-dialog[data-state="open"]');
   const list=document.querySelector('.whats-new-list');
   const heading=dialog && document.getElementById(dialog.getAttribute('aria-labelledby'));
   return {
-    trigger:rect(trigger), triggerText:trigger.textContent.trim(),
+    trigger:rect(trigger), triggerText:trigger.textContent.trim(), triggerLabel:trigger.getAttribute('aria-label'), triggerTitle:trigger.title,
+    settings:rect(settings), footer:rect(footer), footerRows:footer.children.length,
+    siblingButtons:trigger.previousElementSibling===settings && trigger.parentElement.classList.contains('sidebar-settings-row'),
+    nestedButtons:!!footer.querySelector('button button'), serviceDot:!!footer.querySelector('.service-status-dot'),
     expanded:trigger.getAttribute('aria-expanded'),
     footerOrder:[...document.querySelector('.sidebar-footer').children].map(e=>e.textContent.trim()),
-    triggerBeforeSettings:trigger.nextElementSibling?.classList.contains('settings-nav-row'),
     dialog:rect(dialog), role:dialog?.getAttribute('role'), title:heading?.textContent,
     list:rect(list), listClientHeight:list?.clientHeight, listScrollHeight:list?.scrollHeight,
     listClientWidth:list?.clientWidth, listScrollWidth:list?.scrollWidth,
@@ -295,10 +299,30 @@ try {
     receipt.initial = await evaluate(measure);
     assert.equal(receipt.initial.dialog, null, "Never opens automatically.");
     assert.equal(receipt.initial.expanded, "false");
-    assert.equal(receipt.initial.triggerBeforeSettings, true);
+    assert.equal(receipt.initial.siblingButtons, true);
+    assert.equal(receipt.initial.footerRows, 1);
+    assert.equal(receipt.initial.nestedButtons, false);
+    assert.equal(receipt.initial.serviceDot, false);
+    assert.equal(receipt.initial.triggerText, "");
+    assert.equal(
+      receipt.initial.triggerTitle,
+      options.lang === "en" ? "What’s New" : "更新内容",
+    );
+    assert.equal(receipt.initial.triggerLabel, receipt.initial.triggerTitle);
+    assert.equal(receipt.initial.settings.height, 34);
+    assert.equal(receipt.initial.trigger.height, 34);
+    assert.equal(receipt.initial.trigger.y, receipt.initial.settings.y);
+    assert.equal(receipt.initial.footer.height, 50);
+    assert.ok(receipt.initial.trigger.x >= receipt.initial.settings.right);
     assert.equal(receipt.initial.pageOverflow, false);
     assert.ok(receipt.initial.trigger.height >= 32, "Usable footer target.");
-    receipt.checks.push("closed-on-load", "entry-before-settings");
+    receipt.checks.push(
+      "closed-on-load",
+      "single-unchanged-height-footer-row",
+      "sibling-icon-after-settings",
+      "no-service-dot",
+      "localized-tooltip",
+    );
 
     // Reach the actual entry with browser keyboard input, not element.focus().
     let tabCount = 0;

@@ -82,7 +82,7 @@ test("Appearance v1 drives shell, sidebar, content, preview, and controls throug
     /\.composer\s*\{[^}]*background:\s*var\(--color-surface\)/su,
     /\.primary-button\s*\{[^}]*background:\s*var\(--color-accent\)/su,
     /\.field input,[\s\S]*?background:\s*var\(--color-surface-code\)/u,
-    /\.service-status-dot\.ready\s*\{[^}]*var\(--color-status-success\)/su,
+    /\.sidebar-settings-row > \.whats-new-trigger\s*\{[^}]*var\(--color-text-muted\)/su,
     /\.appearance-preview-sidebar\s*\{[^}]*background:\s*var\(--color-surface-sidebar\)/su,
     /\.appearance-preview-content\s*\{[^}]*background:\s*var\(--color-surface-main\)/su,
   ]) {

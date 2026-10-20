@@ -11,14 +11,15 @@ export function WhatsNew() {
   return (
     <>
       <button
-        className="settings-nav-row whats-new-trigger"
+        className="icon-button whats-new-trigger"
         type="button"
+        aria-label={t("whatsNew")}
+        title={t("whatsNew")}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen(true)}
       >
         <Icon name="book" />
-        <span>{t("whatsNew")}</span>
       </button>
       <Dialog
         open={open}

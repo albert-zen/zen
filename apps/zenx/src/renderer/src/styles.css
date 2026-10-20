@@ -1340,43 +1340,10 @@ button:disabled {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
 }
-.service-status-dot {
-  width: 7px;
-  height: 7px;
-  margin-right: 2px;
-  border-radius: 50%;
-  background: var(--color-text-muted);
-  pointer-events: none;
-}
-.service-status-dot.ready {
-  background: var(--color-status-success);
-}
-.service-status-dot.starting,
-.service-status-dot.reconnecting {
-  background: var(--color-status-warning);
-  animation: service-status-pulse 1.8s ease-in-out infinite;
-}
-.service-status-dot.error,
-.service-status-dot.stopped {
-  background: var(--color-status-danger);
-}
-@keyframes service-status-pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .app-shell,
   .sidebar {
     transition: none;
-  }
-  .service-status-dot.starting,
-  .service-status-dot.reconnecting {
-    animation: none;
   }
 }
 .sidebar-scrim {
@@ -11564,6 +11531,27 @@ button:disabled {
   justify-self: start;
 }
 
+.sidebar-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebar-settings-row > .settings-nav-row {
+  flex: 1;
+  min-width: 0;
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+.sidebar-settings-row > .whats-new-trigger {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  color: var(--color-text-muted);
+}
+.sidebar-settings-row > .whats-new-trigger:hover {
+  color: var(--color-text-primary);
+}
 .ui-dialog.whats-new-dialog {
   display: flex;
   flex-direction: column;
@@ -11623,7 +11611,6 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 @media (pointer: coarse) {
-  .whats-new-trigger,
   .whats-new-header .icon-button {
     min-height: 44px;
     min-width: 44px;
