@@ -42,6 +42,11 @@ await withPreviewBrowser(
       );
       await evaluate("document.fonts.ready");
       await settle();
+      assert.equal(
+        await evaluate("document.querySelector('.turn-outcome') === null"),
+        true,
+        "Synthetic completed turns have an explicit final acknowledgment",
+      );
       await screenshot(`${name}-initial-sent.png`);
       // Use an actual DOM Range; the production selectionchange listener owns the toolbar.
       await evaluate(
@@ -105,6 +110,17 @@ await withPreviewBrowser(
       assert.equal(sent.draft.references.length, 0);
       assert.equal(sent.draft.text, "");
       assert.equal(sent.overflow, false);
+      assert.deepEqual(
+        await evaluate(
+          "window.quoteFixture.getThread().canonicalItems.filter(item=>item.turnId==='turn-synthetic-send-1').map(item=>item.type)",
+        ),
+        ["turn_started", "user_message", "agent_message", "turn_completed"],
+      );
+      assert.equal(
+        await evaluate("document.querySelector('.turn-outcome') === null"),
+        true,
+        "Local preview must not imply a failed backend send",
+      );
       await screenshot(`${name}-sent.png`);
       evidence.scenes.push({ ...entry, draft, sent });
     }

@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { Sidebar } from "../../src/renderer/src/Sidebar.js";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import { ThreadReadingStateProvider } from "../../src/renderer/src/thread-reading-state.js";
-import { Icon } from "../../src/renderer/src/icons.js";
 import {
   editComposer,
   emptyComposerState,
@@ -59,6 +58,16 @@ export function appendSyntheticSent(
   next = applyNativeThreadEvent(next, {
     type: "item_completed",
     item: {
+      type: "turn_started",
+      id: `start-${clientId}`,
+      threadId: thread.id,
+      turnId,
+      createdAt: "2026-10-20T08:00:00Z",
+    },
+  });
+  next = applyNativeThreadEvent(next, {
+    type: "item_completed",
+    item: {
       type: "user_message",
       id: `message-${clientId}`,
       threadId: thread.id,
@@ -66,6 +75,30 @@ export function appendSyntheticSent(
       createdAt: "2026-10-20T08:00:01Z",
       clientId,
       content: [{ type: "text", text }],
+    },
+  });
+  // A completed native Turn requires a final message. This is an explicitly
+  // labeled local fixture acknowledgment, not a generated Provider response.
+  next = applyNativeThreadEvent(next, {
+    type: "item_completed",
+    item: {
+      type: "agent_message",
+      id: `preview-ack-${clientId}`,
+      threadId: thread.id,
+      turnId,
+      createdAt: "2026-10-20T08:00:02Z",
+      text: "本地预览：问题与引用已显示在上方，未调用模型。",
+    },
+  });
+  next = applyNativeThreadEvent(next, {
+    type: "item_completed",
+    item: {
+      type: "turn_completed",
+      id: `end-${clientId}`,
+      threadId: thread.id,
+      turnId,
+      createdAt: "2026-10-20T08:00:03Z",
+      status: "completed",
     },
   });
   return applyNativeThreadEvent(next, {
@@ -140,10 +173,15 @@ function Fixture() {
   });
   return (
     <div className={`app-shell${narrow ? " sidebar-collapsed" : ""}`}>
-      <header className="window-titlebar">
-        <div className="window-titlebar-product">
-          <span style={{ paddingLeft: 18, fontWeight: 650 }}>ZenX</span>
-        </div>
+      <header
+        className="window-titlebar"
+        style={narrow ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}
+      >
+        {!narrow ? (
+          <div className="window-titlebar-product">
+            <span style={{ paddingLeft: 18, fontWeight: 650 }}>ZenX</span>
+          </div>
+        ) : null}
         <div
           style={{
             paddingInline: 16,
@@ -154,7 +192,9 @@ function Fixture() {
             minWidth: 0,
           }}
         >
-          zenx <Icon name="chevron-right" /> 选段引用
+          <span style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+            {narrow ? "ZenX · 选段引用" : "zenx › 选段引用"}
+          </span>
           <span
             style={{
               marginLeft: "auto",
@@ -162,7 +202,9 @@ function Fixture() {
               whiteSpace: "nowrap",
             }}
           >
-            合成数据 · 发送只添加本地示例消息
+            {narrow
+              ? "合成预览 · 不调用模型"
+              : "合成数据 · 发送只添加本地示例消息"}
           </span>
         </div>
       </header>
