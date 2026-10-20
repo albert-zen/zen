@@ -373,6 +373,26 @@ test("duplicate thread names select canonical ID with keyboard, preserve tail, f
   });
 });
 
+/** An unnamed Thread whose first message is the wakeup that created it. */
+function unnamedWakeupSummary(preview: string) {
+  return {
+    threadId: "wakeup-first-message",
+    name: undefined,
+    preview,
+    archived: false,
+    createdAt: new Date(1_000).toISOString(),
+    updatedAt: new Date(2_000).toISOString(),
+    currentMetadata: {
+      model: "fake",
+      provider: "fake",
+      cwd: "C:/workspace",
+      sandbox: "danger-full-access" as const,
+      approvalPolicy: "never" as const,
+    },
+    status: "idle" as const,
+  };
+}
+
 test("Thread references share the Thread title and disclose a wakeup first message", async () => {
   await withView(async ({ api, getDraft }) => {
     const wakeup = [
@@ -395,11 +415,18 @@ test("Thread references share the Thread title and disclose a wakeup first messa
         status: "idle",
         currentMetadata: { cwd: "C:/workspace" },
       },
+      {
+        threadId: "wakeup-first-message",
+        name: null,
+        preview: wakeup,
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
     ];
     await input("@");
     await settleSearch();
     const labels = options().map((row) => row.textContent ?? "");
-    assert.equal(labels.length, 2);
+    assert.equal(labels.length, 3);
     // A named Thread never shows its wakeup first message here either.
     assert.match(labels[0]!, /PAW/u);
     assert.doesNotMatch(labels[0]!, /Trigger ID/u);
@@ -427,6 +454,12 @@ test("Thread references share the Thread title and disclose a wakeup first messa
       true,
     );
     assert.doesNotMatch(labels[1]!, /Trigger ID|ZenX trigger wakeup/u);
+    // A Thread with no name yet falls back to its first message; that decision
+    // is the user's, and it stays identical here and in the Sidebar.
+    assert.equal(
+      labels[2]!.startsWith(threadTitle(unnamedWakeupSummary(wakeup))),
+      true,
+    );
     await key("Enter");
     const reference = getDraft().references[0];
     assert.equal(reference?.kind, "thread");
