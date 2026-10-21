@@ -9,34 +9,44 @@ import {
   beginComposerSubmission,
   acceptComposerSubmission,
 } from "../../src/renderer/src/composer-state.js";
-import { parseSkillDraft } from "../../src/renderer/src/skill-draft.js";
+import {
+  parseSkillDraft,
+  withSkillDraft,
+} from "../../src/renderer/src/skill-draft.js";
 import { referenceMessage } from "../../src/renderer/src/reference-draft.js";
 import { applyNativeThreadEvent } from "../../src/renderer/src/thread-view-state.js";
 import { runtimeMessage, runtimeThread } from "./agent-runtime-data.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
+import type { Reference } from "../../src/renderer/src/composer-selector.js";
+import { Dialog } from "../../src/renderer/src/ui/controls.js";
+import bundle from "../../docs/reference-context/v2/fixture-bundle.json";
+import chatRequest from "../../docs/reference-context/v2/chat-completions.request.pretty.json";
+import responsesRequest from "../../docs/reference-context/v2/responses.request.pretty.json";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 void i18n.changeLanguage(params.get("lang") ?? "zh-CN");
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
-const sourceText =
-  "建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n完成后保留结果，具体命令和输出按需展开。\n\n选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。\n\n```ts\nconst source = { threadId, messageId };\nconst excerpt = selection.toString();\n// 保留换行、缩进与准确来源\n```";
+const unified = params.has("references");
+const sourceText = unified
+  ? "这是一组完整的合成引用。线程、子线程和文件仅包含位置；消息与选段包含精确原文。编辑下方问题并发送，即可查看实际生产组件的发送态。"
+  : "建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n完成后保留结果，具体命令和输出按需展开。\n\n选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。\n\n```ts\nconst source = { threadId, messageId };\nconst excerpt = selection.toString();\n// 保留换行、缩进与准确来源\n```";
 const base: Thread = {
   ...runtimeThread(
     [runtimeMessage("synthetic-answer", sourceText)],
     "completed",
-    "quote-thread",
+    unified ? "synthetic-host-1" : "quote-thread",
   ),
-  name: "选段引用体验",
-  cwd: "/synthetic/zenx",
+  name: unified ? "统一引用体系" : "选段引用体验",
+  cwd: unified ? "/tmp/zen-reference-demo" : "/synthetic/zenx",
   canonicalItems: [
     {
       type: "agent_message",
       id: "synthetic-answer",
-      threadId: "quote-thread",
+      threadId: unified ? "synthetic-host-1" : "quote-thread",
       turnId: "runtime-turn",
       createdAt: "2026-10-20T08:00:00Z",
       text: sourceText,
@@ -108,26 +118,27 @@ export function appendSyntheticSent(
     status: "completed",
   });
 }
-const initial = params.has("empty")
-  ? base
-  : appendSyntheticSent(
-      base,
-      referenceMessage(
-        "这部分可以举个例子吗？",
-        [
-          {
-            kind: "message",
-            name: "ZenX",
-            cwd: base.cwd,
-            threadId: base.id,
-            id: "synthetic-answer",
-            excerpt: "按需展开",
-          },
-        ],
+const initial =
+  unified || params.has("empty")
+    ? base
+    : appendSyntheticSent(
+        base,
+        referenceMessage(
+          "这部分可以举个例子吗？",
+          [
+            {
+              kind: "message",
+              name: "ZenX",
+              cwd: base.cwd,
+              threadId: base.id,
+              id: "synthetic-answer",
+              excerpt: "按需展开",
+            },
+          ],
+          "synthetic-example",
+        ),
         "synthetic-example",
-      ),
-      "synthetic-example",
-    );
+      );
 const summaries: NativeThreadSummary[] = [
   "选段引用体验",
   "消息投递与队列",
@@ -135,6 +146,8 @@ const summaries: NativeThreadSummary[] = [
 ].map((title, i) => ({
   threadId: i ? `synthetic-${i}` : base.id,
   title,
+  name: title,
+  archived: false,
   preview: title,
   createdAt: "2026-10-20T08:00:00Z",
   updatedAt: "2026-10-20T08:00:00Z",
@@ -144,7 +157,7 @@ const summaries: NativeThreadSummary[] = [
     provider: "openai",
     model: "demo-model",
     sandbox: "workspace-write",
-    approvalPolicy: "on-request",
+    approvalPolicy: "always",
   },
 }));
 Object.assign(window, {
@@ -154,7 +167,15 @@ Object.assign(window, {
   },
 });
 function Fixture() {
-  const [composer, setComposer] = useState(emptyComposerState());
+  const [composer, setComposer] = useState(() =>
+    unified
+      ? editComposer(
+          emptyComposerState(),
+          withSkillDraft(bundle.question, [], bundle.references as Reference[]),
+        )
+      : emptyComposerState(),
+  );
+  const [contextOpen, setContextOpen] = useState(false);
   const [thread, setThread] = useState(initial);
   const counter = useRef(0);
   const sending = useRef(false);
@@ -163,6 +184,7 @@ function Fixture() {
   Object.assign(window, {
     quoteFixture: {
       getDraft: () => parseSkillDraft(composer.draft.text),
+      expectedPayload: bundle.canonicalText,
       getSent: () => sent,
       getThread: () => thread,
       navigate: () => {
@@ -193,7 +215,11 @@ function Fixture() {
           }}
         >
           <span style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
-            {narrow ? "ZenX · 选段引用" : "zenx › 选段引用"}
+            {unified
+              ? "ZenX · 统一引用体系"
+              : narrow
+                ? "ZenX · 选段引用"
+                : "zenx › 选段引用"}
           </span>
           <span
             style={{
@@ -206,6 +232,11 @@ function Fixture() {
               ? "合成预览 · 不调用模型"
               : "合成数据 · 发送只添加本地示例消息"}
           </span>
+          {unified && (
+            <button type="button" onClick={() => setContextOpen(true)}>
+              模型实际输入
+            </button>
+          )}
         </div>
       </header>
       <Sidebar
@@ -269,7 +300,10 @@ function Fixture() {
                     composer,
                     intent,
                     expectedTurnId,
-                    () => `synthetic-send-${++counter.current}`,
+                    () =>
+                      unified && counter.current++ === 0
+                        ? bundle.clientId
+                        : `synthetic-send-${++counter.current}`,
                   );
                   const submission = prepared.submission;
                   if (!submission) return;
@@ -302,6 +336,42 @@ function Fixture() {
           </ThreadReadingStateProvider>
         </section>
       </main>
+      <Dialog
+        open={contextOpen}
+        onOpenChange={setContextOpen}
+        title="同一组引用的实际模型请求"
+      >
+        <p>
+          生产 Host、Runtime、journal 与 provider adapter 的实际请求体；HTTP
+          为假实现，零网络。工具仅 wait。文件/线程是指针，未读取正文。
+        </p>
+        <details open>
+          <summary>Chat Completions</summary>
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              maxHeight: 300,
+              overflow: "auto",
+            }}
+          >
+            {JSON.stringify(chatRequest, null, 2)}
+          </pre>
+        </details>
+        <details>
+          <summary>Responses</summary>
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              maxHeight: 300,
+              overflow: "auto",
+            }}
+          >
+            {JSON.stringify(responsesRequest, null, 2)}
+          </pre>
+        </details>
+      </Dialog>
     </div>
   );
 }

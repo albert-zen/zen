@@ -30,34 +30,132 @@ export function referenceMessage(
   references: readonly Reference[],
   clientId?: string,
 ) {
-  const quotes = references.filter((reference) => reference.kind === "message");
-  if (quotes.length === 0 || !clientId)
+  if (references.length === 0) return text;
+  if (!clientId)
     return [text, ...references.map(referenceText)]
       .filter(Boolean)
       .join("\n\n");
-  // One canonical text part carries both the question and exact quote snapshots.
-  // A matching send identity opts in to presentation; it is not authentication.
   return (
-    SENT_QUOTE_PREFIX +
+    SENT_REFERENCE_PREFIX +
     JSON.stringify({
-      version: 1,
+      version: 2,
       clientId,
-      text: [
-        text,
-        ...references
-          .filter((reference) => reference.kind !== "message")
-          .map(referenceText),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      quotes: quotes.map(({ threadId, id, excerpt }) => ({
-        threadId,
-        id,
-        excerpt,
-      })),
+      text,
+      references: references.map(sentReference),
     })
   );
 }
+
+const SENT_REFERENCE_PREFIX = "[zenx-reference-message:v2]\n";
+function sentReference(reference: Reference) {
+  const common = {
+    kind: reference.kind,
+    name: reference.name,
+    cwd: reference.cwd,
+  };
+  if (reference.kind === "file")
+    return { ...common, path: reference.path, contentMode: "pointer" };
+  if (reference.kind === "thread")
+    return { ...common, id: reference.id, contentMode: "pointer" };
+  return {
+    ...common,
+    threadId: reference.threadId,
+    id: reference.id,
+    contentMode: "excerpt",
+    excerpt: reference.excerpt,
+  };
+}
+
+/** Exact versioned presentation, never reference inference from ordinary text. */
+export function parseSentReferenceContent(
+  text: string,
+  clientId?: string | null,
+): { text: string; references: Reference[] } {
+  const ordinary = { text, references: [] };
+  if (!clientId) return ordinary;
+  if (!text.startsWith(SENT_REFERENCE_PREFIX)) {
+    const legacy = parseLegacyQuoteMessage(text, clientId);
+    return {
+      text: legacy.text,
+      references: legacy.quotes.map((quote) => ({
+        kind: "message",
+        name: "ZenX",
+        cwd: "",
+        ...quote,
+      })),
+    };
+  }
+  try {
+    const value: unknown = JSON.parse(text.slice(SENT_REFERENCE_PREFIX.length));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return ordinary;
+    const envelope = value as Record<string, unknown>;
+    if (
+      SENT_REFERENCE_PREFIX + JSON.stringify(value) !== text ||
+      Object.keys(envelope).sort().join(",") !==
+        "clientId,references,text,version" ||
+      envelope.version !== 2 ||
+      envelope.clientId !== clientId ||
+      typeof envelope.text !== "string" ||
+      !Array.isArray(envelope.references) ||
+      envelope.references.length === 0
+    )
+      return ordinary;
+    const references: Reference[] = [];
+    for (const entry of envelope.references) {
+      if (!isReference(entry)) return ordinary;
+      const record = entry as unknown as Record<string, unknown>;
+      const keys = Object.keys(record).sort().join(",");
+      const expected =
+        entry.kind === "file"
+          ? "contentMode,cwd,kind,name,path"
+          : entry.kind === "thread"
+            ? "contentMode,cwd,id,kind,name"
+            : "contentMode,cwd,excerpt,id,kind,name,threadId";
+      if (
+        keys !== expected ||
+        record.contentMode !==
+          (entry.kind === "message" ? "excerpt" : "pointer")
+      )
+        return ordinary;
+      if (
+        entry.kind === "file"
+          ? !entry.path
+          : !entry.id || (entry.kind === "message" && !entry.threadId)
+      )
+        return ordinary;
+      // Strip only the known presentation policy, never source text or identity.
+      const { contentMode: _contentMode, ...reference } = record;
+      references.push(reference as unknown as Reference);
+    }
+    return { text: envelope.text, references };
+  } catch {
+    return ordinary;
+  }
+}
+
+/** Compatibility view for callers that only need quote snapshots. */
+export function parseSentReferenceMessage(
+  text: string,
+  clientId?: string | null,
+): { text: string; quotes: SentMessageQuote[] } {
+  const parsed = parseSentReferenceContent(text, clientId);
+  return {
+    text: parsed.text,
+    quotes: parsed.references.flatMap((reference) =>
+      reference.kind === "message"
+        ? [
+            {
+              threadId: reference.threadId,
+              id: reference.id,
+              excerpt: reference.excerpt,
+            },
+          ]
+        : [],
+    ),
+  };
+}
+
 export function referenceTitle(text: string, references: readonly Reference[]) {
   return [text, ...references.map((reference) => reference.name)]
     .filter(Boolean)
@@ -86,7 +184,7 @@ export interface SentMessageQuote {
   excerpt: string;
 }
 /** Presentation only. Invalid, unbound or future formats stay completely visible. */
-export function parseSentReferenceMessage(
+function parseLegacyQuoteMessage(
   text: string,
   clientId?: string | null,
 ): { text: string; quotes: SentMessageQuote[] } {

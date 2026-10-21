@@ -6,6 +6,47 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { ThreadTitleEditor } from "../src/renderer/src/thread-title-editor.js";
 
+test("editor starts from the exact Thread name, not its disclosure title", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  const wakeup = "[ZenX trigger wakeup]\nTrigger ID: trigger-a";
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ThreadTitleEditor, {
+          editable: true,
+          title: "Room wakeup · 63c6c01d",
+          editTitle: wakeup,
+          onRename: async () => undefined,
+        }),
+      ),
+    );
+    assert.equal(
+      document.querySelector<HTMLElement>(".thread-title-line strong")
+        ?.textContent,
+      "Room wakeup · 63c6c01d",
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".thread-title-rename")!
+        .click(),
+    );
+    // A single-line input strips newlines; the stored title normalizes whitespace.
+    assert.equal(
+      document.querySelector<HTMLInputElement>("input")!.value,
+      wakeup.replace(/[\r\n]/gu, ""),
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
 test("working Thread title editor handles IME, Escape, late saves, and focus ownership", async () => {
   const dom = new JSDOM(
     '<div id="root"></div><button id="outside">Outside</button>',

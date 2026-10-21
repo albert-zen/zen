@@ -95,6 +95,7 @@ async function withView(
     sends: string[];
     renderMissingSource(): Promise<void>;
   }) => Promise<void>,
+  initialDraft = "Existing question",
 ) {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -124,7 +125,7 @@ async function withView(
     }),
   });
   let thread = initial;
-  let composer = editComposer(emptyComposerState(), "Existing question");
+  let composer = editComposer(emptyComposerState(), initialDraft);
   const sends: string[] = [];
   const root = createRoot(document.getElementById("root")!);
   const render = () =>
@@ -204,14 +205,15 @@ test("sent native user message renders two exact pills and ordinary question, wi
       const sent = document.querySelector(
         '[data-sent-message-id="sent-item"]',
       )!;
-      assert.equal(sent.querySelectorAll(".message-quote-card").length, 2);
+      assert.equal(sent.querySelectorAll(".reference-token").length, 2);
       assert.deepEqual(
-        [...sent.querySelectorAll(".message-quote-excerpt")].map(
+        [...sent.querySelectorAll(".reference-token-details > span")].map(
           (node) => node.textContent,
         ),
         [quote.excerpt, longQuote.excerpt],
       );
-      assert.equal(sent.querySelector(".message-quote-remove"), null);
+      assert.equal(sent.querySelector(".reference-token-remove"), null);
+      assert.equal(sent.querySelector(".user-bubble .reference-token"), null);
       assert.match(sent.textContent!, /Please explain both/);
       assert.match(sent.textContent!, /Host skill snapshot stays visible/);
       assert.ok(
@@ -221,10 +223,14 @@ test("sent native user message renders two exact pills and ordinary question, wi
       );
       assert.equal(document.querySelectorAll("textarea").length, 1);
       await renderMissingSource();
-      await click(sent.querySelector(".message-quote-source")!);
-      assert.match(sent.textContent!, /Source unavailable/);
+      await click(sent.querySelector(".reference-token-details")!);
+      await click(document.querySelector(".reference-open-source")!);
+      assert.match(
+        document.querySelector(".reference-details-popover")!.textContent!,
+        /Source unavailable/,
+      );
       assert.equal(
-        sent.querySelector(".message-quote-excerpt")!.textContent,
+        sent.querySelector(".reference-token-details > span")!.textContent,
         quote.excerpt,
       );
     },
@@ -242,7 +248,7 @@ test("unbound or malformed canonical text is never stripped into a quote present
       const sent = document.querySelector(
         '[data-sent-message-id="sent-item"]',
       )!;
-      assert.equal(sent.querySelectorAll(".message-quote-card").length, 0);
+      assert.equal(sent.querySelectorAll(".reference-token").length, 0);
       assert.ok(sent.textContent!.includes(text.split("\n")[0]!));
     });
   }
@@ -268,6 +274,12 @@ test("select → quote → normal composer → explicit send appends real projec
     assert.equal(draft().text, "Existing question");
     assert.equal(draft().references.length, 1);
     assert.equal(sends.length, 0);
+    assert.equal(document.querySelector(".composer .reference-token"), null);
+    assert.equal(
+      document.querySelectorAll(".composer-reference-rail .reference-token")
+        .length,
+      1,
+    );
     const composer =
       document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
     assert.equal(document.activeElement, composer);
@@ -291,7 +303,7 @@ test("select → quote → normal composer → explicit send appends real projec
     assert.equal(draft().text, "");
     const sent = document.querySelector('[data-sent-message-id="sent-item"]')!;
     assert.equal(
-      sent.querySelector(".message-quote-excerpt")!.textContent,
+      sent.querySelector(".reference-token-details > span")!.textContent,
       quote.excerpt,
     );
     assert.match(sent.textContent!, /Existing question/);
@@ -327,5 +339,76 @@ test("retry preserves envelope identity; failure and newer edits keep their draf
   assert.equal(
     acceptComposerSubmission(newer, "client-retry").draft.text,
     "new question",
+  );
+});
+
+test("all five reference categories share outside rails in draft and sent; removal changes only draft", async () => {
+  const references = [
+    {
+      kind: "thread" as const,
+      id: "thread-a",
+      name: "引用体系设计",
+      cwd: "/project",
+    },
+    { ...quote, name: "完整消息" },
+    {
+      kind: "thread" as const,
+      id: "child-b",
+      name: "检查发送边界",
+      cwd: "/project",
+    },
+    { ...longQuote, name: "选段" },
+    {
+      kind: "file" as const,
+      path: "reference-plan.md",
+      name: "reference-plan.md",
+      cwd: "/project",
+    },
+  ];
+  const payload = referenceMessage("Question", references, "client-all");
+  await withView(
+    append(base(), payload, "client-all"),
+    async ({ draft, sends }) => {
+      const sent = document.querySelector(
+        '[data-sent-message-id="sent-item"]',
+      )!;
+      const draftRail = document.querySelector(".composer-reference-rail")!;
+      assert.deepEqual(
+        [...draftRail.querySelectorAll(".reference-token")].map((el) =>
+          el.getAttribute("data-reference-kind"),
+        ),
+        ["thread", "message", "thread", "message", "file"],
+      );
+      assert.deepEqual(
+        [...sent.querySelectorAll(".reference-token")].map((el) =>
+          el.getAttribute("data-reference-kind"),
+        ),
+        ["thread", "message", "thread", "message", "file"],
+      );
+      assert.equal(document.querySelector(".composer .reference-token"), null);
+      assert.equal(sent.querySelector(".user-bubble .reference-token"), null);
+      assert.equal(sent.querySelector(".reference-token-remove"), null);
+      await click(
+        draftRail.querySelector(
+          '[data-reference-kind="file"] .reference-token-details',
+        )!,
+      );
+      assert.match(
+        document.querySelector(".reference-details-popover")!.textContent!,
+        /Pointer only/,
+      );
+      assert.match(
+        document.querySelector(".reference-details-popover")!.textContent!,
+        /reference-plan.md/,
+      );
+      await click(
+        document.querySelector('[aria-label="Close reference details"]')!,
+      );
+      await click(draftRail.querySelector(".reference-token-remove")!);
+      assert.equal(draft().references.length, 4);
+      assert.equal(sent.querySelectorAll(".reference-token").length, 5);
+      assert.equal(sends.length, 0);
+    },
+    withSkillDraft("Question", [], references),
   );
 });

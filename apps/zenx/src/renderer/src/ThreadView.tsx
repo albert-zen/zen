@@ -1,10 +1,7 @@
+import { ReferenceToken } from "./ReferenceToken.js";
+import { MessageSelectionActions, addMessageQuote } from "./message-quote.js";
 import {
-  MessageSelectionActions,
-  MessageQuoteCard,
-  addMessageQuote,
-} from "./message-quote.js";
-import {
-  parseSentReferenceMessage,
+  parseSentReferenceContent,
   type SentMessageQuote,
 } from "./reference-draft.js";
 import { OriginalHistoryReference } from "./OriginalHistory.js";
@@ -1592,6 +1589,64 @@ function ThreadViewContent({
             {cancelNotice.message}
           </p>
         ) : null}
+        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+          {skillDraft.references.length > 0 && (
+            <div
+              className="reference-rail composer-reference-rail"
+              aria-label={i18n.t("shell:referencesToSend")}
+            >
+              {skillDraft.references.map((reference, index) => (
+                <ReferenceToken
+                  key={JSON.stringify([index, reference])}
+                  reference={reference}
+                  onSource={
+                    reference.kind === "message"
+                      ? () => {
+                          pauseFollowing();
+                          return goToMessageQuoteSource(
+                            scrollRef.current,
+                            reference,
+                          );
+                        }
+                      : undefined
+                  }
+                  onRemove={() => {
+                    onDraftChange(
+                      withSkillDraft(
+                        skillDraft.text,
+                        skillDraft.skills,
+                        skillDraft.references.filter((_, i) => i !== index),
+                      ),
+                    );
+                    composerTextareaRef.current?.focus({ preventScroll: true });
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          {composer.draft.images.length === 0 ? null : (
+            <div
+              className="composer-images"
+              aria-label={i18n.t("shell:imagesToSend")}
+            >
+              {composer.draft.images.map((image) => (
+                <DraftImage
+                  image={image}
+                  key={image.id}
+                  onOpen={(trigger) =>
+                    setPreview({
+                      attachment: image.attachment,
+                      name: image.name,
+                      trigger,
+                    })
+                  }
+                  onReadAttachment={onReadAttachment}
+                  onRemove={() => onRemoveImage(image.id)}
+                />
+              ))}
+            </div>
+          )}
+        </MessageLinkContext.Provider>
         <ComposerShell
           onSubmit={(event) => {
             event.preventDefault();
@@ -1633,72 +1688,6 @@ function ThreadViewContent({
               ))}
             </div>
           )}
-          {skillDraft.references.length > 0 && (
-            <div
-              className="composer-skills composer-references"
-              aria-label={i18n.t("shell:referencesToSend")}
-            >
-              {skillDraft.references.map((reference, index) =>
-                reference.kind === "message" ? (
-                  <MessageQuoteCard
-                    key={JSON.stringify([
-                      reference.threadId,
-                      reference.id,
-                      reference.excerpt,
-                    ])}
-                    reference={reference}
-                    onSource={() => {
-                      pauseFollowing();
-                      return goToMessageQuoteSource(
-                        scrollRef.current,
-                        reference,
-                      );
-                    }}
-                    onRemove={() => {
-                      onDraftChange(
-                        withSkillDraft(
-                          skillDraft.text,
-                          skillDraft.skills,
-                          skillDraft.references.filter((_, i) => i !== index),
-                        ),
-                      );
-                      composerTextareaRef.current?.focus({
-                        preventScroll: true,
-                      });
-                    }}
-                  />
-                ) : (
-                  <span
-                    className="composer-skill"
-                    key={index}
-                    title={`${reference.cwd} · ${reference.kind === "file" ? reference.path : reference.id}`}
-                  >
-                    <Icon
-                      name={reference.kind === "file" ? "file" : "thread"}
-                    />
-                    <span>{reference.name}</span>
-                    <button
-                      type="button"
-                      aria-label={i18n.t("shell:removeReference", {
-                        name: reference.name,
-                      })}
-                      onClick={() =>
-                        onDraftChange(
-                          withSkillDraft(
-                            skillDraft.text,
-                            skillDraft.skills,
-                            skillDraft.references.filter((_, i) => i !== index),
-                          ),
-                        )
-                      }
-                    >
-                      <Icon name="x" />
-                    </button>
-                  </span>
-                ),
-              )}
-            </div>
-          )}
           <WorkflowCommandMenu
             id={selectorId}
             selector={selector}
@@ -1707,28 +1696,6 @@ function ThreadViewContent({
           <label className="sr-only" htmlFor={composerId}>
             {i18n.t("panels:messageZenx")}
           </label>
-          {composer.draft.images.length === 0 ? null : (
-            <div
-              className="composer-images"
-              aria-label={i18n.t("shell:imagesToSend")}
-            >
-              {composer.draft.images.map((image) => (
-                <DraftImage
-                  image={image}
-                  key={image.id}
-                  onOpen={(trigger) =>
-                    setPreview({
-                      attachment: image.attachment,
-                      name: image.name,
-                      trigger,
-                    })
-                  }
-                  onReadAttachment={onReadAttachment}
-                  onRemove={() => onRemoveImage(image.id)}
-                />
-              ))}
-            </div>
-          )}
           <ComposerEditor
             id={composerId}
             aria-label={i18n.t("shell:message")}
@@ -3722,11 +3689,11 @@ function InputMessage({
   const clientId = canonical ? canonical.clientId : item.clientId;
   const presentation =
     item.type === "userMessage"
-      ? parts.map((part) => parseSentReferenceMessage(part, clientId))
-      : [{ text, quotes: [] }];
+      ? parts.map((part) => parseSentReferenceContent(part, clientId))
+      : [{ text, references: [] }];
   const presented = {
     text: presentation.map((part) => part.text).join("\n"),
-    quotes: presentation.flatMap((part) => part.quotes),
+    references: presentation.flatMap((part) => part.references),
   };
   return (
     <article
@@ -3778,33 +3745,31 @@ function InputMessage({
           ))}
         </div>
       )}
-      {text.length === 0 ? null : (
+      {presented.references.length > 0 && (
+        <div
+          className="reference-rail sent-reference-rail"
+          aria-label={i18n.t("shell:referencesToSend")}
+        >
+          {presented.references.map((reference, index) => (
+            <ReferenceToken
+              key={index}
+              reference={reference}
+              onSource={
+                reference.kind === "message"
+                  ? () =>
+                      goToMessageQuoteSource(
+                        article.current?.closest(".thread-view") ?? null,
+                        reference,
+                      )
+                  : undefined
+              }
+            />
+          ))}
+        </div>
+      )}
+      {presented.text.length > 0 && (
         <div className="user-bubble">
-          {presented.quotes.length > 0 && (
-            <div
-              className="sent-message-quotes"
-              aria-label={i18n.t("shell:quotedPassages")}
-            >
-              {presented.quotes.map((quote, index) => (
-                <MessageQuoteCard
-                  key={index}
-                  reference={{
-                    ...quote,
-                    kind: "message",
-                    name: "ZenX",
-                    cwd: "",
-                  }}
-                  onSource={() =>
-                    goToMessageQuoteSource(
-                      article.current?.closest(".thread-view") ?? null,
-                      quote,
-                    )
-                  }
-                />
-              ))}
-            </div>
-          )}
-          {presented.text.length > 0 && <Markdown text={presented.text} />}
+          <Markdown text={presented.text} />
         </div>
       )}
       <MessageActions

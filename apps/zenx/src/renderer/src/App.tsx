@@ -161,6 +161,7 @@ import {
   moveSidebarProject,
   moveSidebarThread,
   movePinnedThreadIds,
+  threadEditTitle,
   threadTitle,
   writeSidebarMode,
   type SidebarMode,
@@ -3798,6 +3799,7 @@ function ConversationTitleBar({
             <ThreadTitleEditor
               key={selectedSummary.threadId}
               editable={!selectedSummary.archived}
+              editTitle={threadEditTitle(selectedSummary)}
               onRename={onRename}
               onRetry={onRetryTitle}
               projection={titleProjection}

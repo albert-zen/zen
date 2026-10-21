@@ -1,4 +1,17 @@
 export const en = {
+  referenceDetails: "Reference details",
+  referenceDetailsNamed: "Reference details: {{name}}",
+  closeReferenceDetails: "Close reference details",
+  referencePointerOnly:
+    "Pointer only. The name and location are included; source content is not.",
+  referenceExcerptIncluded:
+    "This exact excerpt and its source identity are included.",
+  referenceName: "Name",
+  referenceSource: "Source",
+  referenceWorkspace: "Workspace",
+  openReferenceSource: "Open source",
+  referenceSourceUnavailable:
+    "Source unavailable here. The reference and its exact content are preserved.",
   quoteSelectionActions: "Selected text actions",
   copySelection: "Copy",
   selectionCopied: "Copied",
@@ -929,6 +942,16 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  referenceDetails: "引用详情",
+  referenceDetailsNamed: "引用详情：{{name}}",
+  closeReferenceDetails: "关闭引用详情",
+  referencePointerOnly: "仅位置指针：发送名称与位置，不包含来源正文。",
+  referenceExcerptIncluded: "已包含下面的精确原文和来源标识。",
+  referenceName: "名称",
+  referenceSource: "来源",
+  referenceWorkspace: "工作区",
+  openReferenceSource: "查看来源",
+  referenceSourceUnavailable: "当前无法打开来源，引用与完整内容仍保留。",
   quoteSelectionActions: "选中文字操作",
   copySelection: "复制",
   selectionCopied: "已复制",
