@@ -320,3 +320,227 @@ body {
     line-height: 54px;
   }
 }
+.prototype-boundary {
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+.reference-token {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  max-width: 100%;
+  height: 28px;
+  box-sizing: border-box;
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-wash);
+  color: var(--color-text-secondary);
+}
+.reference-token > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.reference-token > button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.reference-token > button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.reference-token > .reference-token-details {
+  gap: 5px;
+  max-width: 250px;
+  padding-inline: 8px;
+}
+.reference-token-details > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 18px;
+}
+.reference-token-details svg {
+  flex: none;
+}
+.reference-token > .reference-token-remove {
+  flex: none;
+  width: 24px;
+  margin-right: 1px;
+}
+.inline-sequence > .reference-token {
+  margin: 2px 3px;
+}
+.draft-stage {
+  min-height: 206px;
+}
+.sent-stage {
+  min-height: 200px;
+}
+.layout-inline .comparison-composer {
+  min-height: 164px;
+}
+.context-evidence {
+  padding: 22px 24px;
+  margin-top: 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-surface-elevated);
+}
+.context-evidence h2 {
+  margin: 0 0 15px;
+  font-size: 16px;
+  font-weight: 650;
+}
+.context-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+.context-facts p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.context-facts strong,
+.context-facts span {
+  display: block;
+}
+.context-facts span {
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+}
+.evidence-scope {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+  margin: 14px 0 10px;
+}
+.context-evidence details {
+  font-size: 12px;
+  margin-top: 10px;
+  color: var(--color-text-secondary);
+}
+.context-evidence summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.context-evidence pre,
+.reference-inspector pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  font-size: 11px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.context-evidence details p {
+  line-height: 1.7;
+}
+.reference-inspector {
+  margin-top: 20px;
+  padding: 18px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface-elevated);
+  outline: none;
+}
+.reference-inspector header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.reference-inspector button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.reference-inspector header button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+}
+.reference-delivery {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.reference-inspector dl {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--color-text-secondary);
+}
+.reference-inspector dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.reference-source-link {
+  padding: 0;
+  font-size: 12px !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.source-record p {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.single-layout {
+  max-width: 900px;
+}
+.single-layout .comparison-grid {
+  grid-template-columns: 1fr;
+}
+.single-layout .draft-stage {
+  min-height: 180px;
+}
+.single-layout .sent-stage {
+  min-height: 170px;
+}
+@media (max-width: 880px) {
+  .context-facts {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .context-evidence {
+    padding: 20px;
+  }
+  .reference-token > .reference-token-details {
+    max-width: 240px;
+  }
+  .draft-stage {
+    min-height: 0;
+  }
+  .sent-stage {
+    min-height: 0;
+  }
+}
+@media (pointer: coarse), (hover: none) {
+  .reference-token {
+    height: 48px;
+  }
+  .reference-token > button {
+    height: 44px;
+  }
+  .reference-token > .reference-token-remove {
+    width: 44px;
+  }
+}

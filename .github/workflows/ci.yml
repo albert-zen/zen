@@ -64,6 +64,7 @@ jobs:
           node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
       - name: Build and capture synthetic quote layout alternatives
         run: |
+          node --import tsx apps/zenx/scripts/capture-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context"
           node apps/zenx/scripts/build-quote-layout-preview.mjs "${{ runner.temp }}/zenx-quote-preview/layout-comparison"
           node apps/zenx/scripts/capture-quote-layout-preview.mjs "${{ runner.temp }}/zenx-quote-preview/layout-comparison"
       - name: Retain synthetic quote visual evidence
