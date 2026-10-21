@@ -8,6 +8,7 @@ import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
 import { Icon } from "./icons.js";
 import { Dialog } from "./ui/controls.js";
 import { ReferenceToken } from "./ReferenceToken.js";
+import type { Reference } from "./composer-selector.js";
 import { parseReferenceDraft, withReferenceDraft } from "./reference-draft.js";
 
 export interface QueuedMessageEditorProps {
@@ -22,7 +23,11 @@ export interface QueuedMessageEditorProps {
   disabledReason?: string | null;
   /** Resolves only after an authoritative native edit receipt. */
   onSave(draft: ComposerDraft): Promise<void>;
-  onClose(reason: "cancel" | "saved"): void;
+  onClose(reason: "cancel" | "saved" | "source"): void;
+  /** Exact current-viewport target, not a label search; source navigation suspends this draft. */
+  onReferenceSource?(
+    reference: Extract<Reference, { kind: "message" }>,
+  ): HTMLElement | null;
   trigger: HTMLElement | null;
   /** Exact parent-owned thread/selection guard, including a connected trigger. */
   canRestoreFocus?(): boolean;
@@ -267,6 +272,32 @@ function EditorSession(props: QueuedMessageEditorProps) {
               key={JSON.stringify([index, reference])}
               reference={reference}
               removeDisabled={locked}
+              onSource={
+                reference.kind === "message"
+                  ? () => {
+                      if (!canEdit()) return false;
+                      const target =
+                        latest.current.onReferenceSource?.(reference);
+                      if (!target) return false;
+                      restoreRequested.current = false;
+                      latest.current.onClose("source");
+                      // Wait for the modal focus trap to leave, then reveal the exact source.
+                      requestAnimationFrame(() => {
+                        if (
+                          target.isConnected &&
+                          (latest.current.canRestoreFocus?.() ?? true)
+                        ) {
+                          target.scrollIntoView({
+                            block: "center",
+                            behavior: "auto",
+                          });
+                          target.focus({ preventScroll: true });
+                        }
+                      });
+                      return true;
+                    }
+                  : undefined
+              }
               onRemove={() => {
                 if (!canEdit()) return;
                 const current = parseReferenceDraft(draftRef.current.text);

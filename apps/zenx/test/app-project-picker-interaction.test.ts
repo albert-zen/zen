@@ -16,6 +16,7 @@ import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/model-key.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { i18n } from "../src/renderer/src/i18n.js";
+import { parseSentReferenceContent } from "../src/renderer/src/reference-draft.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -5022,7 +5023,10 @@ test("reference selector sends exact locators through App with and without nativ
         document.querySelector<HTMLButtonElement>(".selector-option"),
       );
       await act(async () => option.click());
-      await waitFor(() => document.querySelector(".composer-references"));
+      await waitFor(() =>
+        document.querySelector(".composer-reference-rail .reference-token"),
+      );
+      assert.equal(document.querySelector(".composer .reference-token"), null);
       assert.equal(sends.length, 0);
       assert.doesNotMatch(
         textarea.value,
@@ -5035,7 +5039,19 @@ test("reference selector sends exact locators through App with and without nativ
       const text = send.params.input.find(
         (part: any) => part.type === "text",
       ).text;
-      assert.match(text, /File reference/);
+      assert.match(text, /^\[zenx-reference-message:v2\]/u);
+      assert.deepEqual(
+        parseSentReferenceContent(text, send.params.clientUserMessageId)
+          .references,
+        [
+          {
+            kind: "file",
+            name: '文 [x]".ts',
+            path: 'src/文 [x]".ts',
+            cwd: "C:/space root",
+          },
+        ],
+      );
       assert.ok(text.includes(JSON.stringify('src/文 [x]".ts')));
       assert.ok(text.includes("C:/space root"));
       assert.doesNotMatch(text, /zenx-references/);

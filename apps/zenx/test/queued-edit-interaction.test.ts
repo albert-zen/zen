@@ -729,3 +729,91 @@ test("queue editor hydrates and edits literal reserved headers as visible text, 
     assert.equal((request.input[0] as { text: string }).text, pasted);
   });
 });
+
+test("queue excerpt source opens the exact visible message and suspends unsaved edits for reopening", async () => {
+  await withRuntimeDom(async (h) => {
+    const source = {
+      ...queueReferences[1]!,
+      kind: "message" as const,
+      threadId: "runtime-thread",
+      id: "queue-intro",
+      excerpt: "同名消息，按 ID 定位",
+    };
+    const references = [source, queueReferences[2]!];
+    const thread = referencedQueue(
+      referenceMessage("原问题", references, "queue-client-0"),
+    );
+    thread.canonicalItems!.push({
+      type: "agent_message",
+      id: "queue-intro",
+      threadId: thread.id,
+      turnId: "runtime-turn",
+      createdAt: "2026-10-21T00:00:00Z",
+      text: "我会并行读取组件、检查页面，并运行验证。",
+    });
+    let saves = 0;
+    await h.render(thread, {
+      onReadAttachment: readImage,
+      onEditQueued: async (p) => {
+        saves++;
+        return result(p);
+      },
+    });
+    const target = document.querySelector<HTMLElement>(
+      '[data-quote-thread-id="runtime-thread"][data-quote-item-id="queue-intro"]',
+    )!;
+    assert.ok(target);
+    let scrolled = 0;
+    target.scrollIntoView = () => {
+      scrolled++;
+    };
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    const identity = editor()!.dataset.queueEditorIdentity;
+    await changeText("未保存的问题");
+    await h.click(
+      '.queue-editor-reference-rail [data-reference-kind="file"] .reference-token-remove',
+    );
+    await h.click(
+      '.queue-editor-reference-rail [data-reference-kind="message"] .reference-token-details',
+    );
+    await h.click(".reference-open-source");
+    await flush();
+    assert.equal(editor(), null);
+    assert.equal(scrolled, 1);
+    assert.equal(document.activeElement, target);
+    assert.equal(saves, 0);
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    assert.equal(editor()!.dataset.queueEditorIdentity, identity);
+    assert.equal(text().value, "未保存的问题");
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 1);
+    assert.equal(editor()!.querySelector('[data-reference-kind="file"]'), null);
+    assert.equal(saves, 0);
+  });
+});
+
+test("missing queue excerpt source keeps the editor and unsaved reference draft open", async () => {
+  await withRuntimeDom(async (h) => {
+    let saves = 0;
+    await h.render(
+      referencedQueue(
+        referenceMessage("保留问题", [queueReferences[1]!], "queue-client-0"),
+      ),
+      {
+        onReadAttachment: readImage,
+        onEditQueued: async (p) => {
+          saves++;
+          return result(p);
+        },
+      },
+    );
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    await changeText("尚未保存");
+    await h.click(".queue-editor-reference-rail .reference-token-details");
+    await h.click(".reference-open-source");
+    await flush();
+    assert.ok(editor());
+    assert.equal(text().value, "尚未保存");
+    assert.ok(document.querySelector(".reference-source-error"));
+    assert.equal(saves, 0);
+  });
+});

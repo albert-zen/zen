@@ -189,19 +189,27 @@ const CanonicalMessageForkContext = createContext<{
   isCurrent(itemId: string): boolean;
 } | null>(null);
 
+function findMessageQuoteSource(
+  viewport: Element | null,
+  quote: SentMessageQuote,
+): HTMLElement | null {
+  return (
+    Array.from(
+      viewport?.querySelectorAll<HTMLElement>(
+        "[data-quote-thread-id][data-quote-item-id]",
+      ) ?? [],
+    ).find(
+      (element) =>
+        element.dataset.quoteThreadId === quote.threadId &&
+        element.dataset.quoteItemId === quote.id,
+    ) ?? null
+  );
+}
 function goToMessageQuoteSource(
   viewport: Element | null,
   quote: SentMessageQuote,
 ): boolean {
-  const source = Array.from(
-    viewport?.querySelectorAll<HTMLElement>(
-      "[data-quote-thread-id][data-quote-item-id]",
-    ) ?? [],
-  ).find(
-    (element) =>
-      element.dataset.quoteThreadId === quote.threadId &&
-      element.dataset.quoteItemId === quote.id,
-  );
+  const source = findMessageQuoteSource(viewport, quote);
   if (!source) return false;
   source.scrollIntoView({ block: "center", behavior: "auto" });
   source.focus({ preventScroll: true });
@@ -1971,10 +1979,21 @@ function ThreadViewContent({
                 updateEditSession(key, { ...current, draft });
             }}
             onSave={(draft) => saveQueuedEdit(key, draft)}
-            onClose={(_reason) => {
+            onReferenceSource={(reference) => {
+              if (currentThreadRef.current !== session.threadId) return null;
+              const target = findMessageQuoteSource(
+                scrollRef.current,
+                reference,
+              );
+              if (target) pauseFollowing();
+              return target;
+            }}
+            onClose={(reason) => {
               const current = editSessionsRef.current[key];
               if (current?.owner === editOwner.current) {
-                if (
+                if (reason === "source")
+                  updateEditSession(key, { ...current, owner: undefined });
+                else if (
                   !current.pending &&
                   (!current.confirmed || observedEdit(current))
                 )

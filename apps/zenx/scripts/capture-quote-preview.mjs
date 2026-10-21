@@ -244,7 +244,7 @@ for (const entry of [
             url: `${url}/quote-frame.html?references&stress&narrow`,
           });
           await waitFor(
-            "window.quoteFixture && document.querySelectorAll('.composer-reference-rail .reference-token').length === 15 && document.querySelectorAll('.composer-images img').length === 6 && document.querySelector('.queue-shelf')",
+            "Boolean(window.quoteFixture && document.querySelectorAll('.composer-reference-rail .reference-token').length === 15 && document.querySelectorAll('.composer-images img').length === 6 && document.querySelector('.queue-shelf'))",
           );
           await evaluate("document.fonts.ready");
           await settle();
