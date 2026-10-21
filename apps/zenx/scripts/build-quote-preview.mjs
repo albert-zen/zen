@@ -48,6 +48,13 @@ execFileSync(process.execPath, ["--input-type=module", "--check"], {
   stdio: ["pipe", "inherit", "inherit"],
 });
 await writeFile(path.join(directory, "quote-frame.html"), html);
+// A file-open-safe default entry for the unified-reference deliverable.
+// This changes only the trusted fixture flag, not the bundled components or payload.
+if (!html.includes("<html")) throw new Error("Expected preview document root");
+await writeFile(
+  path.join(directory, "unified-reference-frame.html"),
+  html.replace("<html", '<html data-preview-mode="references"'),
+);
 console.log(
-  "Self-contained synthetic quote preview created and syntax checked.",
+  "Self-contained quote and unified-reference entries created and syntax checked.",
 );

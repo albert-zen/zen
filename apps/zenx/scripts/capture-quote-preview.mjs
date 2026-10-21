@@ -180,7 +180,7 @@ for (const entry of [
       evidence.scenes.push({ ...entry, capabilities, draft, sent });
       if (desktop) {
         await send("Page.navigate", {
-          url: `${url}/quote-frame.html?references&theme=${entry.theme}${entry.width < 600 ? "&narrow" : ""}`,
+          url: `${url}/unified-reference-frame.html?theme=${entry.theme}${entry.width < 600 ? "&narrow" : ""}`,
         });
         await waitFor(
           "window.quoteFixture && document.querySelectorAll('.composer-reference-rail .reference-token').length === 5",
@@ -241,7 +241,7 @@ for (const entry of [
             mobile: false,
           });
           await send("Page.navigate", {
-            url: `${url}/quote-frame.html?references&stress&narrow`,
+            url: `${url}/unified-reference-frame.html?stress&narrow`,
           });
           await waitFor(
             "Boolean(window.quoteFixture && document.querySelectorAll('.composer-reference-rail .reference-token').length === 15 && document.querySelectorAll('.composer-images img').length === 6 && document.querySelector('.queue-shelf'))",

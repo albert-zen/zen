@@ -35,7 +35,9 @@ Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
 void i18n.changeLanguage(params.get("lang") ?? "zh-CN");
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
-const unified = params.has("references");
+const unified =
+  params.has("references") ||
+  document.documentElement.dataset.previewMode === "references";
 const stress = params.has("stress");
 const sourceText = unified
   ? "这是一组完整的合成引用。线程、子线程和文件仅包含位置；消息与选段包含精确原文。编辑下方问题并发送，即可查看实际生产组件的发送态。"
