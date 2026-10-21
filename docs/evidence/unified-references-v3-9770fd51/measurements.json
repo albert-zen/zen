@@ -1,0 +1,363 @@
+{
+  "source": "Production components with synthetic native-message projection. Browser scenes call no Provider; exact five-reference payload is compared with a separately captured model user message.",
+  "scenes": [
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 1280,
+      "height": 1000,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 24,
+        "buttonHeight": 22,
+        "removeHeight": 22,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "position": 0,
+        "text": "￼请解释这三个字。",
+        "insideComposer": true,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。06:02",
+        "excerpt": "建议把",
+        "remove": false,
+        "inBubble": true,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v3;clientId=\"synthetic-send-1\"]\n[ZenX reference: {\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]请解释这三个字。",
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 1280,
+      "height": 1000,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 24,
+        "buttonHeight": 22,
+        "removeHeight": 22,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "position": 0,
+        "text": "￼请解释这三个字。",
+        "insideComposer": true,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。06:02",
+        "excerpt": "建议把",
+        "remove": false,
+        "inBubble": true,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v3;clientId=\"synthetic-send-1\"]\n[ZenX reference: {\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]请解释这三个字。",
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 24,
+        "buttonHeight": 22,
+        "removeHeight": 22,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "position": 0,
+        "text": "￼请解释这三个字。",
+        "insideComposer": true,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。06:02",
+        "excerpt": "建议把",
+        "remove": false,
+        "inBubble": true,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v3;clientId=\"synthetic-send-1\"]\n[ZenX reference: {\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]请解释这三个字。",
+        "overflow": false
+      }
+    },
+    {
+      "name": "short-queue-references-images",
+      "width": 420,
+      "height": 480,
+      "reachability": {
+        "checks": [
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          }
+        ],
+        "overflowY": "auto",
+        "scrollHeight": 499,
+        "clientHeight": 268,
+        "editorOverflowY": "auto",
+        "editorScrollHeight": 339,
+        "editorClientHeight": 134,
+        "horizontalOverflow": false
+      }
+    },
+    {
+      "name": "long-inline-reference",
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "longChip": {
+        "hostWidth": 267,
+        "tokenWidth": 267,
+        "tokenHeight": 24,
+        "removeHeight": 22,
+        "removeRightGap": 2,
+        "insideShell": true,
+        "ellipsized": true,
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "touch",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "capabilities": {
+        "fine": false,
+        "hover": false,
+        "anyFine": false,
+        "anyHover": false,
+        "coarse": true,
+        "noHover": true
+      },
+      "draft": {
+        "height": 48,
+        "buttonHeight": 44,
+        "removeHeight": 44,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "position": 0,
+        "text": "￼请解释这三个字。",
+        "insideComposer": true,
+        "overflow": false
+      },
+      "sent": {
+        "height": 48,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。06:02",
+        "excerpt": "建议把",
+        "remove": false,
+        "inBubble": true,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v3;clientId=\"synthetic-send-1\"]\n[ZenX reference: {\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]请解释这三个字。",
+        "overflow": false
+      }
+    },
+    {
+      "name": "long-inline-reference",
+      "inputMode": "touch",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "longChip": {
+        "hostWidth": 280,
+        "tokenWidth": 280,
+        "tokenHeight": 48,
+        "removeHeight": 44,
+        "removeRightGap": 2,
+        "insideShell": true,
+        "ellipsized": true,
+        "overflow": false
+      }
+    }
+  ]
+}
