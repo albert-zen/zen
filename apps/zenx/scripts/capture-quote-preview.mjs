@@ -304,6 +304,54 @@ for (const entry of [
           0,
           "composing Enter must not send",
         );
+        await settle();
+        assert.equal(
+          await evaluate("window.quoteFixture.getSent().length"),
+          0,
+          "composing Enter must not send after React settles",
+        );
+        const afterSyntheticComposition = await evaluate(
+          "window.quoteFixture.getDraft()",
+        );
+        if (afterSyntheticComposition.text !== baseline.text) {
+          // Dispatching a synthetic composing keydown does not ask Chrome's
+          // IME to consume it. CodeMirror's compositionstart sets composing=0;
+          // a real composition edit increments it above 0 before keydown.
+          // This bare synthetic event can therefore insert a newline.
+          // Verify that this is the only change, then undo the probe before
+          // testing the exact native-send payload.
+          const insertedAt = afterSyntheticComposition.text.indexOf("\n");
+          assert.ok(
+            insertedAt >= 0,
+            "synthetic composition only inserts a newline",
+          );
+          assert.equal(
+            afterSyntheticComposition.text.slice(0, insertedAt) +
+              afterSyntheticComposition.text.slice(insertedAt + 1),
+            baseline.text,
+            "synthetic composition does not alter any other prose or token",
+          );
+          assert.deepEqual(
+            afterSyntheticComposition.references,
+            baseline.references.map((reference) => ({
+              ...reference,
+              position:
+                reference.position >= insertedAt
+                  ? reference.position + 1
+                  : reference.position,
+            })),
+            "synthetic composition preserves all reference identities",
+          );
+          await press("z", "KeyZ", 2);
+          await waitFor(
+            `window.quoteFixture.getDraft().text.length === ${baseline.text.length}`,
+          );
+        }
+        assert.deepEqual(
+          await evaluate("window.quoteFixture.getDraft()"),
+          baseline,
+          "composition probe must leave the exact draft before native send",
+        );
         await evaluate("document.querySelector('#thread-composer').focus()");
         await press("Enter");
         await waitFor(
