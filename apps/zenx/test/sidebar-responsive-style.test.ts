@@ -11,7 +11,7 @@ test("Thread rows reserve factual status space and reveal actions over a surface
   );
   assert.match(
     styles,
-    /padding-inline-end: calc\(10px \+ var\(--thread-state-space, 0px\)\);/u,
+    /padding-inline-end: calc\(\s*10px \+ var\(--thread-state-space, 0px\) \+\s*var\(--thread-shortcut-space\)\s*\);/u,
   );
   assert.match(
     styles,
@@ -38,6 +38,38 @@ test("Thread rows reserve factual status space and reveal actions over a surface
   assert.doesNotMatch(styles, /padding: 10px 46px|padding-right: 52px/u);
 });
 
+test("modifier hints own a trailing slot separate from factual Thread status", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.thread-row-shell:has\(> \.thread-row\[data-shortcut-key\]\)\s*\{[^}]*--thread-shortcut-space:/u,
+    "holding the modifier must allocate space even on rows without status icons",
+  );
+  assert.match(
+    styles,
+    /\.thread-status-rail\s*\{[^}]*inset-inline-end: var\(--thread-shortcut-space\);/u,
+    "spinner, trigger and unread slots must end before the shortcut slot",
+  );
+  assert.match(
+    styles,
+    /padding-inline-end: calc\(\s*10px \+ var\(--thread-state-space, 0px\) \+\s*var\(--thread-shortcut-space\)\s*\);/u,
+    "the title must reserve both factual status and shortcut space",
+  );
+  assert.match(
+    styles,
+    /padding-inline-end: calc\(\s*54px \+ var\(--thread-state-space, 0px\) \+\s*var\(--thread-shortcut-space\)\s*\);/u,
+    "coarse-pointer menu targets must not steal shortcut space",
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.thread-row-shell:has\([^}]*data-shortcut-key[^}]*\.thread-menu-trigger\s*\{/u,
+    "hover and focused menu controls stay available in their own rail",
+  );
+});
+
 test("Thread status and actions share icon size and spacing with a full-height rounded fade", async () => {
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
@@ -45,7 +77,7 @@ test("Thread status and actions share icon size and spacing with a full-height r
   );
   assert.match(
     styles,
-    /\.thread-status-rail\s*\{[^}]*inset-block: 0;[^}]*inset-inline-end: 0;[^}]*gap: 0;[^}]*border-radius: inherit;[^}]*border-start-start-radius: 32px 50%;[^}]*border-end-start-radius: 32px 50%;/u,
+    /\.thread-status-rail\s*\{[^}]*inset-block: 0;[^}]*inset-inline-end: var\(--thread-shortcut-space\);[^}]*gap: 0;[^}]*border-radius: inherit;[^}]*border-start-start-radius: 32px 50%;[^}]*border-end-start-radius: 32px 50%;/u,
   );
   assert.doesNotMatch(
     styles.match(/\.thread-status-rail\s*\{[^}]*\}/u)?.[0] ?? "",

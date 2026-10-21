@@ -53,6 +53,20 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install CJK fonts for synthetic UI acceptance
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Build and capture approved UI previews
+        run: |
+          node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
+          ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
+      - name: Retain approved synthetic UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-approved-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-approved-ui-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check ZenX with bounded execution-order evidence
         env:
           ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson
