@@ -79,6 +79,19 @@ jobs:
           path: ${{ runner.temp }}/zenx-process-style-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Build and capture synthetic quote draft and sent states
+        run: |
+          node --import tsx apps/zenx/scripts/capture-inline-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context-v3"
+          node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+          node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+      - name: Retain synthetic quote visual evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-quote-preview-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-quote-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check ZenX with bounded execution-order evidence
         env:
           ZENX_TEST_EXECUTION_TRACE_FILE: ${{ runner.temp }}/zenx-test-execution.ndjson

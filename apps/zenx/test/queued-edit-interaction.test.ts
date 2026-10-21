@@ -1,3 +1,10 @@
+import { EditorView } from "@codemirror/view";
+import {
+  parseReferenceDraft,
+  parseSentReferenceContent,
+  referenceMessage,
+  withReferenceDraft,
+} from "../src/renderer/src/reference-draft.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -21,7 +28,17 @@ import { projectQueuedImages } from "../src/renderer/src/queued-message-images.j
 
 const editor = () =>
   document.querySelector<HTMLDivElement>(".queued-message-editor");
-const text = () => editor()!.querySelector<HTMLTextAreaElement>("textarea")!;
+const text = () => {
+  const plain = editor()!.querySelector<HTMLTextAreaElement>("textarea");
+  if (plain) return plain;
+  const content = editor()!.querySelector<HTMLElement>(".cm-content")!;
+  const view = EditorView.findFromDOM(content)!;
+  Object.defineProperty(content, "value", {
+    configurable: true,
+    get: () => view.state.doc.toString().replaceAll("\uFFFC", ""),
+  });
+  return content as HTMLTextAreaElement;
+};
 const mainDraft = () =>
   document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value;
 const flush = async () => {
@@ -41,6 +58,20 @@ const result = (p: NativeQueueEditParams): NativeQueueEditResult => ({
 async function changeText(value: string) {
   const target = text();
   await act(async () => {
+    const rich = editor()!.querySelector<HTMLElement>(".cm-content");
+    if (rich) {
+      const view = EditorView.findFromDOM(rich)!;
+      const current = view.state.doc.toString();
+      const first = current.indexOf("\uFFFC");
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: first < 0 ? current.length : first,
+          insert: value,
+        },
+      });
+      return;
+    }
     Object.getOwnPropertyDescriptor(
       window.HTMLTextAreaElement.prototype,
       "value",
@@ -559,5 +590,259 @@ test("image-only queued input edits image order without inventing text or replac
       thread.queuedMessages!.map((x) => x.id),
       ["queue-0", "queue-1"],
     );
+  });
+});
+
+const queueReferences: import("../src/renderer/src/composer-selector.js").Reference[] =
+  [
+    {
+      kind: "thread",
+      name: "引用体系设计",
+      cwd: "/synthetic",
+      id: "source-thread",
+    },
+    {
+      kind: "message",
+      name: "ZenX",
+      cwd: "/synthetic",
+      threadId: "source-thread",
+      id: "source-message",
+      excerpt: "第一行\n  second <line>",
+    },
+    {
+      kind: "file",
+      name: "reference-plan.md",
+      cwd: "/synthetic",
+      path: "reference-plan.md",
+    },
+  ];
+function referencedQueue(raw: string) {
+  const thread = queueScenario(2);
+  return {
+    ...thread,
+    canonicalItems: thread.canonicalItems!.map((item) =>
+      item.type === "user_message_queued" && item.id === "queue-0"
+        ? {
+            ...item,
+            input: [
+              { type: "text" as const, text: raw },
+              ...item.input.filter((part) => part.type !== "text"),
+            ],
+          }
+        : item,
+    ),
+    queuedMessages: thread.queuedMessages!.map((item) =>
+      item.id === "queue-0" ? { ...item, text: raw } : item,
+    ),
+  };
+}
+
+test("queue reference codec preserves order, exact excerpts, client binding, ordinary headers and repeated saves", () => {
+  const raw = referenceMessage("问题", queueReferences, "queue-client-0");
+  const input = [
+    { type: "text" as const, text: raw },
+    { type: "image" as const, attachment: queueImageAttachments[0]! },
+  ];
+  const draft = queuedInputDraft(input, "queue-0", "queue-client-0")!;
+  assert.deepEqual(parseReferenceDraft(draft.text), {
+    text: "问题",
+    references: queueReferences,
+  });
+  assert.deepEqual(queuedDraftInput(draft, "queue-client-0"), input);
+  assert.deepEqual(
+    queuedDraftInput(
+      queuedInputDraft(
+        queuedDraftInput(draft, "queue-client-0"),
+        "queue-0",
+        "queue-client-0",
+      )!,
+      "queue-client-0",
+    ),
+    input,
+  );
+  const header = withReferenceDraft("literal", queueReferences);
+  for (const literal of [
+    header,
+    `\\${header}`,
+    `\\\\${header}`,
+    raw,
+    "[zenx-reference-message:v2]\n{malformed}",
+  ]) {
+    const ordinary = [{ type: "text" as const, text: literal }];
+    const hydrated = queuedInputDraft(ordinary, "q", "different-client")!;
+    assert.deepEqual(parseReferenceDraft(hydrated.text), {
+      text: literal,
+      references: [],
+    });
+    assert.deepEqual(queuedDraftInput(hydrated, "different-client"), ordinary);
+  }
+});
+
+test("queue editor shows unified inline references, edits/removes without double wrapping, and retains exact retry identity", async () => {
+  await withRuntimeDom(async (h) => {
+    const raw = referenceMessage("原问题", queueReferences, "queue-client-0");
+    const requests: NativeQueueEditParams[] = [];
+    let reject!: (reason: Error) => void;
+    await h.render(referencedQueue(raw), {
+      onReadAttachment: readImage,
+      onEditQueued: (p) => {
+        requests.push(p);
+        return new Promise((_resolve, fail) => {
+          reject = fail;
+        });
+      },
+    });
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    assert.equal(text().value, "原问题");
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 3);
+    assert.ok(editor()!.querySelector(".composer .reference-token"));
+    assert.equal(
+      editor()!.querySelector(".composer .queue-editor-images"),
+      null,
+    );
+    await changeText("修改后的问题");
+    await h.click(
+      '.inline-composer-editor [data-reference-kind="file"] .reference-token-remove',
+    );
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 2);
+    await h.click(".queue-editor-save");
+    const sent = requests[0]!;
+    assert.equal(sent.clientId, "queue-client-0");
+    assert.equal(sent.queuedItemId, "queue-0");
+    assert.equal(sent.expectedRevision, 0);
+    assert.equal(sent.input[0]!.type, "text");
+    const payload = (sent.input[0] as { text: string }).text;
+    const decoded = parseSentReferenceContent(payload, sent.clientId);
+    assert.equal(decoded.text, "修改后的问题\uFFFC\uFFFC");
+    assert.deepEqual(
+      decoded.references.map(
+        ({ position: _position, ...reference }) => reference,
+      ),
+      queueReferences.slice(0, 2),
+    );
+    assert.equal(payload.split("[zenx-reference-message:v3;").length, 2);
+    assert.equal(
+      editor()!.querySelector<HTMLButtonElement>(".reference-token-remove")!
+        .disabled,
+      true,
+    );
+    await act(async () => reject(new Error("Synthetic transport failure")));
+    assert.equal(text().value, "修改后的问题");
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 2);
+    await h.click(".queue-editor-save");
+    assert.equal(requests[1]!.editId, sent.editId);
+    assert.deepEqual(requests[1]!.input, sent.input);
+    await act(async () => reject(new Error("Synthetic retry failure")));
+  });
+});
+
+test("queue editor hydrates and edits literal reserved headers as visible text, not references", async () => {
+  await withRuntimeDom(async (h) => {
+    const literal = `\\${withReferenceDraft("literal", queueReferences)}`;
+    let request!: NativeQueueEditParams;
+    await h.render(referencedQueue(literal), {
+      onReadAttachment: readImage,
+      onEditQueued: async (p) => {
+        request = p;
+        return result(p);
+      },
+    });
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    assert.equal(text().value, literal);
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 0);
+    const pasted = withReferenceDraft("pasted unchanged", queueReferences);
+    await changeText(pasted);
+    assert.equal(text().value, pasted);
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 0);
+    await h.click(".queue-editor-save");
+    assert.equal((request.input[0] as { text: string }).text, pasted);
+  });
+});
+
+test("queue excerpt source opens the exact visible message and suspends unsaved edits for reopening", async () => {
+  await withRuntimeDom(async (h) => {
+    const source = {
+      ...queueReferences[1]!,
+      kind: "message" as const,
+      threadId: "runtime-thread",
+      id: "queue-intro",
+      excerpt: "同名消息，按 ID 定位",
+    };
+    const references = [source, queueReferences[2]!];
+    const thread = referencedQueue(
+      referenceMessage("原问题", references, "queue-client-0"),
+    );
+    thread.canonicalItems!.push({
+      type: "agent_message",
+      id: "queue-intro",
+      threadId: thread.id,
+      turnId: "runtime-turn",
+      createdAt: "2026-10-21T00:00:00Z",
+      text: "我会并行读取组件、检查页面，并运行验证。",
+    });
+    let saves = 0;
+    await h.render(thread, {
+      onReadAttachment: readImage,
+      onEditQueued: async (p) => {
+        saves++;
+        return result(p);
+      },
+    });
+    const target = document.querySelector<HTMLElement>(
+      '[data-quote-thread-id="runtime-thread"][data-quote-item-id="queue-intro"]',
+    )!;
+    assert.ok(target);
+    let scrolled = 0;
+    target.scrollIntoView = () => {
+      scrolled++;
+    };
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    const identity = editor()!.dataset.queueEditorIdentity;
+    await changeText("未保存的问题");
+    await h.click(
+      '.inline-composer-editor [data-reference-kind="file"] .reference-token-remove',
+    );
+    await h.click(
+      '.inline-composer-editor [data-reference-kind="message"] .reference-token-details',
+    );
+    await h.click(".reference-open-source");
+    await flush();
+    assert.equal(editor(), null);
+    assert.equal(scrolled, 1);
+    assert.equal(document.activeElement, target);
+    assert.equal(saves, 0);
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    assert.equal(editor()!.dataset.queueEditorIdentity, identity);
+    assert.equal(text().value, "未保存的问题");
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 1);
+    assert.equal(editor()!.querySelector('[data-reference-kind="file"]'), null);
+    assert.equal(saves, 0);
+  });
+});
+
+test("missing queue excerpt source keeps the editor and unsaved reference draft open", async () => {
+  await withRuntimeDom(async (h) => {
+    let saves = 0;
+    await h.render(
+      referencedQueue(
+        referenceMessage("保留问题", [queueReferences[1]!], "queue-client-0"),
+      ),
+      {
+        onReadAttachment: readImage,
+        onEditQueued: async (p) => {
+          saves++;
+          return result(p);
+        },
+      },
+    );
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    await changeText("尚未保存");
+    await h.click(".inline-composer-editor .reference-token-details");
+    await h.click(".reference-open-source");
+    await flush();
+    assert.ok(editor());
+    assert.equal(text().value, "尚未保存");
+    assert.ok(document.querySelector(".reference-source-error"));
+    assert.equal(saves, 0);
   });
 });

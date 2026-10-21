@@ -1,3 +1,6 @@
+@import "./inline-composer.css";
+@import "./reference-token.css";
+@import "./message-quote.css";
 @import "./workspace-files.css";
 @import "./host-message.css";
 @import "./session-import.css";
@@ -10086,7 +10089,13 @@ button:disabled {
 .bottom-zone.has-queue:not(.has-approval) {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* External references/images must remain reachable in short viewports. */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.bottom-zone.has-queue:not(.has-approval) > .composer-reference-rail,
+.bottom-zone.has-queue:not(.has-approval) > .composer-images {
+  flex: 0 0 auto;
 }
 .bottom-zone.has-queue:not(.has-approval) > .composer {
   flex: 0 0 auto;

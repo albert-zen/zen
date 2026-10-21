@@ -4,6 +4,7 @@ import {
   type ComponentProps,
   type RefObject,
 } from "react";
+import type { ComposerInput } from "./composer-input.js";
 import { Icon } from "./icons.js";
 
 /** Shared presentation only. Drafts, admission and permissions remain with callers. */
@@ -18,10 +19,11 @@ export function ComposerEditor({
   textareaRef,
   ...props
 }: ComponentProps<"textarea"> & {
-  textareaRef?: RefObject<HTMLTextAreaElement | null>;
+  textareaRef?: RefObject<ComposerInput | null>;
 }) {
   const localRef = useRef<HTMLTextAreaElement>(null);
-  const ref = textareaRef ?? localRef;
+  const ref = (textareaRef ??
+    localRef) as RefObject<HTMLTextAreaElement | null>;
   useLayoutEffect(() => {
     const textarea = ref.current;
     if (textarea === null) return;

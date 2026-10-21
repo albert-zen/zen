@@ -1,3 +1,4 @@
+import type { ComposerInput } from "./composer-input.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import type { RefObject } from "react";
@@ -11,7 +12,7 @@ export function WorkflowCommandMenu({
 }: {
   id: string;
   selector: ReturnType<typeof useComposerSelector>;
-  textarea: RefObject<HTMLTextAreaElement | null>;
+  textarea: RefObject<ComposerInput | null>;
 }) {
   useTranslation("shell");
   const localizedSelector = {

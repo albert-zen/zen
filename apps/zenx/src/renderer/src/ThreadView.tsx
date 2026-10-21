@@ -1,3 +1,13 @@
+import { InlineComposerEditor } from "./InlineComposerEditor.js";
+import type { ComposerInput } from "./composer-input.js";
+import { normalizeInlineReferences } from "./reference-draft.js";
+import { InlineReferenceContent } from "./InlineReferenceContent.js";
+import { ReferenceToken } from "./ReferenceToken.js";
+import { MessageSelectionActions, addMessageQuote } from "./message-quote.js";
+import {
+  parseSentReferenceContent,
+  type SentMessageQuote,
+} from "./reference-draft.js";
 import { OriginalHistoryReference } from "./OriginalHistory.js";
 import { ThreadDebugger } from "./ThreadDebugger.js";
 import {
@@ -43,7 +53,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
-import type { FailureItem } from "../../../../../src/item.js";
+import type { CanonicalItem, FailureItem } from "../../../../../src/item.js";
 import {
   isTurnEndItem,
   latestTurnEnd,
@@ -171,11 +181,44 @@ export function ThreadViewActionsProvider({
   );
 }
 
+// A read-only projection of canonical input parts preserves boundaries such as
+// Host-added skill snapshots; it never changes or replaces the journal payload.
+const CanonicalInputContentContext = createContext<
+  ReadonlyMap<string, Extract<CanonicalItem, { type: "user_message" }>>
+>(new Map());
+
 const CanonicalMessageForkContext = createContext<{
   threadId: string;
   items: Map<string, string | undefined>;
   isCurrent(itemId: string): boolean;
 } | null>(null);
+
+function findMessageQuoteSource(
+  viewport: Element | null,
+  quote: SentMessageQuote,
+): HTMLElement | null {
+  return (
+    Array.from(
+      viewport?.querySelectorAll<HTMLElement>(
+        "[data-quote-thread-id][data-quote-item-id]",
+      ) ?? [],
+    ).find(
+      (element) =>
+        element.dataset.quoteThreadId === quote.threadId &&
+        element.dataset.quoteItemId === quote.id,
+    ) ?? null
+  );
+}
+function goToMessageQuoteSource(
+  viewport: Element | null,
+  quote: SentMessageQuote,
+): boolean {
+  const source = findMessageQuoteSource(viewport, quote);
+  if (!source) return false;
+  source.scrollIntoView({ block: "center", behavior: "auto" });
+  source.focus({ preventScroll: true });
+  return true;
+}
 
 interface ThreadViewProps {
   localModelDebug?: boolean;
@@ -264,6 +307,15 @@ export function ThreadView(props: ThreadViewProps) {
       items === undefined ? undefined : projectThreadAttachmentItems(items),
     [items],
   );
+  const canonicalInputs = useMemo(
+    () =>
+      new Map(
+        (items ?? []).flatMap((item) =>
+          item.type === "user_message" ? [[item.id, item] as const] : [],
+        ),
+      ),
+    [items],
+  );
   const forkSource = useMemo(
     () =>
       props.thread === null
@@ -310,30 +362,34 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <ThreadReadingContext.Provider value={readingState}>
-      <CanonicalMessageForkContext.Provider value={forkContext}>
-        <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
-          <div className="thread-conversation-surface">
-            {debugging && props.thread && items !== undefined ? (
-              <ThreadDebugger
-                key={props.thread.id}
-                thread={props.thread}
-                items={items}
-                localModelDebug={props.localModelDebug}
-                onExit={props.onExitDebug}
-                onOpenMessageLink={props.onOpenMessageLink}
-                onReadAttachment={props.onReadAttachment}
-              />
-            ) : (
-              <ThreadViewContent
-                {...props}
-                threadAttachments={
-                  canonicalAttachments ?? props.threadAttachments
-                }
-              />
-            )}
-          </div>
-        </MessageSourceViewportContext.Provider>
-      </CanonicalMessageForkContext.Provider>
+      <CanonicalInputContentContext.Provider value={canonicalInputs}>
+        <CanonicalMessageForkContext.Provider value={forkContext}>
+          <MessageSourceViewportContext.Provider
+            value={props.thread?.id ?? null}
+          >
+            <div className="thread-conversation-surface">
+              {debugging && props.thread && items !== undefined ? (
+                <ThreadDebugger
+                  key={props.thread.id}
+                  thread={props.thread}
+                  items={items}
+                  localModelDebug={props.localModelDebug}
+                  onExit={props.onExitDebug}
+                  onOpenMessageLink={props.onOpenMessageLink}
+                  onReadAttachment={props.onReadAttachment}
+                />
+              ) : (
+                <ThreadViewContent
+                  {...props}
+                  threadAttachments={
+                    canonicalAttachments ?? props.threadAttachments
+                  }
+                />
+              )}
+            </div>
+          </MessageSourceViewportContext.Provider>
+        </CanonicalMessageForkContext.Provider>
+      </CanonicalInputContentContext.Provider>
     </ThreadReadingContext.Provider>
   );
 }
@@ -496,7 +552,7 @@ function ThreadViewContent({
         )
       )
         return [];
-      const draft = queuedInputDraft(item.input, item.id);
+      const draft = queuedInputDraft(item.input, item.id, item.clientId);
       return draft === null ? [] : [[item.id, { item, draft }] as const];
     }),
   );
@@ -569,7 +625,19 @@ function ThreadViewContent({
   const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
-  const skillDraft = parseSkillDraft(composer.draft.text);
+  const parsedSkillDraft = parseSkillDraft(composer.draft.text);
+  const normalizedDraft = normalizeInlineReferences(
+    parsedSkillDraft.text,
+    parsedSkillDraft.references,
+  );
+  const skillDraft = { ...parsedSkillDraft, ...normalizedDraft };
+  const composerScope = thread?.id ?? "new-thread";
+  const [inlineSession, setInlineSession] = useState<string | null>(null);
+  const useInlineComposer =
+    inlineSession === composerScope || skillDraft.references.length > 0;
+  useEffect(() => {
+    if (skillDraft.references.length > 0) setInlineSession(composerScope);
+  }, [skillDraft.references.length, composerScope]);
   useEffect(() => {
     if (window.zenx?.skills === undefined) return;
     let active = true;
@@ -591,7 +659,29 @@ function ThreadViewContent({
   const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
-  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerTextareaRef = useRef<ComposerInput>(null);
+  const plainSnapshot = useRef<{
+    scope: string;
+    value: string;
+    references: typeof skillDraft.references;
+    selection: { anchor: number; head: number };
+  } | null>(null);
+  // A seed exists only for a plain-to-inline transition in this composer.
+  // Discard it on scope changes, including when the next draft is already inline.
+  if (plainSnapshot.current?.scope !== composerScope)
+    plainSnapshot.current = null;
+  if (!useInlineComposer)
+    plainSnapshot.current = {
+      scope: composerScope,
+      value: skillDraft.text,
+      references: [],
+      selection: {
+        anchor:
+          composerTextareaRef.current?.selectionStart ?? skillDraft.text.length,
+        head:
+          composerTextareaRef.current?.selectionEnd ?? skillDraft.text.length,
+      },
+    };
   const lastCanonicalTurnEnd = latestTurnEnd(thread?.canonicalItems ?? []);
   const readMessageOrder = useMemo(
     () =>
@@ -864,7 +954,7 @@ function ThreadViewContent({
     ) {
       throw new Error(i18n.t("shell:queueEditBusy"));
     }
-    const input = queuedDraftInput(draft);
+    const input = queuedDraftInput(draft, session.clientId);
     const fingerprint = JSON.stringify(input);
     const attempt =
       session.attempt?.fingerprint === fingerprint
@@ -1324,6 +1414,49 @@ function ThreadViewContent({
         </MessageLinkContext.Provider>
       </div>
 
+      <MessageSelectionActions
+        viewport={scrollRef}
+        threadId={thread?.id}
+        disabled={composerDisabled || submitting}
+        onQuote={(selection) => {
+          if (
+            !thread ||
+            selection.threadId !== thread.id ||
+            !thread.canonicalItems?.some(
+              (item) =>
+                item.type === "agent_message" &&
+                item.id === selection.id &&
+                item.threadId === thread.id,
+            )
+          )
+            return;
+          const insertion =
+            composerTextareaRef.current?.selectionStart ??
+            skillDraft.text.length;
+          onDraftChange(
+            addMessageQuote(
+              composer.draft.text,
+              {
+                ...selection,
+                kind: "message",
+                name: "ZenX",
+                cwd: thread.cwd,
+              },
+              composerTextareaRef.current?.selectionStart ??
+                skillDraft.text.length,
+              composerTextareaRef.current?.selectionEnd ??
+                skillDraft.text.length,
+            ),
+          );
+          requestAnimationFrame(() => {
+            composerTextareaRef.current?.focus({ preventScroll: true });
+            composerTextareaRef.current?.setSelectionRange(
+              insertion + 1,
+              insertion + 1,
+            );
+          });
+        }}
+      />
       {atLive ? null : (
         <button
           className="back-live"
@@ -1518,6 +1651,30 @@ function ThreadViewContent({
             {cancelNotice.message}
           </p>
         ) : null}
+        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+          {composer.draft.images.length === 0 ? null : (
+            <div
+              className="composer-images"
+              aria-label={i18n.t("shell:imagesToSend")}
+            >
+              {composer.draft.images.map((image) => (
+                <DraftImage
+                  image={image}
+                  key={image.id}
+                  onOpen={(trigger) =>
+                    setPreview({
+                      attachment: image.attachment,
+                      name: image.name,
+                      trigger,
+                    })
+                  }
+                  onReadAttachment={onReadAttachment}
+                  onRemove={() => onRemoveImage(image.id)}
+                />
+              ))}
+            </div>
+          )}
+        </MessageLinkContext.Provider>
         <ComposerShell
           onSubmit={(event) => {
             event.preventDefault();
@@ -1559,40 +1716,6 @@ function ThreadViewContent({
               ))}
             </div>
           )}
-          {skillDraft.references.length > 0 && (
-            <div
-              className="composer-skills composer-references"
-              aria-label={i18n.t("shell:referencesToSend")}
-            >
-              {skillDraft.references.map((reference, index) => (
-                <span
-                  className="composer-skill"
-                  key={index}
-                  title={`${reference.cwd} · ${reference.kind === "file" ? reference.path : reference.id}`}
-                >
-                  <Icon name={reference.kind === "file" ? "file" : "thread"} />
-                  <span>{reference.name}</span>
-                  <button
-                    type="button"
-                    aria-label={i18n.t("shell:removeReference", {
-                      name: reference.name,
-                    })}
-                    onClick={() =>
-                      onDraftChange(
-                        withSkillDraft(
-                          skillDraft.text,
-                          skillDraft.skills,
-                          skillDraft.references.filter((_, i) => i !== index),
-                        ),
-                      )
-                    }
-                  >
-                    <Icon name="x" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
           <WorkflowCommandMenu
             id={selectorId}
             selector={selector}
@@ -1601,90 +1724,167 @@ function ThreadViewContent({
           <label className="sr-only" htmlFor={composerId}>
             {i18n.t("panels:messageZenx")}
           </label>
-          {composer.draft.images.length === 0 ? null : (
-            <div
-              className="composer-images"
-              aria-label={i18n.t("shell:imagesToSend")}
-            >
-              {composer.draft.images.map((image) => (
-                <DraftImage
-                  image={image}
-                  key={image.id}
-                  onOpen={(trigger) =>
-                    setPreview({
-                      attachment: image.attachment,
-                      name: image.name,
-                      trigger,
-                    })
-                  }
-                  onReadAttachment={onReadAttachment}
-                  onRemove={() => onRemoveImage(image.id)}
-                />
-              ))}
-            </div>
-          )}
-          <ComposerEditor
-            id={composerId}
-            aria-label={i18n.t("shell:message")}
-            aria-controls={selector.open ? selectorId : undefined}
-            aria-activedescendant={
-              selector.open && selector.rows.length
-                ? `${selectorId}-${selector.active}`
-                : undefined
-            }
-            aria-describedby={selector.open ? `${selectorId}-hint` : undefined}
-            onSelect={(event) => selector.select(event.currentTarget)}
-            onBlur={() => selector.dismiss()}
+          {useInlineComposer ? (
+            <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+              <InlineComposerEditor
+                key={composerScope}
+                initialUndo={plainSnapshot.current ?? undefined}
+                initialSelection={{
+                  anchor:
+                    (skillDraft.references[0]?.position ??
+                      skillDraft.text.length - 1) + 1,
+                  head:
+                    (skillDraft.references[0]?.position ??
+                      skillDraft.text.length - 1) + 1,
+                }}
+                id={composerId}
+                editorRef={composerTextareaRef}
+                value={skillDraft.text}
+                references={skillDraft.references}
+                aria-label={i18n.t("shell:message")}
+                aria-controls={selector.open ? selectorId : undefined}
+                aria-activedescendant={
+                  selector.open && selector.rows.length
+                    ? `${selectorId}-${selector.active}`
+                    : undefined
+                }
+                aria-describedby={
+                  selector.open ? `${selectorId}-hint` : undefined
+                }
+                disabled={composerDisabled}
+                onChange={(text, references) => {
+                  selector.reopen();
+                  onDraftChange(
+                    withSkillDraft(text, skillDraft.skills, references),
+                  );
+                }}
+                onSelectionChange={(input) => selector.select(input)}
+                onBlur={() => selector.dismiss()}
+                onReferenceSource={(reference) => {
+                  if (reference.kind !== "message") return false;
+                  pauseFollowing();
+                  return goToMessageQuoteSource(scrollRef.current, reference);
+                }}
+                onPaste={(event) => {
+                  if (composerDisabled || submitting) return;
+                  const files = event.clipboardData
+                    ? imageFiles(event.clipboardData.files)
+                    : [];
+                  if (files.length === 0) return;
+                  event.preventDefault();
+                  setAttachmentError(null);
+                  void onImportImages(files).catch((error: unknown) =>
+                    setAttachmentError(describeError(error)),
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    handleComposerSuggestionKey(
+                      {
+                        key: event.key,
+                        shiftKey: event.shiftKey,
+                        repeat: event.repeat,
+                        preventDefault: () => event.preventDefault(),
+                        nativeEvent: { isComposing: event.isComposing },
+                      },
+                      selector,
+                    )
+                  )
+                    return;
+                  if (
+                    event.key !== "Enter" ||
+                    event.shiftKey ||
+                    event.isComposing
+                  )
+                    return;
+                  event.preventDefault();
+                  if (!event.repeat)
+                    submit(
+                      defaultComposerIntent(
+                        runningTurn !== null,
+                        composerSendMode,
+                        event.metaKey || event.ctrlKey,
+                      ),
+                    );
+                }}
+                placeholder={
+                  runningTurn === null
+                    ? watching
+                      ? i18n.t("shell:sendAMessageToWakeThisThread")
+                      : i18n.t("shell:askZenxAnything")
+                    : composerSendMode === "queue" ||
+                        composerSendMode === "batch"
+                      ? i18n.t("shell:messageForTheNextTurn")
+                      : i18n.t("shell:steerTheCurrentRun")
+                }
+              />
+            </MessageLinkContext.Provider>
+          ) : (
+            <ComposerEditor
+              id={composerId}
+              aria-label={i18n.t("shell:message")}
+              aria-controls={selector.open ? selectorId : undefined}
+              aria-activedescendant={
+                selector.open && selector.rows.length
+                  ? `${selectorId}-${selector.active}`
+                  : undefined
+              }
+              aria-describedby={
+                selector.open ? `${selectorId}-hint` : undefined
+              }
+              onSelect={(event) => selector.select(event.currentTarget)}
+              onBlur={() => selector.dismiss()}
 
-            disabled={composerDisabled}
-            onChange={(event) => {
-              selector.reopen();
-              selector.select(event.currentTarget ?? event.target);
-              onDraftChange(
-                withSkillDraft(
-                  event.target.value,
-                  skillDraft.skills,
-                  skillDraft.references,
-                ),
-              );
-            }}
-            onPaste={(event) => {
-              if (composerDisabled || submitting) return;
-              const files = imageFiles(event.clipboardData.files);
-              if (files.length === 0) return;
-              event.preventDefault();
-              setAttachmentError(null);
-              void onImportImages(files).catch((error: unknown) =>
-                setAttachmentError(describeError(error)),
-              );
-            }}
-            onKeyDown={(event) => {
-              if (handleComposerSuggestionKey(event, selector)) return;
-              if (event.key !== "Enter" || event.shiftKey) return;
-              if (event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              if (event.repeat) return;
-              submit(
-                defaultComposerIntent(
-                  runningTurn !== null,
-                  composerSendMode,
-                  event.metaKey || event.ctrlKey,
-                ),
-              );
-            }}
-            placeholder={
-              runningTurn === null
-                ? watching
-                  ? i18n.t("shell:sendAMessageToWakeThisThread")
-                  : i18n.t("shell:askZenxAnything")
-                : composerSendMode === "queue" || composerSendMode === "batch"
-                  ? i18n.t("shell:messageForTheNextTurn")
-                  : i18n.t("shell:steerTheCurrentRun")
-            }
-            textareaRef={composerTextareaRef}
-            rows={1}
-            value={skillDraft.text}
-          />
+              disabled={composerDisabled}
+              onChange={(event) => {
+                selector.reopen();
+                selector.select(event.currentTarget ?? event.target);
+                onDraftChange(
+                  withSkillDraft(
+                    event.target.value,
+                    skillDraft.skills,
+                    skillDraft.references,
+                  ),
+                );
+              }}
+              onPaste={(event) => {
+                if (composerDisabled || submitting) return;
+                const files = imageFiles(event.clipboardData.files);
+                if (files.length === 0) return;
+                event.preventDefault();
+                setAttachmentError(null);
+                void onImportImages(files).catch((error: unknown) =>
+                  setAttachmentError(describeError(error)),
+                );
+              }}
+              onKeyDown={(event) => {
+                if (handleComposerSuggestionKey(event, selector)) return;
+                if (event.key !== "Enter" || event.shiftKey) return;
+                if (event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                if (event.repeat) return;
+                submit(
+                  defaultComposerIntent(
+                    runningTurn !== null,
+                    composerSendMode,
+                    event.metaKey || event.ctrlKey,
+                  ),
+                );
+              }}
+              placeholder={
+                runningTurn === null
+                  ? watching
+                    ? i18n.t("shell:sendAMessageToWakeThisThread")
+                    : i18n.t("shell:askZenxAnything")
+                  : composerSendMode === "queue" || composerSendMode === "batch"
+                    ? i18n.t("shell:messageForTheNextTurn")
+                    : i18n.t("shell:steerTheCurrentRun")
+              }
+              textareaRef={composerTextareaRef}
+              rows={1}
+              value={skillDraft.text}
+            />
+          )}
           <div className="composer-rail">
             <div className="composer-tools">
               <button
@@ -1855,75 +2055,88 @@ function ThreadViewContent({
           </div>
         </Dialog>
       )}
-      {Object.entries(editSessions).map(([key, session]) => (
-        <QueuedMessageEditor
-          key={session.identity}
-          identity={session.identity}
-          open={
-            openEditKey === key &&
-            session.owner === editOwner.current &&
-            thread?.id === session.threadId
-          }
-          initialDraft={session.draft}
-          pending={session.pending}
-          error={session.error}
-          trigger={session.trigger}
-          canRestoreFocus={() =>
-            currentThreadRef.current === session.threadId &&
-            document.getSelection()?.isCollapsed !== false
-          }
-          onRestoreFocus={() => {
-            if (
-              currentThreadRef.current === session.threadId &&
-              !document.querySelector('[role="dialog"]') &&
-              document.getSelection()?.isCollapsed !== false
-            )
-              composerTextareaRef.current?.focus({ preventScroll: true });
-          }}
-          disabledReason={
-            session.confirmed
-              ? i18n.t("shell:queueEditSyncing")
-              : composerDisabled
-                ? i18n.t("shell:queueEditBusy")
-                : undefined
-          }
-          onDraftChange={(draft) => {
-            const current = editSessionsRef.current[key];
-            if (
-              current?.owner === editOwner.current &&
-              !current.pending &&
-              !current.confirmed
-            )
-              updateEditSession(key, { ...current, draft });
-          }}
-          onSave={(draft) => saveQueuedEdit(key, draft)}
-          onClose={(_reason) => {
-            const current = editSessionsRef.current[key];
-            if (current?.owner === editOwner.current) {
-              if (
-                !current.pending &&
-                (!current.confirmed || observedEdit(current))
-              )
-                updateEditSession(key, null);
-              else updateEditSession(key, { ...current, owner: undefined });
+      <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+        {Object.entries(editSessions).map(([key, session]) => (
+          <QueuedMessageEditor
+            key={session.identity}
+            identity={session.identity}
+            open={
+              openEditKey === key &&
+              session.owner === editOwner.current &&
+              thread?.id === session.threadId
             }
-            setOpenEditKey((value) => (value === key ? null : value));
-          }}
-          onReadAttachment={onReadAttachment}
-          onImportImages={
-            onImportQueueImages ??
-            (async () => {
-              throw new Error(i18n.t("shell:imageReaderUnavailable"));
-            })
-          }
-          onPickImages={
-            onPickQueueImages ??
-            (async () => {
-              throw new Error(i18n.t("shell:imageReaderUnavailable"));
-            })
-          }
-        />
-      ))}
+            initialDraft={session.draft}
+            pending={session.pending}
+            error={session.error}
+            trigger={session.trigger}
+            canRestoreFocus={() =>
+              currentThreadRef.current === session.threadId &&
+              document.getSelection()?.isCollapsed !== false
+            }
+            onRestoreFocus={() => {
+              if (
+                currentThreadRef.current === session.threadId &&
+                !document.querySelector('[role="dialog"]') &&
+                document.getSelection()?.isCollapsed !== false
+              )
+                composerTextareaRef.current?.focus({ preventScroll: true });
+            }}
+            disabledReason={
+              session.confirmed
+                ? i18n.t("shell:queueEditSyncing")
+                : composerDisabled
+                  ? i18n.t("shell:queueEditBusy")
+                  : undefined
+            }
+            onDraftChange={(draft) => {
+              const current = editSessionsRef.current[key];
+              if (
+                current?.owner === editOwner.current &&
+                !current.pending &&
+                !current.confirmed
+              )
+                updateEditSession(key, { ...current, draft });
+            }}
+            onSave={(draft) => saveQueuedEdit(key, draft)}
+            onReferenceSource={(reference) => {
+              if (currentThreadRef.current !== session.threadId) return null;
+              const target = findMessageQuoteSource(
+                scrollRef.current,
+                reference,
+              );
+              if (target) pauseFollowing();
+              return target;
+            }}
+            onClose={(reason) => {
+              const current = editSessionsRef.current[key];
+              if (current?.owner === editOwner.current) {
+                if (reason === "source")
+                  updateEditSession(key, { ...current, owner: undefined });
+                else if (
+                  !current.pending &&
+                  (!current.confirmed || observedEdit(current))
+                )
+                  updateEditSession(key, null);
+                else updateEditSession(key, { ...current, owner: undefined });
+              }
+              setOpenEditKey((value) => (value === key ? null : value));
+            }}
+            onReadAttachment={onReadAttachment}
+            onImportImages={
+              onImportQueueImages ??
+              (async () => {
+                throw new Error(i18n.t("shell:imageReaderUnavailable"));
+              })
+            }
+            onPickImages={
+              onPickQueueImages ??
+              (async () => {
+                throw new Error(i18n.t("shell:imageReaderUnavailable"));
+              })
+            }
+          />
+        ))}
+      </MessageLinkContext.Provider>
       {preview === null || !queuePreviewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}
@@ -3624,8 +3837,28 @@ function InputMessage({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
   const text = item.content.map((content) => content.text).join("\n");
+  const article = useRef<HTMLElement>(null);
+  const canonical = useContext(CanonicalInputContentContext).get(item.id);
+  const parts = canonical
+    ? canonical.text !== undefined
+      ? [canonical.text]
+      : canonical.content.flatMap((part) =>
+          part.type === "text" ? [part.text] : [],
+        )
+    : item.content.map((part) => part.text);
+  const clientId = canonical ? canonical.clientId : item.clientId;
+  const presentation =
+    item.type === "userMessage"
+      ? parts.map((part) => parseSentReferenceContent(part, clientId))
+      : [{ text, references: [] }];
+  const presented = {
+    text: presentation.map((part) => part.text).join("\n"),
+    references: presentation.flatMap((part) => part.references),
+  };
   return (
     <article
+      ref={article}
+      data-sent-message-id={item.id}
       className={
         item.type === "threadMessage"
           ? "user-row thread-message-row"
@@ -3672,9 +3905,26 @@ function InputMessage({
           ))}
         </div>
       )}
-      {text.length === 0 ? null : (
+      {(presented.text.length > 0 || presented.references.length > 0) && (
         <div className="user-bubble">
-          <Markdown text={text} />
+          {presented.references.length > 0 ? (
+            presentation.map((part, index) => (
+              <InlineReferenceContent
+                key={index}
+                text={part.text}
+                references={part.references}
+                onSource={(reference) =>
+                  reference.kind === "message" &&
+                  goToMessageQuoteSource(
+                    article.current?.closest(".thread-view") ?? null,
+                    reference,
+                  )
+                }
+              />
+            ))
+          ) : (
+            <Markdown text={presented.text} />
+          )}
         </div>
       )}
       <MessageActions
@@ -3756,8 +4006,18 @@ function AgentMessage({
       ? { sourceThreadId: source.threadId, itemId: item.id }
       : undefined;
   return (
-    <article className="agent-copy" data-read-message-id={item.id}>
-      <Markdown text={item.text} />
+    <article
+      className="agent-copy"
+      data-read-message-id={item.id}
+      data-quote-thread-id={
+        source?.items.has(item.id) ? source.threadId : undefined
+      }
+      data-quote-item-id={source?.items.has(item.id) ? item.id : undefined}
+      tabIndex={-1}
+    >
+      <div data-message-quote-body>
+        <Markdown text={item.text} />
+      </div>
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
       {showActions ? (
         <MessageActions
