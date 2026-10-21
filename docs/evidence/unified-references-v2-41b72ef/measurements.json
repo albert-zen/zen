@@ -1,0 +1,246 @@
+{
+  "source": "Production components with synthetic native-message projection; no Provider or Host calls.",
+  "scenes": [
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 1280,
+      "height": 1000,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 28,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。03:46",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v2]\n{\"version\":2,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"references\":[{\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 1280,
+      "height": 1000,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 28,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。03:47",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v2]\n{\"version\":2,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"references\":[{\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "capabilities": {
+        "fine": true,
+        "hover": true,
+        "anyFine": true,
+        "anyHover": true,
+        "coarse": false,
+        "noHover": false
+      },
+      "draft": {
+        "height": 28,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 28,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。03:47",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v2]\n{\"version\":2,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"references\":[{\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    },
+    {
+      "name": "short-queue-references-images",
+      "width": 420,
+      "height": 480,
+      "reachability": {
+        "checks": [
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          },
+          {
+            "visible": true,
+            "hit": true
+          }
+        ],
+        "overflowY": "auto",
+        "scrollHeight": 752,
+        "clientHeight": 268,
+        "horizontalOverflow": false
+      }
+    },
+    {
+      "inputMode": "touch",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "capabilities": {
+        "fine": false,
+        "hover": false,
+        "anyFine": false,
+        "anyHover": false,
+        "coarse": true,
+        "noHover": true
+      },
+      "draft": {
+        "height": 48,
+        "radius": "999px",
+        "excerpt": "建议把",
+        "disclosure": false,
+        "overflow": false
+      },
+      "sent": {
+        "height": 48,
+        "radius": "999px",
+        "text": "建议把请解释这三个字。03:47",
+        "excerpt": "建议把",
+        "remove": false,
+        "draft": {
+          "skills": [],
+          "text": "",
+          "references": []
+        },
+        "raw": "[zenx-reference-message:v2]\n{\"version\":2,\"clientId\":\"synthetic-send-1\",\"text\":\"请解释这三个字。\",\"references\":[{\"kind\":\"message\",\"name\":\"ZenX\",\"cwd\":\"/synthetic/zenx\",\"threadId\":\"quote-thread\",\"id\":\"synthetic-answer\",\"contentMode\":\"excerpt\",\"excerpt\":\"建议把\"}]}",
+        "overflow": false
+      }
+    }
+  ]
+}
