@@ -2450,45 +2450,37 @@ function RunningTurnLabel({
             : phase === "requested"
               ? i18n.t("shell:awaitingToolResult")
               : commandPhaseLabel(phase);
-  const busy =
-    phase === "running" ||
-    phase === "thinking" ||
-    phase === "idle" ||
-    phase === "recovering";
   return (
     <div
       className="turn-running-label"
       data-phase={phase}
       data-compact={compact}
     >
-      <Icon
-        name={
-          phase === "approval"
-            ? "lock"
-            : phase === "stopping"
-              ? "stop"
-              : "reasoning"
-        }
-        size={14}
-      />
       <span
-        className={compact ? "sr-only" : undefined}
+        className="sr-only"
         role="status"
         aria-live="polite"
         aria-atomic="true"
       >
-        <ActivityText active={busy && !compact}>{label}</ActivityText>
+        {label}
+      </span>
+      <span className="turn-work-label">
+        {startedAt === null ? (
+          i18n.t("shell:working")
+        ) : (
+          <span className="turn-duration">
+            {i18n.t("shell:workingFor", {
+              duration: formatDuration(now - startedAt * 1000),
+            })}
+          </span>
+        )}
       </span>
       {phase === "recovering" && recovery ? (
         <span className="turn-recovery-attempt">
+          {i18n.t("shell:recoveringTask")} ·{" "}
           {i18n.t("shell:recoveryAttempt", { count: recovery.attempt })}
         </span>
       ) : null}
-      {startedAt === null ? null : (
-        <span className="turn-duration" aria-hidden="true">
-          {formatDuration(now - startedAt * 1000)}
-        </span>
-      )}
     </div>
   );
 }
@@ -2713,7 +2705,7 @@ function TurnBlock({
             setExpanded(!expanded);
           }}
         >
-          <span>
+          <span className="turn-work-label">
             {turn.status === "failed" || confirmedStopped
               ? i18n.t("shell:turnActivityHistory")
               : completedTurnLabel(turn)}
@@ -2721,7 +2713,16 @@ function TurnBlock({
           <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
-      ) : null}
+      ) : (
+        <RunningTurnLabel
+          recovery={turn.liveRecovery}
+          startedAt={turn.liveRecovery ? null : turn.startedAt}
+          activity={activity}
+          stopping={stopping}
+          approval={approvals.length > 0}
+          compact={compactRunningStatus}
+        />
+      )}
       {!complete || expanded ? (
         <div className="turn-history" id={historyId}>
           {projection.history.map((node) =>
@@ -2765,20 +2766,6 @@ function TurnBlock({
             showActions
             turn={turn}
             usage={usage}
-          />
-        </div>
-      ) : null}
-      {!complete ? (
-        <div
-          className={`turn-status-footer${compactRunningStatus ? "" : " workflow-status"}`}
-        >
-          <RunningTurnLabel
-            recovery={turn.liveRecovery}
-            startedAt={turn.liveRecovery ? null : turn.startedAt}
-            activity={activity}
-            stopping={stopping}
-            approval={approvals.length > 0}
-            compact={compactRunningStatus}
           />
         </div>
       ) : null}
@@ -3382,6 +3369,13 @@ function TraceSequence({
   const busy =
     turn.status === "inProgress" &&
     (activity.phase === "running" || activity.phase === "thinking");
+  const previewItem = busy
+    ? (activity.current ??
+      (node.kind === "traceGroup" ? node.items : [node.item]).findLast(
+        (item) => item.type === "reasoning" && item.status === "inProgress",
+      ))
+    : undefined;
+  const preview = previewItem ? traceActivityPreview(previewItem) : undefined;
   const detailsId = useId();
   const singleton = node.kind === "traceItem" ? node.item : null;
   const singletonExpandable =
@@ -3412,17 +3406,27 @@ function TraceSequence({
           aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <span className="trace-tool-icons" aria-hidden="true">
-            {traceGroupIcons(node.items).map((name) => (
-              <Icon key={name} name={name} size={15} />
-            ))}
-          </span>
           <span
             className="trace-activity-title"
-            title={traceSummary(node.items, observations)}
+            title={
+              preview
+                ? `${preview.prefix} ${preview.text}`.trim()
+                : traceSummary(node.items, observations)
+            }
           >
-            <ActivityText active={busy}>
-              {traceSummary(node.items, observations)}
+            <ActivityText
+              active={busy}
+              preview={preview !== undefined}
+              prefix={preview?.prefix}
+              leading={
+                <span className="trace-tool-icons" aria-hidden="true">
+                  {traceGroupIcons(node.items).map((name) => (
+                    <Icon key={name} name={name} size={15} />
+                  ))}
+                </span>
+              }
+            >
+              {preview?.text ?? traceSummary(node.items, observations)}
             </ActivityText>
           </span>
           <TraceCounts activity={activity} />
@@ -3619,23 +3623,39 @@ function TraceItemHeader({
     (item.type === "reasoning"
       ? item.status === "inProgress"
       : observedCommandPhase(item, observations) === "running");
+  const preview = active ? traceActivityPreview(item) : undefined;
   return (
     <>
-      <Icon
-        name={
-          item.type === "reasoning"
-            ? "reasoning"
-            : toolPresentation(item.toolName ?? item.command).icon
+      <span
+        className="trace-item-label"
+        title={
+          preview
+            ? `${preview.prefix} ${preview.text}`.trim()
+            : traceItemLabel(item)
         }
-        size={14}
-      />
-      {item.type === "reasoning" ? null : (
-        <strong>
-          {toolPresentation(item.toolName ?? item.command).category}
-        </strong>
-      )}
-      <span title={traceItemLabel(item)}>
-        <ActivityText active={active}>{traceItemLabel(item)}</ActivityText>
+      >
+        <ActivityText
+          active={active}
+          preview={preview !== undefined}
+          leading={
+            <Icon
+              name={
+                item.type === "reasoning"
+                  ? "reasoning"
+                  : toolPresentation(item.toolName ?? item.command).icon
+              }
+              size={14}
+            />
+          }
+          prefix={
+            preview?.prefix ??
+            (item.type === "reasoning"
+              ? undefined
+              : toolPresentation(item.toolName ?? item.command).category)
+          }
+        >
+          {preview?.text ?? traceItemLabel(item)}
+        </ActivityText>
       </span>
       <span className="trace-item-status">
         {approvalPending ? (
@@ -4179,6 +4199,37 @@ function WakeupCard(
   );
 }
 
+/** Only preview public item text already available in the disclosure. */
+function traceActivityPreview(
+  item: ThreadItem,
+): { prefix: string; text: string } | undefined {
+  if (item.type === "reasoning") {
+    const content =
+      reasoningContentText(item).trim() || item.summary.join("\n").trim();
+    // Keep the latest live text visible even after a long stream; never synthesize it.
+    const characters = [...content.replace(/\s+/gu, " ")];
+    let text = characters.join("");
+    if (characters.length > 240) {
+      text = characters.slice(-238).join("");
+      // Mark omitted context, and avoid starting halfway through a Latin word.
+      if (
+        /[A-Za-z0-9_]/u.test(characters[characters.length - 239] ?? "") &&
+        /^[A-Za-z0-9_]/u.test(text)
+      )
+        text = text.replace(/^[A-Za-z0-9_]+(?:[.,:;!?])?\s+/u, "");
+      text = `… ${text}`;
+    }
+    return { prefix: i18n.t("shell:thinking"), text };
+  }
+  if (item.type === "commandExecution") {
+    return {
+      prefix: toolPresentation(item.toolName ?? item.command).category,
+      text: item.command,
+    };
+  }
+  return undefined;
+}
+
 function traceItemLabel(item: ThreadItem): string {
   if (item.type === "reasoning") {
     const summary = item.summary.join("\n").trim();
@@ -4202,6 +4253,8 @@ function completedTurnLabel(turn: Turn): string {
         ? i18n.t("shell:interrupted")
         : i18n.t("shell:failed");
   if (duration === null) return result;
+  if (turn.status === "completed")
+    return i18n.t("shell:workedFor", { duration: formatDuration(duration) });
   return i18n.t("shell:statusForDuration", {
     status: result,
     duration: formatDuration(duration),

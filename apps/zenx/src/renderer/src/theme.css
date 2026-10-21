@@ -1,4 +1,12 @@
 :root {
+  /* Alpha-only activity mask; identical across appearances. */
+  --activity-shimmer-mask: linear-gradient(
+    105deg,
+    transparent 0%,
+    black 40% 60%,
+    transparent 100%
+  );
+
   color-scheme: dark;
   --font-body: "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
   --font-heading:

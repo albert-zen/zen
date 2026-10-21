@@ -171,3 +171,98 @@ test("repeated active changes reuse the observer and cannot resurrect stale visi
     assert.equal(h.observerCount(), 1);
   });
 });
+
+test("only overflowing previews get the shared 48px fade, and streaming or resize updates both copies", async () => {
+  const dom = new JSDOM("<div id='preview-root'></div>", {
+    url: "http://localhost",
+  });
+  const previous = {
+    window: globalThis.window,
+    document: globalThis.document,
+    ResizeObserver: globalThis.ResizeObserver,
+  };
+  let availableWidth = 120;
+  const observers = new Set<() => void>();
+  class ResizeObserved {
+    constructor(readonly callback: () => void) {}
+    observe() {
+      observers.add(this.callback);
+    }
+    disconnect() {
+      observers.delete(this.callback);
+    }
+  }
+  Object.defineProperties(dom.window.HTMLElement.prototype, {
+    clientWidth: { configurable: true, get: () => availableWidth },
+    scrollWidth: {
+      configurable: true,
+      get() {
+        return (this.textContent?.length ?? 0) * 8;
+      },
+    },
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    ResizeObserver: ResizeObserved,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("preview-root")!);
+  const render = async (children: string) => {
+    await act(async () =>
+      root.render(
+        React.createElement(ActivityText, {
+          active: true,
+          preview: true,
+          prefix: "Thinking",
+          children,
+        }),
+      ),
+    );
+    const activity = document.querySelector(".activity-text")!;
+    assert.equal(activity.textContent, `Thinking ${children}`);
+    assert.equal(
+      activity
+        .querySelector(".activity-sweep .activity-label")
+        ?.getAttribute("data-activity-copy"),
+      children,
+    );
+    assert.equal(
+      activity.querySelector(".activity-sweep")?.getAttribute("aria-hidden"),
+      "true",
+    );
+    return activity;
+  };
+  try {
+    const short = await render("Ready");
+    assert.equal(short.getAttribute("data-overflow"), null);
+    const long = await render(
+      "The actual public stream now exceeds the available single line",
+    );
+    assert.equal(long, short);
+    assert.equal(long.getAttribute("data-overflow"), "true");
+    assert.equal(
+      long.querySelector("strong")?.getAttribute("style"),
+      null,
+      "Fade never belongs to prefix",
+    );
+    availableWidth = 1000;
+    await act(async () => observers.forEach((notify) => notify()));
+    assert.equal(
+      long.getAttribute("data-overflow"),
+      null,
+      "Resize removes an unnecessary fade",
+    );
+    availableWidth = 120;
+    await act(async () => observers.forEach((notify) => notify()));
+    assert.equal(long.getAttribute("data-overflow"), "true");
+    assert.equal((await render("Done")).getAttribute("data-overflow"), null);
+  } finally {
+    await act(async () => root.unmount());
+    assert.equal(observers.size, 0);
+    Object.assign(globalThis, previous, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    dom.window.close();
+  }
+});

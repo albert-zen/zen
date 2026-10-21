@@ -53,11 +53,32 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Install Chinese fonts for synthetic quote screenshots
+      - name: Install CJK fonts for synthetic UI acceptance
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Build and capture approved UI previews
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          fc-match "sans:lang=zh-cn"
+          node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
+          ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
+      - name: Retain approved synthetic UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-approved-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-approved-ui-preview
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build and capture synthetic process-style preview
+        run: |
+          node apps/zenx/scripts/build-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
+          node apps/zenx/scripts/capture-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
+      - name: Retain synthetic process-style visual evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-process-style-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-process-style-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture synthetic quote draft and sent states
         run: |
           node --import tsx apps/zenx/scripts/capture-inline-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context-v3"

@@ -21,10 +21,8 @@ test("native wait receipt stays static despite successful outer call; parallel r
       "waiting",
     );
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
     await h.render(
       runtimeThread([wait, runtimeTask("other", "task-b", "running")]),
@@ -34,10 +32,8 @@ test("native wait receipt stays static despite successful outer call; parallel r
       "running",
     );
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
     assert.equal(
       document
@@ -60,10 +56,8 @@ test("empty recovered turn without start evidence does not advertise running ani
     thread.turns[0]!.startedAt = null;
     await h.render(thread);
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
   });
 });
@@ -113,7 +107,12 @@ test("waiting and approval retain visible static metadata rather than duplicate 
     );
     const label = document.querySelector(".turn-running-label")!;
     assert.equal(label.getAttribute("data-compact"), "false");
-    assert.equal(label.querySelector(".sr-only"), null);
+    assert.ok(label.querySelector('[role="status"].sr-only'));
+    assert.match(
+      label.querySelector(".turn-work-label")!.textContent!,
+      /^Working for /u,
+    );
+    assert.equal(label.querySelector("svg"), null);
     assert.equal(
       document
         .querySelector(".trace-toggle .activity-text")
@@ -131,11 +130,13 @@ test("waiting and approval retain visible static metadata rather than duplicate 
       { approvals: [runtimeApproval] },
     );
     assert.equal(label.getAttribute("data-phase"), "approval");
-    assert.equal(label.getAttribute("data-compact"), "false");
-    assert.equal(
-      label.querySelector(".activity-text")?.getAttribute("data-active"),
-      "false",
+    assert.ok(document.querySelector(".approval-request-allow"));
+    assert.match(
+      label.querySelector(".turn-work-label")!.textContent!,
+      /^Working for /u,
     );
+    assert.equal(label.getAttribute("data-compact"), "false");
+    assert.equal(label.querySelector(".activity-text"), null);
   });
 });
 
@@ -149,10 +150,8 @@ test("submitted generic call is requested and static until an authoritative runn
       "requested",
     );
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
   });
 });
