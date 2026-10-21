@@ -31,6 +31,28 @@ for (const entry of [
         evaluate(
           "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
         );
+      const settleDialog = async (selector) => {
+        const state = await evaluate(`(async () => {
+          const dialog = document.querySelector(${JSON.stringify(selector)});
+          const overlay = document.querySelector('.ui-dialog-overlay[data-state="open"]');
+          if (!dialog || !overlay) throw new Error('Open dialog or overlay missing');
+          const animations = [dialog, overlay]
+            .flatMap(element => element.getAnimations({ subtree: false }))
+            .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime));
+          await Promise.all(animations.map(animation => animation.finished));
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          return {
+            dialogOpacity: getComputedStyle(dialog).opacity,
+            overlayOpacity: getComputedStyle(overlay).opacity,
+            dialogState: dialog.getAttribute('data-state'),
+          };
+        })()`);
+        assert.deepEqual(state, {
+          dialogOpacity: "1",
+          overlayOpacity: "1",
+          dialogState: "open",
+        });
+      };
       const press = async (key, code = key, modifiers = 0) => {
         const windowsVirtualKeyCode =
           key === "Enter"
@@ -387,6 +409,7 @@ for (const entry of [
           await waitFor(
             "document.querySelector('[data-model-user-payload]')?.textContent === window.quoteFixture.expectedPayload",
           );
+          await settleDialog('.ui-dialog[data-state="open"]');
           await screenshot(
             `unified-${entry.theme}-${entry.width}-model-user-message.png`,
           );
@@ -453,6 +476,9 @@ for (const entry of [
           await click('[data-queue-id="queue-99"] .queue-row-edit');
           await waitFor(
             "document.querySelectorAll('.queued-message-editor .reference-token').length === 5",
+          );
+          await settleDialog(
+            '.ui-dialog.queued-message-editor[data-state="open"]',
           );
           await screenshot("unified-short-queue-edit-inline.png");
           const beforeQueueEdit = await evaluate(
