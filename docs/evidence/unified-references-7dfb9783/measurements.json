@@ -1,0 +1,373 @@
+{
+  "environment": "Ubuntu Chrome desktop-input capability emulation; synthetic five-reference layout proposal, not a production send UI",
+  "observations": [
+    {
+      "scene": {
+        "name": "unified-references-a-external",
+        "width": 1100,
+        "query": "?layout=external",
+        "layouts": [
+          "external"
+        ]
+      },
+      "media": {
+        "(hover: hover)": true,
+        "(pointer: fine)": true,
+        "(any-hover: hover)": true,
+        "(any-pointer: fine)": true,
+        "(hover: none)": false,
+        "(pointer: coarse)": false
+      },
+      "overflow": false,
+      "layouts": [
+        {
+          "name": "external",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 0,
+          "sentInside": 0,
+          "sentRemove": 0
+        }
+      ],
+      "heights": [
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28
+      ],
+      "payload": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-reference-submission\",\"text\":\"请结合这些引用说明实现边界，不要把指针当作已经读过的内容。\\n\\n[Thread reference: \\\"引用体系设计\\\"; thread ID: \\\"synthetic-host-3\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[Thread reference: \\\"检查发送边界\\\"; thread ID: \\\"synthetic-host-7\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[File reference: \\\"reference-plan.md\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"; relative path: \\\"reference-plan.md\\\"]\",\"quotes\":[{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"引用需要保留来源。\\n文件和线程默认只提供位置；选中的原文按快照传入。\"},{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"文件和线程默认只提供位置\"}]}",
+      "contentHeight": 1200
+    },
+    {
+      "scene": {
+        "name": "unified-references-b-inline",
+        "width": 1100,
+        "query": "?layout=inline",
+        "layouts": [
+          "inline"
+        ]
+      },
+      "media": {
+        "(hover: hover)": true,
+        "(pointer: fine)": true,
+        "(any-hover: hover)": true,
+        "(any-pointer: fine)": true,
+        "(hover: none)": false,
+        "(pointer: coarse)": false
+      },
+      "overflow": false,
+      "layouts": [
+        {
+          "name": "inline",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 5,
+          "sentInside": 5,
+          "sentRemove": 0
+        }
+      ],
+      "heights": [
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28
+      ],
+      "payload": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-reference-submission\",\"text\":\"请结合这些引用说明实现边界，不要把指针当作已经读过的内容。\\n\\n[Thread reference: \\\"引用体系设计\\\"; thread ID: \\\"synthetic-host-3\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[Thread reference: \\\"检查发送边界\\\"; thread ID: \\\"synthetic-host-7\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[File reference: \\\"reference-plan.md\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"; relative path: \\\"reference-plan.md\\\"]\",\"quotes\":[{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"引用需要保留来源。\\n文件和线程默认只提供位置；选中的原文按快照传入。\"},{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"文件和线程默认只提供位置\"}]}",
+      "contentHeight": 1200
+    },
+    {
+      "scene": {
+        "name": "unified-references-comparison",
+        "width": 1440,
+        "query": "",
+        "layouts": [
+          "external",
+          "inline"
+        ]
+      },
+      "media": {
+        "(hover: hover)": true,
+        "(pointer: fine)": true,
+        "(any-hover: hover)": true,
+        "(any-pointer: fine)": true,
+        "(hover: none)": false,
+        "(pointer: coarse)": false
+      },
+      "overflow": false,
+      "layouts": [
+        {
+          "name": "external",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 0,
+          "sentInside": 0,
+          "sentRemove": 0
+        },
+        {
+          "name": "inline",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 5,
+          "sentInside": 5,
+          "sentRemove": 0
+        }
+      ],
+      "heights": [
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28
+      ],
+      "payload": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-reference-submission\",\"text\":\"请结合这些引用说明实现边界，不要把指针当作已经读过的内容。\\n\\n[Thread reference: \\\"引用体系设计\\\"; thread ID: \\\"synthetic-host-3\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[Thread reference: \\\"检查发送边界\\\"; thread ID: \\\"synthetic-host-7\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[File reference: \\\"reference-plan.md\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"; relative path: \\\"reference-plan.md\\\"]\",\"quotes\":[{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"引用需要保留来源。\\n文件和线程默认只提供位置；选中的原文按快照传入。\"},{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"文件和线程默认只提供位置\"}]}",
+      "contentHeight": 1200
+    },
+    {
+      "scene": {
+        "name": "unified-references-dark",
+        "width": 1440,
+        "query": "?theme=dark",
+        "layouts": [
+          "external",
+          "inline"
+        ]
+      },
+      "media": {
+        "(hover: hover)": true,
+        "(pointer: fine)": true,
+        "(any-hover: hover)": true,
+        "(any-pointer: fine)": true,
+        "(hover: none)": false,
+        "(pointer: coarse)": false
+      },
+      "overflow": false,
+      "layouts": [
+        {
+          "name": "external",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 0,
+          "sentInside": 0,
+          "sentRemove": 0
+        },
+        {
+          "name": "inline",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 5,
+          "sentInside": 5,
+          "sentRemove": 0
+        }
+      ],
+      "heights": [
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28
+      ],
+      "payload": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-reference-submission\",\"text\":\"请结合这些引用说明实现边界，不要把指针当作已经读过的内容。\\n\\n[Thread reference: \\\"引用体系设计\\\"; thread ID: \\\"synthetic-host-3\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[Thread reference: \\\"检查发送边界\\\"; thread ID: \\\"synthetic-host-7\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[File reference: \\\"reference-plan.md\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"; relative path: \\\"reference-plan.md\\\"]\",\"quotes\":[{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"引用需要保留来源。\\n文件和线程默认只提供位置；选中的原文按快照传入。\"},{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"文件和线程默认只提供位置\"}]}",
+      "contentHeight": 1200
+    },
+    {
+      "scene": {
+        "name": "unified-references-narrow",
+        "width": 420,
+        "query": "",
+        "layouts": [
+          "external",
+          "inline"
+        ]
+      },
+      "media": {
+        "(hover: hover)": true,
+        "(pointer: fine)": true,
+        "(any-hover: hover)": true,
+        "(any-pointer: fine)": true,
+        "(hover: none)": false,
+        "(pointer: coarse)": false
+      },
+      "overflow": false,
+      "layouts": [
+        {
+          "name": "external",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 0,
+          "sentInside": 0,
+          "sentRemove": 0
+        },
+        {
+          "name": "inline",
+          "draft": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "sent": [
+            "thread",
+            "message",
+            "subagent",
+            "selection",
+            "file"
+          ],
+          "draftInside": 5,
+          "sentInside": 5,
+          "sentRemove": 0
+        }
+      ],
+      "heights": [
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28
+      ],
+      "payload": "[zenx-quoted-message:v1]\n{\"version\":1,\"clientId\":\"synthetic-reference-submission\",\"text\":\"请结合这些引用说明实现边界，不要把指针当作已经读过的内容。\\n\\n[Thread reference: \\\"引用体系设计\\\"; thread ID: \\\"synthetic-host-3\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[Thread reference: \\\"检查发送边界\\\"; thread ID: \\\"synthetic-host-7\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"]\\n\\n[File reference: \\\"reference-plan.md\\\"; workspace: \\\"/tmp/zen-reference-demo\\\"; relative path: \\\"reference-plan.md\\\"]\",\"quotes\":[{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"引用需要保留来源。\\n文件和线程默认只提供位置；选中的原文按快照传入。\"},{\"threadId\":\"synthetic-host-3\",\"id\":\"synthetic-runtime-3\",\"excerpt\":\"文件和线程默认只提供位置\"}]}",
+      "contentHeight": 2124
+    }
+  ]
+}
