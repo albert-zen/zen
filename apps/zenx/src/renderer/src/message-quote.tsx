@@ -1,3 +1,7 @@
+import {
+  normalizeInlineReferences,
+  insertInlineReference,
+} from "./reference-draft.js";
 import React, {
   useEffect,
   useId,
@@ -64,8 +68,21 @@ export function readMessageSelection(
 export function addMessageQuote(
   draft: string,
   quote: MessageQuoteReference,
+  start?: number,
+  end = start,
 ): string {
   const { text, skills, references } = parseSkillDraft(draft);
+  if (start !== undefined) {
+    const normalized = normalizeInlineReferences(text, references);
+    const inserted = insertInlineReference(
+      normalized.text,
+      normalized.references,
+      quote,
+      start,
+      end ?? start,
+    );
+    return withSkillDraft(inserted.text, skills, inserted.references);
+  }
   if (
     references.some(
       (reference) =>

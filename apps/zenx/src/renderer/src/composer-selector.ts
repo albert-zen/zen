@@ -38,14 +38,30 @@ export function replaceTrigger(
 }
 
 export type Reference =
-  | { kind: "file"; name: string; cwd: string; path: string }
-  | { kind: "thread"; name: string; cwd: string; id: string }
+  | {
+      kind: "file";
+      name: string;
+      cwd: string;
+      path: string;
+      /** UTF-16 offset of this reference's U+FFFC token in Composer text. */
+      position?: number;
+    }
+  | {
+      kind: "thread";
+      name: string;
+      cwd: string;
+      id: string;
+      /** UTF-16 offset of this reference's U+FFFC token in Composer text. */
+      position?: number;
+    }
   | MessageQuoteReference;
 
 export interface MessageQuoteReference {
   kind: "message";
   name: string;
   cwd: string;
+  /** UTF-16 offset of this reference's U+FFFC token in Composer text. */
+  position?: number;
   threadId: string;
   id: string;
   /** The exact browser-selected rendered text. */

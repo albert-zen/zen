@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { Sidebar } from "../../src/renderer/src/Sidebar.js";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import { ThreadReadingStateProvider } from "../../src/renderer/src/thread-reading-state.js";
@@ -13,7 +14,12 @@ import {
   parseSkillDraft,
   withSkillDraft,
 } from "../../src/renderer/src/skill-draft.js";
-import { referenceMessage } from "../../src/renderer/src/reference-draft.js";
+import {
+  insertInlineReference,
+  normalizeInlineReferences,
+  parseSentReferenceContent,
+  referenceMessage,
+} from "../../src/renderer/src/reference-draft.js";
 import { applyNativeThreadEvent } from "../../src/renderer/src/thread-view-state.js";
 import { runtimeMessage, runtimeThread } from "./agent-runtime-data.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
@@ -21,14 +27,17 @@ import type { Thread } from "../../src/protocol-client/index.js";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
 import type { Reference } from "../../src/renderer/src/composer-selector.js";
 import { Dialog } from "../../src/renderer/src/ui/controls.js";
-import { queueScenario } from "./agent-queue-data.js";
+import {
+  applyQueueItem,
+  editQueueFact,
+  queueItem,
+  queueScenario,
+} from "./agent-queue-data.js";
 import {
   queueImageAttachments,
   readQueueFixtureImage,
 } from "./agent-queue-images.js";
-import bundle from "../../docs/reference-context/v2/fixture-bundle.json";
-import chatRequest from "../../docs/reference-context/v2/chat-completions.request.pretty.json";
-import responsesRequest from "../../docs/reference-context/v2/responses.request.pretty.json";
+import bundle from "../../docs/reference-context/v3/fixture-metadata.json";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
@@ -39,6 +48,7 @@ const unified =
   params.has("references") ||
   document.documentElement.dataset.previewMode === "references";
 const stress = params.has("stress");
+const long = params.has("long");
 const sourceText = unified
   ? "这是一组完整的合成引用。线程、子线程和文件仅包含位置；消息与选段包含精确原文。编辑下方问题并发送，即可查看实际生产组件的发送态。"
   : "建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n完成后保留结果，具体命令和输出按需展开。\n\n选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。\n\n```ts\nconst source = { threadId, messageId };\nconst excerpt = selection.toString();\n// 保留换行、缩进与准确来源\n```";
@@ -132,18 +142,26 @@ const initial =
     : appendSyntheticSent(
         base,
         referenceMessage(
-          "这部分可以举个例子吗？",
-          [
-            {
-              kind: "message",
-              name: "ZenX",
-              cwd: base.cwd,
-              threadId: base.id,
-              id: "synthetic-answer",
-              excerpt: "按需展开",
-            },
-          ],
-          "synthetic-example",
+          ...(() => {
+            const inserted = insertInlineReference(
+              "这部分可以举个例子吗？",
+              [],
+              {
+                kind: "message",
+                name: "ZenX",
+                cwd: base.cwd,
+                threadId: base.id,
+                id: "synthetic-answer",
+                excerpt: "按需展开",
+              },
+              3,
+            );
+            return [
+              inserted.text,
+              inserted.references,
+              "synthetic-example",
+            ] as const;
+          })(),
         ),
         "synthetic-example",
       );
@@ -175,20 +193,40 @@ Object.assign(window, {
   },
 });
 function Fixture() {
+  const inlineDraft = long
+    ? insertInlineReference(
+        "长引用在这两句话之间。 后一句继续描述可编辑位置。",
+        [],
+        {
+          kind: "file",
+          name: "超长路径 LongLabelWithoutBreaksABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".repeat(
+            3,
+          ),
+          cwd: "/tmp/zen-reference-demo",
+          path:
+            "nested/" +
+            "unbrokenpath0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".repeat(5) +
+            "/file.md",
+        },
+        "长引用在这两句话之间。 ".length,
+      )
+    : stress
+      ? normalizeInlineReferences(
+          bundle.text,
+          Array.from(
+            { length: 3 },
+            () => bundle.references,
+          ).flat() as Reference[],
+        )
+      : normalizeInlineReferences(
+          bundle.text,
+          bundle.references as Reference[],
+        );
   const [composer, setComposer] = useState(() => {
     const state = unified
       ? editComposer(
           emptyComposerState(),
-          withSkillDraft(
-            bundle.question,
-            [],
-            stress
-              ? (Array.from(
-                  { length: 3 },
-                  () => bundle.references,
-                ).flat() as Reference[])
-              : (bundle.references as Reference[]),
-          ),
+          withSkillDraft(inlineDraft.text, [], inlineDraft.references),
         )
       : emptyComposerState();
     return stress
@@ -205,8 +243,24 @@ function Fixture() {
         }
       : state;
   });
+  const [thread, setThread] = useState(() =>
+    stress
+      ? applyQueueItem(
+          queueScenario(3),
+          queueItem(99, [
+            {
+              type: "text",
+              text: referenceMessage(
+                bundle.text,
+                bundle.references as Reference[],
+                "queue-client-99",
+              ),
+            },
+          ]),
+        )
+      : initial,
+  );
   const [contextOpen, setContextOpen] = useState(false);
-  const [thread, setThread] = useState(stress ? queueScenario(3) : initial);
   const counter = useRef(0);
   const sending = useRef(false);
   const [sent, setSent] = useState<string[]>([]);
@@ -214,9 +268,34 @@ function Fixture() {
   Object.assign(window, {
     quoteFixture: {
       getDraft: () => parseSkillDraft(composer.draft.text),
-      expectedPayload: bundle.canonicalText,
+      expectedPayload: long || stress ? null : bundle.payload,
       getSent: () => sent,
       getThread: () => thread,
+      setComposerCaret: (offset: number) => {
+        const content = document.querySelector<HTMLElement>("#thread-composer");
+        const view = content && EditorView.findFromDOM(content);
+        if (!view) throw new Error("Inline composer is not mounted");
+        view.focus();
+        view.dispatch({ selection: { anchor: offset } });
+      },
+      setQueueCaret: (offset: number) => {
+        const content = document.querySelector<HTMLElement>(
+          ".queued-message-editor .cm-content",
+        );
+        const view = content && EditorView.findFromDOM(content);
+        if (!view) throw new Error("Inline queue editor is not mounted");
+        view.focus();
+        view.dispatch({ selection: { anchor: offset } });
+      },
+      getEditedQueue: () => {
+        const item = thread.canonicalItems
+          ?.filter((item) => item.type === "user_message_queue_edited")
+          .at(-1);
+        const part = item?.input[0];
+        return part?.type === "text"
+          ? parseSentReferenceContent(part.text, item.clientId)
+          : null;
+      },
       navigate: () => {
         setThread({ ...base, id: "other-thread", canonicalItems: [] });
         setComposer(emptyComposerState());
@@ -262,9 +341,13 @@ function Fixture() {
               ? "合成预览 · 不调用模型"
               : "合成数据 · 发送只添加本地示例消息"}
           </span>
-          {unified && !stress && (
-            <button type="button" onClick={() => setContextOpen(true)}>
-              模型实际输入
+          {unified && !stress && !long && !narrow && (
+            <button
+              type="button"
+              data-model-user-message=""
+              onClick={() => setContextOpen(true)}
+            >
+              捕获的模型 user 消息
             </button>
           )}
         </div>
@@ -332,6 +415,16 @@ function Fixture() {
               onDraftChange={(value) =>
                 setComposer((state) => editComposer(state, value))
               }
+              onEditQueued={async (request) => {
+                setThread((current) => editQueueFact(current, request));
+                return {
+                  status: "edited",
+                  editItemId: `edit-${request.editId}`,
+                  queuedItemId: request.queuedItemId,
+                  clientId: request.clientId,
+                  revision: request.expectedRevision + 1,
+                };
+              }}
               onInterrupt={async () => {}}
               onRespondToApproval={async () => {}}
               onSubmit={async (intent, expectedTurnId) => {
@@ -381,38 +474,23 @@ function Fixture() {
       <Dialog
         open={contextOpen}
         onOpenChange={setContextOpen}
-        title="同一组引用的实际模型请求"
+        title="捕获的模型 user 消息"
       >
         <p>
-          生产 Host、Runtime、journal 与 provider adapter 的实际请求体；HTTP
-          为假实现，零网络。工具仅 wait。文件/线程是指针，未读取正文。
+          这里只展示实际捕获的单条 user
+          消息，不展示系统或工具上下文。浏览器预览本身不调用模型。
         </p>
-        <details open>
-          <summary>Chat Completions</summary>
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
-              maxHeight: 300,
-              overflow: "auto",
-            }}
-          >
-            {JSON.stringify(chatRequest, null, 2)}
-          </pre>
-        </details>
-        <details>
-          <summary>Responses</summary>
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
-              maxHeight: 300,
-              overflow: "auto",
-            }}
-          >
-            {JSON.stringify(responsesRequest, null, 2)}
-          </pre>
-        </details>
+        <pre
+          data-model-user-payload=""
+          style={{
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            maxHeight: 400,
+            overflow: "auto",
+          }}
+        >
+          {bundle.payload}
+        </pre>
       </Dialog>
     </div>
   );

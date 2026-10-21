@@ -5,7 +5,7 @@ import { withPreviewBrowser, delay } from "./preview-browser.mjs";
 const directory = path.resolve(process.argv[2] ?? ".quote-preview");
 const evidence = {
   source:
-    "Production components with synthetic native-message projection; no Provider or Host calls.",
+    "Production components with synthetic native-message projection. Browser scenes call no Provider; exact five-reference payload is compared with a separately captured model user message.",
   scenes: [],
 };
 for (const entry of [
@@ -31,6 +31,51 @@ for (const entry of [
         evaluate(
           "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
         );
+      const press = async (key, code = key, modifiers = 0) => {
+        const windowsVirtualKeyCode =
+          key === "Enter"
+            ? 13
+            : key === "Backspace"
+              ? 8
+              : key === "Escape"
+                ? 27
+                : key.toUpperCase().charCodeAt(0);
+        await send("Input.dispatchKeyEvent", {
+          type: "keyDown",
+          key,
+          code,
+          windowsVirtualKeyCode,
+          modifiers,
+        });
+        await send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key,
+          code,
+          windowsVirtualKeyCode,
+          modifiers,
+        });
+      };
+      const click = async (selector) => {
+        const point = await evaluate(
+          `(() => { const target=document.querySelector(${JSON.stringify(selector)}); if(!target) throw new Error('Target missing: ${selector}'); target.scrollIntoView({block:'center'}); const r=target.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`,
+        );
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          ...point,
+        });
+        await send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          button: "left",
+          clickCount: 1,
+          ...point,
+        });
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          button: "left",
+          clickCount: 1,
+          ...point,
+        });
+      };
       const name = `quote-${entry.inputMode}-${entry.theme}-${entry.width}`;
       if (entry.inputMode === "touch") {
         await send("Emulation.setTouchEmulationEnabled", {
@@ -107,7 +152,9 @@ for (const entry of [
         clickCount: 1,
         ...quoteAction,
       });
-      await waitFor("window.quoteFixture.getDraft().references.length === 1");
+      await waitFor(
+        "window.quoteFixture.getDraft().references.length === 1 && document.querySelectorAll('.inline-composer-editor .reference-token').length === 1",
+      );
       assert.equal(
         await evaluate("window.quoteFixture.getSent().length"),
         0,
@@ -115,32 +162,26 @@ for (const entry of [
       );
       await send("Input.insertText", { text: "请解释这三个字。" });
       await waitFor(
-        "window.quoteFixture.getDraft().text === '请解释这三个字。'",
+        "window.quoteFixture.getDraft().text.includes('请解释这三个字。')",
       );
       await evaluate(
         "document.querySelector('#thread-composer').scrollIntoView({block:'end'})",
       );
       await settle();
       const draft = await evaluate(
-        `(() => {const pill=document.querySelector('.composer-reference-rail .reference-token');const rect=pill.getBoundingClientRect();return {height:rect.height,radius:getComputedStyle(pill).borderRadius,excerpt:document.querySelector('.composer-reference-rail .reference-token-details > span').textContent,disclosure:!!document.querySelector('.composer-reference-rail .message-quote-expand'),overflow:document.documentElement.scrollWidth>innerWidth};})()`,
+        `(() => {const pill=document.querySelector('.inline-composer-editor .reference-token');const rect=pill.getBoundingClientRect();const details=pill.querySelector('.reference-token-details');const remove=pill.querySelector('.reference-token-remove');const draft=window.quoteFixture.getDraft();return {height:rect.height,buttonHeight:details.getBoundingClientRect().height,removeHeight:remove.getBoundingClientRect().height,radius:getComputedStyle(pill).borderRadius,excerpt:details.querySelector('span').textContent,position:draft.references[0].position,text:draft.text,insideComposer:!!pill.closest('.composer'),overflow:document.documentElement.scrollWidth>innerWidth};})()`,
       );
       assert.equal(draft.radius, "999px");
-      assert.equal(draft.height, desktop ? 28 : 48);
-      assert.equal(draft.disclosure, false);
+      assert.equal(draft.height, desktop ? 24 : 48);
+      if (!desktop) {
+        assert.ok(draft.buttonHeight >= 44);
+        assert.ok(draft.removeHeight >= 44);
+      }
+      assert.equal(draft.position, 0);
+      assert.equal(draft.insideComposer, true);
       assert.equal(draft.overflow, false);
       await screenshot(`${name}-draft.png`);
-      await send("Input.dispatchKeyEvent", {
-        type: "keyDown",
-        key: "Enter",
-        code: "Enter",
-        windowsVirtualKeyCode: 13,
-      });
-      await send("Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: "Enter",
-        code: "Enter",
-        windowsVirtualKeyCode: 13,
-      });
+      await press("Enter");
       await waitFor(
         "window.quoteFixture.getSent().length === 1 && document.querySelector('[data-sent-message-id=\"message-synthetic-send-1\"]') !== null",
       );
@@ -149,16 +190,17 @@ for (const entry of [
       );
       await settle();
       const sent = await evaluate(
-        `(() => {const row=document.querySelector('[data-sent-message-id="message-synthetic-send-1"]');return {height:row.querySelector('.reference-token').getBoundingClientRect().height,radius:getComputedStyle(row.querySelector('.reference-token')).borderRadius,text:row.textContent,excerpt:row.querySelector('.reference-token-details > span').textContent,remove:!!row.querySelector('.reference-token-remove'),draft:window.quoteFixture.getDraft(),raw:window.quoteFixture.getSent()[0],overflow:document.documentElement.scrollWidth>innerWidth};})()`,
+        `(() => {const row=document.querySelector('[data-sent-message-id="message-synthetic-send-1"]');const pill=row.querySelector('.user-bubble .reference-token');return {height:pill.getBoundingClientRect().height,radius:getComputedStyle(pill).borderRadius,text:row.textContent,excerpt:pill.querySelector('.reference-token-details > span').textContent,remove:!!pill.querySelector('.reference-token-remove'),inBubble:!!pill.closest('.user-bubble'),draft:window.quoteFixture.getDraft(),raw:window.quoteFixture.getSent()[0],overflow:document.documentElement.scrollWidth>innerWidth};})()`,
       );
-      assert.equal(sent.height, draft.height);
+      assert.equal(sent.height, desktop ? 28 : 48);
       assert.equal(sent.radius, "999px");
       assert.equal(sent.excerpt, draft.excerpt);
       assert.match(sent.text, /请解释这三个字/);
       assert.equal(sent.remove, false);
+      assert.equal(sent.inBubble, true);
       assert.equal(
         await evaluate(
-          "document.querySelector('.user-bubble .reference-token') === null && document.querySelector('.composer .reference-token') === null",
+          "document.querySelector('.composer .reference-token') === null",
         ),
         true,
       );
@@ -183,56 +225,112 @@ for (const entry of [
           url: `${url}/unified-reference-frame.html?theme=${entry.theme}${entry.width < 600 ? "&narrow" : ""}`,
         });
         await waitFor(
-          "window.quoteFixture && document.querySelectorAll('.composer-reference-rail .reference-token').length === 5",
+          "window.quoteFixture && document.querySelectorAll('.inline-composer-editor .reference-token').length === 5",
         );
         await evaluate("document.fonts.ready");
         await settle();
         assert.equal(await evaluate("window.quoteFixture.getSent().length"), 0);
-        assert.equal(
-          await evaluate(
-            "document.querySelector('.composer .reference-token') === null",
+        const baseline = await evaluate("window.quoteFixture.getDraft()");
+        assert.equal(baseline.references.length, 5);
+        assert.ok(
+          baseline.references.every(
+            (reference) => baseline.text[reference.position] === "\uFFFC",
           ),
-          true,
+        );
+        assert.ok(
+          baseline.text.split("\uFFFC").filter(Boolean).length >= 3,
+          "five references must be interleaved with prose",
         );
         assert.equal(
           await evaluate("document.documentElement.scrollWidth > innerWidth"),
           false,
         );
         await screenshot(`unified-${entry.theme}-${entry.width}-draft.png`);
-        await evaluate("document.querySelector('#thread-composer').focus()");
-        await send("Input.dispatchKeyEvent", {
-          type: "keyDown",
-          key: "Enter",
-          code: "Enter",
-          windowsVirtualKeyCode: 13,
-        });
-        await send("Input.dispatchKeyEvent", {
-          type: "keyUp",
-          key: "Enter",
-          code: "Enter",
-          windowsVirtualKeyCode: 13,
-        });
+        // Real keyboard edits around atomic chips, not a mock textarea facade.
+        await evaluate(
+          `window.quoteFixture.setComposerCaret(${baseline.references[2].position + 1})`,
+        );
+        await press("Backspace");
+        await waitFor("window.quoteFixture.getDraft().references.length === 4");
+        await press("z", "KeyZ", 2);
+        await waitFor("window.quoteFixture.getDraft().references.length === 5");
+        assert.deepEqual(
+          await evaluate("window.quoteFixture.getDraft()"),
+          baseline,
+          "undo restores token identity and position",
+        );
+        const betweenStart = baseline.references[0].position + 1;
+        const between = [
+          ...baseline.text.slice(betweenStart, baseline.references[1].position),
+        ];
+        const middle =
+          betweenStart +
+          between.slice(0, Math.floor(between.length / 2)).join("").length;
+        await evaluate(`window.quoteFixture.setComposerCaret(${middle})`);
+        await send("Input.insertText", { text: "中间探针" });
         await waitFor(
-          "window.quoteFixture.getSent().length === 1 && document.querySelectorAll('.sent-reference-rail .reference-token').length === 5",
+          "window.quoteFixture.getDraft().text.includes('中间探针')",
+        );
+        await press("z", "KeyZ", 2);
+        await waitFor(
+          `window.quoteFixture.getDraft().text.length === ${baseline.text.length}`,
+        );
+        assert.deepEqual(
+          await evaluate("window.quoteFixture.getDraft()"),
+          baseline,
+          "caret insertion undo returns exact interleaved draft",
+        );
+        await evaluate(`window.quoteFixture.setComposerCaret(${middle})`);
+        await send("Input.insertText", { text: " @" });
+        await waitFor(
+          "Boolean(document.querySelector('#thread-composer')?.getAttribute('aria-controls'))",
+        );
+        await screenshot(
+          `unified-${entry.theme}-${entry.width}-mention-between.png`,
+        );
+        await press("z", "KeyZ", 2);
+        await waitFor(
+          `window.quoteFixture.getDraft().text.length === ${baseline.text.length}`,
+        );
+        assert.deepEqual(
+          await evaluate("window.quoteFixture.getDraft()"),
+          baseline,
+          "mention probe must not alter captured payload",
+        );
+        assert.equal(
+          await evaluate(
+            `(() => {const content=document.querySelector('#thread-composer');content.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));content.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true,isComposing:true}));content.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));return window.quoteFixture.getSent().length;})()`,
+          ),
+          0,
+          "composing Enter must not send",
+        );
+        await evaluate("document.querySelector('#thread-composer').focus()");
+        await press("Enter");
+        await waitFor(
+          "window.quoteFixture.getSent().length === 1 && document.querySelectorAll('.user-bubble .reference-token').length === 5",
         );
         assert.equal(
           await evaluate(
             "window.quoteFixture.getSent()[0] === window.quoteFixture.expectedPayload",
           ),
           true,
-          "visible five-reference send exactly matches actual provider capture",
-        );
-        assert.equal(
-          await evaluate(
-            "document.querySelector('.user-bubble .reference-token') === null",
-          ),
-          true,
+          "visible five-reference send exactly matches captured model user message",
         );
         await evaluate(
-          "document.querySelector('.sent-reference-rail').scrollIntoView({block:'center'})",
+          "document.querySelector('.user-bubble .reference-token').scrollIntoView({block:'center'})",
         );
         await settle();
         await screenshot(`unified-${entry.theme}-${entry.width}-sent.png`);
+        if (entry.width >= 600) {
+          await click("[data-model-user-message]");
+          await waitFor(
+            "document.querySelector('[data-model-user-payload]')?.textContent === window.quoteFixture.expectedPayload",
+          );
+          await screenshot(
+            `unified-${entry.theme}-${entry.width}-model-user-message.png`,
+          );
+          await press("Escape");
+        }
         if (entry.width === 420) {
           await send("Emulation.setDeviceMetricsOverride", {
             width: 420,
@@ -244,13 +342,14 @@ for (const entry of [
             url: `${url}/unified-reference-frame.html?stress&narrow`,
           });
           await waitFor(
-            "Boolean(window.quoteFixture && document.querySelectorAll('.composer-reference-rail .reference-token').length === 15 && document.querySelectorAll('.composer-images img').length === 6 && document.querySelector('.queue-shelf'))",
+            "Boolean(window.quoteFixture && document.querySelectorAll('.inline-composer-editor .reference-token').length === 15 && document.querySelectorAll('.composer-images img').length === 6 && document.querySelector('.queue-shelf'))",
           );
           await evaluate("document.fonts.ready");
           await settle();
           const reachability = await evaluate(`(async () => {
             const zone = document.querySelector('.bottom-zone');
-            const targets = [...document.querySelectorAll('.composer-reference-rail .reference-token-details, .composer-images .remove-draft-image'), document.querySelector('#thread-composer')];
+            const scroller = document.querySelector('.inline-composer-editor .cm-scroller');
+            const targets = [...document.querySelectorAll('.inline-composer-editor .reference-token-details, .inline-composer-editor .reference-token-remove, .composer-images .remove-draft-image'), document.querySelector('.inline-composer-editor .cm-editor')];
             const checks = [];
             for (const target of targets) {
               target.scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -259,20 +358,61 @@ for (const entry of [
               const x = r.x + r.width / 2, y = r.y + r.height / 2;
               checks.push({ visible: y >= z.top && y <= z.bottom && y >= 0 && y <= innerHeight, hit: target.contains(document.elementFromPoint(x, y)) });
             }
-            return { checks, overflowY: getComputedStyle(zone).overflowY, scrollHeight: zone.scrollHeight, clientHeight: zone.clientHeight, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+            return { checks, overflowY: getComputedStyle(zone).overflowY, scrollHeight: zone.scrollHeight, clientHeight: zone.clientHeight, editorOverflowY:getComputedStyle(scroller).overflowY, editorScrollHeight:scroller.scrollHeight, editorClientHeight:scroller.clientHeight, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
           })()`);
           assert.equal(reachability.horizontalOverflow, false);
           assert.equal(reachability.overflowY, "auto");
+          assert.equal(reachability.editorOverflowY, "auto");
+          assert.ok(
+            reachability.editorScrollHeight > reachability.editorClientHeight,
+            "fifteen chips must scroll within CodeMirror",
+          );
           assert.ok(
             reachability.checks.every((check) => check.visible && check.hit),
             "Every reference, image remove target and Composer must be reachable without clipping",
           );
           await screenshot("unified-short-queue-composer.png");
           await evaluate(
-            "document.querySelector('.composer-reference-rail .reference-token-details').scrollIntoView({block:'center'})",
+            "document.querySelector('.inline-composer-editor .reference-token-details').scrollIntoView({block:'center'})",
           );
           await settle();
           await screenshot("unified-short-queue-references.png");
+          if (
+            await evaluate(
+              "document.querySelector('.queue-shelf-toggle').getAttribute('aria-expanded') === 'false'",
+            )
+          )
+            await click(".queue-shelf-toggle");
+          if (
+            await evaluate(
+              "document.querySelector('.queue-view-all')?.getAttribute('aria-expanded') === 'false'",
+            )
+          )
+            await click(".queue-view-all");
+          await click('[data-queue-id="queue-99"] .queue-row-edit');
+          await waitFor(
+            "document.querySelectorAll('.queued-message-editor .reference-token').length === 5",
+          );
+          await screenshot("unified-short-queue-edit-inline.png");
+          const beforeQueueEdit = await evaluate(
+            "window.quoteFixture.getDraft()",
+          );
+          await evaluate("window.quoteFixture.setQueueCaret(0)");
+          await send("Input.insertText", { text: "队列前缀" });
+          await click(".queue-editor-save");
+          await waitFor(
+            "window.quoteFixture.getEditedQueue()?.text.startsWith('队列前缀')",
+          );
+          const editedQueue = await evaluate(
+            "window.quoteFixture.getEditedQueue()",
+          );
+          assert.deepEqual(
+            editedQueue.references.map((reference) => reference.position),
+            beforeQueueEdit.references
+              .slice(0, 5)
+              .map((reference) => reference.position + "队列前缀".length),
+            "queue edit keeps all five reference offsets after a prefix insertion",
+          );
           evidence.scenes.push({
             name: "short-queue-references-images",
             width: 420,
@@ -280,6 +420,53 @@ for (const entry of [
             reachability,
           });
         }
+      }
+      if (entry.width === 420) {
+        await send("Emulation.setDeviceMetricsOverride", {
+          width: entry.width,
+          height: entry.height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        await send("Page.navigate", {
+          url: `${url}/unified-reference-frame.html?long&narrow&theme=${entry.theme}`,
+        });
+        await waitFor(
+          "window.quoteFixture && document.querySelectorAll('.inline-composer-editor .reference-token').length === 1",
+        );
+        await evaluate("document.fonts.ready");
+        await evaluate(
+          "document.querySelector('.inline-composer-editor .reference-token').scrollIntoView({block:'center'})",
+        );
+        await settle();
+        const longChip = await evaluate(`(() => {
+          const host=document.querySelector('.inline-composer-reference');
+          const token=host.querySelector('.reference-token');
+          const label=host.querySelector('.reference-token-details > span');
+          const remove=host.querySelector('.reference-token-remove');
+          const shell=document.querySelector('.inline-composer-editor');
+          const h=host.getBoundingClientRect(),t=token.getBoundingClientRect(),r=remove.getBoundingClientRect(),s=shell.getBoundingClientRect();
+          return {hostWidth:h.width,tokenWidth:t.width,tokenHeight:t.height,removeHeight:r.height,removeRightGap:h.right-r.right,insideShell:h.left>=s.left-1&&h.right<=s.right+1,ellipsized:label.scrollWidth>label.clientWidth,overflow:document.documentElement.scrollWidth>innerWidth};
+        })()`);
+        assert.ok(
+          longChip.hostWidth <= 300 && longChip.tokenWidth <= 300,
+          "long CJK/Latin/unbroken path chip stays bounded",
+        );
+        assert.ok(
+          longChip.removeRightGap >= -1 && longChip.removeRightGap <= 6,
+          "remove button remains at the chip's far right",
+        );
+        assert.equal(longChip.insideShell, true);
+        assert.equal(longChip.ellipsized, true);
+        assert.equal(longChip.overflow, false);
+        if (entry.inputMode === "touch")
+          assert.ok(longChip.tokenHeight >= 44 && longChip.removeHeight >= 44);
+        await screenshot(`refsLong-${entry.inputMode}-${entry.theme}-420.png`);
+        evidence.scenes.push({
+          name: "long-inline-reference",
+          ...entry,
+          longChip,
+        });
       }
     },
   );
@@ -289,5 +476,5 @@ await writeFile(
   JSON.stringify(evidence, null, 2) + "\n",
 );
 console.log(
-  "Captured real-browser selection, compact desktop draft/sent states and separate touch-capability sizing with verified media queries.",
+  "Captured real-browser inline draft/sent, undo, mention, composition, queue edit, stress and long-chip scenes with verified input capabilities.",
 );

@@ -1393,3 +1393,5 @@ action; it does not rewrite any ingress preference or an explicitly queued sibli
 ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按单调钟至少间隔 15 秒读取固定 host-visible 内存与 visible-cgroup-root v2 数值；它不是 job/child 内存归因，不探索成员或挂载路径，无 timer/进程/信号修改，独立双 sink 32 KiB/32 样本上限不占用原 4 MiB trace 预算，缺值为 null，停事件或预算耗尽后最后样本会陈旧。
 
 ZenX's unified-reference v2 text envelope extends the existing client-ID-bound quote presentation with an ordered, strictly validated list of file/Thread pointers and explicit message excerpts; it remains one canonical text part, is model-visible verbatim, preserves legacy v1 reads, and adds no Core field, automatic resolver, or frontend-owned conversation state.
+
+ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.

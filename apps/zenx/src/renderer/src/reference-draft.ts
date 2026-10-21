@@ -1,6 +1,130 @@
 import { referenceText, type Reference } from "./composer-selector.js";
 
 const PREFIX = /^\[zenx-references:([^\]\n]+)\]\n/u;
+const OBJECT_REPLACEMENT = "\uFFFC";
+
+export type InlineReferencePart = { text: string } | { reference: Reference };
+
+/**
+ * Keep every reference paired with one atomic object-replacement token.
+ * Legacy references without positions are appended, in their input order.
+ * Positions are JavaScript/CodeMirror UTF-16 offsets.
+ */
+export function normalizeInlineReferences(
+  text: string,
+  references: readonly Reference[],
+): { text: string; references: Reference[] } {
+  const positioned: Reference[] = [];
+  const appended: Reference[] = [];
+  const claimed = new Set<number>();
+
+  for (const reference of references) {
+    const position = reference.position;
+    if (
+      Number.isSafeInteger(position) &&
+      position! >= 0 &&
+      position! < text.length &&
+      text.charAt(position!) === OBJECT_REPLACEMENT &&
+      !claimed.has(position!)
+    ) {
+      positioned.push(reference);
+      claimed.add(position!);
+    } else {
+      // Invalid or duplicate positions cannot own an existing token. Preserve
+      // their reference data by treating them like legacy unpositioned refs.
+      appended.push(reference);
+    }
+  }
+
+  let normalizedText = text;
+  for (const reference of appended) {
+    const position = normalizedText.length;
+    normalizedText += OBJECT_REPLACEMENT;
+    positioned.push({ ...reference, position });
+  }
+  positioned.sort((left, right) => left.position! - right.position!);
+  return { text: normalizedText, references: positioned };
+}
+
+/** Replace a UTF-16 range while preserving the locations of surviving tokens. */
+export function spliceInlineReferenceText(
+  text: string,
+  references: readonly Reference[],
+  from: number,
+  to: number,
+  insertion: string,
+): { text: string; references: Reference[] } {
+  const normalized = normalizeInlineReferences(text, references);
+  const clamp = (offset: number) =>
+    Number.isFinite(offset)
+      ? Math.min(normalized.text.length, Math.max(0, Math.trunc(offset)))
+      : 0;
+  const start = Math.min(clamp(from), clamp(to));
+  const end = Math.max(clamp(from), clamp(to));
+  const nextText =
+    normalized.text.slice(0, start) + insertion + normalized.text.slice(end);
+  const delta = insertion.length - (end - start);
+  const nextReferences = normalized.references.flatMap((reference) => {
+    const position = reference.position!;
+    if (position >= start && position < end) return [];
+    return [
+      {
+        ...reference,
+        position: position >= end ? position + delta : position,
+      },
+    ];
+  });
+  return { text: nextText, references: nextReferences };
+}
+
+/** Replace a selection with one atomic reference token and return its caret. */
+export function insertInlineReference(
+  text: string,
+  references: readonly Reference[],
+  reference: Reference,
+  from: number,
+  to = from,
+): { text: string; references: Reference[]; caret: number } {
+  const normalized = normalizeInlineReferences(text, references);
+  const clamp = (offset: number) =>
+    Number.isFinite(offset)
+      ? Math.min(normalized.text.length, Math.max(0, Math.trunc(offset)))
+      : 0;
+  const start = Math.min(clamp(from), clamp(to));
+  const spliced = spliceInlineReferenceText(
+    normalized.text,
+    normalized.references,
+    start,
+    Math.max(clamp(from), clamp(to)),
+    OBJECT_REPLACEMENT,
+  );
+  const withReference = normalizeInlineReferences(spliced.text, [
+    ...spliced.references,
+    { ...reference, position: start },
+  ]);
+  return { ...withReference, caret: start + OBJECT_REPLACEMENT.length };
+}
+
+/** Split Composer text into prose and references, in visible text order. */
+export function inlineReferenceParts(
+  text: string,
+  references: readonly Reference[],
+): InlineReferencePart[] {
+  const normalized = normalizeInlineReferences(text, references);
+  const parts: InlineReferencePart[] = [];
+  let cursor = 0;
+  for (const reference of normalized.references) {
+    const position = reference.position!;
+    if (position > cursor)
+      parts.push({ text: normalized.text.slice(cursor, position) });
+    parts.push({ reference });
+    cursor = position + OBJECT_REPLACEMENT.length;
+  }
+  if (cursor < normalized.text.length)
+    parts.push({ text: normalized.text.slice(cursor) });
+  return parts;
+}
+
 function encodedReferenceDraft(draft: string): {
   text: string;
   references: Reference[];
@@ -56,6 +180,25 @@ export function referenceMessage(
   clientId?: string,
 ) {
   if (references.length === 0) return text;
+  if (references.some((reference) => reference.position !== undefined)) {
+    const parts = inlineReferenceParts(text, references);
+    if (clientId)
+      return (
+        referenceMessageV3Header(clientId) +
+        parts
+          .map((part) =>
+            "text" in part
+              ? escapeReferenceProse(part.text)
+              : referenceMarker(part.reference),
+          )
+          .join("")
+      );
+    return parts
+      .map((part) =>
+        "text" in part ? part.text : referenceText(part.reference),
+      )
+      .join("");
+  }
   if (!clientId)
     return [text, ...references.map(referenceText)]
       .filter(Boolean)
@@ -72,6 +215,26 @@ export function referenceMessage(
 }
 
 const SENT_REFERENCE_PREFIX = "[zenx-reference-message:v2]\n";
+const SENT_REFERENCE_V3_HEADER_PREFIX = "[zenx-reference-message:v3;clientId=";
+const SENT_REFERENCE_V3_MARKER_PREFIX = "[ZenX reference: ";
+
+function referenceMessageV3Header(clientId: string) {
+  return `${SENT_REFERENCE_V3_HEADER_PREFIX}${JSON.stringify(clientId)}]\n`;
+}
+
+function escapeReferenceProse(text: string) {
+  return text
+    .replaceAll("\\", "\\\\")
+    .replaceAll(
+      SENT_REFERENCE_V3_MARKER_PREFIX,
+      `\\${SENT_REFERENCE_V3_MARKER_PREFIX}`,
+    );
+}
+
+function referenceMarker(reference: Reference) {
+  return `${SENT_REFERENCE_V3_MARKER_PREFIX}${JSON.stringify(sentReference(reference))}]`;
+}
+
 function sentReference(reference: Reference) {
   const common = {
     kind: reference.kind,
@@ -91,6 +254,144 @@ function sentReference(reference: Reference) {
   };
 }
 
+function jsonStringEnd(source: string, start: number) {
+  if (source[start] !== '"') return -1;
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (source[index] === '"') return index + 1;
+  }
+  return -1;
+}
+
+function jsonObjectEnd(source: string, start: number) {
+  if (source[start] !== "{") return -1;
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (inString) {
+      if (character === "\\") index += 1;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === "{") depth += 1;
+    else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return -1;
+}
+
+function decodedSentReference(value: unknown): Reference | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  const keys = Object.keys(record).sort().join(",");
+  const expected =
+    kind === "file"
+      ? "contentMode,cwd,kind,name,path"
+      : kind === "thread"
+        ? "contentMode,cwd,id,kind,name"
+        : kind === "message"
+          ? "contentMode,cwd,excerpt,id,kind,name,threadId"
+          : "";
+  if (!expected || keys !== expected) return null;
+  if (
+    typeof record.name !== "string" ||
+    typeof record.cwd !== "string" ||
+    (kind === "file" &&
+      (typeof record.path !== "string" ||
+        !record.path ||
+        record.contentMode !== "pointer")) ||
+    (kind === "thread" &&
+      (typeof record.id !== "string" ||
+        !record.id ||
+        record.contentMode !== "pointer")) ||
+    (kind === "message" &&
+      (typeof record.threadId !== "string" ||
+        !record.threadId ||
+        typeof record.id !== "string" ||
+        !record.id ||
+        typeof record.excerpt !== "string" ||
+        !record.excerpt.trim() ||
+        record.contentMode !== "excerpt"))
+  )
+    return null;
+  const { contentMode: _contentMode, ...reference } = record;
+  return reference as unknown as Reference;
+}
+
+function parseSentReferenceV3(
+  text: string,
+  expectedClientId: string,
+): { text: string; references: Reference[] } | null {
+  const stringStart = SENT_REFERENCE_V3_HEADER_PREFIX.length;
+  const stringEnd = jsonStringEnd(text, stringStart);
+  if (stringEnd < 0 || text.slice(stringEnd, stringEnd + 2) !== "]\n")
+    return null;
+  let clientId: unknown;
+  try {
+    clientId = JSON.parse(text.slice(stringStart, stringEnd));
+  } catch {
+    return null;
+  }
+  const headerEnd = stringEnd + 2;
+  if (
+    typeof clientId !== "string" ||
+    clientId !== expectedClientId ||
+    text.slice(0, headerEnd) !== referenceMessageV3Header(clientId)
+  )
+    return null;
+
+  const body = text.slice(headerEnd);
+  let decodedText = "";
+  const references: Reference[] = [];
+  for (let index = 0; index < body.length;) {
+    if (body.startsWith(SENT_REFERENCE_V3_MARKER_PREFIX, index)) {
+      const jsonStart = index + SENT_REFERENCE_V3_MARKER_PREFIX.length;
+      const jsonEnd = jsonObjectEnd(body, jsonStart);
+      if (jsonEnd < 0 || body[jsonEnd] !== "]") return null;
+      let value: unknown;
+      try {
+        value = JSON.parse(body.slice(jsonStart, jsonEnd));
+      } catch {
+        return null;
+      }
+      const reference = decodedSentReference(value);
+      if (!reference) return null;
+      references.push({ ...reference, position: decodedText.length });
+      decodedText += OBJECT_REPLACEMENT;
+      index = jsonEnd + 1;
+      continue;
+    }
+    if (body[index] === "\\") {
+      if (body.startsWith("\\\\", index)) {
+        decodedText += "\\";
+        index += 2;
+        continue;
+      }
+      if (body.startsWith(`\\${SENT_REFERENCE_V3_MARKER_PREFIX}`, index)) {
+        decodedText += SENT_REFERENCE_V3_MARKER_PREFIX;
+        index += SENT_REFERENCE_V3_MARKER_PREFIX.length + 1;
+        continue;
+      }
+      return null;
+    }
+    decodedText += body[index]!;
+    index += 1;
+  }
+  if (references.length === 0) return null;
+  // This verifies escaping, marker spelling, field order and JSON spelling.
+  // Any unknown or noncanonical envelope remains entirely visible as raw text.
+  if (referenceMessage(decodedText, references, clientId) !== text) return null;
+  return { text: decodedText, references };
+}
+
 /** Exact versioned presentation, never reference inference from ordinary text. */
 export function parseSentReferenceContent(
   text: string,
@@ -98,6 +399,8 @@ export function parseSentReferenceContent(
 ): { text: string; references: Reference[] } {
   const ordinary = { text, references: [] };
   if (!clientId) return ordinary;
+  if (text.startsWith(SENT_REFERENCE_V3_HEADER_PREFIX))
+    return parseSentReferenceV3(text, clientId) ?? ordinary;
   if (!text.startsWith(SENT_REFERENCE_PREFIX)) {
     const legacy = parseLegacyQuoteMessage(text, clientId);
     return {
@@ -182,6 +485,10 @@ export function parseSentReferenceMessage(
 }
 
 export function referenceTitle(text: string, references: readonly Reference[]) {
+  if (references.some((reference) => reference.position !== undefined))
+    return inlineReferenceParts(text, references)
+      .map((part) => ("text" in part ? part.text : part.reference.name))
+      .join("");
   return [text, ...references.map((reference) => reference.name)]
     .filter(Boolean)
     .join("\n");
@@ -190,6 +497,9 @@ function isReference(value: unknown): value is Reference {
   if (!value || typeof value !== "object") return false;
   const reference = value as Record<string, unknown>;
   return (
+    (reference.position === undefined ||
+      (Number.isSafeInteger(reference.position) &&
+        (reference.position as number) >= 0)) &&
     typeof reference.name === "string" &&
     typeof reference.cwd === "string" &&
     ((reference.kind === "file" && typeof reference.path === "string") ||

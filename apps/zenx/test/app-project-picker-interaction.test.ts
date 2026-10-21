@@ -5024,22 +5024,31 @@ test("reference selector sends exact locators through App with and without nativ
       );
       await act(async () => option.click());
       await waitFor(() =>
-        document.querySelector(".composer-reference-rail .reference-token"),
+        document.querySelector(".inline-composer-editor .reference-token"),
       );
-      assert.equal(document.querySelector(".composer .reference-token"), null);
+      assert.ok(document.querySelector(".composer .reference-token"));
       assert.equal(sends.length, 0);
       assert.doesNotMatch(
         textarea.value,
         /zenx-references|relative path|space root/,
       );
-      await dispatchComposerKey(textarea, { key: "Enter" });
+      const inlineInput = document.querySelector<HTMLElement>(".cm-content")!;
+      await act(async () =>
+        inlineInput.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
       await waitFor(() => sends.length === 1);
       const send = sends[0]!;
       assert.equal(send.method, "zen/turn/send");
       const text = send.params.input.find(
         (part: any) => part.type === "text",
       ).text;
-      assert.match(text, /^\[zenx-reference-message:v2\]/u);
+      assert.match(text, /^\[zenx-reference-message:v3;/u);
       assert.deepEqual(
         parseSentReferenceContent(text, send.params.clientUserMessageId)
           .references,
@@ -5049,6 +5058,7 @@ test("reference selector sends exact locators through App with and without nativ
             name: '文 [x]".ts',
             path: 'src/文 [x]".ts',
             cwd: "C:/space root",
+            position: 5,
           },
         ],
       );

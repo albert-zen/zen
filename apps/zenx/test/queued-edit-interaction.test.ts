@@ -1,3 +1,4 @@
+import { EditorView } from "@codemirror/view";
 import {
   parseReferenceDraft,
   parseSentReferenceContent,
@@ -27,7 +28,17 @@ import { projectQueuedImages } from "../src/renderer/src/queued-message-images.j
 
 const editor = () =>
   document.querySelector<HTMLDivElement>(".queued-message-editor");
-const text = () => editor()!.querySelector<HTMLTextAreaElement>("textarea")!;
+const text = () => {
+  const plain = editor()!.querySelector<HTMLTextAreaElement>("textarea");
+  if (plain) return plain;
+  const content = editor()!.querySelector<HTMLElement>(".cm-content")!;
+  const view = EditorView.findFromDOM(content)!;
+  Object.defineProperty(content, "value", {
+    configurable: true,
+    get: () => view.state.doc.toString().replaceAll("\uFFFC", ""),
+  });
+  return content as HTMLTextAreaElement;
+};
 const mainDraft = () =>
   document.querySelector<HTMLTextAreaElement>("#thread-composer")!.value;
 const flush = async () => {
@@ -47,6 +58,20 @@ const result = (p: NativeQueueEditParams): NativeQueueEditResult => ({
 async function changeText(value: string) {
   const target = text();
   await act(async () => {
+    const rich = editor()!.querySelector<HTMLElement>(".cm-content");
+    if (rich) {
+      const view = EditorView.findFromDOM(rich)!;
+      const current = view.state.doc.toString();
+      const first = current.indexOf("\uFFFC");
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: first < 0 ? current.length : first,
+          insert: value,
+        },
+      });
+      return;
+    }
     Object.getOwnPropertyDescriptor(
       window.HTMLTextAreaElement.prototype,
       "value",
@@ -653,7 +678,7 @@ test("queue reference codec preserves order, exact excerpts, client binding, ord
   }
 });
 
-test("queue editor shows unified external references, edits/removes without double wrapping, and retains exact retry identity", async () => {
+test("queue editor shows unified inline references, edits/removes without double wrapping, and retains exact retry identity", async () => {
   await withRuntimeDom(async (h) => {
     const raw = referenceMessage("原问题", queueReferences, "queue-client-0");
     const requests: NativeQueueEditParams[] = [];
@@ -670,14 +695,14 @@ test("queue editor shows unified external references, edits/removes without doub
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
     assert.equal(text().value, "原问题");
     assert.equal(editor()!.querySelectorAll(".reference-token").length, 3);
-    assert.equal(editor()!.querySelector(".composer .reference-token"), null);
+    assert.ok(editor()!.querySelector(".composer .reference-token"));
     assert.equal(
       editor()!.querySelector(".composer .queue-editor-images"),
       null,
     );
     await changeText("修改后的问题");
     await h.click(
-      '.queue-editor-reference-rail [data-reference-kind="file"] .reference-token-remove',
+      '.inline-composer-editor [data-reference-kind="file"] .reference-token-remove',
     );
     assert.equal(editor()!.querySelectorAll(".reference-token").length, 2);
     await h.click(".queue-editor-save");
@@ -687,11 +712,15 @@ test("queue editor shows unified external references, edits/removes without doub
     assert.equal(sent.expectedRevision, 0);
     assert.equal(sent.input[0]!.type, "text");
     const payload = (sent.input[0] as { text: string }).text;
-    assert.deepEqual(parseSentReferenceContent(payload, sent.clientId), {
-      text: "修改后的问题",
-      references: queueReferences.slice(0, 2),
-    });
-    assert.equal(payload.split("[zenx-reference-message:v2]").length, 2);
+    const decoded = parseSentReferenceContent(payload, sent.clientId);
+    assert.equal(decoded.text, "修改后的问题\uFFFC\uFFFC");
+    assert.deepEqual(
+      decoded.references.map(
+        ({ position: _position, ...reference }) => reference,
+      ),
+      queueReferences.slice(0, 2),
+    );
+    assert.equal(payload.split("[zenx-reference-message:v3;").length, 2);
     assert.equal(
       editor()!.querySelector<HTMLButtonElement>(".reference-token-remove")!
         .disabled,
@@ -771,10 +800,10 @@ test("queue excerpt source opens the exact visible message and suspends unsaved 
     const identity = editor()!.dataset.queueEditorIdentity;
     await changeText("未保存的问题");
     await h.click(
-      '.queue-editor-reference-rail [data-reference-kind="file"] .reference-token-remove',
+      '.inline-composer-editor [data-reference-kind="file"] .reference-token-remove',
     );
     await h.click(
-      '.queue-editor-reference-rail [data-reference-kind="message"] .reference-token-details',
+      '.inline-composer-editor [data-reference-kind="message"] .reference-token-details',
     );
     await h.click(".reference-open-source");
     await flush();
@@ -808,7 +837,7 @@ test("missing queue excerpt source keeps the editor and unsaved reference draft 
     );
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
     await changeText("尚未保存");
-    await h.click(".queue-editor-reference-rail .reference-token-details");
+    await h.click(".inline-composer-editor .reference-token-details");
     await h.click(".reference-open-source");
     await flush();
     assert.ok(editor());

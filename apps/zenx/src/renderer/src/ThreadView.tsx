@@ -1,3 +1,7 @@
+import { InlineComposerEditor } from "./InlineComposerEditor.js";
+import type { ComposerInput } from "./composer-input.js";
+import { normalizeInlineReferences } from "./reference-draft.js";
+import { InlineReferenceContent } from "./InlineReferenceContent.js";
 import { ReferenceToken } from "./ReferenceToken.js";
 import { MessageSelectionActions, addMessageQuote } from "./message-quote.js";
 import {
@@ -621,7 +625,19 @@ function ThreadViewContent({
   const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
-  const skillDraft = parseSkillDraft(composer.draft.text);
+  const parsedSkillDraft = parseSkillDraft(composer.draft.text);
+  const normalizedDraft = normalizeInlineReferences(
+    parsedSkillDraft.text,
+    parsedSkillDraft.references,
+  );
+  const skillDraft = { ...parsedSkillDraft, ...normalizedDraft };
+  const composerScope = thread?.id ?? "new-thread";
+  const [inlineSession, setInlineSession] = useState<string | null>(null);
+  const useInlineComposer =
+    inlineSession === composerScope || skillDraft.references.length > 0;
+  useEffect(() => {
+    if (skillDraft.references.length > 0) setInlineSession(composerScope);
+  }, [skillDraft.references.length, composerScope]);
   useEffect(() => {
     if (window.zenx?.skills === undefined) return;
     let active = true;
@@ -643,7 +659,23 @@ function ThreadViewContent({
   const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
-  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerTextareaRef = useRef<ComposerInput>(null);
+  const plainSnapshot = useRef({
+    value: skillDraft.text,
+    references: [] as typeof skillDraft.references,
+    selection: { anchor: 0, head: 0 },
+  });
+  if (!useInlineComposer)
+    plainSnapshot.current = {
+      value: skillDraft.text,
+      references: [],
+      selection: {
+        anchor:
+          composerTextareaRef.current?.selectionStart ?? skillDraft.text.length,
+        head:
+          composerTextareaRef.current?.selectionEnd ?? skillDraft.text.length,
+      },
+    };
   const lastCanonicalTurnEnd = latestTurnEnd(thread?.canonicalItems ?? []);
   const readMessageOrder = useMemo(
     () =>
@@ -1392,15 +1424,31 @@ function ThreadViewContent({
             )
           )
             return;
+          const insertion =
+            composerTextareaRef.current?.selectionStart ??
+            skillDraft.text.length;
           onDraftChange(
-            addMessageQuote(composer.draft.text, {
-              ...selection,
-              kind: "message",
-              name: "ZenX",
-              cwd: thread.cwd,
-            }),
+            addMessageQuote(
+              composer.draft.text,
+              {
+                ...selection,
+                kind: "message",
+                name: "ZenX",
+                cwd: thread.cwd,
+              },
+              composerTextareaRef.current?.selectionStart ??
+                skillDraft.text.length,
+              composerTextareaRef.current?.selectionEnd ??
+                skillDraft.text.length,
+            ),
           );
-          composerTextareaRef.current?.focus({ preventScroll: true });
+          requestAnimationFrame(() => {
+            composerTextareaRef.current?.focus({ preventScroll: true });
+            composerTextareaRef.current?.setSelectionRange(
+              insertion + 1,
+              insertion + 1,
+            );
+          });
         }}
       />
       {atLive ? null : (
@@ -1598,40 +1646,6 @@ function ThreadViewContent({
           </p>
         ) : null}
         <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
-          {skillDraft.references.length > 0 && (
-            <div
-              className="reference-rail composer-reference-rail"
-              aria-label={i18n.t("shell:referencesToSend")}
-            >
-              {skillDraft.references.map((reference, index) => (
-                <ReferenceToken
-                  key={JSON.stringify([index, reference])}
-                  reference={reference}
-                  onSource={
-                    reference.kind === "message"
-                      ? () => {
-                          pauseFollowing();
-                          return goToMessageQuoteSource(
-                            scrollRef.current,
-                            reference,
-                          );
-                        }
-                      : undefined
-                  }
-                  onRemove={() => {
-                    onDraftChange(
-                      withSkillDraft(
-                        skillDraft.text,
-                        skillDraft.skills,
-                        skillDraft.references.filter((_, i) => i !== index),
-                      ),
-                    );
-                    composerTextareaRef.current?.focus({ preventScroll: true });
-                  }}
-                />
-              ))}
-            </div>
-          )}
           {composer.draft.images.length === 0 ? null : (
             <div
               className="composer-images"
@@ -1704,68 +1718,167 @@ function ThreadViewContent({
           <label className="sr-only" htmlFor={composerId}>
             {i18n.t("panels:messageZenx")}
           </label>
-          <ComposerEditor
-            id={composerId}
-            aria-label={i18n.t("shell:message")}
-            aria-controls={selector.open ? selectorId : undefined}
-            aria-activedescendant={
-              selector.open && selector.rows.length
-                ? `${selectorId}-${selector.active}`
-                : undefined
-            }
-            aria-describedby={selector.open ? `${selectorId}-hint` : undefined}
-            onSelect={(event) => selector.select(event.currentTarget)}
-            onBlur={() => selector.dismiss()}
+          {useInlineComposer ? (
+            <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+              <InlineComposerEditor
+                key={composerScope}
+                initialUndo={plainSnapshot.current}
+                initialSelection={{
+                  anchor:
+                    (skillDraft.references[0]?.position ??
+                      skillDraft.text.length - 1) + 1,
+                  head:
+                    (skillDraft.references[0]?.position ??
+                      skillDraft.text.length - 1) + 1,
+                }}
+                id={composerId}
+                editorRef={composerTextareaRef}
+                value={skillDraft.text}
+                references={skillDraft.references}
+                aria-label={i18n.t("shell:message")}
+                aria-controls={selector.open ? selectorId : undefined}
+                aria-activedescendant={
+                  selector.open && selector.rows.length
+                    ? `${selectorId}-${selector.active}`
+                    : undefined
+                }
+                aria-describedby={
+                  selector.open ? `${selectorId}-hint` : undefined
+                }
+                disabled={composerDisabled}
+                onChange={(text, references) => {
+                  selector.reopen();
+                  onDraftChange(
+                    withSkillDraft(text, skillDraft.skills, references),
+                  );
+                }}
+                onSelectionChange={(input) => selector.select(input)}
+                onBlur={() => selector.dismiss()}
+                onReferenceSource={(reference) => {
+                  if (reference.kind !== "message") return false;
+                  pauseFollowing();
+                  return goToMessageQuoteSource(scrollRef.current, reference);
+                }}
+                onPaste={(event) => {
+                  if (composerDisabled || submitting) return;
+                  const files = event.clipboardData
+                    ? imageFiles(event.clipboardData.files)
+                    : [];
+                  if (files.length === 0) return;
+                  event.preventDefault();
+                  setAttachmentError(null);
+                  void onImportImages(files).catch((error: unknown) =>
+                    setAttachmentError(describeError(error)),
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    handleComposerSuggestionKey(
+                      {
+                        key: event.key,
+                        shiftKey: event.shiftKey,
+                        repeat: event.repeat,
+                        preventDefault: () => event.preventDefault(),
+                        nativeEvent: { isComposing: event.isComposing },
+                      },
+                      selector,
+                    )
+                  )
+                    return;
+                  if (
+                    event.key !== "Enter" ||
+                    event.shiftKey ||
+                    event.isComposing
+                  )
+                    return;
+                  event.preventDefault();
+                  if (!event.repeat)
+                    submit(
+                      defaultComposerIntent(
+                        runningTurn !== null,
+                        composerSendMode,
+                        event.metaKey || event.ctrlKey,
+                      ),
+                    );
+                }}
+                placeholder={
+                  runningTurn === null
+                    ? watching
+                      ? i18n.t("shell:sendAMessageToWakeThisThread")
+                      : i18n.t("shell:askZenxAnything")
+                    : composerSendMode === "queue" ||
+                        composerSendMode === "batch"
+                      ? i18n.t("shell:messageForTheNextTurn")
+                      : i18n.t("shell:steerTheCurrentRun")
+                }
+              />
+            </MessageLinkContext.Provider>
+          ) : (
+            <ComposerEditor
+              id={composerId}
+              aria-label={i18n.t("shell:message")}
+              aria-controls={selector.open ? selectorId : undefined}
+              aria-activedescendant={
+                selector.open && selector.rows.length
+                  ? `${selectorId}-${selector.active}`
+                  : undefined
+              }
+              aria-describedby={
+                selector.open ? `${selectorId}-hint` : undefined
+              }
+              onSelect={(event) => selector.select(event.currentTarget)}
+              onBlur={() => selector.dismiss()}
 
-            disabled={composerDisabled}
-            onChange={(event) => {
-              selector.reopen();
-              selector.select(event.currentTarget ?? event.target);
-              onDraftChange(
-                withSkillDraft(
-                  event.target.value,
-                  skillDraft.skills,
-                  skillDraft.references,
-                ),
-              );
-            }}
-            onPaste={(event) => {
-              if (composerDisabled || submitting) return;
-              const files = imageFiles(event.clipboardData.files);
-              if (files.length === 0) return;
-              event.preventDefault();
-              setAttachmentError(null);
-              void onImportImages(files).catch((error: unknown) =>
-                setAttachmentError(describeError(error)),
-              );
-            }}
-            onKeyDown={(event) => {
-              if (handleComposerSuggestionKey(event, selector)) return;
-              if (event.key !== "Enter" || event.shiftKey) return;
-              if (event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              if (event.repeat) return;
-              submit(
-                defaultComposerIntent(
-                  runningTurn !== null,
-                  composerSendMode,
-                  event.metaKey || event.ctrlKey,
-                ),
-              );
-            }}
-            placeholder={
-              runningTurn === null
-                ? watching
-                  ? i18n.t("shell:sendAMessageToWakeThisThread")
-                  : i18n.t("shell:askZenxAnything")
-                : composerSendMode === "queue" || composerSendMode === "batch"
-                  ? i18n.t("shell:messageForTheNextTurn")
-                  : i18n.t("shell:steerTheCurrentRun")
-            }
-            textareaRef={composerTextareaRef}
-            rows={1}
-            value={skillDraft.text}
-          />
+              disabled={composerDisabled}
+              onChange={(event) => {
+                selector.reopen();
+                selector.select(event.currentTarget ?? event.target);
+                onDraftChange(
+                  withSkillDraft(
+                    event.target.value,
+                    skillDraft.skills,
+                    skillDraft.references,
+                  ),
+                );
+              }}
+              onPaste={(event) => {
+                if (composerDisabled || submitting) return;
+                const files = imageFiles(event.clipboardData.files);
+                if (files.length === 0) return;
+                event.preventDefault();
+                setAttachmentError(null);
+                void onImportImages(files).catch((error: unknown) =>
+                  setAttachmentError(describeError(error)),
+                );
+              }}
+              onKeyDown={(event) => {
+                if (handleComposerSuggestionKey(event, selector)) return;
+                if (event.key !== "Enter" || event.shiftKey) return;
+                if (event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                if (event.repeat) return;
+                submit(
+                  defaultComposerIntent(
+                    runningTurn !== null,
+                    composerSendMode,
+                    event.metaKey || event.ctrlKey,
+                  ),
+                );
+              }}
+              placeholder={
+                runningTurn === null
+                  ? watching
+                    ? i18n.t("shell:sendAMessageToWakeThisThread")
+                    : i18n.t("shell:askZenxAnything")
+                  : composerSendMode === "queue" || composerSendMode === "batch"
+                    ? i18n.t("shell:messageForTheNextTurn")
+                    : i18n.t("shell:steerTheCurrentRun")
+              }
+              textareaRef={composerTextareaRef}
+              rows={1}
+              value={skillDraft.text}
+            />
+          )}
           <div className="composer-rail">
             <div className="composer-tools">
               <button
@@ -3766,31 +3879,26 @@ function InputMessage({
           ))}
         </div>
       )}
-      {presented.references.length > 0 && (
-        <div
-          className="reference-rail sent-reference-rail"
-          aria-label={i18n.t("shell:referencesToSend")}
-        >
-          {presented.references.map((reference, index) => (
-            <ReferenceToken
-              key={index}
-              reference={reference}
-              onSource={
-                reference.kind === "message"
-                  ? () =>
-                      goToMessageQuoteSource(
-                        article.current?.closest(".thread-view") ?? null,
-                        reference,
-                      )
-                  : undefined
-              }
-            />
-          ))}
-        </div>
-      )}
-      {presented.text.length > 0 && (
+      {(presented.text.length > 0 || presented.references.length > 0) && (
         <div className="user-bubble">
-          <Markdown text={presented.text} />
+          {presented.references.length > 0 ? (
+            presentation.map((part, index) => (
+              <InlineReferenceContent
+                key={index}
+                text={part.text}
+                references={part.references}
+                onSource={(reference) =>
+                  reference.kind === "message" &&
+                  goToMessageQuoteSource(
+                    article.current?.closest(".thread-view") ?? null,
+                    reference,
+                  )
+                }
+              />
+            ))
+          ) : (
+            <Markdown text={presented.text} />
+          )}
         </div>
       )}
       <MessageActions

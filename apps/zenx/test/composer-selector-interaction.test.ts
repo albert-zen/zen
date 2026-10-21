@@ -1,3 +1,4 @@
+import { EditorView } from "@codemirror/view";
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -175,10 +176,8 @@ async function withView(
     window: dom.window,
     document: dom.window.document,
     IS_REACT_ACT_ENVIRONMENT: true,
-    requestAnimationFrame: (callback: FrameRequestCallback) => {
-      callback(0);
-      return 0;
-    },
+    requestAnimationFrame: (callback: FrameRequestCallback) =>
+      window.requestAnimationFrame(callback),
   });
   Object.assign(dom.window.HTMLElement.prototype, {
     attachEvent: () => {},
@@ -367,8 +366,15 @@ test("duplicate thread names select canonical ID with keyboard, preserve tail, f
       (getDraft().references[0] as { id: string }).id,
       "bbbbbbbb-second",
     );
-    assert.equal(getDraft().text, "Ask  after");
-    assert.equal(document.activeElement, textarea());
+    assert.equal(getDraft().text, "Ask \uFFFC after");
+    assert.equal(getDraft().references[0]?.position, 4);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
     assert.deepEqual(sends, []);
   });
 });
@@ -485,7 +491,13 @@ test("loading Enter, IME Enter and Escape do not send; Tab chooses a file refere
     await act(async () => pending.resolve(fileResult("文档 [draft] # %.bin")));
     await key("Tab");
     assert.equal(getDraft().references[0]?.name, "文档 [draft] # %.bin");
-    assert.equal(document.activeElement, textarea());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
     assert.deepEqual(sends, []);
   });
 });
@@ -557,7 +569,13 @@ test("failed reference validation preserves input, announces the error and never
     assert.equal(getDraft().text, "@deleted");
     assert.deepEqual(getDraft().references, []);
     assert.deepEqual(sends, []);
-    assert.equal(document.activeElement, textarea());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
   });
 });
 
@@ -588,7 +606,13 @@ test("editing after Escape reopens the same reference query", async () => {
     await input("@same");
     await settleSearch();
     assert.match(options()[0]?.textContent ?? "", /same.txt/);
-    assert.equal(document.activeElement, textarea());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
     assert.deepEqual(sends, []);
   });
 });
@@ -723,5 +747,43 @@ test("keyboard selection scrolls only the portaled candidate list", async () => 
     await key("ArrowDown");
     assert.equal(list.scrollTop, 60);
     assert.deepEqual(scrolled, []);
+  });
+});
+
+test("a repeated @ reference stays at each caret position between surrounding prose", async () => {
+  await withView(async ({ api, getDraft, sends }) => {
+    api.threads.list = async () => [
+      {
+        threadId: "thread-exact",
+        name: "Same",
+        preview: "",
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
+    ];
+    await input("先看 @Same 再比较", 8);
+    await settleSearch();
+    await key("Enter");
+    assert.equal(getDraft().references.length, 1);
+    const content = document.querySelector<HTMLElement>(".cm-content")!;
+    const view = EditorView.findFromDOM(content)!;
+    const end = view.state.doc.length;
+    await act(async () =>
+      view.dispatch({
+        changes: { from: end, insert: " 然后 @Same 最后" },
+        selection: { anchor: end + 9 },
+      }),
+    );
+    await settleSearch();
+    await key("Enter");
+    const result = getDraft();
+    assert.equal(result.references.length, 2);
+    assert.equal((result.references[0] as { id: string }).id, "thread-exact");
+    assert.equal((result.references[1] as { id: string }).id, "thread-exact");
+    assert.equal(result.text, "先看 \uFFFC 再比较 然后 \uFFFC 最后");
+    assert.ok(
+      result.references[1]!.position! > result.references[0]!.position!,
+    );
+    assert.deepEqual(sends, []);
   });
 });

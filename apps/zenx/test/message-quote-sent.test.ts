@@ -213,7 +213,7 @@ test("sent native user message renders two exact pills and ordinary question, wi
         [quote.excerpt, longQuote.excerpt],
       );
       assert.equal(sent.querySelector(".reference-token-remove"), null);
-      assert.equal(sent.querySelector(".user-bubble .reference-token"), null);
+      assert.ok(sent.querySelector(".user-bubble .reference-token"));
       assert.match(sent.textContent!, /Please explain both/);
       assert.match(sent.textContent!, /Host skill snapshot stays visible/);
       assert.ok(
@@ -271,23 +271,26 @@ test("select → quote → normal composer → explicit send appends real projec
       ...document.querySelectorAll(".message-selection-actions button"),
     ].find((button) => button.textContent === "Quote")!;
     await click(quoteButton);
-    assert.equal(draft().text, "Existing question");
+    assert.equal(draft().text.replaceAll("\uFFFC", ""), "Existing question");
     assert.equal(draft().references.length, 1);
     assert.equal(sends.length, 0);
-    assert.equal(document.querySelector(".composer .reference-token"), null);
+    assert.ok(document.querySelector(".composer .reference-token"));
     assert.equal(
-      document.querySelectorAll(".composer-reference-rail .reference-token")
+      document.querySelectorAll(".inline-composer-editor .reference-token")
         .length,
       1,
     );
-    const composer =
-      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
-    assert.equal(document.activeElement, composer);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    const composer = document.querySelector<HTMLElement>("#thread-composer")!;
+    assert.ok(document.activeElement === composer);
     await act(async () =>
       composer.dispatchEvent(
         new window.KeyboardEvent("keydown", {
           key: "Enter",
           bubbles: true,
+          cancelable: true,
           isComposing: true,
         }),
       ),
@@ -295,7 +298,11 @@ test("select → quote → normal composer → explicit send appends real projec
     assert.equal(sends.length, 0);
     await act(async () =>
       composer.dispatchEvent(
-        new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        new window.KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
       ),
     );
     assert.equal(sends.length, 1);
@@ -342,7 +349,7 @@ test("retry preserves envelope identity; failure and newer edits keep their draf
   );
 });
 
-test("all five reference categories share outside rails in draft and sent; removal changes only draft", async () => {
+test("all five reference categories share inline tokens in draft and sent; removal changes only draft", async () => {
   const references = [
     {
       kind: "thread" as const,
@@ -372,7 +379,7 @@ test("all five reference categories share outside rails in draft and sent; remov
       const sent = document.querySelector(
         '[data-sent-message-id="sent-item"]',
       )!;
-      const draftRail = document.querySelector(".composer-reference-rail")!;
+      const draftRail = document.querySelector(".inline-composer-editor")!;
       assert.deepEqual(
         [...draftRail.querySelectorAll(".reference-token")].map((el) =>
           el.getAttribute("data-reference-kind"),
@@ -385,8 +392,8 @@ test("all five reference categories share outside rails in draft and sent; remov
         ),
         ["thread", "message", "thread", "message", "file"],
       );
-      assert.equal(document.querySelector(".composer .reference-token"), null);
-      assert.equal(sent.querySelector(".user-bubble .reference-token"), null);
+      assert.ok(document.querySelector(".composer .reference-token"));
+      assert.ok(sent.querySelector(".user-bubble .reference-token"));
       assert.equal(sent.querySelector(".reference-token-remove"), null);
       await click(
         draftRail.querySelector(
@@ -441,7 +448,7 @@ test("normal Composer input events never promote pasted draft headers or strip l
         assert.equal(draft().text, literal);
         assert.deepEqual(draft().references, []);
         assert.equal(
-          document.querySelectorAll(".composer-reference-rail .reference-token")
+          document.querySelectorAll(".inline-composer-editor .reference-token")
             .length,
           0,
         );
