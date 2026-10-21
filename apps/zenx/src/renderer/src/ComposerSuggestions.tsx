@@ -1,3 +1,4 @@
+import { composerInputElement, type ComposerInput } from "./composer-input.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import {
@@ -51,7 +52,10 @@ export interface ComposerSuggestionState {
 
 /** Shared selection keys never invoke a send while the candidate menu is open. */
 export function handleComposerSuggestionKey(
-  event: KeyboardEvent<HTMLTextAreaElement>,
+  event: Pick<
+    KeyboardEvent<HTMLTextAreaElement>,
+    "key" | "shiftKey" | "repeat" | "preventDefault"
+  > & { nativeEvent: { isComposing: boolean } },
   selector: ComposerSuggestionState,
 ): boolean {
   if (event.nativeEvent.isComposing || !selector.open) return false;
@@ -95,7 +99,7 @@ export function ComposerSuggestions({
 }: {
   id: string;
   selector: ComposerSuggestionState;
-  textarea: RefObject<HTMLTextAreaElement | null>;
+  textarea: RefObject<ComposerInput | null>;
   label: string;
   hint: string;
 }) {
@@ -124,13 +128,14 @@ export function ComposerSuggestions({
   }, [selector.active, selector.rows[selector.active]?.key]);
   useLayoutEffect(() => {
     if (!selector.open) return;
-    const ownerDocument = textarea.current?.ownerDocument ?? document;
+    const ownerDocument =
+      composerInputElement(textarea.current)?.ownerDocument ?? document;
     const dismissOutside = (event: Event) => {
       const target = event.target as Node | null;
       if (
         !target ||
         panel.current?.contains(target) ||
-        target === textarea.current
+        composerInputElement(textarea.current)?.contains(target)
       )
         return;
       selector.dismiss();
@@ -144,7 +149,8 @@ export function ComposerSuggestions({
   }, [selector.open, selector.dismiss, textarea]);
   useLayoutEffect(() => {
     if (!selector.open) return;
-    const anchor = textarea.current?.closest(".composer") ?? textarea.current;
+    const element = composerInputElement(textarea.current);
+    const anchor = element?.closest(".composer") ?? element;
     if (!anchor) return;
     const reposition = () => {
       const rect = anchor.getBoundingClientRect();

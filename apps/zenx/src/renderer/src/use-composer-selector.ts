@@ -1,3 +1,9 @@
+import type { ComposerInput } from "./composer-input.js";
+import {
+  insertInlineReference,
+  normalizeInlineReferences,
+  spliceInlineReferenceText,
+} from "./reference-draft.js";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
@@ -53,7 +59,7 @@ export function useComposerSelector({
   commands: readonly WorkflowCommand[];
   skills: readonly SkillEntry[];
   onChange(text: string): void;
-  textarea: React.RefObject<HTMLTextAreaElement | null>;
+  textarea: React.RefObject<ComposerInput | null>;
 }) {
   useTranslation("selector");
   const parsed = parseSkillDraft(draft);
@@ -273,10 +279,24 @@ export function useComposerSelector({
           trigger,
           expandWorkflowCommand(commandInput, row.command),
         );
+        references = spliceInlineReferenceText(
+          parsed.text,
+          references,
+          trigger.start,
+          trigger.end,
+          replacement.text.slice(trigger.start, replacement.caret),
+        ).references;
         text = replacement.text;
         caret = replacement.caret;
       } else {
         text = expandWorkflowCommand(parsed.text, row.command);
+        references = spliceInlineReferenceText(
+          parsed.text,
+          references,
+          0,
+          parsed.text.length,
+          text,
+        ).references;
         caret = text.length;
       }
     } else if (row.reference && trigger) {
@@ -296,13 +316,15 @@ export function useComposerSelector({
           });
         }
         if (current.current !== scope) return;
-        references = [
-          ...references.filter(
-            (value) => JSON.stringify(value) !== JSON.stringify(reference),
-          ),
+        const normalized = normalizeInlineReferences(parsed.text, references);
+        const replacement = insertInlineReference(
+          normalized.text,
+          normalized.references,
           reference,
-        ];
-        const replacement = replaceTrigger(parsed.text, trigger, "");
+          trigger.start,
+          trigger.end,
+        );
+        references = replacement.references;
         text = replacement.text;
         caret = replacement.caret;
       } catch (error) {
@@ -353,7 +375,9 @@ export function useComposerSelector({
         : "",
     dismiss: () => setDismissed(scope),
     reopen: () => setDismissed(null),
-    select: (element: HTMLTextAreaElement) =>
+    select: (
+      element: Pick<ComposerInput, "value" | "selectionStart" | "selectionEnd">,
+    ) =>
       setSelection({
         text: element.value,
         start: element.selectionStart ?? element.value.length,

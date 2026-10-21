@@ -6,6 +6,21 @@ let currentWindow = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://localhost",
 }).window;
 function prepare(window: typeof currentWindow) {
+  window.requestAnimationFrame ??= (callback) =>
+    window.setTimeout(() => callback(Date.now()), 0);
+  window.cancelAnimationFrame ??= (id) => window.clearTimeout(id);
+  window.Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+  window.Range.prototype.getBoundingClientRect ??= () => ({
+    left: 0,
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: 0,
+    height: 0,
+    x: 0,
+    y: 0,
+    toJSON() {},
+  });
   window.HTMLElement.prototype.scrollIntoView ??= () => {};
   window.HTMLElement.prototype.hasPointerCapture ??= () => false;
   window.HTMLElement.prototype.setPointerCapture ??= () => {};
@@ -22,6 +37,7 @@ Object.defineProperty(globalThis, "window", {
 });
 Object.assign(globalThis, { document: currentWindow.document });
 for (const name of [
+  "Window",
   "DocumentFragment",
   "HTMLElement",
   "Element",

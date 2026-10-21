@@ -1,3 +1,5 @@
+import { InlineComposerEditor } from "./InlineComposerEditor.js";
+import type { ComposerInput } from "./composer-input.js";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
@@ -7,6 +9,12 @@ import { ComposerEditor, ComposerShell } from "./Composer.js";
 import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
 import { Icon } from "./icons.js";
 import { Dialog } from "./ui/controls.js";
+import type { Reference } from "./composer-selector.js";
+import {
+  normalizeInlineReferences,
+  parseReferenceDraft,
+  withReferenceDraft,
+} from "./reference-draft.js";
 
 export interface QueuedMessageEditorProps {
   /** Captured thread + item + client + base revision, never a display index. */
@@ -20,7 +28,11 @@ export interface QueuedMessageEditorProps {
   disabledReason?: string | null;
   /** Resolves only after an authoritative native edit receipt. */
   onSave(draft: ComposerDraft): Promise<void>;
-  onClose(reason: "cancel" | "saved"): void;
+  onClose(reason: "cancel" | "saved" | "source"): void;
+  /** Exact current-viewport target, not a label search; source navigation suspends this draft. */
+  onReferenceSource?(
+    reference: Extract<Reference, { kind: "message" }>,
+  ): HTMLElement | null;
   trigger: HTMLElement | null;
   /** Exact parent-owned thread/selection guard, including a connected trigger. */
   canRestoreFocus?(): boolean;
@@ -49,6 +61,17 @@ function EditorSession(props: QueuedMessageEditorProps) {
     images: [...props.initialDraft.images],
   }));
   const draftRef = useRef(draft);
+  const parsedReferenceDraft = parseReferenceDraft(draft.text);
+  const referenceDraft = normalizeInlineReferences(
+    parsedReferenceDraft.text,
+    parsedReferenceDraft.references,
+  );
+  const [inlineSession, setInlineSession] = useState(
+    referenceDraft.references.length > 0,
+  );
+  useEffect(() => {
+    if (referenceDraft.references.length > 0) setInlineSession(true);
+  }, [referenceDraft.references.length]);
   const latest = useRef(props);
   latest.current = props;
   const mounted = useRef(true);
@@ -59,7 +82,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
   const [importing, setImporting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const textarea = useRef<ComposerInput>(null);
   const previewHost = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<{
     image: ComposerDraftImage;
@@ -191,6 +214,20 @@ function EditorSession(props: QueuedMessageEditorProps) {
     return true;
   };
 
+  const openReferenceSource = (reference: Reference): boolean => {
+    if (reference.kind !== "message" || !canEdit()) return false;
+    const target = latest.current.onReferenceSource?.(reference);
+    if (!target) return false;
+    restoreRequested.current = false;
+    latest.current.onClose("source");
+    requestAnimationFrame(() => {
+      if (target.isConnected && (latest.current.canRestoreFocus?.() ?? true)) {
+        target.scrollIntoView({ block: "center", behavior: "auto" });
+        target.focus({ preventScroll: true });
+      }
+    });
+    return true;
+  };
   return (
     <Dialog
       id={dialogId}
@@ -254,6 +291,57 @@ function EditorSession(props: QueuedMessageEditorProps) {
           <Icon name="x" size={18} />
         </button>
       </header>
+      {draft.images.length ? (
+        <div
+          className="composer-images queue-editor-images"
+          aria-label={t("imagesToSend")}
+        >
+          {draft.images.map((image) => (
+            <div
+              className="draft-image"
+              key={image.id}
+              data-editor-image-id={image.id}
+            >
+              <AttachmentImage
+                attachment={image.attachment}
+                name={image.name}
+                onReadAttachment={props.onReadAttachment}
+                retryOnError
+                onOpen={(_attachment, _name, trigger) => {
+                  if (mounted.current && latest.current.open)
+                    setPreview({ image, trigger });
+                }}
+              />
+              <button
+                className="remove-draft-image"
+                type="button"
+                disabled={locked}
+                aria-label={t("removeImageName", { name: image.name })}
+                title={t("removeImageName", { name: image.name })}
+                onClick={() => {
+                  if (!canEdit()) return;
+                  updateDraft({
+                    ...draftRef.current,
+                    images: draftRef.current.images.filter(
+                      (entry) => entry.id !== image.id,
+                    ),
+                  });
+                  requestAnimationFrame(() => {
+                    if (
+                      mounted.current &&
+                      latest.current.open &&
+                      document.activeElement === document.body
+                    )
+                      textarea.current?.focus({ preventScroll: true });
+                  });
+                }}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <ComposerShell
         className={`queue-editor-form${dragging ? " is-dragging" : ""}`}
         onSubmit={(event) => {
@@ -293,82 +381,77 @@ function EditorSession(props: QueuedMessageEditorProps) {
           <label className="queue-editor-label" htmlFor={editorId}>
             {t("message")}
           </label>
-          <ComposerEditor
-            id={editorId}
-            textareaRef={textarea}
-            value={draft.text}
-            readOnly={locked}
-            aria-describedby={error ? errorId : descriptionId}
-            aria-label={t("message")}
-            onChange={(event) =>
-              canEdit() &&
-              updateDraft({ ...draftRef.current, text: event.target.value })
-            }
-            onPaste={(event) => {
-              if (!locked && importFiles(event.clipboardData.files)) {
+          {inlineSession || referenceDraft.references.length > 0 ? (
+            <InlineComposerEditor
+              id={editorId}
+              editorRef={textarea}
+              value={referenceDraft.text}
+              references={referenceDraft.references}
+              readOnly={locked}
+              aria-describedby={error ? errorId : descriptionId}
+              aria-label={t("message")}
+              onReferenceSource={openReferenceSource}
+              onChange={(text, references) => {
+                if (canEdit())
+                  updateDraft({
+                    ...draftRef.current,
+                    text: withReferenceDraft(text, references),
+                  });
+              }}
+              onPaste={(event) => {
+                if (
+                  !locked &&
+                  event.clipboardData &&
+                  importFiles(event.clipboardData.files)
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key !== "Enter" ||
+                  (!event.ctrlKey && !event.metaKey) ||
+                  event.isComposing
+                )
+                  return;
                 event.preventDefault();
-                event.stopPropagation();
+                if (!event.repeat) void save();
+              }}
+            />
+          ) : (
+            <ComposerEditor
+              id={editorId}
+              textareaRef={textarea}
+              value={referenceDraft.text}
+              readOnly={locked}
+              aria-describedby={error ? errorId : descriptionId}
+              aria-label={t("message")}
+              onChange={(event) =>
+                canEdit() &&
+                updateDraft({
+                  ...draftRef.current,
+                  text: withReferenceDraft(
+                    event.target.value,
+                    parseReferenceDraft(draftRef.current.text).references,
+                  ),
+                })
               }
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || (!event.ctrlKey && !event.metaKey))
-                return;
-              if (event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              if (!event.repeat) void save();
-            }}
-          />
-          {draft.images.length ? (
-            <div
-              className="composer-images queue-editor-images"
-              aria-label={t("imagesToSend")}
-            >
-              {draft.images.map((image) => (
-                <div
-                  className="draft-image"
-                  key={image.id}
-                  data-editor-image-id={image.id}
-                >
-                  <AttachmentImage
-                    attachment={image.attachment}
-                    name={image.name}
-                    onReadAttachment={props.onReadAttachment}
-                    retryOnError
-                    onOpen={(_attachment, _name, trigger) => {
-                      if (mounted.current && latest.current.open)
-                        setPreview({ image, trigger });
-                    }}
-                  />
-                  <button
-                    className="remove-draft-image"
-                    type="button"
-                    disabled={locked}
-                    aria-label={t("removeImageName", { name: image.name })}
-                    title={t("removeImageName", { name: image.name })}
-                    onClick={() => {
-                      if (!canEdit()) return;
-                      updateDraft({
-                        ...draftRef.current,
-                        images: draftRef.current.images.filter(
-                          (entry) => entry.id !== image.id,
-                        ),
-                      });
-                      requestAnimationFrame(() => {
-                        if (
-                          mounted.current &&
-                          latest.current.open &&
-                          document.activeElement === document.body
-                        )
-                          textarea.current?.focus({ preventScroll: true });
-                      });
-                    }}
-                  >
-                    <Icon name="x" size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
+              onPaste={(event) => {
+                if (!locked && importFiles(event.clipboardData.files)) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || (!event.ctrlKey && !event.metaKey))
+                  return;
+                if (event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                if (!event.repeat) void save();
+              }}
+            />
+          )}
           <div className="queue-editor-image-tools">
             <button
               type="button"

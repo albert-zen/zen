@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **ZenX selected-message references** — Exact rendered excerpts and source Thread/Item IDs live in the existing Composer draft until explicit send. Message references serialize once into a versioned text envelope bound to that submission client ID; matching canonical user input renders a read-only quote projection, while invalid or missing-ID formats remain complete ordinary text. The ID match is a presentation discriminator, not authentication; raw input remains the sole conversation authority. No Core schema, protocol field, durable annotation store, or alternative send state is introduced.
+
 - **Explicit manual continuation** — Native turn retry admits one localized human continuation message only against the exact latest failed/aborted Turn under the existing admission lock; a stable client message identity plus canonical retryOfTurnId provenance reconciles uncertain replies, preserves canonical history and tool receipts, and never replays a tool or consumes a Composer draft. Forked history preserves original Turn IDs, but inherited retry provenance cannot authorize a local retry.
 
 - **Live Turn recovery observation** — Runtime emits a transient native repair-sampling status after canonical recovery intent commits and clears it when sampling resumes successfully or exits; the existing epoch/watermark projection retains only the latest observation per active Turn, never deriving live execution from historical failure Items or adding durable recovery authority.
@@ -1391,3 +1393,7 @@ does not imply delivery or permit client-side cancel/resend. This is a one-messa
 action; it does not rewrite any ingress preference or an explicitly queued sibling.
 
 ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按单调钟至少间隔 15 秒读取固定 host-visible 内存与 visible-cgroup-root v2 数值；它不是 job/child 内存归因，不探索成员或挂载路径，无 timer/进程/信号修改，独立双 sink 32 KiB/32 样本上限不占用原 4 MiB trace 预算，缺值为 null，停事件或预算耗尽后最后样本会陈旧。
+
+ZenX's unified-reference v2 text envelope extends the existing client-ID-bound quote presentation with an ordered, strictly validated list of file/Thread pointers and explicit message excerpts; it remains one canonical text part, is model-visible verbatim, preserves legacy v1 reads, and adds no Core field, automatic resolver, or frontend-owned conversation state.
+
+ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
