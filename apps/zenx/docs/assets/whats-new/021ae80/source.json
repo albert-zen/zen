@@ -1,0 +1,16 @@
+{
+  "commit": "2cd179b2861268505d4bbcffb0ec9bd9bf6cbcd9",
+  "scope": "Actual production Sidebar renders WhatsNew with the shared Dialog, bundled release notes, translations and theme/styles. One synthetic Project and idle Thread; no Host, credentials or private profile. The Sidebar is held open by a preview scaffold, not App; App-wide Escape handling and navigation integration are not exercised. Linux browser keyboard/pointer emulation, not native Electron or physical OS acceptance.",
+  "sources": {
+    "src/renderer/src/Sidebar.tsx": "4a6eef9672ff7c1b7b0ffdbdb0a387ef267a1db7ee4d619777ffe518df33ce4f",
+    "src/renderer/src/WhatsNew.tsx": "0617622db7792a3fe549f5dbeaa9cd8bbd63e37ef38a679619b21a755de54252",
+    "src/renderer/src/release-notes.ts": "d69cfdbce91bab704b9f06330787e5b5a5d57c27832699ba8da018e1c9e9b865",
+    "src/renderer/src/ui/controls.tsx": "00fe25d78afb1ad6e377bad937e6ce496f3a063a25ec98d774897a479df1addb",
+    "src/renderer/src/styles.css": "a5692f22f8802b015eb202760125896157a0f764590ad6cd22a7586f0bb89bdf",
+    "src/renderer/src/theme.css": "86644cd2bb46fac080d1cc7c9e81b9c577946a7622005b494b28e838057ae558",
+    "src/renderer/src/i18n/shell.ts": "7d42ea332eaaccb2b9fcd2dd74327e89d7783c9fdd9d06296065a7ec4e323e32",
+    "scripts/whats-new-preview.tsx": "a92124e795ad9eae7e948b4d389118de3af68c424936da84a66baac0bec0c380",
+    "scripts/build-whats-new-preview.mjs": "2ba8e598fa0ee13c820b98d9164caded57f9cdcf714e8e7815fd5d71b35c5653",
+    "scripts/capture-whats-new-preview.mjs": "9f2ec419f011448ea54caaa2e5da8ec78d237aa0d5db401baec60b5620b2a002"
+  }
+}

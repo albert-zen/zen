@@ -1,0 +1,18 @@
+{
+  "head": "021ae804726cbd4472330f4ef0566ebe20eb228a",
+  "ci_merge_commit": "2cd179b2861268505d4bbcffb0ec9bd9bf6cbcd9",
+  "workflow_run": 39454698708,
+  "source_sha256_match": {
+    "src/renderer/src/Sidebar.tsx": true,
+    "src/renderer/src/WhatsNew.tsx": true,
+    "src/renderer/src/release-notes.ts": true,
+    "src/renderer/src/ui/controls.tsx": true,
+    "src/renderer/src/styles.css": true,
+    "src/renderer/src/theme.css": true,
+    "src/renderer/src/i18n/shell.ts": true,
+    "scripts/whats-new-preview.tsx": true,
+    "scripts/build-whats-new-preview.mjs": true,
+    "scripts/capture-whats-new-preview.mjs": true
+  },
+  "all_sources_identical": true
+}
