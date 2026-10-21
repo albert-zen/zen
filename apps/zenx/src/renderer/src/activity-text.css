@@ -1,5 +1,5 @@
-/* T3 Code's shared icon/text overlay pattern, adapted to existing ZenX tokens.
-   Base content stays selectable; the clipped decorative copy carries one band. */
+/* DSH's width-relative shared sweep, with ZenX visibility gates and colors.
+   Real content stays selectable; only the inert copy carries the moving mask. */
 .activity-text {
   position: relative;
   display: inline-grid;
@@ -34,28 +34,36 @@
 [data-activity-copy]::after {
   content: attr(data-activity-copy);
 }
+.activity-text[data-preview="true"] {
+  max-width: min(100%, 72ch);
+}
+.activity-text[data-preview="true"] .activity-label {
+  white-space: nowrap;
+  text-overflow: clip;
+}
+.activity-text[data-preview="true"][data-overflow="true"] .activity-label {
+  mask-image: linear-gradient(to right, black calc(100% - 48px), transparent);
+}
 .activity-sweep {
-  --activity-band: 4.5rem;
   position: absolute;
-  inset-block: 0;
-  left: calc(-1 * var(--activity-band));
-  width: calc(100% + var(--activity-band) * 2);
+  inset: 0;
   pointer-events: none;
   user-select: none;
   color: var(--text);
   mask-image: var(--activity-shimmer-mask);
   mask-repeat: no-repeat;
-  animation: activity-sweep 2.2s steps(30) infinite paused;
+  transform: translateX(-100%);
+  animation: activity-sweep 1.5s steps(48, end) 0.3s infinite paused;
 }
 .activity-sweep-counter {
   display: block;
   width: 100%;
-  animation: activity-sweep-counter 2.2s steps(30) infinite paused;
+  transform: translateX(100%);
+  animation: activity-sweep-counter 1.5s steps(48, end) 0.3s infinite paused;
 }
 .activity-sweep-aligned {
   display: block;
-  width: calc(100% - var(--activity-band) * 2);
-  margin-left: var(--activity-band);
+  width: 100%;
 }
 .activity-sweep .activity-content,
 .activity-text .activity-sweep strong {
@@ -66,18 +74,20 @@
   animation-play-state: running;
 }
 @keyframes activity-sweep {
-  from {
-    transform: translateX(0);
+  0% {
+    transform: translateX(-100%);
   }
-  to {
+  66.6667%,
+  100% {
     transform: translateX(100%);
   }
 }
 @keyframes activity-sweep-counter {
-  from {
-    transform: translateX(0);
+  0% {
+    transform: translateX(100%);
   }
-  to {
+  66.6667%,
+  100% {
     transform: translateX(-100%);
   }
 }

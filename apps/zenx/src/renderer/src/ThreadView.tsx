@@ -3156,6 +3156,13 @@ function TraceSequence({
   const busy =
     turn.status === "inProgress" &&
     (activity.phase === "running" || activity.phase === "thinking");
+  const previewItem = busy
+    ? (activity.current ??
+      (node.kind === "traceGroup" ? node.items : [node.item]).findLast(
+        (item) => item.type === "reasoning" && item.status === "inProgress",
+      ))
+    : undefined;
+  const preview = previewItem ? traceActivityPreview(previewItem) : undefined;
   const detailsId = useId();
   const singleton = node.kind === "traceItem" ? node.item : null;
   const singletonExpandable =
@@ -3188,10 +3195,16 @@ function TraceSequence({
         >
           <span
             className="trace-activity-title"
-            title={traceSummary(node.items, observations)}
+            title={
+              preview
+                ? `${preview.prefix} ${preview.text}`.trim()
+                : traceSummary(node.items, observations)
+            }
           >
             <ActivityText
               active={busy}
+              preview={preview !== undefined}
+              prefix={preview?.prefix}
               leading={
                 <span className="trace-tool-icons" aria-hidden="true">
                   {traceGroupIcons(node.items).map((name) => (
@@ -3200,7 +3213,7 @@ function TraceSequence({
                 </span>
               }
             >
-              {traceSummary(node.items, observations)}
+              {preview?.text ?? traceSummary(node.items, observations)}
             </ActivityText>
           </span>
           <TraceCounts activity={activity} />
@@ -3397,11 +3410,20 @@ function TraceItemHeader({
     (item.type === "reasoning"
       ? item.status === "inProgress"
       : observedCommandPhase(item, observations) === "running");
+  const preview = active ? traceActivityPreview(item) : undefined;
   return (
     <>
-      <span className="trace-item-label" title={traceItemLabel(item)}>
+      <span
+        className="trace-item-label"
+        title={
+          preview
+            ? `${preview.prefix} ${preview.text}`.trim()
+            : traceItemLabel(item)
+        }
+      >
         <ActivityText
           active={active}
+          preview={preview !== undefined}
           leading={
             <Icon
               name={
@@ -3413,12 +3435,13 @@ function TraceItemHeader({
             />
           }
           prefix={
-            item.type === "reasoning"
+            preview?.prefix ??
+            (item.type === "reasoning"
               ? undefined
-              : toolPresentation(item.toolName ?? item.command).category
+              : toolPresentation(item.toolName ?? item.command).category)
           }
         >
-          {traceItemLabel(item)}
+          {preview?.text ?? traceItemLabel(item)}
         </ActivityText>
       </span>
       <span className="trace-item-status">
@@ -3914,6 +3937,26 @@ function WakeupCard(
       {entry.error ? <small>{entry.error}</small> : null}
     </article>
   );
+}
+
+/** Only preview public item text already available in the disclosure. */
+function traceActivityPreview(
+  item: ThreadItem,
+): { prefix: string; text: string } | undefined {
+  if (item.type === "reasoning") {
+    const content =
+      reasoningContentText(item).trim() || item.summary.join("\n").trim();
+    // Keep the latest live text visible even after a long stream; never synthesize it.
+    const text = [...content.replace(/\s+/gu, " ")].slice(-240).join("");
+    return { prefix: i18n.t("shell:thinking"), text };
+  }
+  if (item.type === "commandExecution") {
+    return {
+      prefix: toolPresentation(item.toolName ?? item.command).category,
+      text: item.command,
+    };
+  }
+  return undefined;
 }
 
 function traceItemLabel(item: ThreadItem): string {

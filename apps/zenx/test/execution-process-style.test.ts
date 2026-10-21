@@ -134,7 +134,10 @@ test("icon sweep is stroke-only, visibility-gated and reduced-motion safe", asyn
     "utf8",
   );
   assert.match(css, /mask-image: var\(--activity-shimmer-mask\)/u);
-  assert.match(css, /activity-sweep 2\.2s steps\(30\) infinite paused/u);
+  assert.match(
+    css,
+    /activity-sweep 1\.5s steps\(48, end\) 0\.3s infinite paused/u,
+  );
   assert.match(css, /data-animating="true"/u);
   assert.match(
     css,
@@ -164,7 +167,7 @@ test("shared shimmer mask is valid when inherited from the root theme", async ()
   // Root custom properties resolve before inheritance. A child-only variable here
   // would make the entire inherited mask invalid and leave a solid overlay.
   assert.doesNotMatch(mask, /var\(--activity-band\)/u);
-  assert.match(mask, /transparent 4\.5rem/u);
+  assert.match(mask, /105deg,[\s\S]*black 40% 60%,[\s\S]*transparent 100%/u);
 });
 
 test("approval and stopping retain the same visible work-duration header", async () => {
