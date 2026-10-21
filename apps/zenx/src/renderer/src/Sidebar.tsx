@@ -25,6 +25,7 @@ import type {
 } from "../../main/host-profile.js";
 import type { AppServerHostStatus } from "../../main/app-server-manager.js";
 import { Icon } from "./icons.js";
+import { WhatsNew } from "./WhatsNew.js";
 import type { LoadedPluginContribution } from "./plugin-contributions.js";
 import { ProviderLogo } from "./ProviderLogo.js";
 import {
@@ -752,20 +753,22 @@ export function Sidebar({
         </div>
 
         <footer className="sidebar-footer">
-          <button
-            className="settings-nav-row"
-            type="button"
-            aria-label={i18n.t("shell:settingsServiceStatus", {
-              status: serviceStatusPresentation(serverStatus).label,
-            })}
-            title={serviceStatusPresentation(serverStatus).label}
-            aria-current={selectedPage === "settings" ? "page" : undefined}
-            onClick={onOpenSettings}
-          >
-            <Icon name="settings" />
-            <span>{i18n.t("shell:settings")}</span>
-            <ServiceStatusDot status={serverStatus} />
-          </button>
+          <div className="sidebar-settings-row">
+            <button
+              className="settings-nav-row"
+              type="button"
+              aria-label={i18n.t("shell:settingsServiceStatus", {
+                status: serviceStatusPresentation(serverStatus).label,
+              })}
+              title={serviceStatusPresentation(serverStatus).label}
+              aria-current={selectedPage === "settings" ? "page" : undefined}
+              onClick={onOpenSettings}
+            >
+              <Icon name="settings" />
+              <span>{i18n.t("shell:settings")}</span>
+            </button>
+            <WhatsNew />
+          </div>
         </footer>
       </aside>
       <button
@@ -849,16 +852,6 @@ export function serviceStatusPresentation(status: AppServerHostStatus): {
         label: i18n.t("shell:localServiceStopped"),
       };
   }
-}
-
-function ServiceStatusDot({ status }: { status: AppServerHostStatus }) {
-  const presentation = serviceStatusPresentation(status);
-  return (
-    <span
-      className={`service-status-dot ${presentation.className}`}
-      aria-hidden="true"
-    />
-  );
 }
 
 function InboxView({

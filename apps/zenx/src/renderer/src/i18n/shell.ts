@@ -26,6 +26,9 @@ export const en = {
     "Source unavailable here. The exact quoted text is preserved.",
   quotedPassages: "Quoted passages",
 
+  whatsNew: "What’s New",
+  whatsNewLocal: "Included in this build · available offline",
+  whatsNewClose: "Close release notes",
   debugItemPaging: "Item pages",
   debugItemRange: "{{start}}–{{end}} of {{count}} Items",
   debugPreviousItems: "Previous",
@@ -966,6 +969,9 @@ export const zhCN = {
   quoteSourceUnavailable: "当前无法定位原消息，完整引用仍保留。",
   quotedPassages: "引用内容",
 
+  whatsNew: "更新内容",
+  whatsNewLocal: "当前构建已包含 · 离线可读",
+  whatsNewClose: "关闭更新内容",
   outputRate: "输出 {{rate}} tok/s（按 Turn 时长）",
   outputRateUnknown: "输出速度未知",
   debugItemPaging: "Item 分页",

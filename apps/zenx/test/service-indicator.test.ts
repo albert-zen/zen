@@ -81,7 +81,7 @@ test("maps every App Server host state to an explicit status", () => {
   }
 });
 
-test("service status is part of the Settings row, not a separate footer line", async () => {
+test("Settings and release notes share one footer row without a service dot", async () => {
   const dom = new JSDOM(
     "<!doctype html><html><body><div id=root></div></body></html>",
     { url: "http://localhost" },
@@ -106,11 +106,17 @@ test("service status is part of the Settings row, not a separate footer line", a
   try {
     await act(async () => root.render(createElement(TestSidebar)));
     assert.equal(document.querySelector(".service-status"), null);
-    const dot = document.querySelector(".service-status-dot");
-    assert.ok(dot);
-    assert.equal(dot.tagName, "SPAN");
-    assert.equal(dot.getAttribute("role"), null);
-    assert.equal(dot.getAttribute("tabindex"), null);
+    assert.equal(document.querySelector(".service-status-dot"), null);
+    const footer = document.querySelector(".sidebar-footer")!;
+    const row = footer.querySelector(".sidebar-settings-row")!;
+    assert.ok(row);
+    assert.equal(footer.children.length, 1);
+    assert.equal(row.querySelectorAll(":scope > button").length, 2);
+    assert.equal(row.querySelector("button button"), null);
+    const notes = row.querySelector<HTMLButtonElement>(".whats-new-trigger")!;
+    assert.equal(notes.textContent, "");
+    assert.equal(notes.title, "What’s New");
+    assert.equal(notes.getAttribute("aria-label"), "What’s New");
     const settings =
       document.querySelector<HTMLButtonElement>(".settings-nav-row");
     assert.ok(settings);
@@ -124,18 +130,6 @@ test("service status is part of the Settings row, not a separate footer line", a
     });
     dom.window.close();
   }
-});
-
-test("starting and reconnecting status dots stop animating for reduced motion", async () => {
-  const css = await readFile(
-    new URL("../src/renderer/src/styles.css", import.meta.url),
-    "utf8",
-  );
-  assert.match(css, /prefers-reduced-motion:\s*reduce/u);
-  assert.match(
-    css,
-    /\.service-status-dot\.starting,\s*\.service-status-dot\.reconnecting\s*\{\s*animation:\s*none;/su,
-  );
 });
 
 function TestSidebar() {

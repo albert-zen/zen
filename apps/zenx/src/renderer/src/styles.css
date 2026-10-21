@@ -1341,43 +1341,10 @@ button:disabled {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
 }
-.service-status-dot {
-  width: 7px;
-  height: 7px;
-  margin-right: 2px;
-  border-radius: 50%;
-  background: var(--color-text-muted);
-  pointer-events: none;
-}
-.service-status-dot.ready {
-  background: var(--color-status-success);
-}
-.service-status-dot.starting,
-.service-status-dot.reconnecting {
-  background: var(--color-status-warning);
-  animation: service-status-pulse 1.8s ease-in-out infinite;
-}
-.service-status-dot.error,
-.service-status-dot.stopped {
-  background: var(--color-status-danger);
-}
-@keyframes service-status-pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .app-shell,
   .sidebar {
     transition: none;
-  }
-  .service-status-dot.starting,
-  .service-status-dot.reconnecting {
-    animation: none;
   }
 }
 .sidebar-scrim {
@@ -11560,4 +11527,90 @@ button:disabled {
 
 .trace-reasoning-without-details .trace-item-static {
   grid-template-columns: 16px minmax(0, 1fr);
+}
+
+.sidebar-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebar-settings-row > .settings-nav-row {
+  flex: 1;
+  min-width: 0;
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+.sidebar-settings-row > .whats-new-trigger {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  color: var(--color-text-muted);
+}
+.sidebar-settings-row > .whats-new-trigger:hover {
+  color: var(--color-text-primary);
+}
+.ui-dialog.whats-new-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(560px, calc(100dvh - 32px));
+  overflow: hidden;
+  padding: 0;
+}
+.whats-new-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 16px 14px 20px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.whats-new-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.whats-new-header p {
+  margin: 5px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.whats-new-header .icon-button {
+  flex-shrink: 0;
+}
+.whats-new-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px 20px 16px;
+}
+.whats-new-list section {
+  padding-top: 16px;
+}
+.whats-new-list section + section {
+  margin-top: 16px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.whats-new-list h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.whats-new-list ul {
+  margin: 10px 0 0;
+  padding-left: 16px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .whats-new-header .icon-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
