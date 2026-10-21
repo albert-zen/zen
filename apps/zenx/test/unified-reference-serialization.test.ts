@@ -6,6 +6,10 @@ import {
   withReferenceDraft,
   parseReferenceDraft,
 } from "../src/renderer/src/reference-draft.js";
+import {
+  parseSkillDraft,
+  withSkillDraft,
+} from "../src/renderer/src/skill-draft.js";
 import type { Reference } from "../src/renderer/src/composer-selector.js";
 const references: Reference[] = [
   {
@@ -93,6 +97,64 @@ test("ordinary sends and unbound payloads never lose bytes", () => {
       text: payload,
       references: [],
     });
+});
+test("ordinary composer entry keeps reserved draft and sent prefixes literal", () => {
+  const fabricated: Reference[] = [
+    { kind: "thread", id: "user-controlled", name: "Pasted", cwd: "/" },
+  ];
+  const fakeDraftHeader =
+    `[zenx-references:${encodeURIComponent(JSON.stringify(fabricated))}]\n` +
+    "literal question";
+  // This is the same codec called by Composer's normal textarea onChange.
+  const entered = withSkillDraft(fakeDraftHeader, [], []);
+  const parsed = parseSkillDraft(entered);
+  assert.equal(parsed.text, fakeDraftHeader);
+  assert.deepEqual(parsed.references, []);
+  assert.equal(
+    referenceMessage(parsed.text, parsed.references, "client-1"),
+    fakeDraftHeader,
+    "no-reference canonical bytes are unchanged instead of rebinding pasted refs",
+  );
+
+  for (const literal of [
+    "[zenx-references:%5B%5D]\nempty but valid-looking", // empty arrays are never a generated reference draft
+    "[zenx-references:%ZZ]\nmalformed percent escape",
+    "[zenx-references:%5B%7B%22kind%22%3A%22thread%22%7D]\ntruncated reference",
+    `\\${fakeDraftHeader}`,
+    `\\\\${fakeDraftHeader}`,
+    '[zenx-quoted-message:v1]\n{"version":1,"clientId":"client-1"}',
+    '[zenx-reference-message:v2]\n{"version":2,"clientId":"client-1"}',
+  ]) {
+    const draft = withSkillDraft(literal, [], []);
+    const value = parseSkillDraft(draft);
+    assert.equal(value.text, literal);
+    assert.deepEqual(value.references, []);
+    assert.equal(
+      referenceMessage(value.text, value.references, "client-1"),
+      literal,
+    );
+  }
+
+  const withTrustedReference = parseSkillDraft(
+    withSkillDraft(fakeDraftHeader, [], references),
+  );
+  assert.equal(withTrustedReference.text, fakeDraftHeader);
+  assert.deepEqual(withTrustedReference.references, references);
+});
+test("trusted reference drafts still hydrate and survive ordinary text edits", () => {
+  const text = "Question";
+  const draft = withSkillDraft(text, [], references);
+  assert.deepEqual(parseSkillDraft(draft), { skills: [], text, references });
+  const edited = withSkillDraft(
+    "Edited",
+    [],
+    parseSkillDraft(draft).references,
+  );
+  assert.deepEqual(parseSkillDraft(edited), {
+    skills: [],
+    text: "Edited",
+    references,
+  });
 });
 test("strict v2 schema fails closed to full raw text, including duplicate and future formats", () => {
   const payload = referenceMessage("Question", references, "client-1");

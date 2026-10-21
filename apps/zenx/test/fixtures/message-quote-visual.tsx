@@ -21,6 +21,11 @@ import type { Thread } from "../../src/protocol-client/index.js";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
 import type { Reference } from "../../src/renderer/src/composer-selector.js";
 import { Dialog } from "../../src/renderer/src/ui/controls.js";
+import { queueScenario } from "./agent-queue-data.js";
+import {
+  queueImageAttachments,
+  readQueueFixtureImage,
+} from "./agent-queue-images.js";
 import bundle from "../../docs/reference-context/v2/fixture-bundle.json";
 import chatRequest from "../../docs/reference-context/v2/chat-completions.request.pretty.json";
 import responsesRequest from "../../docs/reference-context/v2/responses.request.pretty.json";
@@ -31,6 +36,7 @@ const params = new URLSearchParams(location.search);
 void i18n.changeLanguage(params.get("lang") ?? "zh-CN");
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 const unified = params.has("references");
+const stress = params.has("stress");
 const sourceText = unified
   ? "这是一组完整的合成引用。线程、子线程和文件仅包含位置；消息与选段包含精确原文。编辑下方问题并发送，即可查看实际生产组件的发送态。"
   : "建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n完成后保留结果，具体命令和输出按需展开。\n\n选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。\n\n```ts\nconst source = { threadId, messageId };\nconst excerpt = selection.toString();\n// 保留换行、缩进与准确来源\n```";
@@ -167,16 +173,38 @@ Object.assign(window, {
   },
 });
 function Fixture() {
-  const [composer, setComposer] = useState(() =>
-    unified
+  const [composer, setComposer] = useState(() => {
+    const state = unified
       ? editComposer(
           emptyComposerState(),
-          withSkillDraft(bundle.question, [], bundle.references as Reference[]),
+          withSkillDraft(
+            bundle.question,
+            [],
+            stress
+              ? (Array.from(
+                  { length: 3 },
+                  () => bundle.references,
+                ).flat() as Reference[])
+              : (bundle.references as Reference[]),
+          ),
         )
-      : emptyComposerState(),
-  );
+      : emptyComposerState();
+    return stress
+      ? {
+          ...state,
+          draft: {
+            ...state.draft,
+            images: queueImageAttachments.map((attachment, i) => ({
+              id: `synthetic-image-${i}`,
+              name: `合成图片 ${i + 1}`,
+              attachment,
+            })),
+          },
+        }
+      : state;
+  });
   const [contextOpen, setContextOpen] = useState(false);
-  const [thread, setThread] = useState(initial);
+  const [thread, setThread] = useState(stress ? queueScenario(3) : initial);
   const counter = useRef(0);
   const sending = useRef(false);
   const [sent, setSent] = useState<string[]>([]);
@@ -232,7 +260,7 @@ function Fixture() {
               ? "合成预览 · 不调用模型"
               : "合成数据 · 发送只添加本地示例消息"}
           </span>
-          {unified && (
+          {unified && !stress && (
             <button type="button" onClick={() => setContextOpen(true)}>
               模型实际输入
             </button>
@@ -287,6 +315,18 @@ function Fixture() {
               thread={thread}
               composer={composer}
               approvals={[]}
+              onReadAttachment={readQueueFixtureImage}
+              onRemoveImage={(id) =>
+                setComposer((current) => ({
+                  ...current,
+                  draft: {
+                    ...current.draft,
+                    images: current.draft.images.filter(
+                      (image) => image.id !== id,
+                    ),
+                  },
+                }))
+              }
               onDraftChange={(value) =>
                 setComposer((state) => editComposer(state, value))
               }

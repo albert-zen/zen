@@ -1,3 +1,9 @@
+import {
+  parseReferenceDraft,
+  parseSentReferenceContent,
+  referenceMessage,
+  withReferenceDraft,
+} from "../src/renderer/src/reference-draft.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -559,5 +565,167 @@ test("image-only queued input edits image order without inventing text or replac
       thread.queuedMessages!.map((x) => x.id),
       ["queue-0", "queue-1"],
     );
+  });
+});
+
+const queueReferences: import("../src/renderer/src/composer-selector.js").Reference[] =
+  [
+    {
+      kind: "thread",
+      name: "引用体系设计",
+      cwd: "/synthetic",
+      id: "source-thread",
+    },
+    {
+      kind: "message",
+      name: "ZenX",
+      cwd: "/synthetic",
+      threadId: "source-thread",
+      id: "source-message",
+      excerpt: "第一行\n  second <line>",
+    },
+    {
+      kind: "file",
+      name: "reference-plan.md",
+      cwd: "/synthetic",
+      path: "reference-plan.md",
+    },
+  ];
+function referencedQueue(raw: string) {
+  const thread = queueScenario(2);
+  return {
+    ...thread,
+    canonicalItems: thread.canonicalItems!.map((item) =>
+      item.type === "user_message_queued" && item.id === "queue-0"
+        ? {
+            ...item,
+            input: [
+              { type: "text" as const, text: raw },
+              ...item.input.filter((part) => part.type !== "text"),
+            ],
+          }
+        : item,
+    ),
+    queuedMessages: thread.queuedMessages!.map((item) =>
+      item.id === "queue-0" ? { ...item, text: raw } : item,
+    ),
+  };
+}
+
+test("queue reference codec preserves order, exact excerpts, client binding, ordinary headers and repeated saves", () => {
+  const raw = referenceMessage("问题", queueReferences, "queue-client-0");
+  const input = [
+    { type: "text" as const, text: raw },
+    { type: "image" as const, attachment: queueImageAttachments[0]! },
+  ];
+  const draft = queuedInputDraft(input, "queue-0", "queue-client-0")!;
+  assert.deepEqual(parseReferenceDraft(draft.text), {
+    text: "问题",
+    references: queueReferences,
+  });
+  assert.deepEqual(queuedDraftInput(draft, "queue-client-0"), input);
+  assert.deepEqual(
+    queuedDraftInput(
+      queuedInputDraft(
+        queuedDraftInput(draft, "queue-client-0"),
+        "queue-0",
+        "queue-client-0",
+      )!,
+      "queue-client-0",
+    ),
+    input,
+  );
+  const header = withReferenceDraft("literal", queueReferences);
+  for (const literal of [
+    header,
+    `\\${header}`,
+    `\\\\${header}`,
+    raw,
+    "[zenx-reference-message:v2]\n{malformed}",
+  ]) {
+    const ordinary = [{ type: "text" as const, text: literal }];
+    const hydrated = queuedInputDraft(ordinary, "q", "different-client")!;
+    assert.deepEqual(parseReferenceDraft(hydrated.text), {
+      text: literal,
+      references: [],
+    });
+    assert.deepEqual(queuedDraftInput(hydrated, "different-client"), ordinary);
+  }
+});
+
+test("queue editor shows unified external references, edits/removes without double wrapping, and retains exact retry identity", async () => {
+  await withRuntimeDom(async (h) => {
+    const raw = referenceMessage("原问题", queueReferences, "queue-client-0");
+    const requests: NativeQueueEditParams[] = [];
+    let reject!: (reason: Error) => void;
+    await h.render(referencedQueue(raw), {
+      onReadAttachment: readImage,
+      onEditQueued: (p) => {
+        requests.push(p);
+        return new Promise((_resolve, fail) => {
+          reject = fail;
+        });
+      },
+    });
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    assert.equal(text().value, "原问题");
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 3);
+    assert.equal(editor()!.querySelector(".composer .reference-token"), null);
+    assert.equal(
+      editor()!.querySelector(".composer .queue-editor-images"),
+      null,
+    );
+    await changeText("修改后的问题");
+    await h.click(
+      '.queue-editor-reference-rail [data-reference-kind="file"] .reference-token-remove',
+    );
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 2);
+    await h.click(".queue-editor-save");
+    const sent = requests[0]!;
+    assert.equal(sent.clientId, "queue-client-0");
+    assert.equal(sent.queuedItemId, "queue-0");
+    assert.equal(sent.expectedRevision, 0);
+    assert.equal(sent.input[0]!.type, "text");
+    const payload = (sent.input[0] as { text: string }).text;
+    assert.deepEqual(parseSentReferenceContent(payload, sent.clientId), {
+      text: "修改后的问题",
+      references: queueReferences.slice(0, 2),
+    });
+    assert.equal(payload.split("[zenx-reference-message:v2]").length, 2);
+    assert.equal(
+      editor()!.querySelector<HTMLButtonElement>(".reference-token-remove")!
+        .disabled,
+      true,
+    );
+    await act(async () => reject(new Error("Synthetic transport failure")));
+    assert.equal(text().value, "修改后的问题");
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 2);
+    await h.click(".queue-editor-save");
+    assert.equal(requests[1]!.editId, sent.editId);
+    assert.deepEqual(requests[1]!.input, sent.input);
+    await act(async () => reject(new Error("Synthetic retry failure")));
+  });
+});
+
+test("queue editor hydrates and edits literal reserved headers as visible text, not references", async () => {
+  await withRuntimeDom(async (h) => {
+    const literal = `\\${withReferenceDraft("literal", queueReferences)}`;
+    let request!: NativeQueueEditParams;
+    await h.render(referencedQueue(literal), {
+      onReadAttachment: readImage,
+      onEditQueued: async (p) => {
+        request = p;
+        return result(p);
+      },
+    });
+    await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+    assert.equal(text().value, literal);
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 0);
+    const pasted = withReferenceDraft("pasted unchanged", queueReferences);
+    await changeText(pasted);
+    assert.equal(text().value, pasted);
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 0);
+    await h.click(".queue-editor-save");
+    assert.equal((request.input[0] as { text: string }).text, pasted);
   });
 });

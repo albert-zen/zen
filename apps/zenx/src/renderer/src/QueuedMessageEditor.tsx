@@ -7,6 +7,8 @@ import { ComposerEditor, ComposerShell } from "./Composer.js";
 import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
 import { Icon } from "./icons.js";
 import { Dialog } from "./ui/controls.js";
+import { ReferenceToken } from "./ReferenceToken.js";
+import { parseReferenceDraft, withReferenceDraft } from "./reference-draft.js";
 
 export interface QueuedMessageEditorProps {
   /** Captured thread + item + client + base revision, never a display index. */
@@ -49,6 +51,7 @@ function EditorSession(props: QueuedMessageEditorProps) {
     images: [...props.initialDraft.images],
   }));
   const draftRef = useRef(draft);
+  const referenceDraft = parseReferenceDraft(draft.text);
   const latest = useRef(props);
   latest.current = props;
   const mounted = useRef(true);
@@ -254,6 +257,83 @@ function EditorSession(props: QueuedMessageEditorProps) {
           <Icon name="x" size={18} />
         </button>
       </header>
+      {referenceDraft.references.length > 0 && (
+        <div
+          className="reference-rail queue-editor-reference-rail"
+          aria-label={t("referencesToSend")}
+        >
+          {referenceDraft.references.map((reference, index) => (
+            <ReferenceToken
+              key={JSON.stringify([index, reference])}
+              reference={reference}
+              removeDisabled={locked}
+              onRemove={() => {
+                if (!canEdit()) return;
+                const current = parseReferenceDraft(draftRef.current.text);
+                updateDraft({
+                  ...draftRef.current,
+                  text: withReferenceDraft(
+                    current.text,
+                    current.references.filter((_, i) => i !== index),
+                  ),
+                });
+                textarea.current?.focus({ preventScroll: true });
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {draft.images.length ? (
+        <div
+          className="composer-images queue-editor-images"
+          aria-label={t("imagesToSend")}
+        >
+          {draft.images.map((image) => (
+            <div
+              className="draft-image"
+              key={image.id}
+              data-editor-image-id={image.id}
+            >
+              <AttachmentImage
+                attachment={image.attachment}
+                name={image.name}
+                onReadAttachment={props.onReadAttachment}
+                retryOnError
+                onOpen={(_attachment, _name, trigger) => {
+                  if (mounted.current && latest.current.open)
+                    setPreview({ image, trigger });
+                }}
+              />
+              <button
+                className="remove-draft-image"
+                type="button"
+                disabled={locked}
+                aria-label={t("removeImageName", { name: image.name })}
+                title={t("removeImageName", { name: image.name })}
+                onClick={() => {
+                  if (!canEdit()) return;
+                  updateDraft({
+                    ...draftRef.current,
+                    images: draftRef.current.images.filter(
+                      (entry) => entry.id !== image.id,
+                    ),
+                  });
+                  requestAnimationFrame(() => {
+                    if (
+                      mounted.current &&
+                      latest.current.open &&
+                      document.activeElement === document.body
+                    )
+                      textarea.current?.focus({ preventScroll: true });
+                  });
+                }}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <ComposerShell
         className={`queue-editor-form${dragging ? " is-dragging" : ""}`}
         onSubmit={(event) => {
@@ -296,13 +376,19 @@ function EditorSession(props: QueuedMessageEditorProps) {
           <ComposerEditor
             id={editorId}
             textareaRef={textarea}
-            value={draft.text}
+            value={referenceDraft.text}
             readOnly={locked}
             aria-describedby={error ? errorId : descriptionId}
             aria-label={t("message")}
             onChange={(event) =>
               canEdit() &&
-              updateDraft({ ...draftRef.current, text: event.target.value })
+              updateDraft({
+                ...draftRef.current,
+                text: withReferenceDraft(
+                  event.target.value,
+                  parseReferenceDraft(draftRef.current.text).references,
+                ),
+              })
             }
             onPaste={(event) => {
               if (!locked && importFiles(event.clipboardData.files)) {
@@ -318,57 +404,6 @@ function EditorSession(props: QueuedMessageEditorProps) {
               if (!event.repeat) void save();
             }}
           />
-          {draft.images.length ? (
-            <div
-              className="composer-images queue-editor-images"
-              aria-label={t("imagesToSend")}
-            >
-              {draft.images.map((image) => (
-                <div
-                  className="draft-image"
-                  key={image.id}
-                  data-editor-image-id={image.id}
-                >
-                  <AttachmentImage
-                    attachment={image.attachment}
-                    name={image.name}
-                    onReadAttachment={props.onReadAttachment}
-                    retryOnError
-                    onOpen={(_attachment, _name, trigger) => {
-                      if (mounted.current && latest.current.open)
-                        setPreview({ image, trigger });
-                    }}
-                  />
-                  <button
-                    className="remove-draft-image"
-                    type="button"
-                    disabled={locked}
-                    aria-label={t("removeImageName", { name: image.name })}
-                    title={t("removeImageName", { name: image.name })}
-                    onClick={() => {
-                      if (!canEdit()) return;
-                      updateDraft({
-                        ...draftRef.current,
-                        images: draftRef.current.images.filter(
-                          (entry) => entry.id !== image.id,
-                        ),
-                      });
-                      requestAnimationFrame(() => {
-                        if (
-                          mounted.current &&
-                          latest.current.open &&
-                          document.activeElement === document.body
-                        )
-                          textarea.current?.focus({ preventScroll: true });
-                      });
-                    }}
-                  >
-                    <Icon name="x" size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
           <div className="queue-editor-image-tools">
             <button
               type="button"

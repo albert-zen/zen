@@ -540,7 +540,7 @@ function ThreadViewContent({
         )
       )
         return [];
-      const draft = queuedInputDraft(item.input, item.id);
+      const draft = queuedInputDraft(item.input, item.id, item.clientId);
       return draft === null ? [] : [[item.id, { item, draft }] as const];
     }),
   );
@@ -908,7 +908,7 @@ function ThreadViewContent({
     ) {
       throw new Error(i18n.t("shell:queueEditBusy"));
     }
-    const input = queuedDraftInput(draft);
+    const input = queuedDraftInput(draft, session.clientId);
     const fingerprint = JSON.stringify(input);
     const attempt =
       session.attempt?.fingerprint === fingerprint
@@ -1928,75 +1928,77 @@ function ThreadViewContent({
           </div>
         </Dialog>
       )}
-      {Object.entries(editSessions).map(([key, session]) => (
-        <QueuedMessageEditor
-          key={session.identity}
-          identity={session.identity}
-          open={
-            openEditKey === key &&
-            session.owner === editOwner.current &&
-            thread?.id === session.threadId
-          }
-          initialDraft={session.draft}
-          pending={session.pending}
-          error={session.error}
-          trigger={session.trigger}
-          canRestoreFocus={() =>
-            currentThreadRef.current === session.threadId &&
-            document.getSelection()?.isCollapsed !== false
-          }
-          onRestoreFocus={() => {
-            if (
-              currentThreadRef.current === session.threadId &&
-              !document.querySelector('[role="dialog"]') &&
-              document.getSelection()?.isCollapsed !== false
-            )
-              composerTextareaRef.current?.focus({ preventScroll: true });
-          }}
-          disabledReason={
-            session.confirmed
-              ? i18n.t("shell:queueEditSyncing")
-              : composerDisabled
-                ? i18n.t("shell:queueEditBusy")
-                : undefined
-          }
-          onDraftChange={(draft) => {
-            const current = editSessionsRef.current[key];
-            if (
-              current?.owner === editOwner.current &&
-              !current.pending &&
-              !current.confirmed
-            )
-              updateEditSession(key, { ...current, draft });
-          }}
-          onSave={(draft) => saveQueuedEdit(key, draft)}
-          onClose={(_reason) => {
-            const current = editSessionsRef.current[key];
-            if (current?.owner === editOwner.current) {
-              if (
-                !current.pending &&
-                (!current.confirmed || observedEdit(current))
-              )
-                updateEditSession(key, null);
-              else updateEditSession(key, { ...current, owner: undefined });
+      <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+        {Object.entries(editSessions).map(([key, session]) => (
+          <QueuedMessageEditor
+            key={session.identity}
+            identity={session.identity}
+            open={
+              openEditKey === key &&
+              session.owner === editOwner.current &&
+              thread?.id === session.threadId
             }
-            setOpenEditKey((value) => (value === key ? null : value));
-          }}
-          onReadAttachment={onReadAttachment}
-          onImportImages={
-            onImportQueueImages ??
-            (async () => {
-              throw new Error(i18n.t("shell:imageReaderUnavailable"));
-            })
-          }
-          onPickImages={
-            onPickQueueImages ??
-            (async () => {
-              throw new Error(i18n.t("shell:imageReaderUnavailable"));
-            })
-          }
-        />
-      ))}
+            initialDraft={session.draft}
+            pending={session.pending}
+            error={session.error}
+            trigger={session.trigger}
+            canRestoreFocus={() =>
+              currentThreadRef.current === session.threadId &&
+              document.getSelection()?.isCollapsed !== false
+            }
+            onRestoreFocus={() => {
+              if (
+                currentThreadRef.current === session.threadId &&
+                !document.querySelector('[role="dialog"]') &&
+                document.getSelection()?.isCollapsed !== false
+              )
+                composerTextareaRef.current?.focus({ preventScroll: true });
+            }}
+            disabledReason={
+              session.confirmed
+                ? i18n.t("shell:queueEditSyncing")
+                : composerDisabled
+                  ? i18n.t("shell:queueEditBusy")
+                  : undefined
+            }
+            onDraftChange={(draft) => {
+              const current = editSessionsRef.current[key];
+              if (
+                current?.owner === editOwner.current &&
+                !current.pending &&
+                !current.confirmed
+              )
+                updateEditSession(key, { ...current, draft });
+            }}
+            onSave={(draft) => saveQueuedEdit(key, draft)}
+            onClose={(_reason) => {
+              const current = editSessionsRef.current[key];
+              if (current?.owner === editOwner.current) {
+                if (
+                  !current.pending &&
+                  (!current.confirmed || observedEdit(current))
+                )
+                  updateEditSession(key, null);
+                else updateEditSession(key, { ...current, owner: undefined });
+              }
+              setOpenEditKey((value) => (value === key ? null : value));
+            }}
+            onReadAttachment={onReadAttachment}
+            onImportImages={
+              onImportQueueImages ??
+              (async () => {
+                throw new Error(i18n.t("shell:imageReaderUnavailable"));
+              })
+            }
+            onPickImages={
+              onPickQueueImages ??
+              (async () => {
+                throw new Error(i18n.t("shell:imageReaderUnavailable"));
+              })
+            }
+          />
+        ))}
+      </MessageLinkContext.Provider>
       {preview === null || !queuePreviewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}

@@ -233,6 +233,53 @@ for (const entry of [
         );
         await settle();
         await screenshot(`unified-${entry.theme}-${entry.width}-sent.png`);
+        if (entry.width === 420) {
+          await send("Emulation.setDeviceMetricsOverride", {
+            width: 420,
+            height: 480,
+            deviceScaleFactor: 1,
+            mobile: false,
+          });
+          await send("Page.navigate", {
+            url: `${url}/quote-frame.html?references&stress&narrow`,
+          });
+          await waitFor(
+            "window.quoteFixture && document.querySelectorAll('.composer-reference-rail .reference-token').length === 15 && document.querySelectorAll('.composer-images img').length === 6 && document.querySelector('.queue-shelf')",
+          );
+          await evaluate("document.fonts.ready");
+          await settle();
+          const reachability = await evaluate(`(async () => {
+            const zone = document.querySelector('.bottom-zone');
+            const targets = [...document.querySelectorAll('.composer-reference-rail .reference-token-details, .composer-images .remove-draft-image'), document.querySelector('#thread-composer')];
+            const checks = [];
+            for (const target of targets) {
+              target.scrollIntoView({ block: 'center', inline: 'nearest' });
+              await new Promise(resolve => requestAnimationFrame(resolve));
+              const r = target.getBoundingClientRect(), z = zone.getBoundingClientRect();
+              const x = r.x + r.width / 2, y = r.y + r.height / 2;
+              checks.push({ visible: y >= z.top && y <= z.bottom && y >= 0 && y <= innerHeight, hit: target.contains(document.elementFromPoint(x, y)) });
+            }
+            return { checks, overflowY: getComputedStyle(zone).overflowY, scrollHeight: zone.scrollHeight, clientHeight: zone.clientHeight, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+          })()`);
+          assert.equal(reachability.horizontalOverflow, false);
+          assert.equal(reachability.overflowY, "auto");
+          assert.ok(
+            reachability.checks.every((check) => check.visible && check.hit),
+            "Every reference, image remove target and Composer must be reachable without clipping",
+          );
+          await screenshot("unified-short-queue-composer.png");
+          await evaluate(
+            "document.querySelector('.composer-reference-rail .reference-token-details').scrollIntoView({block:'center'})",
+          );
+          await settle();
+          await screenshot("unified-short-queue-references.png");
+          evidence.scenes.push({
+            name: "short-queue-references-images",
+            width: 420,
+            height: 480,
+            reachability,
+          });
+        }
       }
     },
   );

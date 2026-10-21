@@ -10,10 +10,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 export function ReferenceToken({
   reference,
   onRemove,
+  removeDisabled = false,
   onSource,
 }: {
   reference: Reference;
   onRemove?(): void;
+  removeDisabled?: boolean;
   onSource?(): boolean;
 }) {
   const { t } = useTranslation("shell");
@@ -81,6 +83,7 @@ export function ReferenceToken({
             type="button"
             className="reference-token-remove"
             aria-label={t("removeReference", { name: reference.name })}
+            disabled={removeDisabled}
             onClick={onRemove}
           >
             <Icon name="x" size={10} />

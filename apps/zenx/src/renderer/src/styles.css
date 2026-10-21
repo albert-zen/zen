@@ -10111,7 +10111,13 @@ button:disabled {
 .bottom-zone.has-queue:not(.has-approval) {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* External references/images must remain reachable in short viewports. */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.bottom-zone.has-queue:not(.has-approval) > .composer-reference-rail,
+.bottom-zone.has-queue:not(.has-approval) > .composer-images {
+  flex: 0 0 auto;
 }
 .bottom-zone.has-queue:not(.has-approval) > .composer {
   flex: 0 0 auto;

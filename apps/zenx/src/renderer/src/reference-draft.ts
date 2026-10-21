@@ -1,30 +1,55 @@
 import { referenceText, type Reference } from "./composer-selector.js";
 
 const PREFIX = /^\[zenx-references:([^\]\n]+)\]\n/u;
+function encodedReferenceDraft(draft: string): {
+  text: string;
+  references: Reference[];
+} | null {
+  const match = PREFIX.exec(draft);
+  if (!match) return null;
+  try {
+    const value: unknown = JSON.parse(decodeURIComponent(match[1]!));
+    if (Array.isArray(value) && value.length > 0 && value.every(isReference))
+      return { text: draft.slice(match[0].length), references: value };
+  } catch {
+    /* Unrecognized text stays ordinary user text. */
+  }
+  return null;
+}
+
 export function parseReferenceDraft(draft: string): {
   text: string;
   references: Reference[];
 } {
-  const match = PREFIX.exec(draft);
-  if (match) {
-    try {
-      const value: unknown = JSON.parse(decodeURIComponent(match[1]!));
-      if (Array.isArray(value) && value.every(isReference))
-        return { text: draft.slice(match[0].length), references: value };
-    } catch {
-      /* Unrecognized text stays ordinary user text. */
-    }
-  }
+  // Ordinary composer input is encoded through withReferenceDraft first.
+  // A leading backslash run is the reversible literal escape for text that
+  // would otherwise look like an internal reference draft header.
+  const slashes = /^(\\+)/u.exec(draft)?.[0].length ?? 0;
+  if (slashes > 0 && encodedReferenceDraft(draft.slice(slashes)))
+    return { text: draft.slice(1), references: [] };
+  const encoded = encodedReferenceDraft(draft);
+  if (encoded) return encoded;
   return { text: draft, references: [] };
 }
 export function withReferenceDraft(
   text: string,
   references: readonly Reference[],
 ) {
-  return references.length
-    ? `[zenx-references:${encodeURIComponent(JSON.stringify(references))}]\n${text}`
-    : text;
+  if (references.length)
+    return `[zenx-references:${encodeURIComponent(JSON.stringify(references))}]\n${text}`;
+
+  // The textarea's onChange path calls this even when it has no selected
+  // references. Escape a pasted/typed valid-looking header before the next
+  // render hydrates the internal draft; preserve any backslashes the user
+  // already typed by always adding exactly one more.
+  const slashes = /^(\\*)/u.exec(text)?.[0].length ?? 0;
+  if (encodedReferenceDraft(text.slice(slashes))) return `\\${text}`;
+  return text;
 }
+/*
+ * This is a draft-only codec. Sent-message envelopes use their distinct v1/v2
+ * prefixes below, and unreferenced outgoing text is never rewritten.
+ */
 export function referenceMessage(
   text: string,
   references: readonly Reference[],

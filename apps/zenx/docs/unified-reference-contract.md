@@ -16,7 +16,7 @@ No-reference sends keep the current bytes. Without a valid generated send identi
 
 ## Compatibility and lifecycle
 
-Read old v1 quote envelopes without rewriting raw data. Their embedded pointer descriptions remain ordinary question text; only the actual v1 quote array becomes reference tokens. Preserve canonical text part boundaries and Host-added skill text. Copy-message returns raw content. Existing draft, retry, queue, failure, newer-edit and acceptance state machines remain unchanged; only serialization at the existing send boundary changes. Editing/resubmitting must use a parsed draft, not re-wrap a canonical envelope accidentally.
+Read old v1 quote envelopes without rewriting raw data. Their embedded pointer descriptions remain ordinary question text; only the actual v1 quote array becomes reference tokens. Preserve canonical text part boundaries and Host-added skill text. Copy-message returns raw content. Existing draft, retry, queue, failure, newer-edit and acceptance state machines remain unchanged; only serialization at the existing send boundary changes. Editing/resubmitting uses a parsed draft bound to the original queued client ID, not a second envelope. The queue editor keeps exact revision/receipt/retry identities, exposes the same external tokens and permits removal. Invalid/unbound canonical text is encoded as literal visible input before entering the ephemeral draft codec; ordinary pasted reserved headers and leading backslashes round-trip unchanged. The same literal-safe entry boundary applies to the main Composer.
 
 ## UI
 

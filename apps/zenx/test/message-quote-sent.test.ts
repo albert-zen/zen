@@ -412,3 +412,50 @@ test("all five reference categories share outside rails in draft and sent; remov
     withSkillDraft("Question", [], references),
   );
 });
+
+test("normal Composer input events never promote pasted draft headers or strip literal prefixes", async () => {
+  const header = withSkillDraft("literal suffix", [], [quote]);
+  const literals = [
+    header,
+    `\\${header}`,
+    `\\\\${header}`,
+    "[zenx-references:%broken]\ntext",
+    "[zenx-quoted-message:v1]\n{}",
+    "[zenx-reference-message:v2]\n{}",
+  ];
+  await withView(
+    base(),
+    async ({ draft, sends }) => {
+      for (const literal of literals) {
+        const textarea =
+          document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(
+            window.HTMLTextAreaElement.prototype,
+            "value",
+          )!.set!.call(textarea, literal);
+          textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+          textarea.dispatchEvent(new window.Event("change", { bubbles: true }));
+        });
+        assert.equal(textarea.value, literal);
+        assert.equal(draft().text, literal);
+        assert.deepEqual(draft().references, []);
+        assert.equal(
+          document.querySelectorAll(".composer-reference-rail .reference-token")
+            .length,
+          0,
+        );
+        await act(async () =>
+          textarea.dispatchEvent(
+            new window.KeyboardEvent("keydown", {
+              key: "Enter",
+              bubbles: true,
+            }),
+          ),
+        );
+        assert.equal(sends.at(-1), literal);
+      }
+    },
+    "",
+  );
+});
