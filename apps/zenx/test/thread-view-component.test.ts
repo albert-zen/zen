@@ -65,17 +65,13 @@ test("native recovery keeps one live Turn until completion and terminal failure 
         assert.equal(document.querySelector(".turn-final"), null);
       }
       if (["running", "recovering", "continuing"].includes(phase)) {
-        const footer = requiredElement(".turn-status-footer");
+        const metadata = requiredElement(".turn > .turn-running-label");
         const history = requiredElement(".turn-history");
         assert.ok(
-          history.compareDocumentPosition(footer) &
+          metadata.compareDocumentPosition(history) &
             Node.DOCUMENT_POSITION_FOLLOWING,
         );
-        assert.ok(
-          document.querySelector(".turn > .turn-running-label") === null,
-        );
-        if (phase === "recovering" || phase === "continuing")
-          assert.ok(footer.classList.contains("workflow-status"));
+        assert.equal(document.querySelector(".turn-status-footer"), null);
         if (phase === "continuing") {
           const label = requiredElement(".turn-running-label");
           assert.equal(label.getAttribute("data-compact"), "false");
@@ -1333,10 +1329,9 @@ test("one running orb switches between Stop and send without losing attachment-o
         requiredElement(".turn-running-label").getAttribute("data-phase"),
         "stopping",
       );
-      assert.ok(
-        requiredElement(".turn-status-footer").classList.contains(
-          "workflow-status",
-        ),
+      assert.equal(
+        requiredElement(".turn > .turn-running-label").className,
+        "turn-running-label",
       );
     }
     composer = editComposer(composer, "new direction");
@@ -1714,7 +1709,7 @@ test("pending approvals render in the bottom zone next to the composer", () => {
   const html = render(true, [approval]);
   assert.match(html, /class="bottom-zone[^"]*"/u);
   assert.match(html, /class="approval-request-card"/u);
-  assert.match(html, /turn-status-footer workflow-status/u);
+  assert.match(html, /class="turn-running-label"/u);
   assert.match(html, /data-phase="approval" data-compact="false"/u);
   assert.match(html, /Allow tool access\?/u);
   assert.match(
@@ -1785,7 +1780,7 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
   assert.match(
     html,
-    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span class="turn-work-label">Worked for 1s<\/span>/u,
   );
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
@@ -2058,7 +2053,7 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
   assert.match(
     html,
-    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span class="turn-work-label">Worked for 1s<\/span>/u,
   );
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
@@ -2128,7 +2123,7 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   );
 });
 
-test("ongoing footer avoids duplicating active traces but shows work after settled history", () => {
+test("ongoing metadata avoids duplicating active traces but shows work after settled history", () => {
   const activeCommand = {
     ...commandItem("active-no-task", "read file"),
     status: "inProgress",
@@ -2140,13 +2135,13 @@ test("ongoing footer avoids duplicating active traces but shows work after settl
   const commandHtml = renderTurns([
     turnWithItems("inProgress", [activeCommand]),
   ]);
-  assert.match(commandHtml, /turn-status-footer workflow-status/u);
+  assert.match(commandHtml, /class="turn-running-label"/u);
   assert.match(commandHtml, /data-phase="requested"/u);
   for (const item of [activeReasoning]) {
     const html = renderTurns([turnWithItems("inProgress", [item])]);
-    assert.match(html, /class="turn-status-footer"/u);
+    assert.match(html, /class="turn-running-label"/u);
     assert.match(html, /data-compact="true"/u);
-    assert.doesNotMatch(html, /turn-status-footer workflow-status/u);
+    assert.doesNotMatch(html, /turn-status-footer/u);
   }
   const settled = renderTurns([
     turnWithItems("inProgress", [
@@ -2154,7 +2149,7 @@ test("ongoing footer avoids duplicating active traces but shows work after settl
       reasoning("Done thinking"),
     ]),
   ]);
-  assert.match(settled, /turn-status-footer workflow-status/u);
+  assert.match(settled, /class="turn-running-label"/u);
   assert.match(settled, /data-compact="false"/u);
   assert.match(settled, /Working/u);
 });
@@ -3157,10 +3152,9 @@ test("yielded shell work reports the actual task receipt phase", async () => {
       requiredElement(".turn-running-label").getAttribute("data-compact"),
       "true",
     );
-    assert.ok(
-      !requiredElement(".turn-status-footer").classList.contains(
-        "workflow-status",
-      ),
+    assert.equal(
+      requiredElement(".turn > .turn-running-label").className,
+      "turn-running-label",
     );
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
@@ -3525,8 +3519,8 @@ test("running and completed durations share second, minute and hour formatting",
       t.mock.timers.setTime(10_000 + duration);
       await renderInteractive(root, turnWithItems("inProgress", []));
       assert.equal(
-        requiredElement(".turn-running-label").textContent,
-        `Working${label}`,
+        requiredElement(".turn-running-label .turn-work-label").textContent,
+        `Working for ${label}`,
       );
       await renderInteractive(root, turnWithItems("completed", [], duration));
       assert.equal(
@@ -3542,23 +3536,23 @@ test("running duration ticks from turn start and stops on completion", async (t)
   await withDom(async (root) => {
     await renderInteractive(root, turnWithItems("inProgress", []));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working12s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 12s",
     );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working14s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 14s",
     );
     await act(async () => t.mock.timers.tick(46_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working1m 0s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 1m 0s",
     );
     await act(async () => t.mock.timers.tick(3_540_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working1h 0m 0s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
     assert.equal(document.querySelector(".turn-running-label"), null);

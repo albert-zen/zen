@@ -1747,14 +1747,23 @@ button:disabled {
 .turn-running-label,
 .turn-toggle {
   width: fit-content;
-  min-height: 30px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 34px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  margin: 1px 0 -2px -7px;
-  padding: 0 7px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 6px;
+  border-radius: 8px;
   color: var(--text-3);
   font-size: var(--font-size-caption);
+  line-height: 20px;
+}
+.turn-running-label > svg,
+.turn-toggle > svg {
+  flex: 0 0 auto;
 }
 .turn-usage {
   color: var(--text-3);
@@ -1771,11 +1780,12 @@ button:disabled {
   color: var(--text-2);
   background: var(--surface-wash);
 }
-.turn-toggle svg {
+.turn-toggle > svg:last-child {
+  transform: rotate(-90deg);
   transition: transform 180ms ease;
 }
-.turn-toggle[aria-expanded="true"] svg {
-  transform: rotate(180deg);
+.turn-toggle[aria-expanded="true"] > svg:last-child {
+  transform: rotate(0);
 }
 .turn-history {
   width: 100%;
@@ -1929,11 +1939,12 @@ button:disabled {
   grid-template-columns: 18px minmax(0, 1fr) 14px;
   align-items: center;
   gap: 8px;
-  padding: 2px 4px;
+  padding: 5px 6px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-3);
+  line-height: 20px;
   text-align: left;
 }
 .trace-toggle:hover {
@@ -2020,14 +2031,15 @@ button:disabled {
   width: 100%;
   min-height: 34px;
   display: grid;
-  grid-template-columns: 16px auto minmax(0, 1fr) auto 14px;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
   align-items: center;
-  gap: 7px;
-  padding: 1px 4px;
+  gap: 8px;
+  padding: 5px 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-3);
+  line-height: 20px;
   text-align: left;
 }
 .trace-item-status {
@@ -2035,14 +2047,14 @@ button:disabled {
   align-items: center;
   justify-content: flex-end;
   min-width: 14px;
-  grid-column: 4;
+  grid-column: 2;
 }
 .trace-item-chevron {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 14px;
-  grid-column: 5;
+  grid-column: 3;
 }
 .trace-item-status small {
   font-size: var(--font-size-caption);
@@ -5569,6 +5581,7 @@ button:disabled {
   .agent-copy {
     font-size: 13px;
   }
+  .turn-running-label,
   .turn-toggle,
   .trace-toggle,
   .trace-item-toggle,
@@ -9830,18 +9843,11 @@ button:disabled {
   line-height: 1.5;
 }
 
-/* Activity remains one quiet reading lane, including narrow side chats. */
-.turn-running-label {
-  color: var(--text-2);
-  margin-bottom: 6px;
-  gap: 8px;
-}
+/* T3-style work-duration heading: no phase-dependent leading glyph or prefix. */
+.turn-work-label,
 .turn-duration {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
-}
-.turn-running-label[data-compact="true"] > svg {
-  display: none;
 }
 .trace-group,
 .trace-singleton {
@@ -9849,12 +9855,14 @@ button:disabled {
 }
 .trace-toggle {
   width: 100%;
-  grid-template-columns: 32px minmax(120px, 1fr) auto 14px;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
   padding: 5px 6px;
 }
 .trace-tool-icons {
   display: flex;
-  width: 32px;
+  width: max-content;
+  min-width: 16px;
+  max-width: 32px;
   height: 16px;
   align-items: center;
   justify-content: flex-start;
@@ -9914,7 +9922,7 @@ button:disabled {
   font-size: 12px;
   line-height: var(--workflow-status-line-height);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 8px;
   background: var(--surface-wash);
 }
 .turn-outcome {
@@ -9927,11 +9935,6 @@ button:disabled {
   color: var(--text-3);
   font-size: 12px;
   min-width: 0;
-}
-/* Expanded diagnostics are a readable panel, never a tall oval. */
-.turn-outcome:has(.turn-outcome-details, .turn-retry-error),
-.turn-outcome.uncertain {
-  border-radius: 16px;
 }
 .turn-outcome-heading {
   display: inline-flex;
@@ -9979,12 +9982,7 @@ button:disabled {
   background: var(--surface-control);
 }
 @media (max-width: 480px) {
-  .workflow-status {
-    /* Single rows remain pills; longer translations wrap into a calm panel. */
-    border-radius: 20px;
-  }
-  .turn-outcome,
-  .turn-status-footer.workflow-status {
+  .turn-outcome {
     gap: 4px;
     padding-inline: 6px;
   }
@@ -10032,25 +10030,6 @@ button:disabled {
   order: 6;
   flex-basis: 100%;
   color: var(--danger);
-}
-.turn-status-footer {
-  display: flex;
-  align-items: center;
-  margin-top: 12px;
-  padding: 4px 8px;
-}
-.turn-status-footer .turn-running-label {
-  margin: 0;
-  padding: 0;
-  min-height: var(--workflow-status-control-height, 28px);
-  gap: 6px;
-  line-height: var(--workflow-status-line-height, 20px);
-}
-.turn-status-footer .turn-running-label > [role="status"],
-.turn-status-footer .activity-text {
-  display: inline-flex;
-  align-items: center;
-  line-height: var(--workflow-status-line-height, 20px);
 }
 .queued-cancel-confirmation {
   width: min(480px, calc(100vw - 48px));
@@ -10171,16 +10150,16 @@ button:disabled {
 }
 @container (max-width: 460px) {
   .trace-toggle {
-    grid-template-columns: 32px minmax(0, 1fr) 14px;
+    grid-template-columns: minmax(0, 1fr) 14px;
     gap: 5px 8px;
   }
   .trace-toggle > .trace-counts {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 2;
     justify-content: flex-start;
   }
   .trace-toggle > svg:last-child {
-    grid-column: 3;
+    grid-column: 2;
     grid-row: 1;
   }
 }
@@ -11549,16 +11528,10 @@ button:disabled {
   min-height: 44px;
 }
 
-.turn-running-label[data-phase="recovering"] {
-  color: var(--text-2);
-}
 .turn-recovery-attempt {
-  font-size: 11px;
   color: var(--text-3);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 7px;
-  line-height: 1.4;
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
 }
 
 .turn-outcome-actions .quiet-button {
@@ -11574,4 +11547,8 @@ button:disabled {
 
 .turn-outcome-review {
   justify-self: start;
+}
+
+.trace-reasoning-without-details .trace-item-static {
+  grid-template-columns: 16px minmax(0, 1fr);
 }
