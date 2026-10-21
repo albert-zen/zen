@@ -36,6 +36,7 @@ const measure = `(() => {
   const turn = document.querySelector('.turn');
   const header = turn?.querySelector(':scope > .turn-running-label, :scope > .turn-toggle');
   const history = turn?.querySelector(':scope > .turn-history');
+  const messages = turn?.closest('.messages');
   const row = history?.querySelector('.trace-toggle, .trace-item-toggle, .trace-item-static');
   const rect = element => element ? { x: element.getBoundingClientRect().x, y: element.getBoundingClientRect().y, width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height } : null;
   const activity = element => {
@@ -51,10 +52,21 @@ const measure = `(() => {
     const animations = sweep?.getAnimations() ?? [];
     return { rect: rect(element), content: rect(content), copyContent: rect(copyContent), copyLabel: rect(copyLabel), contentMask: content && getComputedStyle(content).maskImage, prefixMask: prefix && getComputedStyle(prefix).maskImage, iconMask: icon && getComputedStyle(icon).maskImage, copyLabelMask: copyLabel && getComputedStyle(copyLabel).maskImage, icon: rect(icon), label: rect(label), prefix: prefix?.textContent, labelText: label?.textContent, text: content?.textContent, baseColor: content && getComputedStyle(content).color, iconColor: icon && getComputedStyle(icon).color, labelColor: labelStyle?.color, sweepColor: style?.color, activeSweep: element.dataset.animating, preview: element.dataset.preview, overflowing: element.dataset.overflow === 'true', gap: icon && (prefix || label) ? (prefix || label).getBoundingClientRect().left - icon.getBoundingClientRect().right : null, prefixGap: prefix && label ? label.getBoundingClientRect().left - prefix.getBoundingClientRect().right : null, labelScrollWidth: label?.scrollWidth, labelClientWidth: label?.clientWidth, labelWhiteSpace: labelStyle?.whiteSpace, labelMask: labelStyle?.maskImage, labelTextOverflow: labelStyle?.textOverflow, sweepMask: style?.maskImage, sharedMask: getComputedStyle(element).getPropertyValue('--activity-shimmer-mask').trim(), sweepDisplay: style?.display, sweepDuration: style?.animationDuration, sweepDelay: style?.animationDelay, sweepTiming: style?.animationTimingFunction, sweepTransform: style?.transform, sweepX: style && new DOMMatrixReadOnly(style.transform).m41, keyframes: animations[0]?.effect?.getKeyframes().map(frame => ({ offset: frame.offset, transform: frame.transform })), copyHidden: sweep?.getAttribute('aria-hidden'), copyInert: sweep?.inert, copyTextNodes: sweep?.textContent };
   };
-  return { text: header?.textContent, workLabel: header?.querySelector('.turn-work-label')?.textContent, workLabelX: header?.querySelector('.turn-work-label')?.getBoundingClientRect().x, headerIcons: header?.querySelectorAll('svg').length, phase: header?.getAttribute('data-phase'), header: rect(header), history: rect(history), row: rect(row), expanded: row?.getAttribute('aria-expanded'), headerIndex: turn && header ? [...turn.children].indexOf(header) : -1, totalInsideHistory: !!history?.querySelector('.turn-duration'), footer: !!document.querySelector('.turn-status-footer'), overflow: document.documentElement.scrollWidth > innerWidth, activities: [...(history?.querySelectorAll('.activity-text[data-active="true"]') ?? [])].map(activity) };
+  return { turn: rect(turn), messages: rect(messages), scrollTop: messages?.scrollTop, text: header?.textContent, workLabel: header?.querySelector('.turn-work-label')?.textContent, workLabelX: header?.querySelector('.turn-work-label')?.getBoundingClientRect().x, headerIcons: header?.querySelectorAll('svg').length, phase: header?.getAttribute('data-phase'), header: rect(header), history: rect(history), row: rect(row), expanded: row?.getAttribute('aria-expanded'), headerIndex: turn && header ? [...turn.children].indexOf(header) : -1, totalInsideHistory: !!history?.querySelector('.turn-duration'), footer: !!document.querySelector('.turn-status-footer'), overflow: document.documentElement.scrollWidth > innerWidth, activities: [...(history?.querySelectorAll('.activity-text[data-active="true"]') ?? [])].map(activity) };
 })()`;
 const settle =
   "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
+function expectedReasoningExcerpt(content) {
+  const characters = [...content.replace(/\s+/gu, " ").trim()];
+  if (characters.length <= 240) return characters.join("");
+  let text = characters.slice(-238).join("");
+  if (
+    /[A-Za-z0-9_]/u.test(characters[characters.length - 239] ?? "") &&
+    /^[A-Za-z0-9_]/u.test(text)
+  )
+    text = text.replace(/^[A-Za-z0-9_]+(?:[.,:;!?])?\s+/u, "");
+  return `… ${text}`;
+}
 const evidence = {
   source:
     "Synthetic authored public item.content and commands; production Sidebar, ThreadView, ActivityText and CSS. No Host actions or hidden model reasoning.",
@@ -245,9 +257,7 @@ await withPreviewBrowser(
             ? ""
             : short
               ? samples.publicReasoning.short
-              : [...samples.publicReasoning.long.replace(/\s+/gu, " ")]
-                  .slice(-240)
-                  .join("")
+              : expectedReasoningExcerpt(samples.publicReasoning.long)
           : samples.commands[short ? "short" : "long"];
         const active = before.activities[0];
         assert.ok(active, `${name}: active summary exists`);
@@ -440,23 +450,48 @@ await withPreviewBrowser(
       } else {
         await screenshot(`${name}.png`);
       }
+      // The expanded transcript can scroll during live-follow or focus. Compare
+      // the same-turn content anchor, not an earlier collapsed viewport position.
+      await evaluate(settle);
+      const beforeCompletion = await evaluate(measure);
       await evaluate("window.__processStylePreview.finish()");
       await delay(200);
       const after = await evaluate(measure);
+      await writeFile(
+        path.join(directory, "latest-completion.json"),
+        JSON.stringify({ ...entry, beforeCompletion, after }, null, 2) + "\n",
+      );
       assert.equal(
         after.headerIndex,
         before.headerIndex,
         `${name}: stable completed metadata`,
       );
-      assert.equal(
-        after.header.y,
-        before.header.y,
-        `${name}: header does not jump`,
+      assert.ok(
+        Math.abs(
+          after.header.y -
+            after.turn.y -
+            (beforeCompletion.header.y - beforeCompletion.turn.y),
+        ) < 1,
+        `${name}: header keeps its same-turn layout anchor`,
+      );
+      assert.ok(
+        Math.abs(
+          after.header.y -
+            after.messages.y +
+            after.scrollTop -
+            (beforeCompletion.header.y -
+              beforeCompletion.messages.y +
+              beforeCompletion.scrollTop),
+        ) < 1,
+        `${name}: header keeps its scroll-normalized transcript position`,
       );
       assert.equal(after.totalInsideHistory, false);
-      assert.equal(
-        after.workLabelX,
-        before.workLabelX,
+      assert.ok(
+        Math.abs(
+          after.workLabelX -
+            after.turn.x -
+            (beforeCompletion.workLabelX - beforeCompletion.turn.x),
+        ) < 1,
         `${name}: stable text anchor`,
       );
       assert.match(
@@ -469,7 +504,13 @@ await withPreviewBrowser(
         `${name}: completion stops activity`,
       );
       await screenshot(`${name}-completed.png`);
-      evidence.scenes.push({ ...entry, before, ...details, after });
+      evidence.scenes.push({
+        ...entry,
+        before,
+        ...details,
+        beforeCompletion,
+        after,
+      });
       // Keep useful partial evidence if a later scene fails in CI.
       await writeFile(
         path.join(directory, "measurements.json"),

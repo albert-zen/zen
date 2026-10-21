@@ -128,3 +128,25 @@ test("group preview uses the existing observed current task, not a later reasoni
     );
   });
 });
+
+test("truncated reasoning marks omitted context without broken Latin words or Unicode characters", async () => {
+  await withRuntimeDom(async (h) => {
+    const content =
+      "Earlier context ".repeat(30) + "clippedword " + "x".repeat(230);
+    await h.render(runtimeThread([thinking(content)]));
+    assert.equal(
+      title().querySelector(".activity-label")?.textContent,
+      "… " + "x".repeat(230),
+    );
+    await h.click(".trace-item-toggle");
+    assert.equal(document.querySelector(".trace-detail")?.textContent, content);
+    const unicode = "公开正文🧭".repeat(100) + "末尾";
+    await h.render(runtimeThread([thinking(unicode)]));
+    const excerpt = title().querySelector(".activity-label")!.textContent!;
+    assert.equal([...excerpt].length, 240);
+    assert.ok(excerpt.startsWith("… "));
+    assert.ok(excerpt.endsWith("末尾"));
+    assert.equal(excerpt.includes("�"), false);
+    assert.equal(document.querySelector(".trace-detail")?.textContent, unicode);
+  });
+});

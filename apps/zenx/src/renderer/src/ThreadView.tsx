@@ -3947,7 +3947,18 @@ function traceActivityPreview(
     const content =
       reasoningContentText(item).trim() || item.summary.join("\n").trim();
     // Keep the latest live text visible even after a long stream; never synthesize it.
-    const text = [...content.replace(/\s+/gu, " ")].slice(-240).join("");
+    const characters = [...content.replace(/\s+/gu, " ")];
+    let text = characters.join("");
+    if (characters.length > 240) {
+      text = characters.slice(-238).join("");
+      // Mark omitted context, and avoid starting halfway through a Latin word.
+      if (
+        /[A-Za-z0-9_]/u.test(characters[characters.length - 239] ?? "") &&
+        /^[A-Za-z0-9_]/u.test(text)
+      )
+        text = text.replace(/^[A-Za-z0-9_]+(?:[.,:;!?])?\s+/u, "");
+      text = `… ${text}`;
+    }
     return { prefix: i18n.t("shell:thinking"), text };
   }
   if (item.type === "commandExecution") {
