@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import {
-  builtInModelCatalogPreset,
-  legacyModelCatalogEntries,
-} from "../../../../apps/cli/src/model-presets.js";
+import { legacyModelCatalogEntries } from "../../../../apps/cli/src/model-presets.js";
 import {
   normalizeModelCatalogEntry,
   type ModelCatalogEntry,
@@ -39,10 +36,6 @@ export type ZenXProviderProfile = ZenXProviderConnection & {
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
   logoResource?: string;
-  /** The user has actively configured this Provider's model catalog (added
-   * or removed model IDs). Host then stops injecting built-in presets or the
-   * auto-configured subscription catalog; deletions survive restarts. */
-  modelsUserConfigured?: true;
 };
 
 export type ZenXModelCatalogEntry = Omit<ModelCatalogEntry, "isDefault"> & {
@@ -245,15 +238,11 @@ export class ZenXHostProfileStore {
     const migratedV1 = isLegacyHostProfile(value);
     const migratedV2 = isLegacyHostProfileV2(value);
     const migrated = migratedV1 || migratedV2;
-    const decoded = migratedV1
+    const profile = migratedV1
       ? migrateLegacyHostProfile(value, this.#projectPlatform)
       : migratedV2
         ? migrateHostProfileV2(value, this.#projectPlatform)
         : validateHostProfile(value, this.#projectPlatform);
-    const profile = applyBuiltInModelCatalogPresets(
-      decoded,
-      this.#projectPlatform,
-    );
     const foregroundPreferenceWasMissing =
       !migrated &&
       isRecord(value) &&
@@ -264,7 +253,6 @@ export class ZenXHostProfileStore {
       migrated ||
       foregroundPreferenceWasMissing ||
       toolPresentationWasMissing ||
-      JSON.stringify(profile) !== JSON.stringify(decoded) ||
       JSON.stringify(profile) !== JSON.stringify(value)
     ) {
       await this.write(profile);
@@ -750,9 +738,6 @@ function validateProviderProfile(value: unknown): ZenXProviderProfile {
     ...(value.logoResource === undefined
       ? {}
       : { logoResource: providerLogoResource(value.logoResource) }),
-    ...(value.modelsUserConfigured === true
-      ? { modelsUserConfigured: true as const }
-      : {}),
   };
 }
 
@@ -911,55 +896,6 @@ export function structuredLegacyModelCatalog(
     const { isDefault: _isDefault, ...model } = normalized;
     return model;
   });
-}
-
-export function applyBuiltInModelCatalogPresets(
-  profile: ZenXHostProfile,
-  projectPlatform: NodeJS.Platform = process.platform,
-): ZenXHostProfile {
-  const validated = validateHostProfile(profile, projectPlatform);
-  const providerProfiles = validated.providerProfiles.map((provider) => {
-    if (provider.type === "openai-compatible") {
-      return {
-        ...provider,
-        models: provider.models.map((model) => ({
-          ...model,
-          supportedReasoningEfforts: model.supportedReasoningEfforts ?? [],
-          inputModalities: model.inputModalities ?? ["text"],
-        })),
-      };
-    }
-    if (provider.type !== "openai-subscription") return provider;
-    // A user-configured subscription catalog is authoritative: deleted
-    // presets must not come back on the next load, update, or repackaging.
-    if (provider.modelsUserConfigured === true) return provider;
-    const existingById = new Map(
-      provider.models.map((model) => [model.id, model]),
-    );
-    const presetModels = builtInModelCatalogPreset("openai-subscription").map(
-      (preset) => {
-        const existing = existingById.get(preset.id);
-        if (existing !== undefined) existingById.delete(preset.id);
-        // Manual capability edits remain authoritative. For built-in presets,
-        // refresh metadata while carrying the user's visibility choice across
-        // restarts so a hidden model is not resurrected into normal selection.
-        if (existing?.source === "manual") return existing;
-        const normalized = normalizeModelCatalogEntry(preset);
-        const { isDefault: _isDefault, ...model } = normalized;
-        return existing === undefined
-          ? model
-          : { ...model, hidden: existing.hidden };
-      },
-    );
-    return {
-      ...provider,
-      models: [...presetModels, ...existingById.values()],
-    };
-  });
-  return validateHostProfile(
-    { ...validated, providerProfiles },
-    projectPlatform,
-  );
 }
 
 function validateModelReference(

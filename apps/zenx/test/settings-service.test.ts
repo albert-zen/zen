@@ -36,6 +36,39 @@ const encryption: LocalEncryption = {
   decryptString: (value) => value.toString().replace(/^secure:/u, ""),
 };
 
+test("subscription presets initialize a new profile but never refill a saved catalog", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-initial-catalog-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "openai-subscription" });
+    const initial = (await service.publicSettings()).profile;
+    const provider = initial.providerProfiles[0]!;
+    assert.deepEqual(
+      provider.models.map((model) => model.id),
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+    );
+    const models = provider.models.filter((model) =>
+      [initial.defaultModel.modelId, initial.titleModel.modelId].includes(
+        model.id,
+      ),
+    );
+    await service.save({
+      ...initial,
+      providerProfiles: [{ ...provider, models }],
+    });
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({ ZENX_PROVIDER: "openai-subscription" });
+    assert.deepEqual(
+      (await reloaded.publicSettings()).profile.providerProfiles[0]!.models,
+      models,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("persists one user-scoped workflow configuration for Settings and self-control", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-workflows-"));
   try {

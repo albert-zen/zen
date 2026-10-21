@@ -149,6 +149,10 @@ test("subscription discovery uses an account-scoped cache and then built-in fall
         ),
     });
     await service.initialize({});
+    const savedProfile = await readFile(
+      path.join(directory, "host-profile.json"),
+      "utf8",
+    );
     const remote = await service.discoverProviderModels("openai-codex");
     assert.equal(remote.source, "remote");
     assert.equal(
@@ -182,6 +186,10 @@ test("subscription discovery uses an account-scoped cache and then built-in fall
     assert.equal(
       fallback.models.some((model) => model.id === "gpt-5.6-terra"),
       true,
+    );
+    assert.equal(
+      await readFile(path.join(directory, "host-profile.json"), "utf8"),
+      savedProfile,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -734,374 +742,48 @@ function subscriptionToken(accountId: string): string {
   })}.signature`;
 }
 
-test("an unconfigured subscription catalog auto-configures the recent remote models exactly once", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-sub-auto-"));
-  const profileStore = new ZenXHostProfileStore(
-    path.join(directory, "host-profile.json"),
-  );
-  const vault = new ZenXCredentialVault(
-    path.join(directory, "credentials.vault"),
-    encryption,
-  );
-  const accessToken = subscriptionToken("acct-auto");
-  let requests = 0;
-  const catalogFetch = () =>
-    Object.assign(
-      async () => {
-        requests += 1;
-        return Response.json({
-          models: [
-            {
-              slug: "gpt-6.1-max",
-              display_name: "GPT 6.1 Max",
-              default_reasoning_level: "high",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "" },
-                { effort: "high", description: "" },
-              ],
-              visibility: "list",
-              priority: 0,
-              input_modalities: ["text", "image"],
-              context_window: 400_000,
-            },
-            {
-              slug: "gpt-6.1",
-              default_reasoning_level: "medium",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "" },
-              ],
-              visibility: "list",
-              priority: 1,
-              context_window: 400_000,
-            },
-            {
-              slug: "gpt-6.0",
-              default_reasoning_level: "medium",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "" },
-              ],
-              visibility: "list",
-              priority: 2,
-              context_window: 300_000,
-            },
-            {
-              slug: "gpt-5.9",
-              default_reasoning_level: "medium",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "" },
-              ],
-              visibility: "list",
-              priority: 3,
-              context_window: 272_000,
-            },
-            {
-              slug: "internal-6",
-              default_reasoning_level: "medium",
-              supported_reasoning_levels: [],
-              visibility: "hide",
-              priority: 4,
-            },
-            {
-              slug: "gpt-5.8-mini",
-              default_reasoning_level: "medium",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "" },
-              ],
-              visibility: "list",
-              priority: 5,
-            },
-            {
-              slug: "gpt-5.7",
-              default_reasoning_level: "medium",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "" },
-              ],
-              visibility: "list",
-              priority: 6,
-              context_window: 200_000,
-            },
-          ],
-        });
-      },
-      { close: async () => undefined },
-    );
-  try {
-    await profileStore.write(subscriptionProfile());
-    const service = new ZenXSettingsService({
+test("saved subscription edits survive reload without ownership bookkeeping", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-saved-edits-"));
+  const file = path.join(directory, "host-profile.json");
+  const profileStore = new ZenXHostProfileStore(file);
+  const createService = () =>
+    new ZenXSettingsService({
       userDataDirectory: directory,
       zenDataDirectory: path.join(directory, "zen"),
       profileStore,
-      vault,
-      subscription: {
-        ...inactiveSubscription,
-        status: async () => ({
-          authenticated: true,
-          expired: false,
-          accountId: "acct-auto",
-        }),
-        acquireAccessLease: async () => ({ accessToken }),
-      },
-      providerFetchFactory: catalogFetch,
-    });
-    await service.initialize({});
-    // Before seeding, loading applied the build-time presets.
-    assert.deepEqual(
-      (await service.publicSettings()).profile.providerProfiles[0]!.models.map(
-        (model) => model.id,
-      ),
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
-    );
-
-    assert.equal(await service.autoConfigureSubscriptionModels(), true);
-
-    const profile = (await service.publicSettings()).profile;
-    const provider = profile.providerProfiles[0]!;
-    // The hidden entry never appears; the window-less gpt-5.8-mini is
-    // excluded because Host requires a positive context for configured
-    // models; only the five most recent usable models are kept.
-    assert.deepEqual(
-      provider.models.map((model) => model.id),
-      ["gpt-6.1-max", "gpt-6.1", "gpt-6.0", "gpt-5.9", "gpt-5.7"],
-    );
-    assert.equal(provider.modelsUserConfigured, true);
-    assert.deepEqual(provider.models[0]?.supportedReasoningEfforts, [
-      "medium",
-      "high",
-    ]);
-    assert.equal(provider.models[0]?.contextWindow, 400_000);
-    // Old default/title references were repaired to the new catalog.
-    assert.equal(
-      provider.models.some(
-        (model) => model.id === profile.defaultModel.modelId,
-      ),
-      true,
-    );
-    assert.equal(
-      provider.models.some((model) => model.id === profile.titleModel.modelId),
-      true,
-    );
-
-    // A second attempt is a no-op: the catalog now belongs to the user.
-    const requestsAfterSeed = requests;
-    assert.equal(await service.autoConfigureSubscriptionModels(), false);
-    assert.equal(requests, requestsAfterSeed);
-
-    // Reloading the persisted profile never re-injects the old presets.
-    const reloaded = new ZenXSettingsService({
-      userDataDirectory: directory,
-      zenDataDirectory: path.join(directory, "zen"),
-      profileStore,
-      vault,
-      subscription: inactiveSubscription,
-      providerFetchFactory: catalogFetch,
-    });
-    await reloaded.initialize({});
-    assert.deepEqual(
-      (await reloaded.publicSettings()).profile.providerProfiles[0]!.models.map(
-        (model) => model.id,
-      ),
-      ["gpt-6.1-max", "gpt-6.1", "gpt-6.0", "gpt-5.9", "gpt-5.7"],
-    );
-    assert.equal(requests, requestsAfterSeed);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("auto-configuration keeps the built-in presets when the subscription is unavailable", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-sub-auto-off-"));
-  const profileStore = new ZenXHostProfileStore(
-    path.join(directory, "host-profile.json"),
-  );
-  try {
-    await profileStore.write(subscriptionProfile());
-    let requests = 0;
-    const service = new ZenXSettingsService({
-      userDataDirectory: directory,
-      zenDataDirectory: path.join(directory, "zen"),
-      profileStore,
-      vault: new ZenXCredentialVault(
-        path.join(directory, "credentials.vault"),
-        encryption,
-      ),
-      subscription: inactiveSubscription,
-      providerFetchFactory: () =>
-        Object.assign(
-          async () => {
-            requests += 1;
-            throw new Error("offline");
-          },
-          { close: async () => undefined },
-        ),
-    });
-    await service.initialize({});
-    assert.equal(await service.autoConfigureSubscriptionModels(), false);
-    assert.equal(requests, 0);
-    assert.equal(
-      (await service.publicSettings()).profile.providerProfiles[0]!.models.some(
-        (model) => model.id === "gpt-5.6-terra",
-      ),
-      true,
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("removing subscription models marks the catalog user-owned and survives reload", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-sub-own-"));
-  const profileStore = new ZenXHostProfileStore(
-    path.join(directory, "host-profile.json"),
-  );
-  const vault = new ZenXCredentialVault(
-    path.join(directory, "credentials.vault"),
-    encryption,
-  );
-  try {
-    await profileStore.write(subscriptionProfile());
-    const service = new ZenXSettingsService({
-      userDataDirectory: directory,
-      zenDataDirectory: path.join(directory, "zen"),
-      profileStore,
-      vault,
+      vault: new ZenXCredentialVault(path.join(directory, "vault"), encryption),
       subscription: inactiveSubscription,
     });
+  try {
+    await profileStore.write(subscriptionProfile());
+    const service = createService();
     await service.initialize({});
     const before = (await service.publicSettings()).profile;
     const provider = before.providerProfiles[0]!;
-    // A pure metadata save (same model IDs) keeps the catalog Host-owned.
-    const renamed = provider.models.map((model, index) =>
-      index === 0 ? { ...model, displayName: "Renamed" } : model,
-    );
+    const models = provider.models
+      .filter((model) => model.id === "gpt-5.6-terra")
+      .map((model) => ({
+        ...model,
+        displayName: "My Terra",
+        contextWindow: 64_000,
+      }));
+    const titleModel = before.defaultModel;
     await service.editProviderProfile(
       provider.providerProfileId,
-      { ...provider, models: renamed },
-      { baseRevision: before.revision },
-    );
-    const afterRename = (await service.publicSettings()).profile;
-    assert.equal(
-      afterRename.providerProfiles[0]!.modelsUserConfigured,
-      undefined,
-    );
-    // Deleting a model ID takes ownership of the catalog.
-    const trimmed = afterRename.providerProfiles[0]!.models.filter(
-      (model) => model.id !== "gpt-5.4",
-    );
-    await service.editProviderProfile(
-      provider.providerProfileId,
-      { ...afterRename.providerProfiles[0]!, models: trimmed },
-      { baseRevision: afterRename.revision },
-    );
-    const edited = (await service.publicSettings()).profile;
-    assert.equal(edited.providerProfiles[0]!.modelsUserConfigured, true);
-    assert.equal(
-      edited.providerProfiles[0]!.models.some(
-        (model) => model.id === "gpt-5.4",
-      ),
-      false,
-    );
-    // A reloaded profile keeps the deletion; repackaging cannot resurrect
-    // built-in models for a user-owned catalog.
-    const reloaded = new ZenXSettingsService({
-      userDataDirectory: directory,
-      zenDataDirectory: path.join(directory, "zen"),
-      profileStore,
-      vault,
-      subscription: inactiveSubscription,
-    });
-    await reloaded.initialize({});
-    const kept = (await reloaded.publicSettings()).profile.providerProfiles[0]!;
-    assert.equal(kept.modelsUserConfigured, true);
-    assert.equal(
-      kept.models.some((model) => model.id === "gpt-5.4"),
-      false,
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("auto-configuration carries the user's hidden and manual catalog choices", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-sub-carry-"));
-  const profileStore = new ZenXHostProfileStore(
-    path.join(directory, "host-profile.json"),
-  );
-  const accessToken = subscriptionToken("acct-carry");
-  try {
-    const base = subscriptionProfile();
-    const provider = base.providerProfiles[0]!;
-    await profileStore.write({
-      ...base,
-      providerProfiles: [
-        {
-          ...provider,
-          models: provider.models.map((model) =>
-            model.id === "gpt-5.6-luna"
-              ? { ...model, hidden: true }
-              : model.id === "gpt-5.6-terra"
-                ? { ...model, source: "manual" as const, displayName: "Mine" }
-                : model,
-          ),
-        },
-      ],
-    });
-    const service = new ZenXSettingsService({
-      userDataDirectory: directory,
-      zenDataDirectory: path.join(directory, "zen"),
-      profileStore,
-      vault: new ZenXCredentialVault(
-        path.join(directory, "credentials.vault"),
-        encryption,
-      ),
-      subscription: {
-        ...inactiveSubscription,
-        status: async () => ({
-          authenticated: true,
-          expired: false,
-          accountId: "acct-carry",
-        }),
-        acquireAccessLease: async () => ({ accessToken }),
+      { ...provider, models },
+      {
+        baseRevision: before.revision,
+        titleModel,
       },
-      providerFetchFactory: () =>
-        Object.assign(
-          async () =>
-            Response.json({
-              models: [
-                {
-                  slug: "gpt-5.6-terra",
-                  display_name: "Remote Terra",
-                  default_reasoning_level: "medium",
-                  supported_reasoning_levels: [
-                    { effort: "medium", description: "" },
-                  ],
-                  visibility: "list",
-                  priority: 0,
-                  context_window: 300_000,
-                },
-                {
-                  slug: "gpt-5.6-luna",
-                  display_name: "Remote Luna",
-                  default_reasoning_level: "medium",
-                  supported_reasoning_levels: [
-                    { effort: "medium", description: "" },
-                  ],
-                  visibility: "list",
-                  priority: 1,
-                  context_window: 200_000,
-                },
-              ],
-            }),
-          { close: async () => undefined },
-        ),
-    });
-    await service.initialize({});
-    assert.equal(await service.autoConfigureSubscriptionModels(), true);
-    const providerAfter = (await service.publicSettings()).profile
-      .providerProfiles[0]!;
-    // Manual metadata wins over the remote description for the same id.
-    assert.equal(providerAfter.models[0]?.displayName, "Mine");
-    // The hidden choice carries across the seed.
-    assert.equal(providerAfter.models[1]?.hidden, true);
+    );
+    const persisted = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(persisted.providerProfiles[0].modelsUserConfigured, undefined);
+    const reloaded = createService();
+    await reloaded.initialize({});
+    const after = (await reloaded.publicSettings()).profile;
+    assert.deepEqual(after.providerProfiles[0]!.models, models);
+    assert.deepEqual(after.defaultModel, before.defaultModel);
+    assert.deepEqual(after.titleModel, titleModel);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -1363,161 +1045,6 @@ test("subscription cache rejects ETags from another catalog compatibility versio
     delete stored.catalogClientVersion;
     await writeFile(file, JSON.stringify(stored));
     assert.equal(await cache.load("account"), undefined);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-for (const changedDuring of ["fetch", "close"] as const) {
-  test(`auto seed refuses an old account catalog after switching during ${changedDuring}`, async () => {
-    const directory = await mkdtemp(
-      path.join(os.tmpdir(), "zenx-auto-account-"),
-    );
-    try {
-      const profileStore = new ZenXHostProfileStore(
-        path.join(directory, "profile.json"),
-      );
-      await profileStore.write(subscriptionProfile());
-      let account = "account-a";
-      const entered = deferred<void>();
-      const release = deferred<void>();
-      const response = () =>
-        Response.json({
-          models: [
-            {
-              slug: "account-a-exclusive",
-              visibility: "list",
-              priority: 0,
-              context_window: 300_000,
-              supported_reasoning_levels: [],
-            },
-          ],
-        });
-      const service = new ZenXSettingsService({
-        userDataDirectory: directory,
-        zenDataDirectory: path.join(directory, "zen"),
-        profileStore,
-        vault: new ZenXCredentialVault(
-          path.join(directory, "vault"),
-          encryption,
-        ),
-        subscription: {
-          ...inactiveSubscription,
-          status: async () => ({
-            authenticated: true,
-            expired: false,
-            accountId: account,
-          }),
-          acquireAccessLease: async () => ({
-            accessToken: subscriptionToken("account-a"),
-          }),
-        },
-        providerFetchFactory: () =>
-          Object.assign(
-            async () => {
-              if (changedDuring === "fetch") {
-                entered.resolve();
-                await release.promise;
-              }
-              return response();
-            },
-            {
-              close: async () => {
-                if (changedDuring === "close") {
-                  entered.resolve();
-                  await release.promise;
-                }
-              },
-            },
-          ),
-      });
-      await service.initialize({});
-      const result = service.autoConfigureSubscriptionModels();
-      await entered.promise;
-      account = "account-b";
-      release.resolve();
-      assert.equal(
-        await result,
-        false,
-        "must not permanently seed account-a models for account-b",
-      );
-      const profile = (await service.publicSettings()).profile;
-      assert.notEqual(profile.providerProfiles[0]?.modelsUserConfigured, true);
-      assert.equal(
-        profile.providerProfiles[0]?.models.some(
-          (model) => model.id === "account-a-exclusive",
-        ),
-        false,
-      );
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-}
-
-test("auto seed repairs title model when default belongs to another Provider", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-auto-title-"));
-  try {
-    const profileStore = new ZenXHostProfileStore(
-      path.join(directory, "profile.json"),
-    );
-    const profile = subscriptionProfile();
-    profile.providerProfiles.push({
-      providerProfileId: "fake",
-      displayName: "Fake",
-      type: "fake",
-      models: structuredLegacyModelCatalog("fake", ["fake"]),
-    });
-    profile.defaultModel = { providerProfileId: "fake", modelId: "fake" };
-    await profileStore.write(profile);
-    const service = new ZenXSettingsService({
-      userDataDirectory: directory,
-      zenDataDirectory: path.join(directory, "zen"),
-      profileStore,
-      vault: new ZenXCredentialVault(path.join(directory, "vault"), encryption),
-      subscription: {
-        ...inactiveSubscription,
-        status: async () => ({
-          authenticated: true,
-          expired: false,
-          accountId: "account-a",
-        }),
-        acquireAccessLease: async () => ({
-          accessToken: subscriptionToken("account-a"),
-        }),
-      },
-      providerFetchFactory: () =>
-        Object.assign(
-          async () =>
-            Response.json({
-              models: [
-                {
-                  slug: "new-model",
-                  visibility: "list",
-                  priority: 0,
-                  context_window: 300000,
-                  supported_reasoning_levels: [],
-                },
-              ],
-            }),
-          { close: async () => undefined },
-        ),
-    });
-    await service.initialize({});
-    assert.equal(
-      await service.autoConfigureSubscriptionModels(),
-      true,
-      "valid separate default Provider must not prevent subscription seeding",
-    );
-    const after = (await service.publicSettings()).profile;
-    assert.deepEqual(after.defaultModel, {
-      providerProfileId: "fake",
-      modelId: "fake",
-    });
-    assert.deepEqual(after.titleModel, {
-      providerProfileId: "openai-codex",
-      modelId: "new-model",
-    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
