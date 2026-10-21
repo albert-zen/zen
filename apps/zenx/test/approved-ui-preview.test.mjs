@@ -29,6 +29,14 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
       ],
       { maxBuffer: 2 * 1024 * 1024 },
     );
+    const provenance = JSON.parse(
+      await readFile(path.join(directory, "source.json"), "utf8"),
+    );
+    assert.deepEqual(provenance.sidebarBaseline, {
+      commit: "dfd427541ced50a4c076ca131d4fd8e9107336f3",
+      blob: "464e3f45d7b9c691ec5f930657a3f073f1fb98df",
+    });
+    assert.match(provenance.note, /not a historical full-app build/);
     for (const variant of ["before", "after"]) {
       for (const kind of ["sidebar", "context"]) {
         const html = await readFile(

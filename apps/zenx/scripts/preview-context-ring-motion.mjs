@@ -7,6 +7,37 @@ import { build } from "esbuild";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const entry = resolve(root, "test/fixtures/context-ring-motion.tsx");
 const motionFile = resolve(root, "src/renderer/src/ContextUsageIndicator.css");
+const assetInputs = new Set();
+// esbuild IIFE output has no import.meta.url. Preserve real static image assets
+// as data URLs rather than booting imported production modules with invalid URLs.
+const inlineAssetUrls = {
+  name: "inline-static-production-image-urls",
+  setup(builder) {
+    builder.onLoad(
+      { filter: /(?:ProviderLogo|ZenXBrand)\.tsx$/ },
+      async ({ path }) => {
+        let contents = await readFile(path, "utf8");
+        const pattern =
+          /new URL\(\s*(["'])(\.\/assets\/[^"']+)\1,\s*import\.meta\.url,?\s*\)\s*\.href/g;
+        for (const match of [...contents.matchAll(pattern)]) {
+          const asset = resolve(path, "..", match[2]);
+          const mime = asset.endsWith(".svg")
+            ? "image/svg+xml"
+            : asset.endsWith(".png")
+              ? "image/png"
+              : "image/x-icon";
+          assetInputs.add(asset);
+          const data = (await readFile(asset)).toString("base64");
+          contents = contents.replace(
+            match[0],
+            JSON.stringify(`data:${mime};base64,${data}`),
+          );
+        }
+        return { contents, loader: "tsx" };
+      },
+    );
+  },
+};
 const after = await build({
   entryPoints: [entry],
   outfile: "context-ring-motion.js",
@@ -18,6 +49,7 @@ const after = await build({
   minify: true,
   define: { "process.env.NODE_ENV": '"production"' },
   metafile: true,
+  plugins: [inlineAssetUrls],
 });
 const before = await build({
   entryPoints: [entry],
@@ -30,6 +62,7 @@ const before = await build({
   minify: true,
   define: { "process.env.NODE_ENV": '"production"' },
   plugins: [
+    inlineAssetUrls,
     {
       name: "omit-only-context-motion-for-baseline",
       setup(builder) {
@@ -42,7 +75,7 @@ const before = await build({
   ],
 });
 const inputs = await Promise.all(
-  Object.keys(after.metafile.inputs)
+  [...Object.keys(after.metafile.inputs), ...assetInputs]
     .sort()
     .map(async (file) => [file, await readFile(file)]),
 );

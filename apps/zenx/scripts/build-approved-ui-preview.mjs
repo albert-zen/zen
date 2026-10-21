@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const directory = path.resolve(process.argv[2] ?? ".approved-ui-preview");
 await mkdir(directory, { recursive: true });
 const stylesheet = path.join(root, "src/renderer/src/styles.css");
-// Reconstruct only the reviewed pre-change stylesheet, never production files.
+// Verify each accepted shortcut seam without coupling to unrelated CSS additions.
 function previousSidebarStyles(current) {
   const replace = (from, to) => {
     assert.equal(
@@ -42,18 +42,26 @@ function previousSidebarStyles(current) {
     "padding-inline-end: calc(\n      54px + var(--thread-state-space, 0px) + var(--thread-shortcut-space)\n    );",
     "padding-inline-end: calc(54px + var(--thread-state-space, 0px));",
   );
-  const bytes = Buffer.from(current);
-  const blob = createHash("sha1")
-    .update(`blob ${bytes.length}\0`)
-    .update(bytes)
-    .digest("hex");
-  assert.ok(
-    blob.startsWith("464e3f45"),
-    "Reviewed dfd42754 stylesheet baseline",
-  );
   return current;
 }
-const baseline = previousSidebarStyles(await readFile(stylesheet, "utf8"));
+previousSidebarStyles(await readFile(stylesheet, "utf8"));
+// Pin the reviewed primary stylesheet independently of the current aggregate.
+// Imported modules and production components remain current in both variants.
+const baselineCommit = "dfd427541ced50a4c076ca131d4fd8e9107336f3";
+const baselineBlob = "464e3f45d7b9c691ec5f930657a3f073f1fb98df";
+const baseline = await readFile(
+  path.join(root, "test/fixtures/sidebar-styles-dfd42754.css.txt"),
+  "utf8",
+);
+const baselineBytes = Buffer.from(baseline);
+assert.equal(
+  createHash("sha1")
+    .update(`blob ${baselineBytes.length}\0`)
+    .update(baselineBytes)
+    .digest("hex"),
+  baselineBlob,
+  "Exact reviewed dfd42754 primary stylesheet baseline",
+);
 for (const variant of ["before", "after"]) {
   const result = await build({
     configFile: false,
@@ -124,7 +132,8 @@ await writeFile(
         cwd: root,
         encoding: "utf8",
       }).trim(),
-      note: "Actual production Sidebar and context/send controls with synthetic data. Before reverses only the accepted CSS changes. No Host actions or user data.",
+      note: "Current production components and imported CSS modules with synthetic data. Sidebar before uses the pinned dfd42754 primary stylesheet, not a historical full-app build; after uses current CSS. Context before omits only its motion stylesheet. No Host actions or user data.",
+      sidebarBaseline: { commit: baselineCommit, blob: baselineBlob },
       cssSha256: createHash("sha256")
         .update(await readFile(stylesheet))
         .digest("hex"),
