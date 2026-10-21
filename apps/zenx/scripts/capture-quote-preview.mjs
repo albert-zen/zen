@@ -309,12 +309,25 @@ for (const entry of [
         await waitFor(
           "window.quoteFixture.getSent().length === 1 && document.querySelectorAll('.user-bubble .reference-token').length === 5",
         );
+        const payloadComparison = await evaluate(`(() => {
+          const actual = window.quoteFixture.getSent()[0];
+          const expected = window.quoteFixture.expectedPayload;
+          let offset = 0;
+          while (offset < Math.min(actual.length, expected.length) &&
+            actual[offset] === expected[offset]) offset++;
+          return {
+            equal: actual === expected,
+            actualLength: actual.length,
+            expectedLength: expected.length,
+            firstDifferentOffset: offset,
+            actualAroundDifference: actual.slice(Math.max(0, offset - 50), offset + 100),
+            expectedAroundDifference: expected.slice(Math.max(0, offset - 50), offset + 100),
+          };
+        })()`);
         assert.equal(
-          await evaluate(
-            "window.quoteFixture.getSent()[0] === window.quoteFixture.expectedPayload",
-          ),
+          payloadComparison.equal,
           true,
-          "visible five-reference send exactly matches captured model user message",
+          `visible five-reference send exactly matches captured model user message: ${JSON.stringify(payloadComparison)}`,
         );
         await evaluate(
           "document.querySelector('.user-bubble .reference-token').scrollIntoView({block:'center'})",
