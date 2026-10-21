@@ -1,5 +1,5 @@
 /** Synthetic, read-only scene. All process rows are production components. */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Sidebar } from "../../src/renderer/src/Sidebar.js";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
@@ -27,6 +27,10 @@ document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 const startedAt = Math.floor(Date.now() / 1000) - 164;
 export const scenes = [
   "thinking",
+  "thinking-short",
+  "thinking-empty",
+  "command-long",
+  "command-short",
   "waiting",
   "running",
   "parallel",
@@ -38,6 +42,20 @@ export const scenes = [
   "completed",
 ] as const;
 type Scene = (typeof scenes)[number];
+// Deliberately synthetic public item.content, never hidden model reasoning.
+const publicReasoning = {
+  long: "Synthetic public reasoning: first inspect the existing trace component and preserve its disclosure identity. Then compare the shared icon-and-text sweep in light and dark appearances. Check that a narrow window keeps the command on one line, fades only overflowing text, and leaves the full command available in its details. Finally verify that each new public streaming update reaches the visible excerpt without resetting keyboard focus or the expanded row.",
+  short: "Check spacing.",
+};
+const commands = {
+  long: "cd /synthetic/workspace-demo && npm run check --workspace @zen/zenx && node scripts/verify-process-preview.mjs --component ActivityText --reasoning public-item-content --command full-original-command --themes light,dark --widths 420,1280 --motion default,reduced --verify-icon-and-text-pixels --preserve-expanded-disclosure",
+  short: "pwd",
+};
+const streamChunks = [
+  " The latest public update checks icon contrast beside the Thinking label.",
+  " The next public update verifies the full command and the 48px trailing fade.",
+  " Final public update: narrow-layout checks preserve this same expanded disclosure.",
+];
 const intro: ThreadItem[] = [
   {
     type: "userMessage",
@@ -63,15 +81,39 @@ function scenario(scene: Scene): Thread {
   const base = [...intro, prior];
   let thread: Thread;
   if (scene === "recovery") return recoveryScenario("recovering");
-  if (scene === "thinking")
+  if (scene.startsWith("thinking"))
     thread = runtimeThread([
       ...base,
       {
         type: "reasoning",
         id: "thinking",
         status: "inProgress",
-        summary: ["核对现有样式与交互"],
-        content: [],
+        summary:
+          scene === "thinking-empty"
+            ? []
+            : ["Synthetic summary, not the live excerpt"],
+        content:
+          scene === "thinking-empty"
+            ? []
+            : [
+                scene === "thinking-short"
+                  ? publicReasoning.short
+                  : publicReasoning.long,
+              ],
+      },
+    ]);
+  else if (scene === "command-long" || scene === "command-short")
+    thread = runtimeThread([
+      ...base,
+      {
+        ...runtimeTask("operation", "task-one", "running"),
+        command: scene === "command-long" ? commands.long : commands.short,
+        toolName: "run_code",
+        toolArguments: {
+          code: scene === "command-long" ? commands.long : commands.short,
+          description:
+            "Synthetic friendly title must not replace the actual command",
+        },
       },
     ]);
   else if (scene === "waiting")
@@ -188,6 +230,25 @@ function Fixture() {
   );
   const [thread, setThread] = useState(() => scenario(scene));
   const [narrow, setNarrow] = useState(innerWidth < 700);
+  const threadRef = useRef(thread);
+  const streamIndex = useRef(0);
+  threadRef.current = thread;
+  const updateReasoning = (text: string, append: boolean) => {
+    setThread((current) => ({
+      ...current,
+      turns: current.turns.map((turn) => ({
+        ...turn,
+        items: turn.items.map((item) =>
+          item.type === "reasoning" && item.id === "thinking"
+            ? {
+                ...item,
+                content: [append ? item.content.join("\n") + text : text],
+              }
+            : item,
+        ),
+      })),
+    }));
+  };
   useEffect(() => {
     const resize = () => setNarrow(innerWidth < 700);
     addEventListener("resize", resize);
@@ -197,8 +258,38 @@ function Fixture() {
     Object.assign(window, {
       __processStylePreview: {
         scenes,
+        samples: { publicReasoning, commands, streamChunks },
+        snapshot() {
+          const current = threadRef.current;
+          return { scene, thread: current };
+        },
+        appendReasoning(text: string) {
+          updateReasoning(text, true);
+        },
+        setReasoning(text: string) {
+          updateReasoning(text, false);
+        },
+        streamStep() {
+          const chunk =
+            streamChunks[streamIndex.current++ % streamChunks.length]!;
+          updateReasoning(chunk, true);
+        },
+        setCommand(command: string) {
+          setThread((current) => ({
+            ...current,
+            turns: current.turns.map((turn) => ({
+              ...turn,
+              items: turn.items.map((item) =>
+                item.type === "commandExecution" && item.id === "operation"
+                  ? { ...item, command, toolArguments: { code: command } }
+                  : item,
+              ),
+            })),
+          }));
+        },
         selectScene(value: Scene) {
           if (scenes.includes(value)) {
+            streamIndex.current = 0;
             setScene(value);
             setThread(scenario(value));
           }
@@ -207,6 +298,7 @@ function Fixture() {
           setThread((value) => complete(value));
         },
         reset() {
+          streamIndex.current = 0;
           setThread(scenario(scene));
         },
         setTheme(value: string) {

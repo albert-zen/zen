@@ -64,7 +64,8 @@ for (const grouped of [false, true]) {
         const task = {
           ...runtimeTask("operation", "task-one", "running"),
           command,
-          toolArguments: { command, description: "Friendly short title" },
+          toolName: "run_code",
+          toolArguments: { code: command, description: "Friendly short title" },
         };
         await h.render(runtimeThread([...prior, task]));
         assert.equal(
@@ -88,5 +89,42 @@ test("reasoning without public text uses only the honest localized fallback", as
     assert.equal(title().textContent, "Thinking");
     assert.equal(title().querySelector(".activity-label")?.textContent, "");
     assert.ok(title().parentElement!.querySelector(".activity-sweep svg"));
+  });
+});
+
+test("content-only reasoning advances while its empty summary stays unchanged", async () => {
+  await withRuntimeDom(async (h) => {
+    for (const content of [
+      "Public reasoning",
+      "Public reasoning delta arrives",
+    ]) {
+      await h.render(
+        runtimeThread([{ ...thinking(content), summary: [] } as ThreadItem]),
+      );
+      assert.equal(
+        title().querySelector(".activity-label")?.textContent,
+        content,
+      );
+    }
+  });
+});
+
+test("group preview uses the existing observed current task, not a later reasoning item", async () => {
+  await withRuntimeDom(async (h) => {
+    const first = {
+      ...runtimeTask("first", "task-one", "running"),
+      command: "first actual command",
+    };
+    const latest = {
+      ...runtimeTask("second", "task-two", "running"),
+      command: "selected actual command",
+    };
+    await h.render(
+      runtimeThread([first, latest, thinking("A later reasoning item")]),
+    );
+    assert.equal(
+      title().querySelector(".activity-label")?.textContent,
+      "selected actual command",
+    );
   });
 });

@@ -78,6 +78,7 @@ export function ActivityText({
       <span className="activity-content">
         {leading}
         {prefix ? <strong>{prefix}</strong> : null}
+        {prefix && children ? " " : null}
         <span ref={label} className="activity-label">
           {children}
         </span>
