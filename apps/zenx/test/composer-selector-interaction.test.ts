@@ -1,3 +1,4 @@
+import { undo, redo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
@@ -132,7 +133,7 @@ async function withView(
     sends: string[];
     reads: string[];
     scrolled: string[];
-    setThread(id: string | null): Promise<void>;
+    setThread(id: string | null, draft?: string): Promise<void>;
     setDraft(text: string): Promise<void>;
     api: {
       skills: {
@@ -260,9 +261,11 @@ async function withView(
       reads,
       scrolled,
       getDraft: () => parseSkillDraft(composer.draft.text),
-      setThread: async (id) => {
+      setThread: async (id, draft) => {
         await act(async () => {
           activeThread = id;
+          if (draft !== undefined)
+            composer = editComposer(emptyComposerState(), draft);
           render();
         });
       },
@@ -785,5 +788,57 @@ test("a repeated @ reference stays at each caret position between surrounding pr
       result.references[1]!.position! > result.references[0]!.position!,
     );
     assert.deepEqual(sends, []);
+  });
+});
+
+test("inline undo history stays in its thread and preserves first-reference undo", async () => {
+  await withView(async ({ setThread, setDraft, getDraft }) => {
+    const aText = "A private draft";
+    const aInline = withSkillDraft(
+      aText + "\uFFFC",
+      [],
+      [
+        {
+          kind: "thread",
+          name: "A source",
+          cwd: "/a",
+          id: "a-source",
+          position: aText.length,
+        },
+      ],
+    );
+    const bInline = withSkillDraft(
+      "B question \uFFFC",
+      [],
+      [
+        {
+          kind: "thread",
+          name: "B source",
+          cwd: "/b",
+          id: "b-source",
+          position: 11,
+        },
+      ],
+    );
+    const editor = () =>
+      EditorView.findFromDOM(
+        document.querySelector<HTMLElement>(".cm-editor")!,
+      )!;
+    await setThread("thread-a", aText);
+    await setDraft(aInline);
+    // The first insertion must remain undoable inside the same thread.
+    await act(async () => assert.equal(undo(editor()), true));
+    assert.equal(getDraft().text, aText);
+    assert.deepEqual(getDraft().references, []);
+    await act(async () => assert.equal(redo(editor()), true));
+    assert.deepEqual(getDraft(), parseSkillDraft(aInline));
+
+    await setThread("thread-b", bInline);
+    await act(async () => assert.equal(undo(editor()), false));
+    assert.deepEqual(getDraft(), parseSkillDraft(bInline));
+    // Returning to A must not resurrect the abandoned seed from its old editor.
+    await setThread("thread-a", aInline);
+    await act(async () => assert.equal(undo(editor()), false));
+    assert.deepEqual(getDraft(), parseSkillDraft(aInline));
   });
 });

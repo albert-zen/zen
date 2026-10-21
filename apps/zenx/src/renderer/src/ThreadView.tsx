@@ -660,13 +660,19 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<ComposerInput>(null);
-  const plainSnapshot = useRef({
-    value: skillDraft.text,
-    references: [] as typeof skillDraft.references,
-    selection: { anchor: 0, head: 0 },
-  });
+  const plainSnapshot = useRef<{
+    scope: string;
+    value: string;
+    references: typeof skillDraft.references;
+    selection: { anchor: number; head: number };
+  } | null>(null);
+  // A seed exists only for a plain-to-inline transition in this composer.
+  // Discard it on scope changes, including when the next draft is already inline.
+  if (plainSnapshot.current?.scope !== composerScope)
+    plainSnapshot.current = null;
   if (!useInlineComposer)
     plainSnapshot.current = {
+      scope: composerScope,
       value: skillDraft.text,
       references: [],
       selection: {
@@ -1722,7 +1728,7 @@ function ThreadViewContent({
             <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
               <InlineComposerEditor
                 key={composerScope}
-                initialUndo={plainSnapshot.current}
+                initialUndo={plainSnapshot.current ?? undefined}
                 initialSelection={{
                   anchor:
                     (skillDraft.references[0]?.position ??
