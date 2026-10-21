@@ -8,6 +8,7 @@
 @import "./subagents.css";
 @import "./fleet-ui.css";
 @import "./ComposerSendControl.css";
+@import "./ContextUsageIndicator.css";
 
 :root {
   --shadow-low: 0 10px 30px var(--color-elevation-low);
@@ -1246,13 +1247,10 @@ button:disabled {
 }
 .thread-row[data-shortcut-key]::after {
   position: absolute;
-  right: 9px;
+  inset-inline-end: 6px;
   top: 50%;
   transform: translateY(-50%);
-}
-.thread-row-shell:has(.thread-row[data-shortcut-key]) .thread-menu-trigger {
-  opacity: 0;
-  visibility: hidden;
+  white-space: nowrap;
   pointer-events: none;
 }
 .needs-dot,
@@ -10181,8 +10179,18 @@ button:disabled {
    Hover actions cover the tail with a surface fade rather than a vacant column. */
 .thread-row-shell {
   --thread-state-space: 0px;
+  --thread-shortcut-space: 0px;
   --thread-row-surface: var(--color-surface-sidebar);
   border-radius: 10px;
+}
+/* The hint owns a trailing slot; factual statuses and hover actions stay to
+   its left. Size with the caption token so text scaling keeps the gap intact. */
+.thread-row-shell:has(> .thread-row[data-shortcut-key]) {
+  --thread-shortcut-space: calc(3 * var(--font-size-caption) + 20px);
+}
+:root[data-platform="darwin"]
+  .thread-row-shell:has(> .thread-row[data-shortcut-key]) {
+  --thread-shortcut-space: calc(2 * var(--font-size-caption) + 16px);
 }
 .thread-row-shell:hover {
   --thread-row-surface: color-mix(
@@ -10200,7 +10208,9 @@ button:disabled {
 }
 .thread-row-shell > .thread-row {
   background: var(--thread-row-surface);
-  padding-inline-end: calc(10px + var(--thread-state-space, 0px));
+  padding-inline-end: calc(
+    10px + var(--thread-state-space, 0px) + var(--thread-shortcut-space)
+  );
 }
 .thread-row-shell[data-unread="true"] .thread-title {
   font-weight: 650;
@@ -10208,7 +10218,7 @@ button:disabled {
 .thread-status-rail {
   position: absolute;
   inset-block: 0;
-  inset-inline-end: 0;
+  inset-inline-end: var(--thread-shortcut-space);
   display: flex;
   align-items: center;
   gap: 0;
@@ -10394,7 +10404,9 @@ button:disabled {
 @media (hover: none), (pointer: coarse) {
   .thread-row-shell > .thread-row {
     min-height: 44px;
-    padding-inline-end: calc(54px + var(--thread-state-space, 0px));
+    padding-inline-end: calc(
+      54px + var(--thread-state-space, 0px) + var(--thread-shortcut-space)
+    );
   }
   .thread-status-rail .thread-menu-trigger,
   .thread-row-shell:is(:hover, :focus-within, [data-menu-open="true"])

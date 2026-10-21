@@ -50,6 +50,14 @@ export async function withPreviewBrowser(directory, run) {
     chrome,
     [
       "--headless=new",
+      // Explicit test-device emulation, as in Playwright's Chromium launcher.
+      // Chromium web_preferences.mojom defines hover=2 and fine pointer=4:
+      // https://github.com/chromium/chromium/blob/main/third_party/blink/public/mojom/webpreferences/web_preferences.mojom
+      ...(process.env.ZENX_PREVIEW_DESKTOP_INPUT === "1"
+        ? [
+            "--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2",
+          ]
+        : []),
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--no-first-run",
