@@ -637,7 +637,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     const sourceDirectory = path.join(directory, "source", "plugins");
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(
-      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.7.tgz"),
+      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.8.tgz"),
       "rooms tarball",
     );
     const buildPath = path.join(
@@ -654,7 +654,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     });
     assert.equal(
       await readFile(
-        path.join(destination, "zenx-rooms-plugin-1.0.7.tgz"),
+        path.join(destination, "zenx-rooms-plugin-1.0.8.tgz"),
         "utf8",
       ),
       "rooms tarball",
