@@ -901,6 +901,11 @@ test("child visibility retry preserves same-panel model and effort creation choi
     await chooseCreationOption(f, "Child model", model.id);
     await chooseCreationOption(f, "Reasoning effort", "high");
     await f.click(f.button("Side chat model settings"));
+    // Radix restores the closed model popover's focus in a deferred task.
+    // Finish that interaction before focusing the next user-operated control.
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
     const toggle = f.button("Show in sidebar: child-a");
     toggle.focus();
     await act(async () => {

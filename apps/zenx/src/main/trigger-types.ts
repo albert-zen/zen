@@ -189,6 +189,8 @@ export interface ZenXRoom {
   assistant?: {
     threadId: string;
     triggerId: string;
+    /** Optional ownership reference; absent in existing Rooms, never auto-filled. */
+    heartbeatTriggerId?: string;
     deliveryMode?: WakeupDeliveryMode;
   };
   /** Editable planning documents; never Thread/Trigger execution authority. */

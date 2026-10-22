@@ -1,4 +1,8 @@
-import { ALWAYS_ON_ASSISTANT_PROMPT } from "./assistant-preset.js";
+import {
+  ALWAYS_ON_ASSISTANT_PROMPT,
+  PAW_HEARTBEAT_INTERVAL_MINUTES,
+  pawHeartbeatPrompt,
+} from "./assistant-preset.js";
 import { canonicalAssistantWorkspace } from "./trigger-store.js";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -1087,6 +1091,17 @@ export class ZenXTriggerService {
         throw new Error(
           "Assistant routing is fixed; pause replies or create a new conversation",
         );
+      const heartbeatOwner = snapshot.rooms.find(
+        (room) => room.assistant?.heartbeatTriggerId === input.id,
+      );
+      if (
+        heartbeatOwner &&
+        (input.kind !== "timer" ||
+          input.threadId !== heartbeatOwner.assistant!.threadId)
+      )
+        throw new Error(
+          "A PAW heartbeat must remain a timer for its working Thread; delete it to detach the preset",
+        );
       const existing = snapshot.triggers[index]!;
       const replacement = triggerFromInput(
         input,
@@ -1169,6 +1184,9 @@ export class ZenXTriggerService {
           "Assistant reply Trigger is owned by its Room; pause it or delete the Room",
         );
       snapshot.triggers.splice(index, 1);
+      for (const room of snapshot.rooms)
+        if (room.assistant?.heartbeatTriggerId === normalized)
+          delete room.assistant.heartbeatTriggerId;
     });
     this.#rescheduleTimers(generation);
   }
@@ -1225,7 +1243,7 @@ export class ZenXTriggerService {
       throw new Error("An assistant needs exactly one Thread");
     if (
       this.#snapshot.rooms.length >= MAX_ROOM_COUNT ||
-      this.#snapshot.triggers.length >= MAX_TRIGGER_COUNT
+      this.#snapshot.triggers.length + 2 > MAX_TRIGGER_COUNT
     )
       throw new Error("Room or Trigger limit reached");
     return { name, members };
@@ -1234,12 +1252,12 @@ export class ZenXTriggerService {
   async createAssistantRoom(input: CreateRoomInput): Promise<ZenXRoom> {
     const generation = this.#runningGeneration();
     const { name, members } = this.validateAssistantRoom(input);
-    return await this.#mutate(generation, async (snapshot) => {
+    const created = await this.#mutate(generation, async (snapshot) => {
       if (!generation.wakeupAdmission)
         throw new Error("Triggers are not enabled");
       if (
         snapshot.rooms.length >= MAX_ROOM_COUNT ||
-        snapshot.triggers.length >= MAX_TRIGGER_COUNT
+        snapshot.triggers.length + 2 > MAX_TRIGGER_COUNT
       )
         throw new Error("Room or Trigger limit reached");
       const member = members[0]!;
@@ -1268,10 +1286,14 @@ export class ZenXTriggerService {
         operationEpoch: randomUUID(),
         createdAt: this.#now(),
       };
+      const heartbeat = newAssistantHeartbeat(room, this.#now());
+      room.assistant!.heartbeatTriggerId = heartbeat.id;
       snapshot.rooms.push(room);
-      snapshot.triggers.push(trigger);
+      snapshot.triggers.push(trigger, heartbeat);
       return structuredClone(room);
     });
+    this.#rescheduleTimers(generation);
+    return created;
   }
 
   async renameRoom(roomId: string, name: string): Promise<void> {
@@ -1300,6 +1322,30 @@ export class ZenXTriggerService {
       }
       room.name = nextName;
     });
+  }
+
+  async addAssistantHeartbeat(roomId: string): Promise<ZenXTrigger> {
+    const generation = this.#runningGeneration();
+    const heartbeat = await this.#mutate(generation, async (snapshot) => {
+      if (!generation.wakeupAdmission)
+        throw new Error("Enable Triggers before adding a heartbeat");
+      const room = snapshot.rooms.find(
+        (entry) => entry.id === required(roomId, "room", MAX_ID_BYTES),
+      );
+      if (!room?.assistant) throw new Error("PAW Room was not found");
+      const existing = snapshot.triggers.find(
+        (entry) => entry.id === room.assistant!.heartbeatTriggerId,
+      );
+      if (existing) return structuredClone(existing);
+      if (snapshot.triggers.length >= MAX_TRIGGER_COUNT)
+        throw new Error("Trigger limit reached");
+      const trigger = newAssistantHeartbeat(room, this.#now());
+      room.assistant.heartbeatTriggerId = trigger.id;
+      snapshot.triggers.push(trigger);
+      return structuredClone(trigger);
+    });
+    this.#rescheduleTimers(generation);
+    return heartbeat;
   }
   async setAssistantDeliveryMode(
     roomId: string,
@@ -1395,12 +1441,15 @@ export class ZenXTriggerService {
         );
       if (room.assistant)
         snapshot.triggers = snapshot.triggers.filter(
-          (trigger) => trigger.id !== room.assistant!.triggerId,
+          (trigger) =>
+            trigger.id !== room.assistant!.triggerId &&
+            trigger.id !== room.assistant!.heartbeatTriggerId,
         );
       snapshot.rooms = snapshot.rooms.filter(
         (candidate) => candidate.id !== normalized,
       );
     });
+    this.#rescheduleTimers(generation);
   }
 
   async addRoomMember(roomId: string, member: RoomMember): Promise<void> {
@@ -2347,8 +2396,18 @@ export class ZenXTriggerService {
       sourceTurnId: wakeup.sourceTurnId ?? null,
       sourceRoomId: wakeup.sourceRoomId ?? null,
       sourceRoomMessageId: wakeup.sourceRoomMessageId ?? null,
-      replyRoomId: trigger.room?.roomId ?? null,
-      replyAuthor: trigger.room?.mention ?? null,
+      replyRoomId:
+        trigger.room?.roomId ??
+        snapshot.rooms.find(
+          (room) => room.assistant?.heartbeatTriggerId === trigger.id,
+        )?.id ??
+        null,
+      replyAuthor:
+        trigger.room?.mention ??
+        snapshot.rooms.find(
+          (room) => room.assistant?.heartbeatTriggerId === trigger.id,
+        )?.members[0]?.name ??
+        null,
       programInvocationId: null,
       programOutcome: null,
       programOutcomes: [],
@@ -2506,7 +2565,9 @@ export class ZenXTriggerService {
         (room) => room.assistant?.threadId === trigger.threadId,
       );
       const assistantRoom = assistantRooms.find(
-        (room) => room.assistant?.triggerId === trigger.id,
+        (room) =>
+          room.assistant?.triggerId === trigger.id ||
+          room.assistant?.heartbeatTriggerId === trigger.id,
       );
       const sourceRoom =
         wakeup.sourceRoomId === undefined
@@ -3719,6 +3780,23 @@ function wakeupInput(
   ].join("\n");
 }
 
+function newAssistantHeartbeat(room: ZenXRoom, now: number): ZenXTrigger {
+  return triggerFromInput(
+    {
+      kind: "timer",
+      threadId: room.assistant!.threadId,
+      label: "PAW heartbeat",
+      prompt: pawHeartbeatPrompt(room.id),
+      runAt: now + PAW_HEARTBEAT_INTERVAL_MINUTES * 60_000,
+      intervalMinutes: PAW_HEARTBEAT_INTERVAL_MINUTES,
+    },
+    randomUUID(),
+    now,
+    true,
+    now,
+  );
+}
+
 function assistantWakeupInput(
   trigger: ZenXTrigger,
   history: TriggerHistoryEntry,
@@ -3740,7 +3818,9 @@ function assistantWakeupInput(
       ...preset,
       `Reply Room ID: ${sourceRoom.id}`,
       `Current PAW display name: ${JSON.stringify(sourceRoom.name)}`,
-      ...(sourceMessageText !== undefined || bootstrap
+      ...(sourceMessageText !== undefined ||
+      bootstrap ||
+      history.sourceRoomMessageId === null
         ? []
         : [
             "The source Room message is no longer retained; recover its context before acting.",

@@ -1226,6 +1226,15 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 ### Always On Assistant preset
 
 An assistant Room binds one real Thread to an owned roomMention Trigger.
+New Rooms also own one ordinary hourly timer Trigger with a general task-review
+prompt and exact reply Room. Its optional heartbeat Trigger reference records
+ownership only; existing Rooms acquire no timer on load, and deleting the timer
+clears the reference without recreating it. Cadence, prompt, delivery and active
+state remain the ordinary Trigger definition, without another scheduler or
+heartbeat enablement state. Trusted setup adds the preset to an existing PAW
+idempotently, preserving paused or edited definitions. Message-wakeup pause and
+heartbeat pause are independent. Room deletion retires both owned Triggers and
+remains fenced by a nonterminal wakeup's reply route.
 Its personal display name is the existing Room name; an explicit PAW rename
 atomically updates that name, its bound member name and owned Trigger mention.
 Historical messages and canonical Thread titles remain unchanged. First-use
@@ -1245,7 +1254,7 @@ stays under Core workspace instructions and file permissions, with no second
 Host identity document or bootstrap execution ledger.
 Trusted setup defaults to creating an idle Thread through the existing Host
 Project/thread-start boundary with confirmed settings; explicit existing-Thread
-binding remains available. The Room and its Trigger commit atomically in the
+binding remains available. The Room and its owned Triggers commit atomically in the
 existing automation store, after the Thread exists. A bounded Host-lifetime
 setup receipt joins duplicate requests and retains attempted creation failures;
 it is ephemeral request idempotency, not an execution ledger or automatic recovery

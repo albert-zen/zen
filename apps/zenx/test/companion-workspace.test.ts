@@ -97,7 +97,10 @@ for (const existingInstructions of [false, true]) {
         document.querySelector(".companion-content h3")?.textContent,
         "PAW",
       );
-      assert.match(document.body.textContent ?? "", /Creating a PAW/);
+      assert.match(
+        document.body.textContent ?? "",
+        /New PAWs include an hourly heartbeat/,
+      );
       assert.match(
         document.body.textContent ?? "",
         /No recurring check configured/,

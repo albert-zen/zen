@@ -142,12 +142,110 @@ const input = {
   name: "Personal assistant",
   members: [{ name: "Chief", threadId: "chief-thread" }],
 };
+test("creating a PAW installs one visible hourly heartbeat without running the model", async () => {
+  const f = await fixture();
+  try {
+    const before = Date.now();
+    const room = await f.service.createAssistantRoom(input);
+    const timers = f.service
+      .snapshot()
+      .triggers.filter((trigger) => trigger.kind === "timer");
+    assert.equal(timers.length, 1);
+    const heartbeat = timers[0]!;
+    assert.equal(heartbeat.threadId, "chief-thread");
+    assert.equal(heartbeat.active, true);
+    assert.equal(heartbeat.timer?.intervalMinutes, 60);
+    assert.ok(heartbeat.timer!.nextRunAt >= before + 60 * 60_000);
+    assert.match(heartbeat.prompt, new RegExp(room.id));
+    assert.match(heartbeat.prompt, /authorized work/);
+    assert.match(heartbeat.prompt, /Stay quiet/);
+    assert.equal(f.model.requests.length, 0);
+    assert.deepEqual(
+      (await f.store.read()).triggers.find(
+        (trigger) => trigger.id === heartbeat.id,
+      ),
+      heartbeat,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("existing PAWs keep their saved triggers until heartbeat is explicitly added; adding is idempotent", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    await f.service.stop();
+    const legacy = await f.store.read();
+    legacy.triggers = legacy.triggers.filter(
+      (trigger) => trigger.kind !== "timer",
+    );
+    delete legacy.rooms[0]!.assistant!.heartbeatTriggerId;
+    await f.store.write(legacy);
+    await f.service.start();
+    assert.equal(f.service.snapshot().triggers.length, 1);
+    const [first, second] = await Promise.all([
+      f.service.addAssistantHeartbeat(room.id),
+      f.service.addAssistantHeartbeat(room.id),
+    ]);
+    assert.equal(first.id, second.id);
+    assert.equal(f.service.snapshot().triggers.length, 2);
+    await f.service.cancel(first.id);
+    assert.equal(
+      (await f.service.addAssistantHeartbeat(room.id)).active,
+      false,
+    );
+    await f.service.delete(first.id);
+    assert.equal(
+      f.service.snapshot().rooms[0]!.assistant!.heartbeatTriggerId,
+      undefined,
+    );
+    await f.service.stop();
+    await f.service.start();
+    assert.equal(f.service.snapshot().triggers.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the preset heartbeat uses timer admission and its exact Room reply route", async () => {
+  const f = await fixture();
+  try {
+    const room = await f.service.createAssistantRoom(input);
+    const heartbeat = f.service
+      .snapshot()
+      .triggers.find((trigger) => trigger.kind === "timer")!;
+    await f.service.update({
+      id: heartbeat.id,
+      kind: "timer",
+      threadId: heartbeat.threadId,
+      label: heartbeat.label,
+      prompt: heartbeat.prompt,
+      runAt: Date.now() + 30,
+      intervalMinutes: 60,
+    });
+    const deadline = Date.now() + 2000;
+    while (!f.model.requests.length && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(f.model.requests.length, 1);
+    const text = f.model.requests[0]!.input.map((part) =>
+      part.type === "text" ? part.text : "",
+    ).join("\n");
+    assert.match(text, /Reply Room ID:/);
+    assert.doesNotMatch(text, /source Room message is no longer retained/);
+    assert.equal(f.service.snapshot().history[0]?.replyRoomId, room.id);
+    assert.equal(f.service.snapshot().history[0]?.sourceRoomMessageId, null);
+  } finally {
+    await f.close();
+  }
+});
+
 test("assistant setup and reads make no model call; human send needs no mention and duplicates do not redispatch", async () => {
   const f = await fixture();
   try {
     const room = await f.service.createAssistantRoom(input);
     assert.equal(f.model.requests.length, 0);
-    assert.equal(f.service.snapshot().triggers.length, 1);
+    assert.equal(f.service.snapshot().triggers.length, 2);
     assert.equal(
       (await f.store.read()).rooms[0]?.assistant?.threadId,
       "chief-thread",
@@ -289,12 +387,16 @@ test("model arguments cannot impersonate trusted assistant setup or pause UI", a
     setAssistantDeliveryMode: async () => {
       setups++;
     },
+    addAssistantHeartbeat: async () => {
+      setups++;
+    },
   } as unknown as ZenXRoomsTrustedService;
   const runtime = createZenXTrustedPlugin(service);
   for (const toolName of [
     "zenx_rooms_create_assistant",
     "zenx_rooms_assistant_replies",
     "zenx_rooms_assistant_delivery",
+    "zenx_rooms_assistant_heartbeat",
   ]) {
     await assert.rejects(
       runtime.invoke(toolName, {
@@ -409,7 +511,7 @@ test("PAW preset separates direct conversation and closes follow-up lifecycle", 
   assert.match(ALWAYS_ON_ASSISTANT_PROMPT, /cancel or disable/);
   assert.match(
     ALWAYS_ON_ASSISTANT_PROMPT,
-    /No heartbeat is installed by this preset/,
+    /New PAWs include an editable hourly heartbeat/,
   );
 });
 
