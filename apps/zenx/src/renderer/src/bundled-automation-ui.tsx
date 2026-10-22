@@ -3703,6 +3703,11 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                 ) : null}
               </>
             ) : null}
+            {panel === "create" && assistantDialog ? (
+              <p className="room-assistant-disclosure">
+                {i18n.t("panels:pawHeartbeatCreateNote")}
+              </p>
+            ) : null}
             {panel === "create" ? (
               <button
                 type="button"
@@ -3839,6 +3844,39 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
                       {i18n.t("panels:openPawWorkspace")}
                     </button>
                   </div>
+                ) : null}
+                {room?.assistant ? (
+                  <section className="paw-work-settings">
+                    <h3>{i18n.t("panels:heartbeatRecurringChecks")}</h3>
+                    <p>{i18n.t("panels:pawHeartbeatHelp")}</p>
+                    <div className="form-actions">
+                      {!room.assistant.heartbeatTriggerId ? (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={busy}
+                          onClick={() =>
+                            void run("assistant-heartbeat", { roomId: room.id })
+                          }
+                        >
+                          {i18n.t("panels:pawAddHeartbeat")}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="quiet-button"
+                        disabled={busy}
+                        onClick={() => {
+                          setPanel(null);
+                          sdk.navigation.navigate(
+                            `${ROOMS_ROUTE}?${new URLSearchParams({ roomId: room.id, panel: "triggers", request: crypto.randomUUID() })}`,
+                          );
+                        }}
+                      >
+                        {i18n.t("panels:pawManageHeartbeat")}
+                      </button>
+                    </div>
+                  </section>
                 ) : null}
                 {room?.assistant ? (
                   <button

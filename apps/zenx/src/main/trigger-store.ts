@@ -863,7 +863,14 @@ function isRoom(value: unknown): value is ZenXRoom {
     const assistant = record(room["assistant"]);
     if (
       !assistant ||
-      !exactKeys(assistant, ["threadId", "triggerId", "deliveryMode"]) ||
+      !exactKeys(assistant, [
+        "threadId",
+        "triggerId",
+        "heartbeatTriggerId",
+        "deliveryMode",
+      ]) ||
+      (assistant["heartbeatTriggerId"] !== undefined &&
+        !string(assistant["heartbeatTriggerId"], MAX_ID_BYTES)) ||
       (assistant["deliveryMode"] !== undefined &&
         !["steer", "queue"].includes(String(assistant["deliveryMode"]))) ||
       !string(assistant["threadId"], MAX_ID_BYTES) ||

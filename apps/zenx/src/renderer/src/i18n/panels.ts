@@ -496,8 +496,14 @@ export const en = {
   rename: "Rename",
   memberName: "Member name",
   memberConversation: "Member conversation",
-  pausePaw: "Pause PAW",
-  resumePaw: "Resume PAW",
+  pausePaw: "Pause message wakeups",
+  resumePaw: "Resume message wakeups",
+  pawHeartbeatCreateNote:
+    "Includes an hourly heartbeat to review and advance your work. It can use model quota; edit, pause or delete it in Triggers.",
+  pawHeartbeatHelp:
+    "The heartbeat reviews your overall situation and advances authorized work, posting only useful progress or decisions. Manage its schedule, prompt and enabled state in Triggers.",
+  pawAddHeartbeat: "Add hourly heartbeat",
+  pawManageHeartbeat: "Manage heartbeat and triggers",
   members: "Members",
   details: "Details",
   you: "You",
@@ -793,7 +799,7 @@ export const en = {
   directThreadMessagesStayInTheThread:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without duplicating replies.",
   creatingAPawEnablesMessageWakeupsOnly:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start a run.",
+    "New PAWs include an hourly heartbeat. Existing PAWs keep their saved triggers until you add one in PAW settings. Timers may consume model quota; reading this workspace does not start work.",
   membersShareThisConversationChooseAMember:
     "members share this conversation. Choose a member above to use its files, browser and other thread tools.",
   automationStatusUnavailable: "Trigger status unavailable:",
@@ -843,7 +849,7 @@ export const en = {
   pawThreadRoomNote:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without copying every message between them.",
   pawWakeupNote:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start agent work.",
+    "New PAWs include an hourly heartbeat. Existing PAWs keep their saved triggers until you add one in PAW settings. Timers may consume model quota; reading this workspace does not start work.",
   mattersDescription:
     "Assistant-written plans and notes. Linked execution status is shown separately.",
   delegatedWorkDescription:
@@ -1379,8 +1385,14 @@ export const zhCN = {
   rename: "重命名",
   memberName: "成员名称",
   memberConversation: "成员会话",
-  pausePaw: "暂停 PAW",
-  resumePaw: "恢复 PAW",
+  pausePaw: "暂停消息唤醒",
+  resumePaw: "恢复消息唤醒",
+  pawHeartbeatCreateNote:
+    "默认每小时检查并推进一次工作，可能消耗模型额度；可在触发器中修改、暂停或删除。",
+  pawHeartbeatHelp:
+    "心跳会综合当前情况、推进已授权工作，有实质进展或需要决策时才通知。间隔、提示词和启用状态可在触发器中管理。",
+  pawAddHeartbeat: "添加每小时心跳",
+  pawManageHeartbeat: "管理心跳与触发器",
   members: "成员",
   details: "详情",
   you: "你",
@@ -1703,7 +1715,7 @@ export const zhCN = {
   pawThreadRoomNote:
     "直接发送给会话的消息留在会话中。助手仅通过房间消息工具在此发言。此绑定使两个会话保持关联，而不会复制每条消息。",
   pawWakeupNote:
-    "创建 PAW 只启用消息唤醒。需要时在触发器中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动 Agent 工作。",
+    "新建 PAW 默认每小时心跳一次；已有 PAW 保留原触发器，可在 PAW 设置中添加。定时运行可能消耗模型额度，查看此工作区不会启动工作。",
   mattersDescription: "助手编写的计划和笔记。关联的执行状态会单独显示。",
   delegatedWorkDescription:
     "其他委派工作显示在所属事项下，并标明设备和工作区身份。",

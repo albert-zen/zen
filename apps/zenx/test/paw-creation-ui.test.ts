@@ -32,6 +32,8 @@ test("PAW defaults to its own new working Thread, and duplicate clicks share one
       null,
     );
     const submit = createButton();
+    assert.match(document.body.textContent ?? "", /hourly heartbeat/);
+    assert.match(document.body.textContent ?? "", /model quota/);
     assert.equal(submit.disabled, false, "no existing Thread is required");
     assert.ok(
       calls.every((call) =>

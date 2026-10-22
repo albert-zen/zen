@@ -6,7 +6,7 @@ import type { ZenXAutomationControlPort } from "./capabilities/automation-contro
 import type { ZenXTrustedProfilePluginLoader } from "./plugin-profile.js";
 
 export const ZENX_ROOMS_PACKAGE_NAME = "@zenx/rooms-plugin";
-export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.7.tgz";
+export const ZENX_ROOMS_TARBALL = "zenx-rooms-plugin-1.0.8.tgz";
 
 export function createZenXRoomsProfileLoader(
   service: () => ZenXAutomationControlPort,
@@ -99,6 +99,10 @@ export function createZenXRoomsProfileLoader(
       setAssistantReplies: (id: string, enabled: boolean) => {
         requireUi();
         return domain.setAssistantReplies(id, enabled);
+      },
+      addAssistantHeartbeat: (id: string) => {
+        requireUi();
+        return domain.addAssistantHeartbeat(id);
       },
       createRoom: (input: Parameters<typeof domain.createRoom>[0]) => {
         call();

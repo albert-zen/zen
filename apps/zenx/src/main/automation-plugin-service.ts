@@ -1014,6 +1014,23 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     if (enabled) await this.resume(room.assistant.triggerId);
     else await this.cancel(room.assistant.triggerId);
   }
+  async addAssistantHeartbeat(roomId: string) {
+    return await this.#serialize(async () => {
+      this.#requireAssistantSetup();
+      const room = this.#service
+        .snapshot()
+        .rooms.find((entry) => entry.id === roomId);
+      if (!room?.assistant || !this.#targets)
+        throw new Error("Select an available PAW working Thread");
+      const target = await resolveThreadTarget(this.#targets, {
+        target: room.assistant.threadId,
+      });
+      if (target.status !== "resolved" || target.candidate.archived)
+        throw new Error("PAW working Thread is unavailable or archived");
+      this.#requireAssistantSetup();
+      return await this.#service.addAssistantHeartbeat(roomId);
+    });
+  }
   async createRoom(input: CreateRoomInput) {
     return await this.#service.createRoom(input);
   }
