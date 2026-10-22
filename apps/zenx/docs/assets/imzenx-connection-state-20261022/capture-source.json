@@ -1,0 +1,45 @@
+{
+  "commit": "9f44db5e3b9874944d2b9134978b0e57da9f3e0c",
+  "scope": "Actual production ImZenXPage, shared controls, translations and CSS; synthetic SDK status/command responses only. No Host, private profile, credentials or real channel connection. Browser UI capture does not prove real QQ delivery.",
+  "sources": {
+    "apps/zenx/src/renderer/src/imzenx-ui.tsx": "eaab3e256adee747da0107aa8119542c3512c13a4e0cb33b3db0c7d250a9e698",
+    "apps/zenx/src/renderer/src/i18n/panels.ts": "aca5c6a74c76304da5835665f00ad1d25fe7f2232d2cbe99710de3cc3cd72c77",
+    "apps/zenx/src/renderer/src/styles.css": "ebd0eed1ad33fb17d85abc16d5492894889b8930eba67a19960de37ccfc804f1",
+    "apps/zenx/src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "apps/zenx/scripts/imzenx-status-preview.tsx": "6312dea7e96078a59a9c462dcba1bbbacc7be00c9d168f5baedd6c8b472e9261",
+    "apps/zenx/scripts/build-imzenx-status-preview.mjs": "e034d708bc7f1e1b1eda001909c8db1a4c3a88c525c862971d60f99e7fdfaae6"
+  },
+  "screenshots": {
+    "qq-reconnecting.jpg": {
+      "sha256": "da0a9ee94aee89a74bb97e4d8db57823e3560d016fda5f7600a61055d527704f",
+      "bytes": 43600
+    },
+    "qq-ready.jpg": {
+      "sha256": "c53b3dc4a868c135efa726c85b62eff5f0f07aa9d12cdd871f7348eab3b1dfe3",
+      "bytes": 43192
+    },
+    "qq-ready-dark-375.jpg": {
+      "sha256": "2da5b02cf1c614e4d812e78af803b2d3a1d5c1ba893724278e726428169c6f77",
+      "bytes": 35344
+    },
+    "qq-failed.jpg": {
+      "sha256": "a5907296aaaef095cd3620a822ab006ab94e769b6348cf52278f3604e8c12f9a",
+      "bytes": 43258
+    }
+  },
+  "capture": "Actual IAB browser rendering on macOS; 1280x720 light desktop and 375x812 dark viewport.",
+  "ui_checks": {
+    "sourceCommit": "9f44db5e",
+    "synthetic": true,
+    "noRealQQ": true,
+    "statesObserved": ["ready", "reconnecting", "failed"],
+    "automaticPollingObserved": true,
+    "reconnectConsentEscapePassed": true,
+    "narrowDark": {
+      "initialConfirm": false,
+      "qqText": "QQ 已连接",
+      "scrollWidth": 375,
+      "width": 375
+    }
+  }
+}
