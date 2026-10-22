@@ -121,7 +121,7 @@ async def test_zenx_eof_stops_gateway_and_poll_tasks(monkeypatch, tmp_path):
     async with asyncio.timeout(1):
         await zenx.run()
     assert calls == ["gateway-start", "gateway-stop", "state-close"]
-    assert not any(task.get_name().startswith("imzenx-paw") for task in asyncio.all_tasks())
+    assert not any(task.get_name().startswith("imzenx-") for task in asyncio.all_tasks())
 
 
 @pytest.mark.asyncio

@@ -334,6 +334,8 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 6.1 已确认的 contribution 边界
 
+- IMZenX 的本机进程状态与渠道协议连接状态分别显示：只有 SDK 确认渠道 ready 才显示“QQ 已连接”；连接中、重连中、未连接、失败和状态暂不可用保持明确文字。状态更新中断或进程退出时不保留旧的已连接指示。运行后初始“确认连接”变为明确的“重新连接”，成功的前置检查不继续提示用户确认初次连接。渠道已连接不代表真实消息收发已验收。
+
 - 当前 Plugin Package v2、Host Catalog、Runtime Supervisor、Host SDK storage migration、Generic UI Host 与完整 Settings 生命周期入口已经实现；五个第一方 package 与本地 process package 使用同一 lifecycle/runtime/discovery API，没有 legacy capability 控制区。
 - 目标 Generic UI Host 支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 namespaced result renderers。第一方 bundled plugin 与隔离运行的第三方 plugin 使用同一逻辑 Plugin UI SDK，不建立两套 contribution 语义。
 - 已启用 plugin 可以使用这些受控 surfaces，但不取得核心 DOM、router、Chat、Composer、Thread Item 层级或导航 authority。第三方 UI/runtime 必须隔离；第一方信任边界不同也不允许绕过逻辑 SDK。

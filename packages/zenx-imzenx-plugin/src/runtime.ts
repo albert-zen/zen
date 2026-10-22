@@ -1,4 +1,5 @@
 import { attachPawPipe, type PawRequest } from "./paw-pipe.js";
+import type { ImZenXChannelStatus } from "./channel-status.js";
 import { configuration, type Configuration } from "./configuration.js";
 import type { ManagedChannelInspection } from "./channel-schema.js";
 import { inspectReadiness, type ReadinessCheck } from "./readiness.js";
@@ -77,6 +78,8 @@ export class ImZenXRuntime {
   readonly #managedContentEpochs = new Map<string, number>();
   #state: State = "unconfigured";
   #error: string | undefined;
+  #channels: ImZenXChannelStatus[] = [];
+  #channelStatusAt = 0;
 
   constructor(host: ImZenXHost) {
     this.#host = host;
@@ -331,6 +334,13 @@ export class ImZenXRuntime {
   status() {
     return {
       state: this.#state,
+      channels: this.#channels.map((channel) => ({
+        id: channel.id,
+        state:
+          this.#child && performance.now() - this.#channelStatusAt < 10000
+            ? channel.state
+            : "unknown",
+      })),
       configurationRevision: this.#configurationRevision(this.#config),
       ...(this.#error === undefined ? {} : { error: this.#error }),
       configuration: this.#config ?? null,
@@ -455,6 +465,8 @@ export class ImZenXRuntime {
         if (this.#child !== child) return;
         this.#child = undefined;
         this.#activeConfig = undefined;
+        this.#channels = [];
+        this.#channelStatusAt = 0;
         this.#state = "failed";
         this.#error =
           "IM Gateway exited. Check configuration, then Connect again.";
@@ -467,6 +479,10 @@ export class ImZenXRuntime {
           return this.#host.pawRequest(config.cwd, operation, params);
         },
         () => this.#child === child && !this.#closed,
+        (channels) => {
+          this.#channels = channels;
+          this.#channelStatusAt = performance.now();
+        },
       );
       const ready = waitForReady(child);
       child.stdin.write(
@@ -520,6 +536,8 @@ export class ImZenXRuntime {
     this.#detachPaw = undefined;
     this.#child = undefined;
     this.#activeConfig = undefined;
+    this.#channels = [];
+    this.#channelStatusAt = 0;
     if (
       child === undefined ||
       child.pid === undefined ||

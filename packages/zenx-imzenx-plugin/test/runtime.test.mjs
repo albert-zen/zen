@@ -18,6 +18,70 @@ async function waitFor(check) {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
+
+test(
+  "channel facts survive the ready handshake, reject arbitrary fields, expire, and retire with the child",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "imzenx-channel-status-"),
+    );
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const executable = path.join(root, "python-fixture");
+    const facts = path.join(root, "facts.json");
+    const writeFacts = (channels) =>
+      writeFile(facts, JSON.stringify({ type: "channel-status", channels }));
+    await writeFacts([{ id: "qq", state: "ready" }]);
+    await writeFile(
+      executable,
+      `#!${process.execPath}\nimport fs from 'node:fs'; import readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});let timer;lines.once('line',()=>{process.stdout.write('{"type":"ready"}\\n');timer=setInterval(()=>{try{process.stdout.write(fs.readFileSync(${JSON.stringify(facts)},'utf8')+'\\n');}catch{}},10);});lines.once('close',()=>{clearInterval(timer);process.exit(0);});`,
+      { mode: 0o700 },
+    );
+    const { sdk } = createFixturePluginHost({ pluginId: "imzenx" });
+    const runtime = new ImZenXRuntime({
+      dataDirectory: root,
+      isServerReady: () => true,
+      onServerStatus: () => () => {},
+      readConnection: async () => ({
+        url: "ws://127.0.0.1:4500",
+        authentication: { tokenFile: path.join(root, "token") },
+      }),
+    });
+    t.after(() => runtime.close());
+    await runtime.start(sdk);
+    runtime.activate(Promise.resolve());
+    await waitFor(() => runtime.status().state === "unconfigured");
+    await invoke(runtime, "imzenx_configure", {
+      pythonExecutable: executable,
+      channelsConfigFile: path.join(root, "channels.json"),
+      cwd: root,
+    });
+    await waitFor(() => runtime.status().channels[0]?.state === "ready");
+    await writeFacts([{ id: "qq", state: "reconnecting" }]);
+    await waitFor(() => runtime.status().channels[0]?.state === "reconnecting");
+    await writeFacts([
+      { id: "qq", state: "ready", session_id: "private-session" },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.deepEqual(runtime.status().channels, [
+      { id: "qq", state: "reconnecting" },
+    ]);
+    assert.equal(
+      JSON.stringify(runtime.status()).includes("private-session"),
+      false,
+    );
+    const future = performance.now() + 10001;
+    t.mock.method(performance, "now", () => future);
+    assert.deepEqual(runtime.status().channels, [
+      { id: "qq", state: "unknown" },
+    ]);
+    t.mock.restoreAll();
+    await writeFacts([{ id: "qq", state: "ready" }]);
+    await waitFor(() => runtime.status().channels[0]?.state === "ready");
+    await runtime.close();
+    assert.deepEqual(runtime.status().channels, []);
+  },
+);
 test(
   "configuration survives runtime replacement and only connects while ZAS is ready",
   { skip: process.platform === "win32" },

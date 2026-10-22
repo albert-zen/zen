@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Icon } from "./icons.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
+import type { ImZenXChannelStatus } from "../../../../../packages/zenx-imzenx-plugin/src/channel-status.js";
 import type {
   ImZenXSetupView,
   ImZenXChannelSave,
@@ -45,6 +46,19 @@ interface Status {
   configuration: Partial<Configuration> | null;
   activeConfiguration?: Partial<Configuration> | null;
   explicitConnectRequired?: boolean;
+  channels?: ImZenXChannelStatus[];
+}
+function unavailableChannels(status: Status | null): Status | null {
+  return status
+    ? {
+        ...status,
+        channels:
+          status.channels?.map((channel) => ({
+            ...channel,
+            state: "unknown",
+          })) ?? [],
+      }
+    : null;
 }
 interface Readiness {
   ready: boolean;
@@ -701,14 +715,30 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             setStatus(value as Status);
         })
         .catch(() => {
-          /* Explicit refresh reports request errors. */
+          if (active && request === statusVersion.current)
+            setStatus(unavailableChannels);
         });
-    }, 5000);
+    }, 2000);
     return () => {
       active = false;
       clearInterval(timer);
     };
   }, [sdk.pluginId, busy]);
+  useEffect(() => {
+    if (
+      status?.state !== "connected" ||
+      !status.channels?.some((channel) => channel.state !== "unknown")
+    )
+      return;
+    // A long-running settings operation can suspend polling. Its old channel
+    // observation still expires instead of remaining green until polling resumes.
+    const timer = window.setTimeout(() => {
+      setStatus((current) =>
+        current === status ? unavailableChannels(current) : current,
+      );
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
   useEffect(() => {
     // A fresh readiness response may supersede an older status snapshot. Compare
     // only when a new authoritative status arrives (including background polls).
@@ -771,6 +801,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       }
     } catch (reason) {
       if (!mounted.current) return;
+      if (command === "status") setStatus(unavailableChannels);
       setError(reason instanceof Error ? reason.message : String(reason));
       if (command === "readiness" || command === "connect") setReadiness(null);
       if (command === "connect") {
@@ -797,6 +828,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
     !nativeBusy &&
     currentReadiness?.ready === true &&
     Boolean(currentReadiness.configurationRevision?.trim());
+  const consumerRunning = status?.state === "connected";
   const pendingConnection =
     (status?.state === "connected" &&
       status.explicitConnectRequired === true) ||
@@ -856,8 +888,43 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
             {i18n.t("panels:imPendingConfigurationNotice")}
           </p>
         ) : null}
+        {consumerRunning ? (
+          <div
+            className="imzenx-channel-statuses"
+            aria-live="polite"
+            aria-label={i18n.t("panels:imChannelConnections")}
+          >
+            {status.channels?.length ? (
+              status.channels.map((channel) => (
+                <span
+                  key={channel.id}
+                  className="imzenx-status"
+                  data-state={channel.state}
+                >
+                  <span aria-hidden="true" />
+                  {i18n.t(`panels:imChannel_${channel.state}`, {
+                    channel: {
+                      qq: "QQ",
+                      telegram: "Telegram",
+                      feishu: "Feishu",
+                      weixin: "Weixin",
+                    }[channel.id],
+                  })}
+                </span>
+              ))
+            ) : (
+              <span>{i18n.t("panels:imChannelStatusUnavailable")}</span>
+            )}
+          </div>
+        ) : null}
         <div className="imzenx-connection-bottom">
-          <span>{i18n.t("panels:imDeliveryVerificationNotice")}</span>
+          <span>
+            {i18n.t(
+              consumerRunning
+                ? "panels:imChannelConnectionMeaning"
+                : "panels:imDeliveryVerificationNotice",
+            )}
+          </span>
           <button
             className="imzenx-text-button"
             type="button"
@@ -1088,19 +1155,35 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
       </details>
       <section
         className="imzenx-connection imzenx-routing imzenx-readiness"
-        aria-label={i18n.t("panels:imConnectionReadiness")}
+        aria-label={i18n.t(
+          consumerRunning
+            ? "panels:imConnectionSettings"
+            : "panels:imConnectionReadiness",
+        )}
       >
-        <h3>{i18n.t("panels:imConnectionReadiness")}</h3>
+        <h3>
+          {i18n.t(
+            consumerRunning
+              ? "panels:imConnectionSettings"
+              : "panels:imConnectionReadiness",
+          )}
+        </h3>
         <p className="imzenx-hint">
-          {nativeApi
-            ? i18n.t("panels:imNativePreparationSteps")
-            : i18n.t("panels:imManualPreparationSteps")}
+          {consumerRunning
+            ? i18n.t("panels:imRunningConnectionInstructions")
+            : nativeApi
+              ? i18n.t("panels:imNativePreparationSteps")
+              : i18n.t("panels:imManualPreparationSteps")}
         </p>
         {currentReadiness ? (
           <>
             <p role="status">
               {currentReadiness.ready
-                ? i18n.t("panels:imReadinessPassed")
+                ? i18n.t(
+                    consumerRunning
+                      ? "panels:imReadinessPassedRunning"
+                      : "panels:imReadinessPassed",
+                  )
                 : i18n.t("panels:imReadinessIncomplete")}
             </p>
             {currentReadiness.enabledChannels.length ? (
@@ -1176,7 +1259,7 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
               : i18n.t("panels:imCheckReadiness")}
           </button>
           <button
-            className="primary-button"
+            className={consumerRunning ? "secondary-button" : "primary-button"}
             type="button"
             disabled={busy || !canConnect}
             onClick={() => {
@@ -1187,7 +1270,11 @@ export function ImZenXPage({ sdk }: PluginUiSurfaceProps) {
           >
             {operation === "connect"
               ? i18n.t("panels:imConnecting")
-              : i18n.t("panels:imConfirmConnection")}
+              : i18n.t(
+                  consumerRunning
+                    ? "panels:imReconnect"
+                    : "panels:imConfirmConnection",
+                )}
           </button>
         </div>
         <p className="imzenx-hint">{i18n.t("panels:imVerifyActualDelivery")}</p>

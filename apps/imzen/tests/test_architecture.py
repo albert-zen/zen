@@ -28,6 +28,7 @@ def test_imzen_keeps_only_product_composition_modules():
         "__init__.py",
         "__main__.py",
         "channels.py",
+        "channel_status.py",
         "client.py",
         "config.py",
         "controller.py",

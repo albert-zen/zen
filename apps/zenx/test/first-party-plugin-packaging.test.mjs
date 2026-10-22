@@ -37,7 +37,7 @@ const preparedPluginsDirectory = path.resolve(
 const expected = [
   ["@zenx/fleet-plugin", "zenx-fleet-plugin-1.0.0.tgz"],
   ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
-  ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.2.tgz"],
+  ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.3.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-electron-1.0.6.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-multi-1.0.8.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-concurrent-1.0.7.tgz"],

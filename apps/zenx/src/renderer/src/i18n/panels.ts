@@ -97,6 +97,21 @@ export const en = {
 
   imPreparedWaitingToConnect: "Preparation saved; waiting to connect",
   imLocalConsumerRunning: "Local connection process is running",
+  imChannelConnections: "Channel connections",
+  imChannelConnectionMeaning:
+    "Connected confirms the channel connection. Verify sending and receiving in the bot chat.",
+  imChannel_connecting: "{{channel}} connecting",
+  imChannel_ready: "{{channel}} connected",
+  imChannel_reconnecting: "{{channel}} reconnecting",
+  imChannel_disconnected: "{{channel}} not connected",
+  imChannel_failed: "{{channel}} connection failed",
+  imChannel_unknown: "{{channel}} status unavailable",
+  imChannelStatusUnavailable: "Channel connection status unavailable",
+  imConnectionSettings: "Connection settings",
+  imRunningConnectionInstructions:
+    "The connection process is running. After changing settings, save preparation and check again before reconnecting.",
+  imReadinessPassedRunning: "Preparation checks passed",
+  imReconnect: "Reconnect…",
   imRuntimePreparedNotice:
     "Runtime prepared. Save the channel, then check connection readiness.",
   imChannelSavedNotice:
@@ -1021,6 +1036,21 @@ export const zhCN = {
 
   imPreparedWaitingToConnect: "准备已保存，等待连接",
   imLocalConsumerRunning: "本机连接进程运行中",
+  imChannelConnections: "渠道连接状态",
+  imChannelConnectionMeaning:
+    "已连接表示渠道连接已建立；实际收发可在机器人聊天中验证。",
+  imChannel_connecting: "{{channel}} 连接中",
+  imChannel_ready: "{{channel}} 已连接",
+  imChannel_reconnecting: "{{channel}} 重连中",
+  imChannel_disconnected: "{{channel}} 未连接",
+  imChannel_failed: "{{channel}} 连接失败",
+  imChannel_unknown: "{{channel}} 状态暂不可用",
+  imChannelStatusUnavailable: "渠道连接状态暂不可用",
+  imConnectionSettings: "连接设置",
+  imRunningConnectionInstructions:
+    "连接进程已在运行。修改设置后，请保存准备、重新检查，再重新连接。",
+  imReadinessPassedRunning: "准备检查已通过",
+  imReconnect: "重新连接…",
   imRuntimePreparedNotice: "运行环境已准备。保存频道后再检查连接准备情况。",
   imChannelSavedNotice: "频道设置已安全保存，连接尚未启动",
   imConfigurationEditedNotice: "配置已修改，请重新检查准备情况",
