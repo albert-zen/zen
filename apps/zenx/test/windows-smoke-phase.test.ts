@@ -61,48 +61,58 @@ test("failed publication preserves existing snapshots and unrelated files", asyn
 // Compile the exact sampler declaration from the actual smoke harness, without
 // creating its windows or invoking native input. Hold its real read handle open
 // across publication so this regression does not depend on winning a race.
+// The historical in-place writer's EBUSY negative control is not a product
+// contract: do not compile/run a second PowerShell process just to re-prove it.
 test(
   "Windows sampler reads immutable generations while retaining its original snapshot",
   {
     skip:
       process.platform !== "win32" ? "Windows file-sharing contract" : false,
+    timeout: 30000,
   },
-  async () => {
+  async (t) => {
     const directory = await fixture();
-    const harness = await readFile(
-      new URL("../scripts/windows-winapp-smoke.ps1", import.meta.url),
-      "utf8",
-    );
-    const declaration = harness.match(
-      /-TypeDefinition @"\r?\n([\s\S]*?)\r?\n"@/u,
-    )?.[1];
-    assert.ok(
-      declaration,
-      "actual native sampler declarations must be present",
-    );
-    const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    const started = performance.now();
+    let stage = "declaration";
+    let stdout = "",
+      stderr = "";
+    const diagnostic = () =>
+      `Native sampler ${stage} after ${Math.round(performance.now() - started)}ms\nstdout: ${stdout}\nstderr: ${stderr}`;
+    const enter = (next: string) => {
+      stage = next;
+      t.diagnostic(
+        `Native sampler ${stage} at ${Math.round(performance.now() - started)}ms`,
+      );
+    };
+    const failures: unknown[] = [];
     try {
-      for (const shared of [false, true]) {
-        if (shared) await publishWindowsSmokePhase(directory, "uia-set-value");
-        else await writeFile(path.join(directory, "phase"), "uia-set-value");
-        const ready = path.join(
-          directory,
-          shared ? "shared-ready" : "old-ready",
-        );
-        const release = path.join(
-          directory,
-          shared ? "shared-release" : "old-release",
-        );
-        const script: string = `
+      const harness = await readFile(
+        new URL("../scripts/windows-winapp-smoke.ps1", import.meta.url),
+        "utf8",
+      );
+      const declaration = harness.match(
+        /-TypeDefinition @"\r?\n([\s\S]*?)\r?\n"@/u,
+      )?.[1];
+      assert.ok(
+        declaration,
+        "actual native sampler declarations must be present",
+      );
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      await publishWindowsSmokePhase(directory, "uia-set-value");
+      const ready = path.join(directory, "shared-ready");
+      const release = path.join(directory, "shared-release");
+      const script = `
 $ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine('startup: compiling native sampler')
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -ReferencedAssemblies System,System.Drawing,System.Windows.Forms -TypeDefinition @'
 ${declaration}
 '@
 $directory = ${quote(directory)}
-$stream = ${shared ? "[ZenXCaptureSampler]::OpenPhase($directory)" : "[IO.File]::OpenRead((Join-Path $directory 'phase'))"}
+$stream = [ZenXCaptureSampler]::OpenPhase($directory)
 try {
+  [Console]::Error.WriteLine('ready: original snapshot held')
   [IO.File]::WriteAllText(${quote(ready)}, 'ready')
   $deadline = [DateTime]::UtcNow.AddSeconds(10)
   while (-not [IO.File]::Exists(${quote(release)})) {
@@ -111,94 +121,135 @@ try {
   }
   $reader = New-Object IO.StreamReader($stream)
   try { [Console]::Out.WriteLine($reader.ReadToEnd()) } finally { $reader.Dispose() }
-  ${
-    shared
-      ? `[Console]::Out.WriteLine('latest:')
+  [Console]::Out.WriteLine('latest:')
   $latest = New-Object IO.StreamReader([ZenXCaptureSampler]::OpenPhase($directory))
-  try { [Console]::Out.WriteLine($latest.ReadToEnd()) } finally { $latest.Dispose() }`
-      : ""
-  }
+  try { [Console]::Out.WriteLine($latest.ReadToEnd()) } finally { $latest.Dispose() }
 } finally { $stream.Dispose() }
 `;
-        const child = spawn(
-          "powershell.exe",
-          [
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            Buffer.from(script, "utf16le").toString("base64"),
-          ],
-          { stdio: ["ignore", "pipe", "pipe"] },
-        );
-        const watchdog = setTimeout(() => child.kill(), 20000);
-        let stdout = "",
-          stderr = "";
-        child.stdout.on("data", (chunk) => {
-          stdout += chunk;
+      enter("startup/readiness");
+      const child = spawn(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-EncodedCommand",
+          Buffer.from(script, "utf16le").toString("base64"),
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      let hasClosed = false;
+      const settled = new Promise<void>((resolve) => {
+        child.once("close", () => {
+          hasClosed = true;
+          resolve();
         });
-        child.stderr.on("data", (chunk) => {
-          stderr += chunk;
-        });
-        const closed = once(child, "close");
-        // Observe immediately, including failed process creation, before waiting.
-        void closed.catch(() => {});
-        try {
-          const deadline = Date.now() + 15000;
-          for (;;) {
-            try {
-              await readFile(ready);
-              break;
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-                throw error;
-            }
-            assert.equal(child.exitCode, null, stderr);
-            assert.ok(
-              Date.now() < deadline,
-              `Native reader never became ready: ${stderr}`,
-            );
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-          if (shared) {
-            // A deliberately incomplete temporary file must never be sampled.
-            await writeFile(
-              path.join(directory, ".phase-incomplete"),
-              "partial",
-            );
-            const updated = await publishWindowsSmokePhase(
-              directory,
-              "uia-refresh",
-            );
-            assert.equal(await readFile(updated, "utf8"), "uia-refresh");
-          } else {
-            // File.ReadAllText uses this read-only sharing mode. Holding it makes
-            // the old in-place write fail deterministically, reproducing CI EBUSY.
-            await assert.rejects(
-              writeFile(path.join(directory, "phase"), "uia-refresh"),
-              { code: "EBUSY" },
-            );
-          }
-        } finally {
+      });
+      const closed = once(child, "close");
+      // Observe failed creation immediately, rather than hiding it behind readiness.
+      let processError: unknown;
+      void closed.catch((error: unknown) => {
+        processError = error;
+      });
+      // One process, one total budget. Leave 3s for forced close and room for
+      // fixture cleanup before the CI runner's unchanged 30s outer timeout.
+      const deadline = started + 20000;
+      let timedOut = false;
+      let expire: (error: Error) => void;
+      const expired = new Promise<never>((_, reject) => {
+        expire = reject;
+      });
+      const completed = Promise.race([closed, expired]);
+      void completed.catch(() => {});
+      const watchdog = setTimeout(
+        () => {
+          timedOut = true;
+          expire(new Error(diagnostic()));
+          child.kill();
+        },
+        Math.max(0, deadline - performance.now()),
+      );
+      try {
+        const readyDeadline = Math.min(deadline, performance.now() + 15000);
+        for (;;) {
+          if (processError) throw processError;
+          assert.ok(
+            !timedOut && child.exitCode === null && child.signalCode === null,
+            diagnostic(),
+          );
+          assert.ok(performance.now() < readyDeadline, diagnostic());
           try {
-            await writeFile(release, "release");
-          } finally {
-            try {
-              const exited = await closed;
-              assert.equal(exited[0], 0, stderr);
-            } finally {
-              clearTimeout(watchdog);
-            }
+            await readFile(ready);
+            break;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           }
+          await new Promise((resolve) => setTimeout(resolve, 10));
         }
+        enter("publication");
+        // A deliberately incomplete temporary file must never be sampled.
+        await writeFile(path.join(directory, ".phase-incomplete"), "partial");
+        const updated = await publishWindowsSmokePhase(
+          directory,
+          "uia-refresh",
+        );
+        assert.equal(await readFile(updated, "utf8"), "uia-refresh");
+        enter("release/exit");
+        await writeFile(release, "release");
+        const exited = await completed;
+        assert.ok(!timedOut, diagnostic());
+        assert.equal(exited[0], 0, diagnostic());
         assert.equal(
           stdout.trim(),
-          shared ? "uia-set-value\r\nlatest:\r\nuia-refresh" : "uia-set-value",
+          "uia-set-value\r\nlatest:\r\nuia-refresh",
           "held native handle retains old bytes and fresh sampler selects complete latest generation",
         );
+      } catch (error) {
+        failures.push(new Error(diagnostic(), { cause: error }));
+      } finally {
+        clearTimeout(watchdog);
+        enter("process cleanup");
+        if (!hasClosed) child.kill();
+        let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          // A spawn error was already captured above. Still wait for close so
+          // pipes and native handles cannot outlive the fixture on failure.
+          await Promise.race([
+            settled,
+            new Promise<never>((_, reject) => {
+              cleanupTimer = setTimeout(
+                () => reject(new Error(diagnostic())),
+                3000,
+              );
+            }),
+          ]);
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          clearTimeout(cleanupTimer);
+        }
       }
+    } catch (error) {
+      failures.push(error);
     } finally {
-      await rm(directory, { recursive: true, force: true });
+      enter("fixture cleanup");
+      try {
+        await rm(directory, { recursive: true, force: true });
+      } catch (error) {
+        failures.push(error);
+      }
     }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(
+        failures,
+        "Native sampler failed; original failure is first",
+      );
   },
 );
