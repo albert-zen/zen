@@ -965,6 +965,8 @@ Turn 边界由 Zen canonical lifecycle 定义：`turn_started` 开始 Turn，
 `turn_completed` / `turn_aborted` 结束 Turn；完成的语义 Item 在二者之间追加。
 ZAS 当前把它们投影为 `turn/started` / `turn/completed`；CAS adapter 可将这部分
 无损映射到固定 Codex shape，但外部 rollout 命名不反向定义 canonical Turn。
+**Journal payload write** — canonical 与产品 metadata JSONL 写入共用无状态 UTF-8 完整写入 helper，在 fsync 或新 Thread 发布前处理 short write；零进展明确失败，不重放逻辑操作、不修复已写前缀。
+
 任一 canonical append Promise 拒绝后，持久化结果都视为未知：当前 Turn 停止后续
 canonical 写入，App Server 丢弃对应 Thread 与 summary 缓存并在下次读取时从 journal
 重建，不补写替代 failure 或第二个 terminal。

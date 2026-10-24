@@ -271,6 +271,33 @@ function Fixture() {
       expectedPayload: long || stress ? null : bundle.payload,
       getSent: () => sent,
       getThread: () => thread,
+      getComposerEditorState: () => {
+        const content = document.querySelector<HTMLElement>("#thread-composer");
+        const view = content && EditorView.findFromDOM(content);
+        if (!view) throw new Error("Inline composer is not mounted");
+        const selection = document.getSelection();
+        const position = (node: Node | null | undefined, offset: number) =>
+          node && view.contentDOM.contains(node)
+            ? view.posAtDOM(node, offset)
+            : null;
+        return {
+          focused: document.activeElement === view.contentDOM,
+          activeElement: document.activeElement?.className ?? null,
+          editorSelection: {
+            anchor: view.state.selection.main.anchor,
+            head: view.state.selection.main.head,
+          },
+          domSelection: {
+            anchor: position(
+              selection?.anchorNode,
+              selection?.anchorOffset ?? 0,
+            ),
+            head: position(selection?.focusNode, selection?.focusOffset ?? 0),
+          },
+          editorText: view.state.doc.toString(),
+          draft: parseSkillDraft(composer.draft.text),
+        };
+      },
       setComposerCaret: (offset: number) => {
         const content = document.querySelector<HTMLElement>("#thread-composer");
         const view = content && EditorView.findFromDOM(content);

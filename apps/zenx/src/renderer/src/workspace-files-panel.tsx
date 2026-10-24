@@ -22,12 +22,14 @@ export function WorkspaceFilesPanel({
   workspacePath,
   initialPath,
   standalone = false,
+  navigationToggle,
 }: {
   threadId: string;
   drafts: WorkspaceFileDrafts;
   workspacePath?: string;
   initialPath?: string;
   standalone?: boolean;
+  navigationToggle?: React.ReactNode;
 }) {
   useTranslation("panels");
   const entries = useSyncExternalStore(drafts.subscribe, drafts.snapshot);
@@ -210,6 +212,7 @@ export function WorkspaceFilesPanel({
       </header>
       {standalone && file ? (
         <div className="file-location">
+          {navigationToggle}
           <div
             className="file-location-path"
             title={file.base.path}
