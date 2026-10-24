@@ -2733,3 +2733,37 @@ test("single-folder edits save atomically, reject collisions and preserve unrela
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("external applications persist independently and concurrent choices do not overwrite siblings", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-applications-"));
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    await Promise.all([
+      service.setExternalApplication("custom", "/Applications/My Editor.app"),
+      service.setExternalApplication(
+        "vscode",
+        "/Applications/Visual Studio Code.app",
+      ),
+    ]);
+    const reloaded = settingsFor(directory, inactiveSubscription());
+    await reloaded.initialize({ ZENX_PROVIDER: "fake" });
+    assert.deepEqual(
+      (await reloaded.publicSettings()).profile.externalApplications,
+      {
+        custom: "/Applications/My Editor.app",
+        vscode: "/Applications/Visual Studio Code.app",
+      },
+    );
+    await reloaded.setExternalApplication("custom", undefined);
+    assert.deepEqual(
+      (await reloaded.publicSettings()).profile.externalApplications,
+      { vscode: "/Applications/Visual Studio Code.app" },
+    );
+    await assert.rejects(
+      reloaded.setExternalApplication("custom", "code --wait"),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

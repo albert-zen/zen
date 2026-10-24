@@ -1,3 +1,7 @@
+import {
+  normalizeExternalApplications,
+  type ExternalApplications,
+} from "./workspace-external-open.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -95,6 +99,7 @@ export interface ZenXHostProfile {
   /** Explicit Sidebar visibility for child Threads, independent of Pins. */
   visibleSubagentThreadIds: string[];
   sidebarOrder: ZenXSidebarOrder;
+  externalApplications?: ExternalApplications;
 }
 
 export type ZenXSettingsUpdate = Pick<
@@ -454,6 +459,9 @@ export function validateHostProfile(
       : { composerSendModeMigration }),
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
+    externalApplications: normalizeExternalApplications(
+      value.externalApplications,
+    ),
     ...(workflowCommands.length === 0 ? {} : { workflowCommands }),
     ...(titlePrompt === undefined ? {} : { titlePrompt }),
     pinnedThreadIds: normalizeThreadPreferenceIds(

@@ -572,6 +572,111 @@ try {
         (call) => call.threadId === "synthetic-file-sidebar-thread",
       ),
     );
+    // Production menu; only the fixture's catalog/picker/dispatch boundary is fake.
+    const externalLabel =
+      options.lang === "en" ? "Open file externally" : "在外部打开文件";
+    const externalSelector = `${fileSelector} button[aria-label="${externalLabel}"]`;
+    const clickMenu = async (label) => {
+      const point = await evaluate(`(() => {
+        const button=[...document.querySelectorAll('[role="menuitem"]')].find(e=>e.querySelector('strong')?.textContent===${JSON.stringify(label)});
+        if(!button || button.disabled) throw new Error('Unavailable menu action: '+${JSON.stringify(label)});
+        button.scrollIntoView({block:'nearest'});
+        const r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+      })()`);
+      await click(point.x, point.y);
+      await delay(200);
+    };
+    await clickSelector(externalSelector);
+    await waitFor(`!!document.querySelector('[role="menu"]')`);
+    receipt.externalMenu = await evaluate(
+      `(() => { const e=document.querySelector('[role="menu"]');const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,labels:[...e.querySelectorAll('strong')].map(x=>x.textContent)}; })()`,
+    );
+    check(
+      receipt,
+      "external-menu-bounded",
+      receipt.externalMenu.x >= 0 &&
+        receipt.externalMenu.y >= 0 &&
+        receipt.externalMenu.right <= options.width &&
+        receipt.externalMenu.bottom <= options.height,
+    );
+    await capture("external-open-menu");
+    await key("Escape", "Escape", 27);
+    await delay(250);
+    check(
+      receipt,
+      "external-menu-escape-restores-focus",
+      await evaluate(
+        `document.activeElement?.getAttribute('aria-label')===${JSON.stringify(externalLabel)}`,
+      ),
+    );
+    await key("ArrowDown", "ArrowDown", 40);
+    await delay(200);
+    await clickMenu(
+      options.lang === "en"
+        ? "Open in default application"
+        : "使用默认应用打开",
+    );
+    await clickSelector(externalSelector);
+    await clickMenu(
+      options.lang === "en"
+        ? "Choose application for Custom application…"
+        : "选择 自定义应用 应用…",
+    );
+    await clickSelector(externalSelector);
+    await capture("external-custom-configured");
+    await clickMenu(
+      options.lang === "en"
+        ? "Open with Custom application"
+        : "使用 自定义应用 打开",
+    );
+    receipt.externalCalls = await evaluate(
+      "window.__fileSidebarPreview.externalCalls",
+    );
+    check(
+      receipt,
+      "external-default-and-custom-use-exact-local-file",
+      receipt.externalCalls.filter((c) => c.operation === "synthetic-open")
+        .length === 2 &&
+        receipt.externalCalls
+          .filter((c) => c.operation === "synthetic-open")
+          .every(
+            (c) =>
+              c.host === "local" &&
+              c.threadId === "synthetic-file-sidebar-thread" &&
+              c.path === "src/long-source.ts",
+          ) &&
+        receipt.externalCalls.some(
+          (c) =>
+            c.operation === "synthetic-open" && c.application === "default",
+        ) &&
+        receipt.externalCalls.some(
+          (c) => c.operation === "synthetic-open" && c.application === "custom",
+        ),
+    );
+    check(
+      receipt,
+      "custom-application-picker-is-simulated",
+      receipt.externalCalls.some(
+        (c) => c.operation === "synthetic-picker" && c.id === "custom",
+      ),
+    );
+    await evaluate(
+      "window.__fileSidebarPreview.externalState.rejectRemote=true",
+    );
+    await clickSelector(externalSelector);
+    await clickMenu(
+      options.lang === "en"
+        ? "Open in default application"
+        : "使用默认应用打开",
+    );
+    check(
+      receipt,
+      "unsupported-remote-error-is-visible-without-fallback",
+      await evaluate(
+        `document.querySelector(${JSON.stringify(fileSelector)})?.textContent.includes('No local fallback was attempted.') && window.__fileSidebarPreview.externalCalls.filter(c=>c.operation==='synthetic-open').length===2`,
+      ),
+    );
+    await capture("external-unsupported-remote-error");
     receipt.status = receipt.checks.every((check) => check.status === "passed")
       ? receipt.visualFontSupport
         ? "passed"
