@@ -26,6 +26,15 @@
   outline: none;
 }
 
+/* The rounded Composer already owns focus presentation, like its textarea.
+   Match CodeMirror's focused state explicitly so its injected base theme and
+   the editable element's native focus outline cannot add a second rectangle.
+   Queue editors and reference buttons keep their own focus indicators. */
+.composer > .inline-composer-editor .cm-editor.cm-focused,
+.composer > .inline-composer-editor .cm-content:focus {
+  outline: none;
+}
+
 .inline-composer-editor .cm-scroller {
   overflow-y: auto;
   scrollbar-width: thin;
