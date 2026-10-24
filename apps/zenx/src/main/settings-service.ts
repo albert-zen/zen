@@ -1,4 +1,8 @@
 import {
+  normalizeExternalApplications,
+  type ExternalApplicationId,
+} from "./workspace-external-open.js";
+import {
   readSubscriptionUsage,
   SubscriptionQuotaError,
   type SubscriptionUsage,
@@ -1521,6 +1525,24 @@ export class ZenXSettingsService {
         },
         this.#projectPlatform,
       );
+      await this.#persistProfile(next);
+      this.#profile = next;
+    });
+  }
+
+  async setExternalApplication(
+    id: ExternalApplicationId,
+    application: string | undefined,
+  ): Promise<void> {
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const applications = { ...current.externalApplications };
+      if (application === undefined) delete applications[id];
+      else applications[id] = application;
+      const next = validateHostProfile({
+        ...current,
+        externalApplications: normalizeExternalApplications(applications),
+      });
       await this.#persistProfile(next);
       this.#profile = next;
     });

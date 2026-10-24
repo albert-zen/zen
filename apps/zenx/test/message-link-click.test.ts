@@ -35,6 +35,7 @@ test("keyboard-activated message links request the right panel; unavailable file
   const files: string[] = [];
   (dom.window as any).zenx = {
     workspaceFiles: {
+      applications: async () => ({ platform: "linux", applications: {} }),
       read: async (_thread: string, path: string) => {
         files.push(path);
         throw new Error("ENOENT: file unavailable");
@@ -386,7 +387,10 @@ for (const kind of ["browser", "file"] as const) {
           onFocusAddress: () => () => {},
           mount: async () => ({}),
         },
-        workspaceFiles: { read: async () => gate.promise },
+        workspaceFiles: {
+          applications: async () => ({ platform: "linux", applications: {} }),
+          read: async () => gate.promise,
+        },
       };
       function Harness() {
         const [request, setRequest] = useState<any>(null);

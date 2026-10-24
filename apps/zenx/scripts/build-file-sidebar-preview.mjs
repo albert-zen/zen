@@ -49,6 +49,8 @@ await writeFile(
 const sources = [
   "src/renderer/src/auxiliary-panel.tsx",
   "src/renderer/src/workspace-files-panel.tsx",
+  "src/renderer/src/workspace-external-open.tsx",
+  "src/renderer/src/ui/controls.tsx",
   "src/renderer/src/workspace-file-picker.tsx",
   "src/renderer/src/workspace-file-explorer.tsx",
   "src/renderer/src/workspace-file-drafts.ts",
@@ -71,7 +73,7 @@ await writeFile(
         encoding: "utf8",
       }).trim(),
       scope:
-        "Actual AuxiliaryPanel, WorkspaceFilesPanel, WorkspaceFileExplorer, SourceEditor and InlineMarkdownEditor with production styles. Synthetic source and Markdown files, memory-only drafts and a scoped fake file API; no Host, private files or profile. Browser CDP keyboard/pointer input, not native Electron or physical OS acceptance.",
+        "Actual AuxiliaryPanel, WorkspaceFilesPanel, WorkspaceFileExplorer, SourceEditor and InlineMarkdownEditor with production styles. Synthetic source and Markdown files, memory-only drafts and a scoped fake file API; no Host, private files or profile. Application catalog, picker results, external-open receipts and unsupported-remote error are simulated; no native picker or application is launched. Browser CDP keyboard/pointer input, not native Electron or physical OS acceptance.",
       sources: Object.fromEntries(
         await Promise.all(
           sources.map(async (source) => [
@@ -103,7 +105,7 @@ private profile or user data. The file surface has no fixture CSS overrides.
 Acceptance checks actual wheel and keyboard scrolling, horizontal source scroll,
 bounded viewport and non-scrolling ancestors, reaching each file's end, reading
 position across tab switches and tree toggles, breadcrumb-row toggle placement,
-and shared tree scope across file versus non-file tabs. Screenshots are browser
+and shared tree scope across file versus non-file tabs. External-open menu checks cover labels, viewport bounds, keyboard focus, mock default/custom dispatch, simulated application picking and an unsupported-remote error with no fallback. Screenshots are browser
 renderings, not a live Electron app or physical OS input acceptance.
 See measurements.json for assertions and source.json for commit/source hashes.
 CI uses existing Chrome and fonts-noto-cjk; the browser sandbox stays enabled.
