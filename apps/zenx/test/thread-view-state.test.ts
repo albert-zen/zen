@@ -861,7 +861,7 @@ test("native recovery preserves the immediate fork source and copy creation time
   assert.equal(original.createdAt, 10);
 });
 
-test("throughput uses identical canonical millisecond windows during recovery and live completion", async () => {
+test("elapsed Turn time uses identical canonical millisecond windows during recovery and live completion", async () => {
   const { nativeRecoveryForThread } =
     await import("./native-recovery-fixture.js");
   const recovery = nativeRecoveryForThread(
@@ -900,7 +900,7 @@ test("throughput uses identical canonical millisecond windows during recovery an
   assert.equal(
     live.turns[0]?.durationMs,
     250,
-    "receipt wall clock never changes throughput",
+    "receipt wall clock never changes elapsed Turn time",
   );
   const missing = applyNativeThreadEvent(
     thread([turn("turn-1", "inProgress")]),

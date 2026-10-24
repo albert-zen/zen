@@ -1919,10 +1919,6 @@ function ThreadViewContent({
               <ContextUsageIndicator
                 context={threadUsage?.context}
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
-                threadOutputRate={threadOutputRatePerSecond(
-                  thread ?? null,
-                  threadUsage,
-                )}
                 compactDisabled={
                   composerDisabled || runningTurn !== null || submitting
                 }
@@ -2973,66 +2969,14 @@ export function threadCacheUsageLabel(
       });
 }
 
-function outputWindowSeconds(turn: Turn): number | null {
-  const ms = turn.durationMs;
-  return turn.status === "completed" &&
-    ms !== null &&
-    Number.isFinite(ms) &&
-    ms > 0
-    ? ms / 1_000
-    : null;
-}
-
-/** Output tokens per second for one Turn. Unknown without usage telemetry or
- * a positive completed window; the UI never guesses from model names. */
-export function turnOutputRatePerSecond(
-  usage: ModelUsageAggregate | undefined,
-  turn: Turn,
-): number | null {
-  const seconds = outputWindowSeconds(turn);
-  if (usage === undefined || seconds === null) return null;
-  return usage.outputTokens > 0 ? usage.outputTokens / seconds : null;
-}
-
-/** Session rate over completed Turns with matched usage and known duration.
- * Idle gaps between Turns are excluded; tool/wait time within a Turn remains
- * part of its observed execution duration. */
-export function threadOutputRatePerSecond(
-  thread: Thread | null,
-  usage: ModelUsageProjection | undefined,
-): number | null {
-  if (thread === null || usage === undefined) return null;
-  let tokens = 0;
-  let seconds = 0;
-  for (const turn of thread.turns) {
-    const window = outputWindowSeconds(turn);
-    const turnUsage = usage.turns[turn.id];
-    if (window === null || turnUsage === undefined) continue;
-    tokens += turnUsage.outputTokens;
-    seconds += window;
-  }
-  if (tokens <= 0 || seconds <= 0) return null;
-  return tokens / seconds;
-}
-
-export function outputRateLabel(rate: number | null): string {
-  if (rate === null) return i18n.t("shell:outputRateUnknown");
-  const formatted = rate >= 10 ? String(Math.round(rate)) : rate.toFixed(1);
-  return i18n.t("shell:outputRate", { rate: formatted });
-}
-
 export function ContextUsageIndicator({
   context,
   threadCacheHitRate,
-  threadOutputRate,
   compactDisabled = false,
   onCompact,
 }: {
   context?: ModelContextUsageProjection;
   threadCacheHitRate?: number;
-  /** Session output rate in tokens/s; `null` renders Unknown. Omitted for
-   * Threads without usage data, where the line would always be noise. */
-  threadOutputRate?: number | null;
   compactDisabled?: boolean;
   onCompact?(): Promise<void>;
 }) {
@@ -3166,9 +3110,6 @@ export function ContextUsageIndicator({
   const tooltip = [
     contextLabel,
     threadCacheUsageLabel(threadCacheHitRate),
-    ...(threadOutputRate === undefined
-      ? []
-      : [outputRateLabel(threadOutputRate)]),
   ].join("\n");
   const radius = 7;
   return (
@@ -3242,9 +3183,6 @@ export function ContextUsageIndicator({
             </div>
             <p>{tokenUsage}</p>
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
-            {threadOutputRate === undefined ? null : (
-              <p>{outputRateLabel(threadOutputRate)}</p>
-            )}
             <button
               className="context-usage-compact"
               type="button"
@@ -4078,9 +4016,7 @@ function MessageActions({
       {usage === undefined ? null : (
         <span
           className="message-cache"
-          title={`${i18n.t("shell:turnCacheTelemetry")} · ${outputRateLabel(
-            turnOutputRatePerSecond(usage, turn),
-          )}`}
+          title={i18n.t("shell:turnCacheTelemetry")}
         >
           {usageLabel(usage, i18n.t("shell:cache"))}
         </span>
