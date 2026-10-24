@@ -262,15 +262,36 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    const navigate = async () => {
-      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme })}`;
+    const navigate = async (initialFailure = false) => {
+      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0" })}`;
       await send("Page.navigate", { url: destination });
       await waitFor(
-        `location.href===${JSON.stringify(destination)} && document.querySelectorAll('.provider-profile-card').length===4`,
+        `location.href===${JSON.stringify(destination)} && ${initialFailure ? "!!document.querySelector('.page-loading [role=alert]')" : "document.querySelectorAll('.provider-profile-card').length===4"}`,
       );
       await evaluate("document.fonts.ready");
     };
-    await navigate();
+    await navigate(true);
+    assert.equal(
+      await evaluate("!!document.querySelector('.loading-ring')"),
+      false,
+      "Settled failure stops loading",
+    );
+    await capture("00-initial-load-failure");
+    await clickSelector(".page-loading button");
+    await waitFor(
+      "document.querySelectorAll('.provider-profile-card').length===4",
+    );
+    assert.equal(
+      await evaluate(
+        "window.__settingsAudit.calls.filter(x=>x==='settings-get').length",
+      ),
+      2,
+      "One explicit retry, no loop",
+    );
+    await waitFor(
+      `document.querySelector('.settings-view')?.textContent.includes(${JSON.stringify(options.lang === "zh-CN" ? "模型与服务商" : "Models & providers")})`,
+    );
+    await capture("00b-explicit-retry-success");
     await capture("01-models-overview");
     await clickSelector(".provider-profile-actions button:first-child", 3);
     await waitFor(

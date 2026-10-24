@@ -246,6 +246,123 @@ const multiProviderSettings: PublicHostSettings = {
   apiKeyProviderProfileIds: ["profile-alpha", "profile-beta"],
 };
 
+test("Initial settings failure stops loading and retries only on explicit request", async () => {
+  let calls = 0;
+  let resolveRetry: ((value: PublicHostSettings) => void) | undefined;
+  const retry = new Promise<PublicHostSettings>((resolve) => {
+    resolveRetry = resolve;
+  });
+  const harness = await mountSettings("models", {
+    get: async () => {
+      calls++;
+      if (calls === 1) throw new Error("Synthetic settings unavailable");
+      return retry;
+    },
+  });
+  try {
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Synthetic settings unavailable/,
+    );
+    assert.ok(
+      document.querySelector(".loading-ring") === null,
+      "Settled failure must not show a loading ring",
+    );
+    assert.equal(calls, 1);
+    await act(async () =>
+      exactButtonRequired("Retry loading settings").click(),
+    );
+    assert.equal(calls, 2);
+    assert.ok(
+      document.querySelector('[role="alert"]') === null,
+      "Retry must clear the old error",
+    );
+    assert.ok(document.querySelector(".loading-ring"));
+    assert.ok(
+      exactButton("Retry loading settings") === undefined,
+      "Pending retry must not offer a second retry action",
+    );
+    await act(async () => {
+      resolveRetry?.(settings);
+      await retry;
+    });
+    assert.ok(
+      document.querySelector(".page-loading") === null,
+      "Successful loading must reveal settings",
+    );
+    assert.equal(calls, 2);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Failed settings retry remains actionable without an automatic retry loop", async () => {
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    get: async () => {
+      calls++;
+      throw new Error(`Synthetic failure ${calls}`);
+    },
+  });
+  try {
+    await act(async () =>
+      exactButtonRequired("Retry loading settings").click(),
+    );
+    assert.equal(calls, 2);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Synthetic failure 2/,
+    );
+    assert.ok(exactButton("Retry loading settings"));
+    assert.ok(
+      document.querySelector(".loading-ring") === null,
+      "Settled failure must not show a loading ring",
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Settings retry ignores a response after its active scope is left", async () => {
+  let calls = 0;
+  let resolveRetry: ((value: PublicHostSettings) => void) | undefined;
+  const retry = new Promise<PublicHostSettings>((resolve) => {
+    resolveRetry = resolve;
+  });
+  const harness = await mountSettings("models", {
+    get: async () => {
+      calls++;
+      if (calls === 1) throw new Error("Synthetic failure");
+      return retry;
+    },
+  });
+  try {
+    await act(async () =>
+      exactButtonRequired("Retry loading settings").click(),
+    );
+    await act(async () =>
+      exactButtonRequired("Toggle settings visibility").click(),
+    );
+    await act(async () => {
+      resolveRetry?.(settings);
+      await retry;
+    });
+    assert.ok(document.querySelector(".page-loading"));
+    assert.equal(document.querySelectorAll(".provider-profile-card").length, 0);
+    assert.equal(calls, 2);
+    await act(async () =>
+      exactButtonRequired("Toggle settings visibility").click(),
+    );
+    assert.ok(
+      document.querySelector(".page-loading") === null,
+      "Successful loading must reveal settings",
+    );
+    assert.equal(calls, 3);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Browser setup focus waits for settings to finish loading", async () => {
   let finishLoading: ((value: PublicHostSettings) => void) | undefined;
   const pendingSettings = new Promise<PublicHostSettings>((resolve) => {

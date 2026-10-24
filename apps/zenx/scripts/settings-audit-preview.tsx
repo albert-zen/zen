@@ -10,6 +10,7 @@ import type {
   ZenXModelCatalogEntry,
 } from "../src/main/host-profile.js";
 import { i18n } from "../src/renderer/src/i18n.js";
+import { getLanguageController } from "../src/renderer/src/language.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 const query = new URLSearchParams(location.search);
@@ -69,6 +70,7 @@ const settings: PublicHostSettings = {
   subscription: { authenticated: false, expired: false },
 };
 const calls: string[] = [];
+let initialFailure = query.get("initialFailure") === "1";
 const unavailable = async () => {
   throw new Error(
     "Audit fixture has no Host, credentials, or mutation access.",
@@ -78,7 +80,16 @@ Object.assign(window, {
   zenx: {
     platform: "linux",
     settings: {
-      get: async () => structuredClone(settings),
+      get: async () => {
+        calls.push("settings-get");
+        if (initialFailure) {
+          initialFailure = false;
+          throw new Error(
+            "Synthetic settings load failure. No Host request was made.",
+          );
+        }
+        return structuredClone(settings);
+      },
       onManualCodeRequested: () => () => undefined,
       recordDiagnostic: async () => {
         calls.push("validation-diagnostic");
@@ -116,6 +127,9 @@ function Preview() {
     />
   );
 }
+// Receive a fixture-only preference without writing storage. This initializes
+// the same controller used by the mounted LanguageSettings component.
+getLanguageController().receivePreference(language);
 void i18n.changeLanguage(language).then(() => {
   createRoot(document.getElementById("root")!).render(<Preview />);
 });

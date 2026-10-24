@@ -53,6 +53,8 @@ const sources = [
   "src/renderer/src/styles.css",
   "src/renderer/src/theme.css",
   "src/renderer/src/i18n/settings.ts",
+  "src/renderer/src/language.ts",
+  "src/renderer/src/language-preference.ts",
   "scripts/settings-audit-preview.tsx",
   "scripts/build-settings-audit-preview.mjs",
   "scripts/capture-settings-audit-preview.mjs",
