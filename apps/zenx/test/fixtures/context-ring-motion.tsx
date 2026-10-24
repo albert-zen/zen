@@ -67,7 +67,6 @@ function Fixture() {
                 ratio: (pressure ? 587500 : 51300) / 272000,
               }}
               threadCacheHitRate={0.93}
-              threadOutputRate={42}
               onCompact={async () => setAction("Compact clicked")}
             />
             <span>Context</span>
