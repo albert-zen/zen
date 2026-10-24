@@ -107,6 +107,20 @@ jobs:
           path: ${{ runner.temp }}/zenx-whats-new-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Build and capture file sidebar actual-component preview
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-sidebar-preview"
+          node apps/zenx/scripts/capture-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-sidebar-preview"
+      - name: Retain file sidebar synthetic UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-file-sidebar-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-file-sidebar-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check ZenX with bounded execution-order evidence
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         env:

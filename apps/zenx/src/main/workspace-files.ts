@@ -146,10 +146,15 @@ export async function searchWorkspaceFiles(
         let directory = cwd;
         for (const part of parts) {
           directory = path.join(directory, part);
-          if ((await lstat(directory)).isSymbolicLink())
+          const entry = await lstat(directory);
+          if (entry.isSymbolicLink())
             throw new Error(
               "Symbolic link directories are excluded from search",
             );
+          if (!entry.isDirectory())
+            throw Object.assign(new Error("Search parent is not a directory"), {
+              code: "ENOTDIR",
+            });
         }
         const target = await resolveWorkspacePath(cwd, parent);
         priority.push({
@@ -158,7 +163,11 @@ export async function searchWorkspaceFiles(
           priority: true,
         });
       } catch (error) {
-        warn(parent, error);
+        // A query is a case-insensitive substring, not necessarily a literal
+        // directory. Missing partial/case-varied parents simply use the walk;
+        // genuine access and symlink failures still make discovery incomplete.
+        const code = (error as NodeJS.ErrnoException)?.code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") warn(parent, error);
       }
     }
   }
@@ -185,10 +194,11 @@ export async function searchWorkspaceFiles(
           openIterators.set(current.iterator, current.relative);
         }
         // Every entry, including OS debris, costs scan budget. Yield after one
-        // bounded slice so a huge ordinary directory cannot starve its siblings;
-        // hidden subtrees wait behind ordinary work unless explicitly requested.
+        // small slice so even several large directories cannot spend the entire
+        // scan budget before later siblings are visited. This does not increase
+        // the total work budget; hidden subtrees still follow ordinary work.
         let exhausted = false;
-        for (let slice = 0; slice < 1024; slice++) {
+        for (let slice = 0; slice < 64; slice++) {
           if (result.scanned >= 10_000 || performance.now() >= deadline) {
             result.truncated = true;
             break;
