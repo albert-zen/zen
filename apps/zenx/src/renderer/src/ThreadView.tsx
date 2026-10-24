@@ -3368,7 +3368,9 @@ function TraceSequence({
   );
   const busy =
     turn.status === "inProgress" &&
-    (activity.phase === "running" || activity.phase === "thinking");
+    (activity.phase === "running" ||
+      activity.phase === "waiting" ||
+      activity.phase === "thinking");
   const previewItem = busy
     ? (activity.current ??
       (node.kind === "traceGroup" ? node.items : [node.item]).findLast(
@@ -3622,7 +3624,9 @@ function TraceItemHeader({
     !approvalPending &&
     (item.type === "reasoning"
       ? item.status === "inProgress"
-      : observedCommandPhase(item, observations) === "running");
+      : ["running", "waiting"].includes(
+          observedCommandPhase(item, observations),
+        ));
   const preview = active ? traceActivityPreview(item) : undefined;
   return (
     <>

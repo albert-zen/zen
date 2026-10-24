@@ -304,7 +304,8 @@ export function createTraceObservationIndex(
     )
       continue;
     tasks.set(task.id, {
-      itemId: item.id,
+      // Keep activity on the task's originating call, not a returned observer.
+      itemId: item.toolName === "wait" ? (prior?.itemId ?? item.id) : item.id,
       phase: task.phase,
     });
   }
@@ -316,7 +317,12 @@ export function observedCommandPhase(
 ): CommandPhase {
   const phase = commandPhase(item);
   const task = commandTask(item);
-  if (task === null || isTerminalCommandPhase(phase)) return phase;
+  if (
+    item.toolName === "wait" ||
+    task === null ||
+    isTerminalCommandPhase(phase)
+  )
+    return phase;
   return observations.tasks.get(task.id)?.phase ?? phase;
 }
 export function observedCommandStatus(
@@ -377,10 +383,13 @@ export function summarizeTraceActivity(
     result.total += 1;
     const category = toolPresentation(item.toolName ?? item.command).category;
     categories.set(category, (categories.get(category) ?? 0) + 1);
-    const phase = commandPhase(item);
+    const phase = observedCommandPhase(item, observations);
     if (phase === "cancelled" || phase === "declined") result.cancelled += 1;
     const task = commandTask(item);
-    const observed = task === null ? null : observations.tasks.get(task.id);
+    const observed =
+      task === null || item.toolName === "wait"
+        ? null
+        : observations.tasks.get(task.id);
     if (
       isTerminalCommandPhase(phase) ||
       (observed &&
@@ -389,7 +398,7 @@ export function summarizeTraceActivity(
       continue;
     active.push({ item, phase });
     result.active += 1;
-    if (task !== null) result.outstanding += 1;
+    if (task !== null && item.toolName !== "wait") result.outstanding += 1;
     if (phase === "running") result.running += 1;
     if (phase === "waiting") result.waiting += 1;
     if (phase === "cancellation_unconfirmed") result.unconfirmed += 1;

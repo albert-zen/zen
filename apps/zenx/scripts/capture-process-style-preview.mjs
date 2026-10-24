@@ -11,6 +11,13 @@ const previewScenes = [
   "command-short",
 ];
 const matrix = [
+  ...["light", "dark"].map((theme) => ({
+    scene: "wait-lifecycle",
+    theme,
+    width: 1280,
+    height: 900,
+    lang: "en",
+  })),
   ...previewScenes.flatMap((scene) =>
     [
       { theme: "light", width: 1280, lang: "zh-CN" },
@@ -247,6 +254,40 @@ await withPreviewBrowser(
         /总耗时|Total elapsed|等待中|Waiting/u,
       );
       const details = {};
+      if (entry.scene === "wait-lifecycle") {
+        const rows = await evaluate(
+          `([...document.querySelectorAll('.trace-singleton, .trace-group')].map(row => ({ text: row.textContent, active: row.querySelector('.activity-text')?.dataset.active, sweep: !!row.querySelector('.activity-sweep') })))`,
+        );
+        assert.equal(
+          rows.length,
+          3,
+          "Three assistant-separated lifecycle rows",
+        );
+        assert.equal(rows[0].active, "true", "Origin shell remains active");
+        assert.equal(rows[1].active, "false", "Returned wait is settled");
+        assert.equal(rows[1].sweep, false, "Returned wait has no sweep");
+        assert.match(rows[1].text, /Waited/u);
+        assert.doesNotMatch(rows[1].text, /Waiting/u);
+        assert.equal(rows[2].active, "true", "Pending wait remains active");
+        assert.equal(rows[2].sweep, true, "Pending wait has sweep");
+        assert.match(rows[2].text, /Waiting/u);
+        assertSweep(before.activities[0], entry, `${name} origin shell`);
+        assertSweep(before.activities[1], entry, `${name} pending wait`);
+        await animationTime(300);
+        const start = await crop(before.activities[1].rect);
+        await screenshot(`${name}-sweep-start.png`);
+        await animationTime(800);
+        const pixels = await pixelDifference(
+          start,
+          await crop(before.activities[1].rect),
+        );
+        assert.ok(
+          pixels.changedPixels >= 4 && pixels.maxChannelDelta >= 10,
+          "Pending wait pixels visibly sweep",
+        );
+        details.waitLifecycle = { rows, pendingWaitPixels: pixels };
+      }
+
       if (previewScenes.includes(entry.scene)) {
         const samples = await evaluate("window.__processStylePreview.samples");
         const reasoning = entry.scene.startsWith("thinking");

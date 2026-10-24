@@ -32,6 +32,7 @@ export const scenes = [
   "command-long",
   "command-short",
   "waiting",
+  "wait-lifecycle",
   "running",
   "parallel",
   "approval",
@@ -81,7 +82,50 @@ function scenario(scene: Scene): Thread {
   const base = [...intro, prior];
   let thread: Thread;
   if (scene === "recovery") return recoveryScenario("recovering");
-  if (scene.startsWith("thinking"))
+  if (scene === "wait-lifecycle") {
+    const shell = {
+      ...runtimeTask("shell-origin", "background", "running"),
+      command: "sleep 60",
+      toolArguments: { command: "sleep 60" },
+    };
+    const returned = {
+      ...runtimeWait("returned-wait", "background"),
+      durationMs: 1000,
+    };
+    const pending = {
+      ...runtimeWait("pending-wait", "background"),
+      status: "inProgress" as const,
+      contentType: undefined,
+      structuredContent: undefined,
+      aggregatedOutput: "",
+      exitCode: null,
+    };
+    thread = runtimeThread([
+      {
+        type: "userMessage",
+        id: "user",
+        clientId: null,
+        content: [
+          {
+            type: "text",
+            text: "Verify returned wait versus pending wait activity (synthetic).",
+            text_elements: [],
+          },
+        ],
+      },
+      shell,
+      runtimeMessage(
+        "sep-one",
+        "The shell is still running. I will wait for more output.",
+      ),
+      returned,
+      runtimeMessage(
+        "sep-two",
+        "That wait returned successfully while the task was still running. I will wait again.",
+      ),
+      pending,
+    ]);
+  } else if (scene.startsWith("thinking"))
     thread = runtimeThread([
       ...base,
       {
@@ -117,7 +161,10 @@ function scenario(scene: Scene): Thread {
       },
     ]);
   else if (scene === "waiting")
-    thread = runtimeThread([...base, runtimeWait("wait", "task-one")]);
+    thread = runtimeThread([
+      ...base,
+      { ...runtimeWait("wait", "task-one"), status: "inProgress" },
+    ]);
   else if (scene === "running")
     thread = runtimeThread([
       ...base,

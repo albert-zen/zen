@@ -29,7 +29,10 @@ for (const theme of ["light", "dark"]) {
       for (const [phase, item] of [
         ["running", runtimeTask("running", "task-one", "running")],
         ["thinking", thinking],
-        ["waiting", runtimeWait("waiting", "task-one")],
+        [
+          "waiting",
+          { ...runtimeWait("waiting", "task-one"), status: "inProgress" },
+        ],
         ["requested", runtimeCommand("requested", "echo ready", "inProgress")],
       ] as const) {
         await h.render(runtimeThread([item]));
@@ -103,7 +106,7 @@ test("completing the same turn leaves metadata above history and preserves focus
     assert.equal(document.activeElement, tool);
   });
 });
-test("active group and singleton icons sweep with text while waits and completion stay static", async () => {
+test("active group and singleton icons sweep with text while returned waits and completion stay static", async () => {
   await withRuntimeDom(async (h) => {
     for (const grouped of [false, true]) {
       const base = grouped ? [runtimeCommand("previous")] : [];

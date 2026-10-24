@@ -10,6 +10,7 @@ import {
   summarizeTraceActivity,
   createTraceObservationIndex,
   observedCommandStatus,
+  observedCommandPhase,
 } from "../src/renderer/src/turn-projection.js";
 
 test("adjacent reasoning without public details has one honest row, not one per item", () => {
@@ -97,13 +98,13 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
     structuredContent: { task_id: "test-task", status: "running" },
   };
   const cases = [
-    [wait, "Waiting for task"],
+    [wait, "Waited for task"],
     [
       {
         ...wait,
         structuredContent: { task_id: "test-task", status: "timed_out" },
       },
-      "Wait · timed out",
+      "Waited for task",
     ],
     [
       {
@@ -457,4 +458,59 @@ test("observed settlement preserves cancellation and timeout facts and cannot re
   const index = createTraceObservationIndex([early, final, lateRunning]);
   assert.equal(observedCommandStatus(early, index), "Ended");
   assert.equal(observedCommandStatus(lateRunning, index), "Ended");
+});
+
+test("returned waits keep their own lifecycle while observations update the background task", () => {
+  const shell = {
+    ...command("shell", "sleep 60"),
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: { task_id: "background", status: "running" },
+  };
+  const wait = { ...shell, id: "wait-1", toolName: "wait" };
+  const nextWait = {
+    ...wait,
+    id: "wait-2",
+    status: "inProgress" as const,
+    contentType: undefined,
+    structuredContent: undefined,
+  };
+  const other = {
+    ...shell,
+    id: "other",
+    structuredContent: { task_id: "other", status: "running" },
+  };
+  const items = [
+    shell,
+    wait,
+    agent("progress", "Checking again"),
+    other,
+    nextWait,
+  ];
+  const index = createTraceObservationIndex(items);
+  assert.equal(observedCommandPhase(wait, index), "completed");
+  assert.equal(observedCommandStatus(wait, index), "Waited");
+  assert.equal(summarizeTraceActivity([wait], index).active, 0);
+  assert.equal(observedCommandPhase(nextWait, index), "waiting");
+  assert.equal(summarizeTraceActivity([nextWait], index).waiting, 1);
+  assert.equal(observedCommandPhase(shell, index), "running");
+  assert.equal(summarizeTraceActivity([shell], index).running, 1);
+  assert.equal(summarizeTraceActivity([shell, wait], index).active, 1);
+  assert.equal(summarizeTraceActivity([other], index).running, 1);
+  for (const status of ["completed", "failed", "timed_out", "cancelled"]) {
+    const settled = {
+      ...wait,
+      id: "wait-final",
+      structuredContent: { task_id: "background", status },
+    };
+    const updated = createTraceObservationIndex([...items, settled]);
+    assert.equal(observedCommandPhase(wait, updated), "completed");
+    assert.equal(observedCommandPhase(nextWait, updated), "waiting");
+    assert.equal(observedCommandPhase(shell, updated), status);
+    assert.equal(
+      summarizeTraceActivity([shell, wait, settled], updated).active,
+      0,
+    );
+    assert.equal(summarizeTraceActivity([other], updated).running, 1);
+  }
 });
