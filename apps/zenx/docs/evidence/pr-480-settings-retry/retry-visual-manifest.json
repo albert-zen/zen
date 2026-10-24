@@ -1,0 +1,170 @@
+{
+  "pullRequest": 480,
+  "headSha": "6dc891739c8af09e0534a8c611af599e1b6ed7ad",
+  "runId": 40109937090,
+  "jobId": 120919348190,
+  "artifactId": 12566062945,
+  "mergeRef": "523c0346411ec3379e92fad8823bcfe0a5f454ab",
+  "scope": "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, mutations or persistence. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
+  "review": "Inspected desktop EN dark and narrow ZH light initial-failure and explicit-retry-success screenshots. Retry is reachable/localized and returns loaded Settings. Initial one settings-get becomes exactly two after explicit retry; four synthetic provider cards loaded; no page overflow. This is retry-path evidence, not broad Settings UX approval.",
+  "cases": [
+    {
+      "name": "desktop-en",
+      "states": [
+        {
+          "name": "00-initial-load-failure",
+          "filename": "desktop-en-00-initial-load-failure.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "Synthetic settings load failure. No Host request was made.Retry loading settingsvar W0=it=>{throw TypeError(it)};var Z0=",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {},
+            "providerCards": 0,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "00b-explicit-retry-success",
+          "filename": "desktop-en-00b-explicit-retry-success.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 0,
+              "height": 640,
+              "total": 673
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "narrow-zh",
+      "states": [
+        {
+          "name": "00-initial-load-failure",
+          "filename": "narrow-zh-00-initial-load-failure.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "Synthetic settings load failure. No Host request was made.\u91cd\u8bd5\u52a0\u8f7d\u8bbe\u7f6evar W0=it=>{throw TypeError(it)};var Z0=(it,jn,En)=>jn.h",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {},
+            "providerCards": 0,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "00b-explicit-retry-success",
+          "filename": "narrow-zh-00b-explicit-retry-success.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "\u8bbe\u7f6e\u6309\u4f60\u7684\u4e60\u60ef\u914d\u7f6e ZenX\u8d26\u6237\u6a21\u578b\u4e0e\u670d\u52a1\u5546\u63d2\u4ef6\u5916\u89c2\u901a\u7528\u4e0a\u4e0b\u6587\u538b\u7f29\u6280\u80fd\u5de5\u4f5c\u6d41\u7a0b\u8bbe\u5907\u5df2\u5f52\u6863\u4f1a\u8bdd\u8d26\u6237OpenAI \u8ba2\u9605\u8fde\u63a5\u60a8\u7684ChatGPT \u8ba2\u9605\u4ee5\u4f7f\u7528\u5176\u6a21\u578b\u3002\u672a\u914d\u7f6e\u5173\u8054\u8d26\u53f7\u5728\u6a21\u578b\u548c\u670d\u52a1\u5546\u4e2d\u6dfb\u52a0OpenAI \u8ba2\u9605\u4ee5\u5f00\u59cb\u4f7f\u7528\u3002\u8ba2\u9605\u4f7f\u7528\u60c5\u51b5\u67e5\u770b\u5f53\u524d",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 0,
+              "height": 523,
+              "total": 1200
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "sources": {
+    "src/renderer/src/SettingsView.tsx": "3ae2d331a39814c3b1a70a39b222262f1bd3991ab48c6d605246ef2a50a35291",
+    "src/renderer/src/ProviderModelAdmissionControls.tsx": "2eb524fa520bfe2b1c8d4d31082673db1e5f362b6ba6ec99efee892ac53754c3",
+    "src/renderer/src/ui/controls.tsx": "00fe25d78afb1ad6e377bad937e6ce496f3a063a25ec98d774897a479df1addb",
+    "src/renderer/src/styles.css": "ebd0eed1ad33fb17d85abc16d5492894889b8930eba67a19960de37ccfc804f1",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "src/renderer/src/i18n/settings.ts": "cba41b5f754aa811d1c8c4a344309e4d540065246c10968277b072c0daf0a099",
+    "src/renderer/src/language.ts": "ba5ec89ac6ca5c6910364bc6ad749e87c115a4cd3a803dfa5686422727e71108",
+    "src/renderer/src/language-preference.ts": "b8a7211e6afefa796e0d3c2d71c4f9b99ec3fad7e0c98f446507bc2a5cd333f4",
+    "scripts/settings-audit-preview.tsx": "56b0dde93e2a8b734ad6646ba1f6b2884379833c799b48e097e334c808faad45",
+    "scripts/build-settings-audit-preview.mjs": "2857f94d93f2657f399f517f6e294c44b7a297fb52c8b34c7c70417b23949de1",
+    "scripts/capture-settings-audit-preview.mjs": "e71a4f2fdc52c948d876ba289fa8e79b3a5b892f54d2a074adc9724b28db560a"
+  },
+  "sha256": {
+    "artifact.zip": "20256146767f3fc8118a769b85f218651f1176b5e2d99313e6e700b248097d71",
+    "capture/measurements.json": "5acd20abb12d7356415f5155f10a5cdaed0cf98ea196ca53d61f8f70c9d63e0f",
+    "capture/source.json": "b7a816fd3a9f21de9ac89757c66edeed6429739a90f99de8d20119b6ccbe8205",
+    "capture/narrow-zh-00-initial-load-failure.png": "354c0f5facd6c990205bfdb40711e82349843510455e1501fd8ca64558ac7920",
+    "capture/desktop-en-00b-explicit-retry-success.png": "87c85a229cd62dbae2f79378f66cf64cbfbe5e8758abfcf30129a23c9a23c764",
+    "capture/narrow-zh-00b-explicit-retry-success.png": "dd2e21b45161022a26f469c809f7ced54b61e4dff8d2a226b1b562593f21e3c6",
+    "capture/desktop-en-00-initial-load-failure.png": "3fa98552b8651a1c0315f7d0e80535238526a17394ac453e84ffffed4e4274e5"
+  }
+}
