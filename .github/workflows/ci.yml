@@ -107,6 +107,20 @@ jobs:
           path: ${{ runner.temp }}/zenx-whats-new-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Capture read-only Settings audit evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-settings-audit-preview.mjs "${{ runner.temp }}/zenx-settings-audit"
+          node apps/zenx/scripts/capture-settings-audit-preview.mjs "${{ runner.temp }}/zenx-settings-audit"
+      - name: Retain Settings audit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-settings-audit-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-settings-audit
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check ZenX with bounded execution-order evidence
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         env:
