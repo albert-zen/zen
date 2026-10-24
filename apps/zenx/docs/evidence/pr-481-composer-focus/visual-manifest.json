@@ -1,0 +1,257 @@
+{
+  "pullRequest": 481,
+  "headSha": "22fbd9bc3870abfea752d492b7f48c59cc38a2b3",
+  "reviewedHeadTree": "fd0cbaa0a9b02e988a42f2d84524ded929bb54d8",
+  "captureMergeRefSha": "cb7976bb91f26f0d95ea97c6406e58ad17f2ea32",
+  "mergeRefSource": "GitHub artifact name; capture is merge-ref, not standalone head",
+  "runId": 40112020869,
+  "jobId": 120925541709,
+  "artifactId": 12566742574,
+  "captureStatus": "passed",
+  "scope": "Production components with synthetic native-message projection. Browser scenes call no Provider; exact five-reference payload is compared with a separately captured model user message.",
+  "limits": "Synthetic actual-component Chrome fixture. No private user screenshot, real Host/provider, physical touch, native Electron or OS acceptance. Full job status separate from passing capture.",
+  "focusReceipts": 48,
+  "focusCoverage": [
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 1280,
+      "stages": 10
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 1280,
+      "stages": 10
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 420,
+      "stages": 10
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 420,
+      "stages": 10
+    },
+    {
+      "inputMode": "touch",
+      "theme": "light",
+      "width": 420,
+      "stages": 8
+    }
+  ],
+  "computedFocusSummary": "All48 have editable focus; each content/wrapper outline style none or width0; outer border equals expected focus-ring color. Reference-button keyboard focus assertion preserved.",
+  "atomicDeletes": [
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 1280,
+      "height": 1000,
+      "beforeCount": 5,
+      "afterCount": 4,
+      "beforeEditorSelection": {
+        "anchor": 32,
+        "head": 32
+      },
+      "beforeDOMSelection": {
+        "anchor": 32,
+        "head": 32
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 1280,
+      "height": 1000,
+      "beforeCount": 5,
+      "afterCount": 4,
+      "beforeEditorSelection": {
+        "anchor": 32,
+        "head": 32
+      },
+      "beforeDOMSelection": {
+        "anchor": 32,
+        "head": 32
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "beforeCount": 5,
+      "afterCount": 4,
+      "beforeEditorSelection": {
+        "anchor": 32,
+        "head": 32
+      },
+      "beforeDOMSelection": {
+        "anchor": 32,
+        "head": 32
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 420,
+      "height": 900,
+      "beforeCount": 5,
+      "afterCount": 4,
+      "beforeEditorSelection": {
+        "anchor": 32,
+        "head": 32
+      },
+      "beforeDOMSelection": {
+        "anchor": 32,
+        "head": 32
+      }
+    }
+  ],
+  "remountCenterTargets": [
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 1280,
+      "height": 1000,
+      "point": {
+        "x": 772,
+        "y": 887.5
+      },
+      "target": {
+        "tag": "BUTTON",
+        "className": "reference-token-remove"
+      },
+      "control": {
+        "tag": "BUTTON",
+        "className": "reference-token-remove",
+        "role": null,
+        "label": "移除引用 执行子任务审查",
+        "title": null
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 1280,
+      "height": 1000,
+      "point": {
+        "x": 772,
+        "y": 887.5
+      },
+      "target": {
+        "tag": "BUTTON",
+        "className": "reference-token-remove"
+      },
+      "control": {
+        "tag": "BUTTON",
+        "className": "reference-token-remove",
+        "role": null,
+        "label": "移除引用 执行子任务审查",
+        "title": null
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "light",
+      "width": 420,
+      "height": 900,
+      "point": {
+        "x": 205,
+        "y": 767.5
+      },
+      "target": {
+        "tag": "BUTTON",
+        "className": "reference-token-details"
+      },
+      "control": {
+        "tag": "BUTTON",
+        "className": "reference-token-details",
+        "role": null,
+        "label": "引用详情：执行子任务审查",
+        "title": "执行子任务审查"
+      }
+    },
+    {
+      "inputMode": "desktop",
+      "theme": "dark",
+      "width": 420,
+      "height": 900,
+      "point": {
+        "x": 205,
+        "y": 767.5
+      },
+      "target": {
+        "tag": "BUTTON",
+        "className": "reference-token-details"
+      },
+      "control": {
+        "tag": "BUTTON",
+        "className": "reference-token-details",
+        "role": null,
+        "label": "引用详情：执行子任务审查",
+        "title": "执行子任务审查"
+      }
+    }
+  ],
+  "visualInspection": [
+    "quote-desktop-light-1280-draft.png",
+    "quote-desktop-dark-1280-draft.png",
+    "quote-desktop-light-420-empty-refocus.png",
+    "quote-desktop-dark-420-empty-refocus.png",
+    "quote-touch-light-420-draft.png"
+  ],
+  "visualOutcome": "No inner rectangular focus box; single outer composer boundary retained, references and text readable within container.",
+  "diagnosticConclusion": "Prior harness center click hit subagent remove control at1280; this is now directly recorded read-only. New remount focus preserves full five-reference draft before atomic key action.",
+  "sha256": {
+    "capture/quote-desktop-light-420-selection-toolbar.png": "bd73ede818d09c131598ddfd5bc3d212202ca06e5ef39d5918bd985e5991f5f5",
+    "capture/quote-desktop-dark-420-initial-sent.png": "03b5a36eeed66d48c025aa646feec06e21424842cefacdf76d6229f08026b243",
+    "capture/unified-light-1280-draft.png": "dd28a95bf21b2bda28d243400e45ec1972438f8a4fe5d728da98b07527e4340e",
+    "capture/refsLong-desktop-light-420.png": "e82e5f003f058d7cddf7ca7b20afbc615d1baf09300476198d37fa34ecbb84e0",
+    "capture/quote-touch-light-420-sent.png": "762249226aab98e40a4b9684d6f312075f863ee72c07410a1fab9ebfdd2927d6",
+    "capture/quote-touch-light-420-empty-refocus.png": "7a178673ea4f17a436d7b966fe481594e839e9fb61af2a322e235dec2821ad9d",
+    "capture/quote-desktop-light-1280-selection-toolbar.png": "09fa305006267d7ae5865696ad7f9772e0196456ef7fc4ab786bf96e6a6e3ddb",
+    "capture/unified-short-queue-edit-inline.png": "bde0d51a64e8d84eec1526558c57806f1ae6b77abb40528346d607b0570139c6",
+    "capture/unified-short-queue-references.png": "8592ee3514d7d2e3a4f5f86468a2b1b773da93c78a62c06c8f8cda2896973f41",
+    "capture/unified-light-420-draft.png": "1932c4d59c3e91d7e59c259a32d3f6d6d5a60b50fdfae14bbeba4baa9dcc3fe1",
+    "capture/unified-light-1280-model-user-message.png": "52709c9462fac221c00003587f61fe1ed71e60e61023c7f54afb3be664e7cec4",
+    "capture/unified-dark-420-draft.png": "f0fdf4a3128637dbec87fc54f4f74f01150ff9a2a6e6c2a8e2018b7806aa9eec",
+    "capture/refsLong-desktop-dark-420.png": "d1eea84a652dfb4b26017183d3b9710bb6290f0293d73047516193047f91de21",
+    "capture/unified-dark-1280-mention-between.png": "11639fad186ae50b9913e2871b57e3cac8e6119b3010c5c0dbd6c8d2941dfc3c",
+    "capture/quote-desktop-dark-420-draft.png": "634ac5fbd7479e17d428aad6f1f02ef68fe40cb783d35268c09f432e16ea4d7c",
+    "capture/unified-dark-1280-draft.png": "7056d0caba30818e7cd9fd449287c8e409bf0af11299f0bbb316efaf9e8e9a8a",
+    "capture/quote-desktop-light-420-sent.png": "6d0db6abce142f4ea8247a60d6ef0d2ad96bff854edd7daa275fa2886c35a0fd",
+    "capture/quote-desktop-dark-1280-empty-refocus.png": "ef83c757ca50c7940a169a123db8c76318a70ac14f400b6103638397851c4a43",
+    "capture/unified-short-queue-composer.png": "80c3eb8d851c3406eba03e664f227965a8e01ce7dbc82ac6c61e3c868db546e0",
+    "capture/quote-touch-light-420-draft.png": "c610e141e4842f77e4517b4b7b42f0f42766d89d6927510193a2457c363105a0",
+    "capture/quote-desktop-light-1280-initial-sent.png": "3c106ce73d55c72c4c8f7524091a008dbe776c83fc50e35a3375ace74bd843e1",
+    "capture/quote-desktop-light-1280-draft.png": "bf9d55197aa087c6a1c4faca1b82f4c8670acebcfe66505a78d1604cffebe69f",
+    "capture/quote-desktop-dark-420-sent.png": "c184a3bbfa6a64a1366acf77ddc5085c10e837fe8293402db9cc3ec2840626c4",
+    "capture/quote-touch-light-420-selection-toolbar.png": "b14e47658ba26eb6f6bd3a91dbe0deb9e55238365458d6650a9d1ad7f3aa3078",
+    "capture/quote-desktop-dark-1280-selection-toolbar.png": "002f045af505d95ac16f3b2c5ff7133c854d24ebc4f95ffeaef3ce427cb3b6ad",
+    "capture/unified-light-420-mention-between.png": "6670e481fc66210d82eae11551a0fc340a59521f94f0cffe6eef18f966389dad",
+    "capture/quote-desktop-light-420-empty-refocus.png": "b7b940e9970b8ac140e504dc92be1c428d4a6506ada4c591b4e66ba061036442",
+    "capture/quote-touch-light-420-initial-sent.png": "59d34588df115df1e51bfd737791914c37b73c2d0c84f50249e3bbde2b2a1462",
+    "capture/unified-light-420-sent.png": "5cc416952a03978cfe2417780832271a00bee0f8791846f520b3855aec26553a",
+    "capture/unified-dark-1280-model-user-message.png": "9e1021f7fcf48ea858d19bf1e6702927b6530b9f809d135a1e8ccd8d27c89fae",
+    "capture/quote-desktop-dark-420-selection-toolbar.png": "268abd42332b67dda7d5178e2f060ed3e779ff9d27c64658f5b32f6aae30f51e",
+    "capture/quote-desktop-light-420-draft.png": "b565aee4122afbba7589d1a98f1ce347a2167c43b653377f5bea196182ea8e81",
+    "capture/unified-dark-1280-sent.png": "f9cc4adc41f01f1983f6ed9af3fd73b3d7e2c5427f199e25b7f890845967a733",
+    "capture/unified-dark-420-mention-between.png": "6879e38fa951b3dd46cbbb4b9632ef7c55931020dd07dd6ffec85737f5ddb4c8",
+    "capture/quote-desktop-dark-420-empty-refocus.png": "4dfc04a3ae578f4e7952707ef57cbbec598ddaf4b28d74952c105bfd35e2400c",
+    "capture/unified-dark-420-sent.png": "c7543d0465d408180f2e2df2f4cc0cbd9d8dee9ce8db20af4fb712c0137726b0",
+    "capture/refsLong-touch-light-420.png": "3d1c7349ccefe3a5c038cc44032be56e96cf768f03aaf31e5f122bd01f28d414",
+    "capture/unified-light-1280-sent.png": "42237ea76936bdc5e9b4ea6a13309f2f8bdb36bc676f3ecd50a62318c056efbf",
+    "capture/unified-light-1280-mention-between.png": "a55f991b5a5694bc368d738d08d28ed8cd8fcb13a8b1a73d573cbcf9074b8d34",
+    "capture/quote-desktop-light-1280-empty-refocus.png": "37cd25c3e249619be77014fbbe6d5b3c1fe41fcfd719c7979cde968139472cef",
+    "capture/quote-desktop-light-420-initial-sent.png": "c29b97823be55396b7d15d9533c6d882cdac560876315a2335f61f619db8ab4d",
+    "capture/quote-desktop-light-1280-sent.png": "f298a28483e1c4642c0df03a2ec255d4b80db87f3947e10bcde451294f8df757",
+    "capture/quote-desktop-dark-1280-initial-sent.png": "d9337a91d7983b615f3f7d8ed956420dd239fd80703ff99c4bb6474d22b665d0",
+    "capture/quote-desktop-dark-1280-sent.png": "11f23a7c02b170e6672d9722c8122d512942bdb962f55e9249422b0c6f650745",
+    "capture/quote-desktop-dark-1280-draft.png": "37ddf8e05c2ec077fad13deb5f3835b91d243f29bf5e8d2f43c2d5bc5c5700cf",
+    "capture/measurements.json": "e28547d8163fcb60bf9763d5fd22551a60acbcb12b64a40482618693a5535d50",
+    "artifact.zip": "34d72dc012311ecc3eb0cc8590f33884ea106cd5013429c8e484c76d842b08c9"
+  }
+}
