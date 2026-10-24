@@ -1445,7 +1445,10 @@ async function mountApp(options: MountOptions) {
     detachEvent: { value: () => undefined },
   });
   const zenx = {
-    workspaceFiles: { read: options.readFile },
+    workspaceFiles: {
+      applications: async () => ({ platform: "linux", applications: {} }),
+      read: options.readFile,
+    },
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
     protocol: {

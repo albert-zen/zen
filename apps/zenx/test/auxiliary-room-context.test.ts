@@ -131,6 +131,7 @@ async function mount(
       },
     },
     workspaceFiles: {
+      applications: async () => ({ platform: "linux", applications: {} }),
       list: async (threadId: string) => {
         calls.push({ id: "file-list", threadId });
         return { path: ".", entries: [], truncated: false };

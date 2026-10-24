@@ -162,6 +162,7 @@ for (const existingInstructions of [false, true]) {
       const fileReads: Array<[string, string]> = [];
       Object.assign(window.zenx, {
         workspaceFiles: {
+          applications: async () => ({ platform: "linux", applications: {} }),
           read: async (threadId: string, relative: string) => {
             fileReads.push([threadId, relative]);
             if (existingInstructions)
