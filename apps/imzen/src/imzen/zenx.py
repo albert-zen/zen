@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from .channel_status import report_channel_status
 from .config import Settings
 from .main import prepare_gateway, resolve_channels
 from .migration import GatewayStateMigrationError
@@ -118,6 +119,16 @@ async def run() -> None:
         tasks.append(asyncio.create_task(host.read_responses(), name="imzenx-paw-pipe"))
         await gateway.start()
         print(json.dumps({"type": "ready"}), flush=True)
+        tasks.append(
+            asyncio.create_task(
+                report_channel_status(
+                    gateway,
+                    (channel.channel_instance_id for channel in channels),
+                    lambda frame: print(json.dumps(frame), flush=True),
+                ),
+                name="imzenx-channel-status",
+            )
+        )
         tasks.append(asyncio.create_task(paw.poll(), name="imzenx-paw-room-poll"))
         # EOF on disable/uninstall/Quit/Host death stops both the poll and SDK.
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

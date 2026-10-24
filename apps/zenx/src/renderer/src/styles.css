@@ -6250,13 +6250,26 @@ button:disabled {
   border-radius: 50%;
   background: currentColor;
 }
-.imzenx-status[data-state="connected"] {
+.imzenx-status[data-state="connected"],
+.imzenx-status[data-state="ready"] {
   color: var(--text-accent);
   background: var(--accent-soft);
 }
 .imzenx-status[data-state="failed"] {
   color: var(--danger);
   background: var(--surface-danger);
+}
+.imzenx-channel-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 24px 16px;
+  color: var(--text-2);
+}
+.imzenx-channel-statuses .imzenx-status {
+  padding: 6px 10px;
+  font-size: 14px;
+  font-weight: 600;
 }
 .imzenx-connection-bottom {
   display: flex;

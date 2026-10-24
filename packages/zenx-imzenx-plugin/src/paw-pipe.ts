@@ -1,5 +1,9 @@
 import { StringDecoder } from "node:string_decoder";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  readChannelStatus,
+  type ImZenXChannelStatus,
+} from "./channel-status.js";
 
 export type PawOperation = "list" | "read" | "post";
 export type PawRequest = (
@@ -12,6 +16,7 @@ export function attachPawPipe(
   child: ChildProcessWithoutNullStreams,
   request: PawRequest,
   isCurrent: () => boolean,
+  channelStatus?: (channels: ImZenXChannelStatus[]) => void,
 ): () => void {
   let buffer = "";
   const decoder = new StringDecoder("utf8");
@@ -48,7 +53,13 @@ export function attachPawPipe(
       } catch {
         continue;
       }
-      if (!value || value.type !== "paw-request") continue;
+      if (!value || typeof value !== "object") continue;
+      if (value.type === "channel-status") {
+        const channels = readChannelStatus(value);
+        if (channels && active && isCurrent()) channelStatus?.(channels);
+        continue;
+      }
+      if (value.type !== "paw-request") continue;
       const { id, operation, params } = value;
       if (typeof id !== "string" || id.length > 128) continue;
       const response = { type: "paw-response", id };

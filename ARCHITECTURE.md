@@ -1334,6 +1334,8 @@ continues through the SDK's namespace, workspace fingerprint, and runtime fencin
 
 ### IMZenX PAW Room routes
 
+IMZenX projects only allowlisted, process-local SDK channel connection diagnostics over its existing private child pipe. These transient observations expire when their heartbeat stops or their child retires; they are neither bridge authority nor proof of message delivery, and never contain credentials, native session identifiers, or raw errors.
+
 IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. Startup preparation and Room polling are scoped to the explicitly enabled deployment channels; disabling a channel retains its Room binding and checkpoint for a later re-enable. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
 
 - **ZenX sidebar width** — A renderer-only local preference drives the existing shell track; viewport clamping, pointer gestures and collapsed/overlay presentation are disposable layout state and never alter Thread or Host facts.
