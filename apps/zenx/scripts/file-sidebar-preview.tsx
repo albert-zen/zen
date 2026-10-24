@@ -126,6 +126,7 @@ function Preview() {
     "custom:overview",
   ]);
   const [open, setOpen] = useState(true);
+  const [workspacePanelWidth, setWorkspacePanelWidth] = useState(0);
   useEffect(() => {
     let active = true;
     void document.fonts.ready.then(() =>
@@ -140,7 +141,14 @@ function Preview() {
     };
   }, []);
   return (
-    <div className="app-shell sidebar-collapsed">
+    <div
+      className="app-shell sidebar-collapsed"
+      style={
+        {
+          "--workspace-panel-width": `${workspacePanelWidth}px`,
+        } as React.CSSProperties
+      }
+    >
       <header className="window-titlebar">
         <div className="window-titlebar-product">
           <ZenXBrand />
@@ -168,6 +176,7 @@ function Preview() {
           title="Synthetic file review"
           open={open}
           onOpenChange={setOpen}
+          onWidthChange={setWorkspacePanelWidth}
           snapshot={null}
           selectedTab={selectedTab}
           onSelectTab={setSelectedTab}

@@ -240,7 +240,10 @@ try {
       if (!e) throw new Error('Missing pointer target: ' + ${JSON.stringify(selector)});
       const r=e.getBoundingClientRect();
       if (!r.width || !r.height) throw new Error('Hidden pointer target: ' + ${JSON.stringify(selector)});
-      return {x:r.x+r.width/2,y:r.y+r.height/2};
+      const x=r.x+r.width/2, y=r.y+r.height/2;
+      const hit=document.elementFromPoint(x,y);
+      if (!hit || !e.contains(hit)) throw new Error('Obscured pointer target: ' + ${JSON.stringify(selector)} + '; hit=' + (hit?.className ?? 'none'));
+      return {x,y};
     })()`);
     await click(point.x, point.y);
     await delay(180);
