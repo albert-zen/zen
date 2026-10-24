@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { InMemoryAttachmentStore } from "../src/attachment.js";
+import { InMemoryThreadJournal } from "../src/journal.js";
+import { ViewImageToolRuntime } from "../src/view-image.js";
 
 import type { ModelTool } from "../src/model.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
@@ -231,4 +235,98 @@ test("compact_context stays top-level in every presentation mode", () => {
       ),
     /at most one valid compact_context definition/u,
   );
+});
+
+test("code SDK preserves sibling properties with required-only alternatives", () => {
+  for (const keyword of ["oneOf", "anyOf"]) {
+    const sdk = generateToolSdk([
+      {
+        name: "inspect_target",
+        description: "Inspect an exact target.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            target: { type: "string", description: "Unique target name." },
+            threadId: { type: "string", description: "Exact Thread ID." },
+            turnId: { type: "string" },
+            limit: { type: "integer" },
+          },
+          required: ["turnId"],
+          [keyword]: [{ required: ["target"] }, { required: ["threadId"] }],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    assert.doesNotMatch(sdk, /inspect_target\(args: unknown\)/u);
+    assert.match(sdk, /Unique target name\./u);
+    assert.match(sdk, /Exact Thread ID\./u);
+    assert.match(sdk, /target: string;/u);
+    assert.match(sdk, /threadId: string;/u);
+    assert.match(sdk, /turnId: string;/u);
+    assert.match(sdk, /limit\?: number;/u);
+    if (keyword === "oneOf") {
+      assert.match(sdk, /target\?: never;/u);
+      assert.match(sdk, /threadId\?: never;/u);
+    } else {
+      assert.doesNotMatch(sdk, /(?:target|threadId)\?: never/u);
+    }
+  }
+});
+
+test("required-only alternatives keep nested schemas and direct definitions intact", () => {
+  const definition: ModelTool = {
+    name: "view_image",
+    description: "View an image.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative to Thread cwd." },
+        attachment: {
+          type: "object",
+          properties: { sha256: { type: "string" } },
+          required: ["sha256"],
+        },
+      },
+      oneOf: [{ required: ["path"] }, { required: ["attachment"] }],
+      additionalProperties: false,
+    },
+  };
+  const before = structuredClone(definition);
+  const sdk = generateToolSdk([definition]);
+  assert.match(sdk, /attachment: \{ sha256: string; \}/u);
+  assert.match(sdk, /Relative to Thread cwd/u);
+  assert.deepEqual(definition, before);
+  assert.deepEqual(buildToolPresentation([definition], "direct").modelTools, [
+    before,
+  ]);
+});
+
+test("shipped image and first-party schemas retain code-mode argument contracts", () => {
+  const image = new ViewImageToolRuntime({
+    attachments: new InMemoryAttachmentStore(),
+    journal: new InMemoryThreadJournal(),
+  }).specification;
+  const imageSdk = generateToolSdk([image]);
+  assert.match(imageSdk, /path: string;/u);
+  assert.match(imageSdk, /attachment: \{/u);
+  assert.match(imageSdk, /sha256: string;/u);
+  assert.doesNotMatch(imageSdk, /view_image\(args: unknown\)/u);
+
+  for (const plugin of ["self-control", "fleet", "rooms"]) {
+    const manifest = JSON.parse(
+      readFileSync(`packages/zenx-${plugin}-plugin/zenx.plugin.json`, "utf8"),
+    ) as { tools: ModelTool[] };
+    const sdk = generateToolSdk(manifest.tools);
+    assert.doesNotMatch(sdk, /\(args: unknown\)/u, plugin);
+    if (plugin === "self-control") {
+      const send = manifest.tools.find(
+        (tool) => tool.name === "zenx_threads_send",
+      )!;
+      const sendSdk = generateToolSdk([send]);
+      assert.match(sendSdk, /target: string;/u);
+      assert.match(sendSdk, /threadId: string;/u);
+      assert.match(sendSdk, /text: string;/u);
+      assert.match(sendSdk, /messageType\?:/u);
+    }
+  }
 });
