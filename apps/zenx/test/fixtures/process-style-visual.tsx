@@ -161,7 +161,10 @@ function scenario(scene: Scene): Thread {
       },
     ]);
   else if (scene === "waiting")
-    thread = runtimeThread([...base, runtimeWait("wait", "task-one")]);
+    thread = runtimeThread([
+      ...base,
+      { ...runtimeWait("wait", "task-one"), status: "inProgress" },
+    ]);
   else if (scene === "running")
     thread = runtimeThread([
       ...base,

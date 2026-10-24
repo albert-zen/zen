@@ -12,6 +12,7 @@ import {
 import { projectCommandCompleted } from "../../../src/protocol/codex/mapper.js";
 import {
   commandPhase,
+  commandTask,
   commandStatus,
 } from "../src/renderer/src/tool-presentation.js";
 
@@ -151,7 +152,11 @@ test(
         );
         const item = project(result, "wait");
 
-        assert.equal(commandPhase(item), timeout ? "timed_out" : "failed");
+        assert.equal(commandPhase(item), "failed");
+        assert.equal(
+          commandTask(item)?.phase,
+          timeout ? "timed_out" : "failed",
+        );
       } finally {
         await env.close();
       }
@@ -198,7 +203,8 @@ test(
       });
       const item = project(result, "wait");
 
-      assert.equal(commandPhase(item), "cancelled");
+      assert.equal(commandPhase(item), "failed");
+      assert.equal(commandTask(item)?.phase, "cancelled");
       assert.equal(item.exitCode, 130);
     } finally {
       await env.close();

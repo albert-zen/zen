@@ -671,7 +671,7 @@ test("native projection keeps a live canonical compaction once for product UI", 
   assert.deepEqual(twice.turns, current.turns);
 });
 
-test("live native result and journal replay agree on a waiting task group", () => {
+test("live native result and journal replay agree on a returned wait group", () => {
   const createdAt = "2026-09-09T11:25:22Z";
   const metadata = {
     id: "metadata-wait",
@@ -774,10 +774,10 @@ test("live native result and journal replay agree on a waiting task group", () =
     const group = projectTurn(projected.turns[0]!).history[0];
     assert.equal(group?.kind, "traceGroup");
     if (group?.kind !== "traceGroup") continue;
-    assert.equal(group.summary, "Waiting for task");
+    assert.equal(group.summary, "Waited for task");
     assert.equal(group.items[1]?.type, "commandExecution");
     if (group.items[1]?.type === "commandExecution")
-      assert.equal(commandStatus(group.items[1]), "Waiting");
+      assert.equal(commandStatus(group.items[1]), "Waited");
   }
 });
 

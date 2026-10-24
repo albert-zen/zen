@@ -100,7 +100,10 @@ test("live groups name the real current operation and retain waiting semantics",
     "Running · npm run check --workspace @zen/zenx",
   );
   assert.equal(
-    traceSummary([done, runtimeWait("wait", "task")]),
+    traceSummary([
+      done,
+      { ...runtimeWait("wait", "task"), status: "inProgress" },
+    ]),
     "Waiting for task",
   );
 });
