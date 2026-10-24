@@ -12,13 +12,13 @@ import {
   confirmedStopped,
 } from "./fixtures/agent-runtime-data.js";
 
-test("native wait receipt stays static despite successful outer call; parallel running task remains active", async () => {
+test("returned native wait stays settled; parallel running task remains active", async () => {
   await withRuntimeDom(async (h) => {
     const wait = runtimeWait("wait", "task-a");
     await h.render(runtimeThread([wait]));
     assert.equal(
       document.querySelector(".turn-running-label")?.getAttribute("data-phase"),
-      "waiting",
+      "idle",
     );
     assert.equal(
       document.querySelector(".turn-running-label .activity-text"),
@@ -100,7 +100,7 @@ test("action-set headers keep one mounted disclosure and metadata while current 
   });
 });
 
-test("waiting and approval retain visible static metadata rather than duplicate activity", async () => {
+test("returned wait and approval retain static metadata rather than duplicate activity", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(
       runtimeThread([runtimeWait("wait", "waiting"), runtimeCommand("done")]),
@@ -121,7 +121,7 @@ test("waiting and approval retain visible static metadata rather than duplicate 
     );
     assert.equal(
       document.querySelector(".trace-activity-title")?.textContent,
-      "Waiting for task",
+      "Wait for task ×1 · Run command ×1",
     );
     await h.render(
       runtimeThread([

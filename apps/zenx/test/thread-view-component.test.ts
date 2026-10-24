@@ -3167,10 +3167,7 @@ test("yielded shell work reports the actual task receipt phase", async () => {
       root,
       turnWithItems("inProgress", [{ ...running, toolName: "wait" }]),
     );
-    assert.equal(
-      document.querySelector(".tool-status")?.textContent,
-      "Waiting",
-    );
+    assert.equal(document.querySelector(".tool-status")?.textContent, "Waited");
     await renderInteractive(
       root,
       turnWithItems("inProgress", [
@@ -3187,14 +3184,11 @@ test("yielded shell work reports the actual task receipt phase", async () => {
         },
       ]),
     );
-    assert.equal(
-      document.querySelector(".tool-status")?.textContent,
-      "Timed out",
-    );
+    assert.equal(document.querySelector(".tool-status")?.textContent, "Ended");
   });
 });
 
-test("folded task group and expanded wait row use the same receipt phase", async () => {
+test("folded task group and expanded wait row use the invocation phase", async () => {
   await withDom(async (root) => {
     const base = commandItem("wait-item", "wait");
     if (base.type !== "commandExecution") throw new Error("missing command");
@@ -3211,12 +3205,12 @@ test("folded task group and expanded wait row use the same receipt phase", async
     );
     const group = requiredButton(".trace-toggle");
     assert.equal(group.getAttribute("aria-expanded"), "false");
-    assert.match(group.textContent ?? "", /Waiting for task/u);
+    assert.match(group.textContent ?? "", /Waited for task/u);
     await act(async () => group.click());
     assert.equal(group.getAttribute("aria-expanded"), "true");
     assert.equal(
       requiredElement(".trace-items .tool-status").textContent,
-      "Waiting",
+      "Waited",
     );
 
     await renderInteractive(
@@ -3229,10 +3223,10 @@ test("folded task group and expanded wait row use the same receipt phase", async
         },
       ]),
     );
-    assert.match(group.textContent ?? "", /Wait · timed out/u);
+    assert.match(group.textContent ?? "", /Waited for task/u);
     assert.equal(
       requiredElement(".trace-items .tool-status").textContent,
-      "Timed out",
+      "Waited",
     );
     await act(async () => group.click());
     assert.equal(group.getAttribute("aria-expanded"), "false");
@@ -3245,14 +3239,14 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     if (base.type !== "commandExecution") throw new Error("missing command");
     const cases = [
       ["browser_click", "queued", "Queued"],
-      ["wait", "queued", "Queued"],
+      ["wait", "queued", "Waited"],
       ["image_generate", "running", "Running"],
-      ["wait", "running", "Waiting"],
-      ["wait", "cancel_requested", "Cancelling"],
-      ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
-      ["wait", "cancelled", "Cancelled"],
-      ["wait", "timed_out", "Timed out"],
-      ["wait", "failed", "Ended"],
+      ["wait", "running", "Waited"],
+      ["wait", "cancel_requested", "Waited"],
+      ["wait", "cancellation_unconfirmed", "Waited"],
+      ["wait", "cancelled", "Waited"],
+      ["wait", "timed_out", "Waited"],
+      ["wait", "failed", "Waited"],
       ["wait", "completed", "Waited"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
@@ -4519,5 +4513,64 @@ test("session throughput weights matched completed windows and excludes gaps, fa
       turnOutputRatePerSecond(usage.turns.one, { ...one, durationMs }),
       null,
     );
+  }
+});
+
+test("pending wait sweeps while returned waits stay settled across groups", () => {
+  const base = commandItem("shell", "sleep 60");
+  if (base.type !== "commandExecution") throw new Error("Expected command");
+  const shell = {
+    ...base,
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: { task_id: "background", status: "running" },
+  };
+  const returned = { ...shell, id: "returned", toolName: "wait" };
+  const pending = {
+    ...returned,
+    id: "pending",
+    status: "inProgress" as const,
+    contentType: undefined,
+    structuredContent: undefined,
+  };
+  for (const grouped of [false, true]) {
+    const items = [
+      shell,
+      { ...agent("Checking"), id: "sep-1" },
+      returned,
+      { ...agent("Waiting again"), id: "sep-2" },
+      ...(grouped ? [commandItem("done", "echo ok")] : []),
+      pending,
+    ];
+    const dom = new JSDOM(renderTurns([turnWithItems("inProgress", items)]));
+    try {
+      const doc = dom.window.document;
+      const sequences = [
+        ...doc.querySelectorAll(".trace-singleton, .trace-group"),
+      ];
+      assert.equal(sequences.length, 3);
+      assert.equal(
+        sequences[0]!
+          .querySelector(".activity-text")
+          ?.getAttribute("data-active"),
+        "true",
+      );
+      assert.equal(
+        sequences[1]!
+          .querySelector(".activity-text")
+          ?.getAttribute("data-active"),
+        "false",
+      );
+      assert.match(sequences[1]!.textContent ?? "", /Waited/);
+      assert.equal(
+        sequences[2]!
+          .querySelector(".activity-text")
+          ?.getAttribute("data-active"),
+        "true",
+      );
+      assert.ok(sequences[2]!.querySelector(".activity-sweep"));
+    } finally {
+      dom.window.close();
+    }
   }
 });

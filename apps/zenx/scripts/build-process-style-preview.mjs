@@ -49,6 +49,7 @@ const scenes = [
   ["command-long", "执行中 · 完整长命令"],
   ["command-short", "执行中 · 短命令"],
   ["waiting", "等待工具"],
+  ["wait-lifecycle", "Wait lifecycle · synthetic"],
   ["running", "执行中"],
   ["parallel", "并行工具"],
   ["approval", "等待审批"],

@@ -202,11 +202,11 @@ test("specific lifecycle facts remain distinct from a generic ended label", () =
     ["timed_out", "Timed out"],
     ["cancelled", "Cancelled"],
     ["cancellation_unconfirmed", "Cancellation unconfirmed"],
-    ["running", "Waiting"],
+    ["running", "Running"],
     ["queued", "Queued"],
   ] as const) {
     const item = {
-      ...command("wait"),
+      ...command("shell"),
       status: "failed" as const,
       exitCode: 1,
       contentType: "application/vnd.zen.tool-task+json",
@@ -222,5 +222,31 @@ test("specific lifecycle facts remain distinct from a generic ended label", () =
   assert.equal(
     commandStatus({ ...command("shell"), status: "declined" }),
     "Declined",
+  );
+});
+
+test("wait presentation follows the invocation, not the observed target task", () => {
+  for (const taskStatus of [
+    "running",
+    "queued",
+    "completed",
+    "failed",
+    "timed_out",
+    "cancelled",
+  ]) {
+    const item = {
+      ...command("wait"),
+      contentType: "application/vnd.zen.tool-task+json",
+      structuredContent: { task_id: "target", status: taskStatus },
+    };
+    assert.equal(commandPhase(item), "completed");
+    assert.equal(commandStatus(item), "Waited");
+    assert.equal(commandPhase({ ...item, status: "failed" }), "failed");
+    assert.equal(commandPhase({ ...item, status: "declined" }), "declined");
+    assert.equal(commandPhase({ ...item, status: "inProgress" }), "waiting");
+  }
+  assert.equal(
+    commandPhase({ ...command("wait"), status: "inProgress" }),
+    "waiting",
   );
 });

@@ -50,10 +50,7 @@ export function commandTask(
     return null;
   return {
     id: data.task_id,
-    phase:
-      status === "running" && item.toolName === "wait"
-        ? "waiting"
-        : (status as CommandPhase),
+    phase: status as CommandPhase,
   };
 }
 export function isTerminalCommandPhase(phase: CommandPhase): boolean {
@@ -69,6 +66,9 @@ export function isTerminalCommandPhase(phase: CommandPhase): boolean {
 /** Task lifetime is independent of an enclosing call being aborted/declined. */
 export function commandPhase(item: CommandItem): CommandPhase {
   if (item.contentType === IMPORTED_TOOL_RESULT_CONTENT_TYPE) return "imported";
+  // A wait receipt describes the observed task, not the lifetime of this call.
+  if (item.toolName === "wait")
+    return item.status === "inProgress" ? "waiting" : item.status;
   const receipt = commandTask(item);
   if (receipt !== null && receipt.phase !== "completed") return receipt.phase;
   if (item.status === "failed" || item.status === "declined")

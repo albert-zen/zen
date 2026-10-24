@@ -84,15 +84,15 @@ test("whole-turn observation retires stale work across assistant-separated group
     2,
   );
 });
-test("canonical successful wait call with running receipt is waiting; parallel task stays running", () => {
+test("canonical successful wait call is settled; parallel task stays running", () => {
   const wait = runtimeWait("wait", "task");
   assert.equal(wait.status, "completed");
   assert.equal(wait.exitCode, 0);
-  assert.equal(commandPhase(wait), "waiting");
+  assert.equal(commandPhase(wait), "completed");
   const only = summarizeTraceActivity([wait]);
-  assert.equal(only.waiting, 1);
+  assert.equal(only.waiting, 0);
   assert.equal(only.running, 0);
-  assert.equal(only.phase, "waiting");
+  assert.equal(only.phase, "idle");
   const mixed = summarizeTraceActivity([
     wait,
     runtimeTask("parallel", "other", "running"),
