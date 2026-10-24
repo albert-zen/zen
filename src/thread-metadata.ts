@@ -1,5 +1,6 @@
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
+import { writeJournalPayload } from "./journal-write.js";
 
 export interface ThreadProductMetadata {
   name?: string;
@@ -103,7 +104,7 @@ export class JsonlThreadMetadataStore implements ThreadMetadataStore {
       await mkdir(path.dirname(this.#filename), { recursive: true });
       const file = await open(this.#filename, "a", 0o600);
       try {
-        await file.write(`${JSON.stringify(event)}\n`);
+        await writeJournalPayload(file, `${JSON.stringify(event)}\n`);
         await file.sync();
       } finally {
         await file.close();

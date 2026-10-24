@@ -1,6 +1,7 @@
 import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { writeJournalPayload } from "./journal-write.js";
 
 import { decodeCanonicalItem, type CanonicalItem } from "./item.js";
 
@@ -59,7 +60,7 @@ export class JsonlThreadJournal implements ThreadJournal {
     await mkdir(this.#directory, { recursive: true });
     const file = await open(this.#pathFor(item.threadId), "a", 0o600);
     try {
-      await file.write(`${JSON.stringify(item)}\n`);
+      await writeJournalPayload(file, `${JSON.stringify(item)}\n`);
       await file.sync();
     } finally {
       await file.close();
@@ -76,7 +77,8 @@ export class JsonlThreadJournal implements ThreadJournal {
     );
     const file = await open(temporary, "wx", 0o600);
     try {
-      await file.write(
+      await writeJournalPayload(
+        file,
         `${items.map((item) => JSON.stringify(item)).join("\n")}\n`,
       );
       await file.sync();
