@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertOutputUsageObservation } from "./output-usage-preview-assertions.mjs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { delay, withPreviewBrowser } from "./preview-browser.mjs";
@@ -76,42 +77,68 @@ await withPreviewBrowser(
       ["en", "light", 1100],
       ["zh-CN", "dark", 390],
     ]) {
-      await navigate("output-usage", { lang, theme }, width, 760);
-      await waitFor(
-        "!!document.querySelector('.message-cache') && !!document.querySelector('.context-usage-trigger')",
-      );
-      // Keep the terminal response actions visible while hovering the context
-      // ring; focus changes presentation only and never invokes Copy.
-      await evaluate("document.querySelector('.message-copy').focus()");
-      const point = await evaluate(
-        "(() => { const r=document.querySelector('.context-usage-trigger').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()",
-      );
-      await move(point.x, point.y);
-      await waitFor("!!document.querySelector('.context-usage-popover')");
-      await delay(250);
-      const observation = await evaluate(`(() => {
+      const scene = `output-usage-${lang}-${theme}-${width}`;
+      let observation;
+      try {
+        await navigate("output-usage", { lang, theme }, width, 760);
+        await waitFor(
+          "!!document.querySelector('.message-cache') && !!document.querySelector('.context-usage-trigger')",
+        );
+        // Keep the terminal response actions visible while hovering the context
+        // ring; focus changes presentation only and never invokes Copy.
+        await evaluate("document.querySelector('.message-copy').focus()");
+        const point = await evaluate(
+          "(() => { const r=document.querySelector('.context-usage-trigger').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()",
+        );
+        await move(point.x, point.y);
+        await waitFor("!!document.querySelector('.context-usage-popover')");
+        await delay(250);
+        observation = await evaluate(`(() => {
         const message = document.querySelector('.message-cache');
         const panel = document.querySelector('.context-usage-popover');
         const header = document.querySelector('.turn-toggle');
-        return {message:message.textContent, title:message.title, panel:panel.textContent, header:header.textContent, markup:document.body.innerHTML, overflow:document.documentElement.scrollWidth>innerWidth};
+        return {message:message.textContent, title:message.title, panel:panel.textContent, header:header.textContent, contextLabel:document.querySelector('.context-usage-trigger').getAttribute('aria-label'), overflow:document.documentElement.scrollWidth>innerWidth};
       })()`);
-      assert.match(observation.message, /900/u);
-      assert.match(observation.message, /50%/u);
-      assert.match(observation.panel, /32K/u);
-      assert.match(observation.panel, /50%/u);
-      assert.match(
-        observation.header,
-        lang === "en" ? /Worked for 3s/u : /已工作 3 秒/u,
-      );
-      assert.doesNotMatch(
-        observation.markup,
-        /tok\/s|output speed unknown|输出速度未知/u,
-      );
-      assert.equal(observation.overflow, false);
-      delete observation.markup;
-      evidence.outputUsage.push({ lang, theme, width, ...observation });
-      await screenshot(`output-usage-${lang}-${theme}-${width}.png`);
+        assertOutputUsageObservation(observation, lang);
+        evidence.outputUsage.push({ lang, theme, width, ...observation });
+        await screenshot(`${scene}.png`);
+        await writeFile(
+          path.join(directory, "output-usage-progress.json"),
+          JSON.stringify(evidence.outputUsage, null, 2) + "\n",
+        );
+      } catch (error) {
+        // Persist the failed scene before browser cleanup or later CI steps.
+        // Existing CDP calls are bounded; a screenshot failure never masks it.
+        const failure = {
+          scene,
+          lang,
+          theme,
+          width,
+          observation,
+          error: String(error),
+        };
+        console.error(JSON.stringify(failure));
+        try {
+          await writeFile(
+            path.join(directory, "output-usage-failure.json"),
+            JSON.stringify(failure, null, 2) + "\n",
+          );
+        } catch (writeError) {
+          console.error(
+            `Failure diagnostics unavailable: ${String(writeError)}`,
+          );
+        }
+        try {
+          await screenshot(`${scene}-failed.png`);
+        } catch (captureError) {
+          console.error(
+            `Failure screenshot unavailable: ${String(captureError)}`,
+          );
+        }
+        throw error;
+      }
     }
+
     for (const options of [
       { width: 220, theme: "light", platform: "darwin", lang: "zh-CN" },
       { width: 360, theme: "dark", platform: "darwin", lang: "en" },
