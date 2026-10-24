@@ -1,0 +1,43 @@
+{
+  "pullRequest": 483,
+  "headSha": "0883247fa00ca7b7c05835d73a25268b0155a259",
+  "captureMergeRefSha": "2e5ff71bb52004f7214f9e9725eb994ab4f212f1",
+  "runId": 40115787843,
+  "jobId": 120937005947,
+  "artifactId": 12568112256,
+  "status": "output-usage actual-component visual acceptance passed; complete workflow status separate",
+  "scope": "Current production components and imported CSS modules with synthetic data. Sidebar before uses the pinned dfd42754 primary stylesheet, not a historical full-app build; after uses current CSS. Context before omits only its motion stylesheet. Output usage renders current ThreadView with synthetic counts and elapsed time. No Host actions or user data.",
+  "observations": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1100,
+      "message": "Cache 50% · 1K in · 900 out",
+      "title": "Turn cache telemetry",
+      "panel": "Context window used3%1K / 32K tokensThread cache 50%Compact context",
+      "header": "Worked for 3s",
+      "contextLabel": "Open context details. Context 3% · 1K / 32K tokens\nThread cache 50%",
+      "overflow": false
+    },
+    {
+      "lang": "zh-CN",
+      "theme": "dark",
+      "width": 390,
+      "message": "缓存 50% · 输入 1000 · 输出 900",
+      "title": "轮次缓存遥测",
+      "panel": "已使用的上下文窗口3%1000 / 3.2万 token会话缓存 50%压缩上下文",
+      "header": "已工作 3 秒",
+      "contextLabel": "打开上下文详情。上下文 3% · 1000 / 3.2万 token\n会话缓存 50%",
+      "overflow": false
+    }
+  ],
+  "visualReview": "Viewed both EN desktop light1100 and ZH narrow dark390 screenshots. Output900,cache50%,context32K/3.2万 and elapsed3s/3秒 visible. Hover telemetry/context popup contain no Turn/session TPS. No clipping of message telemetry, elapsed label or context popup; both page overflow flags false.",
+  "limits": "Synthetic actual production components, no Host/user data or native OS. This verifies removal while preserving raw counts/cache/context/elapsed; no new throughput estimator. Original failed run exact assertion remained unavailable; do not retrofit a proven log cause.",
+  "sha256": {
+    "artifact.zip": "a6a40bf133bee9859ae4d256a1bc109693df43bb86daba087fdf533f80266baf",
+    "capture/measurements.json": "dbfa60a70567add278a9b96d07d86f808077558f140dba4c8d1543db4e1e4b18",
+    "capture/source.json": "7fdf713a76523a8bded3a05dac8ed0040bb82212fa06dac861bb842a270085ce",
+    "capture/output-usage-en-light-1100.png": "bdee5661382dbf72ae00effc8ae6c53b8cae156bc8e22c8c927156400e678d81",
+    "capture/output-usage-zh-CN-dark-390.png": "38cf73e8a29de643f2c2b01cfc92277353c88721b84a89eaaaad1205524bc9bc"
+  }
+}
