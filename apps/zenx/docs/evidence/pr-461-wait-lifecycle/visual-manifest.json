@@ -1,0 +1,79 @@
+{
+  "repository": "albert-zen/zen",
+  "pullRequest": 461,
+  "headSha": "91c70da82c1d6f81d57a7b888eefea69430b2917",
+  "captureMergeRefSha": "e59a68cffcb2b41b5a2747450afd01a3f249e6b6",
+  "mergeRefSource": "GitHub artifact name; PR workflow checkout captures merge ref, not standalone head",
+  "runId": 40100835601,
+  "jobId": 120892465464,
+  "artifactId": 12563280207,
+  "artifactSha256": "a3db641810644ff366566b3ecf6d6a2531d9b8cc26db94743b2165c88778cd8c",
+  "syntheticBoundary": "Authored synthetic projected items with production ThreadView, Sidebar, ActivityText and CSS. No Host/Provider or real user trace.",
+  "visualReview": "Viewed actual light/dark 1280x900 screenshots. Origin shell visibly Running; returned wait visibly Waited; latest pending wait visibly Waiting. All three rows visible with assistant separators; no overflow or overlap.",
+  "motionEvidence": "CI decoded screenshots at animation times 300ms and 800ms: pending wait 337 changed pixels in each theme, max channel delta 115 light / 138 dark. Returned wait has no sweep DOM; origin and pending have active sweep. No continuous-motion video claimed.",
+  "scenes": [
+    {
+      "theme": "light",
+      "checks": {
+        "rows": [
+          {
+            "text": "Shell sleep 60Running",
+            "active": "true",
+            "sweep": true
+          },
+          {
+            "text": "Wait Wait for taskWaited",
+            "active": "false",
+            "sweep": false
+          },
+          {
+            "text": "Wait waitWaiting",
+            "active": "true",
+            "sweep": true
+          }
+        ],
+        "pendingWaitPixels": {
+          "changedPixels": 337,
+          "maxChannelDelta": 115
+        }
+      },
+      "overflow": false,
+      "completedActivities": 0
+    },
+    {
+      "theme": "dark",
+      "checks": {
+        "rows": [
+          {
+            "text": "Shell sleep 60Running",
+            "active": "true",
+            "sweep": true
+          },
+          {
+            "text": "Wait Wait for taskWaited",
+            "active": "false",
+            "sweep": false
+          },
+          {
+            "text": "Wait waitWaiting",
+            "active": "true",
+            "sweep": true
+          }
+        ],
+        "pendingWaitPixels": {
+          "changedPixels": 337,
+          "maxChannelDelta": 138
+        }
+      },
+      "overflow": false,
+      "completedActivities": 0
+    }
+  ],
+  "sha256": {
+    "wait-lifecycle-light-1280-en.png": "bf4e9d30e80b3c62ed76c6764609a64a216c41d2279940f1b5534d3fec081924",
+    "wait-lifecycle-dark-1280-en.png": "46e7cef659b587e82613ab1dea19539af759886e043d6ebf709f60b9bedaef1d",
+    "wait-lifecycle-light-1280-en-sweep-start.png": "b2e47737461efb8373ad4439c29413cfafe38c818b4715537e52ce5444f7eaa0",
+    "wait-lifecycle-dark-1280-en-sweep-start.png": "25c402321963034bf59bd72e97773349966adf1dae4386de62ffd9acfce2b5ca",
+    "measurements.json": "6277fb527c9f14ffdc50ab676bd3328edb43ff64157af1d485e490e18f0369ba"
+  }
+}
