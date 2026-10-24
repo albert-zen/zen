@@ -397,6 +397,9 @@ export function validateHostProfile(
   const contextCompaction = optionalContextCompactionConfig(
     value.contextCompaction,
   );
+  const externalApplications = normalizeExternalApplications(
+    value.externalApplications,
+  );
   const workflowCommands = normalizeWorkflowCommands(value.workflowCommands);
   const titlePrompt = normalizeTitlePrompt(value.titlePrompt);
   const workspace =
@@ -459,9 +462,9 @@ export function validateHostProfile(
       : { composerSendModeMigration }),
     ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
     ...(contextCompaction === undefined ? {} : { contextCompaction }),
-    externalApplications: normalizeExternalApplications(
-      value.externalApplications,
-    ),
+    ...(Object.keys(externalApplications).length === 0
+      ? {}
+      : { externalApplications }),
     ...(workflowCommands.length === 0 ? {} : { workflowCommands }),
     ...(titlePrompt === undefined ? {} : { titlePrompt }),
     pinnedThreadIds: normalizeThreadPreferenceIds(

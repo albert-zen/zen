@@ -2763,6 +2763,16 @@ test("external applications persist independently and concurrent choices do not 
     await assert.rejects(
       reloaded.setExternalApplication("custom", "code --wait"),
     );
+    await reloaded.setExternalApplication("vscode", undefined);
+    const cleared = settingsFor(directory, inactiveSubscription());
+    await cleared.initialize({ ZENX_PROVIDER: "fake" });
+    assert.equal(
+      Object.hasOwn(
+        (await cleared.publicSettings()).profile,
+        "externalApplications",
+      ),
+      false,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
