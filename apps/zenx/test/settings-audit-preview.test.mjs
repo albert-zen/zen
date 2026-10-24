@@ -103,9 +103,8 @@ test("Settings audit HTML boots actual editor, preserves unknown catalog data an
     await waitFor(() => !document.querySelector(".provider-editor"));
     document.querySelector(".provider-section-actions .primary-button").click();
     await waitFor(() => document.querySelector(".provider-editor"));
-    assert.equal(
-      document.querySelector(".model-catalog-head button"),
-      null,
+    assert.ok(
+      document.querySelector(".model-catalog-head button") === null,
       "Current add flow has no discovery action; observation, not desired behavior.",
     );
     document.querySelector(".provider-editor-actions [type=submit]").click();
@@ -120,7 +119,7 @@ test("Settings audit HTML boots actual editor, preserves unknown catalog data an
       [...dom.window.__settingsAudit.calls].filter(
         (x) => x !== "validation-diagnostic",
       ),
-      ["synthetic-discovery"],
+      ["settings-get", "synthetic-discovery"],
     );
     assert.deepEqual(errors, []);
     const capture = await readFile(
@@ -129,6 +128,78 @@ test("Settings audit HTML boots actual editor, preserves unknown catalog data an
     );
     assert.equal(capture.includes('"--no-sandbox"'), false);
     assert.match(capture, /process.env.GITHUB_ACTIONS/u);
+  } finally {
+    dom?.window.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Settings audit uses actual language controller and recovers synthetic initial failure", async () => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "zenx-settings-retry-test-"),
+  );
+  let dom;
+  try {
+    await execute(
+      process.execPath,
+      [
+        new URL("../scripts/build-settings-audit-preview.mjs", import.meta.url)
+          .pathname,
+        directory,
+      ],
+      { maxBuffer: 2 * 1024 * 1024 },
+    );
+    const html = await readFile(
+      path.join(directory, "settings-audit.html"),
+      "utf8",
+    );
+    dom = new JSDOM(html, {
+      url: "http://localhost/settings-audit.html?lang=zh-CN&initialFailure=1",
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+      virtualConsole: new VirtualConsole(),
+      beforeParse(window) {
+        window.structuredClone = structuredClone;
+        window.matchMedia = () => ({
+          matches: false,
+          addEventListener() {},
+          removeEventListener() {},
+        });
+        window.HTMLElement.prototype.scrollIntoView = () => undefined;
+      },
+    });
+    const document = dom.window.document;
+    await waitFor(() => document.querySelector(".page-loading button"));
+    assert.ok(
+      document.querySelector(".loading-ring") === null,
+      "Settled failure has no spinner",
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Synthetic settings load failure/,
+    );
+    assert.equal(
+      document.querySelector(".page-loading button")?.textContent,
+      "重试加载设置",
+    );
+    document.querySelector(".page-loading button").click();
+    await waitFor(
+      () => document.querySelectorAll(".provider-profile-card").length === 4,
+    );
+    assert.match(
+      document.querySelector(".settings-view")?.textContent ?? "",
+      /模型与服务商/,
+    );
+    assert.equal(
+      dom.window.__settingsAudit.calls.filter((x) => x === "settings-get")
+        .length,
+      2,
+    );
+    assert.equal(
+      dom.window.localStorage.length,
+      0,
+      "Fixture locale does not write a stored preference",
+    );
   } finally {
     dom?.window.close();
     await rm(directory, { recursive: true, force: true });

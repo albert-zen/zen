@@ -791,6 +791,7 @@ export const en = {
   "rtkSettingsCard.appleSiliconMacsCargoTestOnlyCommandsRunAs":
     "Apple silicon Macs · cargo test only. Commands run as usual. Shell output inside run_code stays unchanged.",
   "settingsView.loadingLocalSettings": "Loading local settings…",
+  "settingsView.retryLoadingSettings": "Retry loading settings",
   "settingsView.arrowup": "ArrowUp",
   "settingsView.arrowdown": "ArrowDown",
   "settingsView.arrowleft": "ArrowLeft",
@@ -2044,6 +2045,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "rtkSettingsCard.appleSiliconMacsCargoTestOnlyCommandsRunAs":
     "仅适用于 Apple 芯片 Mac 的 cargo test。命令照常运行；run_code 中的原始 Shell 输出保持不变。",
   "settingsView.loadingLocalSettings": "正在加载本地设置……",
+  "settingsView.retryLoadingSettings": "重试加载设置",
   "settingsView.arrowup": "向上箭头",
   "settingsView.arrowdown": "向下箭头",
   "settingsView.arrowleft": "向左箭头",

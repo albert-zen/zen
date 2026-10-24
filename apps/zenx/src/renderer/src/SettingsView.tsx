@@ -122,6 +122,7 @@ export function SettingsView({
 }) {
   const { t } = useTranslation("settings");
   const [settings, setSettings] = useState<PublicHostSettings | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [draft, setDraft] = useState<ZenXHostProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -189,7 +190,7 @@ export function SettingsView({
       subscribed = false;
       dispose();
     };
-  }, [active]);
+  }, [active, loadAttempt]);
 
   useEffect(() => {
     if (status === null) return;
@@ -277,8 +278,26 @@ export function SettingsView({
         className={`product-page settings-view${showHeader ? "" : " settings-view-embedded"}`}
       >
         <div className="page-loading">
-          <div className="loading-ring" />
-          <p>{error ?? t("settingsView.loadingLocalSettings")}</p>
+          {error === null ? (
+            <>
+              <div className="loading-ring" />
+              <p role="status">{t("settingsView.loadingLocalSettings")}</p>
+            </>
+          ) : (
+            <>
+              <p role="alert">{error}</p>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setLoadAttempt((attempt) => attempt + 1);
+                }}
+              >
+                {t("settingsView.retryLoadingSettings")}
+              </button>
+            </>
+          )}
         </div>
       </section>
     );
