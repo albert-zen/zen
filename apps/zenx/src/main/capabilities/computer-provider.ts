@@ -1722,6 +1722,11 @@ func displayLabel(_ element: AXUIElement) -> String {
     let value = textAttribute(element, name)
     if !value.isEmpty { return value }
   }
+  // Static text exposes its displayed content through AXValue. Do not read
+  // editable or secure-field values as labels, or add values to selectors.
+  if textAttribute(element, kAXRoleAttribute) == kAXStaticTextRole {
+    return textAttribute(element, kAXValueAttribute)
+  }
   return ""
 }
 
