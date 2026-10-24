@@ -681,7 +681,7 @@ External connected pages are separate, explicitly read-only peer tabs keyed by t
 
 ### 2026-10-15: Machine picker and generation throughput
 
-The Run on machine picker has room for device names independently of its compact trigger and remains within the viewport. Final-message hover shows output tokens per second for that completed Turn; context usage shows the weighted session rate over completed Turns with matched usage and exact canonical millisecond duration. Idle time between Turns is excluded, while tool and waiting time within each Turn remain included. This is end-to-end Turn throughput, not Provider decode speed. Missing telemetry or duration is Unknown.
+The Run on machine picker has room for device names independently of its compact trigger and remains within the viewport. Final-message telemetry and context usage retain authoritative token counts, cache and context information, but do not show output TPS. Canonical usage has per-response output counts, including reported reasoning tokens and tool-argument generation, but no matching sample start/first-token/end timing. Turn duration includes tool execution and inter-sample waits and must not be used as a generation-rate denominator. Neither text/character counts nor transient message boundaries supply the missing measurement. This applies to live completion, failed/interrupted output and restored history. “Working for” / “Worked for” remains elapsed Turn time, not model speed. Any future TPS must pair authoritative per-sample counts with the same generation interval, explicitly disclose TTFT/reasoning inclusion, exclude tool execution and inter-sample waits, and omit unmatched or partial data.
 
 ### Verified remote message sources
 
