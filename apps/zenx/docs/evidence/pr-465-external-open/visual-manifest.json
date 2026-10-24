@@ -1,0 +1,1287 @@
+{
+  "repository": "albert-zen/zen",
+  "pullRequest": 465,
+  "headSha": "73c6770586979e027bffd1a030d56c1d530eadd9",
+  "captureMergeRefSha": "6dd086c784cb6f23dd6ca7f355cd06b64e2dead0",
+  "runId": 40107714321,
+  "artifactId": 12565621981,
+  "artifactSha256": "08ca96205f3e431a2206146b86d9c7a3bc6b3407c44bee4d2584b5196de832ae",
+  "scope": "Actual AuxiliaryPanel, WorkspaceFilesPanel, WorkspaceFileExplorer, SourceEditor and InlineMarkdownEditor with production styles. Synthetic source and Markdown files, memory-only drafts and a scoped fake file API; no Host, private files or profile. Application catalog, picker results, external-open receipts and unsupported-remote error are simulated; no native picker or application is launched. Browser CDP keyboard/pointer input, not native Electron or physical OS acceptance.",
+  "sources": {
+    "src/renderer/src/auxiliary-panel.tsx": "2d1333dddcd694e4794817265bab895819befb28b5961af32496cb3333fa8121",
+    "src/renderer/src/workspace-files-panel.tsx": "8850c33793fbba7222908f7cc48a1053dc4113231f1a388f6ad233e5512d0631",
+    "src/renderer/src/workspace-external-open.tsx": "b1adf7697b28a93fb6c29aedd076a4b48074b20bf8aed07b9149cef3054d36ce",
+    "src/renderer/src/ui/controls.tsx": "5b12b97e136e72aa6e4f6acc23b1affc47e6ce3c7ed836cc39aef1996de62d1a",
+    "src/renderer/src/workspace-file-picker.tsx": "9f234258b470b9f32d0879e982180635366e101b42e9cd42722db495809ff433",
+    "src/renderer/src/workspace-file-explorer.tsx": "36b311864a27379ce67bbad3d094db8e93e60a916b5e3d53e374a93f784c0a4b",
+    "src/renderer/src/workspace-file-drafts.ts": "da487ed22a20c6cba5bcdc37a730031fd584b711a423507fa6f08cf433211959",
+    "src/renderer/src/SourceEditor.tsx": "62ecaec26d165fa01cfa9b2cd26cd378242bfe3422e1bb7974ce098b316090bd",
+    "src/renderer/src/InlineMarkdownEditor.tsx": "6ccb593c6052c66a8b4e26a20fae8a97ec7fdefa9fcfaac8bf9b1ff725910094",
+    "src/renderer/src/file-content-search.ts": "2c1a3ce728d0d4368bdc0bfc8f0857b8241ea4193b91321182747089afd36c2a",
+    "src/renderer/src/styles.css": "ebd0eed1ad33fb17d85abc16d5492894889b8930eba67a19960de37ccfc804f1",
+    "src/renderer/src/workspace-files.css": "e73d86c414ac0bc0657f7d22057fb6c038ec7f4f466eeae1b7b70f57dea2afc5",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "scripts/file-sidebar-preview.tsx": "628ac4a3a32111aeaca28e7775f3b33e8ab0701258544aad9853f706afee93f8",
+    "scripts/build-file-sidebar-preview.mjs": "2a776a5927765d322395f49b0b53ea95bd4382ba5e1a1faf7093282ba014727d",
+    "scripts/capture-file-sidebar-preview.mjs": "7ece900e6d9125d95d9b755aba8108d0a6b76f43aa22ca60df782f1e6f18517c"
+  },
+  "cases": [
+    {
+      "name": "desktop-en",
+      "width": 1100,
+      "height": 760,
+      "checks": [
+        {
+          "name": "toggle-in-breadcrumb-not-tab-header",
+          "status": "passed"
+        },
+        {
+          "name": "one-shared-tree-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "toggle-labelled-and-linked",
+          "status": "passed"
+        },
+        {
+          "name": "tree-initially-visible",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "wide-source-scrolls-horizontally",
+          "status": "passed"
+        },
+        {
+          "name": "source-tab-restores-both-scroll-axes",
+          "status": "passed"
+        },
+        {
+          "name": "tree-hides-from-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "source-toggle-retains-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "hidden-tree-scope-shared-across-files",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-in-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-tab-restores-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-roundtrip-retains-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-markdown-end",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "non-file-tab-has-no-tree-or-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "file-tree-state-survives-non-file-tab",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-roundtrip-restores-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-source-end",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "all-file-reads-stay-in-synthetic-thread",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-escape-restores-focus",
+          "status": "passed"
+        },
+        {
+          "name": "external-default-and-custom-use-exact-local-file",
+          "status": "passed"
+        },
+        {
+          "name": "custom-application-picker-is-simulated",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-remote-error-is-visible-without-fallback",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "name": "narrow-en",
+      "width": 390,
+      "height": 640,
+      "checks": [
+        {
+          "name": "toggle-in-breadcrumb-not-tab-header",
+          "status": "passed"
+        },
+        {
+          "name": "one-shared-tree-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "toggle-labelled-and-linked",
+          "status": "passed"
+        },
+        {
+          "name": "tree-initially-visible",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "wide-source-scrolls-horizontally",
+          "status": "passed"
+        },
+        {
+          "name": "source-tab-restores-both-scroll-axes",
+          "status": "passed"
+        },
+        {
+          "name": "tree-hides-from-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "source-toggle-retains-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "hidden-tree-scope-shared-across-files",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-in-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-tab-restores-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-roundtrip-retains-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-markdown-end",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "non-file-tab-has-no-tree-or-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "file-tree-state-survives-non-file-tab",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-roundtrip-restores-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-source-end",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "all-file-reads-stay-in-synthetic-thread",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-escape-restores-focus",
+          "status": "passed"
+        },
+        {
+          "name": "external-default-and-custom-use-exact-local-file",
+          "status": "passed"
+        },
+        {
+          "name": "custom-application-picker-is-simulated",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-remote-error-is-visible-without-fallback",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "name": "short-en",
+      "width": 390,
+      "height": 400,
+      "checks": [
+        {
+          "name": "toggle-in-breadcrumb-not-tab-header",
+          "status": "passed"
+        },
+        {
+          "name": "one-shared-tree-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "toggle-labelled-and-linked",
+          "status": "passed"
+        },
+        {
+          "name": "tree-initially-visible",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "wide-source-scrolls-horizontally",
+          "status": "passed"
+        },
+        {
+          "name": "source-tab-restores-both-scroll-axes",
+          "status": "passed"
+        },
+        {
+          "name": "tree-hides-from-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "source-toggle-retains-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "hidden-tree-scope-shared-across-files",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-in-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-tab-restores-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-roundtrip-retains-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-markdown-end",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "non-file-tab-has-no-tree-or-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "file-tree-state-survives-non-file-tab",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-roundtrip-restores-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-source-end",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "all-file-reads-stay-in-synthetic-thread",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-escape-restores-focus",
+          "status": "passed"
+        },
+        {
+          "name": "external-default-and-custom-use-exact-local-file",
+          "status": "passed"
+        },
+        {
+          "name": "custom-application-picker-is-simulated",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-remote-error-is-visible-without-fallback",
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "name": "desktop-zh",
+      "width": 1100,
+      "height": 760,
+      "checks": [
+        {
+          "name": "toggle-in-breadcrumb-not-tab-header",
+          "status": "passed"
+        },
+        {
+          "name": "one-shared-tree-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "toggle-labelled-and-linked",
+          "status": "passed"
+        },
+        {
+          "name": "tree-initially-visible",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "wide-source-scrolls-horizontally",
+          "status": "passed"
+        },
+        {
+          "name": "source-tab-restores-both-scroll-axes",
+          "status": "passed"
+        },
+        {
+          "name": "tree-hides-from-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "source-toggle-retains-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-hidden:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "hidden-tree-scope-shared-across-files",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-in-breadcrumb",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-start:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-scrolls-editor",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel-keeps-breadcrumb-fixed",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-wheel:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-tab-restores-reading-position",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-toggle-roundtrip-retains-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-markdown-end",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "markdown-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "non-file-tab-has-no-tree-or-toggle",
+          "status": "passed"
+        },
+        {
+          "name": "file-tree-state-survives-non-file-tab",
+          "status": "passed"
+        },
+        {
+          "name": "source-tree-roundtrip-restores-position",
+          "status": "passed"
+        },
+        {
+          "name": "keyboard-reaches-source-end",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:editor-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:page-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:panel-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:body-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:views-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:active-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "source-end:content-does-not-own-scroll",
+          "status": "passed"
+        },
+        {
+          "name": "all-file-reads-stay-in-synthetic-thread",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-bounded",
+          "status": "passed"
+        },
+        {
+          "name": "external-menu-escape-restores-focus",
+          "status": "passed"
+        },
+        {
+          "name": "external-default-and-custom-use-exact-local-file",
+          "status": "passed"
+        },
+        {
+          "name": "custom-application-picker-is-simulated",
+          "status": "passed"
+        },
+        {
+          "name": "unsupported-remote-error-is-visible-without-fallback",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "totalChecks": 304,
+  "rendererErrors": [],
+  "externalRequests": [],
+  "browserSandboxDisabled": false,
+  "status": "passed",
+  "limitations": "Synthetic catalog, picker and launch receipts; no actual native app launch or picker acceptance. Menu overcrowding remains UX review concern; not final design acceptance. Other CI job failed Runtime.enable timeout; retry pending.",
+  "sha256": {
+    "desktop-zh-external-open-menu.png": "16ca62dc5551b96bd032fb07789bec348fbc3e74a96588226ea69ebff2bced87",
+    "narrow-en-external-open-menu.png": "768734f26eecbe7d9b3a94054bbae8deb1bd925c43b1f6c41b148d962cb1ad75",
+    "short-en-external-custom-configured.png": "3ba0924e1dec9d224bf0f453da757b3035c104e6852f135c364cbf8c9f3b482b",
+    "source.json": "2350abdd90e3bbece1a3eeea58a64ed2a17bdb43245440968d4faecd6fe31a7d",
+    "measurements.json": "dec9da00ab6d531edabfa29626f5df283c80fb873c9e584821ec4e985c51348f"
+  }
+}
