@@ -642,3 +642,74 @@
     cursor: row-resize;
   }
 }
+
+/* A bounded, infrequent configuration task; file opening stays in the menu. */
+.ui-dialog.external-applications-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(620px, calc(100dvh - 32px));
+  overflow: hidden;
+  padding: 0;
+}
+.external-applications-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.external-applications-header h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.external-applications-header button {
+  flex-shrink: 0;
+}
+.external-applications-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 16px 16px;
+  overflow-wrap: anywhere;
+}
+.external-applications-hint,
+.external-application-missing {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.external-applications-error {
+  color: var(--color-status-danger);
+}
+.external-application {
+  padding: 12px 0;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.external-application h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.external-application details {
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.external-application summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.external-application-path {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.external-applications-dialog button {
+  min-height: 36px;
+  white-space: normal;
+  text-align: start;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .external-applications-dialog button {
+    min-height: 44px;
+  }
+}

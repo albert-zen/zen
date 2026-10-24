@@ -1,3 +1,7 @@
+import type {
+  ExternalApplicationId,
+  ExternalOpenRequest,
+} from "../src/main/workspace-external-open.js";
 /** Actual workspace components with synthetic, memory-only file data. */
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -60,10 +64,53 @@ document.documentElement.dataset.appearance = appearance;
 document.documentElement.dataset.themePreset = "graphite";
 document.documentElement.dataset.platform = "linux";
 void i18n.changeLanguage(language);
+const externalCalls: unknown[] = [];
+const externalState = {
+  rejectRemote: false,
+  rejectConfigure: false,
+  cancelConfigure: false,
+};
+const applications: Partial<Record<ExternalApplicationId, string>> = {
+  vscode: "/synthetic/apps/VS Code",
+  cursor: "/synthetic/apps/Cursor",
+  editor: "/synthetic/apps/Text Editor",
+};
 Object.assign(window, {
   zenx: {
     platform: "linux",
     workspaceFiles: {
+      applications: async () => ({
+        platform: "linux",
+        applications: { ...applications },
+      }),
+      configureApplication: async (
+        id: ExternalApplicationId,
+        reset: boolean,
+      ) => {
+        externalCalls.push({ operation: "synthetic-picker", id, reset });
+        if (externalState.rejectConfigure)
+          throw new Error("Synthetic application selection failed. Try again.");
+        // Model the real API cancellation receipt: return the unchanged catalog.
+        // This is memory-only configuration, never a native application picker.
+        if (externalState.cancelConfigure)
+          return { platform: "linux", applications: { ...applications } };
+        if (reset) delete applications[id];
+        else applications[id] = "/synthetic/apps/Chosen Editor";
+        return { platform: "linux", applications: { ...applications } };
+      },
+      openExternal: async (input: ExternalOpenRequest) => {
+        if (
+          input.host !== "local" ||
+          input.threadId !== threadId ||
+          !files.has(input.path)
+        )
+          throw new Error("Invalid synthetic file identity");
+        if (externalState.rejectRemote)
+          throw new Error(
+            "External opening supports local Host files only. No local fallback was attempted.",
+          );
+        externalCalls.push({ operation: "synthetic-open", ...input });
+      },
       read: async (owner: string, path: string) => {
         record("read", owner, path);
         const file = files.get(path);
@@ -114,6 +161,8 @@ Object.assign(window, {
     markdownPath,
     threadId,
     calls,
+    externalCalls,
+    externalState,
     synthetic: true,
   },
 });

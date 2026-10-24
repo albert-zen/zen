@@ -1,4 +1,24 @@
 export const en = {
+  externalFileOpen: "Open file externally",
+  externalTextEditor: "Text editor",
+  externalCustomApp: "Custom application",
+  externalRevealFinder: "Reveal in Finder",
+  externalRevealExplorer: "Reveal in File Explorer",
+  externalRevealManager: "Reveal in file manager",
+  externalDefaultApp: "Open in default application",
+  externalSaveFirst: "Save or resolve changes before opening the disk version.",
+  externalOpenWith: "Open with {{app}}",
+  externalNotConfigured: "Not detected. Choose an application below.",
+  externalChooseApp: "Choose application for {{app}}…",
+  externalResetCustom: "Remove custom application",
+  externalManageApps: "Manage applications…",
+  externalManageTitle: "Applications for opening files",
+  externalManageClose: "Close",
+  externalManagePersistence:
+    "Each application selection or removal saves immediately on this computer. Cancelling the file picker leaves the current choice unchanged.",
+  externalManageBusy: "Waiting for application selection…",
+  externalApplicationPath: "Application path",
+
   browserOperationFailed:
     "The browser operation failed or its outcome is uncertain. Check the tool result before continuing.",
   externalReadOnly: "External · read-only",
@@ -951,6 +971,26 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  externalFileOpen: "在外部打开文件",
+  externalTextEditor: "文本编辑器",
+  externalCustomApp: "自定义应用",
+  externalRevealFinder: "在 Finder 中显示",
+  externalRevealExplorer: "在文件资源管理器中显示",
+  externalRevealManager: "在文件管理器中显示",
+  externalDefaultApp: "使用默认应用打开",
+  externalSaveFirst: "请先保存或解决冲突，再打开磁盘上的文件。",
+  externalOpenWith: "使用 {{app}} 打开",
+  externalNotConfigured: "未检测到应用。请在下方选择。",
+  externalChooseApp: "选择 {{app}} 应用…",
+  externalResetCustom: "移除自定义应用",
+  externalManageApps: "管理应用…",
+  externalManageTitle: "用于打开文件的应用",
+  externalManageClose: "关闭",
+  externalManagePersistence:
+    "每次选择或移除应用后会立即保存在此电脑上。取消文件选择器不会更改当前选择。",
+  externalManageBusy: "正在等待应用选择…",
+  externalApplicationPath: "应用路径",
+
   browserOperationFailed: "浏览器操作失败或结果不确定。继续前请检查工具结果。",
   externalReadOnly: "外部 · 只读",
   browserAgentWorking: "Agent 正在操作此页面",
