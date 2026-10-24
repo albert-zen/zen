@@ -215,6 +215,8 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 
 ### 4.4 Composer、审批与 live following
 
+- Composer 的文字输入焦点由现有中性圆角外框表达；首次插入引用切换到 inline editor 后、删除最后一个引用后与再次聚焦时均不叠加内部矩形 outline。引用按钮及其他控件保留各自的键盘焦点指示，forced-colors 下保留可见外框；不改变草稿、undo、发送或 Thread 状态语义。
+
 Composer 保持一个位置、几何和命中区域稳定的 primary action，只改变语义：
 
 | Run 状态 | Draft     | Primary action     |
