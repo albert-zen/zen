@@ -604,10 +604,23 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
   try {
     await act(async () => root.render(React.createElement(Harness)));
     const navigation = document.getElementById("workspace-file-navigation")!;
-    const navigationToggle = document.querySelector<HTMLButtonElement>(
-      ".workspace-navigation-toggle",
-    )!;
     const checkNavigationToggle = (label: string, pressed: boolean) => {
+      const toggles = document.querySelectorAll<HTMLButtonElement>(
+        ".workspace-navigation-toggle",
+      );
+      assert.equal(toggles.length, 1, "only the active file owns a toggle");
+      const navigationToggle = toggles[0]!;
+      assert.ok(
+        navigationToggle.closest(".file-location"),
+        "tree toggle belongs to the file path row",
+      );
+      assert.ok(navigationToggle.closest('[role="tabpanel"]:not([hidden])'));
+      assert.equal(
+        document.querySelector(
+          ".auxiliary-heading .workspace-navigation-toggle",
+        ),
+        null,
+      );
       assert.equal(
         navigationToggle.querySelector("svg")?.getAttribute("data-icon"),
         "folder",

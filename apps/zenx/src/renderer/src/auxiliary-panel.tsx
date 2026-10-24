@@ -960,28 +960,6 @@ export function AuxiliaryPanel({
         }}
       />
       <header className="auxiliary-heading">
-        {fileSurface ? (
-          <button
-            type="button"
-            className="icon-button workspace-navigation-toggle"
-            aria-label={i18n.t(
-              fileNavigationVisible
-                ? "panels:hideFileNavigation"
-                : "panels:showFileNavigation",
-            )}
-            title={i18n.t(
-              fileNavigationVisible
-                ? "panels:hideFileNavigation"
-                : "panels:showFileNavigation",
-            )}
-            aria-pressed={Boolean(fileNavigationVisible)}
-            aria-controls="workspace-file-navigation"
-            disabled={pickingFile}
-            onClick={() => setFileNavigationOpen((value) => !value)}
-          >
-            <Icon name="folder" />
-          </button>
-        ) : null}
         <div className="workspace-tab-rail">
           <div
             ref={tabRail}
@@ -1418,6 +1396,31 @@ export function AuxiliaryPanel({
                     workspacePath={workspacePath}
                     initialPath={tab.path}
                     standalone
+                    navigationToggle={
+                      visible ? (
+                        <button
+                          type="button"
+                          className="icon-button workspace-navigation-toggle"
+                          aria-label={i18n.t(
+                            fileNavigationVisible
+                              ? "panels:hideFileNavigation"
+                              : "panels:showFileNavigation",
+                          )}
+                          title={i18n.t(
+                            fileNavigationVisible
+                              ? "panels:hideFileNavigation"
+                              : "panels:showFileNavigation",
+                          )}
+                          aria-pressed={Boolean(fileNavigationVisible)}
+                          aria-controls="workspace-file-navigation"
+                          onClick={() =>
+                            setFileNavigationOpen((value) => !value)
+                          }
+                        >
+                          <Icon name="folder" />
+                        </button>
+                      ) : null
+                    }
                   />
                 ) : null}
                 {tab.browser && threadId !== undefined && visible ? (

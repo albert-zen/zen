@@ -188,6 +188,44 @@ function schemaType(schema: unknown, depth = 0): string {
       ? schema.anyOf
       : undefined;
   if (variants !== undefined && variants.length > 0) {
+    // JSON Schema alternatives also constrain their sibling object properties.
+    // Required-only branches do not redefine those properties or their docs.
+    const properties = schema.properties;
+    if (
+      schema.type === "object" &&
+      isRecord(properties) &&
+      variants.every(
+        (entry) =>
+          isRecord(entry) &&
+          Object.keys(entry).length === 1 &&
+          Array.isArray(entry.required) &&
+          entry.required.length > 0 &&
+          entry.required.every(
+            (name) =>
+              typeof name === "string" && Object.hasOwn(properties, name),
+          ),
+      )
+    ) {
+      const baseRequired = Array.isArray(schema.required)
+        ? schema.required
+        : [];
+      const exclusiveKeys =
+        Array.isArray(schema.oneOf) &&
+        variants.every((entry) => entry.required.length === 1)
+          ? variants.map((entry) => entry.required[0] as string)
+          : [];
+      return variants
+        .map((entry) =>
+          objectSchemaType(
+            { ...schema, required: [...baseRequired, ...entry.required] },
+            depth + 1,
+            new Set(
+              exclusiveKeys.filter((key) => !entry.required.includes(key)),
+            ),
+          ),
+        )
+        .join(" | ");
+    }
     const rendered = variants.map((entry) => schemaType(entry, depth + 1));
     return rendered.every((entry) => entry !== "unknown")
       ? rendered.join(" | ")
@@ -223,6 +261,7 @@ function schemaType(schema: unknown, depth = 0): string {
 function objectSchemaType(
   schema: Record<string, unknown>,
   depth: number,
+  forbidden: ReadonlySet<string> = new Set(),
 ): string {
   const properties = isRecord(schema.properties) ? schema.properties : {};
   const required = new Set(
@@ -237,7 +276,7 @@ function objectSchemaType(
       isRecord(propertySchema) && typeof propertySchema.description === "string"
         ? `${inlineDocComment(propertySchema.description)} `
         : "";
-    return `${description}${typescriptProperty(name)}${required.has(name) ? "" : "?"}: ${schemaType(propertySchema, depth)};`;
+    return `${description}${typescriptProperty(name)}${required.has(name) ? "" : "?"}: ${forbidden.has(name) ? "never" : schemaType(propertySchema, depth)};`;
   });
   if (schema.additionalProperties === true) {
     entries.push("[key: string]: unknown;");

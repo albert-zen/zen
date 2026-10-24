@@ -7,20 +7,29 @@ const evidence = {
   source:
     "Production components with synthetic native-message projection. Browser scenes call no Provider; exact five-reference payload is compared with a separately captured model user message.",
   scenes: [],
+  remountCenterTargets: [],
+  atomicDeletes: [],
 };
 for (const entry of [
   { inputMode: "desktop", theme: "light", width: 1280, height: 1000 },
   { inputMode: "desktop", theme: "dark", width: 1280, height: 1000 },
   { inputMode: "desktop", theme: "light", width: 420, height: 900 },
+  { inputMode: "desktop", theme: "dark", width: 420, height: 900 },
   { inputMode: "touch", theme: "light", width: 420, height: 900 },
 ]) {
+  evidence.currentScene = entry;
   if (entry.inputMode === "desktop")
     process.env.ZENX_PREVIEW_DESKTOP_INPUT = "1";
   else delete process.env.ZENX_PREVIEW_DESKTOP_INPUT;
   await withPreviewBrowser(
     directory,
-    async ({ send, evaluate, url, screenshot }) => {
+    async ({ send, evaluate, url, screenshot: captureScreenshot }) => {
+      const screenshot = async (name) => {
+        evidence.checkpoint = `screenshot: ${name}`;
+        await captureScreenshot(name);
+      };
       const waitFor = async (expression) => {
+        evidence.checkpoint = `waiting for: ${expression}`;
         for (let i = 0; i < 200; i++) {
           if (await evaluate(expression)) return;
           await delay(50);
@@ -31,6 +40,44 @@ for (const entry of [
         evaluate(
           "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
         );
+      const assertComposerFocus = async (stage) => {
+        evidence.checkpoint = `composer focus: ${stage}`;
+        await settle();
+        const focus = await evaluate(`(() => {
+          const input = document.querySelector('#thread-composer');
+          const shell = input.closest('.composer');
+          const editor = input.closest('.cm-editor');
+          const styles = [input, ...(editor ? [editor] : [])].map(element => {
+            const style = getComputedStyle(element);
+            return { element: element.className, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, outlineColor: style.outlineColor };
+          });
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--color-focus-ring)'; shell.append(probe);
+          const expectedBorder = getComputedStyle(probe).color; probe.remove();
+          return { focused: document.activeElement === input, styles, border: getComputedStyle(shell).borderTopColor, expectedBorder };
+        })()`);
+        assert.equal(
+          focus.focused,
+          true,
+          `${stage}: editable input retains focus`,
+        );
+        for (const style of focus.styles)
+          assert.ok(
+            style.outlineStyle === "none" || style.outlineWidth === "0px",
+            `${stage}: no inner outline: ${JSON.stringify(style)}`,
+          );
+        assert.equal(
+          focus.border,
+          focus.expectedBorder,
+          `${stage}: neutral outer focus border remains`,
+        );
+        evidence.scenes.push({
+          name: "composer-focus",
+          stage,
+          ...entry,
+          ...focus,
+        });
+      };
       const settleDialog = async (selector) => {
         const state = await evaluate(`(async () => {
           const dialog = document.querySelector(${JSON.stringify(selector)});
@@ -54,14 +101,17 @@ for (const entry of [
         });
       };
       const press = async (key, code = key, modifiers = 0) => {
+        evidence.checkpoint = `keyboard: ${code}, modifiers ${modifiers}`;
         const windowsVirtualKeyCode =
-          key === "Enter"
-            ? 13
-            : key === "Backspace"
-              ? 8
-              : key === "Escape"
-                ? 27
-                : key.toUpperCase().charCodeAt(0);
+          key === "Tab"
+            ? 9
+            : key === "Enter"
+              ? 13
+              : key === "Backspace"
+                ? 8
+                : key === "Escape"
+                  ? 27
+                  : key.toUpperCase().charCodeAt(0);
         await send("Input.dispatchKeyEvent", {
           type: "keyDown",
           key,
@@ -145,6 +195,8 @@ for (const entry of [
         true,
         "Synthetic completed turns have an explicit final acknowledgment",
       );
+      await click("#thread-composer");
+      await assertComposerFocus("legacy textarea mouse focus");
       await screenshot(`${name}-initial-sent.png`);
       // Use an actual DOM Range; the production selectionchange listener owns the toolbar.
       await evaluate(
@@ -181,6 +233,40 @@ for (const entry of [
         await evaluate("window.quoteFixture.getSent().length"),
         0,
         "Quote never sends",
+      );
+      await assertComposerFocus("first reference insertion");
+      const quotedDraft = await evaluate("window.quoteFixture.getDraft()");
+      await click(".inline-composer-editor .reference-token-remove");
+      await waitFor("window.quoteFixture.getDraft().references.length === 0");
+      await click("#thread-composer");
+      await assertComposerFocus("last reference removed then mouse refocus");
+      await screenshot(`${name}-empty-refocus.png`);
+      await press("z", "KeyZ", 2);
+      await waitFor("window.quoteFixture.getDraft().references.length === 1");
+      assert.deepEqual(
+        await evaluate("window.quoteFixture.getDraft()"),
+        quotedDraft,
+      );
+      await assertComposerFocus("undo restores final reference");
+      // Tab enters the real editor from a temporary preceding keyboard stop.
+      await evaluate(
+        `(() => { const input=document.querySelector('#thread-composer'); const stop=document.createElement('button'); stop.id='focus-probe'; input.closest('.inline-composer-editor').before(stop); stop.focus(); })()`,
+      );
+      await press("Tab", "Tab");
+      await assertComposerFocus("keyboard entry");
+      await evaluate("document.querySelector('#focus-probe').remove()");
+      await press("Tab", "Tab");
+      assert.equal(
+        await evaluate(
+          `(() => { const target=document.activeElement; return target.matches('.reference-token button') && getComputedStyle(target).outlineStyle !== 'none'; })()`,
+        ),
+        true,
+        "reference button keeps its keyboard focus indicator",
+      );
+      await click("#thread-composer");
+      await assertComposerFocus("mouse returns from reference control");
+      await evaluate(
+        "window.quoteFixture.setComposerCaret(window.quoteFixture.getDraft().text.length)",
       );
       await send("Input.insertText", { text: "请解释这三个字。" });
       await waitFor(
@@ -241,6 +327,14 @@ for (const entry of [
         "Local preview must not imply a failed backend send",
       );
       await screenshot(`${name}-sent.png`);
+      await click("#thread-composer");
+      await assertComposerFocus("after send clears references");
+      await evaluate("window.quoteFixture.navigate()");
+      await waitFor(
+        "document.querySelector('#thread-composer')?.tagName === 'TEXTAREA'",
+      );
+      await click("#thread-composer");
+      await assertComposerFocus("thread switch unmounts editor");
       evidence.scenes.push({ ...entry, capabilities, draft, sent });
       if (desktop) {
         await send("Page.navigate", {
@@ -253,6 +347,32 @@ for (const entry of [
         await settle();
         assert.equal(await evaluate("window.quoteFixture.getSent().length"), 0);
         const baseline = await evaluate("window.quoteFixture.getDraft()");
+        // A contenteditable center can be a reference's remove button. Record
+        // the old pointer target without activating it; focus the editor itself.
+        const remountCenterTarget = await evaluate(`(() => {
+          const input = document.querySelector('#thread-composer');
+          input.scrollIntoView({ block: 'center' });
+          const rect = input.getBoundingClientRect();
+          const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+          const target = document.elementFromPoint(point.x, point.y);
+          const control = target?.closest('button, a, input, select, textarea, [role="button"]');
+          return {
+            point,
+            target: target ? { tag: target.tagName, className: target.getAttribute('class') } : null,
+            control: control ? { tag: control.tagName, className: control.getAttribute('class'), role: control.getAttribute('role'), label: control.getAttribute('aria-label'), title: control.getAttribute('title') } : null,
+          };
+        })()`);
+        evidence.remountCenterTargets.push({
+          ...entry,
+          ...remountCenterTarget,
+        });
+        await evaluate("window.quoteFixture.setComposerCaret(0)");
+        await assertComposerFocus("remounted reference editor");
+        assert.deepEqual(
+          await evaluate("window.quoteFixture.getDraft()"),
+          baseline,
+          "remount focus must not activate a reference control or alter the draft",
+        );
         assert.equal(baseline.references.length, 5);
         assert.ok(
           baseline.references.every(
@@ -269,10 +389,46 @@ for (const entry of [
         );
         await screenshot(`unified-${entry.theme}-${entry.width}-draft.png`);
         // Real keyboard edits around atomic chips, not a mock textarea facade.
+        const atomicDelete = {
+          ...entry,
+          beforeSelection: await evaluate(
+            "window.quoteFixture.getComposerEditorState()",
+          ),
+        };
+        evidence.atomicDeletes.push(atomicDelete);
+        const deletionCaret = baseline.references[2].position + 1;
         await evaluate(
-          `window.quoteFixture.setComposerCaret(${baseline.references[2].position + 1})`,
+          `window.quoteFixture.setComposerCaret(${deletionCaret})`,
+        );
+        await settle();
+        atomicDelete.beforeKey = await evaluate(
+          "window.quoteFixture.getComposerEditorState()",
+        );
+        assert.equal(
+          atomicDelete.beforeKey.focused,
+          true,
+          "atomic delete input is focused",
+        );
+        assert.deepEqual(
+          atomicDelete.beforeKey.editorSelection,
+          { anchor: deletionCaret, head: deletionCaret },
+          "atomic delete CodeMirror caret is after the selected token",
+        );
+        assert.deepEqual(
+          atomicDelete.beforeKey.domSelection,
+          { anchor: deletionCaret, head: deletionCaret },
+          "atomic delete native caret matches CodeMirror",
+        );
+        assert.equal(
+          atomicDelete.beforeKey.editorText,
+          baseline.text,
+          "atomic delete editor still matches draft",
         );
         await press("Backspace");
+        await settle();
+        atomicDelete.afterKey = await evaluate(
+          "window.quoteFixture.getComposerEditorState()",
+        );
         await waitFor("window.quoteFixture.getDraft().references.length === 4");
         await press("z", "KeyZ", 2);
         await waitFor("window.quoteFixture.getDraft().references.length === 5");
@@ -332,6 +488,7 @@ for (const entry of [
           0,
           "composing Enter must not send after React settles",
         );
+        await assertComposerFocus("after composition");
         const afterSyntheticComposition = await evaluate(
           "window.quoteFixture.getDraft()",
         );
@@ -485,6 +642,13 @@ for (const entry of [
             "window.quoteFixture.getDraft()",
           );
           await evaluate("window.quoteFixture.setQueueCaret(0)");
+          assert.equal(
+            await evaluate(
+              "document.activeElement.matches('.queued-message-editor .cm-content')",
+            ),
+            true,
+            "queue editor retains editable focus",
+          );
           await send("Input.insertText", { text: "队列前缀" });
           await click(".queue-editor-save");
           await waitFor(
@@ -556,7 +720,23 @@ for (const entry of [
         });
       }
     },
-  );
+  ).catch(async (error) => {
+    // Synthetic fixture data only; preserve the original failure and checkpoint.
+    evidence.failure = {
+      name: error instanceof Error ? error.name : "Error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+    await writeFile(
+      path.join(directory, "measurements.json"),
+      JSON.stringify(evidence, null, 2) + "\n",
+    ).catch((writeError) => {
+      console.error(
+        "Could not retain partial synthetic measurements:",
+        writeError,
+      );
+    });
+    throw error;
+  });
 }
 await writeFile(
   path.join(directory, "measurements.json"),
