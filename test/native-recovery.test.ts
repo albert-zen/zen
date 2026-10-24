@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
+import type { AppServerEvent } from "../src/app-server.js";
+import { StaticModelCatalog } from "../src/model-catalog.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
-import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
+import {
+  NativeRecoveryProjection,
+  type NativeProjectionEvent,
+} from "../src/protocol/native/recovery.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { WebSocket } from "ws";
 
@@ -301,4 +306,131 @@ function deferred<T>(): {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+for (const faultType of ["thread_event", "model_catalog_updated"] as const) {
+  test(`native recovery isolates a failing ${faultType} listener`, async (t) => {
+    const host = createHostedAppServer({
+      cwd: process.cwd(),
+      dataDirectory: "/tmp/unused-native-recovery-listener",
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+      journal: new InMemoryThreadJournal(),
+    });
+    const recovery = new NativeRecoveryProjection(host, {
+      processEpoch: "epoch-listener",
+    });
+    const warnings = t.mock.method(console, "warn", () => {});
+    const readThread = t.mock.method(host, "readThread");
+    const originalEvents: AppServerEvent[] = [];
+    const unsubscribeHost = host.subscribe((event) =>
+      originalEvents.push(event),
+    );
+    const before: NativeProjectionEvent[] = [];
+    const after: NativeProjectionEvent[] = [];
+    const unsubscribeBefore = recovery.subscribe((event) => before.push(event));
+    let failures = 0;
+    const unsubscribeFailed = recovery.subscribe((event) => {
+      if (event.type === faultType) {
+        failures += 1;
+        throw new Error("private payload must not be logged");
+      }
+    });
+    const unsubscribeAfter = recovery.subscribe((event) => after.push(event));
+    const publishCatalog = () => {
+      const current = host.currentRuntimeConfiguration();
+      const { adapter, model } = current.providerSnapshot.resolve(
+        current.defaults,
+      );
+      host.publishRuntimeConfiguration(
+        host.prepareRuntimeConfiguration({
+          revision: current.revision + 1,
+          defaults: current.defaults,
+          providerProfiles: [
+            {
+              providerProfileId: current.defaults.providerProfileId,
+              adapter,
+              modelCatalog: new StaticModelCatalog([model]),
+            },
+          ],
+        }),
+      );
+    };
+    try {
+      if (faultType === "model_catalog_updated") publishCatalog();
+      const thread = await host.startThread();
+      // The throwing observer must not skip compaction at this canonical boundary.
+      assert(readThread.mock.callCount() > 0);
+      for (const input of ["first turn", "subsequent turn"]) {
+        await (
+          await host.startTurn(thread.id, input)
+        ).done;
+      }
+      publishCatalog();
+      publishCatalog();
+
+      assert.equal(failures, 1);
+      assert.deepEqual(before, after);
+      assert.deepEqual(
+        after.map((projected) =>
+          projected.type === "thread_event"
+            ? projected.event.event
+            : { type: projected.type, revision: projected.revision },
+        ),
+        originalEvents,
+      );
+      const completed = after.filter(
+        (event) =>
+          event.type === "thread_event" &&
+          event.event.event.type === "turn_completed",
+      );
+      assert.equal(completed.length, 2);
+      const watermarks = after.flatMap((event) =>
+        event.type === "thread_event" ? [event.event.watermark] : [],
+      );
+      assert.deepEqual(
+        watermarks,
+        watermarks.map((_, index) => index + 1),
+      );
+      assert.deepEqual(
+        warnings.mock.calls.map((call) => call.arguments),
+        [["Removed a failing native recovery event subscriber"]],
+      );
+
+      const canonical = await host.readThread(thread.id);
+      const resumed = await recovery.resume(thread.id);
+      assert.deepEqual(resumed.thread, canonical);
+      assert.equal(canonical.turns.length, 2);
+      assert(canonical.turns.every((turn) => turn.status === "completed"));
+      assert.equal(resumed.watermark, watermarks.at(-1));
+      assert.deepEqual(resumed.events, []);
+      assert.deepEqual(await host.readThread(thread.id), canonical);
+
+      unsubscribeFailed();
+      unsubscribeFailed();
+      unsubscribeBefore();
+      const beforeCount = before.length;
+      const afterCount = after.length;
+      publishCatalog();
+      assert.equal(before.length, beforeCount);
+      assert.equal(after.length, afterCount + 1);
+      recovery.close();
+      recovery.close();
+      publishCatalog();
+      await (
+        await host.startTurn(thread.id, "after close")
+      ).done;
+      assert.equal(after.length, afterCount + 1);
+      assert.equal(warnings.mock.callCount(), 1);
+    } finally {
+      unsubscribeBefore();
+      unsubscribeFailed();
+      unsubscribeAfter();
+      unsubscribeHost();
+      recovery.close();
+      await host.closeProviderTransport();
+    }
+  });
 }
