@@ -7,6 +7,8 @@ const evidence = {
   source:
     "Production components with synthetic native-message projection. Browser scenes call no Provider; exact five-reference payload is compared with a separately captured model user message.",
   scenes: [],
+  remountCenterTargets: [],
+  atomicDeletes: [],
 };
 for (const entry of [
   { inputMode: "desktop", theme: "light", width: 1280, height: 1000 },
@@ -345,8 +347,32 @@ for (const entry of [
         await settle();
         assert.equal(await evaluate("window.quoteFixture.getSent().length"), 0);
         const baseline = await evaluate("window.quoteFixture.getDraft()");
-        await click("#thread-composer");
+        // A contenteditable center can be a reference's remove button. Record
+        // the old pointer target without activating it; focus the editor itself.
+        const remountCenterTarget = await evaluate(`(() => {
+          const input = document.querySelector('#thread-composer');
+          input.scrollIntoView({ block: 'center' });
+          const rect = input.getBoundingClientRect();
+          const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+          const target = document.elementFromPoint(point.x, point.y);
+          const control = target?.closest('button, a, input, select, textarea, [role="button"]');
+          return {
+            point,
+            target: target ? { tag: target.tagName, className: target.getAttribute('class') } : null,
+            control: control ? { tag: control.tagName, className: control.getAttribute('class'), role: control.getAttribute('role'), label: control.getAttribute('aria-label'), title: control.getAttribute('title') } : null,
+          };
+        })()`);
+        evidence.remountCenterTargets.push({
+          ...entry,
+          ...remountCenterTarget,
+        });
+        await evaluate("window.quoteFixture.setComposerCaret(0)");
         await assertComposerFocus("remounted reference editor");
+        assert.deepEqual(
+          await evaluate("window.quoteFixture.getDraft()"),
+          baseline,
+          "remount focus must not activate a reference control or alter the draft",
+        );
         assert.equal(baseline.references.length, 5);
         assert.ok(
           baseline.references.every(
@@ -363,42 +389,44 @@ for (const entry of [
         );
         await screenshot(`unified-${entry.theme}-${entry.width}-draft.png`);
         // Real keyboard edits around atomic chips, not a mock textarea facade.
-        evidence.atomicDelete = {
+        const atomicDelete = {
+          ...entry,
           beforeSelection: await evaluate(
             "window.quoteFixture.getComposerEditorState()",
           ),
         };
+        evidence.atomicDeletes.push(atomicDelete);
         const deletionCaret = baseline.references[2].position + 1;
         await evaluate(
           `window.quoteFixture.setComposerCaret(${deletionCaret})`,
         );
         await settle();
-        evidence.atomicDelete.beforeKey = await evaluate(
+        atomicDelete.beforeKey = await evaluate(
           "window.quoteFixture.getComposerEditorState()",
         );
         assert.equal(
-          evidence.atomicDelete.beforeKey.focused,
+          atomicDelete.beforeKey.focused,
           true,
           "atomic delete input is focused",
         );
         assert.deepEqual(
-          evidence.atomicDelete.beforeKey.editorSelection,
+          atomicDelete.beforeKey.editorSelection,
           { anchor: deletionCaret, head: deletionCaret },
           "atomic delete CodeMirror caret is after the selected token",
         );
         assert.deepEqual(
-          evidence.atomicDelete.beforeKey.domSelection,
+          atomicDelete.beforeKey.domSelection,
           { anchor: deletionCaret, head: deletionCaret },
           "atomic delete native caret matches CodeMirror",
         );
         assert.equal(
-          evidence.atomicDelete.beforeKey.editorText,
+          atomicDelete.beforeKey.editorText,
           baseline.text,
           "atomic delete editor still matches draft",
         );
         await press("Backspace");
         await settle();
-        evidence.atomicDelete.afterKey = await evaluate(
+        atomicDelete.afterKey = await evaluate(
           "window.quoteFixture.getComposerEditorState()",
         );
         await waitFor("window.quoteFixture.getDraft().references.length === 4");
