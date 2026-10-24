@@ -15,13 +15,19 @@ for (const entry of [
   { inputMode: "desktop", theme: "dark", width: 420, height: 900 },
   { inputMode: "touch", theme: "light", width: 420, height: 900 },
 ]) {
+  evidence.currentScene = entry;
   if (entry.inputMode === "desktop")
     process.env.ZENX_PREVIEW_DESKTOP_INPUT = "1";
   else delete process.env.ZENX_PREVIEW_DESKTOP_INPUT;
   await withPreviewBrowser(
     directory,
-    async ({ send, evaluate, url, screenshot }) => {
+    async ({ send, evaluate, url, screenshot: captureScreenshot }) => {
+      const screenshot = async (name) => {
+        evidence.checkpoint = `screenshot: ${name}`;
+        await captureScreenshot(name);
+      };
       const waitFor = async (expression) => {
+        evidence.checkpoint = `waiting for: ${expression}`;
         for (let i = 0; i < 200; i++) {
           if (await evaluate(expression)) return;
           await delay(50);
@@ -33,6 +39,7 @@ for (const entry of [
           "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
         );
       const assertComposerFocus = async (stage) => {
+        evidence.checkpoint = `composer focus: ${stage}`;
         await settle();
         const focus = await evaluate(`(() => {
           const input = document.querySelector('#thread-composer');
@@ -92,6 +99,7 @@ for (const entry of [
         });
       };
       const press = async (key, code = key, modifiers = 0) => {
+        evidence.checkpoint = `keyboard: ${code}, modifiers ${modifiers}`;
         const windowsVirtualKeyCode =
           key === "Tab"
             ? 9
@@ -355,10 +363,44 @@ for (const entry of [
         );
         await screenshot(`unified-${entry.theme}-${entry.width}-draft.png`);
         // Real keyboard edits around atomic chips, not a mock textarea facade.
+        evidence.atomicDelete = {
+          beforeSelection: await evaluate(
+            "window.quoteFixture.getComposerEditorState()",
+          ),
+        };
+        const deletionCaret = baseline.references[2].position + 1;
         await evaluate(
-          `window.quoteFixture.setComposerCaret(${baseline.references[2].position + 1})`,
+          `window.quoteFixture.setComposerCaret(${deletionCaret})`,
+        );
+        await settle();
+        evidence.atomicDelete.beforeKey = await evaluate(
+          "window.quoteFixture.getComposerEditorState()",
+        );
+        assert.equal(
+          evidence.atomicDelete.beforeKey.focused,
+          true,
+          "atomic delete input is focused",
+        );
+        assert.deepEqual(
+          evidence.atomicDelete.beforeKey.editorSelection,
+          { anchor: deletionCaret, head: deletionCaret },
+          "atomic delete CodeMirror caret is after the selected token",
+        );
+        assert.deepEqual(
+          evidence.atomicDelete.beforeKey.domSelection,
+          { anchor: deletionCaret, head: deletionCaret },
+          "atomic delete native caret matches CodeMirror",
+        );
+        assert.equal(
+          evidence.atomicDelete.beforeKey.editorText,
+          baseline.text,
+          "atomic delete editor still matches draft",
         );
         await press("Backspace");
+        await settle();
+        evidence.atomicDelete.afterKey = await evaluate(
+          "window.quoteFixture.getComposerEditorState()",
+        );
         await waitFor("window.quoteFixture.getDraft().references.length === 4");
         await press("z", "KeyZ", 2);
         await waitFor("window.quoteFixture.getDraft().references.length === 5");
@@ -650,7 +692,23 @@ for (const entry of [
         });
       }
     },
-  );
+  ).catch(async (error) => {
+    // Synthetic fixture data only; preserve the original failure and checkpoint.
+    evidence.failure = {
+      name: error instanceof Error ? error.name : "Error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+    await writeFile(
+      path.join(directory, "measurements.json"),
+      JSON.stringify(evidence, null, 2) + "\n",
+    ).catch((writeError) => {
+      console.error(
+        "Could not retain partial synthetic measurements:",
+        writeError,
+      );
+    });
+    throw error;
+  });
 }
 await writeFile(
   path.join(directory, "measurements.json"),
