@@ -8,6 +8,7 @@ import { JSDOM } from "jsdom";
 
 import type { Thread, ThreadItem } from "../src/protocol-client/index.js";
 import { emptyComposerState } from "../src/renderer/src/composer-state.js";
+import { triggerMessagePresentation } from "../src/renderer/src/trigger-message-presentation.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 const { ThreadView } = await import("../src/renderer/src/ThreadView.js");
 const { QueuedMessages } =
@@ -98,7 +99,7 @@ function assertCompact(item: HostItem) {
   assert.ok(!document.body.textContent!.includes(item.sourceId!));
   assert.match(document.body.textContent!, /Release check|Inspect the release/);
 }
-for (const source of ["trigger", "room"] as const) {
+for (const source of ["room"] as const) {
   for (const withHistory of [false, true])
     test(`real ${source} Host wakeup stays compact ${withHistory ? "with" : "without"} history, discloses and copies its exact original`, async () => {
       const { item, entry } = await realWakeup(source);
@@ -120,7 +121,7 @@ for (const source of ["trigger", "room"] as const) {
         assertCompact(item);
         assert.equal(
           document.querySelector(".host-message-source")!.textContent,
-          source === "trigger" ? "Trigger" : "Room",
+          "Room",
         );
         assert.equal(document.querySelector(".user-bubble"), null);
         const toggle = button("Show Host message details");
@@ -140,6 +141,54 @@ for (const source of ["trigger", "room"] as const) {
         assertCompact(item);
       });
     });
+}
+for (const withHistory of [false, true]) {
+  test(`trigger input is a full named message bubble ${withHistory ? "with" : "without"} history`, async () => {
+    const { item, entry } = await realWakeup("trigger");
+    const value = thread(item);
+    value.turns[0]!.completedAt = 20;
+    value.turns[0]!.status = "completed";
+    await withDom(async (root, copied) => {
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: emptyComposerState(),
+            thread: value,
+            wakeups: withHistory ? [entry] : [],
+            onDraftChange: () => {},
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+      const row = document.querySelector(".trigger-message-row")!;
+      const bubble = row.querySelector(".user-bubble")!;
+      assert.ok(bubble);
+      assert.match(bubble.textContent!, /Inspect the release/);
+      assert.doesNotMatch(
+        bubble.textContent!,
+        /\[ZenX trigger wakeup\]|Trigger ID:|Injected prompt:/,
+      );
+      assert.match(bubble.textContent!, /Bounded source context/);
+      assert.equal(
+        row.querySelector(".host-message-source")!.textContent,
+        "Release check",
+      );
+      assert.equal(bubble.querySelector(".message-source-link"), null);
+      assert.equal(row.querySelector(".host-message-toggle"), null);
+      assert.equal(
+        row.querySelector(".message-actions")?.previousElementSibling,
+        bubble,
+      );
+      assert.ok(row.querySelector(".message-time"));
+      await act(async () => button("Copy Host message").click());
+      assert.deepEqual(copied, [
+        triggerMessagePresentation(item.text, item.sourceId).text,
+      ]);
+    });
+  });
 }
 test("queued real Host wakeup uses the same compact disclosure, copies original, and cancels without Edit", async () => {
   const { item } = await realWakeup("trigger");

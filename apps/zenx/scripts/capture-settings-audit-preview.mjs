@@ -19,7 +19,7 @@ const directory = path.resolve(process.argv[2] ?? ".settings-audit-preview");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evidence = {
   scope:
-    "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, mutations or persistence. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
+    "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, Host mutations or persistence. Deferred Save uses a synthetic Promise only. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
   browserSandboxDisabled: false,
   cases: [],
   rendererErrors: [],
@@ -262,8 +262,8 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    const navigate = async (initialFailure = false) => {
-      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0" })}`;
+    const navigate = async (initialFailure = false, deferredSave = false) => {
+      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0", deferredSave: deferredSave ? "1" : "0" })}`;
       await send("Page.navigate", { url: destination });
       await waitFor(
         `location.href===${JSON.stringify(destination)} && ${initialFailure ? "!!document.querySelector('.page-loading [role=alert]')" : "document.querySelectorAll('.provider-profile-card').length===4"}`,
@@ -298,6 +298,28 @@ try {
       "document.querySelectorAll('.provider-model-row').length===12",
     );
     await capture("02-edit-from-last-provider");
+    await evaluate(
+      `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
+    );
+    await send("Input.insertText", { text: "Synthetic unsaved provider" });
+    await waitFor(
+      `document.querySelector('.provider-editor input[id$="-displayName"]').value === "Synthetic unsaved provider"`,
+    );
+    receipt.editorIsolation = await evaluate(`(() => {
+      const editor = document.querySelector('.provider-editor');
+      const name = editor.querySelector('input[id$="-displayName"]');
+      const before = name.value;
+      const actions = [...document.querySelectorAll('.provider-profile-actions button')];
+      actions.forEach(button => button.click());
+      return {allDisabled: actions.every(button => button.disabled), allExplained: actions.every(button => !!document.getElementById(button.getAttribute('aria-describedby'))?.textContent), sameEditor: document.querySelector('.provider-editor') === editor, namePreserved: name.value === before};
+    })()`);
+    assert.deepEqual(receipt.editorIsolation, {
+      allDisabled: true,
+      allExplained: true,
+      sameEditor: true,
+      namePreserved: true,
+    });
+    await capture("02c-preserved-provider-draft");
     await key("Tab", "Tab", 9);
     receipt.keyboardForward = await evaluate(measure);
     await key("Tab", "Tab", 9, 8);
@@ -328,6 +350,87 @@ try {
     await clickSelector(".provider-editor-head button");
     await waitFor("!document.querySelector('.provider-editor')");
     await capture("08-cancel-focus");
+    assert.equal(
+      await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      ),
+      true,
+      "Cancel returns focus to originating provider Edit",
+    );
+    // Real Chromium disables focused native controls unlike DOM-only harnesses.
+    for (const newerNavigation of [false, true]) {
+      await navigate(false, true);
+      await clickSelector(".provider-profile-actions button:first-child", 3);
+      await waitFor("!!document.querySelector('.provider-editor')");
+      await clickSelector('.provider-editor-actions [type="submit"]');
+      await waitFor(
+        "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'true'",
+      );
+      const pendingFocus = await evaluate(measure);
+      (receipt.pendingSaveFocus ??= []).push({ newerNavigation, pendingFocus });
+      if (newerNavigation) await clickSelector("#settings-tab-general");
+      await evaluate("window.__settingsAudit.settleProviderEdit()");
+      await waitFor("!document.querySelector('.provider-editor')");
+      const settledFocus = await evaluate(measure);
+      const restored = await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      );
+      const preservedNavigation = await evaluate(
+        "document.activeElement === document.querySelector('#settings-tab-general')",
+      );
+      (receipt.deferredSaves ??= []).push({
+        newerNavigation,
+        pendingFocus,
+        settledFocus,
+        restored,
+        preservedNavigation,
+      });
+      await capture(newerNavigation ? "12-save-navigation" : "11-save-focus");
+      // Record both cases before asserting so a failed restoration has navigation evidence too.
+    }
+    assert.equal(
+      receipt.deferredSaves[0].restored,
+      true,
+      "Save success returns focus after native pending disable",
+    );
+    assert.equal(
+      receipt.deferredSaves[1].preservedNavigation,
+      true,
+      "Late Save does not steal General tab focus",
+    );
+    await navigate(false, true);
+    await clickSelector(".provider-profile-actions button:first-child", 3);
+    await evaluate(
+      `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
+    );
+    await send("Input.insertText", { text: "Synthetic failed-save draft" });
+    await clickSelector('.provider-editor-actions [type="submit"]');
+    await waitFor(
+      "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'true'",
+    );
+    await evaluate("window.__settingsAudit.settleProviderEdit('failure')");
+    await waitFor(
+      "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'false'",
+    );
+    receipt.failedSave = await evaluate(`(() => ({
+      draft: document.querySelector('.provider-editor input[id$="-displayName"]').value,
+      enabled: !document.querySelector('.provider-editor fieldset').disabled,
+      attempts: window.__settingsAudit.calls.filter(x => x === "synthetic-deferred-edit").length
+    }))()`);
+    assert.deepEqual(receipt.failedSave, {
+      draft: "Synthetic failed-save draft",
+      enabled: true,
+      attempts: 1,
+    });
+    await capture("13-failed-save-draft");
+    await clickSelector(".provider-editor-head button");
+    assert.equal(
+      await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      ),
+      true,
+      "Cancel works after failed Save cleanup",
+    );
     // Fresh page avoids attributing prior synthetic edits to the add flow.
     await navigate();
     await clickSelector(".provider-section-actions .primary-button");
