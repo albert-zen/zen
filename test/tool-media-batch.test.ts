@@ -24,8 +24,10 @@ const image = {
   attachment: {
     type: "attachment" as const,
     sha256: "a".repeat(64),
-    mediaType: "image/png",
+    mediaType: "image/png" as const,
     byteLength: 3,
+    width: 1,
+    height: 1,
   },
 };
 const batch = (prefix: string, media: number[]): ModelMessage[] => [
