@@ -116,7 +116,7 @@ document.documentElement.dataset.appearance =
   q.get("theme") === "light" ? "light" : "dark";
 document.documentElement.dataset.themePreset = "graphite";
 const style = document.createElement("style");
-style.textContent = `body{margin:0;height:100vh}#root{height:100%}.preview-layout{height:100%;display:flex;min-width:0}.preview-conversation{min-width:0;flex:1}.preview-conversation>.thread-view{height:100%;width:100%}.preview-source{width:420px;max-width:55vw;overflow:auto;border-left:1px solid var(--border);background:var(--surface)}@media(max-width:600px){.preview-layout[data-panel=true] .preview-conversation{display:none}.preview-source{max-width:none;width:100%}}`;
+style.textContent = `body{margin:0;height:100vh}#root{height:100%}.preview-layout{height:100%;display:flex;min-width:0}.preview-conversation{min-width:0;min-height:0;flex:1;display:flex;flex-direction:column}.preview-source{width:420px;max-width:55vw;overflow:auto;border-left:1px solid var(--border);background:var(--surface)}@media(max-width:600px){.preview-layout[data-panel=true] .preview-conversation{display:none}.preview-source{max-width:none;width:100%}}`;
 document.head.append(style);
 function Preview() {
   const [open, setOpen] = useState(false);

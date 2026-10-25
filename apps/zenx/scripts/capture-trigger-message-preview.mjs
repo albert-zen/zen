@@ -212,9 +212,16 @@ try {
   // only exposes the requested target; it does not replace activation/focus.
   const clickSelector = async (selector, index = 0) => {
     const target = await evaluate(
-      `(() => { const e=document.querySelectorAll(${JSON.stringify(selector)})[${index}]; if(!e) return null; e.scrollIntoView({block:'center'}); const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,disabled:e.disabled}; })()`,
+      `(() => { const e=document.querySelectorAll(${JSON.stringify(selector)})[${index}]; if(!e) return null; e.scrollIntoView({block:'center'}); const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width,height:r.height,disabled:e.disabled,hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}; })()`,
     );
-    assert.ok(target && !target.disabled, `Available target: ${selector}`);
+    assert.ok(
+      target &&
+        !target.disabled &&
+        target.width > 0 &&
+        target.height > 0 &&
+        target.hit,
+      `Visible, unobscured target: ${selector}`,
+    );
     await click(target.x, target.y);
     await delay(120);
   };
@@ -284,6 +291,13 @@ try {
         "document.querySelector('.trigger-message-row .message-actions').previousElementSibling.classList.contains('user-bubble')",
       ),
       true,
+    );
+    assert.equal(
+      await evaluate(
+        "(() => { const r=document.querySelector('.trigger-message-row .user-bubble').getBoundingClientRect(); return r.width>100 && r.height>100 && r.top<innerHeight && r.bottom>0; })()",
+      ),
+      true,
+      "Message has visible nonzero layout",
     );
     await capture("01-message");
     await clickSelector(".trigger-message-row .message-source-link");

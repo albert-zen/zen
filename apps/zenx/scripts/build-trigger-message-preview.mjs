@@ -44,7 +44,7 @@ assert.ok(
 );
 await writeFile(
   path.join(directory, "trigger-message.html"),
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'"><title>ZenX Trigger management · synthetic component preview</title><style>${css}</style></head><body><div id="root"></div><script>${js.replaceAll("</script", "<\\/script")}</script></body></html>`,
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'"><title>ZenX Trigger messages · synthetic component preview</title><style>${css}</style></head><body><div id="root"></div><script>${js.replaceAll("</script", "<\\/script")}</script></body></html>`,
 );
 const sources = [
   "src/renderer/src/bundled-automation-ui.tsx",
@@ -83,7 +83,7 @@ await writeFile(
 );
 await writeFile(
   path.join(directory, "README.txt"),
-  `Trigger management evidence. Actual production ThreadView and TriggersPanel and styles with synthetic in-memory definitions/history. No Host, scheduling, credentials, private profile, network or persistence. Mutations reject. This is not App integration, native Electron or full accessibility acceptance. source.json identifies source hashes; measurements.json records observations. Screenshot labels match recorded states. CSP blocks networking; CI retains browser sandbox.
+  `Trigger messages evidence. Actual production ThreadView and TriggersPanel and styles with synthetic in-memory definitions/history. No Host, scheduling, credentials, private profile, network or persistence. Mutations reject. This is not App integration, native Electron or full accessibility acceptance. source.json identifies source hashes; measurements.json records observations. Screenshot labels match recorded states. CSP blocks networking; CI retains browser sandbox.
 `,
 );
-console.log(`Built Trigger management preview at ${directory}`);
+console.log(`Built Trigger messages preview at ${directory}`);
