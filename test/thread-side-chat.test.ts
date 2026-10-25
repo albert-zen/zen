@@ -573,15 +573,15 @@ test("copied agentic reset tool receipts remain outside the effective compacted 
 
 test("generated compaction budgets the full pinned Side chat instructions before committing", async () => {
   const f = fixture({
-    contextWindow: 640,
+    contextWindow: 1000,
     stream: async function* (request) {
       assert(
-        estimateModelMessageInputTokens(request.messages) <= 640,
+        estimateModelMessageInputTokens(request.messages) <= 1000,
         "provider context window exceeded",
       );
       yield {
         type: "text_delta",
-        delta: request.tools.length === 0 ? "summary ".repeat(200) : "answer",
+        delta: request.tools.length === 0 ? "summary ".repeat(300) : "answer",
       };
     },
   });
@@ -595,6 +595,11 @@ test("generated compaction budgets the full pinned Side chat instructions before
     await f.server.startTurn(current.id, "question")
   ).done;
   const before = await f.server.readThread(current.id);
+  assert.equal(
+    before.turns[0]?.status,
+    "completed",
+    "fixture must fit complete sampled input before testing compaction target",
+  );
   assert.equal(
     before.items.filter((item) => item.type === "thread_instruction").length,
     3,
@@ -613,7 +618,7 @@ test("generated compaction budgets the full pinned Side chat instructions before
     (await f.server.readThread(current.id)).turns.at(-1)?.status,
     "completed",
   );
-  assert(estimateModelMessageInputTokens(f.requests.at(-1)!.messages) <= 640);
+  assert(estimateModelMessageInputTokens(f.requests.at(-1)!.messages) <= 1000);
 });
 
 test("unretained historical calls and their Side chat receipts stay behind a generated compaction boundary", () => {

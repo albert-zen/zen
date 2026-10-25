@@ -38,9 +38,10 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
     });
     assert.match(provenance.note, /not a historical full-app build/);
     for (const variant of ["before", "after"]) {
-      for (const kind of ["sidebar", "context"]) {
+      for (const kind of ["sidebar", "context", "context-unavailable"]) {
+        const fileKind = kind === "context-unavailable" ? "context" : kind;
         const html = await readFile(
-          path.join(directory, `${kind}-${variant}.html`),
+          path.join(directory, `${fileKind}-${variant}.html`),
           "utf8",
         );
         const parsed = new JSDOM(html);
@@ -62,7 +63,7 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
             errors.push(String(error));
         });
         const dom = new JSDOM(html, {
-          url: `http://localhost/${kind}-${variant}.html?platform=win32&theme=dark&width=220&lang=zh-CN`,
+          url: `http://localhost/${kind}-${variant}.html?platform=win32&theme=dark&width=220&lang=zh-CN${kind === "context-unavailable" ? "&context=unknown" : ""}`,
           pretendToBeVisual: true,
           runScripts: "dangerously",
           virtualConsole,
@@ -81,7 +82,20 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
         });
         try {
           const { document } = dom.window;
-          if (kind === "sidebar") {
+          if (kind === "context-unavailable") {
+            await waitFor(() =>
+              document.querySelector(".motion-preview-controls"),
+            );
+            assert.equal(
+              document.querySelector(".context-usage-trigger"),
+              null,
+            );
+            assert.equal(
+              document.querySelector(".context-usage-breakdown"),
+              null,
+              "unknown is not four fake zero categories",
+            );
+          } else if (kind === "sidebar") {
             await waitFor(() => dom.window.__sidebarVisual?.ready);
             assert.equal(
               document.querySelectorAll(".thread-row-shell").length,
@@ -119,6 +133,42 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
             trigger.focus();
             await waitFor(() =>
               document.querySelector(".context-usage-popover"),
+            );
+            const rows = [
+              ...document.querySelectorAll(".context-usage-breakdown > div"),
+            ];
+            assert.equal(rows.length, 4);
+            assert.match(rows[0].textContent, /系统/u);
+            assert.match(rows[1].textContent, /工具/u);
+            assert.match(rows[2].textContent, /插件/u);
+            assert.match(rows[3].textContent, /对话/u);
+            assert.equal(document.querySelector(".context-usage-help"), null);
+            assert.doesNotMatch(
+              document.querySelector(".context-usage-popover").textContent,
+              /估算|非计费|供应商报告/u,
+            );
+            assert.match(
+              document.querySelector(".context-usage-popover").textContent,
+              /线程缓存命中率/u,
+            );
+            const segments = [
+              ...document.querySelectorAll(
+                ".context-usage-meter > span[data-category]",
+              ),
+            ];
+            assert.equal(segments.length, 4);
+            assert.deepEqual(
+              segments.map((segment) => segment.dataset.category),
+              rows.map((row) => row.dataset.category),
+            );
+            const totalWidth = segments.reduce(
+              (sum, segment) => sum + parseFloat(segment.style.width),
+              0,
+            );
+            assert.ok(Math.abs(totalWidth - (51_300 / 272_000) * 100) < 0.001);
+            assert.doesNotMatch(
+              document.querySelector(".context-usage-popover").textContent,
+              /MCP/u,
             );
             trigger.dispatchEvent(
               new dom.window.KeyboardEvent("keydown", {
