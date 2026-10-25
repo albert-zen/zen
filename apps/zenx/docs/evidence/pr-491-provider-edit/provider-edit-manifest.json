@@ -1,0 +1,62 @@
+{
+  "pr": 491,
+  "head": "463fbefac55119a11fe75b768de608c3ba9e3679",
+  "tree": "12d262d11120338b093f2260355e922eb0f072aa",
+  "run": 40167310073,
+  "job": 121090891787,
+  "artifact": 12588639168,
+  "zipSha256": "c0aa2b901936b60ac2a80759af072983d3a9eaf5b87159260b689e74fb65f4c8",
+  "captureMerge": "0b2c8b4c549c881a230471e18943fc66e7083ada",
+  "sourceHashes": {
+    "src/renderer/src/SettingsView.tsx": "26aef28cd80029bf36edc5c429e90ec1f13da603234fd1ace9a539f3dc211781",
+    "src/renderer/src/ProviderModelAdmissionControls.tsx": "2eb524fa520bfe2b1c8d4d31082673db1e5f362b6ba6ec99efee892ac53754c3",
+    "src/renderer/src/ui/controls.tsx": "00fe25d78afb1ad6e377bad937e6ce496f3a063a25ec98d774897a479df1addb",
+    "src/renderer/src/styles.css": "f555174719850ee9d960aa51f9bc7be72bbbb20c76bdc19905d7714e80bfbbe8",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "src/renderer/src/i18n/settings.ts": "6943b32b516b926c4b6f66d6277d1495f7753fb7fc159894b6516125f933a1db",
+    "src/renderer/src/language.ts": "ba5ec89ac6ca5c6910364bc6ad749e87c115a4cd3a803dfa5686422727e71108",
+    "src/renderer/src/language-preference.ts": "b8a7211e6afefa796e0d3c2d71c4f9b99ec3fad7e0c98f446507bc2a5cd333f4",
+    "scripts/settings-audit-preview.tsx": "56b0dde93e2a8b734ad6646ba1f6b2884379833c799b48e097e334c808faad45",
+    "scripts/build-settings-audit-preview.mjs": "2857f94d93f2657f399f517f6e294c44b7a297fb52c8b34c7c70417b23949de1",
+    "scripts/capture-settings-audit-preview.mjs": "42cb43aeabb501099e395114664c5e7b24d4777e4f7604befae95fdb723a9905"
+  },
+  "scenarios": [
+    {
+      "name": "desktop-en",
+      "isolation": {
+        "allDisabled": true,
+        "allExplained": true,
+        "sameEditor": true,
+        "namePreserved": true
+      },
+      "cancelFocus": {
+        "tag": "BUTTON",
+        "text": "Edit",
+        "label": "Edit Synthetic Provider 4",
+        "id": ""
+      },
+      "overflow": false
+    },
+    {
+      "name": "narrow-zh",
+      "isolation": {
+        "allDisabled": true,
+        "allExplained": true,
+        "sameEditor": true,
+        "namePreserved": true
+      },
+      "cancelFocus": {
+        "tag": "BUTTON",
+        "text": "编辑",
+        "label": "编辑Synthetic Provider 4",
+        "id": ""
+      },
+      "overflow": false
+    }
+  ],
+  "images": {
+    "narrow-zh-02c-preserved-provider-draft.png": "f76aa83d4a77097511be630e230f82ec263a104609c48b29848d2948e2bae549",
+    "narrow-zh-08-cancel-focus.png": "dd53118f79b4d545140e2f4687000f9e8dd93ea3510af5bada1c54e92a0d02cb"
+  },
+  "limits": "Synthetic actual SettingsView. No Host, real credential/profile/provider, native Electron or screen-reader acceptance. Initial editor source isolated one task, not broad Settings redesign. Pending save behavior unit tested; screenshot fixture mutations intentionally reject."
+}
