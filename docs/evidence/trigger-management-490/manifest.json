@@ -1,0 +1,63 @@
+{
+  "pr": 490,
+  "head": "9cb9d9591d29ac621e31977ac5de1e3957d82c0b",
+  "tree": "8b38557cb65a7ceb0e7086bdd1c49494f791d0fc",
+  "tested_merge": "6d32454404b576f50830801b6eeacf6168ec94ca",
+  "baseline": "98caf2f44ec697bd705909eb970036ce615ca664",
+  "run": 40168132564,
+  "artifact": 12588971213,
+  "artifact_zip_sha256": "aca9c667329d1e4438001f0b2789d14c29ab4c1346b1a980d2be9a719135637a",
+  "scope": "Synthetic actual-component fixture; no real Host or trigger execution; not native Electron acceptance.",
+  "files": [
+    {
+      "path": "before/desktop-en-01-overview.png",
+      "size": 76616,
+      "sha256": "49ac832383e3c978edec50f801679e9591d10f907c00e272a233749b06c2392a"
+    },
+    {
+      "path": "before/panel-zh-01-overview.png",
+      "size": 50274,
+      "sha256": "65b3bc71d4e0399c51bb672378d953ffd50956d01193f22a854248725e756459"
+    },
+    {
+      "path": "before/desktop-en-03-editor.png",
+      "size": 79569,
+      "sha256": "96fee58e746616588223ce01fa96cd41c439b02dfd74c4bb02118868ef9ce432"
+    },
+    {
+      "path": "before/source.json",
+      "size": 992,
+      "sha256": "af5069a73a5ae1189f7b4c440fa3b7c1a9da61ca232a2fe4e9591dbc910d73ae"
+    },
+    {
+      "path": "before/measurements.json",
+      "size": 9405,
+      "sha256": "bf84337444a2b9d95763fc06ff361cf69c0b47a7c969a7fe683b129f8ebab381"
+    },
+    {
+      "path": "after/desktop-en-01-overview.png",
+      "size": 68411,
+      "sha256": "90bd65833d533ae546d109047e55ef6d16391fd056676695006a9fbdc51a96a1"
+    },
+    {
+      "path": "after/panel-zh-01-overview.png",
+      "size": 47419,
+      "sha256": "76ba03f1272b3a936c182141f5b3895662a5154fdcfec5317c67e28d7f57ab24"
+    },
+    {
+      "path": "after/desktop-en-03-editor.png",
+      "size": 64754,
+      "sha256": "3fd93cde194ead05b6b8988584fa7da7e735b6b93e9de6ad8c7bce14ee06bda7"
+    },
+    {
+      "path": "after/source.json",
+      "size": 954,
+      "sha256": "d22516a1edbdd0012e0678f329eff6603e7e52a08d106ffd61086025de563ff4"
+    },
+    {
+      "path": "after/measurements.json",
+      "size": 9405,
+      "sha256": "bf84337444a2b9d95763fc06ff361cf69c0b47a7c969a7fe683b129f8ebab381"
+    }
+  ]
+}
