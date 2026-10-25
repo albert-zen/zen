@@ -340,6 +340,14 @@ async function toResponsesInput(
     ) {
       return [];
     }
+    if (message.opaqueReplayProvenance?.adapter === "public-responses") {
+      throw Object.assign(
+        new Error(
+          "Subscription Responses cannot replay opaque reasoning produced by the public API transport; restore its original protocol or use a compacted text context",
+        ),
+        { retryable: false, modelRecoveryBlocked: true },
+      );
+    }
     return [
       {
         type: "reasoning",

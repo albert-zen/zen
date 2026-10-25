@@ -308,14 +308,22 @@ try {
     await clickSelector("[data-provider-protocol]");
     await waitFor("!!document.querySelector('[role=option]')");
     await capture("02d-protocol-options");
+    await waitFor("document.activeElement?.getAttribute('role') === 'option'");
     await key("End", "End", 35);
+    await waitFor(
+      "document.activeElement?.getAttribute('data-value') === 'responses'",
+    );
     await key("Enter", "Enter", 13);
     await waitFor(
       "document.querySelector('[data-provider-protocol]').textContent.includes('Responses')",
     );
     await capture("02e-explicit-responses");
     await clickSelector("[data-provider-protocol]");
+    await waitFor("document.activeElement?.getAttribute('role') === 'option'");
     await key("Home", "Home", 36);
+    await waitFor(
+      "document.activeElement?.getAttribute('data-value') === 'chat-completions'",
+    );
     await key("Enter", "Enter", 13);
     await waitFor(
       "document.querySelector('[data-provider-protocol]').textContent.includes('Chat Completions')",

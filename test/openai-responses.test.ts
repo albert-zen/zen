@@ -525,3 +525,89 @@ test("public Responses does not expose an error-body reader's exception details"
     return true;
   });
 });
+
+test("same-profile protocol changes keep Chat text history usable but reject public opaque state on subscription", async () => {
+  const { OpenAiSubscriptionModel } =
+    await import("../src/model/openai-subscription.js");
+  const { OpenAiCompatibleModel } =
+    await import("../src/model/openai-compatible.js");
+  const { compileModelMessages } = await import("../src/model.js");
+  const { decodeCanonicalItem } = await import("../src/item.js");
+  const base = {
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-10-25T00:00:00.000Z",
+  };
+  const selection = {
+    providerProfileId: "same-profile",
+    modelId: "same-model",
+    reasoningEffort: "medium",
+  };
+  const items = [
+    decodeCanonicalItem({
+      ...base,
+      id: "turn",
+      type: "turn_started",
+      selection,
+    }),
+    decodeCanonicalItem({
+      ...base,
+      id: "reasoning",
+      type: "reasoning",
+      contentVisibility: "opaque",
+      reasoningContent: "opaque-private-state",
+      providerItemId: "rs_real",
+      opaqueReplayProvenance: provenance,
+    }),
+  ];
+  const messages = [
+    ...compileModelMessages(items, selection),
+    { role: "assistant" as const, text: "Completed answer" },
+    { role: "user" as const, text: "Continue as text" },
+  ];
+  let leases = 0;
+  let subscriptionFetches = 0;
+  const subscription = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => {
+      leases++;
+      return { accessToken: "synthetic" };
+    },
+    fetch: async () => {
+      subscriptionFetches++;
+      return sse();
+    },
+  });
+  await assert.rejects(
+    collect(subscription.stream(request({ messages }))),
+    /cannot replay opaque reasoning produced by the public API transport/u,
+  );
+  assert.equal(leases, 0);
+  assert.equal(subscriptionFetches, 0);
+  let chatCalls = 0;
+  const chat = new OpenAiCompatibleModel({
+    baseUrl,
+    apiKey,
+    fetch: async (_url, init) => {
+      chatCalls++;
+      const body = JSON.parse(String(init?.body));
+      assert.equal(
+        JSON.stringify(body).includes("opaque-private-state"),
+        false,
+      );
+      assert.equal(
+        JSON.stringify(body).includes("opaqueReplayProvenance"),
+        false,
+      );
+      assert.ok(
+        body.messages.some(
+          (message: any) => message.content === "Completed answer",
+        ),
+      );
+      return new Response(
+        'data: {"choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n',
+      );
+    },
+  });
+  await collect(chat.stream(request({ messages })));
+  assert.equal(chatCalls, 1);
+});
