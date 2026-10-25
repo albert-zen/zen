@@ -1,0 +1,13 @@
+{
+  "baseline": "98caf2f44ec697bd705909eb970036ce615ca664",
+  "commit": "04a984024c4430f929e62ae3b335a432ce2bc309",
+  "scope": "Actual production TriggerManager with synthetic in-memory trigger definitions/history. No Host, scheduling, credentials, user profile, network or persistence. Not native Electron acceptance.",
+  "sources": {
+    "src/renderer/src/bundled-automation-ui.tsx": "e34d96cf27866e0fbbb8000124df3892dc388d78668495a9184531d8c88b7cd9",
+    "src/renderer/src/trigger-ui.css": "74e1a01e069963770c808fafbf83d9610b140bb5b5306ffb9ec0091903794cde",
+    "src/renderer/src/i18n/panels.ts": "cce892057378e0f7108f186141e8ed4f1a885b7f64d17591083855e43ee773e0",
+    "src/renderer/src/styles.css": "ebd0eed1ad33fb17d85abc16d5492894889b8930eba67a19960de37ccfc804f1",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "scripts/trigger-management-preview.tsx": "b59d683d2830032621d70651b3ba452f8dc872dfd4308964c9f5612b54a7e6b6"
+  }
+}
