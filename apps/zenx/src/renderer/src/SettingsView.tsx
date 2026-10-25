@@ -1222,6 +1222,26 @@ function ModelsPanel({
     null,
   );
 
+  const providerSection = useRef<HTMLElement>(null);
+  const editorOpener = useRef<HTMLButtonElement | null>(null);
+  const addProviderButton = useRef<HTMLButtonElement>(null);
+  const addCustomProviderButton = useRef<HTMLButtonElement>(null);
+  const restoreEditorFocus = useRef(false);
+  const editorNoticeId = useId();
+  useLayoutEffect(() => {
+    if (editor !== null || !restoreEditorFocus.current) return;
+    restoreEditorFocus.current = false;
+    const opener = editorOpener.current;
+    if (opener?.isConnected && !opener.disabled) opener.focus();
+    else
+      (addCustomProviderButton.current ?? addProviderButton.current)?.focus();
+  }, [editor]);
+  const closeEditor = () => {
+    if (busy !== null) return;
+    restoreEditorFocus.current = true;
+    setEditor(null);
+  };
+
   const acceptSettings = (value: PublicHostSettings, message: string) => {
     setSettings(value);
     setDraft({
@@ -1358,7 +1378,12 @@ function ModelsPanel({
     }
   };
 
-  const openAddEditor = (type: ZenXProviderProfile["type"]) => {
+  const openAddEditor = (
+    type: ZenXProviderProfile["type"],
+    opener: HTMLButtonElement,
+  ) => {
+    if (editor !== null || busy !== null) return;
+    editorOpener.current = opener;
     const providerProfileId = globalThis.crypto.randomUUID();
     const provider: ZenXProviderProfile =
       type === "fake"
@@ -1394,7 +1419,12 @@ function ModelsPanel({
     setStatus(null);
   };
 
-  const openKnownProviderEditor = (preset: ZenXKnownProviderPreset) => {
+  const openKnownProviderEditor = (
+    preset: ZenXKnownProviderPreset,
+    opener: HTMLButtonElement,
+  ) => {
+    if (editor !== null || busy !== null) return;
+    editorOpener.current = opener;
     setShowAddChoices(false);
     setDeletingProviderId(null);
     setEditor({
@@ -1458,6 +1488,7 @@ function ModelsPanel({
       </div>
       <section
         className="provider-section"
+        ref={providerSection}
         aria-labelledby="provider-list-title"
       >
         <div className="provider-section-head">
@@ -1472,6 +1503,8 @@ function ModelsPanel({
               <button
                 className="quiet-button"
                 type="button"
+                ref={addProviderButton}
+                disabled={busy !== null}
                 onClick={() => {
                   setShowAddChoices((visible) => !visible);
                   setDeletingProviderId(null);
@@ -1483,7 +1516,11 @@ function ModelsPanel({
               <button
                 className="primary-button"
                 type="button"
-                onClick={() => openAddEditor("openai-compatible")}
+                ref={addCustomProviderButton}
+                disabled={busy !== null}
+                onClick={(event) =>
+                  openAddEditor("openai-compatible", event.currentTarget)
+                }
               >
                 {t("settingsView.addCustomProvider")}
               </button>
@@ -1501,7 +1538,9 @@ function ModelsPanel({
             <button
               type="button"
               aria-label={t("settingsView.addOpenaiSubscription")}
-              onClick={() => openAddEditor("openai-subscription")}
+              onClick={(event) =>
+                openAddEditor("openai-subscription", event.currentTarget)
+              }
               disabled={settings.profile.providerProfiles.some(
                 (provider) => provider.type === "openai-subscription",
               )}
@@ -1528,7 +1567,9 @@ function ModelsPanel({
                   aria-label={t("settingsView.addNamedProvider", {
                     name: preset.displayName,
                   })}
-                  onClick={() => openKnownProviderEditor(preset)}
+                  onClick={(event) =>
+                    openKnownProviderEditor(preset, event.currentTarget)
+                  }
                   disabled={configured}
                 >
                   <ProviderLogo
@@ -1549,7 +1590,7 @@ function ModelsPanel({
             <button
               type="button"
               aria-label={t("settingsView.addLocalDemo")}
-              onClick={() => openAddEditor("fake")}
+              onClick={(event) => openAddEditor("fake", event.currentTarget)}
             >
               <ProviderLogo kind="local" />
               <strong>{t("settingsView.localDemo")}</strong>
@@ -1581,7 +1622,7 @@ function ModelsPanel({
               settings.providerLogoDataUrls?.[editor.provider.providerProfileId]
             }
             titleModel={settings.profile.titleModel}
-            onCancel={() => setEditor(null)}
+            onCancel={closeEditor}
             onSubmit={async (
               provider,
               apiKey,
@@ -1615,10 +1656,23 @@ function ModelsPanel({
                         diagnosticAttemptId,
                       ),
               );
-              if (success !== "failed") setEditor(null);
+              if (success !== "failed") {
+                // A late save must not steal focus from newer navigation.
+                restoreEditorFocus.current = Boolean(
+                  providerSection.current
+                    ?.querySelector(".provider-editor")
+                    ?.contains(document.activeElement),
+                );
+                setEditor(null);
+              }
               return success;
             }}
           />
+        )}
+        {editor === null ? null : (
+          <p className="settings-note" id={editorNoticeId} role="status">
+            {t("settingsView.finishProviderEditBeforeSwitching")}
+          </p>
         )}
         <div className="provider-profile-list">
           {settings.profile.providerProfiles.map((provider) => (
@@ -1628,14 +1682,19 @@ function ModelsPanel({
               provider={provider}
               settings={settings}
               titleModel={settings.profile.titleModel}
+              disabled={editor !== null || busy !== null}
+              disabledReasonId={editor === null ? undefined : editorNoticeId}
               onDelete={() => {
+                if (editor !== null || busy !== null) return;
                 setDeletingProviderId(provider.providerProfileId);
                 setShowAddChoices(false);
                 setEditor(null);
                 setError(null);
                 setStatus(null);
               }}
-              onEdit={() => {
+              onEdit={(opener) => {
+                if (editor !== null || busy !== null) return;
+                editorOpener.current = opener;
                 setEditor({
                   mode: "edit",
                   provider,
@@ -1698,6 +1757,8 @@ function ModelsPanel({
 
 function ProviderProfileCard({
   defaultModel,
+  disabled,
+  disabledReasonId,
   onDelete,
   onEdit,
   provider,
@@ -1705,8 +1766,10 @@ function ProviderProfileCard({
   titleModel,
 }: {
   defaultModel: ZenXModelReference;
+  disabled: boolean;
+  disabledReasonId?: string;
   onDelete(): void;
-  onEdit(): void;
+  onEdit(opener: HTMLButtonElement): void;
   provider: ZenXProviderProfile;
   settings: PublicHostSettings;
   titleModel: ZenXModelReference;
@@ -1761,7 +1824,9 @@ function ProviderProfileCard({
           aria-label={t("settingsView.editNamedProvider", {
             name: provider.displayName,
           })}
-          onClick={onEdit}
+          disabled={disabled}
+          aria-describedby={disabledReasonId}
+          onClick={(event) => onEdit(event.currentTarget)}
         >
           {t("settingsView.edit")}
         </button>
@@ -1771,6 +1836,8 @@ function ProviderProfileCard({
           aria-label={t("settingsView.deleteNamedProvider", {
             name: provider.displayName,
           })}
+          disabled={disabled}
+          aria-describedby={disabledReasonId}
           onClick={onDelete}
         >
           {t("settingsView.delete")}
@@ -1951,14 +2018,21 @@ function ProviderEditor({
           </strong>
           <span>{providerTypeLabel(provider)}</span>
         </div>
-        <button className="quiet-button" type="button" onClick={onCancel}>
+        <button
+          className="quiet-button"
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+        >
           {t("settingsView.cancel2")}
         </button>
       </div>
       <form
         noValidate
+        aria-busy={busy}
         onSubmit={(event) => {
           event.preventDefault();
+          if (busy) return;
           const diagnosticAttemptId = globalThis.crypto.randomUUID();
           if (models.length > MAX_MODELS_PER_PROVIDER) {
             setValidationError(
@@ -2043,573 +2117,586 @@ function ProviderEditor({
           );
         }}
       >
-        {validationIssues.length === 0 ? null : (
-          <div
-            ref={validationSummary}
-            className="settings-error provider-editor-error-summary"
-            role="alert"
-            tabIndex={-1}
-          >
-            <Icon name="warning" />
-            <div>
-              <strong>{t("settingsView.checkTheseFields")}</strong>
-              <ul>
-                {validationIssues.map((issue) => {
-                  const targetId = fieldId(issue.field, issue.modelIndex);
-                  return (
-                    <li key={`${targetId}-${issue.code}`}>
-                      <a
-                        href={`#${targetId}`}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          const target = document.getElementById(targetId);
-                          const details = target?.closest("details");
-                          if (details !== null && details !== undefined)
-                            details.open = true;
-                          target?.scrollIntoView?.({ block: "center" });
-                          target?.focus();
-                        }}
-                      >
-                        {issue.message}
-                      </a>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          </div>
-        )}
-        <div className="form-grid">
-          <Field
-            autoFocus
-            id={fieldId("displayName")}
-            error={issueFor("displayName")}
-            label={t("settingsView.displayName")}
-            value={provider.displayName}
-            onChange={(displayName) => {
-              setProvider({ ...provider, displayName });
-              setValidationError(null);
-            }}
-          />
-          {provider.type === "openai-compatible" ? (
-            <>
-              <Field
-                id={fieldId("providerName")}
-                error={issueFor("providerName")}
-                label={t("settingsView.providerName")}
-                value={provider.name}
-                onChange={(name) => {
-                  setProvider({ ...provider, name });
-                  setValidationError(null);
-                }}
-              />
-              <Field
-                wide
-                id={fieldId("baseUrl")}
-                error={issueFor("baseUrl")}
-                label={t("settingsView.baseUrl")}
-                value={provider.baseUrl}
-                onChange={(baseUrl) => {
-                  setProvider({ ...provider, baseUrl });
-                  setValidationError(null);
-                }}
-              />
-              <Field
-                wide
-                secret
-                id={fieldId("apiKey")}
-                error={issueFor("apiKey")}
-                label={t("settingsView.apiKey")}
-                placeholder={
-                  mode === "edit" && hasApiKey
-                    ? t("settingsView.apiKeySavedLeaveBlankToKeep")
-                    : t("settingsView.required")
-                }
-                value={apiKey}
-                onChange={(value) => {
-                  setApiKey(value);
-                  setValidationError(null);
-                }}
-              />
-            </>
-          ) : null}
-        </div>
-        {provider.type === "openai-compatible" ? (
-          <div
-            className="settings-note"
-            aria-label={t("settingsView.providerLogo")}
-          >
-            <ProviderLogo
-              kind={
-                provider.logoResource === undefined
-                  ? providerLogoKind(provider)
-                  : "generic"
-              }
-              customSrc={
-                logoUpload === null ? undefined : (logoPreview ?? logoDataUrl)
-              }
-            />
-            <label className="field">
-              <span>{t("settingsView.providerLogoPngJpegOrWebpUpTo512")}</span>
-              <input
-                ref={logoFileInput}
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  if (file === undefined) return;
-                  const version = ++logoReadVersion.current;
-                  setLogoUpload(undefined);
-                  setLogoFilename(null);
-                  setLogoPreview(null);
-                  setLogoSelectionError(null);
-                  setLogoReading(false);
-                  if (
-                    !["image/png", "image/jpeg", "image/webp"].includes(
-                      file.type,
-                    )
-                  ) {
-                    const message = t(
-                      "settingsView.chooseAPngJpegOrWebpProviderLogo",
-                    );
-                    setLogoSelectionError(message);
-                    setValidationError(message);
-                    return;
-                  }
-                  if (file.size > 512 * 1024) {
-                    const message = t(
-                      "settingsView.providerLogoMustBeAtMost512Kib",
-                    );
-                    setLogoSelectionError(message);
-                    setValidationError(message);
-                    return;
-                  }
-                  setLogoReading(true);
-                  void file
-                    .arrayBuffer()
-                    .then((bytes) => {
-                      if (version !== logoReadVersion.current) return;
-                      setLogoUpload(new Uint8Array(bytes));
-                      setLogoFilename(file.name);
-                      setLogoPreview(
-                        `data:${file.type};base64,${base64FromBytes(new Uint8Array(bytes))}`,
-                      );
-                      setValidationError(null);
-                    })
-                    .catch((reason) => {
-                      if (version !== logoReadVersion.current) return;
-                      const message = describeError(reason);
-                      setLogoSelectionError(message);
-                      setValidationError(message);
-                    })
-                    .finally(() => {
-                      if (version === logoReadVersion.current)
-                        setLogoReading(false);
-                    });
-                }}
-              />
-            </label>
-            {logoFilename === null ? null : <span>{logoFilename}</span>}
-            {logoUpload !== null &&
-            (logoUpload !== undefined ||
-              logoDataUrl !== undefined ||
-              initialProvider.logoResource !== undefined) ? (
-              <button
-                className="quiet-button"
-                type="button"
-                onClick={() => {
-                  logoReadVersion.current += 1;
-                  if (logoFileInput.current !== null)
-                    logoFileInput.current.value = "";
-                  setLogoUpload(null);
-                  setLogoFilename(null);
-                  setLogoPreview(null);
-                  setLogoSelectionError(null);
-                  setLogoReading(false);
-                  setValidationError(null);
-                }}
-              >
-                {t("settingsView.removeLogo")}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        {provider.type === "openai-compatible" ? (
-          <p className="settings-note credential-note">
-            {t("settingsView.storedKeysAreNeverShownEnterAValueOnly")}
-          </p>
-        ) : provider.type === "openai-subscription" ? (
-          <p className="settings-note credential-note">
-            {t("settingsView.authenticationIsManagedByTheExistingOpenaiSignIn")}
-          </p>
-        ) : (
-          <p className="settings-note credential-note">
-            {t("settingsView.localDemoWorksOfflineAndDoesNotNeedAn")}
-          </p>
-        )}
-        <fieldset className="provider-model-editor">
-          <legend>{t("settingsView.modelCatalog")}</legend>
-          <div className="model-catalog-head">
-            <p>
-              {t("settingsView.chooseTheModelsAvailableFromThisProviderOrAdd")}
-            </p>
-            {(provider.type === "openai-compatible" ||
-              provider.type === "openai-subscription") &&
-            mode === "edit" ? (
-              <button
-                className="quiet-button"
-                type="button"
-                disabled={
-                  discovering ||
-                  (provider.type === "openai-compatible" && !hasApiKey)
-                }
-                title={
-                  provider.type === "openai-subscription"
-                    ? t("settingsView.fetchTheOfficialCodexModelCatalog")
-                    : hasApiKey
-                      ? t("settingsView.fetchModelIdsFromThisProvider")
-                      : t("settingsView.saveAnApiKeyBeforeDiscovery")
-                }
-                onClick={() => {
-                  setDiscovering(true);
-                  setValidationError(null);
-                  setCatalogStatus(null);
-                  void window.zenx.settings
-                    .discoverProvider(provider.providerProfileId)
-                    .then((snapshot) => {
-                      setAvailableModels(snapshot.models);
-                      if (provider.type === "openai-subscription") {
-                        setModelRows((current) =>
-                          current.map((row) => {
-                            const model = row.model;
-                            if (model.source === "manual") return row;
-                            const discovered = snapshot.models.find(
-                              (entry) => entry.id === model.id,
-                            );
-                            return discovered === undefined
-                              ? row
-                              : { ...row, model: { ...discovered } };
-                          }),
-                        );
-                      }
-                      setSelectedAvailableModels([]);
-                      setModelSearch("");
-                      setCatalogStatus(
-                        snapshot.warning ??
-                          (snapshot.source === "cache"
-                            ? t(
-                                "settingsView.officialCatalogIsUnchangedUsingTheLocalCache",
-                              )
-                            : snapshot.source === "remote"
-                              ? t(
-                                  "settingsView.officialMetadataUpdatedInTheDraftSaveProviderTo",
-                                )
-                              : null),
-                      );
-                    })
-                    .catch((reason: unknown) =>
-                      setValidationError(describeError(reason)),
-                    )
-                    .finally(() => setDiscovering(false));
-                }}
-              >
-                {discovering
-                  ? t("settingsView.fetchingModels")
-                  : t("settingsView.getAvailableModels")}
-              </button>
-            ) : null}
-          </div>
-          {catalogStatus === null ? null : (
-            <p className="model-catalog-status" role="status">
-              {catalogStatus}
-            </p>
-          )}
-          {availableModels === null ? null : (
-            <section
-              className="available-model-picker"
-              aria-label={t("settingsView.availableModels")}
+        <fieldset className="provider-editor-fields" disabled={busy}>
+          {validationIssues.length === 0 ? null : (
+            <div
+              ref={validationSummary}
+              className="settings-error provider-editor-error-summary"
+              role="alert"
+              tabIndex={-1}
             >
-              <h4>{t("settingsView.chooseModelsToAdd")}</h4>
-              <p className="settings-note">
-                {provider.type === "openai-subscription"
-                  ? t(
-                      "settingsView.chooseAdditionalModelsOfficialMetadataIsUpdatedInThe",
-                    )
-                  : t(
-                      "settingsView.selectTheModelsYouWantExistingModelsAndTheir",
-                    )}
-              </p>
-              {remainingModelSlots <= 10 ? (
-                <p className="settings-note" role="status">
-                  {remainingModelSlots === 0
-                    ? i18n.t("settings:settingsView.modelLimitReached")
-                    : t("settingsView.moreModels", {
-                        count: remainingModelSlots,
-                      })}
-                </p>
-              ) : null}
-              <label className="field">
-                <span>{t("settingsView.searchAvailableModels")}</span>
-                <input
-                  type="search"
-                  value={modelSearch}
-                  onChange={(event) => setModelSearch(event.target.value)}
-                />
-              </label>
-              <div className="available-model-list">
-                {availableModels
-                  .filter((model) =>
-                    model.id
-                      .toLowerCase()
-                      .includes(modelSearch.trim().toLowerCase()),
-                  )
-                  .map((model) => {
-                    const exists = modelIds.has(model.id);
-                    const selected = selectedAvailableModelIds.has(model.id);
+              <Icon name="warning" />
+              <div>
+                <strong>{t("settingsView.checkTheseFields")}</strong>
+                <ul>
+                  {validationIssues.map((issue) => {
+                    const targetId = fieldId(issue.field, issue.modelIndex);
                     return (
-                      <ProviderModelDiscoveryOption
-                        key={model.id}
-                        modelId={model.id}
-                        exists={exists}
-                        selected={selected}
-                        selectedCount={selectedNewModels.length}
-                        modelCount={models.length}
-                        onCheckedChange={(checked) =>
-                          setSelectedAvailableModels((current) =>
-                            checked
-                              ? [...current, model.id]
-                              : current.filter((id) => id !== model.id),
-                          )
-                        }
-                      />
+                      <li key={`${targetId}-${issue.code}`}>
+                        <a
+                          href={`#${targetId}`}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            const target = document.getElementById(targetId);
+                            const details = target?.closest("details");
+                            if (details !== null && details !== undefined)
+                              details.open = true;
+                            target?.scrollIntoView?.({ block: "center" });
+                            target?.focus();
+                          }}
+                        >
+                          {issue.message}
+                        </a>
+                      </li>
                     );
                   })}
-                {availableModels.every(
-                  (model) =>
-                    !model.id
-                      .toLowerCase()
-                      .includes(modelSearch.trim().toLowerCase()),
-                ) ? (
-                  <p className="settings-note">
-                    {t("settingsView.noMatchingModels")}
-                  </p>
-                ) : null}
+                </ul>
               </div>
-              <div className="available-model-actions">
-                <button
-                  type="button"
-                  className="quiet-button"
-                  onClick={() => {
-                    setAvailableModels(null);
-                    setSelectedAvailableModels([]);
-                  }}
-                >
-                  {t("settingsView.cancelSelection")}
-                </button>
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={
-                    selectedNewModels.length === 0 ||
-                    selectedNewModels.length > remainingModelSlots
-                  }
-                  onClick={() => {
-                    const additions = selectedNewModels.slice(
-                      0,
-                      remainingModelSlots,
-                    );
-                    setModelRows((current) =>
-                      appendProviderModelRows(
-                        current,
-                        additions.map((model) => ({
-                          key: globalThis.crypto.randomUUID(),
-                          model: { ...model },
-                        })),
-                      ),
-                    );
-                    setAvailableModels(null);
-                    setSelectedAvailableModels([]);
-                    setCatalogStatus(
-                      t("settingsView.addedModels", {
-                        count: additions.length,
-                      }),
-                    );
-                  }}
-                >
-                  {t("settingsView.addSelectedModels")}
-                  {selectedAvailableModels.length})
-                </button>
-              </div>
-            </section>
+            </div>
           )}
-          {modelRows.map(({ key, model }, index) => (
-            <div className="provider-model-row" key={key}>
-              <label className="field">
-                <span>
-                  {t("settingsView.modelNumber", { number: index + 1 })}
-                </span>
-                <input
-                  id={fieldId("modelId", index)}
-                  aria-invalid={issueFor("modelId", index) ? true : undefined}
-                  aria-describedby={
-                    issueFor("modelId", index)
-                      ? `${fieldId("modelId", index)}-error`
-                      : undefined
-                  }
-                  value={model.id}
-                  onChange={(event) => {
-                    const id = event.target.value;
-                    updateModel(index, (current) => ({
-                      ...current,
-                      id,
-                      displayName:
-                        current.displayName === current.id
-                          ? id
-                          : current.displayName,
-                      source: "manual",
-                    }));
+          <div className="form-grid">
+            <Field
+              autoFocus
+              id={fieldId("displayName")}
+              error={issueFor("displayName")}
+              label={t("settingsView.displayName")}
+              value={provider.displayName}
+              onChange={(displayName) => {
+                setProvider({ ...provider, displayName });
+                setValidationError(null);
+              }}
+            />
+            {provider.type === "openai-compatible" ? (
+              <>
+                <Field
+                  id={fieldId("providerName")}
+                  error={issueFor("providerName")}
+                  label={t("settingsView.providerName")}
+                  value={provider.name}
+                  onChange={(name) => {
+                    setProvider({ ...provider, name });
+                    setValidationError(null);
                   }}
                 />
-                {issueFor("modelId", index) === undefined ? null : (
-                  <small
-                    id={`${fieldId("modelId", index)}-error`}
-                    className="provider-field-error"
-                  >
-                    {issueFor("modelId", index)}
-                  </small>
-                )}
-              </label>
-              <button
-                className="quiet-button"
-                type="button"
-                aria-label={t("settingsView.removeModelNumber", {
-                  number: index + 1,
-                })}
-                disabled={models.length === 1}
-                onClick={() => {
-                  setModelRows((current) =>
-                    current.filter((_, candidate) => candidate !== index),
-                  );
-                  setValidationError(null);
-                }}
-              >
-                {t("settingsView.remove")}
-              </button>
-              <ModelCapabilityEditor
-                index={index}
-                model={model}
-                fieldId={(field) => fieldId(field, index)}
-                issueFor={(field) => issueFor(field, index)}
-                onChange={(next) => updateModel(index, () => next)}
-                probing={probingModel === model.id}
-                onProbe={
-                  provider.type === "openai-compatible" &&
-                  mode === "edit" &&
-                  hasApiKey &&
-                  initialProvider.models.some(
-                    (entry) => entry.id === model.id,
-                  ) &&
-                  (model.inputModalities === null ||
-                    (model.source === "discovered" &&
-                      model.inputModalities.length === 1 &&
-                      model.inputModalities[0] === "text"))
-                    ? async () => {
-                        setProbingModel(model.id);
-                        setValidationError(null);
-                        setCatalogStatus(
-                          t(
-                            "settingsView.sendingOneTinyImageTestRequestProviderChargesMay",
-                          ),
-                        );
-                        try {
-                          const result =
-                            await window.zenx.settings.probeProviderImage(
-                              provider.providerProfileId,
-                              model.id,
-                            );
-                          updateModel(index, () => ({ ...result.model }));
-                          setCatalogStatus(
-                            result.outcome === "supported"
-                              ? t(
-                                  "settingsView.imageProbeSucceededSupportWasSaved",
-                                )
-                              : result.outcome === "unsupported"
-                                ? t(
-                                    "settingsView.providerExplicitlyRejectedImageInputUnsupportedWasSaved",
-                                  )
-                                : t(
-                                    "settingsView.imageProbeWasInconclusiveCapabilityRemainsUnknown",
-                                  ),
-                          );
-                        } catch (reason) {
-                          setValidationError(describeError(reason));
-                          setCatalogStatus(null);
-                        } finally {
-                          setProbingModel(null);
-                        }
-                      }
-                    : undefined
+                <Field
+                  wide
+                  id={fieldId("baseUrl")}
+                  error={issueFor("baseUrl")}
+                  label={t("settingsView.baseUrl")}
+                  value={provider.baseUrl}
+                  onChange={(baseUrl) => {
+                    setProvider({ ...provider, baseUrl });
+                    setValidationError(null);
+                  }}
+                />
+                <Field
+                  wide
+                  secret
+                  id={fieldId("apiKey")}
+                  error={issueFor("apiKey")}
+                  label={t("settingsView.apiKey")}
+                  placeholder={
+                    mode === "edit" && hasApiKey
+                      ? t("settingsView.apiKeySavedLeaveBlankToKeep")
+                      : t("settingsView.required")
+                  }
+                  value={apiKey}
+                  onChange={(value) => {
+                    setApiKey(value);
+                    setValidationError(null);
+                  }}
+                />
+              </>
+            ) : null}
+          </div>
+          {provider.type === "openai-compatible" ? (
+            <div
+              className="settings-note"
+              aria-label={t("settingsView.providerLogo")}
+            >
+              <ProviderLogo
+                kind={
+                  provider.logoResource === undefined
+                    ? providerLogoKind(provider)
+                    : "generic"
+                }
+                customSrc={
+                  logoUpload === null ? undefined : (logoPreview ?? logoDataUrl)
                 }
               />
+              <label className="field">
+                <span>
+                  {t("settingsView.providerLogoPngJpegOrWebpUpTo512")}
+                </span>
+                <input
+                  ref={logoFileInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    if (file === undefined) return;
+                    const version = ++logoReadVersion.current;
+                    setLogoUpload(undefined);
+                    setLogoFilename(null);
+                    setLogoPreview(null);
+                    setLogoSelectionError(null);
+                    setLogoReading(false);
+                    if (
+                      !["image/png", "image/jpeg", "image/webp"].includes(
+                        file.type,
+                      )
+                    ) {
+                      const message = t(
+                        "settingsView.chooseAPngJpegOrWebpProviderLogo",
+                      );
+                      setLogoSelectionError(message);
+                      setValidationError(message);
+                      return;
+                    }
+                    if (file.size > 512 * 1024) {
+                      const message = t(
+                        "settingsView.providerLogoMustBeAtMost512Kib",
+                      );
+                      setLogoSelectionError(message);
+                      setValidationError(message);
+                      return;
+                    }
+                    setLogoReading(true);
+                    void file
+                      .arrayBuffer()
+                      .then((bytes) => {
+                        if (version !== logoReadVersion.current) return;
+                        setLogoUpload(new Uint8Array(bytes));
+                        setLogoFilename(file.name);
+                        setLogoPreview(
+                          `data:${file.type};base64,${base64FromBytes(new Uint8Array(bytes))}`,
+                        );
+                        setValidationError(null);
+                      })
+                      .catch((reason) => {
+                        if (version !== logoReadVersion.current) return;
+                        const message = describeError(reason);
+                        setLogoSelectionError(message);
+                        setValidationError(message);
+                      })
+                      .finally(() => {
+                        if (version === logoReadVersion.current)
+                          setLogoReading(false);
+                      });
+                  }}
+                />
+              </label>
+              {logoFilename === null ? null : <span>{logoFilename}</span>}
+              {logoUpload !== null &&
+              (logoUpload !== undefined ||
+                logoDataUrl !== undefined ||
+                initialProvider.logoResource !== undefined) ? (
+                <button
+                  className="quiet-button"
+                  type="button"
+                  onClick={() => {
+                    logoReadVersion.current += 1;
+                    if (logoFileInput.current !== null)
+                      logoFileInput.current.value = "";
+                    setLogoUpload(null);
+                    setLogoFilename(null);
+                    setLogoPreview(null);
+                    setLogoSelectionError(null);
+                    setLogoReading(false);
+                    setValidationError(null);
+                  }}
+                >
+                  {t("settingsView.removeLogo")}
+                </button>
+              ) : null}
             </div>
-          ))}
-          <ProviderModelAddControl
-            modelCount={models.length}
-            buttonId={fieldId("addModel")}
-            onAdd={() =>
-              setModelRows((current) =>
-                appendProviderModelRows(current, [
-                  {
-                    key: globalThis.crypto.randomUUID(),
-                    model: manualModelCatalogEntry(""),
-                  },
-                ]),
-              )
-            }
-          />
-        </fieldset>
-        {replacesDefault ? (
-          <ModelReferenceSelect
-            label={t("settingsView.replacementDefaultModel")}
-            placeholder={t("settingsView.selectAModel")}
-            profiles={replacementProfiles}
-            value={defaultReplacement}
-            onChangeValue={setDefaultReplacement}
-          />
-        ) : null}
-        {replacesTitle ? (
-          <ModelReferenceSelect
-            label={t("settingsView.replacementTitleModel")}
-            placeholder={t("settingsView.selectAModel2")}
-            profiles={replacementProfiles}
-            value={titleReplacement}
-            onChangeValue={setTitleReplacement}
-          />
-        ) : null}
-        {logoSelectionError === null && validationError === null ? null : (
-          <div className="settings-error provider-editor-error" role="alert">
-            <Icon name="warning" />
-            {logoSelectionError ?? validationError}
+          ) : null}
+          {provider.type === "openai-compatible" ? (
+            <p className="settings-note credential-note">
+              {t("settingsView.storedKeysAreNeverShownEnterAValueOnly")}
+            </p>
+          ) : provider.type === "openai-subscription" ? (
+            <p className="settings-note credential-note">
+              {t(
+                "settingsView.authenticationIsManagedByTheExistingOpenaiSignIn",
+              )}
+            </p>
+          ) : (
+            <p className="settings-note credential-note">
+              {t("settingsView.localDemoWorksOfflineAndDoesNotNeedAn")}
+            </p>
+          )}
+          <fieldset className="provider-model-editor">
+            <legend>{t("settingsView.modelCatalog")}</legend>
+            <div className="model-catalog-head">
+              <p>
+                {t(
+                  "settingsView.chooseTheModelsAvailableFromThisProviderOrAdd",
+                )}
+              </p>
+              {(provider.type === "openai-compatible" ||
+                provider.type === "openai-subscription") &&
+              mode === "edit" ? (
+                <button
+                  className="quiet-button"
+                  type="button"
+                  disabled={
+                    discovering ||
+                    (provider.type === "openai-compatible" && !hasApiKey)
+                  }
+                  title={
+                    provider.type === "openai-subscription"
+                      ? t("settingsView.fetchTheOfficialCodexModelCatalog")
+                      : hasApiKey
+                        ? t("settingsView.fetchModelIdsFromThisProvider")
+                        : t("settingsView.saveAnApiKeyBeforeDiscovery")
+                  }
+                  onClick={() => {
+                    setDiscovering(true);
+                    setValidationError(null);
+                    setCatalogStatus(null);
+                    void window.zenx.settings
+                      .discoverProvider(provider.providerProfileId)
+                      .then((snapshot) => {
+                        setAvailableModels(snapshot.models);
+                        if (provider.type === "openai-subscription") {
+                          setModelRows((current) =>
+                            current.map((row) => {
+                              const model = row.model;
+                              if (model.source === "manual") return row;
+                              const discovered = snapshot.models.find(
+                                (entry) => entry.id === model.id,
+                              );
+                              return discovered === undefined
+                                ? row
+                                : { ...row, model: { ...discovered } };
+                            }),
+                          );
+                        }
+                        setSelectedAvailableModels([]);
+                        setModelSearch("");
+                        setCatalogStatus(
+                          snapshot.warning ??
+                            (snapshot.source === "cache"
+                              ? t(
+                                  "settingsView.officialCatalogIsUnchangedUsingTheLocalCache",
+                                )
+                              : snapshot.source === "remote"
+                                ? t(
+                                    "settingsView.officialMetadataUpdatedInTheDraftSaveProviderTo",
+                                  )
+                                : null),
+                        );
+                      })
+                      .catch((reason: unknown) =>
+                        setValidationError(describeError(reason)),
+                      )
+                      .finally(() => setDiscovering(false));
+                  }}
+                >
+                  {discovering
+                    ? t("settingsView.fetchingModels")
+                    : t("settingsView.getAvailableModels")}
+                </button>
+              ) : null}
+            </div>
+            {catalogStatus === null ? null : (
+              <p className="model-catalog-status" role="status">
+                {catalogStatus}
+              </p>
+            )}
+            {availableModels === null ? null : (
+              <section
+                className="available-model-picker"
+                aria-label={t("settingsView.availableModels")}
+              >
+                <h4>{t("settingsView.chooseModelsToAdd")}</h4>
+                <p className="settings-note">
+                  {provider.type === "openai-subscription"
+                    ? t(
+                        "settingsView.chooseAdditionalModelsOfficialMetadataIsUpdatedInThe",
+                      )
+                    : t(
+                        "settingsView.selectTheModelsYouWantExistingModelsAndTheir",
+                      )}
+                </p>
+                {remainingModelSlots <= 10 ? (
+                  <p className="settings-note" role="status">
+                    {remainingModelSlots === 0
+                      ? i18n.t("settings:settingsView.modelLimitReached")
+                      : t("settingsView.moreModels", {
+                          count: remainingModelSlots,
+                        })}
+                  </p>
+                ) : null}
+                <label className="field">
+                  <span>{t("settingsView.searchAvailableModels")}</span>
+                  <input
+                    type="search"
+                    value={modelSearch}
+                    onChange={(event) => setModelSearch(event.target.value)}
+                  />
+                </label>
+                <div className="available-model-list">
+                  {availableModels
+                    .filter((model) =>
+                      model.id
+                        .toLowerCase()
+                        .includes(modelSearch.trim().toLowerCase()),
+                    )
+                    .map((model) => {
+                      const exists = modelIds.has(model.id);
+                      const selected = selectedAvailableModelIds.has(model.id);
+                      return (
+                        <ProviderModelDiscoveryOption
+                          key={model.id}
+                          modelId={model.id}
+                          exists={exists}
+                          selected={selected}
+                          selectedCount={selectedNewModels.length}
+                          modelCount={models.length}
+                          onCheckedChange={(checked) =>
+                            setSelectedAvailableModels((current) =>
+                              checked
+                                ? [...current, model.id]
+                                : current.filter((id) => id !== model.id),
+                            )
+                          }
+                        />
+                      );
+                    })}
+                  {availableModels.every(
+                    (model) =>
+                      !model.id
+                        .toLowerCase()
+                        .includes(modelSearch.trim().toLowerCase()),
+                  ) ? (
+                    <p className="settings-note">
+                      {t("settingsView.noMatchingModels")}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="available-model-actions">
+                  <button
+                    type="button"
+                    className="quiet-button"
+                    onClick={() => {
+                      setAvailableModels(null);
+                      setSelectedAvailableModels([]);
+                    }}
+                  >
+                    {t("settingsView.cancelSelection")}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={
+                      selectedNewModels.length === 0 ||
+                      selectedNewModels.length > remainingModelSlots
+                    }
+                    onClick={() => {
+                      const additions = selectedNewModels.slice(
+                        0,
+                        remainingModelSlots,
+                      );
+                      setModelRows((current) =>
+                        appendProviderModelRows(
+                          current,
+                          additions.map((model) => ({
+                            key: globalThis.crypto.randomUUID(),
+                            model: { ...model },
+                          })),
+                        ),
+                      );
+                      setAvailableModels(null);
+                      setSelectedAvailableModels([]);
+                      setCatalogStatus(
+                        t("settingsView.addedModels", {
+                          count: additions.length,
+                        }),
+                      );
+                    }}
+                  >
+                    {t("settingsView.addSelectedModels")}
+                    {selectedAvailableModels.length})
+                  </button>
+                </div>
+              </section>
+            )}
+            {modelRows.map(({ key, model }, index) => (
+              <div className="provider-model-row" key={key}>
+                <label className="field">
+                  <span>
+                    {t("settingsView.modelNumber", { number: index + 1 })}
+                  </span>
+                  <input
+                    id={fieldId("modelId", index)}
+                    aria-invalid={issueFor("modelId", index) ? true : undefined}
+                    aria-describedby={
+                      issueFor("modelId", index)
+                        ? `${fieldId("modelId", index)}-error`
+                        : undefined
+                    }
+                    value={model.id}
+                    onChange={(event) => {
+                      const id = event.target.value;
+                      updateModel(index, (current) => ({
+                        ...current,
+                        id,
+                        displayName:
+                          current.displayName === current.id
+                            ? id
+                            : current.displayName,
+                        source: "manual",
+                      }));
+                    }}
+                  />
+                  {issueFor("modelId", index) === undefined ? null : (
+                    <small
+                      id={`${fieldId("modelId", index)}-error`}
+                      className="provider-field-error"
+                    >
+                      {issueFor("modelId", index)}
+                    </small>
+                  )}
+                </label>
+                <button
+                  className="quiet-button"
+                  type="button"
+                  aria-label={t("settingsView.removeModelNumber", {
+                    number: index + 1,
+                  })}
+                  disabled={models.length === 1}
+                  onClick={() => {
+                    setModelRows((current) =>
+                      current.filter((_, candidate) => candidate !== index),
+                    );
+                    setValidationError(null);
+                  }}
+                >
+                  {t("settingsView.remove")}
+                </button>
+                <ModelCapabilityEditor
+                  index={index}
+                  model={model}
+                  fieldId={(field) => fieldId(field, index)}
+                  issueFor={(field) => issueFor(field, index)}
+                  onChange={(next) => updateModel(index, () => next)}
+                  probing={probingModel === model.id}
+                  onProbe={
+                    provider.type === "openai-compatible" &&
+                    mode === "edit" &&
+                    hasApiKey &&
+                    initialProvider.models.some(
+                      (entry) => entry.id === model.id,
+                    ) &&
+                    (model.inputModalities === null ||
+                      (model.source === "discovered" &&
+                        model.inputModalities.length === 1 &&
+                        model.inputModalities[0] === "text"))
+                      ? async () => {
+                          setProbingModel(model.id);
+                          setValidationError(null);
+                          setCatalogStatus(
+                            t(
+                              "settingsView.sendingOneTinyImageTestRequestProviderChargesMay",
+                            ),
+                          );
+                          try {
+                            const result =
+                              await window.zenx.settings.probeProviderImage(
+                                provider.providerProfileId,
+                                model.id,
+                              );
+                            updateModel(index, () => ({ ...result.model }));
+                            setCatalogStatus(
+                              result.outcome === "supported"
+                                ? t(
+                                    "settingsView.imageProbeSucceededSupportWasSaved",
+                                  )
+                                : result.outcome === "unsupported"
+                                  ? t(
+                                      "settingsView.providerExplicitlyRejectedImageInputUnsupportedWasSaved",
+                                    )
+                                  : t(
+                                      "settingsView.imageProbeWasInconclusiveCapabilityRemainsUnknown",
+                                    ),
+                            );
+                          } catch (reason) {
+                            setValidationError(describeError(reason));
+                            setCatalogStatus(null);
+                          } finally {
+                            setProbingModel(null);
+                          }
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+            ))}
+            <ProviderModelAddControl
+              modelCount={models.length}
+              buttonId={fieldId("addModel")}
+              onAdd={() =>
+                setModelRows((current) =>
+                  appendProviderModelRows(current, [
+                    {
+                      key: globalThis.crypto.randomUUID(),
+                      model: manualModelCatalogEntry(""),
+                    },
+                  ]),
+                )
+              }
+            />
+          </fieldset>
+          {replacesDefault ? (
+            <ModelReferenceSelect
+              label={t("settingsView.replacementDefaultModel")}
+              placeholder={t("settingsView.selectAModel")}
+              profiles={replacementProfiles}
+              value={defaultReplacement}
+              onChangeValue={setDefaultReplacement}
+            />
+          ) : null}
+          {replacesTitle ? (
+            <ModelReferenceSelect
+              label={t("settingsView.replacementTitleModel")}
+              placeholder={t("settingsView.selectAModel2")}
+              profiles={replacementProfiles}
+              value={titleReplacement}
+              onChangeValue={setTitleReplacement}
+            />
+          ) : null}
+          {logoSelectionError === null && validationError === null ? null : (
+            <div className="settings-error provider-editor-error" role="alert">
+              <Icon name="warning" />
+              {logoSelectionError ?? validationError}
+            </div>
+          )}
+          <div className="provider-editor-actions">
+            <button
+              className="quiet-button"
+              type="button"
+              disabled={busy}
+              onClick={onCancel}
+            >
+              {t("settingsView.cancel3")}
+            </button>
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={busy || logoReading}
+            >
+              {busy
+                ? mode === "add"
+                  ? t("settingsView.adding")
+                  : t("settingsView.saving")
+                : mode === "add"
+                  ? t("settingsView.addProvider")
+                  : t("settingsView.saveProvider")}
+            </button>
           </div>
-        )}
-        <div className="provider-editor-actions">
-          <button className="quiet-button" type="button" onClick={onCancel}>
-            {t("settingsView.cancel3")}
-          </button>
-          <button
-            className="primary-button"
-            type="submit"
-            disabled={busy || logoReading}
-          >
-            {busy
-              ? mode === "add"
-                ? t("settingsView.adding")
-                : t("settingsView.saving")
-              : mode === "add"
-                ? t("settingsView.addProvider")
-                : t("settingsView.saveProvider")}
-          </button>
-        </div>
+        </fieldset>
       </form>
     </section>
   );

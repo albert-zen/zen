@@ -298,6 +298,28 @@ try {
       "document.querySelectorAll('.provider-model-row').length===12",
     );
     await capture("02-edit-from-last-provider");
+    await evaluate(
+      `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
+    );
+    await send("Input.insertText", { text: "Synthetic unsaved provider" });
+    await waitFor(
+      `document.querySelector('.provider-editor input[id$="-displayName"]').value === "Synthetic unsaved provider"`,
+    );
+    receipt.editorIsolation = await evaluate(`(() => {
+      const editor = document.querySelector('.provider-editor');
+      const name = editor.querySelector('input[id$="-displayName"]');
+      const before = name.value;
+      const actions = [...document.querySelectorAll('.provider-profile-actions button')];
+      actions.forEach(button => button.click());
+      return {allDisabled: actions.every(button => button.disabled), allExplained: actions.every(button => !!document.getElementById(button.getAttribute('aria-describedby'))?.textContent), sameEditor: document.querySelector('.provider-editor') === editor, namePreserved: name.value === before};
+    })()`);
+    assert.deepEqual(receipt.editorIsolation, {
+      allDisabled: true,
+      allExplained: true,
+      sameEditor: true,
+      namePreserved: true,
+    });
+    await capture("02c-preserved-provider-draft");
     await key("Tab", "Tab", 9);
     receipt.keyboardForward = await evaluate(measure);
     await key("Tab", "Tab", 9, 8);
@@ -328,6 +350,13 @@ try {
     await clickSelector(".provider-editor-head button");
     await waitFor("!document.querySelector('.provider-editor')");
     await capture("08-cancel-focus");
+    assert.equal(
+      await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      ),
+      true,
+      "Cancel returns focus to originating provider Edit",
+    );
     // Fresh page avoids attributing prior synthetic edits to the add flow.
     await navigate();
     await clickSelector(".provider-section-actions .primary-button");
