@@ -1,0 +1,16 @@
+{
+  "sourceHead": "3e7e3d8c2f59cb11dbc06ab26f63d981ede7d5e1",
+  "sourceTree": "5dc8f9d0daf2328754f967a2323d58ed0db1436c",
+  "testMerge": "7ca9eaf6553f6acd8191a4d8617a68152a2f18c3",
+  "run": 40185509184,
+  "artifact": 12595303662,
+  "artifactSha256": "ad238763bf09e7ef582b9dc47ccf57be34de3828247f0cde6c71c80edc5b99a4",
+  "imageEvidenceCommit": "9cba8580152094347a54cb664eac9b2cfb5683e6",
+  "imagesByteIdentical": true,
+  "screenshots": {
+    "context-after-light-900-above.png": "b0b3c15de0098d333fbb89faf86f5650efffe3b4c1a8e854dce8c145ea99526f",
+    "context-after-dark-390-above.png": "a385b2a2cd871dec75a71453f06b2f3ad006a8e09d975ceceb772f33abdd9f23"
+  },
+  "checks": "All four 900/390px light/dark variants retain exact four computed colors, no explanation paragraph, no horizontal overflow, hover bridge and Escape. Root mechanical review confirms only raw colors moved to semantic theme tokens; original failed CI remains documented.",
+  "boundary": "Production components and CSS, synthetic counts, Linux CI Chrome input emulation. No Host/private data/live model calls/native device acceptance. Overall CI still running."
+}
