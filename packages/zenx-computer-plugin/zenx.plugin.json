@@ -11,7 +11,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key and scroll reuse selection without requiring a screenshot per key. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee.",
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee.",
   "provider": {
     "id": "macos-desktop",
     "platforms": ["darwin"],
@@ -346,9 +346,12 @@
               "arrowLeft",
               "arrowRight"
             ]
+          },
+          "bindingId": {
+            "type": "string"
           }
         },
-        "required": ["key"],
+        "required": ["key", "bindingId"],
         "additionalProperties": false
       }
     },
@@ -363,11 +366,123 @@
         "properties": {
           "deltaY": {
             "type": "number"
+          },
+          "bindingId": {
+            "type": "string"
           }
         },
-        "required": ["deltaY"],
+        "required": ["deltaY", "bindingId"],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "computer_foreground_type",
+      "description": "FOREGROUND TAKEOVER: type up to 1024 Unicode scalars into this thread's selected exact window using Unicode keyboard events, without clipboard access. Does not guarantee application acceptance. Partial/cancelled input must not be replayed automatically; no text is echoed in the receipt.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "bindingId": {
+            "type": "string"
+          }
+        },
+        "required": ["text", "bindingId"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound"
+      ]
+    },
+    {
+      "name": "computer_foreground_shortcut",
+      "description": "FOREGROUND TAKEOVER: send one shortcut to this thread's selected exact window. key is a logical unshifted letter/digit in the current Command layout when command is present, otherwise the current base layout; modifiers apply separately. Navigation keys are layout-independent. Missing or ambiguous character mappings/input-source changes fail closed; no ANSI fallback.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e",
+              "f",
+              "g",
+              "h",
+              "i",
+              "j",
+              "k",
+              "l",
+              "m",
+              "n",
+              "o",
+              "p",
+              "q",
+              "r",
+              "s",
+              "t",
+              "u",
+              "v",
+              "w",
+              "x",
+              "y",
+              "z",
+              "0",
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "enter",
+              "escape",
+              "tab",
+              "backspace",
+              "space",
+              "arrowUp",
+              "arrowDown",
+              "arrowLeft",
+              "arrowRight"
+            ]
+          },
+          "modifiers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["command", "control", "option", "shift"]
+            }
+          }
+        },
+        "required": ["key", "modifiers", "bindingId"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound"
+      ]
     },
     {
       "name": "computer_select_target",

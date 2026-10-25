@@ -32,6 +32,19 @@ import {
   type ObservationCapture,
 } from "./observation-capture.js";
 
+export const COMPUTER_SHORTCUT_KEYS = [
+  ...Array.from("abcdefghijklmnopqrstuvwxyz0123456789"),
+  "enter",
+  "escape",
+  "tab",
+  "backspace",
+  "space",
+  "arrowUp",
+  "arrowDown",
+  "arrowLeft",
+  "arrowRight",
+];
+
 export interface ComputerTarget {
   pid?: number;
   applicationId?: string;
@@ -393,7 +406,7 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
   version: "1.1.0",
   mainDocument:
     computerCapabilityManifest.mainDocument +
-    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key and scroll reuse selection without requiring a screenshot per key. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee.",
+    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee.",
   tools: [
     ...computerCapabilityManifest.tools.map((tool) =>
       tool.name === "computer_foreground_click"
@@ -411,8 +424,73 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
               ["x", "y", "captureId"],
             ),
           }
-        : tool,
+        : tool.name.startsWith("computer_foreground_")
+          ? {
+              ...tool,
+              inputSchema: {
+                ...tool.inputSchema,
+                properties: {
+                  ...(tool.inputSchema.properties as Record<string, unknown>),
+                  bindingId: stringSchema(),
+                },
+                required: [
+                  ...(tool.inputSchema.required as string[]),
+                  "bindingId",
+                ],
+              },
+            }
+          : tool,
     ),
+    {
+      name: "computer_foreground_type",
+      description:
+        "FOREGROUND TAKEOVER: type up to 1024 Unicode scalars into this thread's selected exact window using Unicode keyboard events, without clipboard access. Does not guarantee application acceptance. Partial/cancelled input must not be replayed automatically; no text is echoed in the receipt.",
+      inputSchema: objectSchema(
+        {
+          text: { type: "string", minLength: 1, maxLength: 1024 },
+          bindingId: stringSchema(),
+        },
+        ["text", "bindingId"],
+      ),
+      permissions: ["computer.foreground.control"],
+      interactionMode: "foreground_required",
+      capabilities: [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound",
+      ],
+    },
+    {
+      name: "computer_foreground_shortcut",
+      description:
+        "FOREGROUND TAKEOVER: send one shortcut to this thread's selected exact window. key is a logical unshifted letter/digit in the current Command layout when command is present, otherwise the current base layout; modifiers apply separately. Navigation keys are layout-independent. Missing or ambiguous character mappings/input-source changes fail closed; no ANSI fallback.",
+      inputSchema: objectSchema(
+        {
+          bindingId: stringSchema(),
+          key: { type: "string", enum: COMPUTER_SHORTCUT_KEYS },
+          modifiers: {
+            type: "array",
+            minItems: 1,
+            maxItems: 4,
+            uniqueItems: true,
+            items: {
+              type: "string",
+              enum: ["command", "control", "option", "shift"],
+            },
+          },
+        },
+        ["key", "modifiers", "bindingId"],
+      ),
+      permissions: ["computer.foreground.control"],
+      interactionMode: "foreground_required",
+      capabilities: [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound",
+      ],
+    },
     {
       name: "computer_select_target",
       description:
@@ -705,6 +783,15 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     const selectedBindingId = this.#backend.targetSession?.selectedBindingId(
       requiredComputerOwner(invocation),
     );
+    if (
+      this.#backend.targetSession &&
+      toolName !== "computer_foreground_click" &&
+      requiredString(invocation.arguments, "bindingId") !== selectedBindingId
+    ) {
+      throw new Error(
+        "bindingId no longer matches this thread's selected target; no input dispatched",
+      );
+    }
     const signal = AbortSignal.any([
       invocation.signal,
       this.#foregroundConsent.signal,
@@ -787,6 +874,48 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           ...(this.#backend.targetSession
             ? { dispatch: "posted", applicationEffect: "unverified" }
             : {}),
+        };
+      }
+      case "computer_foreground_type":
+      case "computer_foreground_shortcut": {
+        const session = this.#backend.targetSession;
+        if (!session)
+          throw new Error(
+            "This provider does not support bound native keyboard input",
+          );
+        const action =
+          toolName === "computer_foreground_type"
+            ? {
+                operation: "type" as const,
+                text: requiredComputerTypingText(invocation.arguments),
+              }
+            : {
+                operation: "shortcut" as const,
+                ...requiredComputerShortcut(invocation.arguments),
+              };
+        await this.#withForegroundActivity(
+          invocation,
+          signal,
+          async (signal, onStopping) => {
+            this.#assertForegroundControlAllowed(toolName);
+            this.#presentation.invalidateAll();
+            await session.input(
+              requiredComputerOwner(invocation),
+              action,
+              signal,
+              onStopping,
+              selectedBindingId,
+            );
+          },
+        );
+        return {
+          action: action.operation,
+          ...(action.operation === "type"
+            ? { characterCount: Array.from(action.text).length }
+            : { key: action.key, modifiers: action.modifiers }),
+          impact: "foreground_takeover",
+          dispatch: "posted",
+          applicationEffect: "unverified",
         };
       }
       case "computer_foreground_scroll": {
@@ -2626,6 +2755,7 @@ function requireMacOs(): void {
 
 export const MAC_BOUND_TARGET_SOURCE = `import AppKit
 import ApplicationServices
+import Carbon
 import Foundation
 
 struct TargetError: Error { let message: String }
@@ -2721,6 +2851,63 @@ final class Binding {
       "bounds": ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]]
   }
 }
+struct KeyboardLayout {
+  let id: String
+  let translate: (CGKeyCode, Bool) throws -> String
+}
+func readKeyboardLayout() throws -> KeyboardLayout {
+  guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+        let active = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+        let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData),
+        let rawId = TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
+        let activeId = TISGetInputSourceProperty(active, kTISPropertyInputSourceID) else { try refuse("Current keyboard layout is unavailable; no ANSI fallback") }
+  let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue()
+  let id = (Unmanaged<CFString>.fromOpaque(rawId).takeUnretainedValue() as String) + ":" + (Unmanaged<CFString>.fromOpaque(activeId).takeUnretainedValue() as String)
+  let keyboardType = UInt32(LMGetKbdType())
+  return KeyboardLayout(id: id + ":" + String(keyboardType), translate: { code, command in
+    guard let bytes = CFDataGetBytePtr(data) else { try refuse("Keyboard layout data is unavailable") }
+    let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+    var dead: UInt32 = 0
+    var length = 0
+    var output = [UniChar](repeating: 0, count: 8)
+    let status = UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), command ? UInt32(cmdKey) >> 8 : 0,
+      keyboardType, OptionBits(kUCKeyTranslateNoDeadKeysMask), &dead, output.count, &length, &output)
+    guard status == noErr, dead == 0 else { return "" }
+    return String(utf16CodeUnits: output, count: length)
+  })
+}
+func resolveShortcut(_ key: String, _ modifiers: [String]) throws -> (CGKeyCode, CGEventFlags, String?) {
+  guard !modifiers.isEmpty, modifiers.count <= 4, Set(modifiers).count == modifiers.count,
+        modifiers.allSatisfy({ ["command", "control", "option", "shift"].contains($0) }) else { try refuse("Invalid shortcut modifiers") }
+  var flags: CGEventFlags = []
+  if modifiers.contains("command") { flags.insert(.maskCommand) }
+  if modifiers.contains("control") { flags.insert(.maskControl) }
+  if modifiers.contains("option") { flags.insert(.maskAlternate) }
+  if modifiers.contains("shift") { flags.insert(.maskShift) }
+  if let code = keyCodes[key] { return (code, flags, nil) }
+  guard key.utf8.count == 1, "abcdefghijklmnopqrstuvwxyz0123456789".contains(key) else { try refuse("Unsupported logical shortcut key") }
+  let layout = try readKeyboardLayout()
+  var matches: [CGKeyCode] = []
+  // Logical base key under the current Command layout when Command is present.
+  // Other modifiers apply separately; do not search Option/dead-key output text.
+  for code in CGKeyCode(0)...CGKeyCode(63) {
+    if try layout.translate(code, modifiers.contains("command")).lowercased() == key { matches.append(code) }
+  }
+  guard matches.count == 1 else { try refuse("Logical shortcut key has no unique mapping in current keyboard layout") }
+  return (matches[0], flags, layout.id)
+}
+func unicodeChunks(_ text: String) throws -> [[UniChar]] {
+  guard !text.isEmpty, text.unicodeScalars.count <= 1024 else { try refuse("Typing requires 1 to 1024 Unicode scalars") }
+  var chunks: [[UniChar]] = []; var current: [UniChar] = []
+  for scalar in text.unicodeScalars {
+    let units = Array(String(scalar).utf16)
+    if current.count + units.count > 16 { chunks.append(current); current = [] }
+    current.append(contentsOf: units)
+  }
+  if !current.isEmpty { chunks.append(current) }
+  return chunks
+}
+
 let keyCodes: [String: CGKeyCode] = ["enter":36, "escape":53, "tab":48, "backspace":51, "space":49, "arrowUp":126, "arrowDown":125, "arrowLeft":123, "arrowRight":124]
 var bindings: [String: Binding] = [:]
 while let line = readLine() {
@@ -2747,9 +2934,11 @@ while let line = readLine() {
       else {
         // All target activation occurs after the host's approval and foreground arbitration.
         try binding.activate()
+        var shortcutFence: (() throws -> Void)?
         func post(_ event: CGEvent?) throws {
           guard let event else { try refuse("Could not construct native input") }
           try binding.fence()
+          try shortcutFence?()
           event.post(tap: .cghidEventTap)
           posted += 1
         }
@@ -2768,6 +2957,34 @@ while let line = readLine() {
           try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true))
           usleep(20_000)
           try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false))
+        case "type":
+          guard let text = request["text"] as? String else { try refuse("Typing text is required") }
+          let chunks = try unicodeChunks(text)
+          for units in chunks {
+            for down in [true, false] {
+              let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down)
+              event?.flags = []
+              units.withUnsafeBufferPointer { buffer in
+                event?.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+              }
+              try post(event)
+              if down { usleep(5_000) }
+            }
+          }
+        case "shortcut":
+          guard let key = request["key"] as? String, let modifiers = request["modifiers"] as? [String] else { try refuse("Shortcut key and modifiers are required") }
+          let (code, flags, layoutId) = try resolveShortcut(key, modifiers)
+          shortcutFence = {
+            let fresh = try resolveShortcut(key, modifiers)
+            guard fresh.0 == code, fresh.1 == flags, fresh.2 == layoutId else { try refuse("Keyboard input source or mapping changed; reobserve before shortcut") }
+          }
+          let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)
+          down?.flags = flags
+          try post(down)
+          usleep(20_000)
+          let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
+          up?.flags = flags
+          try post(up)
         case "scroll":
           guard let value = request["deltaY"] as? Double, value.isFinite, abs(value) <= 10000, value.rounded() != 0 else { try refuse("Invalid scroll pixels") }
           let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -Int32(value.rounded()), wheel2: 0, wheel3: 0)
@@ -2797,4 +3014,34 @@ function requiredComputerOwner(invocation: ToolInvocation): string {
   if (!invocation.threadId)
     throw new Error("Bound Computer input requires a host-owned threadId");
   return invocation.threadId;
+}
+
+function requiredComputerTypingText(
+  arguments_: Record<string, unknown>,
+): string {
+  const text = requiredString(arguments_, "text");
+  if (Array.from(text).length > 1024 || /[\uD800-\uDFFF]/u.test(text))
+    throw new Error("text must contain 1 to 1024 well-formed Unicode scalars");
+  return text;
+}
+function requiredComputerShortcut(arguments_: Record<string, unknown>): {
+  key: string;
+  modifiers: string[];
+} {
+  const key = requiredString(arguments_, "key");
+  const modifiers = arguments_.modifiers;
+  if (
+    !COMPUTER_SHORTCUT_KEYS.includes(key) ||
+    !Array.isArray(modifiers) ||
+    modifiers.length < 1 ||
+    modifiers.length > 4 ||
+    new Set(modifiers).size !== modifiers.length ||
+    !modifiers.every(
+      (value): value is string =>
+        typeof value === "string" &&
+        ["command", "control", "option", "shift"].includes(value),
+    )
+  )
+    throw new Error("Unsupported shortcut key or modifiers");
+  return { key, modifiers };
 }

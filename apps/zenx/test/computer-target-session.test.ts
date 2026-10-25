@@ -147,7 +147,9 @@ test("unbound package calls never fall back to global input and consent still ga
     capability.invoke(name, {
       callId: "call",
       name,
-      arguments: args,
+      arguments: name.startsWith("computer_foreground_")
+        ? { bindingId: "b1", ...args }
+        : args,
       cwd: "/",
       signal,
       threadId: owner,
@@ -223,4 +225,109 @@ test("input waiting for foreground takeover cannot silently follow a later selec
     /target changed while input awaited/,
   );
   assert.equal(calls.length, count);
+});
+
+test("native text and shortcuts share owner/consent fences and never echo typed text", async () => {
+  const { ComputerZenXCapabilityPackage } =
+    await import("../src/main/capabilities/computer-provider.js");
+  const { session, calls } = fixture();
+  const unsupported = async (): Promise<never> => {
+    throw new Error("Legacy backend must not be used");
+  };
+  const capability = new ComputerZenXCapabilityPackage(
+    {
+      targetSession: session,
+      inspect: unsupported,
+      press: unsupported,
+      setValue: unsupported,
+      screenshot: unsupported,
+      foregroundClick: unsupported,
+      foregroundKeyPress: unsupported,
+      foregroundScroll: unsupported,
+      close: async () => {},
+    },
+    undefined,
+    true,
+  );
+  const invoke = (
+    name: string,
+    args: Record<string, unknown>,
+    threadId = "a",
+  ) =>
+    capability.invoke(name, {
+      callId: "call",
+      name,
+      arguments: name.startsWith("computer_foreground_")
+        ? { bindingId: "b1", ...args }
+        : args,
+      cwd: "/",
+      signal,
+      threadId,
+    });
+  await invoke("computer_select_target", { target: { pid: 7 } });
+  const text = "private 😀";
+  const receipt = (await invoke("computer_foreground_type", { text })) as {
+    characterCount: number;
+  };
+  assert.equal(receipt.characterCount, 9);
+  assert.doesNotMatch(JSON.stringify(receipt), /private/);
+  assert.equal(calls.at(-1)?.owner, "a");
+  assert.equal(calls.at(-1)?.text, text);
+  await invoke("computer_foreground_shortcut", {
+    key: "a",
+    modifiers: ["command"],
+  });
+  assert.equal(calls.at(-1)?.operation, "shortcut");
+  const count = calls.length;
+  await assert.rejects(
+    invoke("computer_foreground_type", {
+      text,
+      bindingId: "stale-approved-target",
+    }),
+    /bindingId no longer matches/,
+  );
+  await assert.rejects(
+    invoke("computer_foreground_type", { text: "x".repeat(1025) }),
+    /1024/,
+  );
+  await assert.rejects(
+    invoke("computer_foreground_type", { text: "\ud800" }),
+    /well-formed/,
+  );
+  await assert.rejects(
+    invoke("computer_foreground_shortcut", {
+      key: "a",
+      modifiers: ["command", "command"],
+    }),
+    /Unsupported shortcut/,
+  );
+  await assert.rejects(
+    invoke(
+      "computer_foreground_shortcut",
+      { key: "a", modifiers: ["command"] },
+      "other",
+    ),
+    /Select a Computer target/,
+  );
+  assert.equal(calls.length, count);
+  const awaitingApproval = { key: "enter", bindingId: "b1" };
+  await invoke("computer_select_target", { target: { pid: 8 } });
+  const afterSelection = calls.length;
+  await assert.rejects(
+    invoke("computer_foreground_key_press", awaitingApproval),
+    /bindingId no longer matches/,
+  );
+  assert.equal(calls.length, afterSelection);
+  assert.equal(session.selectedBindingId("a"), "b2");
+  await invoke("computer_foreground_shortcut", {
+    key: "a",
+    modifiers: ["command"],
+    bindingId: "b2",
+  });
+  capability.setForegroundControlAllowed(false);
+  await assert.rejects(
+    invoke("computer_foreground_type", { text }),
+    /enable Foreground/,
+  );
+  await capability.close();
 });

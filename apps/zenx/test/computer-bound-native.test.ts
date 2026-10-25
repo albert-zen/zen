@@ -62,7 +62,7 @@ final class NSWorkspace {
   static let shared = NSWorkspace()
   var runningApplications: [NSRunningApplication] { [NSRunningApplication(processIdentifier: 42)!] }
   var frontmostApplication: NSRunningApplication? {
-    if mode == "focus-stolen" && posted >= 1 { return NSRunningApplication(processIdentifier: 99) }
+    if ["focus-stolen", "typing-focus-stolen"].contains(mode) && posted >= 1 { return NSRunningApplication(processIdentifier: 99) }
     return NSRunningApplication(processIdentifier: 42)
   }
 }
@@ -72,15 +72,24 @@ enum CGMouseButton { case left, right }
 enum CGEventType: String { case mouseMoved, leftMouseDown, leftMouseUp, rightMouseDown, rightMouseUp }
 enum CGEventTapLocation { case cghidEventTap }
 enum CGScrollEventUnit { case pixel }
+struct CGEventFlags: OptionSet {
+  let rawValue: UInt64
+  static let maskCommand = CGEventFlags(rawValue: 1 << 20)
+  static let maskControl = CGEventFlags(rawValue: 1 << 18)
+  static let maskAlternate = CGEventFlags(rawValue: 1 << 19)
+  static let maskShift = CGEventFlags(rawValue: 1 << 17)
+}
 final class CGEvent {
-  let label: String
+  var flags: CGEventFlags = []
+  var label: String
   var location = CGPoint.zero
-  init?(keyboardEventSource: Any?, virtualKey: CGKeyCode, keyDown: Bool) { label = keyDown ? "down" : "up" }
+  init?(keyboardEventSource: Any?, virtualKey: CGKeyCode, keyDown: Bool) { label = (keyDown ? "down:" : "up:") + String(virtualKey) }
   init?(mouseEventSource: Any?, mouseType: CGEventType, mouseCursorPosition: CGPoint, mouseButton: CGMouseButton) { label = mouseType.rawValue }
   init?(scrollWheelEvent2Source: Any?, units: CGScrollEventUnit, wheelCount: UInt32, wheel1: Int32, wheel2: Int32, wheel3: Int32) { label = "scroll" }
+  func keyboardSetUnicodeString(stringLength: Int, unicodeString: UnsafePointer<UniChar>?) { label += ":unicode=" + String(stringLength) }
   func post(tap: CGEventTapLocation) {
     posted += 1
-    FileHandle.standardError.write(Data(("POST:" + label + "\\n").utf8))
+    FileHandle.standardError.write(Data(("POST:" + label + ":flags=" + String(flags.rawValue) + "\\n").utf8))
   }
 }
 `;
@@ -98,7 +107,7 @@ test(
     const start = MAC_BOUND_TARGET_SOURCE.indexOf("func attribute(");
     const end = MAC_BOUND_TARGET_SOURCE.indexOf("final class Binding");
     assert.ok(start > 0 && end > start);
-    const transformed = (
+    const withoutPlatform = (
       MAC_BOUND_TARGET_SOURCE.slice(0, start) +
       MAC_BOUND_TARGET_SOURCE.slice(end)
     )
@@ -113,6 +122,20 @@ test(
         "owner = requestedOwner",
         "owner = requestedOwner\n    fixtureOperation = operation",
       );
+    const keyboardStart = withoutPlatform.indexOf("func readKeyboardLayout()");
+    const keyboardEnd = withoutPlatform.indexOf("func resolveShortcut(");
+    assert.ok(keyboardStart > 0 && keyboardEnd > keyboardStart);
+    const transformed = (
+      withoutPlatform.slice(0, keyboardStart) +
+      `func readKeyboardLayout() throws -> KeyboardLayout {
+      return KeyboardLayout(id: mode == "layout-changed" && posted >= 1 ? "new-layout" : "fixture-layout", translate: { code, command in
+        let mapped: CGKeyCode = command ? (mode == "layout-remapped" && posted >= 1 ? 13 : 12) : 0
+        return code == mapped || (mode == "shortcut-ambiguous" && code == 0) ? "a" : ""
+      })
+    }
+    ` +
+      withoutPlatform.slice(keyboardEnd)
+    ).replace("import Carbon", "");
     writeFileSync(source, transformed);
     const compilation = spawnSync("/usr/bin/swiftc", [source, "-o", binary], {
       encoding: "utf8",
@@ -128,6 +151,13 @@ test(
       "restarted",
       "activation-failed",
       "focus-stolen",
+      "typing",
+      "typing-focus-stolen",
+      "shortcut-alt",
+      "shortcut-option",
+      "layout-changed",
+      "layout-remapped",
+      "shortcut-ambiguous",
     ]) {
       const child = spawn(binary, [], {
         env: { ...process.env, FIXTURE_MODE: mode },
@@ -176,17 +206,33 @@ test(
           });
           assert.match(foreign.error!, /binding expired/);
         }
+        const input = mode.startsWith("typing")
+          ? { operation: "type", text: "a".repeat(15) + "😀" }
+          : mode.startsWith("shortcut") || mode.startsWith("layout-")
+            ? {
+                operation: "shortcut",
+                key: "a",
+                modifiers: [mode === "shortcut-option" ? "option" : "command"],
+              }
+            : { operation: "key", key: "enter" };
         const result = await request({
-          operation: "key",
-          key: "enter",
+          ...input,
           owner: "thread-a",
           bindingId: selected.result.bindingId,
         });
-        if (mode === "normal") assert.equal(result.error, undefined);
+        if (
+          ["normal", "typing", "shortcut-alt", "shortcut-option"].includes(mode)
+        )
+          assert.equal(result.error, undefined);
         else {
           assert.match(
             result.error!,
-            mode === "focus-stolen"
+            [
+              "focus-stolen",
+              "typing-focus-stolen",
+              "layout-changed",
+              "layout-remapped",
+            ].includes(mode)
               ? /partially dispatched; outcome unknown/
               : /no input dispatched/,
           );
@@ -204,9 +250,29 @@ test(
         );
         assert.equal(
           (stderr.match(/POST:/g) ?? []).length,
-          mode === "normal" ? 2 : mode === "focus-stolen" ? 1 : 0,
+          ["normal", "shortcut-alt", "shortcut-option"].includes(mode)
+            ? 2
+            : mode === "typing"
+              ? 4
+              : [
+                    "focus-stolen",
+                    "typing-focus-stolen",
+                    "layout-changed",
+                    "layout-remapped",
+                  ].includes(mode)
+                ? 1
+                : 0,
           `${mode}: ${stderr}`,
         );
+        if (mode === "typing") {
+          assert.match(stderr, /unicode=15/);
+          assert.match(stderr, /unicode=2/);
+          assert.doesNotMatch(stderr, /unicode=16|unicode=1\n/);
+        }
+        if (mode === "shortcut-alt")
+          assert.match(stderr, /POST:down:12:flags=1048576/);
+        if (mode === "shortcut-option")
+          assert.match(stderr, /POST:down:0:flags=524288/);
       } finally {
         child.kill("SIGKILL");
       }

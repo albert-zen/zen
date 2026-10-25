@@ -79,7 +79,7 @@ const providerVariants = new Map([
   ],
   [
     "zenx-computer-plugin-macos-1.1.0.tgz",
-    ["computer", "1.1.0", "macos-desktop", 9],
+    ["computer", "1.1.0", "macos-desktop", 11],
   ],
   [
     "zenx-computer-plugin-peekaboo-1.0.1.tgz",

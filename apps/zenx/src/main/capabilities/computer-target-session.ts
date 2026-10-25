@@ -29,6 +29,8 @@ export type BoundComputerInput =
       captureId: string;
     }
   | { operation: "key"; key: string }
+  | { operation: "type"; text: string }
+  | { operation: "shortcut"; key: string; modifiers: string[] }
   | { operation: "scroll"; deltaY: number };
 
 /** Ephemeral per-provider, per-thread native target selection. Never persisted or inferred from the foreground app. */
