@@ -248,7 +248,7 @@
 }
 .trigger-manager .trigger-card {
   padding: 16px;
-  border-radius: var(--radius-card, 14px);
+  border-radius: 14px;
 }
 .trigger-card-heading {
   align-items: center;
@@ -373,7 +373,7 @@
 }
 .trigger-manager .trigger-editor {
   padding: 24px;
-  border-radius: var(--radius-card, 14px);
+  border-radius: 14px;
 }
 .trigger-editor > h3 {
   margin: 0 0 20px;

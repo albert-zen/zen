@@ -161,7 +161,9 @@ test("delayed source definition cannot replace a newer New Trigger editor", asyn
     );
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(".trigger-manager > .primary-button")!
+        .querySelector<HTMLButtonElement>(
+          ".trigger-manager-header .primary-button",
+        )!
         .click(),
     );
     assert.match(
