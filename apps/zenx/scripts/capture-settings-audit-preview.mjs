@@ -364,7 +364,7 @@ try {
       await waitFor("!!document.querySelector('.provider-editor')");
       await clickSelector('.provider-editor-actions [type="submit"]');
       await waitFor(
-        "document.querySelector('.provider-editor')?.getAttribute('aria-busy') === 'true'",
+        "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'true'",
       );
       const pendingFocus = await evaluate(measure);
       if (newerNavigation) await clickSelector("#settings-tab-general");
