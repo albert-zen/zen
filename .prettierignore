@@ -1,9 +1,0 @@
-dist/
-node_modules/
-package-lock.json
-**/.pytest_cache/
-**/.ruff_cache/
-**/.venv/
-
-# Reviewed raw CI bytes; SHA-256 includes the original CRLF line endings.
-vendor/winapp-0.3.1/packages.lock.json

@@ -1,0 +1,24 @@
+{
+  "commit": "2165d5f106ac387e67673406a9adb04fa1085bf6",
+  "scope": "Actual AuxiliaryPanel, WorkspaceFilesPanel, WorkspaceFileExplorer, SourceEditor and InlineMarkdownEditor with production styles. Synthetic source and Markdown files, memory-only drafts and a scoped fake file API; no Host, private files or profile. Browser CDP keyboard/pointer input, not native Electron or physical OS acceptance.",
+  "sources": {
+    "src/renderer/src/Markdown.tsx": "de47c1852b2ea6e453370467f5d7755119d789ca09c81ddfb1f37b4b32dc0c60",
+    "src/renderer/src/local-path-links.ts": "ea64add5a70111ff2f95c6a887472f36873aae984328bd91e28df6eb0fe01d0f",
+    "src/renderer/src/message-file-path.ts": "bd461b85069ab7a3dfa6a2e9178709e8f34392bc46ba94beaec46d506a60ba61",
+    "src/external-link-policy.ts": "c13f1edb347c5adbb21f3fe21a780c5419ffb3e11bda1e1f3e8d8fe980e94e4b",
+    "src/renderer/src/auxiliary-panel.tsx": "2d1333dddcd694e4794817265bab895819befb28b5961af32496cb3333fa8121",
+    "src/renderer/src/workspace-files-panel.tsx": "9befa73b7fc44e353b01cb98c235d13e1f128de84eca9a1fb84c8478f0d64663",
+    "src/renderer/src/workspace-file-picker.tsx": "9f234258b470b9f32d0879e982180635366e101b42e9cd42722db495809ff433",
+    "src/renderer/src/workspace-file-explorer.tsx": "36b311864a27379ce67bbad3d094db8e93e60a916b5e3d53e374a93f784c0a4b",
+    "src/renderer/src/workspace-file-drafts.ts": "da487ed22a20c6cba5bcdc37a730031fd584b711a423507fa6f08cf433211959",
+    "src/renderer/src/SourceEditor.tsx": "62ecaec26d165fa01cfa9b2cd26cd378242bfe3422e1bb7974ce098b316090bd",
+    "src/renderer/src/InlineMarkdownEditor.tsx": "6ccb593c6052c66a8b4e26a20fae8a97ec7fdefa9fcfaac8bf9b1ff725910094",
+    "src/renderer/src/file-content-search.ts": "2c1a3ce728d0d4368bdc0bfc8f0857b8241ea4193b91321182747089afd36c2a",
+    "src/renderer/src/styles.css": "ebd0eed1ad33fb17d85abc16d5492894889b8930eba67a19960de37ccfc804f1",
+    "src/renderer/src/workspace-files.css": "e73d86c414ac0bc0657f7d22057fb6c038ec7f4f466eeae1b7b70f57dea2afc5",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "scripts/file-sidebar-preview.tsx": "09eb76840792ac46be20a6e2bcf75166e06cec54c87df0a3f122de4fb5b05d27",
+    "scripts/build-file-sidebar-preview.mjs": "79913c14021dc565e6434b9a4a7dca04c43b0b88b7e00d2fe34a268ae34d95bd",
+    "scripts/capture-file-sidebar-preview.mjs": "e8448ca231cd9a5b8bf49937add1263315ebbec5eac954e76370ec94d3d33dea"
+  }
+}
