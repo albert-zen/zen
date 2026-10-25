@@ -11,6 +11,8 @@ import type { Thread } from "../src/protocol-client/index.js";
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
+import "../src/renderer/src/trigger-ui.css";
+const now = Date.UTC(2026, 9, 25, 6, 0);
 const q = new URLSearchParams(location.search);
 const zh = q.get("lang") === "zh-CN";
 const label = zh ? "每日研究简报" : "Daily research brief";
@@ -27,8 +29,8 @@ const thread: Thread = {
   ephemeral: false,
   isPinned: false,
   modelProvider: "synthetic",
-  createdAt: 10,
-  updatedAt: 20,
+  createdAt: now - 10000,
+  updatedAt: now,
   recencyAt: null,
   status: { type: "idle" },
   path: null,
@@ -53,12 +55,21 @@ const thread: Thread = {
           text,
           mode: "steer",
         },
+        {
+          type: "agentMessage",
+          id: "reply",
+          text: zh
+            ? "研究结果已整理，待你审阅。"
+            : "The research summary is ready for your review.",
+          phase: "final_answer",
+          memoryCitation: null,
+        },
       ],
       itemsView: "full",
       status: "completed",
       error: null,
-      startedAt: 10,
-      completedAt: 20,
+      startedAt: now - 10000,
+      completedAt: now,
       durationMs: 10000,
     },
   ],
@@ -95,7 +106,19 @@ const sdk = {
           ],
           history: [],
         };
-      if (command === "threads") return { threads: [] };
+      if (command === "threads")
+        return {
+          threads: [
+            {
+              threadId: "research",
+              name: zh ? "研究助手" : "Research assistant",
+              archived: false,
+              shortId: "research",
+              status: "idle",
+              cwd: "/synthetic",
+            },
+          ],
+        };
       if (command === "workspaces") return { workspaces: [] };
       throw Error("Fixture mutations forbidden");
     },
