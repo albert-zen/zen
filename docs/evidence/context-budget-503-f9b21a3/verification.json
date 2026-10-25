@@ -1,0 +1,13 @@
+{
+  "sourceHead": "f9b21a3412c9347a12377ae02dc4954495516b7e",
+  "tree": "e6ca0d996fef79316f72a754b3584271248c032a",
+  "testMerge": "c135ee7db31a95cd305bd258c05dfba2f08294f1",
+  "run": 40183091171,
+  "artifact": 12594642973,
+  "artifactSha256": "0bbc1a17d0345799558b3bef390332913d89250e3aa1caf0f7134600a476f984",
+  "screenshots": {
+    "context-after-light-900-above.png": "b0b3c15de0098d333fbb89faf86f5650efffe3b4c1a8e854dce8c145ea99526f",
+    "context-after-dark-390-above.png": "a385b2a2cd871dec75a71453f06b2f3ad006a8e09d975ceceb772f33abdd9f23"
+  },
+  "boundary": "Production component/CSS, synthetic counts, Linux Chrome desktop-input emulation. No Host/private data. This capture does not claim overall CI completion."
+}
