@@ -1414,15 +1414,9 @@ function TriggerManager({
                   {deliveryLabel(entry)}
                 </span>
               </div>
-              <time
-                dateTime={
-                  Number.isFinite(entry.startedAt)
-                    ? new Date(entry.startedAt).toISOString()
-                    : undefined
-                }
-              >
+              <span className="trigger-run-time">
                 {timeLabel(entry.startedAt)}
-              </time>
+              </span>
               <p className="trigger-run-reason">{entry.reason}</p>
               {entry.sourceDevice && entry.sourceThreadId ? (
                 <p>

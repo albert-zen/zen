@@ -40,7 +40,16 @@ test("management hierarchy preserves definition facts and read-only Edit/Cancel 
                 },
               },
             ],
-            history: [],
+            history: [
+              {
+                id: "invalid-finite-time",
+                triggerId: "timer",
+                threadId: "research",
+                startedAt: 1e20,
+                status: "queued",
+                reason: "Synthetic invalid timestamp",
+              },
+            ],
           };
         if (command === "threads")
           return {
@@ -64,6 +73,10 @@ test("management hierarchy preserves definition facts and read-only Edit/Cancel 
   try {
     await React.act(async () =>
       root.render(React.createElement(TriggersPage, { sdk })),
+    );
+    assert.match(
+      document.querySelector(".trigger-run-time")?.textContent ?? "",
+      /Invalid Date/,
     );
     const header = document.querySelector(".trigger-manager-header")!;
     assert.match(header.textContent ?? "", /New trigger/);
