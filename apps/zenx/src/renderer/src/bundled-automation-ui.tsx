@@ -811,6 +811,7 @@ function TriggerManager({
       <header className="trigger-manager-header">
         <div>
           <h2>
+            <Icon name="trigger" size={20} />
             {scopedThreadId
               ? i18n.t("panels:threadTriggers")
               : i18n.t("panels:automations")}
@@ -827,17 +828,37 @@ function TriggerManager({
             </details>
           ) : null}
         </div>
-        {scopedThreadId ? (
-          <button
-            className="quiet-button"
-            type="button"
-            onClick={() =>
-              sdk.navigation.navigate("/plugins/zenx-triggers/triggers")
-            }
-          >
-            {i18n.t("panels:allAutomations")}
-          </button>
-        ) : null}
+        <div className="trigger-manager-header-actions">
+          {!setupIntent ? (
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                invalidateDraft();
+                setError(null);
+                setSetupNotice("");
+                setTargetPreview(null);
+                setTargetNotice("");
+                setWorkspace("");
+                setEditor(blankEditor(scopedThreadId));
+                setEditing(true);
+              }}
+            >
+              {i18n.t("panels:newTrigger")}
+            </button>
+          ) : null}
+          {scopedThreadId ? (
+            <button
+              className="quiet-button"
+              type="button"
+              onClick={() =>
+                sdk.navigation.navigate("/plugins/zenx-triggers/triggers")
+              }
+            >
+              {i18n.t("panels:allAutomations")}
+            </button>
+          ) : null}
+        </div>
       </header>
       {setupIntent ? (
         <button type="button" className="quiet-button" onClick={backToRoom}>
@@ -851,24 +872,6 @@ function TriggerManager({
           {notice}
         </p>
       ))}
-      {!setupIntent ? (
-        <button
-          type="button"
-          className="primary-button"
-          onClick={() => {
-            invalidateDraft();
-            setError(null);
-            setSetupNotice("");
-            setTargetPreview(null);
-            setTargetNotice("");
-            setWorkspace("");
-            setEditor(blankEditor(scopedThreadId));
-            setEditing(true);
-          }}
-        >
-          {i18n.t("panels:newTrigger")}
-        </button>
-      ) : null}
       {editing ? (
         <form
           className={`page-card trigger-editor${roomSetupActive ? " trigger-room-setup" : ""}`}
@@ -1264,36 +1267,45 @@ function TriggerManager({
             >
               <div className="trigger-card-heading">
                 <h3>{trigger.label}</h3>
-                <span>
+                <span
+                  className={`trigger-state ${trigger.active ? "enabled" : "paused"}`}
+                >
                   {trigger.active
                     ? i18n.t("panels:enabled")
                     : i18n.t("panels:paused")}
                 </span>
               </div>
-              <p>{conditionLabel(trigger, threads)}</p>
+              <p className="trigger-condition">
+                {conditionLabel(trigger, threads)}
+              </p>
               {trigger.sourceError ? (
-                <p role="status">
+                <p role="status" className="trigger-source-error">
+                  <Icon name="warning" size={14} />
                   {i18n.t("panels:sourceConnectionError")} {trigger.sourceError}
                 </p>
               ) : null}
-              {trigger.timer ? (
-                <p>
-                  {i18n.t("panels:nextRun")}{" "}
-                  {trigger.active
-                    ? timeLabel(trigger.timer.nextRunAt)
-                    : i18n.t("panels:paused")}
-                </p>
-              ) : null}
-              <p>
-                {i18n.t("panels:target")}{" "}
-                {threadLabel(threads, trigger.threadId)}
-              </p>
+              <dl className="trigger-facts">
+                <div>
+                  <dt>{i18n.t("panels:target")}</dt>
+                  <dd>{threadLabel(threads, trigger.threadId)}</dd>
+                </div>
+                {trigger.timer ? (
+                  <div>
+                    <dt>{i18n.t("panels:nextRun")}</dt>
+                    <dd>
+                      {trigger.active
+                        ? timeLabel(trigger.timer.nextRunAt)
+                        : i18n.t("panels:paused")}
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
               <details className="trigger-instruction-details">
                 <summary>{i18n.t("panels:instructions")}</summary>
                 <p className="trigger-instructions">{trigger.prompt}</p>
               </details>
-              <p>
-                {i18n.t("panels:last")}{" "}
+              <p className="trigger-last-run">
+                <span>{i18n.t("panels:last")}</span>{" "}
                 {last
                   ? `${timeLabel(last.startedAt)} · ${deliveryLabel(last)}${safeProgramFailure(last) ? ` · ${safeProgramFailure(last)}` : last.error ? ` · ${last.error}` : ""}`
                   : i18n.t("panels:noRunsYet")}
@@ -1393,12 +1405,25 @@ function TriggerManager({
               className={`trigger-history ${entry.status}`}
               key={entry.id}
             >
-              <strong>
-                {data.triggers.find((item) => item.id === entry.triggerId)
-                  ?.label ?? i18n.t("panels:deletedTrigger")}
-              </strong>{" "}
-              · {timeLabel(entry.startedAt)} · {deliveryLabel(entry)}
-              <p>{entry.reason}</p>
+              <div className="trigger-run-heading">
+                <strong>
+                  {data.triggers.find((item) => item.id === entry.triggerId)
+                    ?.label ?? i18n.t("panels:deletedTrigger")}
+                </strong>
+                <span className="trigger-run-outcome">
+                  {deliveryLabel(entry)}
+                </span>
+              </div>
+              <time
+                dateTime={
+                  Number.isFinite(entry.startedAt)
+                    ? new Date(entry.startedAt).toISOString()
+                    : undefined
+                }
+              >
+                {timeLabel(entry.startedAt)}
+              </time>
+              <p className="trigger-run-reason">{entry.reason}</p>
               {entry.sourceDevice && entry.sourceThreadId ? (
                 <p>
                   {i18n.t("panels:remoteSource")}{" "}

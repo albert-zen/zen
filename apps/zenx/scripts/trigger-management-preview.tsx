@@ -108,11 +108,17 @@ const sdk: PluginUiSdkV1 = {
               threadId: "research",
               name: zh ? "研究助手" : "Research assistant",
               archived: false,
+              shortId: "research",
+              status: "idle",
+              cwd: "/synthetic/project",
             },
             {
               threadId: "review",
               name: zh ? "代码审查" : "Code review",
               archived: false,
+              shortId: "review",
+              status: "idle",
+              cwd: "/synthetic/project",
             },
           ],
         };

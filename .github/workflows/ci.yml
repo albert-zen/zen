@@ -139,9 +139,12 @@ jobs:
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         timeout-minutes: 3
         run: |
+          git fetch --no-tags origin 98caf2f44ec697bd705909eb970036ce615ca664
           npx tsc -p apps/zenx/tsconfig.trigger-preview.json --noEmit
-          node apps/zenx/scripts/build-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management"
-          node apps/zenx/scripts/capture-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management"
+          node apps/zenx/scripts/build-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/before" --baseline
+          node apps/zenx/scripts/capture-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/before"
+          node apps/zenx/scripts/build-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/after"
+          node apps/zenx/scripts/capture-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/after"
       - name: Retain synthetic trigger management UI
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

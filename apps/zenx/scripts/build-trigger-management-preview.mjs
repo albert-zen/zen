@@ -11,8 +11,35 @@ const directory = path.resolve(
   process.argv[2] ?? ".trigger-management-preview",
 );
 await mkdir(directory, { recursive: true });
+const baseline =
+  process.argv[3] === "--baseline"
+    ? "98caf2f44ec697bd705909eb970036ce615ca664"
+    : null;
+const baselinePaths = [
+  "src/renderer/src/bundled-automation-ui.tsx",
+  "src/renderer/src/trigger-ui.css",
+];
+const baselineSource = (source) =>
+  baseline && baselinePaths.includes(source)
+    ? execFileSync("git", ["show", `${baseline}:apps/zenx/${source}`], {
+        cwd: root,
+        encoding: "utf8",
+      })
+    : null;
+
 const result = await build({
   configFile: false,
+  plugins: [
+    {
+      name: "trigger-baseline-source",
+      enforce: "pre",
+      load(id) {
+        for (const source of baselinePaths)
+          if (id === path.join(root, source)) return baselineSource(source);
+        return null;
+      },
+    },
+  ],
   root: path.resolve(root, "../.."),
   logLevel: "warn",
   define: { "process.env.NODE_ENV": '"production"' },
@@ -60,6 +87,7 @@ await writeFile(
   path.join(directory, "source.json"),
   JSON.stringify(
     {
+      baseline,
       commit: execFileSync("git", ["rev-parse", "HEAD"], {
         cwd: root,
         encoding: "utf8",
@@ -71,7 +99,10 @@ await writeFile(
           sources.map(async (source) => [
             source,
             createHash("sha256")
-              .update(await readFile(path.join(root, source)))
+              .update(
+                baselineSource(source) ??
+                  (await readFile(path.join(root, source))),
+              )
               .digest("hex"),
           ]),
         ),
