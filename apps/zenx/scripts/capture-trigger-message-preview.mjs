@@ -301,10 +301,10 @@ try {
     );
     assert.equal(
       await evaluate(
-        "document.querySelector('.trigger-message-row .message-actions').textContent.includes('2026')",
+        "document.querySelector('.trigger-message-row time').dateTime === '2026-10-25T06:00:00.000Z'",
       ),
       true,
-      "Protocol timestamps render expected fixture year",
+      "Protocol timestamps retain exact expected UTC instant",
     );
     await capture("01-message");
     await clickSelector(".trigger-message-row .message-source-link");
