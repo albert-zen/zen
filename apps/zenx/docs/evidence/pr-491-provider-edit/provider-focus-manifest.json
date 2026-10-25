@@ -1,0 +1,633 @@
+{
+  "sourceHead": "8112cbf4edf0960b4a7a3ae935489bcbb2cb7cf7",
+  "sourceTree": "9a39bfceb1366816158c62aa2659e1406f71cf0f",
+  "run": 40169594491,
+  "job": 121097560458,
+  "artifact": 12589587351,
+  "artifactSha256": "aa8c08d7f94f1c9e839fb2455142913eee2f2f87fecccb6ffc333547ee350f0f",
+  "sources": {
+    "commit": "d4da7b0f8c199fa17caab776415fc7b425580157",
+    "scope": "Actual production SettingsView and theme/styles; four synthetic providers, one with twelve models. Synthetic discovery returns one known and one unknown capability record. No Host, credentials, user profile, network or persistence. Settings-only scaffold, not App or first-launch onboarding. Linux Chrome input, not native Electron acceptance.",
+    "sources": {
+      "src/renderer/src/SettingsView.tsx": "aab8cf6af209a7e9da28864708c7f6d65b876e8a59e6e4784630a7718cc3ae82",
+      "src/renderer/src/ProviderModelAdmissionControls.tsx": "2eb524fa520bfe2b1c8d4d31082673db1e5f362b6ba6ec99efee892ac53754c3",
+      "src/renderer/src/ui/controls.tsx": "00fe25d78afb1ad6e377bad937e6ce496f3a063a25ec98d774897a479df1addb",
+      "src/renderer/src/styles.css": "f555174719850ee9d960aa51f9bc7be72bbbb20c76bdc19905d7714e80bfbbe8",
+      "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+      "src/renderer/src/i18n/settings.ts": "6943b32b516b926c4b6f66d6277d1495f7753fb7fc159894b6516125f933a1db",
+      "src/renderer/src/language.ts": "ba5ec89ac6ca5c6910364bc6ad749e87c115a4cd3a803dfa5686422727e71108",
+      "src/renderer/src/language-preference.ts": "b8a7211e6afefa796e0d3c2d71c4f9b99ec3fad7e0c98f446507bc2a5cd333f4",
+      "scripts/settings-audit-preview.tsx": "742216bb9b9bda2bed012d09de8aafd360dcc450549d9daa931bfd194e7b9520",
+      "scripts/build-settings-audit-preview.mjs": "2857f94d93f2657f399f517f6e294c44b7a297fb52c8b34c7c70417b23949de1",
+      "scripts/capture-settings-audit-preview.mjs": "2e6af33f126c4b384c05987cfb6c41e52083d5ad50c76f4de6653ffffff97517"
+    }
+  },
+  "nativeFocusRepro": {
+    "head": "36362698d632ec284c68384cfb605a6cb77c04e9",
+    "run": 40168944187,
+    "artifact": 12588952389,
+    "artifactSha256": "a2b794a54bd821d94f5d4006fcc97668f70ae73bd3dcc236b2d5ef5e5418cb8d",
+    "failure": "Save success returns focus after native pending disable\n\nfalse !== true\n",
+    "observations": [
+      {
+        "newerNavigation": false,
+        "pendingFocus": {
+          "viewport": {
+            "width": 1100,
+            "height": 760
+          },
+          "editor": {
+            "x": 252,
+            "y": -1380.609375,
+            "width": 778,
+            "height": 1798.796875,
+            "right": 1030,
+            "bottom": 418.1875
+          },
+          "editorRole": null,
+          "focusInEditor": false,
+          "focus": {
+            "tag": "BODY",
+            "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+            "label": null,
+            "id": ""
+          },
+          "scroll": {
+            "top": 1793,
+            "height": 640,
+            "total": 2536
+          },
+          "providerCards": 4,
+          "modelRows": 12,
+          "save": {
+            "x": 936.296875,
+            "y": 361.1875,
+            "width": 74.703125,
+            "height": 38,
+            "right": 1011,
+            "bottom": 399.1875
+          },
+          "discovery": null,
+          "capabilitySummaries": [
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context"
+          ],
+          "dialogs": 0,
+          "overflow": false,
+          "calls": [
+            "settings-get",
+            "synthetic-deferred-edit"
+          ]
+        },
+        "settledFocus": {
+          "viewport": {
+            "width": 1100,
+            "height": 760
+          },
+          "editor": null,
+          "focusInEditor": false,
+          "focus": {
+            "tag": "BODY",
+            "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+            "label": null,
+            "id": ""
+          },
+          "scroll": {
+            "top": 0,
+            "height": 640,
+            "total": 673
+          },
+          "providerCards": 4,
+          "modelRows": 0,
+          "save": null,
+          "discovery": null,
+          "capabilitySummaries": [],
+          "dialogs": 0,
+          "overflow": false,
+          "calls": [
+            "settings-get",
+            "synthetic-deferred-edit"
+          ]
+        },
+        "restored": false,
+        "preservedNavigation": false
+      },
+      {
+        "newerNavigation": true,
+        "pendingFocus": {
+          "viewport": {
+            "width": 1100,
+            "height": 760
+          },
+          "editor": {
+            "x": 252,
+            "y": -1380.609375,
+            "width": 778,
+            "height": 1798.796875,
+            "right": 1030,
+            "bottom": 418.1875
+          },
+          "editorRole": null,
+          "focusInEditor": false,
+          "focus": {
+            "tag": "BODY",
+            "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+            "label": null,
+            "id": ""
+          },
+          "scroll": {
+            "top": 1793,
+            "height": 640,
+            "total": 2536
+          },
+          "providerCards": 4,
+          "modelRows": 12,
+          "save": {
+            "x": 936.296875,
+            "y": 361.1875,
+            "width": 74.703125,
+            "height": 38,
+            "right": 1011,
+            "bottom": 399.1875
+          },
+          "discovery": null,
+          "capabilitySummaries": [
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context",
+            "low / medium / high · text + image · 32,768 context"
+          ],
+          "dialogs": 0,
+          "overflow": false,
+          "calls": [
+            "settings-get",
+            "synthetic-deferred-edit"
+          ]
+        },
+        "settledFocus": {
+          "viewport": {
+            "width": 1100,
+            "height": 760
+          },
+          "editor": null,
+          "focusInEditor": false,
+          "focus": {
+            "tag": "BUTTON",
+            "text": "General",
+            "label": null,
+            "id": "settings-tab-general"
+          },
+          "scroll": {
+            "top": 0,
+            "height": 640,
+            "total": 1455
+          },
+          "providerCards": 4,
+          "modelRows": 0,
+          "save": null,
+          "discovery": null,
+          "capabilitySummaries": [],
+          "dialogs": 0,
+          "overflow": false,
+          "calls": [
+            "settings-get",
+            "synthetic-deferred-edit"
+          ]
+        },
+        "restored": false,
+        "preservedNavigation": true
+      }
+    ]
+  },
+  "finalObservations": [
+    {
+      "name": "desktop-en",
+      "editorIsolation": {
+        "allDisabled": true,
+        "allExplained": true,
+        "sameEditor": true,
+        "namePreserved": true
+      },
+      "deferredSaves": [
+        {
+          "newerNavigation": false,
+          "pendingFocus": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": -1380.609375,
+              "width": 778,
+              "height": 1798.796875,
+              "right": 1030,
+              "bottom": 418.1875
+            },
+            "editorRole": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 1793,
+              "height": 640,
+              "total": 2536
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 936.296875,
+              "y": 361.1875,
+              "width": 74.703125,
+              "height": 38,
+              "right": 1011,
+              "bottom": 399.1875
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "settledFocus": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "Edit",
+              "label": "Edit Synthetic Provider 4",
+              "id": ""
+            },
+            "scroll": {
+              "top": 0,
+              "height": 640,
+              "total": 673
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "restored": true,
+          "preservedNavigation": false
+        },
+        {
+          "newerNavigation": true,
+          "pendingFocus": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": -1380.609375,
+              "width": 778,
+              "height": 1798.796875,
+              "right": 1030,
+              "bottom": 418.1875
+            },
+            "editorRole": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 1793,
+              "height": 640,
+              "total": 2536
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 936.296875,
+              "y": 361.1875,
+              "width": 74.703125,
+              "height": 38,
+              "right": 1011,
+              "bottom": 399.1875
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "settledFocus": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "General",
+              "label": null,
+              "id": "settings-tab-general"
+            },
+            "scroll": {
+              "top": 0,
+              "height": 640,
+              "total": 1455
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "restored": false,
+          "preservedNavigation": true
+        }
+      ],
+      "failedSave": {
+        "draft": "Synthetic failed-save draft",
+        "enabled": true,
+        "attempts": 1
+      }
+    },
+    {
+      "name": "narrow-zh",
+      "editorIsolation": {
+        "allDisabled": true,
+        "allExplained": true,
+        "sameEditor": true,
+        "namePreserved": true
+      },
+      "deferredSaves": [
+        {
+          "newerNavigation": false,
+          "pendingFocus": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": -1827.21875,
+              "width": 352,
+              "height": 2181.984375,
+              "right": 366,
+              "bottom": 354.765625
+            },
+            "editorRole": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "设置按你的习惯配置 ZenX账户模型与服务商插件外观通用上下文压缩技能工作流程设备已归档会话账户OpenAI 订阅连接您的ChatGPT 订阅以使用其模型。未配置关联账号在模型和服务商中添加OpenAI 订阅以开始使用。订阅使用情况查看当前",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 2591,
+              "height": 523,
+              "total": 3411
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 262.984375,
+              "y": 299.765625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 337.765625
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "settledFocus": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "编辑",
+              "label": "编辑Synthetic Provider 4",
+              "id": ""
+            },
+            "scroll": {
+              "top": 677,
+              "height": 523,
+              "total": 1200
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "restored": true,
+          "preservedNavigation": false
+        },
+        {
+          "newerNavigation": true,
+          "pendingFocus": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": -1827.21875,
+              "width": 352,
+              "height": 2181.984375,
+              "right": 366,
+              "bottom": 354.765625
+            },
+            "editorRole": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "设置按你的习惯配置 ZenX账户模型与服务商插件外观通用上下文压缩技能工作流程设备已归档会话账户OpenAI 订阅连接您的ChatGPT 订阅以使用其模型。未配置关联账号在模型和服务商中添加OpenAI 订阅以开始使用。订阅使用情况查看当前",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 2591,
+              "height": 523,
+              "total": 3411
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 262.984375,
+              "y": 299.765625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 337.765625
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "settledFocus": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "通用",
+              "label": null,
+              "id": "settings-tab-general"
+            },
+            "scroll": {
+              "top": 0,
+              "height": 523,
+              "total": 2075
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-deferred-edit"
+            ]
+          },
+          "restored": false,
+          "preservedNavigation": true
+        }
+      ],
+      "failedSave": {
+        "draft": "Synthetic failed-save draft",
+        "enabled": true,
+        "attempts": 1
+      }
+    }
+  ],
+  "limits": [
+    "Synthetic isolated settings only; no Host, private credentials, persistence or external network.",
+    "Real Chromium input/DOM, not installed Electron or desktop alt-tab acceptance. Window blur is unit tested.",
+    "Focus is asserted from DOM, not inferred from a visible focus ring.",
+    "Failed-save draft text is asserted from DOM; bottom-scrolled screenshot does not expose the name input.",
+    "Pre-existing model-chip truncation, translated spacing and Settings layout are outside this bounded fix."
+  ]
+}
