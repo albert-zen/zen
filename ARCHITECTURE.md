@@ -52,7 +52,7 @@
 - **Fleet Settings / Host** — 桌面设置保存设备定位与加密凭证，App Server 所在 Host 子进程持有原生 TLS gateway；授权摘要持久化且可撤销，进程重启不自动撤销配对，关闭进程停止服务。
 - **Fleet Relay** — 可选自托管 TLS relay 按预授权 Host 身份转发出站连接中的原生配对、请求与事件；relay 是可见消息与 grant 的受信任 TLS 终止端，不提供端到端加密、不拥有会话状态。
 - **Fleet Rooms** — Host 对已授权 workspace 内的助手 Room 投影有限消息与原生 Room 操作，客户端沿用 operation epoch 和幂等键，不复制 Room 状态机。
-- **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。
+- **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。首次完整恢复快照固定历史基线；后续 canonical 快照中新出现的已完成 Turn 必须被交付，即使 start/end 通知已被该快照 watermark 吸收，不能依赖磁盘延迟或事件提示恰好先到。观察边界只保留最后一个 canonical Turn ID（常量空间），后续完整快照必须仍包含该边界，否则明确停止观察并报告错误，不淘汰 ID 后重放历史。
 
 - **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。共享工具 ownership identity 定义于无 runtime 依赖的纯类型模块，原生 wire 的 TypeScript import graph 不进入 Node/Host 工具实现。
 - **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
@@ -1418,5 +1418,7 @@ ZenX's unified-reference v2 text envelope extends the existing client-ID-bound q
 ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
 
 ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.
+
+- **Disposable Thread summary persistence** — Canonical commits await journal durability and ordered in-memory summary derivation, never projection disk I/O. A single cache writer coalesces changes with one dirty flag; shutdown offers a one-second best-effort drain, and missing/stale cache snapshots rebuild from canonical journals on restart. No mutation replay or extra durable authority is introduced.
 
 - **Synthetic UI capture lifecycle** — CI-only Chrome observers share bounded startup and teardown phases with failure receipts; they do not restart browsers, retry UI actions, change product timeouts, or own runtime state.
