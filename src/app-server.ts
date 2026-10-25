@@ -449,6 +449,8 @@ export class ZenAppServer {
   #threadSummaries: Map<string, NativeThreadSummary> | undefined;
   #threadSummaryLoad: Promise<void> | undefined;
   #threadSummaryWrites: Promise<void> = Promise.resolve();
+  #threadSummaryPersistence: Promise<void> | undefined;
+  #threadSummaryDirty = false;
 
   constructor(options: {
     journal: ThreadJournal;
@@ -576,6 +578,7 @@ export class ZenAppServer {
   async closeRuntimeConfiguration(): Promise<void> {
     this.#acceptingRootOperations = false;
     await this.#providerRegistry.close();
+    await this.flushThreadSummaryProjection();
   }
 
   beginHostOperation(
@@ -4972,7 +4975,7 @@ export class ZenAppServer {
       persistedForRestart === undefined ||
       !sameSummaries(persistedForRestart, [...rebuilt.values()])
     ) {
-      await this.#persistThreadSummaries();
+      this.#scheduleThreadSummaryPersistence();
     }
   }
 
@@ -4982,7 +4985,7 @@ export class ZenAppServer {
       if (thread.deletion === undefined)
         summaries.set(thread.id, await this.#summary(thread));
       else summaries.delete(thread.id);
-      await this.#saveThreadSummaries(summaries);
+      this.#scheduleThreadSummaryPersistence();
     });
     this.#threadSummaryWrites = update.catch(() => undefined);
     await update;
@@ -4996,13 +4999,42 @@ export class ZenAppServer {
     }
   }
 
-  async #persistThreadSummaries(): Promise<void> {
-    const summaries = this.#threadSummaries!;
-    const update = this.#threadSummaryWrites.then(async () => {
-      await this.#saveThreadSummaries(summaries);
+  // Disposable cache only: never hold canonical commits on projection I/O.
+  // One active snapshot and a dirty bit bound pending persistence under load.
+  #scheduleThreadSummaryPersistence(): void {
+    this.#threadSummaryDirty = true;
+    if (this.#threadSummaryPersistence !== undefined) return;
+    const flush = Promise.resolve().then(async () => {
+      while (this.#threadSummaryDirty) {
+        this.#threadSummaryDirty = false;
+        await this.#saveThreadSummaries(this.#threadSummaries!);
+      }
     });
-    this.#threadSummaryWrites = update.catch(() => undefined);
-    await update;
+    this.#threadSummaryPersistence = flush;
+    void flush.finally(() => {
+      this.#threadSummaryPersistence = undefined;
+      if (this.#threadSummaryDirty) this.#scheduleThreadSummaryPersistence();
+    });
+  }
+
+  /** Best-effort cache drain for shutdown/tests; timeout never weakens journal durability. */
+  async flushThreadSummaryProjection(timeoutMs = 1_000): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        (async () => {
+          await this.#threadSummaryWrites;
+          while (this.#threadSummaryPersistence !== undefined)
+            await this.#threadSummaryPersistence;
+          return true;
+        })(),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   async #saveThreadSummaries(

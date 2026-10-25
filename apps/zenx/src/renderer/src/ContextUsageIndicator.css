@@ -63,16 +63,16 @@
 }
 
 .context-usage-popover [data-category="instructions"] {
-  --context-category-color: #7794ed;
+  --context-category-color: var(--color-context-instructions);
 }
 .context-usage-popover [data-category="toolDefinitions"] {
-  --context-category-color: #b58cdb;
+  --context-category-color: var(--color-context-tools);
 }
 .context-usage-popover [data-category="pluginContext"] {
-  --context-category-color: #d8a255;
+  --context-category-color: var(--color-context-plugins);
 }
 .context-usage-popover [data-category="conversation"] {
-  --context-category-color: #55b5a7;
+  --context-category-color: var(--color-context-conversation);
 }
 .context-usage-popover .context-usage-meter {
   display: flex;
