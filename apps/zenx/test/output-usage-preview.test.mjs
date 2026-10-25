@@ -8,7 +8,7 @@ function observation(lang) {
     title: "Turn cache telemetry",
     panel:
       lang === "en"
-        ? "1K / 32K tokens · Thread cache 50%"
+        ? "1K / 32K tokens · Thread cache hit rate 50%"
         : "1000 / 3.2万 tokens · 缓存 50%",
     contextLabel: "Context details",
     header: lang === "en" ? "Worked for 3s" : "已工作 3 秒",

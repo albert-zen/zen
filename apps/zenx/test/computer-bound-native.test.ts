@@ -26,6 +26,37 @@ let kAXWindowsAttribute = "windows"
 let kAXTitleAttribute = "title"
 let kAXFocusedWindowAttribute = "focused"
 let kAXRaiseAction = "raise"
+let kAXRoleAttribute = "role"
+let kAXWindowRole = "window"
+let kAXWindowAttribute = "window"
+let kCGWindowAlpha = "alpha"
+let kCGWindowBounds = "bounds"
+let kCGWindowNumber = "number"
+let kCGWindowOwnerPID = "owner"
+let kCGNullWindowID = 0
+enum WindowListOption { case optionOnScreenOnly, excludeDesktopElements }
+func CGWindowListCopyWindowInfo(_ options: [WindowListOption], _ id: Int) -> Any? {
+  let window: [String: Any] = ["alpha": 1.0, "bounds": ["X": -100.0, "Y": 20.0, "Width": 400.0, "Height": 200.0], "number": NSNumber(value: 17)]
+  if mode == "pointer-missing" { return [] }
+  if mode == "pointer-ambiguous" { return [["alpha": 1.0]] }
+  if mode == "pointer-trusted-edge" || mode == "pointer-forged-edge" || mode == "pointer-status-over-edge" {
+    var edge = window; edge["number"] = NSNumber(value: 19); edge["owner"] = NSNumber(value: mode == "pointer-forged-edge" ? getppid() + 1 : getppid())
+    if mode == "pointer-status-over-edge" { var status = edge; status["number"] = NSNumber(value: 20); return [status, edge, window] }
+    return [edge, window]
+  }
+  if mode == "pointer-overlay" || mode == "pointer-transparent-overlay" || mode == "scroll-overlay" || (mode == "pointer-late-overlay" && posted >= 2) {
+    var overlay = window; overlay["number"] = NSNumber(value: 18)
+    if mode == "pointer-transparent-overlay" { overlay["alpha"] = 0.0 }
+    return [overlay, window]
+  }
+  return [window]
+}
+func AXUIElementCreateSystemWide() -> AXUIElement { appElement }
+func AXUIElementCopyElementAtPosition(_ root: AXUIElement, _ x: Float, _ y: Float, _ hit: inout AXUIElement?) -> AXError {
+  if mode == "pointer-no-ax-hit" { return .failure }
+  hit = mode == "pointer-wrong-ax-window" ? replacement : original
+  return .success
+}
 enum AXError { case success, failure }
 func AXIsProcessTrusted() -> Bool { true }
 func AXUIElementCreateApplication(_ pid: Int32) -> AXUIElement { appElement }
@@ -35,6 +66,7 @@ func AXUIElementPerformAction(_ window: AXUIElement, _ action: String) -> AXErro
 }
 func fixtureEqual(_ a: AnyObject, _ b: AnyObject) -> Bool { a === b }
 func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+  if name == "role" { return "window" as NSString }
   if name == "title" { return "Fixture" as NSString }
   if name == "focused" { return selectedWindow }
   return nil
@@ -105,7 +137,7 @@ test(
     const source = path.join(directory, "fixture.swift");
     const binary = path.join(directory, "fixture");
     const start = MAC_BOUND_TARGET_SOURCE.indexOf("func attribute(");
-    const end = MAC_BOUND_TARGET_SOURCE.indexOf("final class Binding");
+    const end = MAC_BOUND_TARGET_SOURCE.indexOf("func pointerWindow(");
     assert.ok(start > 0 && end > start);
     const withoutPlatform = (
       MAC_BOUND_TARGET_SOURCE.slice(0, start) +
@@ -114,6 +146,10 @@ test(
       .replace("import AppKit\nimport ApplicationServices", platform)
       .replaceAll(" as CFString", "")
       .replaceAll("CFEqual(", "fixtureEqual(")
+      .replace(
+        "CFGetTypeID(window) == AXUIElementGetTypeID()",
+        "window is AXUIElement",
+      )
       .replace(
         "CFGetTypeID(focused) == AXUIElementGetTypeID()",
         "focused is AXUIElement",
@@ -158,6 +194,19 @@ test(
       "layout-changed",
       "layout-remapped",
       "shortcut-ambiguous",
+      "pointer-normal",
+      "pointer-overlay",
+      "pointer-transparent-overlay",
+      "pointer-late-overlay",
+      "pointer-missing",
+      "pointer-ambiguous",
+      "pointer-wrong-ax-window",
+      "pointer-no-ax-hit",
+      "pointer-trusted-edge",
+      "pointer-forged-edge",
+      "pointer-status-over-edge",
+      "scroll-normal",
+      "scroll-overlay",
     ]) {
       const child = spawn(binary, [], {
         env: { ...process.env, FIXTURE_MODE: mode },
@@ -206,22 +255,37 @@ test(
           });
           assert.match(foreign.error!, /binding expired/);
         }
-        const input = mode.startsWith("typing")
-          ? { operation: "type", text: "a".repeat(15) + "😀" }
-          : mode.startsWith("shortcut") || mode.startsWith("layout-")
-            ? {
-                operation: "shortcut",
-                key: "a",
-                modifiers: [mode === "shortcut-option" ? "option" : "command"],
-              }
-            : { operation: "key", key: "enter" };
+        const input = mode.startsWith("pointer-")
+          ? { operation: "click", x: 20, y: 40, button: "left" }
+          : mode.startsWith("scroll-")
+            ? { operation: "scroll", deltaY: 100 }
+            : mode.startsWith("typing")
+              ? { operation: "type", text: "a".repeat(15) + "😀" }
+              : mode.startsWith("shortcut") || mode.startsWith("layout-")
+                ? {
+                    operation: "shortcut",
+                    key: "a",
+                    modifiers: [
+                      mode === "shortcut-option" ? "option" : "command",
+                    ],
+                  }
+                : { operation: "key", key: "enter" };
         const result = await request({
           ...input,
           owner: "thread-a",
           bindingId: selected.result.bindingId,
+          pointerPassthroughWindowIds: mode.includes("edge") ? [19] : [],
         });
         if (
-          ["normal", "typing", "shortcut-alt", "shortcut-option"].includes(mode)
+          [
+            "normal",
+            "typing",
+            "shortcut-alt",
+            "shortcut-option",
+            "pointer-normal",
+            "pointer-trusted-edge",
+            "scroll-normal",
+          ].includes(mode)
         )
           assert.equal(result.error, undefined);
         else {
@@ -232,6 +296,7 @@ test(
               "typing-focus-stolen",
               "layout-changed",
               "layout-remapped",
+              "pointer-late-overlay",
             ].includes(mode)
               ? /partially dispatched; outcome unknown/
               : /no input dispatched/,
@@ -250,18 +315,24 @@ test(
         );
         assert.equal(
           (stderr.match(/POST:/g) ?? []).length,
-          ["normal", "shortcut-alt", "shortcut-option"].includes(mode)
-            ? 2
-            : mode === "typing"
-              ? 4
-              : [
-                    "focus-stolen",
-                    "typing-focus-stolen",
-                    "layout-changed",
-                    "layout-remapped",
-                  ].includes(mode)
-                ? 1
-                : 0,
+          ["pointer-normal", "pointer-trusted-edge"].includes(mode)
+            ? 3
+            : mode === "scroll-normal"
+              ? 1
+              : mode === "pointer-late-overlay"
+                ? 2
+                : ["normal", "shortcut-alt", "shortcut-option"].includes(mode)
+                  ? 2
+                  : mode === "typing"
+                    ? 4
+                    : [
+                          "focus-stolen",
+                          "typing-focus-stolen",
+                          "layout-changed",
+                          "layout-remapped",
+                        ].includes(mode)
+                      ? 1
+                      : 0,
           `${mode}: ${stderr}`,
         );
         if (mode === "typing") {

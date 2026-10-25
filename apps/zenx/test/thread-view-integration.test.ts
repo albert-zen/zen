@@ -78,7 +78,22 @@ test("projects a streamed tool turn from the hosted App Server", async () => {
     assert.equal(usage.thread.cacheHitRate, undefined);
     assert.ok(usage.thread.inputTokens > 0);
     assert.deepEqual(usage.turns[usageTurn.turn.id], usage.thread);
-    assert.equal(usage.context.inputTokenSource, "provider");
+    assert.equal(usage.context.inputTokenSource, "estimated");
+    assert.equal(
+      usage.context.lastProviderInputTokens,
+      usage.thread.inputTokens,
+    );
+    const estimate = usage.context.estimate;
+    assert.ok(estimate);
+    assert.equal(usage.context.inputTokens, estimate.total);
+    assert.equal(
+      estimate.total,
+      estimate.instructions +
+        estimate.toolDefinitions +
+        estimate.pluginContext +
+        estimate.conversation,
+    );
+    assert.ok(estimate.toolDefinitions > 0);
     assert.equal(usage.context.contextWindow, 10_000);
 
     await manager.request("thread/settings/update", {

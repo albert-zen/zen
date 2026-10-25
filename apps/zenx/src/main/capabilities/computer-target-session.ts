@@ -106,6 +106,7 @@ export class ComputerTargetSession {
     signal: AbortSignal,
     onStopping?: () => void,
     expectedBindingId?: string,
+    pointerPassthroughWindowIds: readonly number[] = [],
   ): Promise<void> {
     const binding = this.#selected.get(owner);
     if (!binding)
@@ -150,7 +151,12 @@ export class ComputerTargetSession {
     }
     try {
       await this.transport.request(
-        { ...operation, owner, bindingId: binding.bindingId },
+        {
+          ...operation,
+          owner,
+          bindingId: binding.bindingId,
+          pointerPassthroughWindowIds,
+        },
         signal,
         onStopping,
       );

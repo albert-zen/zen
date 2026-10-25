@@ -68,6 +68,22 @@ window capture and actual custom-drawn-app delivery require platform acceptance.
 Scroll now carries the selected window's center as event location; scroll units
 remain pixels and no multiplier was introduced.
 
+Click and scroll additionally check the actual pointer location before **each**
+event: the selected window must be the first containing window in the on-screen
+front-to-back native window list, and Accessibility hit-testing must resolve the
+same retained AX window. Nonactivating overlays, same-process covering windows,
+missing hit-test results and ambiguous occlusion refuse input. This deliberately
+also refuses transparent or mouse-ignoring overlays rather than guessing their input
+behavior. The sole exception is the presenter's currently painted, live,
+mouse-ignoring `edges` windows: their exact native IDs come from trusted main
+code after arbitration, not model arguments. Native verification additionally
+requires their CG owner PID to be the helper's parent. The interactive Stop
+card and all other windows remain occluders. After the CG check, app-scoped AX
+hit-testing must still resolve the retained target window. Indicator loss uses
+the existing cancellation/child-closure path; no durable exemption is stored.
+An overlay appearing after a posted event produces partial/unknown,
+never an automatic release or retry. These checks still are not OS-atomic.
+
 ## Deliberately not claimed
 
 - This draft does not make Peekaboo or Windows inherit native macOS guarantees.
@@ -87,12 +103,29 @@ remain pixels and no multiplier was introduced.
 
 Local tests exercise the actual package route, owner isolation, capture mapping,
 old capture rejection, geometry incoherence, consent, native transport death and
-no replay. A macOS-only test executes the shipped Swift Binding/dispatch flow
+no replay. The existing macOS packaged-capability job explicitly runs a test that executes
+the shipped Swift Binding/dispatch flow
 against controlled platform API doubles for focus theft, same-PID wrong window,
 closed/reused window identity, process restart, resize and partial effects.
-The packaging test typechecks the complete real Swift helper on macOS. These
+The packaging pipeline compiles the complete real Swift helper on macOS.
+The generic ZenX test job runs on Linux and skips the native fixture; it is not
+evidence of executing that fixture. These
 fixtures do not activate apps, request OS permission, capture desktops or post
 real events. CI must be checked on the exact published head before acceptance.
+
+Recovery review also covers helper shutdown during executable preparation and
+malformed native receipts: no helper may start after retirement, and broken
+transport only settles after child closure. Tests assert process death before
+rejection; an invalid receipt never permits automatic replay.
+
+Run `40182544245` on the earlier published `39b4cfa9` passed seven of eight jobs.
+Its macOS browser parallel-input job failed before input scenarios, during
+`startup-agent-inspection`: `Page.createIsolatedWorld` timed out after dispatch
+with 1124ms remaining in the existing shared setup budget. The retained artifact
+`12595230257` records completed cleanup and no diagnostic artifact errors. This
+is not a bound Computer failure or acceptance result; no assertion, deadline or
+retry policy is weakened here. Main's #505 preview-capture changes do not alter
+that browser-provider path.
 
 ## Native keyboard extension (separate commit)
 

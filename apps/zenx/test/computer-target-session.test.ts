@@ -24,6 +24,19 @@ function fixture() {
   };
   return { session: new ComputerTargetSession(transport), transport, calls };
 }
+test("pointer exemptions come only from the trusted foreground presenter argument", async () => {
+  const { session, calls } = fixture();
+  const selected = await session.select("a", { pid: 7 }, signal);
+  const action = {
+    operation: "scroll" as const,
+    deltaY: 1,
+    pointerPassthroughWindowIds: [999],
+  };
+  await session.input("a", action, signal, undefined, selected.bindingId);
+  assert.deepEqual(calls.at(-1)?.pointerPassthroughWindowIds, []);
+  await session.input("a", action, signal, undefined, selected.bindingId, [19]);
+  assert.deepEqual(calls.at(-1)?.pointerPassthroughWindowIds, [19]);
+});
 test("explicit selection and capture share owner target, keyboard needs no image per key", async () => {
   const { session, calls } = fixture();
   await session.select("a", { pid: 7 }, signal);

@@ -49,6 +49,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
         );
       const executable = await this.executable();
       signal.throwIfAborted();
+      if (this.#closed) throw new Error("Computer target session is closed");
       this.#start(executable);
     }
     const child = this.#child!;
@@ -123,6 +124,8 @@ export class NativeComputerTargetTransport implements TargetTransport {
       this.#stderr = (this.#stderr + String(chunk)).slice(-2048);
     });
     child.stdout.on("data", (chunk) => {
+      // A late receipt cannot settle cancellation before the owned child closes.
+      if (this.#terminating) return;
       this.#buffer += String(chunk);
       if (this.#buffer.length > 65536)
         return fail(
@@ -137,22 +140,31 @@ export class NativeComputerTargetTransport implements TargetTransport {
         return fail(
           new Error("Unexpected native target response; outcome unknown"),
         );
-      this.#pending = undefined;
       try {
         const response = JSON.parse(line) as {
           error?: string;
           result?: unknown;
         };
+        if (
+          !response ||
+          typeof response !== "object" ||
+          Array.isArray(response) ||
+          ("error" in response
+            ? typeof response.error !== "string" ||
+              response.error.length === 0 ||
+              "result" in response
+            : !("result" in response))
+        )
+          throw new Error("Invalid native target response");
+        this.#pending = undefined;
         if (response.error) pending.reject(new Error(response.error));
         else pending.resolve(response.result);
       } catch {
-        pending.reject(
+        fail(
           new Error(
             "Invalid native target response; outcome unknown; do not retry automatically",
           ),
         );
-        this.#terminating = true;
-        child.kill("SIGKILL");
       }
     });
   }

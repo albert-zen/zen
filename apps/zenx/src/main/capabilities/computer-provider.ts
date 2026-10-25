@@ -823,6 +823,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
                 signal,
                 onStopping,
                 selectedBindingId,
+                this.#foregroundActivity?.pointerPassthroughWindowIds?.() ?? [],
               );
               return;
             }
@@ -938,6 +939,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
                 signal,
                 onStopping,
                 selectedBindingId,
+                this.#foregroundActivity?.pointerPassthroughWindowIds?.() ?? [],
               );
               return;
             }
@@ -2792,6 +2794,38 @@ func cgId(_ app: NSRunningApplication, _ window: AXUIElement, _ bounds: CGRect) 
   }
   return id.intValue
 }
+func pointerWindow(_ point: CGPoint, _ windowId: Int, _ appElement: AXUIElement, _ passthrough: Set<Int>) throws -> AXUIElement {
+  // CGWindowList is front-to-back. Be conservative even for mouse-ignoring
+  // overlays: foreground/focused AX state alone does not identify a pointer recipient.
+  guard let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+    try refuse("Pointer window ordering is unavailable")
+  }
+  var matched = false
+  for item in entries {
+    // Only main-owned, explicitly noninteractive edge indicators are exempt.
+    // Same PID alone, window titles, alpha, and the interactive Stop card are not.
+    if let id = item[kCGWindowNumber as String] as? NSNumber,
+       passthrough.contains(id.intValue),
+       (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == getppid() { continue }
+    // Alpha and accessibility visibility are not proof that a window ignores
+    // input. Even transparent containing windows are conservatively occluders.
+    guard let raw = item[kCGWindowBounds as String] as? [String: Any],
+          let x = raw["X"] as? Double, let y = raw["Y"] as? Double,
+          let width = raw["Width"] as? Double, let height = raw["Height"] as? Double,
+          x.isFinite, y.isFinite, width.isFinite, height.isFinite, width >= 0, height >= 0 else { try refuse("Pointer occlusion geometry is unavailable") }
+    if !CGRect(x: x, y: y, width: width, height: height).contains(point) { continue }
+    guard (item[kCGWindowNumber as String] as? NSNumber)?.intValue == windowId else { try refuse("Selected window is occluded at the input point") }
+    matched = true
+    break
+  }
+  guard matched else { try refuse("Selected window is not the visible pointer recipient") }
+  var hit: AXUIElement?
+  guard AXUIElementCopyElementAtPosition(appElement, Float(point.x), Float(point.y), &hit) == .success,
+        let hit else { try refuse("Pointer recipient is unavailable") }
+  if attribute(hit, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String { return hit }
+  guard let window = attribute(hit, kAXWindowAttribute as CFString), CFGetTypeID(window) == AXUIElementGetTypeID() else { try refuse("Pointer recipient window is ambiguous") }
+  return window as! AXUIElement
+}
 final class Binding {
   let id = UUID().uuidString
   let app: NSRunningApplication
@@ -2844,6 +2878,9 @@ final class Binding {
   func fence() throws {
     try verify()
     guard focused() else { try refuse("Foreground focus changed; reobserve target") }
+  }
+  func pointerFence(_ point: CGPoint, _ passthrough: Set<Int>) throws {
+    guard CFEqual(try pointerWindow(point, windowId, appElement, passthrough), window) else { try refuse("Pointer recipient is not the selected window") }
   }
   func receipt() -> [String: Any] {
     return ["bindingId": id, "windowId": windowId,
@@ -2935,10 +2972,15 @@ while let line = readLine() {
         // All target activation occurs after the host's approval and foreground arbitration.
         try binding.activate()
         var shortcutFence: (() throws -> Void)?
+        var pointerPoint: CGPoint?
+        let passthroughIds = request["pointerPassthroughWindowIds"] as? [Int] ?? []
+        guard passthroughIds.count <= 64, passthroughIds.allSatisfy({ $0 > 0 }) else { try refuse("Invalid foreground indicator identity") }
+        let passthrough = Set(passthroughIds)
         func post(_ event: CGEvent?) throws {
           guard let event else { try refuse("Could not construct native input") }
           try binding.fence()
           try shortcutFence?()
+          if let pointerPoint { try binding.pointerFence(pointerPoint, passthrough) }
           event.post(tap: .cghidEventTap)
           posted += 1
         }
@@ -2948,6 +2990,7 @@ while let line = readLine() {
                 let buttonName = request["button"] as? String, ["left", "right"].contains(buttonName),
                 binding.bounds.contains(CGPoint(x: x, y: y)) else { try refuse("Invalid bound click point") }
           let point = CGPoint(x: x, y: y); let right = buttonName == "right"; let button: CGMouseButton = right ? .right : .left
+          pointerPoint = point
           try post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button))
           try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseDown : .leftMouseDown, mouseCursorPosition: point, mouseButton: button))
           usleep(30_000)
@@ -2989,6 +3032,7 @@ while let line = readLine() {
           guard let value = request["deltaY"] as? Double, value.isFinite, abs(value) <= 10000, value.rounded() != 0 else { try refuse("Invalid scroll pixels") }
           let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -Int32(value.rounded()), wheel2: 0, wheel3: 0)
           event?.location = CGPoint(x: binding.bounds.midX, y: binding.bounds.midY)
+          pointerPoint = CGPoint(x: binding.bounds.midX, y: binding.bounds.midY)
           try post(event)
         default: try refuse("Unsupported bound operation")
         }
