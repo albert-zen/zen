@@ -29,6 +29,7 @@ function fixture(window: number, description: string, instructions = "") {
     async *stream(): AsyncIterable<ModelEvent> {
       requests++;
       yield { type: "text_delta", delta: "ok" };
+      yield { type: "usage", inputTokens: 77, outputTokens: 3 };
     },
   };
   const runtime = new AgentRuntime({
@@ -64,7 +65,7 @@ function fixture(window: number, description: string, instructions = "") {
       approvalPolicy: "never",
     },
   });
-  return { server, requests: () => requests, runtime };
+  return { server, requests: () => requests, runtime, adapter };
 }
 
 test("tool definitions alone exhaust window before any provider or compaction request", async () => {
@@ -471,4 +472,78 @@ test("text-only capability projection budgets media receipts, preserving UI cate
     estimateModelInput(instructions, []),
   );
   await environment.close();
+});
+
+test("removed provider/model preserves historical aggregates with current context explicitly unknown", async (t) => {
+  for (const removed of ["provider", "model"] as const)
+    await t.test(removed, async () => {
+      const f = fixture(32000, "small tool");
+      const thread = await f.server.startThread();
+      await (
+        await f.server.startTurn(thread.id, "hello")
+      ).done;
+      const before = await f.server.readModelUsage(thread.id);
+      assert.equal(before.thread.inputTokens, 77);
+      const configuration = f.server.currentRuntimeConfiguration();
+      const providerProfileId =
+        removed === "provider" ? "replacement-provider" : "fixture";
+      f.server.publishRuntimeConfiguration(
+        f.server.prepareRuntimeConfiguration({
+          revision: configuration.revision + 1,
+          defaults: {
+            ...configuration.defaults,
+            providerProfileId,
+            modelId: "replacement-model",
+          },
+          providerProfiles: [
+            {
+              providerProfileId,
+              adapter: f.adapter,
+              modelCatalog: new StaticModelCatalog([
+                {
+                  id: "replacement-model",
+                  isDefault: true,
+                  contextWindow: 32000,
+                },
+              ]),
+            },
+          ],
+        }),
+      );
+      const after = await f.server.readModelUsage(thread.id);
+      assert.deepEqual(after.thread, before.thread);
+      assert.deepEqual(after.turns, before.turns);
+      assert.deepEqual(after.context, {
+        inputTokens: null,
+        inputTokenSource: null,
+        contextWindow: null,
+        ratio: null,
+      });
+      assert(isModelUsageProjection(after));
+    });
+});
+
+test("usage projection does not swallow estimator bugs or unknown/deleted thread errors", async () => {
+  const f = fixture(32000, "small tool");
+  await assert.rejects(
+    f.server.readModelUsage("nonexistent"),
+    /Unknown thread/,
+  );
+  const thread = await f.server.startThread();
+  await (
+    await f.server.startTurn(thread.id, "hello")
+  ).done;
+  const original = f.runtime.projectToolPresentation;
+  f.runtime.projectToolPresentation = () => {
+    throw new Error("synthetic estimator failure");
+  };
+  await assert.rejects(
+    f.server.readModelUsage(thread.id),
+    /synthetic estimator failure/,
+  );
+  f.runtime.projectToolPresentation = original;
+  const snapshot = await f.server.readThread(thread.id);
+  await f.server.setThreadArchived(thread.id, true);
+  await f.server.deleteThread(thread.id, snapshot.items.at(-1)!.id);
+  await assert.rejects(f.server.readModelUsage(thread.id), /deleted/i);
 });

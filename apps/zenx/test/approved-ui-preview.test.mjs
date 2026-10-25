@@ -38,9 +38,10 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
     });
     assert.match(provenance.note, /not a historical full-app build/);
     for (const variant of ["before", "after"]) {
-      for (const kind of ["sidebar", "context"]) {
+      for (const kind of ["sidebar", "context", "context-unavailable"]) {
+        const fileKind = kind === "context-unavailable" ? "context" : kind;
         const html = await readFile(
-          path.join(directory, `${kind}-${variant}.html`),
+          path.join(directory, `${fileKind}-${variant}.html`),
           "utf8",
         );
         const parsed = new JSDOM(html);
@@ -62,7 +63,7 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
             errors.push(String(error));
         });
         const dom = new JSDOM(html, {
-          url: `http://localhost/${kind}-${variant}.html?platform=win32&theme=dark&width=220&lang=zh-CN`,
+          url: `http://localhost/${kind}-${variant}.html?platform=win32&theme=dark&width=220&lang=zh-CN${kind === "context-unavailable" ? "&context=unknown" : ""}`,
           pretendToBeVisual: true,
           runScripts: "dangerously",
           virtualConsole,
@@ -81,7 +82,20 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
         });
         try {
           const { document } = dom.window;
-          if (kind === "sidebar") {
+          if (kind === "context-unavailable") {
+            await waitFor(() =>
+              document.querySelector(".motion-preview-controls"),
+            );
+            assert.equal(
+              document.querySelector(".context-usage-trigger"),
+              null,
+            );
+            assert.equal(
+              document.querySelector(".context-usage-breakdown"),
+              null,
+              "unknown is not four fake zero categories",
+            );
+          } else if (kind === "sidebar") {
             await waitFor(() => dom.window.__sidebarVisual?.ready);
             assert.equal(
               document.querySelectorAll(".thread-row-shell").length,

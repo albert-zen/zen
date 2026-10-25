@@ -60,20 +60,29 @@ function Fixture() {
         <div className="motion-preview-controls composer">
           <div>
             <ContextUsageIndicator
-              context={{
-                inputTokens: pressure ? 587500 : 51300,
-                inputTokenSource: "estimated",
-                estimate: {
-                  total: pressure ? 587500 : 51300,
-                  instructions: 4200,
-                  toolDefinitions: 12400,
-                  pluginContext: 1700,
-                  conversation: pressure ? 569200 : 33000,
-                },
-                lastProviderInputTokens: 48000,
-                contextWindow: 272000,
-                ratio: (pressure ? 587500 : 51300) / 272000,
-              }}
+              context={
+                options.get("context") === "unknown"
+                  ? {
+                      inputTokens: null,
+                      inputTokenSource: null,
+                      contextWindow: null,
+                      ratio: null,
+                    }
+                  : {
+                      inputTokens: pressure ? 587500 : 51300,
+                      inputTokenSource: "estimated",
+                      estimate: {
+                        total: pressure ? 587500 : 51300,
+                        instructions: 4200,
+                        toolDefinitions: 12400,
+                        pluginContext: 1700,
+                        conversation: pressure ? 569200 : 33000,
+                      },
+                      lastProviderInputTokens: 48000,
+                      contextWindow: 272000,
+                      ratio: (pressure ? 587500 : 51300) / 272000,
+                    }
+              }
               threadCacheHitRate={0.93}
               onCompact={async () => setAction("Compact clicked")}
             />

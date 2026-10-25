@@ -4154,7 +4154,23 @@ export class ZenAppServer {
   /** Read-only current request projection, using current resolved tools rather than last usage. */
   async readModelUsage(threadId: string): Promise<ModelUsageProjection> {
     const thread = await this.#requireThread(threadId);
-    const resolved = this.#requireSelection(thread.effectiveConfiguration());
+    let resolved: ResolvedProviderSelection;
+    try {
+      resolved = this.#requireSelection(thread.effectiveConfiguration());
+    } catch (error) {
+      // Removed host configuration must not make historical usage unreadable.
+      // No partial estimate or old provider count may masquerade as current input.
+      if (
+        !(error instanceof AppServerError) ||
+        (error.code !== "provider_unavailable" &&
+          error.code !== "model_unavailable")
+      )
+        throw error;
+      return projectModelUsage(thread.items, {
+        contextWindow: null,
+        providerContextUsageCompatible: false,
+      });
+    }
     const latestUsage = thread.items.findLast(
       (item) => item.type === "model_usage",
     );
