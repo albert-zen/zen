@@ -367,6 +367,7 @@ try {
         "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'true'",
       );
       const pendingFocus = await evaluate(measure);
+      (receipt.pendingSaveFocus ??= []).push({ newerNavigation, pendingFocus });
       if (newerNavigation) await clickSelector("#settings-tab-general");
       await evaluate("window.__settingsAudit.settleProviderEdit()");
       await waitFor("!document.querySelector('.provider-editor')");

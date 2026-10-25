@@ -71,15 +71,26 @@ const settings: PublicHostSettings = {
 };
 const calls: string[] = [];
 let settleProviderEdit: (() => void) | undefined;
-const deferredProviderEdit = async () => {
+const deferredProviderEdit: Window["zenx"]["settings"]["editProvider"] = async (
+  _id,
+  _provider,
+  _options,
+  attemptId,
+) => {
   if (query.get("deferredSave") !== "1") return unavailable();
   calls.push("synthetic-deferred-edit");
-  return new Promise<PublicHostSettings>((resolve) => {
+  const snapshot = await new Promise<PublicHostSettings>((resolve) => {
     settleProviderEdit = () => {
       settleProviderEdit = undefined;
       resolve(structuredClone(settings));
     };
   });
+  return {
+    ok: true,
+    settings: snapshot,
+    outcome: "success",
+    attemptId: attemptId ?? "synthetic-save",
+  };
 };
 let initialFailure = query.get("initialFailure") === "1";
 const unavailable = async () => {
