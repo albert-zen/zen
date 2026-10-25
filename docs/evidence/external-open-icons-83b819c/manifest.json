@@ -1,0 +1,81 @@
+{
+  "head": "83b819c64d73ca09ac9b869cfccf715b086e17e8",
+  "headTree": "4b3cafe9c2a70e33d215e4b7bb2de25eee466135",
+  "testedMerge": "ad214dfd9f2792d7b5c157c3c9ebb6cc1223aa4f",
+  "testedTree": "c4e7d71b7c3d3c1fd705c2bbaa39adb48dfdadd4",
+  "main": "370158f5d08935f92741929cba9153aa909d67a9",
+  "run": 40178030267,
+  "artifact": 12592804097,
+  "zipSha256": "543ae5aa9009bc017b41de5394f62b28015021de6e36d2e06833b987dc594473",
+  "sourceHashes": "18/18 match tested merge; only panels.ts differs from PR head, due to #490 trigger text, no external-open translation differences",
+  "checks": 570,
+  "cases": 6,
+  "scope": "Actual components, synthetic memory-only files and applications; no real Host, user profile, native picker or app launching. Short viewports intentionally scroll within bounded menu/dialog. Not native Electron acceptance.",
+  "files": [
+    {
+      "name": "desktop-en-external-open-menu.png",
+      "sha256": "0988de99fd5e057db24e191bd74fe170ed975cf85b513814fe58c4459fcfe29b",
+      "size": 146797
+    },
+    {
+      "name": "desktop-zh-external-open-menu.png",
+      "sha256": "3013d91ddb575402ef5910b22c399c65e2006c75cc46f98fa8d12f1bf8e92de5",
+      "size": 149156
+    },
+    {
+      "name": "narrow-en-external-open-menu.png",
+      "sha256": "74bbe10b1a248c20681ffd8413597f5595260b802589d410bd052ee0a98e3917",
+      "size": 65257
+    },
+    {
+      "name": "narrow-zh-external-open-menu.png",
+      "sha256": "5bc19f727ea21bcb39639a3217328c49b3b6711cfffd366dfe703e35c6124bf9",
+      "size": 64613
+    },
+    {
+      "name": "short-en-external-open-menu.png",
+      "sha256": "38a75667372a9afb72bbdd8ddf21754d2e20c8ab7fb9bb61f87d5ff335a56316",
+      "size": 40960
+    },
+    {
+      "name": "short-zh-external-open-menu.png",
+      "sha256": "fc6b2e746f6b06548a1d50db52af0dd5aac2d2f0417b8e0d0558e72430587bfd",
+      "size": 45638
+    },
+    {
+      "name": "desktop-en-external-applications-management.png",
+      "sha256": "01cee400064d51bf032b470fd8081784e18a2551100f90c20f9901916e21b055",
+      "size": 191127
+    },
+    {
+      "name": "desktop-zh-external-applications-management.png",
+      "sha256": "1b2668c3b4d031927bcde6fcd9326b44c80501f97a3dc865201db271f2beb432",
+      "size": 205004
+    },
+    {
+      "name": "narrow-en-external-applications-management.png",
+      "sha256": "a0fbc4d4fa32a0517d487a959cd9ca8ed7ae68c76f264b99bf095d9e2c060312",
+      "size": 46678
+    },
+    {
+      "name": "narrow-zh-external-applications-management.png",
+      "sha256": "b5ff47a323939712b3259541f7b4e257b3878c92202880b99abcad800a04b066",
+      "size": 39985
+    },
+    {
+      "name": "short-en-external-applications-management.png",
+      "sha256": "9b480944bedfc2160e4d2366a70e5f5821189953038dc909887e93f8787f2ff3",
+      "size": 27049
+    },
+    {
+      "name": "short-zh-external-applications-management.png",
+      "sha256": "4bc70067127ec7b78a4217caf6178d26210b9fc888a3b080f46b4965a9490e99",
+      "size": 28894
+    },
+    {
+      "name": "source.json",
+      "sha256": "da6b150bdfc28f8b8671ba78b692c8156c5270af1f8949141bd30f9a84cc8d29",
+      "size": 2590
+    }
+  ]
+}

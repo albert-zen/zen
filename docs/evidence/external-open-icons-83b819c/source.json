@@ -1,0 +1,24 @@
+{
+  "commit": "ad214dfd9f2792d7b5c157c3c9ebb6cc1223aa4f",
+  "scope": "Actual AuxiliaryPanel, WorkspaceFilesPanel, WorkspaceFileExplorer, SourceEditor and InlineMarkdownEditor with production styles. Synthetic source and Markdown files, memory-only drafts and a scoped fake file API; no Host, private files or profile. Application catalog, picker results, external-open receipts and unsupported-remote error are simulated; no native picker or application is launched. Browser CDP keyboard/pointer input, not native Electron or physical OS acceptance.",
+  "sources": {
+    "src/renderer/src/auxiliary-panel.tsx": "2d1333dddcd694e4794817265bab895819befb28b5961af32496cb3333fa8121",
+    "src/renderer/src/workspace-files-panel.tsx": "8850c33793fbba7222908f7cc48a1053dc4113231f1a388f6ad233e5512d0631",
+    "src/renderer/src/workspace-external-open.tsx": "97d2740d3b9cb7aeff4be8c60984f735c86a872d597bb72397cb917e5ea565ef",
+    "src/renderer/src/ui/controls.tsx": "f3f8dc81868f42c7a64faeb76ed4414b171377981440592d5a3791f18412a1c1",
+    "src/renderer/src/icons.tsx": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4",
+    "src/renderer/src/workspace-file-picker.tsx": "9f234258b470b9f32d0879e982180635366e101b42e9cd42722db495809ff433",
+    "src/renderer/src/workspace-file-explorer.tsx": "36b311864a27379ce67bbad3d094db8e93e60a916b5e3d53e374a93f784c0a4b",
+    "src/renderer/src/workspace-file-drafts.ts": "da487ed22a20c6cba5bcdc37a730031fd584b711a423507fa6f08cf433211959",
+    "src/renderer/src/SourceEditor.tsx": "62ecaec26d165fa01cfa9b2cd26cd378242bfe3422e1bb7974ce098b316090bd",
+    "src/renderer/src/InlineMarkdownEditor.tsx": "6ccb593c6052c66a8b4e26a20fae8a97ec7fdefa9fcfaac8bf9b1ff725910094",
+    "src/renderer/src/file-content-search.ts": "2c1a3ce728d0d4368bdc0bfc8f0857b8241ea4193b91321182747089afd36c2a",
+    "src/renderer/src/styles.css": "f4b5f6edf1a71d46d9c30aba6bf45f379899e4abcb9595a64858e11f65ce984e",
+    "src/renderer/src/workspace-files.css": "03b163f8dc5df3c76990d517c25c82ffb22bf85d0a55a61279fb0ac54666ac5b",
+    "src/renderer/src/i18n/panels.ts": "9707de06aba274ef60267851e2ea0bb87fa7e91d12153557b608d0ef005c29bd",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "scripts/file-sidebar-preview.tsx": "aa67ab594d5f995eab61b1193af2895b657abe429ccb8c1b27de1ab47dde7f63",
+    "scripts/build-file-sidebar-preview.mjs": "2efcfbf20b3f8f030b8133a4f3584223c44e5d14fe3bb92773f3cb056ad60f77",
+    "scripts/capture-file-sidebar-preview.mjs": "857471b1d9c481eefd66202b6525f017d4fe214e9039f08c108bdd09ae154962"
+  }
+}
