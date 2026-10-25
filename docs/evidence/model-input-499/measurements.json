@@ -1,0 +1,1892 @@
+{
+  "scope": "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, mutations or persistence. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
+  "browserSandboxDisabled": false,
+  "cases": [
+    {
+      "name": "desktop-en",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1100,
+      "height": 760,
+      "states": [
+        {
+          "name": "00-initial-load-failure",
+          "filename": "desktop-en-00-initial-load-failure.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "Synthetic settings load failure. No Host request was made.Retry loading settingsvar Z0=lt=>{throw TypeError(lt)};var Y0=",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {},
+            "providerCards": 0,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "00b-explicit-retry-success",
+          "filename": "desktop-en-00b-explicit-retry-success.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 0,
+              "height": 640,
+              "total": 673
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "01-models-overview",
+          "filename": "desktop-en-01-models-overview.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 0,
+              "height": 640,
+              "total": 673
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "02-edit-from-last-provider",
+          "filename": "desktop-en-02-edit-from-last-provider.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": 379.390625,
+              "width": 778,
+              "height": 1806.796875,
+              "right": 1030,
+              "bottom": 2186.1875
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 33,
+              "height": 640,
+              "total": 2490
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 910.953125,
+              "y": 2129.1875,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 2167.1875
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "02b-keyboard-escape-observation",
+          "filename": "desktop-en-02b-keyboard-escape-observation.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": 379.390625,
+              "width": 778,
+              "height": 1806.796875,
+              "right": 1030,
+              "bottom": 2186.1875
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 33,
+              "height": 640,
+              "total": 2490
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 910.953125,
+              "y": 2129.1875,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 2167.1875
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "03-editor-top",
+          "filename": "desktop-en-03-editor-top.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": 60.390625,
+              "width": 778,
+              "height": 1806.796875,
+              "right": 1030,
+              "bottom": 1867.1875
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 352,
+              "height": 640,
+              "total": 2490
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 910.953125,
+              "y": 1810.1875,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 1848.1875
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "04-model-capabilities",
+          "filename": "desktop-en-04-model-capabilities.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": -207.609375,
+              "width": 778,
+              "height": 2146.59375,
+              "right": 1030,
+              "bottom": 1938.984375
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "SUMMARY",
+              "text": "low / medium / high · text + image · 32,768 context",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 620,
+              "height": 640,
+              "total": 2830
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 910.953125,
+              "y": 1881.984375,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 1919.984375
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "05-discovery",
+          "filename": "desktop-en-05-discovery.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": -97.609375,
+              "width": 778,
+              "height": 2597.8125,
+              "right": 1030,
+              "bottom": 2500.203125
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "Get available models",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 510,
+              "height": 640,
+              "total": 3281
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 910.953125,
+              "y": 2443.203125,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 2481.203125
+            },
+            "discovery": {
+              "x": 285,
+              "y": 528.609375,
+              "width": 712,
+              "height": 305.796875,
+              "right": 997,
+              "bottom": 834.40625
+            },
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery"
+            ]
+          }
+        },
+        {
+          "name": "06-unknown-context-validation",
+          "filename": "desktop-en-06-unknown-context-validation.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": 277.390625,
+              "width": 778,
+              "height": 2348.59375,
+              "right": 1030,
+              "bottom": 2625.984375
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "DIV",
+              "text": "Check these fieldsModel 13 (catalog-unknown): enter a positive whole number for context window",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 135,
+              "height": 640,
+              "total": 3032
+            },
+            "providerCards": 4,
+            "modelRows": 13,
+            "save": {
+              "x": 910.953125,
+              "y": 2568.984375,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 2606.984375
+            },
+            "discovery": null,
+            "errorSummary": "Check these fieldsModel 13 (catalog-unknown): enter a positive whole number for context window",
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "reasoning unknown · input unknown · context required"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "07-validation-field",
+          "filename": "desktop-en-07-validation-field.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": 266.390625,
+              "width": 778,
+              "height": 2662.984375,
+              "right": 1030,
+              "bottom": 2929.375
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "A",
+              "text": "Model 13 (catalog-unknown): enter a positive whole number for context window",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 146,
+              "height": 640,
+              "total": 3346
+            },
+            "providerCards": 4,
+            "modelRows": 13,
+            "save": {
+              "x": 910.953125,
+              "y": 2872.375,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 2910.375
+            },
+            "discovery": null,
+            "errorSummary": "Check these fieldsModel 13 (catalog-unknown): enter a positive whole number for context window",
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context",
+              "reasoning unknown · input unknown · context required"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "08-cancel-focus",
+          "filename": "desktop-en-08-cancel-focus.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 33,
+              "height": 640,
+              "total": 673
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "09-new-provider",
+          "filename": "desktop-en-09-new-provider.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": 409.390625,
+              "width": 778,
+              "height": 708.796875,
+              "right": 1030,
+              "bottom": 1118.1875
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 3,
+              "height": 640,
+              "total": 1392
+            },
+            "providerCards": 4,
+            "modelRows": 1,
+            "save": {
+              "x": 916.953125,
+              "y": 1061.1875,
+              "width": 94.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 1099.1875
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "no reasoning strength control · text · context required"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "10-new-provider-validation",
+          "filename": "desktop-en-10-new-provider-validation.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": 250.390625,
+              "width": 778,
+              "height": 916.1875,
+              "right": 1030,
+              "bottom": 1166.578125
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "DIV",
+              "text": "Check these fieldsEnter a display nameModel 1: enter a model IDModel 1 (no ID): enter a positive whole number for contex",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 162,
+              "height": 640,
+              "total": 1600
+            },
+            "providerCards": 4,
+            "modelRows": 1,
+            "save": {
+              "x": 916.953125,
+              "y": 1109.578125,
+              "width": 94.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 1147.578125
+            },
+            "discovery": null,
+            "errorSummary": "Check these fieldsEnter a display nameModel 1: enter a model IDModel 1 (no ID): enter a positive whole number for context windowEnter an API key",
+            "capabilitySummaries": [
+              "no reasoning strength control · text · context required"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "validation-diagnostic",
+              "validation-diagnostic",
+              "validation-diagnostic",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "11-declared-input-available",
+          "filename": "desktop-en-11-declared-input-available.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": -97.609375,
+              "width": 778,
+              "height": 1282.875,
+              "right": 1030,
+              "bottom": 1185.265625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "Get available models",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 510,
+              "height": 640,
+              "total": 1966
+            },
+            "providerCards": 4,
+            "modelRows": 2,
+            "save": {
+              "x": 910.953125,
+              "y": 1128.265625,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 1166.265625
+            },
+            "discovery": {
+              "x": 285,
+              "y": 533.46875,
+              "width": 712,
+              "height": 305.796875,
+              "right": 997,
+              "bottom": 839.265625
+            },
+            "capabilitySummaries": [
+              "low / medium / high · input unknown · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-discovery"
+            ]
+          }
+        },
+        {
+          "name": "12-declared-input-draft",
+          "filename": "desktop-en-12-declared-input-draft.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 760
+            },
+            "editor": {
+              "x": 252,
+              "y": -208.609375,
+              "width": 778,
+              "height": 1306.015625,
+              "right": 1030,
+              "bottom": 1097.40625
+            },
+            "editorRole": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "SettingsMake ZenX your ownAccountModels & providerPluginsAppearanceGeneralContext compactionSkillsWorkflowsFleetArchived",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 621,
+              "height": 640,
+              "total": 1989
+            },
+            "providerCards": 4,
+            "modelRows": 2,
+            "save": {
+              "x": 910.953125,
+              "y": 1040.40625,
+              "width": 100.046875,
+              "height": 38,
+              "right": 1011,
+              "bottom": 1078.40625
+            },
+            "discovery": {
+              "x": 285,
+              "y": 445.609375,
+              "width": 712,
+              "height": 305.796875,
+              "right": 997,
+              "bottom": 751.40625
+            },
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 context",
+              "low / medium / high · text + image · 32,768 context"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-discovery"
+            ]
+          }
+        }
+      ],
+      "keyboardForward": {
+        "viewport": {
+          "width": 1100,
+          "height": 760
+        },
+        "editor": {
+          "x": 252,
+          "y": 379.390625,
+          "width": 778,
+          "height": 1806.796875,
+          "right": 1030,
+          "bottom": 2186.1875
+        },
+        "editorRole": null,
+        "focusInEditor": true,
+        "focus": {
+          "tag": "INPUT",
+          "text": "",
+          "label": null,
+          "id": "_r_k_-provider-providerName"
+        },
+        "scroll": {
+          "top": 33,
+          "height": 640,
+          "total": 2490
+        },
+        "providerCards": 4,
+        "modelRows": 12,
+        "save": {
+          "x": 910.953125,
+          "y": 2129.1875,
+          "width": 100.046875,
+          "height": 38,
+          "right": 1011,
+          "bottom": 2167.1875
+        },
+        "discovery": null,
+        "capabilitySummaries": [
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context"
+        ],
+        "dialogs": 0,
+        "overflow": false,
+        "calls": [
+          "settings-get",
+          "settings-get"
+        ]
+      },
+      "keyboardBackward": {
+        "viewport": {
+          "width": 1100,
+          "height": 760
+        },
+        "editor": {
+          "x": 252,
+          "y": 379.390625,
+          "width": 778,
+          "height": 1806.796875,
+          "right": 1030,
+          "bottom": 2186.1875
+        },
+        "editorRole": null,
+        "focusInEditor": true,
+        "focus": {
+          "tag": "INPUT",
+          "text": "",
+          "label": null,
+          "id": "_r_k_-provider-displayName"
+        },
+        "scroll": {
+          "top": 33,
+          "height": 640,
+          "total": 2490
+        },
+        "providerCards": 4,
+        "modelRows": 12,
+        "save": {
+          "x": 910.953125,
+          "y": 2129.1875,
+          "width": 100.046875,
+          "height": 38,
+          "right": 1011,
+          "bottom": 2167.1875
+        },
+        "discovery": null,
+        "capabilitySummaries": [
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context",
+          "low / medium / high · text + image · 32,768 context"
+        ],
+        "dialogs": 0,
+        "overflow": false,
+        "calls": [
+          "settings-get",
+          "settings-get"
+        ]
+      },
+      "status": "captured"
+    },
+    {
+      "name": "narrow-zh",
+      "lang": "zh-CN",
+      "theme": "light",
+      "width": 390,
+      "height": 640,
+      "states": [
+        {
+          "name": "00-initial-load-failure",
+          "filename": "narrow-zh-00-initial-load-failure.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "Synthetic settings load failure. No Host request was made.重试加载设置var Z0=lt=>{throw TypeError(lt)};var Y0=(lt,Nn,Pn)=>Nn.h",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {},
+            "providerCards": 0,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "00b-explicit-retry-success",
+          "filename": "narrow-zh-00b-explicit-retry-success.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "设置按你的习惯配置 ZenX账户模型与服务商插件外观通用上下文压缩技能工作流程设备已归档会话账户OpenAI 订阅连接您的ChatGPT 订阅以使用其模型。未配置关联账号在模型和服务商中添加OpenAI 订阅以开始使用。订阅使用情况查看当前",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 0,
+              "height": 523,
+              "total": 1200
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "01-models-overview",
+          "filename": "narrow-zh-01-models-overview.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "设置按你的习惯配置 ZenX账户模型与服务商插件外观通用上下文压缩技能工作流程设备已归档会话账户OpenAI 订阅连接您的ChatGPT 订阅以使用其模型。未配置关联账号在模型和服务商中添加OpenAI 订阅以开始使用。订阅使用情况查看当前",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 0,
+              "height": 523,
+              "total": 1200
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "02-edit-from-last-provider",
+          "filename": "narrow-zh-02-edit-from-last-provider.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": 86.78125,
+              "width": 352,
+              "height": 2189.984375,
+              "right": 366,
+              "bottom": 2276.765625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 677,
+              "height": 523,
+              "total": 3346
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 262.984375,
+              "y": 2221.765625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 2259.765625
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "02b-keyboard-escape-observation",
+          "filename": "narrow-zh-02b-keyboard-escape-observation.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": 86.78125,
+              "width": 352,
+              "height": 2189.984375,
+              "right": 366,
+              "bottom": 2276.765625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 677,
+              "height": 523,
+              "total": 3346
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 262.984375,
+              "y": 2221.765625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 2259.765625
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "03-editor-top",
+          "filename": "narrow-zh-03-editor-top.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": 56.78125,
+              "width": 352,
+              "height": 2189.984375,
+              "right": 366,
+              "bottom": 2246.765625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 707,
+              "height": 523,
+              "total": 3346
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 262.984375,
+              "y": 2191.765625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 2229.765625
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "04-model-capabilities",
+          "filename": "narrow-zh-04-model-capabilities.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": -424.21875,
+              "width": 352,
+              "height": 2742.78125,
+              "right": 366,
+              "bottom": 2318.5625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "SUMMARY",
+              "text": "low / medium / high · text + image · 32,768 Token 上下文",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 1188,
+              "height": 523,
+              "total": 3899
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 262.984375,
+              "y": 2263.5625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 2301.5625
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "05-discovery",
+          "filename": "narrow-zh-05-discovery.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": -304.21875,
+              "width": 352,
+              "height": 3198,
+              "right": 366,
+              "bottom": 2893.78125
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "获取可用模型",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 1068,
+              "height": 523,
+              "total": 4354
+            },
+            "providerCards": 4,
+            "modelRows": 12,
+            "save": {
+              "x": 262.984375,
+              "y": 2838.78125,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 2876.78125
+            },
+            "discovery": {
+              "x": 45,
+              "y": 467.1875,
+              "width": 290,
+              "height": 309.796875,
+              "right": 335,
+              "bottom": 776.984375
+            },
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery"
+            ]
+          }
+        },
+        {
+          "name": "06-unknown-context-validation",
+          "filename": "narrow-zh-06-unknown-context-validation.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": 207.78125,
+              "width": 352,
+              "height": 2965.78125,
+              "right": 366,
+              "bottom": 3173.5625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "DIV",
+              "text": "检查这些字段模型13 （ catalog-unknown ）：上下文窗口必须是正整数",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 556,
+              "height": 523,
+              "total": 4122
+            },
+            "providerCards": 4,
+            "modelRows": 13,
+            "save": {
+              "x": 262.984375,
+              "y": 3118.5625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 3156.5625
+            },
+            "discovery": null,
+            "errorSummary": "检查这些字段模型13 （ catalog-unknown ）：上下文窗口必须是正整数",
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "推理未知 · 输入未知 · 需要上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "07-validation-field",
+          "filename": "narrow-zh-07-validation-field.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": 197.78125,
+              "width": 352,
+              "height": 2965.78125,
+              "right": 366,
+              "bottom": 3163.5625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "DIV",
+              "text": "检查这些字段模型13 （ catalog-unknown ）：上下文窗口必须是正整数",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 566,
+              "height": 523,
+              "total": 4122
+            },
+            "providerCards": 4,
+            "modelRows": 13,
+            "save": {
+              "x": 262.984375,
+              "y": 3108.5625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 3146.5625
+            },
+            "discovery": null,
+            "errorSummary": "检查这些字段模型13 （ catalog-unknown ）：上下文窗口必须是正整数",
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "推理未知 · 输入未知 · 需要上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "08-cancel-focus",
+          "filename": "narrow-zh-08-cancel-focus.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "设置按你的习惯配置 ZenX账户模型与服务商插件外观通用上下文压缩技能工作流程设备已归档会话账户OpenAI 订阅连接您的ChatGPT 订阅以使用其模型。未配置关联账号在模型和服务商中添加OpenAI 订阅以开始使用。订阅使用情况查看当前",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 481,
+              "height": 523,
+              "total": 1200
+            },
+            "providerCards": 4,
+            "modelRows": 0,
+            "save": null,
+            "discovery": null,
+            "capabilitySummaries": [],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "settings-get",
+              "synthetic-discovery",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "09-new-provider",
+          "filename": "narrow-zh-09-new-provider.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": 293.78125,
+              "width": 352,
+              "height": 824.984375,
+              "right": 366,
+              "bottom": 1118.765625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "INPUT",
+              "text": "",
+              "label": null,
+              "id": "_r_k_-provider-displayName"
+            },
+            "scroll": {
+              "top": 470,
+              "height": 523,
+              "total": 1981
+            },
+            "providerCards": 4,
+            "modelRows": 1,
+            "save": {
+              "x": 262.984375,
+              "y": 1063.765625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 1101.765625
+            },
+            "discovery": null,
+            "capabilitySummaries": [
+              "无推理强度控制 · text · 需要上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get"
+            ]
+          }
+        },
+        {
+          "name": "10-new-provider-validation",
+          "filename": "narrow-zh-10-new-provider-validation.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": 189.78125,
+              "width": 352,
+              "height": 1032.375,
+              "right": 366,
+              "bottom": 1222.15625
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "DIV",
+              "text": "检查这些字段输入显示名称模型1 ：输入模型 ID模型1 （ 无 ID ）：上下文窗口必须是正整数输入API 密钥",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 574,
+              "height": 523,
+              "total": 2188
+            },
+            "providerCards": 4,
+            "modelRows": 1,
+            "save": {
+              "x": 262.984375,
+              "y": 1167.15625,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 1205.15625
+            },
+            "discovery": null,
+            "errorSummary": "检查这些字段输入显示名称模型1 ：输入模型 ID模型1 （ 无 ID ）：上下文窗口必须是正整数输入API 密钥",
+            "capabilitySummaries": [
+              "无推理强度控制 · text · 需要上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "validation-diagnostic",
+              "validation-diagnostic",
+              "validation-diagnostic",
+              "validation-diagnostic"
+            ]
+          }
+        },
+        {
+          "name": "11-declared-input-available",
+          "filename": "narrow-zh-11-declared-input-available.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": -304.21875,
+              "width": 352,
+              "height": 1470.0625,
+              "right": 366,
+              "bottom": 1165.84375
+            },
+            "editorRole": null,
+            "focusInEditor": true,
+            "focus": {
+              "tag": "BUTTON",
+              "text": "获取可用模型",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 1068,
+              "height": 523,
+              "total": 2626
+            },
+            "providerCards": 4,
+            "modelRows": 2,
+            "save": {
+              "x": 262.984375,
+              "y": 1110.84375,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 1148.84375
+            },
+            "discovery": {
+              "x": 45,
+              "y": 472.046875,
+              "width": 290,
+              "height": 309.796875,
+              "right": 335,
+              "bottom": 781.84375
+            },
+            "capabilitySummaries": [
+              "low / medium / high · 输入未知 · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-discovery"
+            ]
+          }
+        },
+        {
+          "name": "12-declared-input-draft",
+          "filename": "narrow-zh-12-declared-input-draft.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 640
+            },
+            "editor": {
+              "x": 14,
+              "y": -416.21875,
+              "width": 352,
+              "height": 1493.203125,
+              "right": 366,
+              "bottom": 1076.984375
+            },
+            "editorRole": null,
+            "focusInEditor": false,
+            "focus": {
+              "tag": "BODY",
+              "text": "设置按你的习惯配置 ZenX账户模型与服务商插件外观通用上下文压缩技能工作流程设备已归档会话账户OpenAI 订阅连接您的ChatGPT 订阅以使用其模型。未配置关联账号在模型和服务商中添加OpenAI 订阅以开始使用。订阅使用情况查看当前",
+              "label": null,
+              "id": ""
+            },
+            "scroll": {
+              "top": 1180,
+              "height": 523,
+              "total": 2649
+            },
+            "providerCards": 4,
+            "modelRows": 2,
+            "save": {
+              "x": 262.984375,
+              "y": 1021.984375,
+              "width": 86.015625,
+              "height": 38,
+              "right": 349,
+              "bottom": 1059.984375
+            },
+            "discovery": {
+              "x": 45,
+              "y": 383.1875,
+              "width": 290,
+              "height": 309.796875,
+              "right": 335,
+              "bottom": 692.984375
+            },
+            "capabilitySummaries": [
+              "low / medium / high · text + image · 32,768 Token 上下文",
+              "low / medium / high · text + image · 32,768 Token 上下文"
+            ],
+            "dialogs": 0,
+            "overflow": false,
+            "calls": [
+              "settings-get",
+              "synthetic-discovery"
+            ]
+          }
+        }
+      ],
+      "keyboardForward": {
+        "viewport": {
+          "width": 390,
+          "height": 640
+        },
+        "editor": {
+          "x": 14,
+          "y": 86.78125,
+          "width": 352,
+          "height": 2189.984375,
+          "right": 366,
+          "bottom": 2276.765625
+        },
+        "editorRole": null,
+        "focusInEditor": true,
+        "focus": {
+          "tag": "INPUT",
+          "text": "",
+          "label": null,
+          "id": "_r_k_-provider-providerName"
+        },
+        "scroll": {
+          "top": 677,
+          "height": 523,
+          "total": 3346
+        },
+        "providerCards": 4,
+        "modelRows": 12,
+        "save": {
+          "x": 262.984375,
+          "y": 2221.765625,
+          "width": 86.015625,
+          "height": 38,
+          "right": 349,
+          "bottom": 2259.765625
+        },
+        "discovery": null,
+        "capabilitySummaries": [
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文"
+        ],
+        "dialogs": 0,
+        "overflow": false,
+        "calls": [
+          "settings-get",
+          "settings-get"
+        ]
+      },
+      "keyboardBackward": {
+        "viewport": {
+          "width": 390,
+          "height": 640
+        },
+        "editor": {
+          "x": 14,
+          "y": 86.78125,
+          "width": 352,
+          "height": 2189.984375,
+          "right": 366,
+          "bottom": 2276.765625
+        },
+        "editorRole": null,
+        "focusInEditor": true,
+        "focus": {
+          "tag": "INPUT",
+          "text": "",
+          "label": null,
+          "id": "_r_k_-provider-displayName"
+        },
+        "scroll": {
+          "top": 677,
+          "height": 523,
+          "total": 3346
+        },
+        "providerCards": 4,
+        "modelRows": 12,
+        "save": {
+          "x": 262.984375,
+          "y": 2221.765625,
+          "width": 86.015625,
+          "height": 38,
+          "right": 349,
+          "bottom": 2259.765625
+        },
+        "discovery": null,
+        "capabilitySummaries": [
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文",
+          "low / medium / high · text + image · 32,768 Token 上下文"
+        ],
+        "dialogs": 0,
+        "overflow": false,
+        "calls": [
+          "settings-get",
+          "settings-get"
+        ]
+      },
+      "status": "captured"
+    }
+  ],
+  "rendererErrors": [],
+  "externalRequests": [],
+  "chrome": "/usr/bin/google-chrome",
+  "chromeVersion": "Google Chrome 155.0.8059.39",
+  "cjkFonts": [
+    "Noto Serif CJK JP",
+    "Noto Serif CJK KR",
+    "Noto Serif CJK HK",
+    "Noto Serif CJK SC",
+    "Noto Serif CJK TC",
+    "Noto Sans Mono CJK SC",
+    "Noto Sans Mono CJK TC",
+    "Noto Sans Mono CJK JP",
+    "Noto Sans Mono CJK HK",
+    "Noto Sans Mono CJK KR",
+    "Noto Sans CJK HK",
+    "Noto Sans CJK KR",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC"
+  ],
+  "status": "passed"
+}
