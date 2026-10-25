@@ -1418,3 +1418,13 @@ ZenX's unified-reference v2 text envelope extends the existing client-ID-bound q
 ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
 
 ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.
+
+### Native Computer target sessions
+
+ZenX's native macOS Computer provider owns an ephemeral, thread-scoped target
+session in its native helper: explicit window selection and scoped window
+capture bind the same retained AX window, while foreground input revalidates
+that binding after existing approval/arbitration. This host device-control state
+is not conversation truth, is never journaled or restored, and cannot authorize
+input without the existing foreground consent. Helper termination invalidates
+all bindings; uncertain input is never automatically replayed.
