@@ -1009,3 +1009,51 @@ test("RTK is an explicit boolean opt-in retained through profile persistence", a
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("external application preferences omit the empty default and preserve configured paths across round trips", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-external-apps-"),
+  );
+  try {
+    const file = path.join(directory, "host-profile.json");
+    const store = new ZenXHostProfileStore(file);
+    for (const applications of [
+      undefined,
+      {},
+      {
+        custom: "/Applications/My Editor.app",
+        vscode: "C:\\Editors\\Code.exe",
+      },
+    ]) {
+      const input = {
+        ...profile,
+        composerSendModeExplicit: true,
+        ...(applications === undefined
+          ? {}
+          : { externalApplications: applications }),
+      };
+      const expected =
+        applications && Object.keys(applications).length
+          ? applications
+          : undefined;
+      await store.write(input);
+      for (let round = 0; round < 2; round++) {
+        const loaded = await store.read(profile);
+        const persisted = JSON.parse(await readFile(file, "utf8"));
+        assert.deepEqual(loaded.externalApplications, expected);
+        assert.deepEqual(persisted.externalApplications, expected);
+        assert.equal(
+          Object.hasOwn(loaded, "externalApplications"),
+          expected !== undefined,
+        );
+        assert.equal(
+          Object.hasOwn(persisted, "externalApplications"),
+          expected !== undefined,
+        );
+        await store.write(loaded);
+      }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
