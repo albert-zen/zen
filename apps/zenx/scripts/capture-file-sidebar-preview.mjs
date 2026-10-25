@@ -203,7 +203,7 @@ try {
   };
   const waitFor = async (expression) => {
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (await evaluate(expression)) return;
+      if (await evaluate(`Boolean(${expression})`)) return;
       await delay(50);
     }
     throw new Error(`Fixture condition timed out: ${expression}`);
