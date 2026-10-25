@@ -15,7 +15,7 @@ import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 const query = new URLSearchParams(location.search);
 const lang = query.get("lang") === "zh-CN" ? "zh-CN" : "en";
-document.documentElement.dataset.theme =
+document.documentElement.dataset.appearance =
   query.get("theme") === "light" ? "light" : "dark";
 const text = referenceMessage(
   "Explain this passage, then compare with the other thread.",

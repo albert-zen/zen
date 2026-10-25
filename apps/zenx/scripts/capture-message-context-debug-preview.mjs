@@ -52,9 +52,11 @@ try {
         );
         await delay(150);
         const measured = await evaluate(
-          `(() => { const dialog = document.querySelector('.message-context-debug'); const rect = dialog.getBoundingClientRect(); const pre = [...dialog.querySelectorAll('pre')]; return { role: dialog.getAttribute('role'), preCount: pre.length, saved: pre[0]?.textContent, captured: pre[1]?.textContent, overflow: document.documentElement.scrollWidth > innerWidth, bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }, focused: dialog.contains(document.activeElement), commands: window.messageDebugFixture.commands }; })()`,
+          `(() => { const dialog = document.querySelector('.message-context-debug'); const rect = dialog.getBoundingClientRect(); const pre = [...dialog.querySelectorAll('pre')]; return { appearance: document.documentElement.dataset.appearance, colorScheme: getComputedStyle(document.documentElement).colorScheme, role: dialog.getAttribute('role'), preCount: pre.length, saved: pre[0]?.textContent, captured: pre[1]?.textContent, overflow: document.documentElement.scrollWidth > innerWidth, bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }, focused: dialog.contains(document.activeElement), commands: window.messageDebugFixture.commands }; })()`,
         );
         assert.equal(measured.role, "dialog");
+        assert.equal(measured.appearance, theme);
+        assert.equal(measured.colorScheme, theme);
         assert.equal(measured.preCount, 2);
         assert.equal(measured.overflow, false);
         assert.ok(

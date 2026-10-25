@@ -175,7 +175,12 @@ export function MessageContextDebugDialog({
       <section>
         <div className="message-context-debug-heading">
           <h3>{t("messageDebugCaptured")}</h3>
-          <button type="button" disabled={busy} onClick={() => void run()}>
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={busy}
+            onClick={() => void run()}
+          >
             {t("modelDebugRefresh")}
           </button>
         </div>
@@ -190,6 +195,7 @@ export function MessageContextDebugDialog({
           {state?.records?.map((record) => (
             <button
               type="button"
+              className="quiet-button"
               key={record.id}
               disabled={busy || record.truncated}
               aria-pressed={page?.record.id === record.id}
@@ -223,6 +229,7 @@ export function MessageContextDebugDialog({
               {page.offset > 0 ? (
                 <button
                   type="button"
+                  className="quiet-button"
                   disabled={busy}
                   onClick={() => void run(page.record.id)}
                 >
@@ -232,6 +239,7 @@ export function MessageContextDebugDialog({
               {page.nextOffset !== null ? (
                 <button
                   type="button"
+                  className="quiet-button"
                   disabled={busy}
                   onClick={() => void run(page.record.id, page.nextOffset!)}
                 >

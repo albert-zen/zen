@@ -11679,6 +11679,7 @@ button:disabled {
   gap: 6px;
 }
 .message-context-debug-records button {
+  justify-content: flex-start;
   text-align: left;
   overflow-wrap: anywhere;
   padding: 9px;
