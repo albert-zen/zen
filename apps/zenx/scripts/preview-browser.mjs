@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import WebSocket from "ws";
+import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
 export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function withPreviewBrowser(directory, run) {
   let chrome;
@@ -68,37 +68,12 @@ export async function withPreviewBrowser(directory, run) {
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  let stderr = "";
-  child.stderr.on("data", (value) => {
-    stderr += value;
-  });
+  const lifecycle = observePreviewChrome(child, profile);
   let socket;
   const pending = new Map();
   const errors = [];
   try {
-    let port;
-    for (let attempt = 0; attempt < 200; attempt++) {
-      if (child.exitCode !== null || child.signalCode !== null)
-        throw new Error(`Chrome exited: ${stderr}`);
-      try {
-        port = Number(
-          (
-            await readFile(path.join(profile, "DevToolsActivePort"), "utf8")
-          ).split("\n")[0],
-        );
-        if (port) break;
-      } catch {}
-      await delay(50);
-    }
-    if (!port)
-      throw new Error(`Chrome debugging endpoint did not start: ${stderr}`);
-    const pages = await (
-      await fetch(`http://127.0.0.1:${port}/json/list`)
-    ).json();
-    const target = pages.find((page) => page.type === "page");
-    if (!target) throw new Error("No page target from existing Chrome");
-    socket = new WebSocket(target.webSocketDebuggerUrl);
-    await once(socket, "open");
+    socket = await lifecycle.connect();
     let id = 0;
     socket.on("message", (data) => {
       const message = JSON.parse(String(data));
@@ -114,6 +89,7 @@ export async function withPreviewBrowser(directory, run) {
     });
     const send = (method, params = {}) =>
       new Promise((resolve, reject) => {
+        lifecycle.commandStarted(method);
         const requestId = ++id;
         const timeout = setTimeout(() => {
           pending.delete(requestId);
@@ -134,6 +110,7 @@ export async function withPreviewBrowser(directory, run) {
     };
     await send("Page.enable");
     await send("Runtime.enable");
+    lifecycle.captureStarted();
     await run({
       send,
       evaluate,
@@ -152,20 +129,33 @@ export async function withPreviewBrowser(directory, run) {
     });
     if (errors.length)
       throw new Error(`Renderer exceptions: ${JSON.stringify(errors)}`);
+    lifecycle.captureFinished("passed");
+  } catch (error) {
+    lifecycle.captureFinished(
+      lifecycle.receipt.captureStatus === "not-started"
+        ? "not-started"
+        : "failed",
+      error,
+    );
+    throw error;
   } finally {
     for (const request of pending.values()) {
       clearTimeout(request.timeout);
       request.reject(new Error("Browser closed"));
     }
-    socket?.close();
-    child.kill("SIGTERM");
+    socket?.terminate();
+    const stopped = await lifecycle.close(directory);
     server.close();
-    await writeFile(path.join(directory, "chrome.log"), stderr);
-    await rm(profile, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    });
+    if (stopped)
+      await rm(profile, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+    if (!stopped && lifecycle.receipt.captureStatus === "passed")
+      throw new Error(
+        "Preview Chrome cleanup incomplete; profile retained. See browser-lifecycle.json.",
+      );
   }
 }

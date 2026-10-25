@@ -7,7 +7,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import WebSocket from "ws";
+import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
 
 assert.equal(
   process.env.GITHUB_ACTIONS,
@@ -32,8 +32,7 @@ let server;
 let child;
 let socket;
 let profile;
-let stderr = "";
-let spawnError;
+let lifecycle;
 const pending = new Map();
 let evaluate;
 let screenshot;
@@ -95,35 +94,8 @@ try {
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  child.on("error", (error) => {
-    spawnError = error;
-  });
-  child.stderr.on("data", (data) => {
-    stderr = (stderr + String(data)).slice(-65_536);
-  });
-  let port;
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (spawnError) throw spawnError;
-    if (child.exitCode !== null || child.signalCode !== null)
-      throw new Error(`Existing Chrome exited before capture: ${stderr}`);
-    try {
-      port = Number(
-        (
-          await readFile(path.join(profile, "DevToolsActivePort"), "utf8")
-        ).split("\n")[0],
-      );
-      if (port) break;
-    } catch {}
-    await delay(50);
-  }
-  assert.ok(port, `Existing Chrome did not become ready: ${stderr}`);
-  const pages = await (
-    await fetch(`http://127.0.0.1:${port}/json/list`)
-  ).json();
-  const target = pages.find((page) => page.type === "page");
-  assert.ok(target, "Existing Chrome exposed a page target.");
-  socket = new WebSocket(target.webSocketDebuggerUrl);
-  await once(socket, "open");
+  lifecycle = observePreviewChrome(child, profile);
+  socket = await lifecycle.connect();
   let id = 0;
   socket.on("message", (data) => {
     const message = JSON.parse(String(data));
@@ -143,6 +115,7 @@ try {
   });
   const send = (method, params = {}) =>
     new Promise((resolve, reject) => {
+      lifecycle.commandStarted(method);
       const requestId = ++id;
       const timeout = setTimeout(() => {
         pending.delete(requestId);
@@ -206,6 +179,7 @@ try {
   };
   await send("Page.enable");
   await send("Runtime.enable");
+  lifecycle.captureStarted();
   await send("Network.enable");
 
   // DOM is inspected immediately before each real CDP click. scrollIntoView
@@ -326,11 +300,18 @@ try {
     evidence.cjkFonts.length > 0,
     "CI has no CJK-capable font. Chinese screenshots are not visual acceptance; no font installation was attempted.",
   );
+  lifecycle.captureFinished("passed");
   evidence.status = "passed";
   console.log(
     "Captured actual ThreadView and TriggersPanel EN/ZH desktop/panel observations.",
   );
 } catch (error) {
+  lifecycle?.captureFinished(
+    lifecycle.receipt.captureStatus === "not-started"
+      ? "not-started"
+      : "failed",
+    error,
+  );
   evidence.status = "failed";
   evidence.failure = error instanceof Error ? error.message : String(error);
   if (evaluate && screenshot) {
@@ -346,28 +327,21 @@ try {
     request.reject(new Error("Preview capture closed."));
   }
   socket?.terminate();
-  if (child && child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
-    for (
-      let attempt = 0;
-      attempt < 50 && child.exitCode === null && child.signalCode === null;
-      attempt++
-    )
-      await delay(100);
-    if (child.exitCode === null && child.signalCode === null)
-      child.kill("SIGKILL");
-  }
+  const stopped = await lifecycle?.close(directory);
   server?.close();
   await writeFile(
     path.join(directory, "measurements.json"),
     JSON.stringify(evidence, null, 2) + "\n",
   );
-  await writeFile(path.join(directory, "chrome.log"), stderr);
-  if (profile)
+  if (profile && stopped)
     await rm(profile, {
       recursive: true,
       force: true,
       maxRetries: 5,
       retryDelay: 100,
     });
+  if (lifecycle && !stopped && evidence.status === "passed")
+    throw new Error(
+      "Preview Chrome cleanup incomplete; profile retained. See browser-lifecycle.json.",
+    );
 }
