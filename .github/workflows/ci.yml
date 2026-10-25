@@ -139,6 +139,7 @@ jobs:
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         timeout-minutes: 3
         run: |
+          npx tsc -p apps/zenx/tsconfig.trigger-preview.json --noEmit
           node apps/zenx/scripts/build-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management"
           node apps/zenx/scripts/capture-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management"
       - name: Retain synthetic trigger management UI

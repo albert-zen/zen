@@ -123,7 +123,7 @@ const sdk: PluginUiSdkV1 = {
   },
 };
 Object.assign(window, { __triggerPreview: { calls } });
-getLanguageController().receiveExternalPreference(language);
+getLanguageController().receivePreference(language);
 void i18n
   .changeLanguage(language)
   .then(() =>
