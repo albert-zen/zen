@@ -367,9 +367,9 @@ export const en = {
   anEarlierTriggerSaveReturnedAnUncertain:
     "An earlier Trigger save returned an uncertain outcome after its form was left. Inspect definitions before retrying; no Host cancellation was implied.",
   hostSchedulesIndependentlyOfThisPanel:
-    "Host schedules independently of this panel.",
+    "Runs while ZenX is open, even if you leave this panel.",
   hostSchedulesWhileRunningEvenWhenThis:
-    "Host schedules while running, even when this page is closed.",
+    "Runs while ZenX is open, even if you leave this page.",
   schedulingAndRecovery: "Scheduling and recovery",
   setUpReplies: "Set up replies",
   editTrigger: "Edit trigger",
@@ -897,6 +897,10 @@ export const en = {
     "Use /threads and /pick to continue a work conversation directly; this mode mirrors its model replies. /new clears the selection. PAW mode currently supports text; native read receipts, quotes, and reactions depend on future channel adapters.",
   save: "Save",
   imageUnavailablePrefix: "Image unavailable:",
+  triggerOnce: "Once",
+  triggerEveryHours: "Every {{count}} hours",
+  triggerEveryHours_one: "Every hour",
+  triggerEveryHours_other: "Every {{count}} hours",
   everyMinutes: "Every {{count}} min",
   onceAt: "Once · {{time}}",
   everyMinutesAt: "Every {{count}} min · {{time}}",
@@ -1304,9 +1308,10 @@ export const zhCN = {
     "之前创建会话的结果尚未确认。重试前请检查会话列表；离开表单并未取消 Host 请求。",
   anEarlierTriggerSaveReturnedAnUncertain:
     "之前保存触发器的结果尚未确认。重试前请检查定义；离开表单并未取消 Host 请求。",
-  hostSchedulesIndependentlyOfThisPanel: "Host 独立于此面板执行调度。",
+  hostSchedulesIndependentlyOfThisPanel:
+    "ZenX 运行时，离开面板也会按计划执行。",
   hostSchedulesWhileRunningEvenWhenThis:
-    "Host 运行期间会继续调度，即使此页面已关闭。",
+    "ZenX 运行时，离开页面也会按计划执行。",
   schedulingAndRecovery: "调度与恢复",
   setUpReplies: "设置回复",
   editTrigger: "编辑触发器",
@@ -1796,6 +1801,10 @@ export const zhCN = {
     "/threads 和 /pick 继续直接工作会话；这个模式会同步该线程的模型回复。/new 清除选择。PAW 模式目前支持文字，平台原生已读、引用和表情取决于后续渠道适配。",
   save: "保存",
   imageUnavailablePrefix: "图片不可用：",
+  triggerOnce: "执行一次",
+  triggerEveryHours: "每 {{count}} 小时",
+  triggerEveryHours_one: "每 1 小时",
+  triggerEveryHours_other: "每 {{count}} 小时",
   everyMinutes: "每 {{count}} 分钟",
   onceAt: "一次 · {{time}}",
   everyMinutesAt: "每 {{count}} 分钟 · {{time}}",
