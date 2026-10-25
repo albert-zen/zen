@@ -688,12 +688,12 @@ test("R1 Runtime/Host: second reset retains pre-sample steer, not after-sample i
   assert.equal((await journal.read(thread.id)).length, snapshot.items.length);
 });
 
-test("R1 Runtime/Host: hard recent-Turn retention over budget fails without losing admitted input", async () => {
+test("R1 Runtime/Host: oversized late steering is rejected before sampling without losing admitted input", async () => {
   const beforeSecondSample = deferred<void>();
   const releaseSecondSample = deferred<void>();
   let samples = 0;
   let summaries = 0;
-  class PauseSecondSampleRuntime extends AgentRuntime {
+  class PauseSecondSampleRuntime extends HistoryBudgetRuntime {
     override async runTurn(options: RunTurnOptions): Promise<void> {
       let preparations = 0;
       await super.runTurn({
@@ -777,15 +777,14 @@ test("R1 Runtime/Host: hard recent-Turn retention over budget fails without losi
     ),
     true,
   );
-  const failed = items.find(
-    (item) => item.type === "tool_result" && item.callId === "overbudget-reset",
+  assert.equal(
+    samples,
+    1,
+    "oversized admitted steer never reaches the provider",
   );
-  assert(failed?.type === "tool_result");
-  assert.equal(failed.exitCode, 1);
-  assert.match(
-    failed.output,
-    /compaction failed|bounded projection|context window/u,
-  );
+  const failed = items.find((item) => item.type === "failure");
+  assert(failed?.type === "failure");
+  assert.match(failed.message, /configured context window/u);
   assert.equal(summaries, 0);
   assert.deepEqual(await journal.read(thread.id), items);
 });
@@ -1241,15 +1240,22 @@ test("oversized agentic text fails without changing the effective projection", a
     snapshot.items.some((item) => item.type === "context_compaction"),
     false,
   );
+  // The failed reset leaves its oversized tool arguments in history; do not
+  // send a second over-window request merely to report the reset error.
+  assert.equal(requests.length, 1);
   assert(
-    requests[1]?.messages.some(
-      (message) =>
-        message.role === "user" &&
-        "content" in message &&
-        message.content[0]?.type === "text" &&
-        message.content[0].text === "original survives",
+    snapshot.items.some(
+      (item) =>
+        item.type === "user_message" &&
+        ("text" in item
+          ? item.text === "original survives"
+          : item.content?.some(
+              (part) =>
+                part.type === "text" && part.text === "original survives",
+            )),
     ),
   );
+  assert.equal(snapshot.turns[0]?.status, "failed");
 });
 
 test("agentic compaction abort and journal failure never admit another sample", async () => {
@@ -1886,7 +1892,7 @@ test("uses triggerPercent for admission and targetPercent for the compacted proj
       yield { type: "text_delta", delta: `answer-${String(normalCalls)}` };
       yield {
         type: "usage",
-        inputTokens: normalCalls === 1 ? 59 : 60,
+        inputTokens: normalCalls === 1 ? 119 : 120,
         outputTokens: 1,
       };
     },
@@ -1895,7 +1901,7 @@ test("uses triggerPercent for admission and targetPercent for the compacted proj
     journal: new InMemoryThreadJournal(),
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow: 200 },
     ]),
     contextCompaction: { triggerPercent: 60, targetPercent: 40 },
   });
@@ -1915,7 +1921,7 @@ test("uses triggerPercent for admission and targetPercent for the compacted proj
   const snapshot = await server.readThread(thread.id);
   assert.equal(snapshot.items.at(-1)?.type, "context_compaction");
   assert(
-    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <= 40,
+    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <= 80,
   );
 });
 
@@ -1966,7 +1972,7 @@ test("does not append when explicit selected Items exceed the target", async () 
     journal,
     model: summaryModel(),
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow: 200 },
     ]),
     contextCompaction: {
       triggerPercent: 80,
@@ -1989,7 +1995,7 @@ test("does not append when explicit selected Items exceed the target", async () 
   assert.deepEqual(await journal.read(thread.id), before);
 });
 
-test("bounds an oversized latest completed Turn without splitting its tool lifecycle", async () => {
+test("fails closed when tool schemas plus a first-Turn result exceed the window, preserving tool lifecycle", async () => {
   const toolOutput = "x".repeat(400);
   let normalSamples = 0;
   const contextWindow = 288;
@@ -2034,31 +2040,18 @@ test("bounds an oversized latest completed Turn without splitting its tool lifec
   ).done;
 
   const snapshot = await server.readThread(thread.id);
-  const compaction = snapshot.items.at(-1);
-  assert(compaction?.type === "context_compaction");
+  assert.equal(snapshot.turns[0]?.status, "failed");
+  assert.equal(normalSamples, 1);
+  assert.equal(summaryRequests.length, 0);
+  assert.equal(
+    snapshot.items.some((item) => item.type === "context_compaction"),
+    false,
+  );
   const call = snapshot.items.find((item) => item.type === "tool_call");
   const result = snapshot.items.find((item) => item.type === "tool_result");
   assert(call?.type === "tool_call");
   assert(result?.type === "tool_result");
   assert.equal(result.output, toolOutput);
-  assert.equal(compaction.retainedItemIds.includes(call.id), false);
-  assert.equal(compaction.retainedItemIds.includes(result.id), false);
-  assert(summaryRequests.length > 1);
-  const excerptSource = summaryRequests
-    .flatMap((request) => request.messages)
-    .filter(
-      (message) =>
-        message.role === "user" &&
-        "text" in message &&
-        message.text.startsWith("[excerpt]\n"),
-    )
-    .map((message) => ("text" in message ? message.text.slice(10) : ""))
-    .join("");
-  assert(excerptSource.includes(toolOutput));
-  assert(
-    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <=
-      231,
-  );
 });
 
 test("compacts an oversized completed history before admitting the next model sample", async () => {
@@ -3446,6 +3439,26 @@ test("active compaction preserves unknown journal outcomes and stop handling", a
   });
 });
 
+// These tests exercise history/retention with deliberately tiny windows. Use a
+// tiny disclosed-schema fixture, not production shell documentation that alone
+// exceeds those windows. Full real-schema admission is covered in context-budget.test.ts.
+class HistoryBudgetRuntime extends AgentRuntime {
+  override projectToolPresentation(
+    items: readonly CanonicalItem[],
+    agentic: boolean,
+  ) {
+    const snapshot = super.projectToolPresentation(items, agentic);
+    return {
+      ...snapshot,
+      modelTools: snapshot.modelTools.map((tool) => ({
+        name: tool.name,
+        description: "",
+        inputSchema: {},
+      })),
+    };
+  }
+}
+
 function createServer(options: {
   journal: ThreadJournal;
   model: ModelAdapter;
@@ -3462,7 +3475,7 @@ function createServer(options: {
     journal: options.journal,
     runtime:
       options.runtime ??
-      new AgentRuntime({
+      new HistoryBudgetRuntime({
         toolEnvironment: new ToolEnvironment({
           runtimes: [new ShellToolRuntime()],
         }),

@@ -51,3 +51,22 @@
     animation: none !important;
   }
 }
+
+.context-usage-breakdown {
+  margin: 10px 0;
+  display: grid;
+  gap: 7px;
+  font-size: 11px;
+}
+.context-usage-breakdown > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.context-usage-breakdown dt {
+  color: var(--text-secondary);
+}
+.context-usage-breakdown dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

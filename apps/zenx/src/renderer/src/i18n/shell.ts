@@ -918,6 +918,13 @@ export const en = {
   usageWithCache: "{{cache}} · {{input}} in · {{output}} out",
   contextUnknownWindow: "Context unknown · {{window}} configured window",
   contextUnknownInput: "Context unknown · {{input}} {{source}}",
+  "contextCategory.instructions": "System & repository instructions",
+  "contextCategory.toolDefinitions": "Tool definitions · includes plugins",
+  "contextCategory.pluginContext": "Plugin-injected context",
+  "contextCategory.conversation": "Conversation & tool results",
+  contextEstimateExplanation:
+    "Estimated next input, not billing. Tool definitions include the disclosed plugin SDK; plugin context counts trigger/room messages separately. Media and provider framing vary by model.",
+  contextLastProviderTokens: "Last provider-reported input: {{tokens}} tokens",
   contextUsageFull:
     "Context {{percent}}% · {{input}} {{source}} / {{window}} configured window",
   threadCachePercent: "Thread cache {{percent}}%",
@@ -1819,6 +1826,13 @@ export const zhCN = {
   usageWithCache: "{{cache}} · 输入 {{input}} · 输出 {{output}}",
   contextUnknownWindow: "上下文未知 · 已配置窗口 {{window}}",
   contextUnknownInput: "上下文未知 · {{input}} {{source}}",
+  "contextCategory.instructions": "系统与仓库指令",
+  "contextCategory.toolDefinitions": "工具定义 · 含插件",
+  "contextCategory.pluginContext": "插件注入上下文",
+  "contextCategory.conversation": "对话与工具结果",
+  contextEstimateExplanation:
+    "下次输入估算，非计费值。工具定义包含已披露的插件 SDK；插件上下文单列触发器与房间消息。媒体和协议开销随模型变化。",
+  contextLastProviderTokens: "上次供应商报告输入：{{tokens}} tokens",
   contextUsageFull:
     "上下文 {{percent}}% · {{input}} {{source}} / 已配置窗口 {{window}}",
   threadCachePercent: "会话缓存 {{percent}}%",

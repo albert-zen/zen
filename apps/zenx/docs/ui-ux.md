@@ -740,3 +740,7 @@ The exact animation reference is DeepSeek Harness [`639ed015`, TextShimmer.modul
 ### 2026-10-20: Bundled What's New
 
 A compact release-notes icon sits at the right of Settings in the same Sidebar footer row, replacing the decorative service-status dot without adding row height. Settings and What's New / 更新内容 are sibling buttons with independent pointer and keyboard targets; the notes icon has a localized tooltip and accessible name. Service runtime behavior, Settings status text and non-ready Sidebar feedback remain unchanged. It opens a compact, date-grouped dialog of changes included in this build, not an updater or a promise of unmerged features. Notes ship locally with stable release and item IDs independent of the package version. Opening is always explicit; there is no startup modal, unread badge, read-state persistence, network request or new permission. The shared Dialog owns focus trapping, Escape, outside dismissal and focus restoration. Notes scroll inside the dialog, with the close control always visible; repeated opening never navigates away from the current conversation or changes its draft.
+
+### Context pressure details
+
+上下文圆圈 hover/click 展示下一次输入的估算分项：系统与仓库指令、工具定义（包含已披露插件 SDK）、插件注入上下文（触发器/房间）、对话与工具结果。分项之和等于估算总数，最后一次 provider 报告值独立显示；媒体和协议开销不是精确计费，不展示不存在的 MCP 分类。

@@ -3188,6 +3188,35 @@ export function ContextUsageIndicator({
               <span style={{ width: `${String(visualPercent)}%` }} />
             </div>
             <p>{tokenUsage}</p>
+            {context?.estimate !== undefined ? (
+              <>
+                <dl className="context-usage-breakdown">
+                  {(
+                    [
+                      "instructions",
+                      "toolDefinitions",
+                      "pluginContext",
+                      "conversation",
+                    ] as const
+                  ).map((category) => (
+                    <div key={category}>
+                      <dt>{i18n.t(`shell:contextCategory.${category}`)}</dt>
+                      <dd>{formatTokenCount(context.estimate![category])}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <p className="context-usage-explanation">
+                  {i18n.t("shell:contextEstimateExplanation")}
+                </p>
+                {context.lastProviderInputTokens === undefined ? null : (
+                  <p>
+                    {i18n.t("shell:contextLastProviderTokens", {
+                      tokens: formatTokenCount(context.lastProviderInputTokens),
+                    })}
+                  </p>
+                )}
+              </>
+            ) : null}
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
             <button
               className="context-usage-compact"

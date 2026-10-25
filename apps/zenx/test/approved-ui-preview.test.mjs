@@ -120,6 +120,22 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
             await waitFor(() =>
               document.querySelector(".context-usage-popover"),
             );
+            const rows = [
+              ...document.querySelectorAll(".context-usage-breakdown > div"),
+            ];
+            assert.equal(rows.length, 4);
+            assert.match(rows[0].textContent, /系统与仓库指令/u);
+            assert.match(rows[1].textContent, /工具定义.*含插件/u);
+            assert.match(rows[2].textContent, /插件注入上下文/u);
+            assert.match(rows[3].textContent, /对话与工具结果/u);
+            assert.match(
+              document.querySelector(".context-usage-popover").textContent,
+              /非计费值/u,
+            );
+            assert.doesNotMatch(
+              document.querySelector(".context-usage-popover").textContent,
+              /MCP/u,
+            );
             trigger.dispatchEvent(
               new dom.window.KeyboardEvent("keydown", {
                 key: "Escape",

@@ -247,6 +247,20 @@ await withPreviewBrowser(
         );
         await delay(250);
         const hover = await evaluate(contextMeasure);
+        const breakdown = await evaluate(
+          `(() => ({ rows: [...document.querySelectorAll('.context-usage-breakdown > div')].map(row => row.textContent), explanation: document.querySelector('.context-usage-explanation')?.textContent }))()`,
+        );
+        assert.equal(
+          breakdown.rows.length,
+          4,
+          `${name}: all additive input categories shown`,
+        );
+        assert(
+          breakdown.rows.every((row) => !row.includes("contextCategory.")),
+          `${name}: translated category labels`,
+        );
+        assert(breakdown.explanation, `${name}: estimate limitations visible`);
+        hover.breakdown = breakdown;
         assert.deepEqual(
           hover.trigger,
           initial.trigger,

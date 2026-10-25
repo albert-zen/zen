@@ -62,7 +62,15 @@ function Fixture() {
             <ContextUsageIndicator
               context={{
                 inputTokens: pressure ? 587500 : 51300,
-                inputTokenSource: "provider",
+                inputTokenSource: "estimated",
+                estimate: {
+                  total: pressure ? 587500 : 51300,
+                  instructions: 4200,
+                  toolDefinitions: 12400,
+                  pluginContext: 1700,
+                  conversation: pressure ? 569200 : 33000,
+                },
+                lastProviderInputTokens: 48000,
                 contextWindow: 272000,
                 ratio: (pressure ? 587500 : 51300) / 272000,
               }}

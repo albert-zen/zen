@@ -1,3 +1,4 @@
+import { projectModelMessages } from "./model-content.js";
 import {
   matchesSkillInputSnapshot,
   prepareSkillInput,
@@ -88,7 +89,13 @@ import {
   type ModelEvent,
   type ModelMessage,
 } from "./model.js";
-import { estimateModelMessageInputTokens } from "./model-usage.js";
+import {
+  estimateModelMessageInputTokens,
+  estimateModelInput,
+  projectModelUsage,
+  type ModelUsageProjection,
+  type ModelInputEstimate,
+} from "./model-usage.js";
 import {
   ProviderRegistryError,
   type ProviderModel,
@@ -3444,6 +3451,7 @@ export class ZenAppServer {
                   sandbox: configuration.sandbox,
                   approvalPolicy: configuration.approvalPolicy,
                   inputModalities: resolved.model.inputModalities,
+                  contextWindow: resolved.model.contextWindow,
                   ...(admitted.configuration.contextCompaction.agenticEnabled &&
                   resolved.model.contextWindow !== null
                     ? {
@@ -4124,6 +4132,53 @@ export class ZenAppServer {
     await active.done;
   }
 
+  #estimateContext(
+    items: readonly CanonicalItem[],
+    resolved: ResolvedProviderSelection,
+    contextCompaction: ResolvedContextCompactionConfig,
+  ): ModelInputEstimate {
+    return estimateModelInput(
+      projectModelMessages(
+        compileModelMessages(items, resolved.selection),
+        resolved.model.inputModalities,
+      ),
+      this.#runtime.projectToolPresentation(
+        items,
+        contextCompaction.agenticEnabled &&
+          resolved.model.contextWindow !== null,
+      ).modelTools,
+      resolved.adapter.contextInstructions,
+    );
+  }
+
+  /** Read-only current request projection, using current resolved tools rather than last usage. */
+  async readModelUsage(threadId: string): Promise<ModelUsageProjection> {
+    const thread = await this.#requireThread(threadId);
+    const resolved = this.#requireSelection(thread.effectiveConfiguration());
+    const latestUsage = thread.items.findLast(
+      (item) => item.type === "model_usage",
+    );
+    const selection = thread.items.find(
+      (item) =>
+        item.type === "turn_started" && item.turnId === latestUsage?.turnId,
+    );
+    return projectModelUsage(thread.items, {
+      contextWindow: resolved.model.contextWindow,
+      estimate: this.#estimateContext(
+        thread.items,
+        resolved,
+        this.#runtimeConfiguration.contextCompaction,
+      ),
+      providerContextUsageCompatible:
+        selection?.type === "turn_started" &&
+        selection.selection?.providerProfileId ===
+          resolved.selection.providerProfileId &&
+        selection.selection?.modelId === resolved.selection.modelId &&
+        selection.selection?.reasoningEffort ===
+          resolved.selection.reasoningEffort,
+    });
+  }
+
   async #handleActiveTurnCompaction(options: {
     threadId: string;
     turnId: string;
@@ -4145,9 +4200,25 @@ export class ZenAppServer {
       // are appended afterwards, so estimate the complete projection that is
       // about to be sampled as well. This closes the gap where a large result
       // crosses the window between two Provider usage reports.
-      const estimatedInputTokens = estimateModelMessageInputTokens(
-        compileModelMessages(thread.items, options.resolved.selection),
+      const estimate = this.#estimateContext(
+        thread.items,
+        options.resolved,
+        options.contextCompaction,
       );
+      const estimatedInputTokens = estimate.total;
+      if (
+        estimate.toolDefinitions +
+          estimateModelInput(
+            [],
+            [],
+            options.resolved.adapter.contextInstructions,
+          ).total >=
+        contextWindow
+      )
+        throw new AppServerError(
+          "context_window_exceeded",
+          "Disclosed tool definitions and static model instructions exceed the configured context window; reduce tool exposure/instructions or select a larger model window",
+        );
       const observedInputTokens = Math.max(
         inputTokens ?? 0,
         estimatedInputTokens,
@@ -4209,9 +4280,11 @@ export class ZenAppServer {
             options.contextCompaction.targetPercent,
           ),
           estimateRetainedTokens: (retainedItems) =>
-            estimateModelMessageInputTokens(
-              compileModelMessages(retainedItems, options.resolved.selection),
-            ),
+            this.#estimateContext(
+              retainedItems,
+              options.resolved,
+              options.contextCompaction,
+            ).total,
           retention: options.contextCompaction.retention,
           allowOpenTurns: true,
         });
@@ -4457,10 +4530,23 @@ export class ZenAppServer {
             },
       ),
     ];
+    const estimate = this.#estimateContext(
+      previewItems,
+      options.resolved,
+      options.contextCompaction,
+    );
     if (
-      estimateModelMessageInputTokens(
-        compileModelMessages(previewItems, options.resolved.selection),
-      ) <
+      estimate.toolDefinitions +
+        estimateModelInput([], [], options.resolved.adapter.contextInstructions)
+          .total >=
+      contextWindow
+    )
+      throw new AppServerError(
+        "context_window_exceeded",
+        "Disclosed tool definitions and static model instructions exceed the configured context window; reduce tool exposure/instructions or select a larger model window",
+      );
+    if (
+      estimate.total <
       contextCompactionTokenBudget(
         contextWindow,
         options.contextCompaction.triggerPercent,
@@ -4502,9 +4588,12 @@ export class ZenAppServer {
     signal: AbortSignal;
     allowOpenTurns?: boolean;
   }): Promise<ContextCompactionItem> {
-    const sourceMessages = compileModelMessages(
-      options.thread.items.slice(0, options.boundary.index + 1),
-      options.selection.selection,
+    const sourceMessages = projectModelMessages(
+      compileModelMessages(
+        options.thread.items.slice(0, options.boundary.index + 1),
+        options.selection.selection,
+      ),
+      options.selection.model.inputModalities,
     );
     const summary = await generateContextCompactionSummary({
       debugThreadId: options.thread.id,
@@ -4571,18 +4660,17 @@ export class ZenAppServer {
         // budget the actual proposed projection, not retained Items alone.
         retainedTokenBudget: targetTokenBudget,
         estimateRetainedTokens: (retainedItems) =>
-          estimateModelMessageInputTokens(
-            compileModelMessages(
-              [
-                ...options.thread.items,
-                {
-                  ...item,
-                  retainedItemIds: retainedItems.map((retained) => retained.id),
-                },
-              ],
-              options.selection.selection,
-            ),
-          ),
+          this.#estimateContext(
+            [
+              ...options.thread.items,
+              {
+                ...item,
+                retainedItemIds: retainedItems.map((retained) => retained.id),
+              },
+            ],
+            options.selection,
+            options.contextCompaction,
+          ).total,
         retention: options.contextCompaction.retention,
         ...(options.allowOpenTurns === undefined
           ? {}
@@ -4601,12 +4689,11 @@ export class ZenAppServer {
       );
     }
     item.retainedItemIds = boundedBoundary.retainedItemIds;
-    const projectedTokens = estimateModelMessageInputTokens(
-      compileModelMessages(
-        [...options.thread.items, item],
-        options.selection.selection,
-      ),
-    );
+    const projectedTokens = this.#estimateContext(
+      [...options.thread.items, item],
+      options.selection,
+      options.contextCompaction,
+    ).total;
     if (projectedTokens > targetTokenBudget) {
       throw new AppServerError(
         "compaction_budget_exceeded",
@@ -5647,7 +5734,8 @@ async function generateContextCompactionSummary(options: {
   const chunks = contextCompactionSummaryChunks(
     options.messages,
     options.summaryInstruction,
-    options.inputTokenBudget,
+    options.inputTokenBudget -
+      estimateModelInput([], [], options.adapter.contextInstructions).total,
   );
   const summaries: string[] = [];
   let inputTokens = 0;
