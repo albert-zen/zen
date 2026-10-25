@@ -1,0 +1,79 @@
+{
+  "scope": "Actual action/Dialog, synthetic message and capture API, no Host or real model. No native app acceptance.",
+  "cases": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1100,
+      "height": 900,
+      "measured": {
+        "appearance": "light",
+        "colorScheme": "light",
+        "role": "dialog",
+        "preCount": 2,
+        "saved": "\"[zenx-reference-message:v2]\\n{\\\"version\\\":2,\\\"clientId\\\":\\\"synthetic-client\\\",\\\"text\\\":\\\"Explain this passage, then compare with the other thread.\\\",\\\"references\\\":[{\\\"kind\\\":\\\"thread\\\",\\\"name\\\":\\\"Research\\\",\\\"cwd\\\":\\\"/synthetic/workspace\\\",\\\"id\\\":\\\"synthetic-research\\\",\\\"contentMode\\\":\\\"pointer\\\"}]}\"",
+        "captured": "{\n  \"role\": \"user\",\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"[Zen recorded user-message metadata: received_at=\\\"2026-10-25T05:00:00.000Z\\\"]\"\n    },\n    {\n      \"type\": \"text\",\n      \"text\": \"[zenx-reference-message:v2]\\n{\\\"version\\\":2,\\\"clientId\\\":\\\"synthetic-client\\\",\\\"text\\\":\\\"Explain this passage, then compare with the other thread.\\\",\\\"references\\\":[{\\\"kind\\\":\\\"thread\\\",\\\"name\\\":\\\"Research\\\",\\\"cwd\\\":\\\"/synthetic/workspace\\\",\\\"id\\\":\\\"synthetic-research\\\",\\\"contentMode\\\":\\\"pointer\\\"}]}\"\n    }\n  ]\n}",
+        "overflow": false,
+        "bounds": {
+          "left": 170,
+          "right": 930,
+          "top": 68,
+          "bottom": 832
+        },
+        "focused": true,
+        "commands": [
+          {
+            "action": "list",
+            "threadId": "synthetic-thread",
+            "itemId": "synthetic-message"
+          },
+          {
+            "action": "read",
+            "id": "synthetic-capture",
+            "view": "message",
+            "itemId": "synthetic-message",
+            "offset": 0
+          }
+        ]
+      },
+      "escapeAndFocusRestoration": true
+    },
+    {
+      "lang": "zh-CN",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "measured": {
+        "appearance": "dark",
+        "colorScheme": "dark",
+        "role": "dialog",
+        "preCount": 2,
+        "saved": "\"[zenx-reference-message:v2]\\n{\\\"version\\\":2,\\\"clientId\\\":\\\"synthetic-client\\\",\\\"text\\\":\\\"Explain this passage, then compare with the other thread.\\\",\\\"references\\\":[{\\\"kind\\\":\\\"thread\\\",\\\"name\\\":\\\"Research\\\",\\\"cwd\\\":\\\"/synthetic/workspace\\\",\\\"id\\\":\\\"synthetic-research\\\",\\\"contentMode\\\":\\\"pointer\\\"}]}\"",
+        "captured": "{\n  \"role\": \"user\",\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"[Zen recorded user-message metadata: received_at=\\\"2026-10-25T05:00:00.000Z\\\"]\"\n    },\n    {\n      \"type\": \"text\",\n      \"text\": \"[zenx-reference-message:v2]\\n{\\\"version\\\":2,\\\"clientId\\\":\\\"synthetic-client\\\",\\\"text\\\":\\\"Explain this passage, then compare with the other thread.\\\",\\\"references\\\":[{\\\"kind\\\":\\\"thread\\\",\\\"name\\\":\\\"Research\\\",\\\"cwd\\\":\\\"/synthetic/workspace\\\",\\\"id\\\":\\\"synthetic-research\\\",\\\"contentMode\\\":\\\"pointer\\\"}]}\"\n    }\n  ]\n}",
+        "overflow": false,
+        "bounds": {
+          "left": 16,
+          "right": 374,
+          "top": 63.3046875,
+          "bottom": 780.6953125
+        },
+        "focused": true,
+        "commands": [
+          {
+            "action": "list",
+            "threadId": "synthetic-thread",
+            "itemId": "synthetic-message"
+          },
+          {
+            "action": "read",
+            "id": "synthetic-capture",
+            "view": "message",
+            "itemId": "synthetic-message",
+            "offset": 0
+          }
+        ]
+      },
+      "escapeAndFocusRestoration": true
+    }
+  ]
+}

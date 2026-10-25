@@ -1,0 +1,15 @@
+{
+  "commit": "e8ea7107f4ca4e11db340ca7ba88db22648a60e2",
+  "scope": "Actual experimental message debug action/Dialog with production styles. Synthetic message scaffold and in-memory capture bridge, no live Host, private data, external model or native desktop. Serializer correctness is covered separately by adapter integration tests.",
+  "sources": {
+    "src/renderer/src/MessageContextDebug.tsx": "b7b31ff0fd1f5834613b8952e9dbcf339c489df813350de95455ca9006a84cf6",
+    "src/renderer/src/ThreadView.tsx": "2601d6bd1303c7c07adeb4df2ec3416a205a605648045092bf852825b04e2ed2",
+    "src/renderer/src/styles.css": "530d49e7bb12cdb17fa79acd08d3bcc23ce4ced660a717d83b260c9893fa3968",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "src/renderer/src/i18n/shell.ts": "abb65e7be29454005e3f2884fa58fbfc7a13fadd94ec5f6f3498630ee19a50dd",
+    "src/renderer/src/reference-draft.ts": "6aa05109d0fe2febdf9cc03f83457503453aa132cebd660c8e118ad4d669a38a",
+    "scripts/message-context-debug-preview.tsx": "2515861ed8ece4e2d90ef96a9df6c5d8c8cda61d1e5ca5bfaee8951897312e4e",
+    "scripts/build-message-context-debug-preview.mjs": "82b6873b1199496998d1f9afc17832b60d69e1de61710a684c1c5ca5031a260d",
+    "scripts/capture-message-context-debug-preview.mjs": "073b44709a76713b5f0a37b9657f9d358a46850ab699f870e8588bdf75607fd3"
+  }
+}
