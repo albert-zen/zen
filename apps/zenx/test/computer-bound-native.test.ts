@@ -155,6 +155,27 @@ test(
           target: { pid: 42, windowTitle: "Fixture" },
         });
         assert.ok(selected.result?.bindingId, JSON.stringify(selected));
+        if (mode === "normal") {
+          const next = await request({
+            operation: "select",
+            owner: "thread-a",
+            target: { pid: 42, windowTitle: "Fixture" },
+          });
+          const stale = await request({
+            operation: "verify",
+            owner: "thread-a",
+            bindingId: selected.result.bindingId,
+          });
+          assert.match(stale.error!, /binding expired/);
+          assert.ok(next.result);
+          selected.result = next.result;
+          const foreign = await request({
+            operation: "verify",
+            owner: "thread-b",
+            bindingId: selected.result!.bindingId,
+          });
+          assert.match(foreign.error!, /binding expired/);
+        }
         const result = await request({
           operation: "key",
           key: "enter",

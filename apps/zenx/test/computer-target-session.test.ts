@@ -206,3 +206,21 @@ test("packaged native profile advertises the actual bound runtime contract, othe
     false,
   );
 });
+
+test("input waiting for foreground takeover cannot silently follow a later selection", async () => {
+  const { session, calls } = fixture();
+  const a = await session.select("a", { pid: 7 }, signal);
+  await session.select("a", { pid: 8 }, signal);
+  const count = calls.length;
+  await assert.rejects(
+    session.input(
+      "a",
+      { operation: "key", key: "enter" },
+      signal,
+      undefined,
+      a.bindingId,
+    ),
+    /target changed while input awaited/,
+  );
+  assert.equal(calls.length, count);
+});

@@ -701,6 +701,10 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     invocation: ToolInvocation,
   ): Promise<unknown> {
     this.#assertForegroundControlAllowed(toolName);
+    // Freeze intent before waiting for activity arbitration or its visible notice.
+    const selectedBindingId = this.#backend.targetSession?.selectedBindingId(
+      requiredComputerOwner(invocation),
+    );
     const signal = AbortSignal.any([
       invocation.signal,
       this.#foregroundConsent.signal,
@@ -731,6 +735,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
                 },
                 signal,
                 onStopping,
+                selectedBindingId,
               );
               return;
             }
@@ -768,6 +773,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
                 { operation: "key", key },
                 signal,
                 onStopping,
+                selectedBindingId,
               );
               return;
             }
@@ -802,6 +808,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
                 { operation: "scroll", deltaY },
                 signal,
                 onStopping,
+                selectedBindingId,
               );
               return;
             }
@@ -2719,12 +2726,14 @@ var bindings: [String: Binding] = [:]
 while let line = readLine() {
   var posted = 0
   var owner = ""
+  var expectedBindingId: String?
   var reply: [String: Any]
   do {
     guard AXIsProcessTrusted() else { try refuse("macOS Accessibility permission is not granted") }
     guard let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let operation = request["operation"] as? String, let requestedOwner = request["owner"] as? String, !requestedOwner.isEmpty else { try refuse("Invalid target request") }
     owner = requestedOwner
+    expectedBindingId = request["bindingId"] as? String
     if operation == "select" {
       bindings.removeValue(forKey: owner)
       guard bindings.count < 32, let target = request["target"] as? [String: Any] else { try refuse("Target capacity reached or target missing") }
@@ -2770,7 +2779,10 @@ while let line = readLine() {
       }
     }
   } catch {
-    bindings.removeValue(forKey: owner)
+    // A stale request must not revoke a newer selection for the same owner.
+    if let expectedBindingId, bindings[owner]?.id == expectedBindingId {
+      bindings.removeValue(forKey: owner)
+    }
     let message = (error as? TargetError)?.message ?? "Invalid native target request"
     let outcome = posted == 0 ? "; no input dispatched" : "; input partially dispatched; outcome unknown; do not retry automatically"
     reply = ["error": message + outcome]

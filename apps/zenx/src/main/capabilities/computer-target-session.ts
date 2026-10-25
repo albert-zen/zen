@@ -89,17 +89,35 @@ export class ComputerTargetSession {
     return { ...image, bindingId: binding.bindingId, captureId };
   }
 
+  selectedBindingId(owner: string): string {
+    const binding = this.#selected.get(owner);
+    if (!binding)
+      throw new Error(
+        "Select a Computer target before input; no input dispatched",
+      );
+    return binding.bindingId;
+  }
+
   async input(
     owner: string,
     action: BoundComputerInput,
     signal: AbortSignal,
     onStopping?: () => void,
+    expectedBindingId?: string,
   ): Promise<void> {
     const binding = this.#selected.get(owner);
     if (!binding)
       throw new Error(
         "Select a Computer target or screenshot its window before input; no input dispatched",
       );
+    if (
+      expectedBindingId !== undefined &&
+      binding.bindingId !== expectedBindingId
+    ) {
+      throw new Error(
+        "Computer target changed while input awaited approval/takeover; no input dispatched",
+      );
+    }
     let operation: Record<string, unknown> = { ...action };
     if (action.operation === "click") {
       const capture = this.#captures.get(owner);
