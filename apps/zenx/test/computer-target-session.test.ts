@@ -174,3 +174,35 @@ test("unbound package calls never fall back to global input and consent still ga
   );
   await capability.close();
 });
+
+test("packaged native profile advertises the actual bound runtime contract, other variants do not", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { boundComputerCapabilityManifest, computerCapabilityManifest } =
+    await import("../src/main/capabilities/computer-provider.js");
+  const profile = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../packages/zenx-computer-plugin/zenx.plugin.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.equal(profile.version, boundComputerCapabilityManifest.version);
+  assert.equal(
+    profile.mainDocument,
+    boundComputerCapabilityManifest.mainDocument,
+  );
+  assert.deepEqual(profile.tools, boundComputerCapabilityManifest.tools);
+  assert.ok(
+    profile.tools.some(
+      (tool: { name: string }) => tool.name === "computer_select_target",
+    ),
+  );
+  assert.equal(
+    computerCapabilityManifest.tools.some(
+      (tool) => tool.name === "computer_select_target",
+    ),
+    false,
+  );
+});

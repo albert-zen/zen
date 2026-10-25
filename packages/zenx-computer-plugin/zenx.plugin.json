@@ -1,7 +1,17 @@
 {
+  "schemaVersion": 2,
   "id": "computer",
-  "version": "1.0.2",
+  "name": "Computer",
+  "version": "1.1.0",
   "description": "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
+  "compatibility": {
+    "zenx": ">=0.1.0 <0.2.0"
+  },
+  "runtime": {
+    "type": "bundled",
+    "entry": "./dist/runtime.js"
+  },
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key and scroll reuse selection without requiring a screenshot per key. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee.",
   "provider": {
     "id": "macos-desktop",
     "platforms": ["darwin"],
@@ -292,7 +302,7 @@
       "interactionMode": "foreground_required",
       "capabilities": ["global_input", "may_change_focus", "cancellable"],
       "name": "computer_foreground_click",
-      "description": "FOREGROUND TAKEOVER: move and click the real global pointer. ZenX shows the running tool before input begins; Stop cancels it.",
+      "description": "FOREGROUND TAKEOVER: click image-pixel x/y in this thread's selected exact window. Requires current window screenshot captureId; validates window/focus immediately before native posting.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -305,9 +315,12 @@
           "button": {
             "type": "string",
             "enum": ["left", "right"]
+          },
+          "captureId": {
+            "type": "string"
           }
         },
-        "required": ["x", "y"],
+        "required": ["x", "y", "captureId"],
         "additionalProperties": false
       }
     },
@@ -355,16 +368,50 @@
         "required": ["deltaY"],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "computer_select_target",
+      "description": "Select this thread's exact application/window for subsequent foreground input without activating it. Supply an exact listed window target; application-only targets must resolve to exactly one window.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["app_targeted", "no_global_input"]
     }
-  ],
-  "schemaVersion": 2,
-  "name": "Computer",
-  "compatibility": {
-    "zenx": ">=0.1.0 <0.2.0"
-  },
-  "runtime": {
-    "type": "bundled",
-    "entry": "./dist/runtime.js"
-  },
-  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls."
+  ]
 }
