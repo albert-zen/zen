@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -162,6 +162,12 @@ async function started(file: string) {
 }
 
 test("loopback TLS shell returns in the caller's canonical Fleet result with no target transcript mutation", async (t) => {
+  // Node after hooks run in registration order: close the dependent caller
+  // before loopback teardown removes the shared storage directory.
+  let closeCaller: (() => Promise<void>) | undefined;
+  t.after(async () => {
+    await closeCaller?.();
+  });
   const f = await loopback(t);
   const before = await f.app.readThread(f.thread.id);
   const package_ = new ZenXFleetCapabilityPackage({
@@ -200,10 +206,13 @@ test("loopback TLS shell returns in the caller's canonical Fleet result with no 
     toolEnvironment: callerTools,
     toolPresentation: "direct",
   });
-  t.after(async () => {
+  closeCaller = async () => {
+    await access(f.cwd);
     await caller.closeHostResources();
     await callerTools.close();
-  });
+    // The shared directory must survive the entire asynchronous caller drain.
+    await access(f.cwd);
+  };
   const callerThread = await caller.startThread({});
   const turn = await caller.startTurn(
     callerThread.id,
