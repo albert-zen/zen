@@ -578,6 +578,57 @@ try {
         : "visual-blocked"
       : "failed";
   }
+  for (const lang of ["en", "zh-CN"]) {
+    const receipt = { name: `local-paths-${lang}`, checks: [] };
+    evidence.cases.push(receipt);
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1100,
+      height: 760,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const destination = `${url}/file-sidebar.html?${new URLSearchParams({ lang, theme: lang === "en" ? "dark" : "light", links: "true" })}`;
+    await send("Page.navigate", { url: destination });
+    await waitFor(
+      `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && document.querySelector('[data-local-path-preview] a')`,
+    );
+    await screenshot(`local-paths-${lang}-before.png`);
+    check(
+      receipt,
+      "links-use-existing-file-flow",
+      await evaluate(
+        `document.querySelectorAll('[data-local-path-preview] a').length===3`,
+      ),
+    );
+    const before = await evaluate(`window.__fileSidebarPreview.calls.length`);
+    await delay(250);
+    check(
+      receipt,
+      "render-does-not-read-files",
+      await evaluate(`window.__fileSidebarPreview.calls.length===${before}`),
+    );
+    await clickSelector("[data-local-path-preview] a");
+    await waitFor(
+      `document.querySelector('.auxiliary-content:not([hidden]) .cm-editor') && document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-notes')`,
+    );
+    receipt.after = await evaluate(measure);
+    await screenshot(`local-paths-${lang}-opened.png`);
+    check(
+      receipt,
+      "click-opens-requested-markdown-file",
+      receipt.after.activeId.includes("long-notes"),
+    );
+    check(
+      receipt,
+      "same-thread-file-ownership",
+      receipt.after.calls.every(
+        (call) => call.threadId === "synthetic-file-sidebar-thread",
+      ),
+    );
+    receipt.status = receipt.checks.every((check) => check.status === "passed")
+      ? "passed"
+      : "failed";
+  }
   evidence.failures = failures;
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");
   assert.equal(evidence.externalRequests.length, 0, "No external requests.");

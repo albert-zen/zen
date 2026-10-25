@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import type { Parent, Root } from "mdast";
 import type {
@@ -17,6 +18,7 @@ import type {
   Text as HtmlText,
   RootContent,
 } from "hast";
+import { remarkLocalPaths } from "./local-path-links.js";
 import { MarkdownImage } from "./MarkdownImage.js";
 import { classifyImageSource } from "../../image-source.js";
 import { classifyMessageLink } from "../../external-link-policy.js";
@@ -77,6 +79,14 @@ export function Markdown({
       (out, token) => out.split(token.marker).join(token.copyText),
       value,
     );
+  const localPathPlugins: PluggableList = onOpen
+    ? [
+        [
+          remarkLocalPaths,
+          { markers: inlineTokens.map((token) => token.marker) },
+        ],
+      ]
+    : [];
   const components: Components = {
     ...markdownComponents,
     a: messageAnchor(onOpen),
@@ -220,6 +230,7 @@ export function Markdown({
           remarkPlugins={[
             remarkGfm,
             remarkBareAutolinkResidue,
+            ...localPathPlugins,
             ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
           ]}
           components={components}
@@ -243,6 +254,7 @@ export function Markdown({
         remarkPlugins={[
           remarkGfm,
           remarkBareAutolinkResidue,
+          ...localPathPlugins,
           ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
         ]}
         components={components}

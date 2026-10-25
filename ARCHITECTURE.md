@@ -1415,3 +1415,7 @@ ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按�
 ZenX's unified-reference v2 text envelope extends the existing client-ID-bound quote presentation with an ordered, strictly validated list of file/Thread pointers and explicit message excerpts; it remains one canonical text part, is model-visible verbatim, preserves legacy v1 reads, and adds no Core field, automatic resolver, or frontend-owned conversation state.
 
 ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
+
+### Message local-path presentation
+
+ZenX renders conservative local file-path tokens as disposable Markdown links to the existing current-Host workspace file viewer; linkification performs no filesystem reads, grants no access, and does not alter canonical message text or model input. Host realpath containment and permissions remain authoritative.

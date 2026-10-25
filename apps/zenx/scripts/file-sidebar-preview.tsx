@@ -1,5 +1,5 @@
 /** Actual workspace components with synthetic, memory-only file data. */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { WorkspaceTextFile } from "../src/main/workspace-files.js";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
@@ -7,6 +7,7 @@ import {
   WorkspaceFileDrafts,
   fileDraftKey,
 } from "../src/renderer/src/workspace-file-drafts.js";
+import { Markdown, MessageLinkContext } from "../src/renderer/src/Markdown.js";
 import { ZenXBrand } from "../src/renderer/src/ZenXBrand.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import "../src/renderer/src/theme.css";
@@ -14,6 +15,7 @@ import "../src/renderer/src/styles.css";
 
 const search = new URLSearchParams(location.search);
 const language = search.get("lang") === "zh-CN" ? "zh-CN" : "en";
+const linkPreview = search.get("links") === "true";
 const appearance = search.get("theme") === "light" ? "light" : "dark";
 const threadId = "synthetic-file-sidebar-thread";
 const workspace = "/synthetic/file-sidebar-preview";
@@ -125,7 +127,13 @@ function Preview() {
     `file:${markdownPath}`,
     "custom:overview",
   ]);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(!linkPreview);
+  const sequence = useRef(0);
+  const [messageLinkRequest, setMessageLinkRequest] = useState<{
+    id: number;
+    kind: "file" | "browser";
+    value: string;
+  } | null>(null);
   const [workspacePanelWidth, setWorkspacePanelWidth] = useState(0);
   useEffect(() => {
     let active = true;
@@ -170,9 +178,29 @@ function Preview() {
             editors. Synthetic long source and Markdown only. No Host, private
             files or external access.
           </p>
+          {linkPreview && (
+            <div data-local-path-preview style={{ maxWidth: 480 }}>
+              <MessageLinkContext.Provider
+                value={(target) => {
+                  setMessageLinkRequest({ ...target, id: ++sequence.current });
+                  setOpen(true);
+                }}
+              >
+                <Markdown
+                  text={
+                    language === "zh-CN"
+                      ? "请查看 docs/long-notes.md，然后检查 `src/long-source.ts`。\n\n绝对路径也可以：`/synthetic/file-sidebar-preview/docs/long-notes.md`。\n\n没有自动访问文件，只有点击后才打开右侧文件栏。"
+                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click."
+                  }
+                />
+              </MessageLinkContext.Provider>
+            </div>
+          )}
         </section>
         <AuxiliaryPanel
           threadId={threadId}
+          messageLinkRequest={messageLinkRequest}
+          onMessageLinkRequestHandled={() => setMessageLinkRequest(null)}
           title="Synthetic file review"
           open={open}
           onOpenChange={setOpen}
