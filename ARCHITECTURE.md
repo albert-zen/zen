@@ -90,7 +90,7 @@
 - **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
 - **Host Provider 资源** — Host 按连接身份复用 adapter/transport，由配置快照与执行持有共同决定寿命，最后引用结束后异步关闭。
-- **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。
+- **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。快照读取失败不截断既有订阅：连接按原顺序释放同 epoch 的临时事件，仍服从删除、退订及关闭栅栏；首次恢复失败不创建普通事件订阅，不自动重试。
 - **远程设备接入边界** — 可选的 Host-owned 原生 ZAS 网关以独立设备凭证、Host 身份和当前授权 workspace 约束读取/创建/发送/停止，只转交唯一 AppServer 的 canonical 权威，不暴露本机 descriptor、不复制 Thread 或改变默认 loopback listener。
 - **有界远程恢复页** — ZAS 网关以同一 Host epoch/watermark 与首次读取的 canonical Item 数为边界，按字节有界地逐页重读 append-only 前缀，并在单连接内暂存有界新事件与最近页重试位置；断线或水位失配重读权威快照，不持有完整镜像或另建日志。
 - **公开文本片段** — 单条合法的大文本 Item 可在多个恢复页按 UTF-16 offset 分片，客户端只在收到完整片段后合成该公开 Item，不将部分文本当作 canonical 完成事实。
