@@ -12,11 +12,16 @@ export function observePreviewChrome(child, profile, options = {}) {
     pollMs = 100,
     now = () => performance.now(),
     delay = sleep,
-    readPort = () => readFile(path.join(profile, "DevToolsActivePort"), "utf8"),
+    readPort = (signal) =>
+      readFile(path.join(profile, "DevToolsActivePort"), {
+        encoding: "utf8",
+        signal,
+      }),
     fetchTargets = (port, signal) =>
       fetch(`http://127.0.0.1:${port}/json/list`, { signal }),
     createSocket = (url, timeout) =>
       new WebSocket(url, { handshakeTimeout: timeout }),
+    writeArtifact = writeFile,
     termMs = 5_000,
     killMs = 2_000,
   } = options;
@@ -76,6 +81,28 @@ export function observePreviewChrome(child, profile, options = {}) {
       );
   };
   const remaining = () => Math.max(0, deadline - now());
+  // Bound even a stalled read/body promise; abort the underlying supported I/O too.
+  const bounded = async (operation, budgetMs) => {
+    const controller = new AbortController();
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => operation(controller.signal)),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(
+            () => {
+              const error = new Error("Readiness I/O deadline exceeded");
+              controller.abort(error);
+              reject(error);
+            },
+            Math.max(1, Math.ceil(budgetMs)),
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   return {
     receipt,
     async connect() {
@@ -87,21 +114,23 @@ export function observePreviewChrome(child, profile, options = {}) {
         receipt.pollCount++;
         try {
           if (!port) {
-            const value = Number((await readPort()).split("\n")[0]);
+            const value = Number(
+              (await bounded(readPort, remaining())).split("\n")[0],
+            );
             if (!Number.isInteger(value) || value < 1 || value > 65535)
               throw new Error("DevToolsActivePort has no valid port yet");
             port = value;
             receipt.port = port;
             phase("target-list");
           }
-          const response = await fetchTargets(
-            port,
-            AbortSignal.timeout(
-              Math.max(1, Math.ceil(Math.min(2_000, remaining()))),
-            ),
+          const pages = await bounded(
+            async (signal) => {
+              const response = await fetchTargets(port, signal);
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              return response.json();
+            },
+            Math.min(2_000, remaining()),
           );
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const pages = await response.json();
           target = pages.find(
             (page) => page.type === "page" && page.webSocketDebuggerUrl,
           );
@@ -119,11 +148,12 @@ export function observePreviewChrome(child, profile, options = {}) {
           `startup deadline ${timeoutMs}ms exceeded; last observation: ${receipt.lastObservation ?? "none"}`,
         );
       phase("websocket-connect");
-      const socket = createSocket(
-        target.webSocketDebuggerUrl,
-        Math.max(1, Math.ceil(remaining())),
-      );
+      let socket;
       try {
+        socket = createSocket(
+          target.webSocketDebuggerUrl,
+          Math.max(1, Math.ceil(remaining())),
+        );
         await new Promise((resolve, reject) => {
           const cleanup = () => {
             clearTimeout(timer);
@@ -161,8 +191,8 @@ export function observePreviewChrome(child, profile, options = {}) {
         receipt.readyElapsedMs = Math.round(now() - started);
         return socket;
       } catch (error) {
-        socket.on("error", () => {});
-        socket.terminate();
+        socket?.on("error", () => {});
+        socket?.terminate();
         throw failure(error.message);
       }
     },
@@ -205,11 +235,27 @@ export function observePreviewChrome(child, profile, options = {}) {
       receipt.exitCode = child.exitCode;
       receipt.signalCode = child.signalCode;
       receipt.elapsedMs = Math.round(now() - started);
-      await writeFile(path.join(directory, "chrome.log"), stderr);
-      await writeFile(
-        path.join(directory, "browser-lifecycle.json"),
-        JSON.stringify(receipt, null, 2) + "\n",
-      );
+      receipt.artifactErrors = [];
+      for (const [name, contents] of [
+        ["chrome.log", () => stderr],
+        [
+          "browser-lifecycle.json",
+          () => JSON.stringify(receipt, null, 2) + "\n",
+        ],
+      ]) {
+        try {
+          await writeArtifact(path.join(directory, name), contents());
+        } catch (error) {
+          receipt.artifactErrors.push({
+            file: name,
+            message: String(error.message ?? error),
+          });
+          // An artifact failure cannot mask the original capture error or skip cleanup.
+          console.error(
+            `Preview artifact ${name} failed: ${error.message ?? error}`,
+          );
+        }
+      }
       return receipt.cleanupComplete;
     },
   };

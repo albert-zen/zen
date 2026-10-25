@@ -591,21 +591,31 @@ try {
     request.reject(new Error("Preview capture closed."));
   }
   socket?.terminate();
-  const stopped = await lifecycle?.close(directory);
-  server?.close();
+  let stopped = false;
+  try {
+    stopped = await lifecycle?.close(directory);
+  } finally {
+    server?.closeAllConnections();
+    if (server?.listening)
+      await new Promise((resolve) => server.close(resolve));
+    if (profile && lifecycle?.receipt.cleanupComplete)
+      await rm(profile, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+  }
   await writeFile(
     path.join(directory, "measurements.json"),
     JSON.stringify(evidence, null, 2) + "\n",
   );
-  if (profile && stopped)
-    await rm(profile, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    });
-  if (lifecycle && !stopped && evidence.status === "passed")
+  if (
+    lifecycle &&
+    (!stopped || lifecycle.receipt.artifactErrors.length) &&
+    evidence.status === "passed"
+  )
     throw new Error(
-      "Preview Chrome cleanup incomplete; profile retained. See browser-lifecycle.json.",
+      "Preview Chrome cleanup or artifact persistence incomplete; see lifecycle receipt and stderr.",
     );
 }

@@ -15,7 +15,7 @@ readiness decision and inadequate diagnostics, not a proven D-Bus/OS root cause.
 A single monotonic 30-second cold-start budget replaces the implicit 10-second
 port-only loop. It covers port discovery, HTTP target-list readiness, and the
 WebSocket handshake together; it is not 30 seconds per phase. HTTP attempts have
-at most 2 seconds and are aborted within the remaining overall budget. Only
+at most 2 seconds including body decoding and are aborted within the remaining overall budget. Port-file reads are also bounded by the remaining deadline, even if an I/O promise never settles. Only
 read-only readiness observations repeat. Chrome is spawned once; captures and
 mutating CDP commands are never retried. CI's existing job deadline stays intact.
 Thirty seconds is a bounded allowance for observed late readiness, not a measured
@@ -37,7 +37,7 @@ Cleanup sends TERM, waits up to five seconds, then sends KILL only if still aliv
 and waits up to two more seconds for close (including stderr drainage). An unreaped
 process is recorded, its profile is retained rather than deleted underneath it,
 and a previously successful capture cannot turn cleanup failure into a green run.
-The original capture/startup failure remains primary when cleanup is incomplete.
+The original capture/startup failure remains primary when cleanup is incomplete. Artifact write errors are retained in the receipt when possible and printed to stderr; both artifact writes are attempted. Every caller closes its HTTP server and removes a safely reaped profile in a nested finally, independent of artifact persistence. Artifact write failure also blocks a green capture.
 
 Launch flags are unchanged: four standalone captures keep sandboxing enabled;
 the older shared `preview-browser.mjs` already passed `--no-sandbox` and this PR

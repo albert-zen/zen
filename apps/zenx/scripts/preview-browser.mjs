@@ -144,18 +144,27 @@ export async function withPreviewBrowser(directory, run) {
       request.reject(new Error("Browser closed"));
     }
     socket?.terminate();
-    const stopped = await lifecycle.close(directory);
-    server.close();
-    if (stopped)
-      await rm(profile, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 100,
-      });
-    if (!stopped && lifecycle.receipt.captureStatus === "passed")
+    let stopped = false;
+    try {
+      stopped = await lifecycle.close(directory);
+    } finally {
+      server.closeAllConnections();
+      if (server.listening)
+        await new Promise((resolve) => server.close(resolve));
+      if (lifecycle.receipt.cleanupComplete)
+        await rm(profile, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 100,
+        });
+    }
+    if (
+      (!stopped || lifecycle.receipt.artifactErrors.length) &&
+      lifecycle.receipt.captureStatus === "passed"
+    )
       throw new Error(
-        "Preview Chrome cleanup incomplete; profile retained. See browser-lifecycle.json.",
+        "Preview Chrome cleanup or artifact persistence incomplete; see lifecycle receipt and stderr.",
       );
   }
 }

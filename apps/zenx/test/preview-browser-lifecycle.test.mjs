@@ -273,3 +273,83 @@ test("real spawn failure still emits close and yields a complete failure receipt
   assert.equal(result.stopped, true);
   assert.equal(result.data.captureStatus, "not-started");
 });
+
+test("stalled port-file read is bounded even if the injected I/O ignores abort", async () => {
+  const h = harness({
+    timeoutMs: 20,
+    now: () => performance.now(),
+    delay: (ms) => new Promise((r) => setTimeout(r, ms)),
+    readPort: () => new Promise(() => {}),
+  });
+  await assert.rejects(
+    h.lifecycle.connect(),
+    /devtools-port failed.*startup deadline/,
+  );
+});
+
+test("stalled HTTP body is bounded, not just the response headers", async () => {
+  const h = harness({
+    timeoutMs: 20,
+    now: () => performance.now(),
+    delay: (ms) => new Promise((r) => setTimeout(r, ms)),
+    fetchTargets: async () => ({ ok: true, json: () => new Promise(() => {}) }),
+  });
+  await assert.rejects(
+    h.lifecycle.connect(),
+    /target-list failed.*startup deadline/,
+  );
+});
+
+test("synchronous WebSocket constructor failure retains its phase", async () => {
+  const h = harness({
+    createSocket: () => {
+      throw new Error("invalid URL");
+    },
+  });
+  await assert.rejects(
+    h.lifecycle.connect(),
+    /websocket-connect failed.*invalid URL/,
+  );
+  assert.equal(h.lifecycle.receipt.failure.phase, "websocket-connect");
+});
+
+test("artifact failures are reported without losing primary capture failure or skipping close", async () => {
+  const written = [];
+  const h = harness({
+    writeArtifact: async (file) => {
+      written.push(path.basename(file));
+      throw new Error("ENOSPC");
+    },
+  });
+  h.lifecycle.captureFinished("failed", new Error("original capture mismatch"));
+  assert.equal(await h.lifecycle.close("/synthetic"), true);
+  assert.deepEqual(written, ["chrome.log", "browser-lifecycle.json"]);
+  assert.equal(
+    h.lifecycle.receipt.failure.message,
+    "original capture mismatch",
+  );
+  assert.equal(h.lifecycle.receipt.artifactErrors.length, 2);
+  assert.deepEqual(h.child.signals, ["SIGTERM"]);
+});
+
+test("every launcher closes its owned server in finally independent of receipt writes", async () => {
+  for (const name of [
+    "preview-browser",
+    "capture-whats-new-preview",
+    "capture-trigger-message-preview",
+    "capture-settings-audit-preview",
+    "capture-file-sidebar-preview",
+  ]) {
+    const source = await readFile(
+      new URL(`../scripts/${name}.mjs`, import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      source,
+      /finally\s*\{\s*server\??\.closeAllConnections\(\)/,
+      name,
+    );
+    assert.match(source, /lifecycle\??\.receipt.cleanupComplete/, name);
+    assert.match(source, /receipt.artifactErrors.length/, name);
+  }
+});
