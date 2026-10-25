@@ -5,6 +5,7 @@ import {
   recoveryDiagnostic,
   sampledMediaOccurrences,
   mediaRequestRejected,
+  isDeterministicProviderRejection,
   isOutputLimit,
   recoveryPublicPartial,
 } from "./loop-recovery.js";
@@ -645,7 +646,11 @@ export class AgentRuntime {
       }
       options.signal.throwIfAborted();
       // Control outcomes keep their identity even after an earlier repair.
-      if (recoveryIsBlocked(result.error) || isAbortError(result.error))
+      if (
+        recoveryIsBlocked(result.error) ||
+        isAbortError(result.error) ||
+        isDeterministicProviderRejection(result.error)
+      )
         throw result.error;
       if (
         attempt >= Math.min(3, this.#sampleRetryMaxAttempts) ||

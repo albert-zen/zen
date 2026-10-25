@@ -4,7 +4,10 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
-import { TriggersPage } from "../src/renderer/src/bundled-automation-ui.js";
+import {
+  TriggersPage,
+  TriggersPanel,
+} from "../src/renderer/src/bundled-automation-ui.js";
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 
 test("source trigger route opens the exact definition, including same-name definitions, without executing it", async () => {
@@ -198,3 +201,76 @@ test("delayed source definition cannot replace a newer New Trigger editor", asyn
     Object.assign(globalThis, prior);
   }
 });
+
+for (const wrongThread of [false, true]) {
+  test(`scoped trigger source opens exact ID and rejects cross-thread definition (${wrongThread})`, async () => {
+    const dom = new JSDOM('<div id="root"></div>', {
+      url: "https://zenx.local",
+    });
+    const prior = { window: globalThis.window, document: globalThis.document };
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    });
+    const calls: string[] = [];
+    const sdk = {
+      context: {
+        threadId: "outer-thread",
+        triggerSourceRequest: {
+          threadId: "source-thread",
+          triggerId: "exact/id",
+          requestId: 1,
+        },
+      },
+      commands: {
+        execute: async (name: string) => {
+          calls.push(name);
+          if (name === "list")
+            return {
+              triggers: [
+                {
+                  id: "exact/id",
+                  label: "Exact definition",
+                  threadId: wrongThread ? "wrong-thread" : "source-thread",
+                  kind: "signal",
+                  signal: { name: "example" },
+                  prompt: "Exact prompt",
+                  active: false,
+                  createdAt: 1,
+                },
+              ],
+              history: [],
+            };
+          if (name === "threads") return { threads: [] };
+          if (name === "workspaces") return { workspaces: [] };
+          throw Error(name);
+        },
+      },
+      navigation: {
+        navigate() {
+          assert.fail("No navigation from scoped source selection");
+        },
+      },
+    } as unknown as PluginUiSdkV1;
+    const root = createRoot(document.getElementById("root")!);
+    try {
+      await act(async () =>
+        root.render(React.createElement(TriggersPanel, { sdk })),
+      );
+      if (wrongThread) {
+        assert.equal(document.querySelector("form textarea"), null);
+        assert.match(document.body.textContent!, /unavailable|deleted/i);
+      } else
+        assert.equal(
+          document.querySelector<HTMLTextAreaElement>("form textarea")?.value,
+          "Exact prompt",
+        );
+      assert.deepEqual(calls.sort(), ["list", "threads", "workspaces"]);
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+      Object.assign(globalThis, prior);
+    }
+  });
+}

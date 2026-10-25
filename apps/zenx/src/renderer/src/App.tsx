@@ -1,9 +1,5 @@
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
-import {
-  TRIGGER_SOURCE_ROUTE,
-  triggerSourceRoute,
-  type MessageSourceNavigator,
-} from "./message-source-navigation.js";
+import { type MessageSourceNavigator } from "./message-source-navigation.js";
 import { requestQueuedSteer } from "./queue-steer-request.js";
 import { sidebarTriggerAdmissionId } from "./sidebar-thread-information.js";
 import { applyThreadTitleReceipt } from "./thread-title-receipt.js";
@@ -2540,6 +2536,16 @@ function AppContent() {
   const [remoteMessageSource, setRemoteMessageSource] =
     useState<FleetMessageSourceView | null>(null);
   useEffect(() => setRemoteMessageSource(null), [page, selectedThreadId]);
+  const [triggerSourceRequest, setTriggerSourceRequest] = useState<{
+    viewportId: string;
+    threadId: string;
+    triggerId: string;
+    requestId: number;
+  } | null>(null);
+  useEffect(
+    () => setTriggerSourceRequest(null),
+    [selectedThreadId, selectedRoom?.id],
+  );
   const sourceNavigationIntent = useRef(0);
   const sourceNavigationState = useRef({ page, selectedThreadId });
   sourceNavigationState.current = { page, selectedThreadId };
@@ -2569,15 +2575,36 @@ function AppContent() {
     if (!target.id)
       throw new Error(i18n.t("shell:sourceNavigationUnavailable"));
     if (target.kind === "trigger") {
-      if (
-        !pluginSnapshot?.pages.some(
-          (entry) =>
-            entry.pluginId === "zenx-triggers" &&
-            entry.route === TRIGGER_SOURCE_ROUTE,
-        )
-      )
-        throw new Error(i18n.t("shell:sourcePluginUnavailable"));
-      if (current()) openPage(triggerSourceRoute(target.id));
+      const panel = pluginSnapshot?.panels.find(
+        (entry) => entry.pluginId === "zenx-triggers",
+      );
+      if (!panel) throw new Error(i18n.t("shell:sourcePluginUnavailable"));
+      if (!current()) return;
+      const viewportId = selectedRoom?.id ?? selectedThreadId;
+      if (!viewportId)
+        throw new Error(i18n.t("shell:sourceNavigationUnavailable"));
+      setTriggerSourceRequest({
+        viewportId,
+        threadId: owner.threadId,
+        triggerId: target.id,
+        requestId: intent,
+      });
+      if (selectedRoom) {
+        setRoomWorkspaceStates((states) => ({
+          ...states,
+          [selectedRoom.id]: {
+            ...(states[selectedRoom.id] ?? {
+              selected: "custom:overview",
+              tabs: [],
+              member: "",
+            }),
+            member: owner.threadId,
+          },
+        }));
+      }
+      openPage(
+        `/threads/${encodeURIComponent(owner.threadId)}?${new URLSearchParams({ panel: panel.key })}`,
+      );
       return;
     }
     let result;
@@ -3492,6 +3519,11 @@ function AppContent() {
               <CompanionWorkspace
                 key={selectedRoom.id}
                 room={selectedRoom}
+                triggerSourceRequest={
+                  triggerSourceRequest?.viewportId === selectedRoom.id
+                    ? triggerSourceRequest
+                    : undefined
+                }
                 onRenameThread={renameThread}
                 renderConversation={renderSideConversation}
                 viewState={
@@ -3529,6 +3561,10 @@ function AppContent() {
             selectedThreadId === threadDetail.id ? (
               <AuxiliaryPanel
                 threadContext={{
+                  triggerSourceRequest:
+                    triggerSourceRequest?.viewportId === threadDetail.id
+                      ? triggerSourceRequest
+                      : undefined,
                   threads: [...activeSummaries, ...archivedSummaries],
                 }}
                 conversations={(conversationPanels[threadDetail.id] ?? []).map(

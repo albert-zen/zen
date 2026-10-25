@@ -1,3 +1,4 @@
+import { triggerMessagePresentation } from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
@@ -2679,7 +2680,12 @@ function TurnBlock({
         turn={turn}
       />
     ) : (
-      <WakeupCard entry={wakeup} key={item.id} />
+      <TriggerMessageBubble
+        text={item.content.map((part) => part.text).join("\n")}
+        sourceId={wakeup.triggerId}
+        key={item.id}
+        turn={turn}
+      />
     );
   };
   return (
@@ -4093,6 +4099,38 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
   );
 }
 
+/** Full readable prompt/context; canonical ID, never text, owns navigation. */
+function TriggerMessageBubble({
+  text,
+  sourceId,
+  turn,
+}: {
+  text: string;
+  sourceId?: string;
+  turn: Turn;
+}) {
+  const presentation = triggerMessagePresentation(text, sourceId);
+  return (
+    <article className="user-row thread-message-row trigger-message-row">
+      <MessageSourceLink
+        target={{ kind: "trigger", id: sourceId ?? "" }}
+        label={presentation.name || i18n.t("shell:hostMessageTrigger")}
+        className="host-message-source"
+      />
+      <div className="user-bubble">
+        <Markdown text={presentation.text} />
+      </div>
+      <MessageActions
+        className="user-message-actions"
+        copyLabel={i18n.t("shell:copyHostMessage")}
+        copiedLabel={i18n.t("shell:copiedHostMessage")}
+        text={presentation.text}
+        turn={turn}
+      />
+    </article>
+  );
+}
+
 function WakeupCard(
   props:
     | { entry: TriggerHistoryEntry }
@@ -4104,6 +4142,14 @@ function WakeupCard(
 ) {
   if ("item" in props) {
     const { item, entry, turn } = props;
+    if (item.source === "trigger")
+      return (
+        <TriggerMessageBubble
+          text={item.text}
+          sourceId={item.sourceId}
+          turn={turn}
+        />
+      );
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent

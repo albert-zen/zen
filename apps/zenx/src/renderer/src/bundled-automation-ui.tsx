@@ -511,7 +511,10 @@ function TriggerManager({
       return;
     sourceHandled.current = true;
     const trigger = data.triggers.find((entry) => entry.id === sourceTriggerId);
-    if (!trigger) {
+    if (
+      !trigger ||
+      (scopedThreadId !== undefined && trigger.threadId !== scopedThreadId)
+    ) {
       setError(i18n.t("shell:sourceTriggerUnavailable"));
       return;
     }
@@ -1633,9 +1636,24 @@ function ThreadPicker({
 
 export function TriggersPanel({ sdk }: PluginUiSurfaceProps) {
   useTranslation("panels");
-  const threadId = sdk.context["threadId"];
+  const source = sdk.context["triggerSourceRequest"] as
+    | { threadId?: unknown; triggerId?: unknown; requestId?: unknown }
+    | undefined;
+  const threadId =
+    typeof source?.threadId === "string"
+      ? source.threadId
+      : sdk.context["threadId"];
   if (typeof threadId !== "string") return null;
-  return <TriggerManager key={threadId} sdk={sdk} scopedThreadId={threadId} />;
+  const sourceTriggerId =
+    typeof source?.triggerId === "string" ? source.triggerId : undefined;
+  return (
+    <TriggerManager
+      key={`${threadId}:${String(source?.requestId ?? "")}`}
+      sdk={sdk}
+      scopedThreadId={threadId}
+      sourceTriggerId={sourceTriggerId}
+    />
+  );
 }
 
 function memberConversationContext(
