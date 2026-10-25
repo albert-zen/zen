@@ -354,6 +354,39 @@ function timeLabel(timestamp: number): string {
   });
 }
 
+export function compactTriggerTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(i18n.resolvedLanguage, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+}
+
+export function triggerScheduleSummary(
+  trigger: ZenXTrigger,
+  threads: readonly ThreadCandidate[],
+): string {
+  if (trigger.timer) {
+    const minutes = trigger.timer.intervalMinutes;
+    if (minutes === null) return i18n.t("panels:triggerOnce");
+    if (minutes > 0 && minutes % 60 === 0)
+      return i18n.t("panels:triggerEveryHours", { count: minutes / 60 });
+    return i18n.t("panels:everyMinutes", { count: minutes });
+  }
+  if (trigger.watch && !trigger.watch.sourceDevice)
+    return i18n.t("panels:afterThreadEnds", {
+      name:
+        threads.find((thread) => thread.threadId === trigger.watch?.threadId)
+          ?.name || trigger.watch.threadId,
+      mode: trigger.watch.once
+        ? i18n.t("panels:oneAttempt")
+        : i18n.t("panels:eachTurn"),
+    });
+  return conditionLabel(trigger, threads);
+}
+
 function conditionLabel(
   trigger: ZenXTrigger,
   threads: readonly ThreadCandidate[],
@@ -1275,8 +1308,11 @@ function TriggerManager({
                     : i18n.t("panels:paused")}
                 </span>
               </div>
-              <p className="trigger-condition">
-                {conditionLabel(trigger, threads)}
+              <p
+                className="trigger-condition"
+                title={conditionLabel(trigger, threads)}
+              >
+                {triggerScheduleSummary(trigger, threads)}
               </p>
               {trigger.sourceError ? (
                 <p role="status" className="trigger-source-error">
@@ -1287,14 +1323,18 @@ function TriggerManager({
               <dl className="trigger-facts">
                 <div>
                   <dt>{i18n.t("panels:target")}</dt>
-                  <dd>{threadLabel(threads, trigger.threadId)}</dd>
+                  <dd title={threadLabel(threads, trigger.threadId)}>
+                    {threads.find(
+                      (thread) => thread.threadId === trigger.threadId,
+                    )?.name || trigger.threadId}
+                  </dd>
                 </div>
                 {trigger.timer ? (
                   <div>
                     <dt>{i18n.t("panels:nextRun")}</dt>
-                    <dd>
+                    <dd title={timeLabel(trigger.timer.nextRunAt)}>
                       {trigger.active
-                        ? timeLabel(trigger.timer.nextRunAt)
+                        ? compactTriggerTime(trigger.timer.nextRunAt)
                         : i18n.t("panels:paused")}
                     </dd>
                   </div>
@@ -1304,10 +1344,13 @@ function TriggerManager({
                 <summary>{i18n.t("panels:instructions")}</summary>
                 <p className="trigger-instructions">{trigger.prompt}</p>
               </details>
-              <p className="trigger-last-run">
+              <p
+                className="trigger-last-run"
+                title={last ? timeLabel(last.startedAt) : undefined}
+              >
                 <span>{i18n.t("panels:last")}</span>{" "}
                 {last
-                  ? `${timeLabel(last.startedAt)} · ${deliveryLabel(last)}${safeProgramFailure(last) ? ` · ${safeProgramFailure(last)}` : last.error ? ` · ${last.error}` : ""}`
+                  ? `${compactTriggerTime(last.startedAt)} · ${deliveryLabel(last)}${safeProgramFailure(last) ? ` · ${safeProgramFailure(last)}` : last.error ? ` · ${last.error}` : ""}`
                   : i18n.t("panels:noRunsYet")}
               </p>
               <div className="trigger-actions">

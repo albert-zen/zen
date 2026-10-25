@@ -18,6 +18,7 @@ const baseline =
 const baselinePaths = [
   "src/renderer/src/bundled-automation-ui.tsx",
   "src/renderer/src/trigger-ui.css",
+  "src/renderer/src/i18n/panels.ts",
 ];
 const baselineSource = (source) =>
   baseline && baselinePaths.includes(source)
@@ -78,6 +79,7 @@ await writeFile(
 const sources = [
   "src/renderer/src/bundled-automation-ui.tsx",
   "src/renderer/src/trigger-ui.css",
+  "src/renderer/src/i18n/panels.ts",
   "src/renderer/src/styles.css",
   "src/renderer/src/theme.css",
   "src/renderer/src/i18n/panels.ts",

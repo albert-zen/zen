@@ -4,7 +4,11 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { TriggersPage } from "../src/renderer/src/bundled-automation-ui.js";
+import {
+  TriggersPage,
+  triggerScheduleSummary,
+  compactTriggerTime,
+} from "../src/renderer/src/bundled-automation-ui.js";
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 
 test("management hierarchy preserves definition facts and read-only Edit/Cancel flow", async () => {
@@ -112,4 +116,34 @@ test("management hierarchy preserves definition facts and read-only Edit/Cancel 
     Object.assign(globalThis, previous);
     dom.window.close();
   }
+});
+
+test("schedule summaries retain exact interval precision and timezone detail", () => {
+  const base = { timer: { intervalMinutes: 1440, nextRunAt: 0 } } as Parameters<
+    typeof triggerScheduleSummary
+  >[0];
+  assert.equal(triggerScheduleSummary(base, []), "Every 24 hours");
+  assert.equal(
+    triggerScheduleSummary(
+      { ...base, timer: { ...base.timer!, intervalMinutes: 90 } },
+      [],
+    ),
+    "Every 90 min",
+  );
+  assert.equal(
+    triggerScheduleSummary(
+      { ...base, timer: { ...base.timer!, intervalMinutes: 60 } },
+      [],
+    ),
+    "Every hour",
+  );
+  assert.equal(
+    triggerScheduleSummary(
+      { ...base, timer: { ...base.timer!, intervalMinutes: null } },
+      [],
+    ),
+    "Once",
+  );
+  assert.equal(compactTriggerTime(1e20), "Invalid Date");
+  assert.ok(compactTriggerTime(0).length > 0);
 });

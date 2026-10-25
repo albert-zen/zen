@@ -28,7 +28,7 @@ const evidence = {
   externalRequests: [],
 };
 
-const measure = `(() => ({viewport:{width:innerWidth,height:innerHeight}, cards:document.querySelectorAll('.trigger-card').length, editor:!!document.querySelector('.trigger-editor'), overflow:document.documentElement.scrollWidth>innerWidth, focus:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}, calls:window.__triggerPreview.calls}))()`;
+const measure = `(() => ({viewport:{width:innerWidth,height:innerHeight}, cards:document.querySelectorAll('.trigger-card').length, cardRects:[...document.querySelectorAll('.trigger-card')].map(e=>({height:e.getBoundingClientRect().height,bottom:e.getBoundingClientRect().bottom})), editor:!!document.querySelector('.trigger-editor'), overflow:document.documentElement.scrollWidth>innerWidth, focus:{tag:document.activeElement?.tagName,label:document.activeElement?.getAttribute('aria-label')}, calls:window.__triggerPreview.calls}))()`;
 
 let server;
 let child;
@@ -301,6 +301,22 @@ try {
     evidence.cjkFonts.length > 0,
     "CI has no CJK-capable font. Chinese screenshots are not visual acceptance; no font installation was attempted.",
   );
+  if (path.basename(directory) === "after") {
+    const before = JSON.parse(
+      await readFile(
+        path.join(directory, "../before/measurements.json"),
+        "utf8",
+      ),
+    );
+    const panel = evidence.cases.find((item) => item.name === "panel-zh")
+      .states[0].observation;
+    const baselinePanel = before.cases.find((item) => item.name === "panel-zh")
+      .states[0].observation;
+    assert.ok(
+      panel.cardRects[1].bottom <= baselinePanel.cardRects[1].bottom,
+      "Narrow overview must not push second-card actions lower than baseline",
+    );
+  }
   evidence.status = "passed";
   console.log(
     "Captured actual TriggerManager EN/ZH desktop/panel observations.",
