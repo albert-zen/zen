@@ -1,0 +1,16 @@
+{
+  "pullRequest": 503,
+  "head": "9ab88bb8a7a18dfd7c0a8a12b1152a80adc4ca3b",
+  "sourceTree": "309e86e180dd7630f3c4e84130c4113081a20cd7",
+  "ciMergeCommit": "304aa70a56f97a009e01238a8cb75048c0de0616",
+  "runId": 40179392365,
+  "artifactId": 12594160207,
+  "artifactZipSha256": "e1c1fef0bd79a85b63fc7474a6a1008395addd6f5424953fe2bb1ee552bbc4fb",
+  "boundary": "Production components, CSS, Chrome on Linux CI; synthetic counts only; no private data, host actions, live model, or physical desktop input. No image editing.",
+  "files": {
+    "context-after-light-900-above.png": "4ecb6cc409bb72805b04097660753f434dc8df9569658d8496e7e848f9ca5ef7",
+    "context-after-dark-390-above.png": "a13c2593758c9ae9f29761024905e0136c8e6f828ccb7c1f06a31445d7ee9b88",
+    "measurements.json": "556b36bec8822dddc3061cecb6fa76f3b15742401c728bb2dc8b8d7529d3ee94",
+    "source.json": "6e7b2573bc85fd66743563a4041c2439796a6d5b1b8895f1d1141a49b83d0f0a"
+  }
+}
