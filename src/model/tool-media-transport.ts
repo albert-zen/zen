@@ -13,9 +13,18 @@ export interface ChatToolMediaCapability {
   readonly reviewedOn: string;
 }
 
+export type ChatToolMediaEvidenceConflict = Omit<
+  ChatToolMediaCapability,
+  "media"
+>;
+
 export interface ToolMediaTransportDecision {
   readonly encoding: "native-tool-content" | "user-after-tool-batch";
-  readonly reason: "declared-support" | "unknown-target" | "undeclared-media";
+  readonly reason:
+    | "declared-support"
+    | "unknown-target"
+    | "undeclared-media"
+    | "conflicting-evidence";
 }
 
 /** Pure selection: no probes, retries, provider-name guesses or media removal. */
@@ -24,7 +33,20 @@ export function selectChatToolMediaTransport(
   endpoint: string,
   model: string,
   content: UserInput,
+  conflicts: readonly ChatToolMediaEvidenceConflict[] = [],
 ): ToolMediaTransportDecision {
+  if (
+    conflicts.some(
+      (entry) =>
+        entry.endpoint === endpoint &&
+        entry.model === model &&
+        entry.protocol === "chat-completions",
+    )
+  )
+    return {
+      encoding: "user-after-tool-batch",
+      reason: "conflicting-evidence",
+    };
   const declared = capabilities.filter(
     (entry) =>
       entry.protocol === "chat-completions" &&

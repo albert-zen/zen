@@ -378,3 +378,55 @@ for (const target of ["native", "fallback", "human"] as const) {
     assert.equal(attempts, 1);
   });
 }
+
+test("adapter observation reports bounded native/fallback decisions without target URLs", async () => {
+  const observations: any[] = [];
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://secret-host.invalid/v1",
+    apiKey: "secret-value",
+    toolMediaCapabilities: [support],
+    attachments: { read: async () => new Uint8Array([1, 2, 3]) },
+    fetch: async (_url, init) => {
+      assert.doesNotMatch(
+        String(init?.body),
+        /toolMediaTransport|unknownTarget|reviewedOn/,
+      );
+      return new Response(
+        'data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+      );
+    },
+  });
+  for await (const _event of adapter.stream({
+    model: "synthetic",
+    reasoningEffort: null,
+    messages: batch("calls", [0, 2]),
+    tools: [],
+    signal: new AbortController().signal,
+    onRequest: (event) => observations.push(event),
+  })) {
+  }
+  assert.deepEqual(observations[0].toolMediaTransport, {
+    nativeToolContent: 0,
+    compatibilitySupplement: 2,
+    unknownTarget: 2,
+    undeclaredMedia: 0,
+    nativeSupportUnverified: 0,
+    conflictingEvidence: 0,
+  });
+  assert.doesNotMatch(
+    JSON.stringify(observations[0].toolMediaTransport),
+    /synthetic|secret|http|endpoint/,
+  );
+});
+
+test("conflicting evidence cannot silently enable an otherwise matching native declaration", () => {
+  const result = selectChatToolMediaTransport(
+    [support],
+    support.endpoint,
+    support.model,
+    [image],
+    [support],
+  );
+  assert.equal(result.encoding, "user-after-tool-batch");
+  assert.equal(result.reason, "conflicting-evidence");
+});

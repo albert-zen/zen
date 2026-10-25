@@ -152,6 +152,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
 
     let transportAttempt = 0;
     const observedTokens = new Set<string>();
+    const supplementalToolResults = request.messages.filter(
+      (message) =>
+        message.role === "tool" && message.modelContent !== undefined,
+    ).length;
     const observe = (accessToken: string) => {
       observedTokens.add(accessToken);
       observeRequestBody(
@@ -161,6 +165,14 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
         this.provider,
         ++transportAttempt,
         [...observedTokens],
+        {
+          nativeToolContent: 0,
+          compatibilitySupplement: supplementalToolResults,
+          unknownTarget: 0,
+          undeclaredMedia: 0,
+          nativeSupportUnverified: supplementalToolResults,
+          conflictingEvidence: 0,
+        },
       );
     };
     let lease = await this.#acquireAccessLease(request.signal);

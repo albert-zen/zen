@@ -1,3 +1,4 @@
+import type { ToolMediaTransportSummary } from "../../../src/model.js";
 /** Ephemeral Host observations; never a source of conversation or execution state. */
 export interface ModelRequestDebugSummary {
   id: string;
@@ -14,6 +15,7 @@ export interface ModelRequestDebugSummary {
   format: "chat-completions" | "responses" | "model-input";
   redacted: boolean;
   truncated: boolean;
+  toolMediaTransport?: ToolMediaTransportSummary;
   originalBytes: number;
   retainedBytes: number;
   sourceAttachments: Array<{

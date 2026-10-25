@@ -97,10 +97,21 @@ export interface ModelRequestDebugContext {
   sampleAttempt: number;
 }
 
-/** Only the serialized body, never URL, transport headers or credentials. */
+/** Bounded adapter decisions only; never endpoint URLs, profile text or credentials. */
+export interface ToolMediaTransportSummary {
+  nativeToolContent: number;
+  compatibilitySupplement: number;
+  unknownTarget: number;
+  undeclaredMedia: number;
+  nativeSupportUnverified: number;
+  conflictingEvidence: number;
+}
+
+/** Only the serialized body and bounded decisions, never URL, headers or credentials. */
 export interface ModelRequestObservation {
   format: "chat-completions" | "responses" | "model-input";
   body: string;
+  toolMediaTransport?: ToolMediaTransportSummary;
   originalBytes: number;
   redacted: boolean;
   transportAttempt: number;

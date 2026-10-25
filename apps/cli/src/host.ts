@@ -1,3 +1,7 @@
+import {
+  BUILTIN_CHAT_TOOL_MEDIA_CAPABILITIES,
+  BUILTIN_CHAT_TOOL_MEDIA_EVIDENCE_CONFLICTS,
+} from "../../../src/model/tool-media-profiles.js";
 import { ModelRequestDebugStore } from "./model-request-debug.js";
 import { SkillsService } from "./skills.js";
 import { RtkShellOutputFilter } from "../../../src/shell-output-filter.js";
@@ -980,6 +984,8 @@ function createModel(
     });
   }
   return new OpenAiCompatibleModel({
+    toolMediaCapabilities: BUILTIN_CHAT_TOOL_MEDIA_CAPABILITIES,
+    toolMediaEvidenceConflicts: BUILTIN_CHAT_TOOL_MEDIA_EVIDENCE_CONFLICTS,
     ...(onStreamFailure === undefined ? {} : { onStreamFailure }),
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,

@@ -1856,3 +1856,56 @@ test("subscription adapter recovers transient admission failure", async () => {
   await collect(adapter.stream(request()));
   assert.equal(calls, 2);
 });
+
+test("subscription reports native tool media support as unverified without changing wire format", async () => {
+  const attachments = new InMemoryAttachmentStore();
+  const ref = await attachments.importBytes(png1x1());
+  let observed: any;
+  let body: any;
+  const adapter = new OpenAiSubscriptionModel({
+    acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
+    attachments,
+    fetch: async (_url, init) => {
+      body = requestBody(init);
+      return sseResponse([
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+      ]);
+    },
+  });
+  await collect(
+    adapter.stream(
+      request({
+        messages: [
+          {
+            role: "assistant",
+            toolCalls: [{ callId: "image", name: "view_image", arguments: {} }],
+          },
+          {
+            role: "tool",
+            callId: "image",
+            exitCode: 0,
+            text: "receipt",
+            modelContent: [{ type: "image", attachment: ref }],
+          },
+        ],
+        onRequest: (event) => {
+          observed = event;
+        },
+      }),
+    ),
+  );
+  assert.deepEqual(observed.toolMediaTransport, {
+    nativeToolContent: 0,
+    compatibilitySupplement: 1,
+    unknownTarget: 0,
+    undeclaredMedia: 0,
+    nativeSupportUnverified: 1,
+    conflictingEvidence: 0,
+  });
+  assert.equal(typeof body.input[1].output, "string");
+  assert.equal(body.input[2].role, "user");
+  assert.equal(body.toolMediaTransport, undefined);
+});

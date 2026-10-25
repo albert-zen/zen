@@ -45,9 +45,12 @@ back to original media objects, accounting for its prepended receipt text.
 - OpenAI Chat Completions documents tool.content as string or text parts. The generic
   compatible adapter therefore retains its existing fallback unless given exact-target
   evidence. https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
-- DeepSeek native Chat documents image/file parts in tool.content. This does not establish
-  support for a DeepSeek-named model served through DashScope or another proxy.
+- DeepSeek native Chat schema documents image/file parts in tool.content, but the Vision
+  guide says images are user-only and confirms deepseek-flash (not deepseek-v4-pro).
+  These sources conflict, so no default native Chat entry is justified yet. Neither
+  source establishes support for a hosted DeepSeek model on DashScope or another proxy.
   https://api-docs.deepseek.com/api/create-chat-completion/
+  https://api-docs.deepseek.com/guides/vision/
 - Public OpenAI Responses documents media output content. The currently implemented
   subscription adapter targets chatgpt.com/backend-api/codex/responses, not the public
   API endpoint. This draft does not assume those endpoints share native output support.
@@ -58,10 +61,11 @@ journal variant, public Responses integration, Claude adapter or Gemini adapter.
 
 ## Deliberately unresolved rollout boundary
 
-No existing Host constructor supplies these declarations yet. Consequently this draft
-alone does not change existing user configurations to native mode. Choosing a persistent
-provider capability schema/UI, shipping an audited endpoint/model capability registry,
-or adding a separate public Responses adapter requires a follow-up design decision.
+The Host factory now injects adapter-owned reviewed profiles. The native-capability
+list is deliberately empty; two exact endpoint/model records identify conflicting
+documentation instead. Consequently existing configurations remain on compatibility
+encoding. Product native activation is blocked on evidence, not on a missing adapter
+boundary. A separate public Responses adapter remains a follow-up design decision.
 The draft is intentionally explicit about that limitation rather than hiding an unverified
 model-name workaround. Capability evidence must be reviewed when an endpoint/model
 contract changes; absence of evidence retains the compatibility encoding, not a probe.
@@ -88,16 +92,75 @@ Have Host construction inject that registry unchanged. The matching key is the f
 request endpoint plus exact model ID and protocol; configuration supplies no model-name
 heuristic. Record documentation URL, review date and supported media types on each entry.
 
-A first candidate for review is Chat endpoint https://api.deepseek.com/chat/completions,
-model IDs deepseek-flash and deepseek-v4-pro, image only, based on DeepSeek's current
-Chat schema and https://api-docs.deepseek.com/ endpoint example (reviewed 2026-10-25). Its /v1 alias needs separately verified endpoint
-coverage before registration. File support in that schema is not an excuse to add a
-canonical file variant in this patch. Audio is not declared by this candidate.
-DashScope's hosted DeepSeek IDs receive no such entry. Generic OpenAI Chat keeps the
-text-tool fallback. Codex subscription remains unknown for native tool output media,
-regardless of public Responses capabilities.
+The initially proposed DeepSeek Chat defaults are withdrawn after checking the Vision
+guide. It confirms only deepseek-flash image input and says user messages only, while
+the Chat schema lists tool images. No native declaration should be enabled until that
+conflict is resolved with authoritative evidence or separately authorized contract tests.
+The same guide explicitly supports tool-output images on public Responses, but this
+repository's subscription Codex endpoint is not that API. No new adapter is implied.
+DashScope hosted IDs and model-name aliases remain unverified. No audio/file or v4-pro
+vision capability can be inferred from the model's presence in the Chat model enum.
 
 Before rollout, surface selection encoding/reason and declaration evidence in the
 provider's developer inspection path, outside provider wire content. Decide separately
 how operators override or withdraw a declaration when endpoint contracts change. Do not
-persist failed-request guesses as capability state. No registry is enabled by this draft.
+persist failed-request guesses as capability state. No native profile is enabled by this draft.
+
+## Follow-up: observable compatibility decisions
+
+The existing opt-in request observer and in-memory debug summary now expose six bounded
+counts: nativeToolContent, compatibilitySupplement, unknownTarget, undeclaredMedia and
+nativeSupportUnverified and conflictingEvidence. These count tool results, not tokens, bytes or attachments.
+No extra capture is enabled. Payload inspection remains the exact serialized body;
+summary data never enters the provider request or canonical journal. Counts are
+allowlisted and capped; endpoint URLs, evidence text and arbitrary profile fields are
+not accepted. Subscription output supplements are explicitly marked unverified for
+native support, rather than inferred from public Responses documentation.
+
+Qwen was independently checked as an alternative on 2026-10-25. Its Function Calling
+Step 5 permits image arrays in tool.content, but its Chat API reference still requires
+a string for Tool Message content. The Vision page confirms qwen3-vl-plus and says the
+legacy Beijing endpoint remains functional; it does not resolve the tool-role conflict.
+Consequently no Qwen native default is enabled either. An official clarification or
+separately authorized contract test is needed before registering that target; do not
+convert conflicting documentation into a claimed verified capability.
+
+- https://help.aliyun.com/en/model-studio/qwen-function-calling
+- https://help.aliyun.com/en/model-studio/qwen-api-via-openai-chat-completions
+- https://help.aliyun.com/en/model-studio/qwen-vl-compatible-with-openai
+
+The deferred #498 provenance patch must preserve this separate summary argument when
+adding message-source metadata to observeRequestBody; neither datum belongs in the
+wire payload. The two features are independent and this draft does not include #498.
+
+## Bounded live contract verification recipe (not run)
+
+Prerequisites: the owner must separately authorize the exact provider account/endpoint,
+model, credential use and a small explicit spending cap. Obtain credentials through the
+normal secure configuration path, never through chat or this document. Confirm current
+pricing and output limits first. This recipe grants no authorization itself.
+
+Use a generated 1x1 PNG with no private content and two inert, read-only fixture tools.
+First validate serialization entirely with fake fetch. For live testing, ask the chosen
+model for one fixture tool, then return its actual call ID with an image in native tool
+content. In a separate case request two fixture tools, and return both actual call IDs
+contiguously with the first result carrying the image. Stop as inconclusive if the model
+does not produce the required calls; do not invent historical call IDs or repeatedly
+prompt until it does. A text-only control can distinguish pairing failures from media
+format rejection. Budget at most six requests total and 256 output tokens each, subject
+to the approved monetary cap; send no user files and perform no real tool side effects.
+
+Record endpoint protocol, exact model/version, date, status/code and the minimal
+synthetic request shape. Do not retain credentials, headers or query strings. A failed
+native request must not silently resubmit using fallback. Test compatibility as a
+separately planned case only within the approved cap. A successful synthetic contract
+test is target-specific evidence, not proof for aliases, other regions or hosted models.
+Before adding a native registry entry, review the documentation conflict, fixture and
+result together. Re-review or withdraw entries when model/version/endpoint contracts
+change; do not maintain inferred durable capability state from runtime failures.
+
+Public OpenAI Responses, Claude tool_result and newer Gemini function-response media
+are distinct native protocol mechanisms. Their existence does not enable them in this
+product's current Chat-compatible and Codex-subscription adapters. Adding/selecting a
+new public Responses transport is a separate architecture and product decision, not a
+reason to send public Responses shapes to the subscription endpoint.
