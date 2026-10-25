@@ -1,5 +1,5 @@
 {
-  "commit": "304aa70a56f97a009e01238a8cb75048c0de0616",
+  "commit": "0fc724d769ca0daf5045b357d7eaebabdb1586f1",
   "note": "Current production components and imported CSS modules with synthetic data. Sidebar before uses the pinned dfd42754 primary stylesheet, not a historical full-app build; after uses current CSS. Context before omits only its motion stylesheet. Output usage renders current ThreadView with synthetic counts and elapsed time. No Host actions or user data.",
   "sidebarBaseline": {
     "commit": "dfd427541ced50a4c076ca131d4fd8e9107336f3",
