@@ -350,6 +350,37 @@ try {
       false,
     );
     await capture("12-declared-input-draft");
+    const firstRow = await evaluate(
+      "document.querySelector('.provider-model-row').textContent",
+    );
+    assert.match(
+      firstRow,
+      /text \+ image/u,
+      "Existing row actually receives declared inputs",
+    );
+    assert.match(
+      firstRow,
+      options.lang === "zh-CN" ? /推理未知/u : /reasoning unknown/u,
+      "Reasoning remains Unknown",
+    );
+    assert.match(
+      firstRow,
+      options.lang === "zh-CN" ? /需要上下文/u : /context required/u,
+      "Context remains Unknown",
+    );
+    const manualRow = await evaluate(
+      "document.querySelectorAll('.provider-model-row')[1].textContent",
+    );
+    assert.match(
+      manualRow,
+      /32,?768|32k/u,
+      "Existing manual context remains unchanged",
+    );
+    await clickSelector(".provider-model-capabilities summary", 0);
+    await evaluate(
+      "document.querySelector('.provider-model-row').scrollIntoView({block:'start'})",
+    );
+    await capture("13-existing-row-input-filled");
     receipt.status = "captured";
   }
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");

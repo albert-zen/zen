@@ -881,7 +881,7 @@ export const en = {
   "settingsView.chooseAdditionalModelsOfficialMetadataIsUpdatedInThe":
     "Choose additional models. Official metadata is updated in the draft; manual settings are preserved. Save provider to apply.",
   "settingsView.selectTheModelsYouWantExistingModelsAndTheir":
-    "Select the models you want. Existing models and their settings stay unchanged.",
+    "Select new models to add. Adding selected models does not modify existing rows.",
   "settingsView.sendingOneTinyImageTestRequestProviderChargesMay":
     "Sending one tiny image test request; Provider charges may apply…",
   "settingsView.imageProbeSucceededSupportWasSaved":
@@ -2133,7 +2133,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.chooseAdditionalModelsOfficialMetadataIsUpdatedInThe":
     "选择其他模型。官方元数据会更新到草稿，手动设置保持不变。保存服务商配置后生效。",
   "settingsView.selectTheModelsYouWantExistingModelsAndTheir":
-    "选择所需的模型。现有模型及其设置保持不变。",
+    "选择要新增的模型。添加所选模型不会修改已有模型行。",
   "settingsView.sendingOneTinyImageTestRequestProviderChargesMay":
     "正在发送一次小型图像测试请求；服务商可能收取费用…",
   "settingsView.imageProbeSucceededSupportWasSaved":

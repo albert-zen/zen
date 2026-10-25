@@ -72,6 +72,9 @@ const settings: PublicHostSettings = {
 if (query.get("metadata") === "1") {
   const existing = settings.profile.providerProfiles[0]!.models[0]!;
   existing.inputModalities = null;
+  existing.supportedReasoningEfforts = null;
+  existing.defaultReasoningEffort = null;
+  existing.contextWindow = null;
   existing.source = "legacy";
 }
 const calls: string[] = [];
