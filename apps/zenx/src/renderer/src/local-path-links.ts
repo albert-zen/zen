@@ -65,7 +65,7 @@ export function remarkLocalPaths(options?: { markers?: string[] }) {
         // Spaces are supported when the entire path is delimited by quotes or
         // inline code. Unquoted prose stops at whitespace rather than guessing.
         const candidates =
-          /"([^"\n]+)"|'([^'\n]+)'|(?<![\p{L}\p{N}_:/\\])(?:[a-z]:[\\/]|file:\/\/|\.\.?\/|\/|[\p{L}\p{N}_.-]+[\/\\])[^\s<>"'`]+/giu;
+          /"([^"\n]+)"|'([^'\n]+)'|(?<![\p{L}\p{N}_:/\\])(?:[a-z]:[\\/]|file:\/\/|\.\.?\/|\/|[\p{L}\p{N}_.-]+[\/\\])[^\s<>"'`，。；：！？（）【】「」]+/giu;
         let end = 0;
         let ambiguousEnd: number | undefined;
         for (const match of node.value.matchAll(candidates)) {

@@ -236,3 +236,11 @@ test("oversized path-like text stays inert", () => {
   assert.equal(isLocalPath(oversized), false);
   assert.doesNotMatch(markup(`\`${oversized}\``), /<a /u);
 });
+
+test("Chinese sentence punctuation delimits bare paths without changing quoted filenames", () => {
+  assert.match(
+    markup("请查看 docs/long-notes.md，然后继续。"),
+    /href="docs\/long-notes.md"/u,
+  );
+  assert.match(markup("`docs/报告（修订）.md`"), /<a /u);
+});
