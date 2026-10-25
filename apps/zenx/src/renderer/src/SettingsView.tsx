@@ -1227,6 +1227,19 @@ function ModelsPanel({
   const addProviderButton = useRef<HTMLButtonElement>(null);
   const addCustomProviderButton = useRef<HTMLButtonElement>(null);
   const restoreEditorFocus = useRef(false);
+  const pendingEditorFocus = useRef<{ owned: boolean; cleanup(): void } | null>(
+    null,
+  );
+  useLayoutEffect(
+    () => () => {
+      // Activity hiding/unmounting is navigation even without a focus event.
+      if (pendingEditorFocus.current) {
+        pendingEditorFocus.current.owned = false;
+        pendingEditorFocus.current.cleanup();
+      }
+    },
+    [],
+  );
   const editorNoticeId = useId();
   useLayoutEffect(() => {
     if (editor !== null || !restoreEditorFocus.current) return;
@@ -1630,39 +1643,75 @@ function ModelsPanel({
               logoUpload,
               diagnosticAttemptId,
             ) => {
-              const success = await runProviderMutation(
-                editor.mode === "add" ? "provider-add" : "provider-edit",
-                editor.mode === "add"
-                  ? t("settingsView.providerAdded")
-                  : t("settingsView.providerSaved"),
-                async () =>
+              // Native disabled controls can blur to BODY while Save is pending.
+              // Keep pre-submit ownership, but never reclaim it after newer intent.
+              const activeEditor =
+                providerSection.current?.querySelector(".provider-editor");
+              const focus = {
+                cleanup: () => {},
+                owned: Boolean(activeEditor?.contains(document.activeElement)),
+              };
+              pendingEditorFocus.current = focus;
+              const abandonFocus = () => {
+                focus.owned = false;
+              };
+              const observeNavigation = (event: Event) => {
+                if (
+                  event.type === "keydown" &&
+                  (event as KeyboardEvent).key !== "Tab"
+                )
+                  return;
+                if (
+                  event.target &&
+                  !activeEditor?.contains(event.target as Node)
+                )
+                  abandonFocus();
+              };
+              for (const type of ["pointerdown", "keydown", "focusin"]) {
+                document.addEventListener(type, observeNavigation, true);
+              }
+              window.addEventListener("blur", abandonFocus);
+              focus.cleanup = () => {
+                for (const type of ["pointerdown", "keydown", "focusin"]) {
+                  document.removeEventListener(type, observeNavigation, true);
+                }
+                window.removeEventListener("blur", abandonFocus);
+              };
+              let success: "success" | "committed-error" | "failed";
+              try {
+                success = await runProviderMutation(
+                  editor.mode === "add" ? "provider-add" : "provider-edit",
                   editor.mode === "add"
-                    ? await window.zenx.settings.addProvider(
-                        provider,
-                        apiKey,
-                        editor.baseRevision,
-                        logoUpload ?? undefined,
-                        diagnosticAttemptId,
-                      )
-                    : await window.zenx.settings.editProvider(
-                        editor.provider.providerProfileId,
-                        provider,
-                        {
-                          ...replacements,
-                          baseRevision: editor.baseRevision,
-                          ...(apiKey === undefined ? {} : { apiKey }),
-                          ...(logoUpload === undefined ? {} : { logoUpload }),
-                        },
-                        diagnosticAttemptId,
-                      ),
-              );
-              if (success !== "failed") {
-                // A late save must not steal focus from newer navigation.
-                restoreEditorFocus.current = Boolean(
-                  providerSection.current
-                    ?.querySelector(".provider-editor")
-                    ?.contains(document.activeElement),
+                    ? t("settingsView.providerAdded")
+                    : t("settingsView.providerSaved"),
+                  async () =>
+                    editor.mode === "add"
+                      ? await window.zenx.settings.addProvider(
+                          provider,
+                          apiKey,
+                          editor.baseRevision,
+                          logoUpload ?? undefined,
+                          diagnosticAttemptId,
+                        )
+                      : await window.zenx.settings.editProvider(
+                          editor.provider.providerProfileId,
+                          provider,
+                          {
+                            ...replacements,
+                            baseRevision: editor.baseRevision,
+                            ...(apiKey === undefined ? {} : { apiKey }),
+                            ...(logoUpload === undefined ? {} : { logoUpload }),
+                          },
+                          diagnosticAttemptId,
+                        ),
                 );
+              } finally {
+                focus.cleanup();
+                if (pendingEditorFocus.current === focus)
+                  pendingEditorFocus.current = null;
+              }
+              if (success !== "failed") {
+                restoreEditorFocus.current = focus.owned;
                 setEditor(null);
               }
               return success;

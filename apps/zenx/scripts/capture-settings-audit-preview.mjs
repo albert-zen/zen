@@ -398,6 +398,39 @@ try {
       true,
       "Late Save does not steal General tab focus",
     );
+    await navigate(false, true);
+    await clickSelector(".provider-profile-actions button:first-child", 3);
+    await evaluate(
+      `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
+    );
+    await send("Input.insertText", { text: "Synthetic failed-save draft" });
+    await clickSelector('.provider-editor-actions [type="submit"]');
+    await waitFor(
+      "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'true'",
+    );
+    await evaluate("window.__settingsAudit.settleProviderEdit('failure')");
+    await waitFor(
+      "document.querySelector('.provider-editor form')?.getAttribute('aria-busy') === 'false'",
+    );
+    receipt.failedSave = await evaluate(`(() => ({
+      draft: document.querySelector('.provider-editor input[id$="-displayName"]').value,
+      enabled: !document.querySelector('.provider-editor fieldset').disabled,
+      attempts: window.__settingsAudit.calls.filter(x => x === "synthetic-deferred-edit").length
+    }))()`);
+    assert.deepEqual(receipt.failedSave, {
+      draft: "Synthetic failed-save draft",
+      enabled: true,
+      attempts: 1,
+    });
+    await capture("13-failed-save-draft");
+    await clickSelector(".provider-editor-head button");
+    assert.equal(
+      await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      ),
+      true,
+      "Cancel works after failed Save cleanup",
+    );
     // Fresh page avoids attributing prior synthetic edits to the add flow.
     await navigate();
     await clickSelector(".provider-section-actions .primary-button");

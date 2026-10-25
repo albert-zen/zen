@@ -3940,3 +3940,67 @@ test("late provider save does not steal focus from another Settings tab or resto
     await unmount(harness);
   }
 });
+
+for (const navigation of [
+  "none",
+  "typing",
+  "pointer",
+  "tab",
+  "window",
+  "activity",
+] as const) {
+  test(`provider Save after native-style blur respects ${navigation} focus intent`, async () => {
+    let finish!: (value: PublicHostSettings) => void;
+    const harness = await mountSettings("models", {
+      initialSettings: multiProviderSettings,
+      editProvider: async () =>
+        await new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    try {
+      const opener = await waitFor(() => labeledButton("Edit Alpha"));
+      await click(opener);
+      const save = exactButtonRequired("Save provider");
+      save.focus();
+      await click(save);
+      // Chromium does this automatically when the focused control is disabled.
+      // JSDOM ignores blur() on disabled controls; temporarily enable only to
+      // emulate Chromium's automatic blur, then restore the pending DOM state.
+      const fieldset = document.querySelector<HTMLFieldSetElement>(
+        ".provider-editor fieldset",
+      )!;
+      fieldset.disabled = false;
+      save.disabled = false;
+      save.blur();
+      fieldset.disabled = true;
+      save.disabled = true;
+      assert.equal(document.activeElement === document.body, true);
+      if (navigation === "pointer")
+        document.body.dispatchEvent(
+          new window.Event("pointerdown", { bubbles: true }),
+        );
+      if (navigation === "typing" || navigation === "tab")
+        document.body.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: navigation === "tab" ? "Tab" : "a",
+            bubbles: true,
+          }),
+        );
+      if (navigation === "window")
+        window.dispatchEvent(new window.Event("blur"));
+      if (navigation === "activity")
+        await click(exactButtonRequired("Toggle settings visibility"));
+      await act(async () => finish(multiProviderSettings));
+      if (navigation === "activity")
+        await click(exactButtonRequired("Toggle settings visibility"));
+      assert.equal(
+        document.activeElement === opener,
+        navigation === "none" || navigation === "typing",
+      );
+      assert.equal(!!document.querySelector(".provider-editor"), false);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}

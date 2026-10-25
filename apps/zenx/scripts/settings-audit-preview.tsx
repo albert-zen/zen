@@ -70,7 +70,7 @@ const settings: PublicHostSettings = {
   subscription: { authenticated: false, expired: false },
 };
 const calls: string[] = [];
-let settleProviderEdit: (() => void) | undefined;
+let settleProviderEdit: ((outcome: "success" | "failure") => void) | undefined;
 const deferredProviderEdit: Window["zenx"]["settings"]["editProvider"] = async (
   _id,
   _provider,
@@ -79,18 +79,28 @@ const deferredProviderEdit: Window["zenx"]["settings"]["editProvider"] = async (
 ) => {
   if (query.get("deferredSave") !== "1") return unavailable();
   calls.push("synthetic-deferred-edit");
-  const snapshot = await new Promise<PublicHostSettings>((resolve) => {
-    settleProviderEdit = () => {
+  return new Promise<
+    Awaited<ReturnType<Window["zenx"]["settings"]["editProvider"]>>
+  >((resolve) => {
+    settleProviderEdit = (outcome) => {
       settleProviderEdit = undefined;
-      resolve(structuredClone(settings));
+      resolve(
+        outcome === "failure"
+          ? {
+              ok: false,
+              outcome: "failed",
+              code: "save-rejected",
+              attemptId: attemptId ?? "synthetic-save",
+            }
+          : {
+              ok: true,
+              settings: structuredClone(settings),
+              outcome: "success",
+              attemptId: attemptId ?? "synthetic-save",
+            },
+      );
     };
   });
-  return {
-    ok: true,
-    settings: snapshot,
-    outcome: "success",
-    attemptId: attemptId ?? "synthetic-save",
-  };
 };
 let initialFailure = query.get("initialFailure") === "1";
 const unavailable = async () => {
@@ -135,9 +145,9 @@ Object.assign(window, {
   },
   __settingsAudit: {
     calls,
-    settleProviderEdit: () => {
+    settleProviderEdit: (outcome: "success" | "failure" = "success") => {
       if (!settleProviderEdit) throw new Error("No synthetic edit pending");
-      settleProviderEdit();
+      settleProviderEdit(outcome);
     },
   },
 });
