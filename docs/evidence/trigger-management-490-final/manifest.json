@@ -1,0 +1,68 @@
+{
+  "pr": 490,
+  "head": "44179f10573d9bfe01052d404f8b5b6d72881b57",
+  "tree": "e1585405aeee5ad62f4f0ea67097b8225fae95a5",
+  "tested_merge": "dbe03504070207087aebcbb1ef5e2688ab038f2c",
+  "baseline": "98caf2f44ec697bd705909eb970036ce615ca664",
+  "run": 40169782907,
+  "artifact": 12589614105,
+  "artifact_zip_sha256": "4281bfbc8a523b1797d3dc5d2b0f2134985958866647d5117857ffc9fcf1d018",
+  "scope": "Synthetic actual-component fixture. No private data or Host execution. Revised after first draft failed visual density review.",
+  "panel_second_card_bottom": {
+    "before": 692.984375,
+    "after": 606.46875
+  },
+  "files": [
+    {
+      "path": "before/desktop-en-01-overview.png",
+      "size": 76616,
+      "sha256": "49ac832383e3c978edec50f801679e9591d10f907c00e272a233749b06c2392a"
+    },
+    {
+      "path": "before/panel-zh-01-overview.png",
+      "size": 50274,
+      "sha256": "65b3bc71d4e0399c51bb672378d953ffd50956d01193f22a854248725e756459"
+    },
+    {
+      "path": "before/desktop-en-03-editor.png",
+      "size": 79569,
+      "sha256": "96fee58e746616588223ce01fa96cd41c439b02dfd74c4bb02118868ef9ce432"
+    },
+    {
+      "path": "before/source.json",
+      "size": 992,
+      "sha256": "8faf344e725c0c3b163bb31fda54a96f91ceab373f5d810c36e891c43bd43a32"
+    },
+    {
+      "path": "before/measurements.json",
+      "size": 13663,
+      "sha256": "d81b22e3949a607090982828fd9a2e4b07ffe29a20200e7d20037bb7d6bbd01b"
+    },
+    {
+      "path": "after/desktop-en-01-overview.png",
+      "size": 68966,
+      "sha256": "f917cbda0997860128aa927aa0260a7a1e7b52cae6dc19d65575995d5289bee4"
+    },
+    {
+      "path": "after/panel-zh-01-overview.png",
+      "size": 49459,
+      "sha256": "4c349307e63b4fa26ffef54be94f6c7a5d60e7a960905a685aebb476992c5355"
+    },
+    {
+      "path": "after/desktop-en-03-editor.png",
+      "size": 74360,
+      "sha256": "bcf62f62b5ddb3d4527e18de2edbeb195f88933539a95174201275c3604fa7a1"
+    },
+    {
+      "path": "after/source.json",
+      "size": 954,
+      "sha256": "1dba6b953ddcf608925915367d3c00710bd657dc68966d7213bff73590fe3692"
+    },
+    {
+      "path": "after/measurements.json",
+      "size": 13780,
+      "sha256": "1371142b91497aa49b4bbc2cbd7816ebf9f2eb7ca703ba61647dbc909f143681"
+    }
+  ],
+  "pixel_comparison": "All 24 before/after PNGs byte-identical to reviewed v2 capture on aa7bb4dc."
+}

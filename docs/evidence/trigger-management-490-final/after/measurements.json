@@ -1,0 +1,565 @@
+{
+  "scope": "Actual TriggerManager with synthetic definitions/history; no Host, scheduling, private settings, mutations or persistence. Not native Electron or full App acceptance.",
+  "browserSandboxDisabled": false,
+  "cases": [
+    {
+      "name": "desktop-en",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1100,
+      "height": 800,
+      "panel": "0",
+      "states": [
+        {
+          "name": "01-overview",
+          "filename": "desktop-en-01-overview.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 800
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 279.734375,
+                "bottom": 422.234375
+              },
+              {
+                "height": 279.734375,
+                "bottom": 422.234375
+              },
+              {
+                "height": 279.734375,
+                "bottom": 422.234375
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "02-instructions",
+          "filename": "desktop-en-02-instructions.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 800
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 289.109375,
+                "bottom": 431.609375
+              },
+              {
+                "height": 289.109375,
+                "bottom": 431.609375
+              },
+              {
+                "height": 289.109375,
+                "bottom": 431.609375
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "SUMMARY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "03-editor",
+          "filename": "desktop-en-03-editor.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 800
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 289.109375,
+                "bottom": 946.453125
+              },
+              {
+                "height": 289.109375,
+                "bottom": 946.453125
+              },
+              {
+                "height": 289.109375,
+                "bottom": 946.453125
+              }
+            ],
+            "editor": true,
+            "overflow": false,
+            "focus": {
+              "tag": "BUTTON",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "04-cancel",
+          "filename": "desktop-en-04-cancel.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 800
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 289.109375,
+                "bottom": 431.609375
+              },
+              {
+                "height": 289.109375,
+                "bottom": 431.609375
+              },
+              {
+                "height": 289.109375,
+                "bottom": 431.609375
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        }
+      ],
+      "status": "captured"
+    },
+    {
+      "name": "panel-zh",
+      "lang": "zh-CN",
+      "theme": "light",
+      "width": 390,
+      "height": 700,
+      "panel": "1",
+      "states": [
+        {
+          "name": "01-overview",
+          "filename": "panel-zh-01-overview.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 700
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 233.234375,
+                "bottom": 387.734375
+              },
+              {
+                "height": 208.734375,
+                "bottom": 606.46875
+              },
+              {
+                "height": 260.234375,
+                "bottom": 876.703125
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "02-instructions",
+          "filename": "panel-zh-02-instructions.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 700
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 267.671875,
+                "bottom": 422.171875
+              },
+              {
+                "height": 208.734375,
+                "bottom": 640.90625
+              },
+              {
+                "height": 260.234375,
+                "bottom": 911.140625
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "SUMMARY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "03-editor",
+          "filename": "panel-zh-03-editor.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 700
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 267.671875,
+                "bottom": 974.609375
+              },
+              {
+                "height": 208.734375,
+                "bottom": 1193.34375
+              },
+              {
+                "height": 260.234375,
+                "bottom": 1463.578125
+              }
+            ],
+            "editor": true,
+            "overflow": false,
+            "focus": {
+              "tag": "BUTTON",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "04-cancel",
+          "filename": "panel-zh-04-cancel.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 700
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 267.671875,
+                "bottom": 422.171875
+              },
+              {
+                "height": 208.734375,
+                "bottom": 640.90625
+              },
+              {
+                "height": 260.234375,
+                "bottom": 911.140625
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        }
+      ],
+      "status": "captured"
+    },
+    {
+      "name": "short-en",
+      "lang": "en",
+      "theme": "dark",
+      "width": 620,
+      "height": 480,
+      "panel": "0",
+      "states": [
+        {
+          "name": "01-overview",
+          "filename": "short-en-01-overview.png",
+          "observation": {
+            "viewport": {
+              "width": 620,
+              "height": 480
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 233.234375,
+                "bottom": 375.734375
+              },
+              {
+                "height": 208.734375,
+                "bottom": 594.46875
+              },
+              {
+                "height": 260.234375,
+                "bottom": 864.703125
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "02-instructions",
+          "filename": "short-en-02-instructions.png",
+          "observation": {
+            "viewport": {
+              "width": 620,
+              "height": 480
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 267.671875,
+                "bottom": 369.171875
+              },
+              {
+                "height": 208.734375,
+                "bottom": 587.90625
+              },
+              {
+                "height": 260.234375,
+                "bottom": 858.140625
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "SUMMARY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "03-editor",
+          "filename": "short-en-03-editor.png",
+          "observation": {
+            "viewport": {
+              "width": 620,
+              "height": 480
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 267.671875,
+                "bottom": 1072.34375
+              },
+              {
+                "height": 208.734375,
+                "bottom": 1291.078125
+              },
+              {
+                "height": 260.234375,
+                "bottom": 1561.3125
+              }
+            ],
+            "editor": true,
+            "overflow": false,
+            "focus": {
+              "tag": "BUTTON",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        },
+        {
+          "name": "04-cancel",
+          "filename": "short-en-04-cancel.png",
+          "observation": {
+            "viewport": {
+              "width": 620,
+              "height": 480
+            },
+            "cards": 3,
+            "cardRects": [
+              {
+                "height": 267.671875,
+                "bottom": 410.171875
+              },
+              {
+                "height": 208.734375,
+                "bottom": 628.90625
+              },
+              {
+                "height": 260.234375,
+                "bottom": 899.140625
+              }
+            ],
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": [
+              {
+                "command": "list"
+              },
+              {
+                "command": "threads"
+              },
+              {
+                "command": "workspaces"
+              }
+            ]
+          }
+        }
+      ],
+      "status": "captured"
+    }
+  ],
+  "rendererErrors": [],
+  "externalRequests": [],
+  "chrome": "/usr/bin/google-chrome",
+  "chromeVersion": "Google Chrome 155.0.8059.39",
+  "cjkFonts": [
+    "Noto Serif CJK JP",
+    "Noto Serif CJK KR",
+    "Noto Serif CJK HK",
+    "Noto Serif CJK SC",
+    "Noto Serif CJK TC",
+    "Noto Sans Mono CJK SC",
+    "Noto Sans Mono CJK TC",
+    "Noto Sans Mono CJK JP",
+    "Noto Sans Mono CJK HK",
+    "Noto Sans Mono CJK KR",
+    "Noto Sans CJK HK",
+    "Noto Sans CJK KR",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC"
+  ],
+  "status": "passed"
+}
