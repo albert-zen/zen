@@ -1,4 +1,4 @@
-/** Audit fixture: actual SettingsView, synthetic read-only services, no Host. */
+/** Audit fixture: actual SettingsView, synthetic isolated services, no Host or persistence. */
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -70,6 +70,17 @@ const settings: PublicHostSettings = {
   subscription: { authenticated: false, expired: false },
 };
 const calls: string[] = [];
+let settleProviderEdit: (() => void) | undefined;
+const deferredProviderEdit = async () => {
+  if (query.get("deferredSave") !== "1") return unavailable();
+  calls.push("synthetic-deferred-edit");
+  return new Promise<PublicHostSettings>((resolve) => {
+    settleProviderEdit = () => {
+      settleProviderEdit = undefined;
+      resolve(structuredClone(settings));
+    };
+  });
+};
 let initialFailure = query.get("initialFailure") === "1";
 const unavailable = async () => {
   throw new Error(
@@ -105,13 +116,19 @@ Object.assign(window, {
         };
       },
       addProvider: unavailable,
-      editProvider: unavailable,
+      editProvider: deferredProviderEdit,
       deleteProvider: unavailable,
       save: unavailable,
       probeProviderImage: unavailable,
     },
   },
-  __settingsAudit: { calls },
+  __settingsAudit: {
+    calls,
+    settleProviderEdit: () => {
+      if (!settleProviderEdit) throw new Error("No synthetic edit pending");
+      settleProviderEdit();
+    },
+  },
 });
 function Preview() {
   const [tab, setTab] = useState<SettingsTab>("models");

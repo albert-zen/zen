@@ -19,7 +19,7 @@ const directory = path.resolve(process.argv[2] ?? ".settings-audit-preview");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evidence = {
   scope:
-    "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, mutations or persistence. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
+    "Actual production SettingsView; synthetic providers/catalog only. No Host, credentials, private settings, live provider, Host mutations or persistence. Deferred Save uses a synthetic Promise only. Settings scaffold, not full App/onboarding/native Electron. Observations are not desired-UX assertions.",
   browserSandboxDisabled: false,
   cases: [],
   rendererErrors: [],
@@ -262,8 +262,8 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    const navigate = async (initialFailure = false) => {
-      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0" })}`;
+    const navigate = async (initialFailure = false, deferredSave = false) => {
+      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0", deferredSave: deferredSave ? "1" : "0" })}`;
       await send("Page.navigate", { url: destination });
       await waitFor(
         `location.href===${JSON.stringify(destination)} && ${initialFailure ? "!!document.querySelector('.page-loading [role=alert]')" : "document.querySelectorAll('.provider-profile-card').length===4"}`,
@@ -356,6 +356,46 @@ try {
       ),
       true,
       "Cancel returns focus to originating provider Edit",
+    );
+    // Real Chromium disables focused native controls unlike DOM-only harnesses.
+    for (const newerNavigation of [false, true]) {
+      await navigate(false, true);
+      await clickSelector(".provider-profile-actions button:first-child", 3);
+      await waitFor("!!document.querySelector('.provider-editor')");
+      await clickSelector('.provider-editor-actions [type="submit"]');
+      await waitFor(
+        "document.querySelector('.provider-editor')?.getAttribute('aria-busy') === 'true'",
+      );
+      const pendingFocus = await evaluate(measure);
+      if (newerNavigation) await clickSelector("#settings-tab-general");
+      await evaluate("window.__settingsAudit.settleProviderEdit()");
+      await waitFor("!document.querySelector('.provider-editor')");
+      const settledFocus = await evaluate(measure);
+      const restored = await evaluate(
+        "document.activeElement === document.querySelectorAll('.provider-profile-actions button:first-child')[3]",
+      );
+      const preservedNavigation = await evaluate(
+        "document.activeElement === document.querySelector('#settings-tab-general')",
+      );
+      (receipt.deferredSaves ??= []).push({
+        newerNavigation,
+        pendingFocus,
+        settledFocus,
+        restored,
+        preservedNavigation,
+      });
+      await capture(newerNavigation ? "12-save-navigation" : "11-save-focus");
+      // Record both cases before asserting so a failed restoration has navigation evidence too.
+    }
+    assert.equal(
+      receipt.deferredSaves[0].restored,
+      true,
+      "Save success returns focus after native pending disable",
+    );
+    assert.equal(
+      receipt.deferredSaves[1].preservedNavigation,
+      true,
+      "Late Save does not steal General tab focus",
     );
     // Fresh page avoids attributing prior synthetic edits to the add flow.
     await navigate();
