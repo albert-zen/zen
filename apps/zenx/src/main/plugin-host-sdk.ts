@@ -183,18 +183,22 @@ export interface CreateZenXPluginHostSdkOptions {
   queryProjects(): Promise<readonly ZenXProjectProjectionEntry[]>;
   appServer: PluginHostAppServerPort;
   ui?: PluginHostUiPort;
+  storage?: JsonPluginStorage;
 }
 
 export async function createZenXPluginHostSdk(
   options: CreateZenXPluginHostSdkOptions,
 ): Promise<ZenXPluginHostSdkV1> {
-  const storage = await JsonPluginStorage.open({
-    pluginId: options.pluginId,
-    root: options.storageRoot,
-    version: options.storageVersion,
-    migrations: options.migrations,
-    initialValue: options.initialStorage,
-  });
+  const storage =
+    options.storage ??
+    (await JsonPluginStorage.open({
+      pluginId: options.pluginId,
+      root: options.storageRoot,
+      version: options.storageVersion,
+      migrations: options.migrations,
+      initialValue: options.initialStorage,
+      bindGeneration: true,
+    }));
   const ui = options.ui ?? unavailableUiPort;
   return Object.freeze({
     version: ZENX_PLUGIN_HOST_SDK_VERSION,
@@ -274,32 +278,189 @@ const nodeStorageFileSystem: PluginStorageFileSystem = {
   unlink,
 };
 
+interface StorageAuthority {
+  tail: Promise<void>;
+  data: StoredPluginData | undefined;
+  generation: symbol;
+  staging?: symbol;
+}
+
+// Host process owns one namespace queue. Weak values do not retain dead test or
+// unloaded-plugin namespaces; every live storage handle retains its authority.
+const storageAuthorities = new WeakMap<
+  PluginStorageFileSystem,
+  Map<string, WeakRef<StorageAuthority>>
+>();
+function storageAuthority(
+  fileSystem: PluginStorageFileSystem,
+  filename: string,
+): StorageAuthority {
+  let namespaces = storageAuthorities.get(fileSystem);
+  if (!namespaces) storageAuthorities.set(fileSystem, (namespaces = new Map()));
+  let authority = namespaces.get(filename)?.deref();
+  if (!authority) {
+    authority = {
+      tail: Promise.resolve(),
+      data: undefined,
+      generation: Symbol("plugin storage"),
+    };
+    namespaces.set(filename, new WeakRef(authority));
+  }
+  return authority;
+}
+function queueStorage<T>(
+  authority: StorageAuthority,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const result = authority.tail.then(operation);
+  authority.tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+interface OpenPluginStorageOptions {
+  pluginId: string;
+  root: string;
+  version: number;
+  migrations?: readonly PluginStorageMigration[];
+  initialValue?: PluginStorageValue;
+  fileSystem?: PluginStorageFileSystem;
+  bindGeneration?: boolean;
+}
+
 export class JsonPluginStorage {
   readonly version: number;
   readonly #filename: string;
   readonly #fileSystem: PluginStorageFileSystem;
-  #value: PluginStorageValue;
-  #mutationTail: Promise<void> = Promise.resolve();
+  readonly #authority: StorageAuthority;
+  readonly #generation: symbol | undefined;
+  readonly #candidate: symbol | undefined;
 
   private constructor(
     filename: string,
     fileSystem: PluginStorageFileSystem,
-    data: StoredPluginData,
+    authority: StorageAuthority,
+    version: number,
+    generation?: symbol,
+    candidate?: symbol,
   ) {
     this.#filename = filename;
     this.#fileSystem = fileSystem;
-    this.version = data.version;
-    this.#value = data.value;
+    this.#authority = authority;
+    this.version = version;
+    this.#generation = generation;
+    this.#candidate = candidate;
   }
 
-  static async open(options: {
-    pluginId: string;
-    root: string;
-    version: number;
-    migrations?: readonly PluginStorageMigration[];
-    initialValue?: PluginStorageValue;
-    fileSystem?: PluginStorageFileSystem;
-  }): Promise<JsonPluginStorage> {
+  static async open(
+    options: OpenPluginStorageOptions,
+  ): Promise<JsonPluginStorage> {
+    const { filename, fileSystem, authority } = this.#location(options);
+    if (authority.staging)
+      throw new Error("Plugin storage replacement is being prepared");
+    return await queueStorage(authority, async () => {
+      if (authority.staging)
+        throw new Error("Plugin storage replacement is being prepared");
+      const { data } = await this.#readAndMigrate(
+        options,
+        filename,
+        fileSystem,
+      );
+      authority.data = data;
+      return new JsonPluginStorage(
+        filename,
+        fileSystem,
+        authority,
+        data.version,
+        options.bindGeneration ? authority.generation : undefined,
+      );
+    });
+  }
+
+  /** Fence old writers before snapshot/migration; never await a runtime's own lease. */
+  static async prepare(options: OpenPluginStorageOptions): Promise<{
+    storage: JsonPluginStorage;
+    publish(): void;
+    rollback(): Promise<void>;
+  }> {
+    const { filename, fileSystem, authority } = this.#location(options);
+    if (authority.staging)
+      throw new Error("Plugin storage replacement is already being prepared");
+    const candidate = Symbol("candidate plugin storage");
+    let published = false;
+    let previous: StoredPluginData | undefined;
+    let previousBytes: string | undefined;
+    let oldGeneration = authority.generation;
+    const rollback = async () => {
+      await queueStorage(authority, async () => {
+        if (authority.staging !== candidate) return;
+        if (previousBytes === undefined) {
+          await fileSystem.unlink(filename).catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          });
+        } else {
+          await atomicWrite(
+            filename,
+            decodeStoredPluginData(previousBytes),
+            fileSystem,
+          );
+        }
+        authority.data = previous;
+        authority.generation = oldGeneration;
+        delete authority.staging;
+      });
+    };
+    try {
+      await queueStorage(authority, async () => {
+        if (authority.staging)
+          throw new Error(
+            "Plugin storage replacement is already being prepared",
+          );
+        try {
+          previousBytes = await fileSystem.readFile(filename, "utf8");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        oldGeneration = authority.generation;
+        previous =
+          previousBytes === undefined
+            ? undefined
+            : decodeStoredPluginData(previousBytes);
+        authority.staging = candidate;
+        const { data } = await this.#readAndMigrate(
+          options,
+          filename,
+          fileSystem,
+        );
+        authority.data = data;
+      });
+    } catch (error) {
+      await rollback();
+      throw error;
+    }
+    return {
+      storage: new JsonPluginStorage(
+        filename,
+        fileSystem,
+        authority,
+        options.version,
+        candidate,
+        candidate,
+      ),
+      publish() {
+        if (published) return;
+        if (authority.staging !== candidate)
+          throw new Error("Plugin storage candidate is no longer current");
+        authority.generation = candidate;
+        delete authority.staging;
+        published = true;
+      },
+      rollback,
+    };
+  }
+
+  static #location(options: OpenPluginStorageOptions) {
     validatePluginId(options.pluginId);
     validateStorageVersion(options.version);
     const fileSystem = options.fileSystem ?? nodeStorageFileSystem;
@@ -308,6 +469,18 @@ export class JsonPluginStorage {
       options.pluginId,
       "storage.json",
     );
+    return {
+      filename,
+      fileSystem,
+      authority: storageAuthority(fileSystem, filename),
+    };
+  }
+
+  static async #readAndMigrate(
+    options: OpenPluginStorageOptions,
+    filename: string,
+    fileSystem: PluginStorageFileSystem,
+  ) {
     let current: StoredPluginData;
     let exists = true;
     try {
@@ -322,66 +495,81 @@ export class JsonPluginStorage {
         value: cloneAndValidate(options.initialValue ?? {}),
       };
     }
-    if (current.version > options.version) {
+    if (current.version > options.version)
       throw new Error(
         `Plugin storage cannot downgrade from version ${String(current.version)} to ${String(options.version)}`,
       );
-    }
     const migrations = validateMigrations(options.migrations ?? []);
     let migrated = current.value;
-    for (
-      let version = current.version;
-      version < options.version;
-      version += 1
-    ) {
+    for (let version = current.version; version < options.version; version++) {
       const migration = migrations.get(version);
-      if (migration === undefined) {
+      if (!migration)
         throw new Error(
           `Plugin storage migration ${String(version)} -> ${String(version + 1)} is missing`,
         );
-      }
       migrated = cloneAndValidate(
         await migration.migrate(structuredClone(migrated)),
       );
     }
-    const next = { version: options.version, value: migrated };
-    if (!exists || current.version !== options.version) {
-      await atomicWrite(filename, next, fileSystem);
-    }
-    return new JsonPluginStorage(filename, fileSystem, next);
+    const data = { version: options.version, value: migrated };
+    if (!exists || current.version !== options.version)
+      await atomicWrite(filename, data, fileSystem);
+    return { data };
+  }
+
+  #checkOwnership(): StoredPluginData {
+    const authority = this.#authority;
+    const candidateActive =
+      this.#candidate !== undefined && authority.staging === this.#candidate;
+    if (authority.staging !== undefined && !candidateActive)
+      throw new Error(
+        "Plugin storage replacement is being prepared; this storage operation was not performed",
+      );
+    if (
+      this.#generation !== undefined &&
+      authority.generation !== this.#generation &&
+      !candidateActive
+    )
+      throw new Error(
+        "Plugin storage generation was replaced; this runtime cannot access current storage",
+      );
+    if (authority.data === undefined || authority.data.version !== this.version)
+      throw new Error("Plugin storage version changed while running");
+    return authority.data;
   }
 
   async get(): Promise<PluginStorageValue> {
-    await this.#mutationTail;
-    return structuredClone(this.#value);
+    this.#checkOwnership();
+    return await queueStorage(this.#authority, async () =>
+      structuredClone(this.#checkOwnership().value),
+    );
   }
 
-  /** Refresh a long-lived host view after an external lifecycle mutation. */
   async reload(): Promise<void> {
-    await this.#mutationTail;
-    const data = decodeStoredPluginData(
-      await this.#fileSystem.readFile(this.#filename, "utf8"),
-    );
-    if (data.version !== this.version)
-      throw new Error("Plugin storage version changed while running");
-    this.#value = data.value;
+    this.#checkOwnership();
+    await queueStorage(this.#authority, async () => {
+      this.#checkOwnership();
+      const data = decodeStoredPluginData(
+        await this.#fileSystem.readFile(this.#filename, "utf8"),
+      );
+      if (data.version !== this.version)
+        throw new Error("Plugin storage version changed while running");
+      this.#authority.data = data;
+    });
   }
 
   async set(value: PluginStorageValue): Promise<void> {
+    this.#checkOwnership();
     const validated = cloneAndValidate(value);
-    const operation = this.#mutationTail.then(async () => {
+    await queueStorage(this.#authority, async () => {
+      this.#checkOwnership();
       await atomicWrite(
         this.#filename,
         { version: this.version, value: validated },
         this.#fileSystem,
       );
-      this.#value = validated;
+      this.#authority.data = { version: this.version, value: validated };
     });
-    this.#mutationTail = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    await operation;
   }
 }
 

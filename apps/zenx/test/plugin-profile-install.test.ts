@@ -2995,3 +2995,117 @@ async function journalItems(journalPath: string): Promise<CanonicalItem[]> {
     .filter(Boolean)
     .map((line) => JSON.parse(line) as CanonicalItem);
 }
+
+test("profile update caller receives committed activation failure without rolling back storage or profile", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-activation-commit-"),
+  );
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  await mkdir(pluginResources, { recursive: true });
+  const tarballs: string[] = [];
+  for (const version of ["1.0.0", "2.0.0"])
+    tarballs.push(
+      await createTarballFixture(pluginResources, {
+        id: "activation-fixture",
+        packageName: "@zenx-test/activation-fixture",
+        version,
+        runtimeType: "bundled",
+        runtimeModule: 'export const fixture = "activation";\n',
+      }),
+    );
+  const sdks: Awaited<ReturnType<typeof createZenXPluginHostSdk>>[] = [];
+  let failActivation = false;
+  let committedWrite: Promise<void> | undefined;
+  const userDataDirectory = path.join(directory, "user-data");
+  const service = new ZenXCapabilityService({
+    userDataDirectory,
+    resourcesDirectory,
+    pnpmCliPath: pnpmCli,
+    bundledProvidersOnly: true,
+    trustedProfileLoaders: {
+      "activation-fixture": () => {
+        let sdk: Awaited<ReturnType<typeof createZenXPluginHostSdk>>;
+        return {
+          start(value) {
+            sdk = value;
+            sdks.push(value);
+          },
+          activate() {
+            if (failActivation) {
+              committedWrite = sdk.storage.set({
+                committedAfterPublication: true,
+              });
+              throw new Error("synthetic postcommit activation failure");
+            }
+          },
+          async invoke() {
+            return { output: "available", exitCode: 0 };
+          },
+        };
+      },
+    },
+  });
+  try {
+    await service.initialize();
+    const expected = {
+      pluginId: "activation-fixture",
+      packageName: "@zenx-test/activation-fixture",
+    };
+    await service.installBundledPluginPackage(tarballs[0]!, expected);
+    await sdks[0]!.storage.set({ old: true });
+    failActivation = true;
+    const result = await service.installBundledPluginPackage(
+      tarballs[1]!,
+      expected,
+    );
+    await committedWrite;
+    const plugin = result.plugins.find(
+      (entry) => entry.id === expected.pluginId,
+    )!;
+    assert.equal(plugin.version, "2.0.0");
+    assert.equal(plugin.enabled, true);
+    assert.equal(plugin.available, false);
+    assert.match(
+      plugin.unavailableReason!,
+      /committed but activation failed.*synthetic postcommit/,
+    );
+    assert.deepEqual(
+      service
+        .pluginSnapshot()
+        .plugins.find((entry) => entry.id === expected.pluginId),
+      plugin,
+    );
+    const durable = await new JsonZenXPluginCatalogStore(
+      path.join(userDataDirectory, "capability-grants.json"),
+    ).load();
+    assert.equal(
+      durable.packages?.[expected.pluginId]?.manifest.version,
+      "2.0.0",
+    );
+    await assert.rejects(
+      sdks[0]!.storage.set({ stale: true }),
+      /generation was replaced/,
+    );
+    assert.deepEqual(await sdks[1]!.storage.get(), {
+      committedAfterPublication: true,
+    });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(
+          path.join(
+            userDataDirectory,
+            "plugin-data",
+            expected.pluginId,
+            "storage.json",
+          ),
+          "utf8",
+        ),
+      ),
+      { version: 1, value: { committedAfterPublication: true } },
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
