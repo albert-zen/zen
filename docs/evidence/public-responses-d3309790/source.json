@@ -1,0 +1,17 @@
+{
+  "commit": "5beff5eb26a0d057bfb36be9e1ae693adbad4ead",
+  "scope": "Actual production SettingsView and theme/styles; four synthetic providers, one with twelve models. Synthetic discovery returns one known and one unknown capability record. No Host, credentials, user profile, network or persistence. Settings-only scaffold, not App or first-launch onboarding. Linux Chrome input, not native Electron acceptance.",
+  "sources": {
+    "src/renderer/src/SettingsView.tsx": "fa445c452085d650c4f959821d8cd603a463c3141fa251d6b7211ec6adb7c704",
+    "src/renderer/src/ProviderModelAdmissionControls.tsx": "2eb524fa520bfe2b1c8d4d31082673db1e5f362b6ba6ec99efee892ac53754c3",
+    "src/renderer/src/ui/controls.tsx": "00fe25d78afb1ad6e377bad937e6ce496f3a063a25ec98d774897a479df1addb",
+    "src/renderer/src/styles.css": "f555174719850ee9d960aa51f9bc7be72bbbb20c76bdc19905d7714e80bfbbe8",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "src/renderer/src/i18n/settings.ts": "6e7ea6391e4121fa2e4b321f4957d453a2e9250a303d670242d2dec0151b11e9",
+    "src/renderer/src/language.ts": "ba5ec89ac6ca5c6910364bc6ad749e87c115a4cd3a803dfa5686422727e71108",
+    "src/renderer/src/language-preference.ts": "b8a7211e6afefa796e0d3c2d71c4f9b99ec3fad7e0c98f446507bc2a5cd333f4",
+    "scripts/settings-audit-preview.tsx": "742216bb9b9bda2bed012d09de8aafd360dcc450549d9daa931bfd194e7b9520",
+    "scripts/build-settings-audit-preview.mjs": "2857f94d93f2657f399f517f6e294c44b7a297fb52c8b34c7c70417b23949de1",
+    "scripts/capture-settings-audit-preview.mjs": "f3700007331933aa97919da07840fa1e19686b7a04a19c1878ac08dc53487c95"
+  }
+}

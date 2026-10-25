@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "pid": 5657,
+  "executable": "/usr/bin/google-chrome",
+  "startupTimeoutMs": 30000,
+  "phase": "capture",
+  "events": [
+    {
+      "phase": "spawn",
+      "elapsedMs": 0
+    },
+    {
+      "phase": "devtools-port",
+      "elapsedMs": 0
+    },
+    {
+      "phase": "target-list",
+      "elapsedMs": 207
+    },
+    {
+      "phase": "websocket-connect",
+      "elapsedMs": 309
+    },
+    {
+      "phase": "page-setup",
+      "elapsedMs": 352
+    },
+    {
+      "phase": "capture",
+      "elapsedMs": 397
+    }
+  ],
+  "pollCount": 3,
+  "captureStatus": "passed",
+  "lastObservation": "ENOENT: no such file or directory, open '/tmp/zenx-settings-audit-chrome-u55B2P/DevToolsActivePort'",
+  "port": 33685,
+  "readyElapsedMs": 352,
+  "lastCommand": {
+    "method": "Page.captureScreenshot",
+    "elapsedMs": 17704
+  },
+  "cleanupComplete": true,
+  "profileRetained": false,
+  "stderrTailLimit": 65536,
+  "exitCode": 0,
+  "signalCode": null,
+  "elapsedMs": 17831,
+  "artifactErrors": []
+}
