@@ -124,6 +124,39 @@ const frames = JSON.parse(comparison.slice(start, end));
 assert.equal(frames.length, 2);
 await writeFile(path.join(directory, "context-before.html"), frames[0]);
 await writeFile(path.join(directory, "context-after.html"), frames[1]);
+// Output usage uses the production conversation, not a hand-drawn telemetry row.
+const usageBuild = await build({
+  configFile: false,
+  root: path.resolve(root, "../.."),
+  logLevel: "warn",
+  define: { "process.env.NODE_ENV": '"production"' },
+  build: {
+    write: false,
+    minify: true,
+    cssCodeSplit: false,
+    lib: {
+      entry: path.join(root, "test/fixtures/machine-throughput-visual.tsx"),
+      name: "OutputUsagePreview",
+      formats: ["iife"],
+    },
+    rollupOptions: { output: { inlineDynamicImports: true } },
+  },
+});
+const usageOutput = (Array.isArray(usageBuild) ? usageBuild[0] : usageBuild)
+  .output;
+const usageJs = usageOutput
+  .filter((file) => file.type === "chunk")
+  .map((file) => file.code)
+  .join("\n");
+const usageCss = usageOutput
+  .filter((file) => file.type === "asset" && file.fileName.endsWith(".css"))
+  .map((file) => String(file.source))
+  .join("\n");
+assert.ok(usageJs && usageCss, "Complete output-usage fixture");
+await writeFile(
+  path.join(directory, "output-usage.html"),
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${usageCss}</style></head><body><div id="root"></div><script>${usageJs.replaceAll("</script", "<\\/script")}</script></body></html>`,
+);
 await writeFile(
   path.join(directory, "source.json"),
   JSON.stringify(
@@ -132,7 +165,7 @@ await writeFile(
         cwd: root,
         encoding: "utf8",
       }).trim(),
-      note: "Current production components and imported CSS modules with synthetic data. Sidebar before uses the pinned dfd42754 primary stylesheet, not a historical full-app build; after uses current CSS. Context before omits only its motion stylesheet. No Host actions or user data.",
+      note: "Current production components and imported CSS modules with synthetic data. Sidebar before uses the pinned dfd42754 primary stylesheet, not a historical full-app build; after uses current CSS. Context before omits only its motion stylesheet. Output usage renders current ThreadView with synthetic counts and elapsed time. No Host actions or user data.",
       sidebarBaseline: { commit: baselineCommit, blob: baselineBlob },
       cssSha256: createHash("sha256")
         .update(await readFile(stylesheet))

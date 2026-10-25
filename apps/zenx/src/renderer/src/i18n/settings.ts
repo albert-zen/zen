@@ -1,5 +1,7 @@
 // Settings UI copy. Keep keys stable across locales; product data and user content stay unchanged.
 export const en = {
+  "settingsView.finishProviderEditBeforeSwitching":
+    "Save or cancel the current provider edit before editing or deleting another provider. Your changes stay in this editor until then.",
   "settingsView.importConversations": "Import conversations",
   "settingsView.importConversationsHelp":
     "Bring a Codex conversation into ZenX from a local rollout file.",
@@ -791,6 +793,7 @@ export const en = {
   "rtkSettingsCard.appleSiliconMacsCargoTestOnlyCommandsRunAs":
     "Apple silicon Macs · cargo test only. Commands run as usual. Shell output inside run_code stays unchanged.",
   "settingsView.loadingLocalSettings": "Loading local settings…",
+  "settingsView.retryLoadingSettings": "Retry loading settings",
   "settingsView.arrowup": "ArrowUp",
   "settingsView.arrowdown": "ArrowDown",
   "settingsView.arrowleft": "ArrowLeft",
@@ -1293,6 +1296,8 @@ export const en = {
 } as const;
 
 export const zhCN: Record<keyof typeof en, string> = {
+  "settingsView.finishProviderEditBeforeSwitching":
+    "请先保存或取消当前服务商的编辑，再编辑或删除其他服务商。在此之前，修改会保留在当前编辑器中。",
   "settingsView.importConversations": "导入会话",
   "settingsView.importConversationsHelp":
     "从本地 rollout 文件将 Codex 会话导入 ZenX。",
@@ -2044,6 +2049,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "rtkSettingsCard.appleSiliconMacsCargoTestOnlyCommandsRunAs":
     "仅适用于 Apple 芯片 Mac 的 cargo test。命令照常运行；run_code 中的原始 Shell 输出保持不变。",
   "settingsView.loadingLocalSettings": "正在加载本地设置……",
+  "settingsView.retryLoadingSettings": "重试加载设置",
   "settingsView.arrowup": "向上箭头",
   "settingsView.arrowdown": "向下箭头",
   "settingsView.arrowleft": "向左箭头",

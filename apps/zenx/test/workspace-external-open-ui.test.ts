@@ -68,6 +68,26 @@ test("external file menu distinguishes reveal, editor, missing apps and unsaved 
     await render(false);
     await click("Open file externally");
     assert.ok(!!button("Reveal in Finder"));
+    for (const [label, icon] of [
+      ["Reveal in Finder", "folder"],
+      ["Open in default application", "external-link"],
+      ["Open with VS Code", "vscode"],
+      ["Manage applications…", "settings"],
+    ]) {
+      assert.equal(
+        button(label!).querySelector("svg")?.getAttribute("data-icon"),
+        icon,
+      );
+      assert.equal(
+        button(label!).querySelector("svg")?.getAttribute("aria-hidden"),
+        "true",
+      );
+      assert.equal(
+        button(label!).textContent?.trim(),
+        label,
+        "decorative icon does not change the accessible text",
+      );
+    }
     assert.equal(button("Open with Cursor"), undefined);
     assert.equal(button("Open with VS Code").disabled, false);
     await click("Open with VS Code");
@@ -237,6 +257,12 @@ test("application management is explicit, immediate, recoverable and scoped", as
     await click("Manage applications…");
     await settle();
     assert.equal(document.querySelectorAll(".external-application").length, 4);
+    assert.deepEqual(
+      [...document.querySelectorAll(".external-application h3 svg")].map((e) =>
+        e.getAttribute("data-icon"),
+      ),
+      ["vscode", "cursor", "compose", "computer"],
+    );
     assert.match(
       document.querySelector('[role="dialog"]')!.textContent!,
       /saves immediately/,

@@ -192,6 +192,7 @@ export function ActionMenu({
   onOpen?(): void;
   items: Array<{
     label: string;
+    icon?: ReactNode;
     disabled?: boolean;
     danger?: boolean;
     description?: string;
@@ -295,7 +296,16 @@ export function ActionMenu({
               item.onSelect(trigger.current);
             }}
           >
-            <strong>{item.label}</strong>
+            <strong
+              className={item.icon ? "ui-action-label-with-icon" : undefined}
+            >
+              {item.icon ? (
+                <span className="ui-action-icon" aria-hidden="true">
+                  {item.icon}
+                </span>
+              ) : null}
+              <span>{item.label}</span>
+            </strong>
             {item.description ? <small>{item.description}</small> : null}
           </button>
         ))}

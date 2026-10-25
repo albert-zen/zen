@@ -1,4 +1,4 @@
-/** Audit fixture: actual SettingsView, synthetic read-only services, no Host. */
+/** Audit fixture: actual SettingsView, synthetic isolated services, no Host or persistence. */
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -10,6 +10,7 @@ import type {
   ZenXModelCatalogEntry,
 } from "../src/main/host-profile.js";
 import { i18n } from "../src/renderer/src/i18n.js";
+import { getLanguageController } from "../src/renderer/src/language.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 const query = new URLSearchParams(location.search);
@@ -69,6 +70,39 @@ const settings: PublicHostSettings = {
   subscription: { authenticated: false, expired: false },
 };
 const calls: string[] = [];
+let settleProviderEdit: ((outcome: "success" | "failure") => void) | undefined;
+const deferredProviderEdit: Window["zenx"]["settings"]["editProvider"] = async (
+  _id,
+  _provider,
+  _options,
+  attemptId,
+) => {
+  if (query.get("deferredSave") !== "1") return unavailable();
+  calls.push("synthetic-deferred-edit");
+  return new Promise<
+    Awaited<ReturnType<Window["zenx"]["settings"]["editProvider"]>>
+  >((resolve) => {
+    settleProviderEdit = (outcome) => {
+      settleProviderEdit = undefined;
+      resolve(
+        outcome === "failure"
+          ? {
+              ok: false,
+              outcome: "failed",
+              code: "save-rejected",
+              attemptId: attemptId ?? "synthetic-save",
+            }
+          : {
+              ok: true,
+              settings: structuredClone(settings),
+              outcome: "success",
+              attemptId: attemptId ?? "synthetic-save",
+            },
+      );
+    };
+  });
+};
+let initialFailure = query.get("initialFailure") === "1";
 const unavailable = async () => {
   throw new Error(
     "Audit fixture has no Host, credentials, or mutation access.",
@@ -78,7 +112,16 @@ Object.assign(window, {
   zenx: {
     platform: "linux",
     settings: {
-      get: async () => structuredClone(settings),
+      get: async () => {
+        calls.push("settings-get");
+        if (initialFailure) {
+          initialFailure = false;
+          throw new Error(
+            "Synthetic settings load failure. No Host request was made.",
+          );
+        }
+        return structuredClone(settings);
+      },
       onManualCodeRequested: () => () => undefined,
       recordDiagnostic: async () => {
         calls.push("validation-diagnostic");
@@ -94,13 +137,19 @@ Object.assign(window, {
         };
       },
       addProvider: unavailable,
-      editProvider: unavailable,
+      editProvider: deferredProviderEdit,
       deleteProvider: unavailable,
       save: unavailable,
       probeProviderImage: unavailable,
     },
   },
-  __settingsAudit: { calls },
+  __settingsAudit: {
+    calls,
+    settleProviderEdit: (outcome: "success" | "failure" = "success") => {
+      if (!settleProviderEdit) throw new Error("No synthetic edit pending");
+      settleProviderEdit(outcome);
+    },
+  },
 });
 function Preview() {
   const [tab, setTab] = useState<SettingsTab>("models");
@@ -116,6 +165,9 @@ function Preview() {
     />
   );
 }
+// Receive a fixture-only preference without writing storage. This initializes
+// the same controller used by the mounted LanguageSettings component.
+getLanguageController().receivePreference(language);
 void i18n.changeLanguage(language).then(() => {
   createRoot(document.getElementById("root")!).render(<Preview />);
 });

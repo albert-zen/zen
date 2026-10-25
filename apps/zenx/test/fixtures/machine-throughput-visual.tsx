@@ -16,7 +16,7 @@ const thread = runtimeThread(
   [
     runtimeMessage(
       "answer",
-      "The synthetic benchmark produced 900 output tokens in a three-second Turn. Hover this answer's telemetry, or open the context indicator below, to inspect the rate.",
+      "This synthetic Turn reports 900 output tokens. Hover this answer's telemetry or open the context indicator below: token and cache information remains, but output speed is not measured.",
     ),
   ],
   "completed",

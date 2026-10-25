@@ -688,8 +688,14 @@
   border-top: 1px solid var(--color-border-subtle);
 }
 .external-application h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 6px;
   font-size: 13px;
+}
+.external-application h3 svg {
+  flex: 0 0 16px;
 }
 .external-application details {
   margin-bottom: 6px;

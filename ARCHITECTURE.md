@@ -144,6 +144,7 @@
 - **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
 - **Tool Model Content** — trusted builtin 可以让 canonical `tool_result` 携带 provider-neutral `UserInput`，由既有 Attachment Store 在后续模型采样时投影为真实媒体内容，并随 ItemList 重放而不保存 payload 副本。
+- **Chat tool-media batch projection** — OpenAI-compatible Chat serializes a contiguous tool-reply batch before supplemental user-role media; media occurrence error paths are recorded at their final wire indices, without changing canonical tool receipts or attachments.
 - **Tool Model Modality Requirement** — Tool Runtime 可声明执行所需的模型输入 modality；AgentRuntime 对已知不支持的模型在执行 body 前明确失败，而 `null` 继续表示 Unknown 并沿用尝试语义。
 - **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
 - **Tool Runtime** — Tool Environment 按一个精确 stable tool name 注册的 specification、execution mode 与 execution body；builtin、plugin proxy 与 external proxy 使用同一单工具合同。
@@ -1417,3 +1418,5 @@ ZenX's unified-reference v2 text envelope extends the existing client-ID-bound q
 ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
 
 ZenX external file opening is a local desktop UI operation: the main process resolves a local Host Thread's workspace-relative file through the existing realpath boundary, then reveals it with the OS file manager or launches a chosen application with literal argv and no shell. Application paths are Settings-owned host-profile preferences, not Thread facts, tool approvals, or a remote execution route; Fleet locators are unsupported and never fall back to a same-path local file.
+
+ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.

@@ -51,6 +51,7 @@ const sources = [
   "src/renderer/src/workspace-files-panel.tsx",
   "src/renderer/src/workspace-external-open.tsx",
   "src/renderer/src/ui/controls.tsx",
+  "src/renderer/src/icons.tsx",
   "src/renderer/src/workspace-file-picker.tsx",
   "src/renderer/src/workspace-file-explorer.tsx",
   "src/renderer/src/workspace-file-drafts.ts",

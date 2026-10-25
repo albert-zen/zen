@@ -613,6 +613,40 @@ try {
         receipt.externalMenu.right <= options.width &&
         receipt.externalMenu.bottom <= options.height,
     );
+    receipt.externalIcons = await evaluate(`(() => {
+      return [...document.querySelectorAll('[role="menuitem"]')].map(button => {
+        const icon=button.querySelector('.ui-action-icon svg'), label=button.querySelector('strong > span:last-child');
+        const i=icon?.getBoundingClientRect(), l=label?.getBoundingClientRect();
+        return {name:icon?.getAttribute('data-icon'),hidden:icon?.getAttribute('aria-hidden'),width:i?.width,height:i?.height,gap:i&&l?l.left-i.right:null};
+      });
+    })()`);
+    check(
+      receipt,
+      "menu-icons-uniform-decorative-aligned",
+      receipt.externalIcons.length === 6 &&
+        receipt.externalIcons.every(
+          (icon) =>
+            icon.name &&
+            icon.hidden === "true" &&
+            icon.width === 16 &&
+            icon.height === 16 &&
+            icon.gap >= 7 &&
+            icon.gap <= 9,
+        ),
+    );
+    check(
+      receipt,
+      "menu-icons-have-app-identity-and-management-gear",
+      JSON.stringify(receipt.externalIcons.map((icon) => icon.name)) ===
+        JSON.stringify([
+          "folder",
+          "external-link",
+          "vscode",
+          "cursor",
+          "compose",
+          "settings",
+        ]),
+    );
     await capture("external-open-menu");
     await key("Escape", "Escape", 27);
     await delay(250);
@@ -697,6 +731,13 @@ try {
     await openManagement();
     receipt.managementInitial = await managementState();
     checkManagementBounds(receipt.managementInitial, "initial");
+    check(
+      receipt,
+      "management-icons-match-opening-menu",
+      await evaluate(
+        `JSON.stringify([...document.querySelectorAll('.external-application h3 svg')].map(e=>e.getAttribute('data-icon')))===JSON.stringify(['vscode','cursor','compose','computer'])`,
+      ),
+    );
     check(
       receipt,
       "management-has-four-labelled-configuration-actions",

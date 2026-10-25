@@ -5,7 +5,14 @@ import type {
   ExternalApplicationId,
 } from "../../main/workspace-external-open.js";
 import { ActionMenu, Dialog } from "./ui/controls.js";
-import { Icon } from "./icons.js";
+import { Icon, type IconName } from "./icons.js";
+
+const applicationIcons: Record<ExternalApplicationId, IconName> = {
+  vscode: "vscode",
+  cursor: "cursor",
+  editor: "compose",
+  custom: "computer",
+};
 
 type Props = {
   threadId: string;
@@ -135,6 +142,7 @@ function ExternalOpenActions({ threadId, path, disabled, onError }: Props) {
                   ? "externalRevealExplorer"
                   : "externalRevealManager",
             ),
+            icon: <Icon name="folder" />,
             disabled: busy,
             onSelect: (trigger: HTMLButtonElement | null) => {
               trigger?.focus();
@@ -143,6 +151,7 @@ function ExternalOpenActions({ threadId, path, disabled, onError }: Props) {
           },
           {
             label: t("externalDefaultApp"),
+            icon: <Icon name="external-link" />,
             disabled: busy || disabled,
             description: disabled ? t("externalSaveFirst") : undefined,
             onSelect: (trigger: HTMLButtonElement | null) => {
@@ -154,6 +163,7 @@ function ExternalOpenActions({ threadId, path, disabled, onError }: Props) {
             .filter((id) => catalog?.applications[id])
             .map((id) => ({
               label: t("externalOpenWith", { app: labels[id] }),
+              icon: <Icon name={applicationIcons[id]} />,
               disabled: busy || disabled || !catalog?.applications[id],
               onSelect: (trigger: HTMLButtonElement | null) => {
                 trigger?.focus();
@@ -162,6 +172,7 @@ function ExternalOpenActions({ threadId, path, disabled, onError }: Props) {
             })),
           {
             label: t("externalManageApps"),
+            icon: <Icon name="settings" />,
             onSelect: (trigger: HTMLButtonElement | null) => {
               trigger?.focus();
               dialogTrigger.current = trigger;
@@ -207,7 +218,10 @@ function ExternalOpenActions({ threadId, path, disabled, onError }: Props) {
               key={id}
               aria-label={labels[id]}
             >
-              <h3>{labels[id]}</h3>
+              <h3>
+                <Icon name={applicationIcons[id]} />
+                <span>{labels[id]}</span>
+              </h3>
               {catalog?.applications[id] ? (
                 <details>
                   <summary>{t("externalApplicationPath")}</summary>

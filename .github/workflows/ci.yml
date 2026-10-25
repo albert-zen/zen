@@ -107,6 +107,21 @@ jobs:
           path: ${{ runner.temp }}/zenx-whats-new-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Build and capture trigger message bubble evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          npx tsc -p apps/zenx/tsconfig.trigger-message-preview.json --noEmit
+          node apps/zenx/scripts/build-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
+          node apps/zenx/scripts/capture-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
+      - name: Retain trigger message synthetic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-trigger-message-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-trigger-message-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture file sidebar actual-component preview
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         timeout-minutes: 3
@@ -174,6 +189,20 @@ jobs:
         run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
       - name: Exercise shell lifecycle observations on macOS
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
+      - name: Verify macOS input construction without desktop input
+        env:
+          ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts
+      - name: Retain construction-only CoreGraphics metadata
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-event-construction-${{ github.sha }}
+          path: ${{ runner.temp }}/computer-event-construction.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify native static-text labeling with synthetic attributes
+        run: node --import tsx --test apps/zenx/test/computer-static-text-label.test.ts
       - name: Exercise macOS login-shell PATH and first tool execution
         run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
       - name: Verify native launch observer and hung-main cleanup contracts
