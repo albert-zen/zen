@@ -2733,3 +2733,64 @@ test("single-folder edits save atomically, reject collisions and preserve unrela
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Responses title model uses the selected protocol and Responses output budget", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-title-responses-"),
+  );
+  const vault = new ZenXCredentialVault(
+    path.join(directory, "credentials.vault"),
+    encryption,
+  );
+  const profileStore = new ZenXHostProfileStore(
+    path.join(directory, "host-profile.json"),
+  );
+  const originalFetch = globalThis.fetch;
+  let body: any;
+  let url = "";
+  globalThis.fetch = async (input, init) => {
+    url = String(input);
+    body = JSON.parse(String(init?.body));
+    return new Response(
+      'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg","role":"assistant","content":[]}}\n\ndata: {"type":"response.output_text.delta","item_id":"msg","output_index":0,"content_index":0,"delta":"Synthetic title"}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n',
+    );
+  };
+  try {
+    const current = compatibleProfile("response-title");
+    await profileStore.write({
+      ...current,
+      providerProfiles: current.providerProfiles.map((provider) => ({
+        ...provider,
+        protocol: "responses" as const,
+      })),
+    });
+    await vault.writeApiKey("response-title", "synthetic-not-real");
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      profileStore,
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({});
+    const configured = await service.titleModel();
+    assert.ok(configured.adapter);
+    let output = "";
+    for await (const event of configured.adapter.stream({
+      model: configured.model,
+      reasoningEffort: null,
+      messages: [{ role: "user", text: "title fixture" }],
+      tools: [],
+      signal: new AbortController().signal,
+    }))
+      if (event.type === "text_delta") output += event.delta;
+    assert.equal(output, "Synthetic title");
+    assert.match(url, /\/responses$/u);
+    assert.equal(body.max_output_tokens, 4096);
+    assert.equal("max_tokens" in body, false);
+    assert.equal(body.store, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(directory, { recursive: true, force: true });
+  }
+});

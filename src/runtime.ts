@@ -948,6 +948,9 @@ export class AgentRuntime {
             ...(event.providerItemId === undefined
               ? {}
               : { providerItemId: event.providerItemId }),
+            ...(event.opaqueReplayProvenance === undefined
+              ? {}
+              : { opaqueReplayProvenance: event.opaqueReplayProvenance }),
           };
           // Later tool validation can still invalidate this entire sample.
           completedReasoning.push(reasoning);

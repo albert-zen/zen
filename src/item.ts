@@ -404,6 +404,13 @@ export interface ModelUsageItem extends ItemBase {
   reasoningOutputTokens?: number;
 }
 
+/** Adapter-owned replay identity; contains neither endpoint URLs nor credentials. */
+export interface OpaqueReasoningReplayProvenance {
+  version: 1;
+  adapter: "public-responses";
+  endpointSha256: string;
+}
+
 export type ReasoningItem =
   | (ItemBase & {
       type: "reasoning";
@@ -415,6 +422,7 @@ export type ReasoningItem =
       contentVisibility: "public" | "opaque";
       /** Stable provider identity retained only when its adapter requires replay. */
       providerItemId?: string;
+      opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
     })
   /** Existing summary-only journals remain readable without a rewrite. */
   | (ItemBase & {
@@ -424,6 +432,7 @@ export type ReasoningItem =
       reasoningContent?: never;
       contentVisibility?: never;
       providerItemId?: never;
+      opaqueReplayProvenance?: never;
       incomplete?: never;
     });
 
@@ -1150,11 +1159,41 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
           item.providerItemId,
           `${type}.providerItemId`,
         );
+        if (item.opaqueReplayProvenance !== undefined) {
+          if (item.contentVisibility !== "opaque")
+            throw new Error(
+              "reasoning.opaqueReplayProvenance requires opaque content",
+            );
+          requireRecord(
+            item.opaqueReplayProvenance,
+            "reasoning.opaqueReplayProvenance",
+          );
+          const provenance = item.opaqueReplayProvenance as Record<
+            string,
+            unknown
+          >;
+          if (
+            Object.keys(provenance).some(
+              (key) => !["version", "adapter", "endpointSha256"].includes(key),
+            ) ||
+            provenance.version !== 1 ||
+            provenance.adapter !== "public-responses" ||
+            typeof provenance.endpointSha256 !== "string" ||
+            !/^[a-f0-9]{64}$/u.test(provenance.endpointSha256)
+          ) {
+            throw new Error("reasoning.opaqueReplayProvenance is invalid");
+          }
+        }
       } else {
         requireString(item.summary, `${type}.summary`);
         rejectPresent(
           item,
-          ["contentVisibility", "providerItemId", "incomplete"],
+          [
+            "contentVisibility",
+            "providerItemId",
+            "opaqueReplayProvenance",
+            "incomplete",
+          ],
           type,
         );
       }

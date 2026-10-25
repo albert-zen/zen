@@ -21,6 +21,7 @@ import {
 import { builtInModelCatalogPreset } from "../../../../apps/cli/src/model-presets.js";
 import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscription-auth.js";
 import type { ModelAdapter } from "../../../../src/model.js";
+import { OpenAiResponsesModel } from "../../../../src/model/openai-responses.js";
 import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
 import {
   extractChatGptAccountId,
@@ -597,7 +598,10 @@ export class ZenXSettingsService {
     let models: ZenXModelCatalogEntry[];
     try {
       const discovered = await discoverOpenAiCompatibleModels({
-        baseUrl: target.provider.baseUrl,
+        baseUrl:
+          target.provider.protocol === "responses"
+            ? target.provider.baseUrl.replace(/\/responses\/?$/u, "")
+            : target.provider.baseUrl,
         apiKey: target.apiKey,
         fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -833,6 +837,9 @@ export class ZenXSettingsService {
     try {
       outcome = await probeOpenAiCompatibleImage({
         baseUrl: target.provider.baseUrl,
+        ...(target.provider.protocol === undefined
+          ? {}
+          : { protocol: target.provider.protocol }),
         apiKey: target.apiKey,
         provider: target.provider.name,
         model: target.model!.id,
@@ -972,14 +979,22 @@ export class ZenXSettingsService {
         `Title model Provider profile ${provider.providerProfileId} has no API key`,
       );
     return {
-      adapter: new OpenAiCompatibleModel({
-        baseUrl: provider.baseUrl,
-        apiKey,
-        provider: provider.name,
-        // Reasoning and visible output share this budget on compatible providers.
-        // A 40-token cap can end with finish_reason=length before any title.
-        defaultParams: { temperature: 0.2, max_tokens: 4096 },
-      }),
+      adapter:
+        provider.protocol === "responses"
+          ? new OpenAiResponsesModel({
+              baseUrl: provider.baseUrl,
+              apiKey,
+              provider: provider.name,
+              defaultParams: { max_output_tokens: 4096 },
+            })
+          : new OpenAiCompatibleModel({
+              baseUrl: provider.baseUrl,
+              apiKey,
+              provider: provider.name,
+              // Reasoning and visible output share this budget on compatible providers.
+              // A 40-token cap can end with finish_reason=length before any title.
+              defaultParams: { temperature: 0.2, max_tokens: 4096 },
+            }),
       model: titleReference.modelId,
       reasoningEffort,
     };
@@ -2231,6 +2246,9 @@ function profileFromLegacy(
             name: config.provider.name ?? "openai",
             displayName: config.provider.name ?? "OpenAI compatible",
             baseUrl: config.provider.baseUrl,
+            ...(config.provider.protocol === undefined
+              ? {}
+              : { protocol: config.provider.protocol }),
           };
   const providerProfileId =
     config.provider.type === "fake"

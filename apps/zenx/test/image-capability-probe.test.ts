@@ -125,3 +125,34 @@ test("probe transport failures are inconclusive", async () => {
     "inconclusive",
   );
 });
+
+test("explicit Responses image check uses Responses only and never guesses Chat fallback", async () => {
+  let calls = 0;
+  for (const status of [200, 400]) {
+    const outcome = await probeOpenAiCompatibleImage({
+      baseUrl: "https://synthetic.invalid/v1",
+      protocol: "responses",
+      apiKey: "synthetic-not-real",
+      provider: "fixture",
+      model: "fixture",
+      fetch: async (url, init) => {
+        calls++;
+        assert.equal(String(url), "https://synthetic.invalid/v1/responses");
+        const body = JSON.parse(String(init?.body));
+        assert.equal(body.max_output_tokens, 16);
+        assert.equal("max_tokens" in body, false);
+        assert.equal(body.input[0].content[1].type, "input_image");
+        return status === 200
+          ? new Response(
+              'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n',
+            )
+          : new Response(
+              '{"error":{"type":"invalid_request_error","message":"not supported"}}',
+              { status: 400 },
+            );
+      },
+    });
+    assert.equal(outcome, status === 200 ? "supported" : "inconclusive");
+  }
+  assert.equal(calls, 2);
+});

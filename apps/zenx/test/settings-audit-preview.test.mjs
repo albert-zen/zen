@@ -69,6 +69,20 @@ test("Settings audit HTML boots actual editor, preserves unknown catalog data an
     await waitFor(
       () => document.querySelectorAll(".provider-model-row").length === 12,
     );
+    assert.match(
+      document.querySelector("[data-provider-protocol]").textContent,
+      /Chat Completions/u,
+    );
+    assert.match(
+      document
+        .querySelector("[data-provider-protocol]")
+        .getAttribute("aria-label"),
+      /API protocol/u,
+    );
+    assert.match(
+      document.querySelector(".provider-editor").textContent,
+      /no automatic fallback/u,
+    );
     document.querySelector(".model-catalog-head button").click();
     await waitFor(
       () => document.querySelectorAll(".available-model-option").length === 2,

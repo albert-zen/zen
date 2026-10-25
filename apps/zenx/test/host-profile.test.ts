@@ -1009,3 +1009,49 @@ test("RTK is an explicit boolean opt-in retained through profile persistence", a
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("public Responses protocol is explicit and missing legacy protocol roundtrips unchanged", () => {
+  const legacy = validateHostProfile(profile);
+  assert.equal(Object.hasOwn(legacy.providerProfiles[0]!, "protocol"), false);
+  assert.deepEqual(
+    validateHostProfile(JSON.parse(JSON.stringify(legacy))),
+    legacy,
+  );
+  for (const protocol of ["responses", "chat-completions"] as const) {
+    const selected = validateHostProfile({
+      ...profile,
+      providerProfiles: profile.providerProfiles.map((provider) => ({
+        ...provider,
+        protocol,
+      })),
+    });
+    const saved = selected.providerProfiles[0]!;
+    assert.equal(saved.type, "openai-compatible");
+    if (saved.type !== "openai-compatible") throw new Error("fixture type");
+    assert.equal(saved.protocol, protocol);
+    const config = hostConfigFromProfile(selected, {
+      dataDirectory: path.join(os.tmpdir(), "data"),
+      subscriptionProfilePath: path.join(os.tmpdir(), "auth"),
+      fallbackWorkspace: path.join(os.tmpdir(), "fallback"),
+      apiKeys: { local: "synthetic" },
+    });
+    assert.equal(config.providers![0]!.provider.type, "openai-compatible");
+    if (config.providers![0]!.provider.type !== "openai-compatible")
+      throw new Error("fixture type");
+    assert.equal(
+      (config.providers![0]!.provider as { protocol?: string }).protocol,
+      protocol,
+    );
+  }
+  assert.throws(
+    () =>
+      validateHostProfile({
+        ...profile,
+        providerProfiles: profile.providerProfiles.map((provider) => ({
+          ...provider,
+          protocol: "automatic",
+        })),
+      }),
+    /protocol/u,
+  );
+});

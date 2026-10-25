@@ -96,7 +96,7 @@ export function safeProviderErrorIdentity(value: unknown): string | undefined {
 export function safeProviderErrorParameter(value: unknown): string | undefined {
   return typeof value === "string" &&
     value.length <= 160 &&
-    /^(?:messages|input)(?:\[\d{1,4}\]|\.(?:content|image_url|file_url|url|file|image|audio|data|type|input_audio|input_image|file_data|file_id))*$/u.test(
+    /^(?:messages|input)(?:\[\d{1,4}\]|\.(?:content|output|image_url|file_url|url|file|image|audio|data|type|input_audio|input_image|file_data|file_id))*$/u.test(
       value,
     )
     ? value

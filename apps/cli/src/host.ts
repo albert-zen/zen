@@ -29,6 +29,7 @@ import {
   type ModelCatalogEntryInput,
 } from "../../../src/model-catalog.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
+import { OpenAiResponsesModel } from "../../../src/model/openai-responses.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
@@ -63,6 +64,7 @@ export type HostProvider =
   | {
       type: "openai-compatible";
       baseUrl: string;
+      protocol?: "chat-completions" | "responses";
       apiKey: string;
       name?: string;
       defaultParams?: Readonly<Record<string, unknown>>;
@@ -975,6 +977,26 @@ function createModel(
         await profile.acquireAccessLease(signal),
       renewAccessLease: async (rejectedAccessToken, signal) =>
         await profile.renewAccessLease(rejectedAccessToken, signal),
+      fetch,
+      attachments,
+    });
+  }
+  if (
+    provider.protocol !== undefined &&
+    provider.protocol !== "chat-completions" &&
+    provider.protocol !== "responses"
+  )
+    throw new Error(
+      "Compatible provider protocol must be chat-completions or responses",
+    );
+  if (provider.protocol === "responses") {
+    return new OpenAiResponsesModel({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      ...(provider.name === undefined ? {} : { provider: provider.name }),
+      ...(provider.defaultParams === undefined
+        ? {}
+        : { defaultParams: provider.defaultParams }),
       fetch,
       attachments,
     });

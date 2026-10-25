@@ -7,6 +7,7 @@ import {
   contentFromUserMessage,
   SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   textFromUserInput,
+  type OpaqueReasoningReplayProvenance,
   type CanonicalProviderSelection,
   type CanonicalItem,
   type UserInput,
@@ -76,6 +77,7 @@ export interface ReasoningModelMessage {
   summary?: string;
   contentVisibility: "public" | "opaque";
   providerItemId?: string;
+  opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
 }
 
 export type ModelMessage =
@@ -155,6 +157,7 @@ export type ModelEvent =
       summary?: string;
       contentVisibility: "public" | "opaque";
       providerItemId?: string;
+      opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
     }
   | {
       type: "tool_call";
@@ -532,6 +535,9 @@ function compileCanonicalModelMessages(
             ...(item.providerItemId === undefined
               ? {}
               : { providerItemId: item.providerItemId }),
+            ...(item.opaqueReplayProvenance === undefined
+              ? {}
+              : { opaqueReplayProvenance: item.opaqueReplayProvenance }),
           });
         }
         break;

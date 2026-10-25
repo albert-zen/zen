@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { OpenAiResponsesModel } from "../../../../src/model/openai-responses.js";
 import type { AttachmentRef } from "../../../../src/attachment.js";
 import {
   OpenAiCompatibleModel,
@@ -26,6 +27,7 @@ const PROBE_REF: AttachmentRef = Object.freeze({
 
 export async function probeOpenAiCompatibleImage(options: {
   baseUrl: string;
+  protocol?: "chat-completions" | "responses";
   apiKey: string;
   provider: string;
   model: string;
@@ -34,11 +36,18 @@ export async function probeOpenAiCompatibleImage(options: {
 }): Promise<ImageCapabilityProbeOutcome> {
   const controller = new AbortController();
   const signal = options.signal ?? controller.signal;
-  const adapter = new OpenAiCompatibleModel({
+  const Adapter =
+    options.protocol === "responses"
+      ? OpenAiResponsesModel
+      : OpenAiCompatibleModel;
+  const adapter = new Adapter({
     baseUrl: options.baseUrl,
     apiKey: options.apiKey,
     provider: options.provider,
-    defaultParams: { max_tokens: 1 },
+    defaultParams:
+      options.protocol === "responses"
+        ? { max_output_tokens: 16 }
+        : { max_tokens: 1 },
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     attachments: {
       read: async (ref) => {
