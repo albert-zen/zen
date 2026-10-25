@@ -69,6 +69,11 @@ const settings: PublicHostSettings = {
   subscriptionProviderProfileId: null,
   subscription: { authenticated: false, expired: false },
 };
+if (query.get("metadata") === "1") {
+  const existing = settings.profile.providerProfiles[0]!.models[0]!;
+  existing.inputModalities = null;
+  existing.source = "legacy";
+}
 const calls: string[] = [];
 let initialFailure = query.get("initialFailure") === "1";
 const unavailable = async () => {
@@ -94,9 +99,17 @@ Object.assign(window, {
       recordDiagnostic: async () => {
         calls.push("validation-diagnostic");
       },
-      discoverProvider: async () => {
+      discoverProvider: async (providerProfileId: string) => {
         calls.push("synthetic-discovery");
         return {
+          providerProfileId,
+          ...(query.get("metadata") === "1"
+            ? {
+                declaredInputModalities: [
+                  { id: "audit-model-1", inputModalities: ["text", "image"] },
+                ],
+              }
+            : {}),
           models: [
             model("catalog-known", true),
             model("catalog-unknown", false),

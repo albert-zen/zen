@@ -262,8 +262,8 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    const navigate = async (initialFailure = false) => {
-      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0" })}`;
+    const navigate = async (initialFailure = false, metadata = false) => {
+      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0", metadata: metadata ? "1" : "0" })}`;
       await send("Page.navigate", { url: destination });
       await waitFor(
         `location.href===${JSON.stringify(destination)} && ${initialFailure ? "!!document.querySelector('.page-loading [role=alert]')" : "document.querySelectorAll('.provider-profile-card').length===4"}`,
@@ -336,6 +336,20 @@ try {
     await clickSelector('.provider-editor-actions [type="submit"]');
     await waitFor("!!document.querySelector('.provider-editor-error-summary')");
     await capture("10-new-provider-validation");
+    await navigate(false, true);
+    await clickSelector(".provider-profile-actions button:first-child", 0);
+    await clickSelector(".model-catalog-head button");
+    await waitFor("!!document.querySelector('.model-catalog-status button')");
+    await capture("11-declared-input-available");
+    await clickSelector(".model-catalog-status button");
+    await waitFor("!document.querySelector('.model-catalog-status button')");
+    assert.equal(
+      await evaluate(
+        "window.__settingsAudit.calls.some(x=>x.includes('save'))",
+      ),
+      false,
+    );
+    await capture("12-declared-input-draft");
     receipt.status = "captured";
   }
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");

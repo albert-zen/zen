@@ -51,7 +51,8 @@ import {
 } from "./host-profile.js";
 import { ZenXCredentialVault } from "./credential-vault.js";
 import {
-  discoverOpenAiCompatibleModels,
+  discoverOpenAiCompatibleCatalog,
+  type DeclaredInputModalities,
   discoverOpenAiSubscriptionModels,
   type DiscoveredModelCatalogEntry,
   ModelDiscoveryHttpError,
@@ -120,6 +121,8 @@ interface CanonicalWorkspaceSnapshot {
 }
 
 export interface ZenXProviderCatalogSnapshot {
+  /** Ephemeral explicit provider claims; never synthesized from model IDs. */
+  declaredInputModalities?: readonly DeclaredInputModalities[];
   providerProfileId: string;
   models: ZenXModelCatalogEntry[];
   source?: "remote" | "cache" | "fallback";
@@ -595,13 +598,16 @@ export class ZenXSettingsService {
     await this.#assertProviderOperationCurrent(target, "model discovery");
     const fetch = this.#providerFetchFactory(transport);
     let models: ZenXModelCatalogEntry[];
+    let declaredInputModalities: readonly DeclaredInputModalities[];
     try {
-      const discovered = await discoverOpenAiCompatibleModels({
+      const catalog = await discoverOpenAiCompatibleCatalog({
         baseUrl: target.provider.baseUrl,
         apiKey: target.apiKey,
         fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
+      const discovered = catalog.models;
+      declaredInputModalities = catalog.declaredInputModalities;
       const discoveredById = new Map(
         discovered.map((entry) => [entry.id, entry]),
       );
@@ -621,6 +627,7 @@ export class ZenXSettingsService {
     return {
       providerProfileId: target.provider.providerProfileId,
       models,
+      declaredInputModalities,
     };
   }
 

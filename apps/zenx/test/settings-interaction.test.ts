@@ -3745,3 +3745,267 @@ test("Settings Plugins uses the plug icon while Context compaction retains compr
     await unmount(harness);
   }
 });
+
+for (const manual of [false, true]) {
+  test(`API explicit input metadata fills only Unknown after opt-in; manual=${manual}`, async () => {
+    const initial = structuredClone(multiProviderSettings);
+    initial.profile.providerProfiles[0]!.models[0] = {
+      ...model("shared-model"),
+      inputModalities: manual ? ["text"] : null,
+      source: manual ? "manual" : "legacy",
+    };
+    let saved: ZenXProviderProfile | undefined;
+    const harness = await mountSettings("models", {
+      initialSettings: initial,
+      discoverProvider: async () => ({
+        providerProfileId: "profile-alpha",
+        models: [
+          { ...model("shared-model"), inputModalities: ["text", "image"] },
+        ],
+        declaredInputModalities: [
+          { id: "shared-model", inputModalities: ["text", "image"] },
+        ],
+      }),
+      editProvider: async (_id, provider) => {
+        saved = provider;
+        return initial;
+      },
+    });
+    try {
+      await waitFor(() => labeledButton("Edit Alpha"));
+      await click(labeledButtonRequired("Edit Alpha"));
+      await click(exactButtonRequired("Get available models"));
+      assert.equal(saved, undefined);
+      if (!manual) {
+        assert.ok(exactButtonRequired("Fill unknown input metadata (1)"));
+        assert.match(document.body.textContent ?? "", /input unknown/u);
+        await click(exactButtonRequired("Fill unknown input metadata (1)"));
+        assert.match(
+          document.body.textContent ?? "",
+          /Input metadata filled in the draft/u,
+        );
+        assert.equal(saved, undefined);
+      } else {
+        assert.equal(
+          Array.from(document.querySelectorAll("button")).find(
+            (button) =>
+              button.textContent?.trim() === "Fill unknown input metadata (1)",
+          ),
+          undefined,
+        );
+      }
+      await click(exactButtonRequired("Save provider"));
+      assert.deepEqual(
+        (saved as ZenXProviderProfile | undefined)?.models[0]?.inputModalities,
+        manual ? ["text"] : ["text", "image"],
+      );
+      assert.equal(
+        (saved as ZenXProviderProfile | undefined)?.models[0]?.contextWindow,
+        32768,
+      );
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("API ID-only catalog and mismatched provider cannot fill existing Unknown metadata", async () => {
+  const initial = structuredClone(multiProviderSettings);
+  initial.profile.providerProfiles[0]!.models[0] = {
+    ...model("shared-model"),
+    inputModalities: null,
+  };
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: initial,
+    discoverProvider: async () => ({
+      providerProfileId: ++calls === 1 ? "profile-alpha" : "profile-beta",
+      models: [
+        { ...model("shared-model"), inputModalities: ["text", "image"] },
+      ],
+      ...(calls === 1
+        ? {}
+        : {
+            declaredInputModalities: [
+              {
+                id: "shared-model",
+                inputModalities: ["text" as const, "image" as const],
+              },
+            ],
+          }),
+    }),
+  });
+  try {
+    await waitFor(() => labeledButton("Edit Alpha"));
+    await click(labeledButtonRequired("Edit Alpha"));
+    await click(exactButtonRequired("Get available models"));
+    assert.equal(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) =>
+          button.textContent?.trim() === "Fill unknown input metadata (1)",
+      ),
+      undefined,
+    );
+    await click(exactButtonRequired("Get available models"));
+    assert.match(
+      document.body.textContent ?? "",
+      /different provider profile/u,
+    );
+    assert.equal(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) =>
+          button.textContent?.trim() === "Fill unknown input metadata (1)",
+      ),
+      undefined,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const interruption of [
+  "manual-edit",
+  "endpoint-edit",
+  "switch-provider",
+  "failure",
+] as const) {
+  test(`API pending metadata respects ${interruption}`, async () => {
+    const initial = structuredClone(multiProviderSettings);
+    initial.profile.providerProfiles[0]!.models[0] = {
+      ...model("shared-model"),
+      inputModalities: null,
+      source: "legacy",
+    };
+    let resolve!: (snapshot: ZenXProviderCatalogSnapshot) => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise<ZenXProviderCatalogSnapshot>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    const harness = await mountSettings("models", {
+      initialSettings: initial,
+      discoverProvider: async () => pending,
+    });
+    try {
+      await waitFor(() => labeledButton("Edit Alpha"));
+      await click(labeledButtonRequired("Edit Alpha"));
+      await click(exactButtonRequired("Get available models"));
+      if (interruption === "manual-edit") {
+        await changeControl(
+          (await labeledSelect("Model 1 input modalities"))!,
+          "text",
+        );
+      } else if (interruption === "endpoint-edit") {
+        await changeControl(
+          requiredInput("Base URL"),
+          "https://new.example.test/v1",
+        );
+        assert.equal(
+          exactButtonRequired("Get available models").disabled,
+          true,
+        );
+      } else if (interruption === "switch-provider") {
+        await click(exactButtonRequired("Cancel"));
+        await click(labeledButtonRequired("Edit Beta"));
+      }
+      await React.act(async () => {
+        if (interruption === "failure")
+          reject(new Error("Synthetic discovery failed"));
+        else
+          resolve({
+            providerProfileId: "profile-alpha",
+            models: [model("shared-model")],
+            declaredInputModalities: [
+              { id: "shared-model", inputModalities: ["text", "image"] },
+            ],
+          });
+      });
+      assert.equal(
+        Array.from(document.querySelectorAll("button")).find(
+          (button) =>
+            button.textContent?.trim() === "Fill unknown input metadata (1)",
+        ),
+        undefined,
+      );
+      if (interruption === "failure")
+        assert.match(
+          document.body.textContent ?? "",
+          /Synthetic discovery failed/u,
+        );
+      if (interruption === "manual-edit")
+        assert.equal(
+          (await labeledSelect("Model 1 input modalities"))?.value,
+          "text",
+        );
+      if (interruption === "switch-provider")
+        assert.ok(document.querySelector('[aria-label="Edit Beta"]'));
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+for (const resolveBeforeSave of [false, true]) {
+  test(`API discovery cannot race failed Save provider; metadata ready=${resolveBeforeSave}`, async () => {
+    const initial = structuredClone(multiProviderSettings);
+    initial.profile.providerProfiles[0]!.models[0] = {
+      ...model("shared-model"),
+      inputModalities: null,
+      source: "legacy",
+    };
+    let finishDiscovery!: (snapshot: ZenXProviderCatalogSnapshot) => void;
+    const discovery = new Promise<ZenXProviderCatalogSnapshot>((resolve) => {
+      finishDiscovery = resolve;
+    });
+    let failSave!: (error: Error) => void;
+    const save = new Promise<PublicHostSettings>((_resolve, reject) => {
+      failSave = reject;
+    });
+    const snapshot: ZenXProviderCatalogSnapshot = {
+      providerProfileId: "profile-alpha",
+      models: [model("shared-model")],
+      declaredInputModalities: [
+        { id: "shared-model", inputModalities: ["text", "image"] },
+      ],
+    };
+    const harness = await mountSettings("models", {
+      initialSettings: initial,
+      discoverProvider: async () => discovery,
+      editProvider: async () => save,
+    });
+    try {
+      await waitFor(() => labeledButton("Edit Alpha"));
+      await click(labeledButtonRequired("Edit Alpha"));
+      await click(exactButtonRequired("Get available models"));
+      if (resolveBeforeSave) {
+        await React.act(async () => finishDiscovery(snapshot));
+        assert.ok(exactButtonRequired("Fill unknown input metadata (1)"));
+      }
+      await click(exactButtonRequired("Save provider"));
+      assert.equal(exactButtonRequired("Get available models").disabled, true);
+      if (!resolveBeforeSave)
+        await React.act(async () => finishDiscovery(snapshot));
+      assert.equal(
+        Array.from(document.querySelectorAll("button")).find(
+          (button) =>
+            button.textContent?.trim() === "Fill unknown input metadata (1)",
+        ),
+        undefined,
+      );
+      await React.act(async () =>
+        failSave(new Error("Synthetic save failure")),
+      );
+      assert.equal(exactButtonRequired("Get available models").disabled, false);
+      assert.match(document.body.textContent ?? "", /input unknown/u);
+      assert.equal(
+        Array.from(document.querySelectorAll("button")).find(
+          (button) =>
+            button.textContent?.trim() === "Fill unknown input metadata (1)",
+        ),
+        undefined,
+      );
+    } finally {
+      await unmount(harness);
+    }
+  });
+}

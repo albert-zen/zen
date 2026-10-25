@@ -1,3 +1,4 @@
+import type { DeclaredInputModalities } from "../../main/model-discovery.js";
 import { i18n } from "./i18n.js";
 import { useTranslation } from "react-i18next";
 import { SkillsSettingsPanel } from "./SkillsSettingsPanel.js";
@@ -1821,6 +1822,10 @@ function ProviderEditor({
   const modelIds = new Set(models.map((model) => model.id));
   const remainingModelSlots = remainingProviderModelSlots(models.length);
   const [discovering, setDiscovering] = useState(false);
+  const [declaredInputs, setDeclaredInputs] = useState<
+    readonly DeclaredInputModalities[]
+  >([]);
+  const discoveryVersion = useRef(0);
   const [availableModels, setAvailableModels] = useState<
     ZenXModelCatalogEntry[] | null
   >(null);
@@ -1837,6 +1842,42 @@ function ProviderEditor({
   const [probingModel, setProbingModel] = useState<string | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const discoveryConnectionChanged =
+    provider.type === "openai-compatible" &&
+    (initialProvider.type !== "openai-compatible" ||
+      provider.baseUrl !== initialProvider.baseUrl ||
+      apiKey !== "");
+  const discoveryIdentity =
+    provider.type === "openai-compatible"
+      ? `${provider.providerProfileId}:${provider.baseUrl}:${provider.name}:${apiKey}`
+      : provider.providerProfileId;
+
+  useLayoutEffect(() => {
+    discoveryVersion.current += 1;
+    setDeclaredInputs([]);
+    setAvailableModels(null);
+    setSelectedAvailableModels([]);
+    setDiscovering(false);
+    setCatalogStatus(null);
+    return () => {
+      discoveryVersion.current += 1;
+    };
+  }, [discoveryIdentity]);
+  useLayoutEffect(() => {
+    if (!busy) return;
+    discoveryVersion.current += 1;
+    setDeclaredInputs([]);
+    setDiscovering(false);
+  }, [busy]);
+  const applicableInputClaims = declaredInputs.filter((claim) =>
+    modelRows.some(
+      ({ model }) =>
+        model.id === claim.id &&
+        model.source !== "manual" &&
+        model.inputModalities === null,
+    ),
+  );
+
   const [logoUpload, setLogoUpload] = useState<Uint8Array | null | undefined>();
   const [logoFilename, setLogoFilename] = useState<string | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
@@ -2260,23 +2301,39 @@ function ProviderEditor({
                 className="quiet-button"
                 type="button"
                 disabled={
+                  busy ||
                   discovering ||
+                  discoveryConnectionChanged ||
                   (provider.type === "openai-compatible" && !hasApiKey)
                 }
                 title={
-                  provider.type === "openai-subscription"
-                    ? t("settingsView.fetchTheOfficialCodexModelCatalog")
-                    : hasApiKey
-                      ? t("settingsView.fetchModelIdsFromThisProvider")
-                      : t("settingsView.saveAnApiKeyBeforeDiscovery")
+                  discoveryConnectionChanged
+                    ? t("settingsView.saveConnectionBeforeDiscovery")
+                    : provider.type === "openai-subscription"
+                      ? t("settingsView.fetchTheOfficialCodexModelCatalog")
+                      : hasApiKey
+                        ? t("settingsView.fetchModelIdsFromThisProvider")
+                        : t("settingsView.saveAnApiKeyBeforeDiscovery")
                 }
                 onClick={() => {
+                  const requestVersion = ++discoveryVersion.current;
+                  setDeclaredInputs([]);
                   setDiscovering(true);
                   setValidationError(null);
                   setCatalogStatus(null);
                   void window.zenx.settings
                     .discoverProvider(provider.providerProfileId)
                     .then((snapshot) => {
+                      if (requestVersion !== discoveryVersion.current) return;
+                      if (
+                        snapshot.providerProfileId !==
+                        provider.providerProfileId
+                      ) {
+                        throw new Error(
+                          "Model discovery returned a different provider profile",
+                        );
+                      }
+                      setDeclaredInputs(snapshot.declaredInputModalities ?? []);
                       setAvailableModels(snapshot.models);
                       if (provider.type === "openai-subscription") {
                         setModelRows((current) =>
@@ -2296,21 +2353,27 @@ function ProviderEditor({
                       setModelSearch("");
                       setCatalogStatus(
                         snapshot.warning ??
-                          (snapshot.source === "cache"
-                            ? t(
-                                "settingsView.officialCatalogIsUnchangedUsingTheLocalCache",
-                              )
-                            : snapshot.source === "remote"
+                          (provider.type !== "openai-subscription"
+                            ? null
+                            : snapshot.source === "cache"
                               ? t(
-                                  "settingsView.officialMetadataUpdatedInTheDraftSaveProviderTo",
+                                  "settingsView.officialCatalogIsUnchangedUsingTheLocalCache",
                                 )
-                              : null),
+                              : snapshot.source === "remote"
+                                ? t(
+                                    "settingsView.officialMetadataUpdatedInTheDraftSaveProviderTo",
+                                  )
+                                : null),
                       );
                     })
-                    .catch((reason: unknown) =>
-                      setValidationError(describeError(reason)),
-                    )
-                    .finally(() => setDiscovering(false));
+                    .catch((reason: unknown) => {
+                      if (requestVersion === discoveryVersion.current)
+                        setValidationError(describeError(reason));
+                    })
+                    .finally(() => {
+                      if (requestVersion === discoveryVersion.current)
+                        setDiscovering(false);
+                    });
                 }}
               >
                 {discovering
@@ -2319,6 +2382,52 @@ function ProviderEditor({
               </button>
             ) : null}
           </div>
+          {provider.type === "openai-compatible" && availableModels !== null ? (
+            <div className="model-catalog-status">
+              <p>{t("settingsView.declaredInputMetadataOnly")}</p>
+              {applicableInputClaims.length > 0 ? (
+                <button
+                  className="quiet-button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const claims = new Map(
+                      applicableInputClaims.map((claim) => [
+                        claim.id,
+                        claim.inputModalities,
+                      ]),
+                    );
+                    setModelRows((current) =>
+                      current.map((row) => {
+                        const claim = claims.get(row.model.id);
+                        return claim === undefined ||
+                          row.model.source === "manual" ||
+                          row.model.inputModalities !== null
+                          ? row
+                          : {
+                              ...row,
+                              model: {
+                                ...row.model,
+                                inputModalities: claim,
+                                source: "discovered",
+                              },
+                            };
+                      }),
+                    );
+                    setCatalogStatus(
+                      t("settingsView.inputMetadataFilledInDraft"),
+                    );
+                  }}
+                >
+                  {t("settingsView.fillUnknownInputMetadata", {
+                    count: applicableInputClaims.length,
+                  })}
+                </button>
+              ) : (
+                <p>{t("settingsView.noEligibleInputMetadata")}</p>
+              )}
+            </div>
+          ) : null}
           {catalogStatus === null ? null : (
             <p className="model-catalog-status" role="status">
               {catalogStatus}

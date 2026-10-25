@@ -866,6 +866,16 @@ export const en = {
     "Official catalog is unchanged; using the local cache.",
   "settingsView.officialMetadataUpdatedInTheDraftSaveProviderTo":
     "Official metadata updated in the draft. Save provider to apply.",
+  "settingsView.saveConnectionBeforeDiscovery":
+    "Save endpoint or credential changes before discovery",
+  "settingsView.declaredInputMetadataOnly":
+    "Only explicit provider input declarations can fill Unknown fields. Context and reasoning are not filled; declarations are not capability tests.",
+  "settingsView.fillUnknownInputMetadata":
+    "Fill unknown input metadata ({{count}})",
+  "settingsView.inputMetadataFilledInDraft":
+    "Input metadata filled in the draft. Save provider to apply.",
+  "settingsView.noEligibleInputMetadata":
+    "No eligible unknown input fields to fill.",
   "settingsView.fetchingModels": "Fetching models…",
   "settingsView.getAvailableModels": "Get available models",
   "settingsView.chooseAdditionalModelsOfficialMetadataIsUpdatedInThe":
@@ -2110,6 +2120,14 @@ export const zhCN: Record<keyof typeof en, string> = {
     "官方目录未更改；使用本地缓存。",
   "settingsView.officialMetadataUpdatedInTheDraftSaveProviderTo":
     "官方元数据已更新到草稿。保存服务商配置后生效。",
+  "settingsView.saveConnectionBeforeDiscovery":
+    "请先保存端点或凭证的更改，再获取模型",
+  "settingsView.declaredInputMetadataOnly":
+    "仅使用服务商明确声明的输入类型补全未知字段。上下文和推理配置不补全；声明不等于能力测试。",
+  "settingsView.fillUnknownInputMetadata": "补全未知输入类型（{{count}}）",
+  "settingsView.inputMetadataFilledInDraft":
+    "输入类型已补全到草稿。保存服务商配置后生效。",
+  "settingsView.noEligibleInputMetadata": "没有可补全的未知输入字段。",
   "settingsView.fetchingModels": "正在获取模型…",
   "settingsView.getAvailableModels": "获取可用模型",
   "settingsView.chooseAdditionalModelsOfficialMetadataIsUpdatedInThe":
