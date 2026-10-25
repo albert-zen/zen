@@ -1,0 +1,14 @@
+{
+  "commit": "b4f81410469c0a655d7cd8f0f71a47a59848b4e3",
+  "scope": "Actual production ThreadView and TriggersPanel with synthetic in-memory trigger definitions/history. No Host, scheduling, credentials, user profile, network or persistence. Not native Electron acceptance.",
+  "sources": {
+    "src/renderer/src/bundled-automation-ui.tsx": "1743a826b9f09fc78ab8699498f064f3d91980fe5878cec16a6f4c914cad24b5",
+    "src/renderer/src/trigger-ui.css": "74e1a01e069963770c808fafbf83d9610b140bb5b5306ffb9ec0091903794cde",
+    "src/renderer/src/ThreadView.tsx": "8bf705fb2220a93fe839a5ebc677b0414dbde10b8a442fa5f02f3586838bc5e0",
+    "src/renderer/src/trigger-message-presentation.ts": "be51356033fa941eae2a7f6b7deefee4734cdba976b1efd470c0620dd82a87ab",
+    "src/renderer/src/styles.css": "ebd0eed1ad33fb17d85abc16d5492894889b8930eba67a19960de37ccfc804f1",
+    "src/renderer/src/theme.css": "4d9722169729cefa4f628d38bc2aa9fa2a9b22a525c9b6ccec3af70980427434",
+    "src/renderer/src/i18n/panels.ts": "cce892057378e0f7108f186141e8ed4f1a885b7f64d17591083855e43ee773e0",
+    "scripts/trigger-message-preview.tsx": "1814d158765be4b4578618df145361c36025f81f22872a3aa0d9364cec7fb78d"
+  }
+}

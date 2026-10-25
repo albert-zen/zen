@@ -1,0 +1,181 @@
+{
+  "scope": "Actual ThreadView and TriggersPanel with synthetic definitions/history; no Host, scheduling, private settings, mutations or persistence. Not native Electron or full App acceptance.",
+  "browserSandboxDisabled": false,
+  "cases": [
+    {
+      "name": "desktop-en",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1100,
+      "height": 800,
+      "panel": "0",
+      "states": [
+        {
+          "name": "01-message",
+          "filename": "desktop-en-01-message.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 800
+            },
+            "bubbles": 1,
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": []
+          }
+        },
+        {
+          "name": "02-source",
+          "filename": "desktop-en-02-source.png",
+          "observation": {
+            "viewport": {
+              "width": 1100,
+              "height": 800
+            },
+            "bubbles": 1,
+            "editor": true,
+            "overflow": false,
+            "focus": {
+              "tag": "INPUT",
+              "label": null
+            },
+            "calls": [
+              "list",
+              "threads",
+              "workspaces"
+            ]
+          }
+        }
+      ],
+      "status": "captured"
+    },
+    {
+      "name": "panel-zh",
+      "lang": "zh-CN",
+      "theme": "light",
+      "width": 390,
+      "height": 700,
+      "panel": "1",
+      "states": [
+        {
+          "name": "01-message",
+          "filename": "panel-zh-01-message.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 700
+            },
+            "bubbles": 1,
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": []
+          }
+        },
+        {
+          "name": "02-source",
+          "filename": "panel-zh-02-source.png",
+          "observation": {
+            "viewport": {
+              "width": 390,
+              "height": 700
+            },
+            "bubbles": 1,
+            "editor": true,
+            "overflow": false,
+            "focus": {
+              "tag": "INPUT",
+              "label": null
+            },
+            "calls": [
+              "list",
+              "threads",
+              "workspaces"
+            ]
+          }
+        }
+      ],
+      "status": "captured"
+    },
+    {
+      "name": "short-en",
+      "lang": "en",
+      "theme": "dark",
+      "width": 620,
+      "height": 480,
+      "panel": "0",
+      "states": [
+        {
+          "name": "01-message",
+          "filename": "short-en-01-message.png",
+          "observation": {
+            "viewport": {
+              "width": 620,
+              "height": 480
+            },
+            "bubbles": 1,
+            "editor": false,
+            "overflow": false,
+            "focus": {
+              "tag": "BODY",
+              "label": null
+            },
+            "calls": []
+          }
+        },
+        {
+          "name": "02-source",
+          "filename": "short-en-02-source.png",
+          "observation": {
+            "viewport": {
+              "width": 620,
+              "height": 480
+            },
+            "bubbles": 1,
+            "editor": true,
+            "overflow": false,
+            "focus": {
+              "tag": "INPUT",
+              "label": null
+            },
+            "calls": [
+              "list",
+              "threads",
+              "workspaces"
+            ]
+          }
+        }
+      ],
+      "status": "captured"
+    }
+  ],
+  "rendererErrors": [],
+  "externalRequests": [],
+  "chrome": "/usr/bin/google-chrome",
+  "chromeVersion": "Google Chrome 155.0.8059.39",
+  "cjkFonts": [
+    "Noto Serif CJK JP",
+    "Noto Serif CJK KR",
+    "Noto Serif CJK HK",
+    "Noto Serif CJK SC",
+    "Noto Serif CJK TC",
+    "Noto Sans Mono CJK SC",
+    "Noto Sans Mono CJK TC",
+    "Noto Sans Mono CJK JP",
+    "Noto Sans Mono CJK HK",
+    "Noto Sans Mono CJK KR",
+    "Noto Sans CJK HK",
+    "Noto Sans CJK KR",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC"
+  ],
+  "status": "passed"
+}

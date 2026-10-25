@@ -1,0 +1,18 @@
+{
+  "pr": 492,
+  "head": "8a40481f3fe302d75a52bc5dedfa75d5a9bfc2eb",
+  "ci_run": 40168988596,
+  "artifact": 12589332851,
+  "artifact_zip_sha256": "e24e7578b62f76fa318f76de499044a5a23af9f82b53d2f55b39328c6dcce318",
+  "scope": "Actual ThreadView and TriggersPanel with synthetic fixture; not live Host, native Electron, or full App visual acceptance. App routing separately integration tested. No private data, scheduling, mutations, or external network. Short viewport naturally scrolls; no content disclosure/truncation. Management redesign remains separate draft.",
+  "files": {
+    "desktop-en-01-message.png": "070ca8367b231c6e8b1ba784e9abe44b07372ab7dade642749568f5f9829889d",
+    "desktop-en-02-source.png": "a293571b1db8a2fda449651527decd5bf03653bbb0931c1870e2ddd0378412e3",
+    "panel-zh-01-message.png": "d2ab7f6f7d25f5faa13705f378a36e75370a7c98d4e193256a5347597df111b2",
+    "panel-zh-02-source.png": "4610e131c93af398fc7aff70139f1c04fae528ecf9f01dcb3cdbe9233173b461",
+    "short-en-01-message.png": "8f9ba0b4278f70a3ba1f345089f8bb814f4b960ed0f91f09392d4b0dd8f2be17",
+    "short-en-02-source.png": "9bd01f50e1d97140a14961e0273edcd3ab11d02a5816f28793a4ea977f90bcdd",
+    "measurements.json": "e227c7a4429b397a2daa0ad68ac0007e330cc2b1ddd549185628bad34c1eed11",
+    "source.json": "b0c58d8720f678ff7d6119dcab3f1320d2796b949b05da910108fc58921d2872"
+  }
+}
