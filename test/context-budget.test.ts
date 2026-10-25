@@ -547,3 +547,51 @@ test("usage projection does not swallow estimator bugs or unknown/deleted thread
   await f.server.deleteThread(thread.id, snapshot.items.at(-1)!.id);
   await assert.rejects(f.server.readModelUsage(thread.id), /deleted/i);
 });
+
+test("Host/UI calibrates from the exact sent sample, not thread totals or cached subsets", async () => {
+  const f = fixture(10000, "small tool");
+  let requestEstimate = 0;
+  let calls = 0;
+  f.adapter.stream = async function* (request) {
+    calls++;
+    requestEstimate = estimateModelInput(
+      request.messages,
+      request.tools,
+      f.adapter.contextInstructions,
+    ).total;
+    yield { type: "text_delta", delta: "response" };
+    yield {
+      type: "usage",
+      inputTokens: calls === 1 ? 500 : 700,
+      cachedInputTokens: 450,
+      outputTokens: 2,
+    };
+  };
+  const thread = await f.server.startThread();
+  for (const expectedProvider of [500, 700]) {
+    await (
+      await f.server.startTurn(thread.id, "next")
+    ).done;
+    const snapshot = await f.server.readThread(thread.id);
+    const raw = estimateModelInput(
+      compileModelMessages(snapshot.items),
+      f.runtime.projectToolPresentation(snapshot.items, false).modelTools,
+    );
+    const usage = await f.server.readModelUsage(thread.id);
+    assert.equal(
+      usage.context.inputTokens,
+      expectedProvider + raw.total - requestEstimate,
+    );
+    assert.equal(usage.context.estimate!.total, usage.context.inputTokens);
+    assert.equal(
+      usage.context.estimate!.instructions +
+        usage.context.estimate!.toolDefinitions +
+        usage.context.estimate!.pluginContext +
+        usage.context.estimate!.conversation,
+      usage.context.inputTokens,
+    );
+  }
+  const usage = await f.server.readModelUsage(thread.id);
+  assert.equal(usage.thread.inputTokens, 1200);
+  assert.notEqual(usage.context.inputTokens, 1200);
+});

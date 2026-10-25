@@ -3173,7 +3173,7 @@ export function ContextUsageIndicator({
             aria-label={i18n.t("shell:contextDetails")}
           >
             <div className="context-usage-heading">
-              <span>{i18n.t("shell:contextWindowUsed")}</span>
+              <span>{i18n.t("shell:contextCompactTitle")}</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
@@ -3185,10 +3185,29 @@ export function ContextUsageIndicator({
               aria-valuenow={visualPercent}
               aria-valuetext={contextLabel}
             >
-              <span style={{ width: `${String(visualPercent)}%` }} />
+              {context.estimate ? (
+                (
+                  [
+                    "instructions",
+                    "toolDefinitions",
+                    "pluginContext",
+                    "conversation",
+                  ] as const
+                ).map((category) => (
+                  <span
+                    key={category}
+                    data-category={category}
+                    style={{
+                      width: `${context.estimate!.total > 0 ? (visualRatio * 100 * context.estimate![category]) / context.estimate!.total : 0}%`,
+                    }}
+                  />
+                ))
+              ) : (
+                <span style={{ width: `${String(visualPercent)}%` }} />
+              )}
             </div>
             <p>{tokenUsage}</p>
-            {context?.estimate !== undefined ? (
+            {context.estimate ? (
               <>
                 <dl className="context-usage-breakdown">
                   {(
@@ -3199,22 +3218,15 @@ export function ContextUsageIndicator({
                       "conversation",
                     ] as const
                   ).map((category) => (
-                    <div key={category}>
-                      <dt>{i18n.t(`shell:contextCategory.${category}`)}</dt>
+                    <div key={category} data-category={category}>
+                      <dt>
+                        <i aria-hidden="true" />
+                        {i18n.t(`shell:contextCategory.${category}`)}
+                      </dt>
                       <dd>{formatTokenCount(context.estimate![category])}</dd>
                     </div>
                   ))}
                 </dl>
-                <p className="context-usage-explanation">
-                  {i18n.t("shell:contextEstimateExplanation")}
-                </p>
-                {context.lastProviderInputTokens === undefined ? null : (
-                  <p>
-                    {i18n.t("shell:contextLastProviderTokens", {
-                      tokens: formatTokenCount(context.lastProviderInputTokens),
-                    })}
-                  </p>
-                )}
               </>
             ) : null}
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>

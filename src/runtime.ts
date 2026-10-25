@@ -1,4 +1,8 @@
 import {
+  ContextCalibration,
+  type ContextEstimateRequest,
+} from "./context-calibration.js";
+import {
   MAX_TURN_RECOVERY_SAMPLES,
   recoveryIsBlocked,
   recoveryDelay,
@@ -244,6 +248,12 @@ function assertPositiveExecutionLimit(value: number, label: string): void {
 }
 
 export class AgentRuntime {
+  readonly #contextCalibration = new ContextCalibration();
+
+  estimateContextInput(request: ContextEstimateRequest) {
+    return this.#contextCalibration.prepare(request).estimate;
+  }
+
   readonly #tools: ToolEnvironment;
   readonly #id: () => string;
   readonly #now: () => string;
@@ -878,11 +888,20 @@ export class AgentRuntime {
       options.configuration.inputModalities,
       (source, projected) => mediaOrigins.set(projected, source),
     );
-    const estimate = estimateModelInput(
-      projectedMessages,
-      presentation.modelTools,
-      options.modelAdapter.contextInstructions,
-    );
+    const contextRequest = this.#contextCalibration.prepare({
+      threadId: options.thread.id,
+      items: options.thread.items,
+      messages: projectedMessages,
+      tools: presentation.modelTools,
+      adapter: options.modelAdapter,
+      selection: {
+        providerProfileId: options.configuration.providerProfileId,
+        modelId: options.configuration.model,
+        reasoningEffort: options.configuration.reasoningEffort,
+      },
+      inputModalities: options.configuration.inputModalities ?? null,
+    });
+    const estimate = contextRequest.estimate;
     const contextWindow = options.configuration.contextWindow;
     if (contextWindow != null && estimate.total >= contextWindow) {
       throw new ModelContextBudgetError(
@@ -1102,6 +1121,12 @@ export class AgentRuntime {
       }
     }
     if (latestUsage !== undefined) {
+      if (failure === undefined)
+        this.#contextCalibration.record(
+          options.thread.id,
+          contextRequest.receipt,
+          latestUsage.inputTokens,
+        );
       const usage: ModelUsageItem = {
         id: this.#id(),
         threadId: options.thread.id,

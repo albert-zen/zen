@@ -248,7 +248,7 @@ await withPreviewBrowser(
         await delay(250);
         const hover = await evaluate(contextMeasure);
         const breakdown = await evaluate(
-          `(() => ({ rows: [...document.querySelectorAll('.context-usage-breakdown > div')].map(row => row.textContent), explanation: document.querySelector('.context-usage-explanation')?.textContent }))()`,
+          `(() => ({ rows: [...document.querySelectorAll('.context-usage-breakdown > div')].map(row => row.textContent), helpPresent: !!document.querySelector('.context-usage-help'), segments: [...document.querySelectorAll('.context-usage-meter > span[data-category]')].map(s => ({category:s.dataset.category, width:parseFloat(s.style.width), color:getComputedStyle(s).backgroundColor})) }))()`,
         );
         assert.equal(
           breakdown.rows.length,
@@ -259,7 +259,20 @@ await withPreviewBrowser(
           breakdown.rows.every((row) => !row.includes("contextCategory.")),
           `${name}: translated category labels`,
         );
-        assert(breakdown.explanation, `${name}: estimate limitations visible`);
+        assert.equal(
+          breakdown.helpPresent,
+          false,
+          `${name}: no explanatory UI`,
+        );
+        assert.equal(breakdown.segments.length, 4);
+        if (variant === "after")
+          assert.equal(new Set(breakdown.segments.map((s) => s.color)).size, 4);
+        assert(
+          Math.abs(
+            breakdown.segments.reduce((sum, s) => sum + s.width, 0) -
+              (51300 / 272000) * 100,
+          ) < 0.001,
+        );
         hover.breakdown = breakdown;
         assert.deepEqual(
           hover.trigger,

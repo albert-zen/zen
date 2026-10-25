@@ -138,14 +138,34 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
               ...document.querySelectorAll(".context-usage-breakdown > div"),
             ];
             assert.equal(rows.length, 4);
-            assert.match(rows[0].textContent, /系统与仓库指令/u);
-            assert.match(rows[1].textContent, /工具定义.*含插件/u);
-            assert.match(rows[2].textContent, /插件注入上下文/u);
-            assert.match(rows[3].textContent, /对话与工具结果/u);
+            assert.match(rows[0].textContent, /系统/u);
+            assert.match(rows[1].textContent, /工具/u);
+            assert.match(rows[2].textContent, /插件/u);
+            assert.match(rows[3].textContent, /对话/u);
+            assert.equal(document.querySelector(".context-usage-help"), null);
+            assert.doesNotMatch(
+              document.querySelector(".context-usage-popover").textContent,
+              /估算|非计费|供应商报告/u,
+            );
             assert.match(
               document.querySelector(".context-usage-popover").textContent,
-              /非计费值/u,
+              /线程缓存命中率/u,
             );
+            const segments = [
+              ...document.querySelectorAll(
+                ".context-usage-meter > span[data-category]",
+              ),
+            ];
+            assert.equal(segments.length, 4);
+            assert.deepEqual(
+              segments.map((segment) => segment.dataset.category),
+              rows.map((row) => row.dataset.category),
+            );
+            const totalWidth = segments.reduce(
+              (sum, segment) => sum + parseFloat(segment.style.width),
+              0,
+            );
+            assert.ok(Math.abs(totalWidth - (51_300 / 272_000) * 100) < 0.001);
             assert.doesNotMatch(
               document.querySelector(".context-usage-popover").textContent,
               /MCP/u,

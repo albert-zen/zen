@@ -4137,18 +4137,22 @@ export class ZenAppServer {
     resolved: ResolvedProviderSelection,
     contextCompaction: ResolvedContextCompactionConfig,
   ): ModelInputEstimate {
-    return estimateModelInput(
-      projectModelMessages(
+    return this.#runtime.estimateContextInput({
+      threadId: items[0]?.threadId ?? "",
+      items,
+      messages: projectModelMessages(
         compileModelMessages(items, resolved.selection),
         resolved.model.inputModalities,
       ),
-      this.#runtime.projectToolPresentation(
+      tools: this.#runtime.projectToolPresentation(
         items,
         contextCompaction.agenticEnabled &&
           resolved.model.contextWindow !== null,
       ).modelTools,
-      resolved.adapter.contextInstructions,
-    );
+      adapter: resolved.adapter,
+      selection: resolved.selection,
+      inputModalities: resolved.model.inputModalities,
+    });
   }
 
   /** Read-only current request projection, using current resolved tools rather than last usage. */

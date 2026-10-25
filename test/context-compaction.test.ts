@@ -2325,14 +2325,20 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
     false,
   );
 
-  const second = await server.startTurn(thread.id, "two");
-  await second.done;
+  // The measured request remains above the trigger. A new turn must not
+  // bypass admission using the smaller raw character estimate after compaction fails.
+  await assert.rejects(
+    server.startTurn(thread.id, "two"),
+    /summary provider unavailable/u,
+  );
   snapshot = await server.readThread(thread.id);
   assert.equal(summaryCalls, 2);
-  assert.equal(snapshot.turns[1]?.status, "completed");
+  assert.equal(normalCalls, 1);
+  assert.equal(snapshot.turns.length, 1);
+  assert.equal(snapshot.turns[0]?.status, "completed");
   assert.equal(
     snapshot.items.filter((item) => item.type === "turn_completed").length,
-    2,
+    1,
   );
   assert.equal(
     snapshot.items.some((item) => item.type === "context_compaction"),
@@ -2390,7 +2396,7 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
     ),
     false,
   );
-  assert.equal(warnings.length, 2);
+  assert.equal(warnings.length, 1);
   assert(
     warnings.every((warning) =>
       warning.startsWith("Could not automatically compact completed Turn"),

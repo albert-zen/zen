@@ -1422,3 +1422,41 @@ ZenX trigger message bubbles are a disposable UI projection: only the exact know
 ### Context pressure projection
 
 Context budgeting is a disposable projection of compiled messages, the exact disclosed tool-presentation snapshot (including generated run_code SDK), and adapter-owned static instructions; it is not canonical state or provider billing. The same estimate drives compaction admission and ZenX's next-input breakdown. Message categories are out-of-band projection metadata, never serialized as model text. Last provider-reported input remains a separate historical observation.
+
+### Context usage calibration
+
+Runtime keeps one ephemeral input-usage anchor per thread. The anchor pairs the
+raw local estimate of one capability-projected request with that same sample's
+provider input usage. It stores only counts and SHA-256 fingerprints, not a
+second prompt payload. Provider input already includes its cached subset.
+A compatible append-only request uses the measured anchor plus the locally
+estimated delta. UI, admission, and compaction call the same product estimator.
+Four local category weights allocate the corrected total with integer remainders;
+they are not provider-reported per-category measurements.
+
+The scope includes provider/model/reasoning selection, adapter protocol and object
+generation, tool schemas, static instructions, input capabilities, and compaction
+boundary. The original message prefix must hash identically. Changing/replacing
+the adapter (including endpoint/configuration reload), rewriting history or media
+receipts, and compaction invalidate reuse. Invalid or absent usage does not create
+an anchor. Process restart starts uncalibrated until the next response; no journal
+migration, tokenizer download, or preflight network request is introduced.
+The underlying character heuristic remains imperfect, especially for dense text;
+the product reports one context statistic, not a second historical usage counter.
+
+Primary-source comparison (inspected 2026-10-25):
+
+- OpenCode uses a measured prompt anchor plus locally estimated later messages,
+  with provider compatibility checks:
+  https://github.com/anomalyco/opencode/blob/32b57015e5b491a789fba1534ecb472e676c9d8e/packages/core/src/session/compaction.ts
+- Cline estimates complete request payloads with a character heuristic and media
+  allowance; its compaction code bounds underestimation adjustments:
+  https://github.com/cline/cline/blob/40c5d99031fe1128189c5b52e40638d2b7787754/sdk/packages/shared/src/llms/tokens.ts
+  https://github.com/cline/cline/blob/40c5d99031fe1128189c5b52e40638d2b7787754/sdk/packages/core/src/extensions/context/compaction-shared.ts
+- Roo adds the last-message estimate to prior context tokens, and recounts after
+  truncation rather than retaining an invalid old anchor:
+  https://github.com/RooCodeInc/Roo-Code/blob/main/src/core/context-management/index.ts
+
+These are design references, not claims that their cache normalization or hidden
+reasoning policies can be copied across adapters. The product does not send
+history or unsent drafts to a provider merely because a user opens the context UI.
