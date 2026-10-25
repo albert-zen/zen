@@ -107,6 +107,21 @@ jobs:
           path: ${{ runner.temp }}/zenx-whats-new-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Build and capture trigger message bubble evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          npx tsc -p apps/zenx/tsconfig.trigger-message-preview.json --noEmit
+          node apps/zenx/scripts/build-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
+          node apps/zenx/scripts/capture-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
+      - name: Retain trigger message synthetic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-trigger-message-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-trigger-message-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture file sidebar actual-component preview
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         timeout-minutes: 3

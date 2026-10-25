@@ -32,7 +32,10 @@ import {
 } from "./fixtures/agent-runtime-data.js";
 import { conversationReadStore } from "../src/renderer/src/conversation-read-state.js";
 import { App } from "../src/renderer/src/App.js";
-import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
+import {
+  RoomsPage,
+  TriggersPanel,
+} from "../src/renderer/src/bundled-automation-ui.js";
 import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
@@ -2596,3 +2599,157 @@ for (const listed of [false, true]) {
     }
   });
 }
+
+test("trigger message source opens exact scoped sidebar without leaving the conversation", async () => {
+  const dispose = pluginUiRegistry.registerTrusted("trigger-source-test", {
+    panel: TriggersPanel,
+  });
+  const snapshot = {
+    plugins: [
+      {
+        id: "zenx-triggers",
+        displayName: "Triggers",
+        enabled: true,
+        available: true,
+        lifecycle: "enabled",
+        version: "1",
+        source: "bundled",
+        contributionCount: 1,
+      },
+    ],
+    panels: [
+      {
+        key: "zenx-triggers:triggers",
+        pluginId: "zenx-triggers",
+        id: "triggers",
+        title: "Triggers",
+        surfaceId: "panel",
+      },
+    ],
+    surfaces: [
+      {
+        key: "zenx-triggers:panel",
+        pluginId: "zenx-triggers",
+        id: "panel",
+        bundleId: "ui",
+        exportName: "panel",
+      },
+    ],
+    bundles: [
+      {
+        key: "zenx-triggers:ui",
+        pluginId: "zenx-triggers",
+        id: "ui",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "trigger-source-test",
+      },
+    ],
+    pages: [],
+    sidebar: [],
+    subroutes: [],
+    settings: [],
+    commands: [],
+    menus: [],
+  } as ZenXPluginSnapshot;
+  const requests: string[] = [];
+  const commands: string[] = [];
+  const source = thread();
+  source.turns = [
+    {
+      ...runningTurn(),
+      status: "completed",
+      completedAt: 20,
+      items: [
+        {
+          type: "hostMessage",
+          id: "trigger-item",
+          clientId: "trigger-client",
+          source: "trigger",
+          sourceId: "exact/id",
+          mode: "steer",
+          text: "[ZenX trigger wakeup]\nTrigger ID: exact/id\nReason: timer\nRegistered trigger: Daily review\n\nInjected prompt:\nReview all work.",
+        },
+      ],
+    },
+  ];
+  const harness = await mountApp({
+    pluginSnapshot: snapshot,
+    request: async (method) => {
+      requests.push(method);
+      if (method === "zen/thread/resume") return resumed(source);
+      throw Error(method);
+    },
+    executeCommand: async (plugin, command) => {
+      assert.equal(plugin, "zenx-triggers");
+      commands.push(command);
+      if (command === "list")
+        return {
+          triggers: [
+            {
+              id: "exact/id",
+              threadId: "thread-1",
+              kind: "signal",
+              signal: { name: "daily" },
+              label: "Daily review",
+              prompt: "Review all work.",
+              active: false,
+              createdAt: 1,
+            },
+          ],
+          history: [],
+        };
+      if (command === "threads") return { threads: [] };
+      if (command === "workspaces") return { workspaces: [] };
+      throw Error(`Unexpected write: ${command}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const sourceLink = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".trigger-message-row .message-source-link",
+      ),
+    );
+    assert.equal(sourceLink.textContent, "Daily review");
+    const bubble = document.querySelector(".trigger-message-row .user-bubble")!;
+    assert.equal(bubble.textContent, "Review all work.");
+    assert.equal(bubble.contains(sourceLink), false);
+    const before = requests.length;
+    await act(async () => sourceLink.click());
+    const editor = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".auxiliary-panel form textarea",
+      ),
+    );
+    assert.equal(editor.value, "Review all work.");
+    await act(async () => sourceLink.click());
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(
+        ".auxiliary-panel form textarea",
+      )?.value,
+      "Review all work.",
+    );
+
+    assert.ok(document.querySelector(".thread-view .trigger-message-row"));
+    assert.equal(
+      document.querySelector(".auxiliary-panel")?.getAttribute("data-open"),
+      "true",
+    );
+    assert.equal(
+      requests.length,
+      before,
+      "opening source must not resume or navigate another thread",
+    );
+    assert.ok(
+      commands.every((name) =>
+        ["list", "threads", "workspaces"].includes(name),
+      ),
+    );
+  } finally {
+    await harness.unmount();
+    dispose();
+  }
+});
