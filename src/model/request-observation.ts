@@ -1,3 +1,4 @@
+import type { SerializedMessageSource } from "./message-provenance.js";
 import type { ModelRequest, ModelRequestObservation } from "../model.js";
 
 const credentialField =
@@ -11,6 +12,7 @@ export function observeRequestBody(
   provider: string,
   transportAttempt: number,
   secrets: readonly string[] = [],
+  messageSources: readonly SerializedMessageSource[] = [],
 ): void {
   if (request.onRequest === undefined) return;
   try {
@@ -49,6 +51,13 @@ export function observeRequestBody(
       originalBytes: Buffer.byteLength(body, "utf8"),
       redacted,
       transportAttempt,
+      messageSources:
+        messageSources.length > 1024
+          ? []
+          : messageSources.map((source) => ({
+              ...source,
+              itemId: scrub(source.itemId),
+            })),
       provider: safeProvider,
       model: safeModel,
     });

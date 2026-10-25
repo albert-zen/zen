@@ -1,4 +1,33 @@
 export const en = {
+  messageDebugOpen: "Inspect message input",
+  messageDebugTitle: "Message input",
+  messageDebugClose: "Close message input",
+  messageDebugExperiment: "EXPERIMENT · LOCAL MEMORY",
+  messageDebugScope:
+    "Read-only. Opening this panel does not enable capture or resend the message. Only this message is shown, not system instructions or tools.",
+  messageDebugSaved: "Saved admitted input",
+  messageDebugSavedNote:
+    "Exact saved message content, including reference markup. This is not proof of what a provider received.",
+  messageDebugCaptured: "Captured provider message",
+  messageDebugCaptureNote:
+    "Explicit serializer attribution, not text matching. Each entry is one observed sample/transport attempt; observation before transport does not prove server receipt.",
+  messageDebugUnavailable:
+    "Capture unavailable, expired, or attribution ambiguous. Refresh to check again.",
+  messageDebugLoading: "Reading local capture…",
+  messageDebugOff:
+    "Request capture is off. Enable it explicitly in the thread debugger before a future request; past requests cannot be recovered.",
+  messageDebugNoCapture:
+    "No retained attributed capture. It may not have been captured, may have expired, or may have been omitted after compaction. Unsupported adapters do not claim an actual provider field.",
+  messageDebugRedacted: "redacted",
+  messageDebugTruncated: "truncated · unavailable",
+  messageDebugRedactedNote:
+    "Actual captured provider field after redaction; not byte-exact original content.",
+  messageDebugObservedNote:
+    "Field extracted from the observed serialized request. JSON whitespace is formatted for reading.",
+  messageDebugPage: "Characters {{start}}–{{end}} / {{total}}",
+  messageDebugFirst: "First page",
+  messageDebugNext: "Next page",
+
   referenceDetails: "Reference details",
   referenceDetailsNamed: "Reference details: {{name}}",
   closeReferenceDetails: "Close reference details",
@@ -944,6 +973,33 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  messageDebugOpen: "查看消息输入",
+  messageDebugTitle: "消息输入",
+  messageDebugClose: "关闭消息输入",
+  messageDebugExperiment: "实验功能 · 本机内存",
+  messageDebugScope:
+    "只读。打开面板不会开启捕获或重新发送消息。仅显示本条消息，不显示系统指令或工具定义。",
+  messageDebugSaved: "已保存的接收内容",
+  messageDebugSavedNote:
+    "已保存的原始消息内容，包含引用标记。不代表供应商实际收到的内容。",
+  messageDebugCaptured: "捕获的供应商消息字段",
+  messageDebugCaptureNote:
+    "依据序列化时的明确来源映射，不按文字猜测。每项对应一次采样或传输尝试；发送前的观察不能证明服务器已收到。",
+  messageDebugUnavailable: "捕获不可用、已过期或来源映射不唯一。请刷新检查。",
+  messageDebugLoading: "正在读取本机捕获…",
+  messageDebugOff:
+    "请求捕获已关闭。请在后续请求前，通过线程调试器明确开启；无法找回未捕获的历史请求。",
+  messageDebugNoCapture:
+    "没有保留的对应捕获。可能未开启捕获、已过期，或压缩后未包含本消息。不支持的适配器不会冒充实际供应商字段。",
+  messageDebugRedacted: "已脱敏",
+  messageDebugTruncated: "已截断 · 不可读取",
+  messageDebugRedactedNote: "实际捕获字段的脱敏版本，不是逐字节原文。",
+  messageDebugObservedNote:
+    "从序列化请求的观察记录中提取此字段。JSON 空白已格式化以便阅读。",
+  messageDebugPage: "字符 {{start}}–{{end}} / {{total}}",
+  messageDebugFirst: "第一页",
+  messageDebugNext: "下一页",
+
   referenceDetails: "引用详情",
   referenceDetailsNamed: "引用详情：{{name}}",
   closeReferenceDetails: "关闭引用详情",

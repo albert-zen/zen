@@ -31,6 +31,10 @@ export function validateModelRequestDebugCommand(
     value.action === "list" &&
     typeof value.threadId === "string" &&
     value.threadId.length <= 200 &&
+    (value.itemId === undefined ||
+      (typeof value.itemId === "string" &&
+        value.itemId.length > 0 &&
+        value.itemId.length <= 200)) &&
     (value.query === undefined ||
       (typeof value.query === "string" && value.query.length <= 1000))
   )
@@ -38,13 +42,18 @@ export function validateModelRequestDebugCommand(
       action: value.action,
       threadId: value.threadId,
       ...(value.query === undefined ? {} : { query: value.query }),
+      ...(typeof value.itemId === "string" ? { itemId: value.itemId } : {}),
     };
   if (
     value.action === "read" &&
     (value.view === undefined ||
-      ["payload", "messages", "tools", "configuration"].includes(
+      ["payload", "messages", "tools", "configuration", "message"].includes(
         String(value.view),
       )) &&
+    (value.view !== "message" ||
+      (typeof value.itemId === "string" &&
+        value.itemId.length > 0 &&
+        value.itemId.length <= 200)) &&
     typeof value.id === "string" &&
     value.id.length <= 200 &&
     (value.offset === undefined ||
@@ -57,9 +66,10 @@ export function validateModelRequestDebugCommand(
         ? {}
         : {
             view: value.view as
-              "payload" | "messages" | "tools" | "configuration",
+              "payload" | "messages" | "tools" | "configuration" | "message",
           }),
       ...(value.offset === undefined ? {} : { offset: Number(value.offset) }),
+      ...(value.view === "message" ? { itemId: String(value.itemId) } : {}),
     };
   throw new Error("Invalid model debug request");
 }
@@ -109,6 +119,10 @@ export class ModelRequestDebugStore {
           ({ summary, body }) =>
             (command.threadId === "" ||
               summary.threadId === command.threadId) &&
+            (command.itemId === undefined ||
+              summary.messageSources?.some(
+                (source) => source.itemId === command.itemId,
+              )) &&
             (!query ||
               body.toLocaleLowerCase().includes(query) ||
               JSON.stringify(summary).toLocaleLowerCase().includes(query)),
@@ -130,16 +144,32 @@ export class ModelRequestDebugStore {
             "Structured views are unavailable for truncated captures",
           );
         const payload = JSON.parse(body) as Record<string, unknown>;
+        const mappings =
+          record.summary.messageSources?.filter(
+            (source) => source.itemId === command.itemId,
+          ) ?? [];
+        if (view === "message" && mappings.length !== 1)
+          throw new Error("Exact message attribution unavailable");
+        const mapping = mappings[0];
+        const entries =
+          mapping === undefined ? undefined : payload[mapping.container];
+        if (
+          view === "message" &&
+          (!Array.isArray(entries) || entries[mapping!.index]?.role !== "user")
+        )
+          throw new Error("Captured message unavailable");
         const value =
-          view === "messages"
-            ? (payload.messages ?? payload.input ?? [])
-            : view === "tools"
-              ? (payload.tools ?? [])
-              : Object.fromEntries(
-                  Object.entries(payload).filter(
-                    ([key]) => !["messages", "input", "tools"].includes(key),
-                  ),
-                );
+          view === "message"
+            ? (entries as unknown[])[mapping!.index]
+            : view === "messages"
+              ? (payload.messages ?? payload.input ?? [])
+              : view === "tools"
+                ? (payload.tools ?? [])
+                : Object.fromEntries(
+                    Object.entries(payload).filter(
+                      ([key]) => !["messages", "input", "tools"].includes(key),
+                    ),
+                  );
         body = JSON.stringify(value, null, 2);
       }
       const offset = command.offset ?? 0;
@@ -217,6 +247,9 @@ export class ModelRequestDebugStore {
               transportAttempt: event.transportAttempt,
               redacted: event.redacted,
               originalBytes: event.originalBytes,
+              ...(event.messageSources === undefined
+                ? {}
+                : { messageSources: event.messageSources }),
               sourceAttachments,
               sourceAttachmentCount: attachmentRefs.length,
             },

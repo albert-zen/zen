@@ -1,3 +1,4 @@
+import { copyMessageSource } from "./model/message-provenance.js";
 import {
   decodeMediaDataUri,
   validateAttachmentRef,
@@ -108,10 +109,16 @@ export function projectModelMessages(
     });
   return messages.map((message) => {
     if (message.role === "user" && "content" in message)
-      return { ...message, content: project(message.content) };
+      return copyMessageSource(message, {
+        ...message,
+        content: project(message.content),
+      });
     if (message.role === "tool" && message.modelContent !== undefined)
-      return { ...message, modelContent: project(message.modelContent) };
-    return structuredClone(message);
+      return copyMessageSource(message, {
+        ...message,
+        modelContent: project(message.modelContent),
+      });
+    return copyMessageSource(message, structuredClone(message));
   });
 }
 

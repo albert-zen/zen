@@ -1,4 +1,8 @@
 import {
+  serializedMessageSource,
+  type SerializedMessageSource,
+} from "./message-provenance.js";
+import {
   safeProviderErrorIdentity,
   safeProviderErrorParameter,
   providerRecoveryBlocked,
@@ -142,6 +146,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     });
     const messages: Readonly<Record<string, unknown>>[] = [];
     const mediaPaths = new Map<string, object>();
+    const messageSources: SerializedMessageSource[] = [];
     let pendingReasoning = "";
     for (const message of request.messages) {
       if (message.role === "reasoning") {
@@ -176,6 +181,10 @@ export class OpenAiCompatibleModel implements ModelAdapter {
           mediaPaths,
           `messages[${messages.length}]`,
           modelUserContent(message),
+        );
+      if (message.role === "user")
+        messageSources.push(
+          ...serializedMessageSource(message, "messages", messages.length),
         );
       messages.push(encoded);
       if (message.role === "tool" && message.modelContent !== undefined) {
@@ -235,6 +244,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             this.provider,
             ++transportAttempt,
             [this.#apiKey],
+            messageSources,
           );
           return this.#fetch(this.#endpoint, {
             method: "POST",

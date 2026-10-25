@@ -68,6 +68,18 @@ jobs:
           path: ${{ runner.temp }}/zenx-approved-ui-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Build and capture experimental message input debugger
+        run: |
+          node apps/zenx/scripts/build-message-context-debug-preview.mjs "${{ runner.temp }}/zenx-message-debug-preview"
+          node apps/zenx/scripts/capture-message-context-debug-preview.mjs "${{ runner.temp }}/zenx-message-debug-preview"
+      - name: Retain experimental message input evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-message-debug-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-message-debug-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture synthetic process-style preview
         run: |
           node apps/zenx/scripts/build-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"

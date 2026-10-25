@@ -1,4 +1,8 @@
 import {
+  serializedMessageSource,
+  type SerializedMessageSource,
+} from "./message-provenance.js";
+import {
   safeProviderErrorIdentity,
   safeProviderErrorParameter,
   providerRecoveryBlocked,
@@ -106,6 +110,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     const sessionHint = promptCacheHint(request.sessionId);
     const input: Array<Record<string, unknown>> = [];
     const mediaPaths = new Map<string, object>();
+    const messageSources: SerializedMessageSource[] = [];
     for (const [index, message] of request.messages.entries()) {
       const encoded = await toResponsesInput(
         message,
@@ -127,6 +132,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
           `input[${input.length + encoded.length - 1}]`,
           message.modelContent,
           ["image"],
+        );
+      if (message.role === "user" && encoded.length === 1)
+        messageSources.push(
+          ...serializedMessageSource(message, "input", input.length),
         );
       input.push(...encoded);
     }
@@ -161,6 +170,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
         this.provider,
         ++transportAttempt,
         [...observedTokens],
+        messageSources,
       );
     };
     let lease = await this.#acquireAccessLease(request.signal);
