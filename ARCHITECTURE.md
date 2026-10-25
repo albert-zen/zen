@@ -1460,3 +1460,5 @@ Primary-source comparison (inspected 2026-10-25):
 These are design references, not claims that their cache normalization or hidden
 reasoning policies can be copied across adapters. The product does not send
 history or unsent drafts to a provider merely because a user opens the context UI.
+
+- **Synthetic UI capture lifecycle** — CI-only Chrome observers share bounded startup and teardown phases with failure receipts; they do not restart browsers, retry UI actions, change product timeouts, or own runtime state.
