@@ -12,7 +12,7 @@ import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 import "../src/renderer/src/trigger-ui.css";
-const now = Date.UTC(2026, 9, 25, 6, 0);
+const now = Date.UTC(2026, 9, 25, 6, 0) / 1000;
 const q = new URLSearchParams(location.search);
 const zh = q.get("lang") === "zh-CN";
 const label = zh ? "每日研究简报" : "Daily research brief";
@@ -29,7 +29,7 @@ const thread: Thread = {
   ephemeral: false,
   isPinned: false,
   modelProvider: "synthetic",
-  createdAt: now - 10000,
+  createdAt: now - 10,
   updatedAt: now,
   recencyAt: null,
   status: { type: "idle" },
@@ -68,7 +68,7 @@ const thread: Thread = {
       itemsView: "full",
       status: "completed",
       error: null,
-      startedAt: now - 10000,
+      startedAt: now - 10,
       completedAt: now,
       durationMs: 10000,
     },

@@ -299,6 +299,13 @@ try {
       true,
       "Message has visible nonzero layout",
     );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('.trigger-message-row .message-actions').textContent.includes('2026')",
+      ),
+      true,
+      "Protocol timestamps render expected fixture year",
+    );
     await capture("01-message");
     await clickSelector(".trigger-message-row .message-source-link");
     await waitFor(
