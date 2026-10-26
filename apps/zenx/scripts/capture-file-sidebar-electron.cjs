@@ -11,6 +11,11 @@ const { app, BrowserWindow, screen } = require("electron");
 const {
   fileEditorDiagnosticScope,
 } = require("./file-editor-diagnostic-scope.cjs");
+const {
+  fileEditorResizeState,
+  fileEditorResizeEvents,
+} = require("./file-editor-resize-readiness.cjs");
+const resizeState = `(${fileEditorResizeState.toString()})(document)`;
 const scope = fileEditorDiagnosticScope(process.argv.slice(3));
 
 assert.equal(
@@ -192,36 +197,65 @@ async function verifyOriginIsolation() {
     originProbeUrl = undefined;
   }
 }
-async function resizeEditor(width) {
+async function resizeEditor(width, caseReceipt, editor) {
+  const receipt = { editor, targetWidth: width };
+  (caseReceipt.resizeActions ||= []).push(receipt);
+  await evaluate("window.__nativeFileResizeEvents=[]");
   await click(".auxiliary-panel > .browser-panel-resizer");
   for (let i = 0; i < 4 && (await evaluate(measure)).panel.width < 600; i++)
     await key("Left");
-  // Native keyboard handling can commit React size state before Chromium's
-  // actual grid geometry. Do not derive a tree drag from the previous 520px pane.
-  await until(
-    `Math.abs(document.querySelector('.auxiliary-panel').getBoundingClientRect().width-600)<1`,
-    "outer panel geometry committed",
-  );
-  const beforeResize = await evaluate(measure);
-  const handle = await pointFor(".workspace-file-resizer");
-  const end = {
-    x: Math.round(handle.x + beforeResize.scroller.width - width),
-    y: handle.y,
-  };
-  input({ type: "mouseMove", ...handle });
-  input({ type: "mouseDown", button: "left", clickCount: 1, ...handle });
-  input({
-    type: "mouseMove",
-    button: "left",
-    modifiers: ["leftButtonDown"],
-    ...end,
-  });
-  input({ type: "mouseUp", button: "left", clickCount: 1, ...end });
-  await pause(300);
-  await until(
-    `Math.abs(document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-scroller').getBoundingClientRect().width-${width})<=3`,
-    "resized editor layout committed",
-  );
+  // Layout can be 600px while ResizeObserver's React split limit still belongs
+  // to the previous 520px pane (279 rather than 359). Keep the original polling
+  // deadline, but await both actual geometry and the handler's exposed limit.
+  receipt.beforeReadiness = await evaluate(resizeState);
+  try {
+    await until(
+      `${resizeState}.ready`,
+      "outer panel and file-navigation bounds committed",
+    );
+    const beforeResize = await evaluate(measure);
+    const state = await evaluate(resizeState);
+    const handle = await pointFor(".workspace-file-resizer");
+    receipt.beforeDrag = { ...state, handle, scroller: beforeResize.scroller };
+    const events = fileEditorResizeEvents(
+      state,
+      handle,
+      beforeResize.scroller.width,
+      width,
+    );
+    await evaluate(`(() => {
+      window.__nativeFileResizeEvents=[];
+      if(window.__nativeFileResizeObserverInstalled)return;
+      window.__nativeFileResizeObserverInstalled=true;
+      for(const type of ['pointerdown','pointermove','pointerup','pointercancel'])
+        document.addEventListener(type,event=>{
+          const separator=event.target?.closest?.('.workspace-file-resizer');
+          if(!separator)return;
+          const receipt={type:event.type,time:event.timeStamp,isTrusted:event.isTrusted,
+            x:event.clientX,y:event.clientY,button:event.button,buttons:event.buttons,
+            pointerId:event.pointerId,maximum:separator.getAttribute('aria-valuemax'),
+            current:separator.getAttribute('aria-valuenow'),captured:separator.hasPointerCapture(event.pointerId)};
+          window.__nativeFileResizeEvents.push(receipt);
+          if(window.__nativeFileResizeEvents.length>32)window.__nativeFileResizeEvents.shift();
+          queueMicrotask(()=>receipt.afterDispatch={maximum:separator.getAttribute('aria-valuemax'),current:separator.getAttribute('aria-valuenow'),captured:separator.hasPointerCapture(event.pointerId)});
+        },{capture:true,passive:true});
+    })()`);
+    receipt.sentEvents = [];
+    for (const event of events) {
+      input(event);
+      receipt.sentEvents.push(event);
+    }
+    await pause(300);
+    await until(
+      `Math.abs(document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-scroller').getBoundingClientRect().width-${width})<=3`,
+      "resized editor layout committed",
+    );
+  } finally {
+    receipt.after = await evaluate(resizeState);
+    receipt.pointerEvents = await evaluate(
+      "window.__nativeFileResizeEvents || []",
+    );
+  }
 }
 async function runColdEndCase(markdown) {
   const receipt = {
@@ -323,7 +357,7 @@ async function runCase(width, precise, productionCsp = false) {
       0,
       "Runtime editor styles pass strict CSP",
     );
-    await resizeEditor(width);
+    await resizeEditor(width, receipt, "source");
     receipt.sourceBefore = await evaluate(measure);
     bounded(receipt.sourceBefore);
     await wheel(precise);
@@ -412,7 +446,7 @@ async function runCase(width, precise, productionCsp = false) {
     "Markdown active",
   );
   receipt.phase = "resize-editor";
-  await resizeEditor(width);
+  await resizeEditor(width, receipt, "markdown");
   await evaluate(
     `(() => {window.__nativeFileWheelEvents=[];window.__nativeFileKeyEvents=[];document.addEventListener('keydown',event=>{const e={key:event.key,code:event.code,metaKey:event.metaKey,ctrlKey:event.ctrlKey,altKey:event.altKey,shiftKey:event.shiftKey,target:event.target?.className};window.__nativeFileKeyEvents.push(e);setTimeout(()=>e.defaultPrevented=event.defaultPrevented,0);},{capture:true,passive:true});document.addEventListener('wheel',event=>{const e={target:event.target?.className,deltaX:event.deltaX,deltaY:event.deltaY,deltaMode:event.deltaMode,defaultPreventedAtCapture:event.defaultPrevented};window.__nativeFileWheelEvents.push(e);setTimeout(()=>e.defaultPreventedAfterDispatch=event.defaultPrevented,0);},{capture:true,passive:true});})()`,
   );

@@ -101,6 +101,7 @@ const sources = [
   "src/renderer/index.html",
   "scripts/capture-file-sidebar-electron.cjs",
   "scripts/file-editor-diagnostic-scope.cjs",
+  "scripts/file-editor-resize-readiness.cjs",
 ];
 await writeFile(
   path.join(directory, "source.json"),
