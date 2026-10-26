@@ -8,6 +8,7 @@ import {
 } from "./browser-provider.js";
 import {
   computerCapabilityManifest,
+  boundComputerCapabilityManifest,
   ElectronMacComputerBackend,
   type ZenXComputerBackend,
 } from "./computer-provider.js";
@@ -594,7 +595,7 @@ async function selectComputerProviderForId(
   if (executable === undefined) {
     return {
       backend: new ElectronMacComputerBackend(),
-      manifest: computerCapabilityManifest,
+      manifest: boundComputerCapabilityManifest,
       diagnostics: [
         unavailableDiagnostic(
           "computer",
@@ -636,7 +637,7 @@ async function selectComputerProviderForId(
   } catch (error) {
     return {
       backend: new ElectronMacComputerBackend(),
-      manifest: computerCapabilityManifest,
+      manifest: boundComputerCapabilityManifest,
       diagnostics: [
         unavailableDiagnostic(
           "computer",

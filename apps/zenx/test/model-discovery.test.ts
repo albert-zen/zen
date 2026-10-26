@@ -12,6 +12,7 @@ import {
 } from "../src/main/host-profile.js";
 import {
   discoverOpenAiCompatibleModels,
+  discoverOpenAiCompatibleCatalog,
   discoverOpenAiSubscriptionModels,
   OpenAiSubscriptionModelCache,
 } from "../src/main/model-discovery.js";
@@ -1048,4 +1049,36 @@ test("subscription cache rejects ETags from another catalog compatibility versio
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("API catalog separates explicit input claims from ID inference without changing catalog defaults", async () => {
+  const result = await discoverOpenAiCompatibleCatalog({
+    baseUrl: "https://synthetic.example.test/v1",
+    apiKey: "synthetic",
+    fetch: async () =>
+      Response.json({
+        data: [
+          { id: "ordinary" },
+          { id: "gpt-5.6-terra" },
+          {
+            id: "explicit-image",
+            architecture: { input_modalities: ["text", "image"] },
+          },
+          { id: "explicit-text", input_modalities: ["text"] },
+          { id: "boolean-only", capabilities: { vision: false } },
+          { id: "boolean-true", capabilities: { vision: true } },
+          { id: "mixed-unknown", input_modalities: ["text", "video"] },
+          { id: "invalid", input_modalities: [42] },
+        ],
+      }),
+  });
+  assert.deepEqual(result.declaredInputModalities, [
+    { id: "explicit-image", inputModalities: ["text", "image"] },
+    { id: "explicit-text", inputModalities: ["text"] },
+  ]);
+  assert.deepEqual(result.models[1]?.inputModalities, ["text", "image"]);
+  assert.equal(result.models[1]?.source, "preset");
+  assert.ok(
+    result.models.every((entry) => !("declaredInputModalities" in entry)),
+  );
 });
