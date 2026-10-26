@@ -574,6 +574,7 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
 export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
   readonly #delegate: ZenXAutomationControlCapabilityPackage;
   readonly #port: ZenXAutomationControlPort;
+  #runtimeSdk: ZenXPluginHostSdkV1 | undefined;
   readonly manifest: ZenXPluginManifestV2;
   readonly storage = {
     version: 1,
@@ -615,8 +616,13 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
     });
   }
 
+  createRuntime(): ZenXTriggersCapabilityPackage {
+    return new ZenXTriggersCapabilityPackage(this.#port);
+  }
+
   async start(sdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#port.startPlugin?.(ZENX_TRIGGERS_CAPABILITY_ID, sdk);
+    this.#runtimeSdk = sdk;
   }
 
   async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
@@ -627,13 +633,17 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
-    await this.#port.stopPlugin?.(ZENX_TRIGGERS_CAPABILITY_ID);
+    await this.#port.stopPlugin?.(
+      ZENX_TRIGGERS_CAPABILITY_ID,
+      this.#runtimeSdk,
+    );
   }
 }
 
 export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
   readonly #delegate: ZenXAutomationControlCapabilityPackage;
   readonly #port: ZenXAutomationControlPort;
+  #runtimeSdk: ZenXPluginHostSdkV1 | undefined;
   readonly manifest: ZenXPluginManifestV2;
   readonly storage = { version: 1, initialValue: { rooms: [] } } as const;
 
@@ -666,8 +676,13 @@ export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
     });
   }
 
+  createRuntime(): ZenXRoomsCapabilityPackage {
+    return new ZenXRoomsCapabilityPackage(this.#port);
+  }
+
   async start(sdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#port.startPlugin?.(ZENX_ROOMS_CAPABILITY_ID, sdk);
+    this.#runtimeSdk = sdk;
   }
 
   async invoke(name: string, invocation: ToolInvocation): Promise<unknown> {
@@ -678,7 +693,7 @@ export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
-    await this.#port.stopPlugin?.(ZENX_ROOMS_CAPABILITY_ID);
+    await this.#port.stopPlugin?.(ZENX_ROOMS_CAPABILITY_ID, this.#runtimeSdk);
   }
 }
 

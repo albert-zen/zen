@@ -60,35 +60,37 @@ export function ReferenceToken({
   }
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <span
-        className="reference-token"
-        data-reference-kind={reference.kind}
-        data-message-quote-ignore=""
-        role="group"
-        aria-label={t("referenceDetails")}
-      >
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="reference-token-details"
-            aria-label={t("referenceDetailsNamed", { name: label })}
-            title={label}
-          >
-            <Icon name={icon} size={13} />
-            <span>{label}</span>
-          </button>
-        </PopoverTrigger>
-        {onRemove && (
-          <button
-            type="button"
-            className="reference-token-remove"
-            aria-label={t("removeReference", { name: reference.name })}
-            disabled={removeDisabled}
-            onClick={onRemove}
-          >
-            <Icon name="x" size={10} />
-          </button>
-        )}
+      <span className="reference-token-wrap">
+        <span
+          className="reference-token"
+          data-reference-kind={reference.kind}
+          data-message-quote-ignore=""
+          role="group"
+          aria-label={t("referenceDetails")}
+        >
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="reference-token-details"
+              aria-label={t("referenceDetailsNamed", { name: label })}
+              title={label}
+            >
+              <Icon name={icon} size={13} />
+              <span>{label}</span>
+            </button>
+          </PopoverTrigger>
+          {onRemove && (
+            <button
+              type="button"
+              className="reference-token-remove"
+              aria-label={t("removeReference", { name: reference.name })}
+              disabled={removeDisabled}
+              onClick={onRemove}
+            >
+              <Icon name="x" size={10} />
+            </button>
+          )}
+        </span>
       </span>
       <PopoverContent
         className="reference-details-popover"
