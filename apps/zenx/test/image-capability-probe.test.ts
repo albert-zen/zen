@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createHostedAppServer } from "../../../apps/cli/src/host.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -6,6 +10,16 @@ import { probeOpenAiCompatibleImage } from "../src/main/image-capability-probe.j
 
 test("explicit image probe uses the real adapter request and classifies supported, unsupported, and inconclusive", async () => {
   const requests: Array<Record<string, unknown>> = [];
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-probe-canonical-"),
+  );
+  const host = createHostedAppServer({
+    cwd: "/tmp",
+    dataDirectory: directory,
+    provider: { type: "fake" },
+    model: "fake",
+    approvalPolicy: "never",
+  });
   const server = createServer((request, response) => {
     let body = "";
     request.setEncoding("utf8");
@@ -74,11 +88,19 @@ test("explicit image probe uses the real adapter request and classifies supporte
           apiKey: "probe-secret",
           provider: "fake-http-provider",
           model,
+          execute: (request, signal) =>
+            host.runConfiguredModelOperation(
+              request.input,
+              request.profile,
+              signal,
+            ),
         }),
         expected,
       );
     }
   } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
     await new Promise<void>((resolve, reject) =>
       server.close((error) =>
         error === undefined ? resolve() : reject(error),
@@ -118,41 +140,85 @@ test("probe transport failures are inconclusive", async () => {
       apiKey: "secret",
       provider: "provider",
       model: "model",
-      fetch: async () => {
-        throw new Error("network unavailable");
-      },
+      execute: async () => ({
+        threadId: "synthetic",
+        operationItemId: "synthetic",
+        status: "failed",
+        error: "Model operation failed",
+        probeOutcome: "inconclusive",
+      }),
     }),
     "inconclusive",
   );
 });
 
-test("explicit Responses image check uses Responses only and never guesses Chat fallback", async () => {
-  let calls = 0;
-  for (const status of [200, 400]) {
-    const outcome = await probeOpenAiCompatibleImage({
-      baseUrl: "https://synthetic.invalid/v1",
-      protocol: "responses",
-      apiKey: "synthetic-not-real",
-      provider: "fixture",
-      model: "fixture",
-      fetch: async (url, init) => {
-        calls++;
-        assert.equal(String(url), "https://synthetic.invalid/v1/responses");
-        const body = JSON.parse(String(init?.body));
-        assert.equal(body.max_output_tokens, 16);
-        assert.equal("max_tokens" in body, false);
-        assert.equal(body.input[0].content[1].type, "input_image");
-        return status === 200
-          ? new Response(
-              'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n',
-            )
-          : new Response(
-              '{"error":{"type":"invalid_request_error","message":"not supported"}}',
-              { status: 400 },
-            );
-      },
+test("explicit Responses image check uses canonical Host dispatch only and never guesses Chat fallback", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-responses-probe-"),
+  );
+  const host = createHostedAppServer({
+    cwd: "/tmp",
+    dataDirectory: directory,
+    provider: { type: "fake" },
+    model: "fake",
+    approvalPolicy: "never",
+  });
+  const requests: Array<{ url: string; body: Record<string, any> }> = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      const parsed = JSON.parse(body);
+      requests.push({ url: request.url ?? "", body: parsed });
+      if (parsed.model === "supported") {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n',
+        );
+      } else {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          '{"error":{"type":"invalid_request_error","message":"not supported"}}',
+        );
+      }
     });
-    assert.equal(outcome, status === 200 ? "supported" : "inconclusive");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    for (const model of ["supported", "ambiguous"]) {
+      const outcome = await probeOpenAiCompatibleImage({
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        protocol: "responses",
+        apiKey: "synthetic-not-real",
+        provider: "fixture",
+        model,
+        execute: (request, signal) =>
+          host.runConfiguredModelOperation(
+            request.input,
+            request.profile,
+            signal,
+          ),
+      });
+      assert.equal(
+        outcome,
+        model === "supported" ? "supported" : "inconclusive",
+      );
+    }
+    assert.equal(requests.length, 2);
+    for (const { url, body } of requests) {
+      assert.equal(url, "/v1/responses");
+      assert.equal(body.max_output_tokens, 1);
+      assert.equal("max_tokens" in body, false);
+      assert.equal(body.input[0].content[1].type, "input_image");
+    }
+  } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   }
-  assert.equal(calls, 2);
 });

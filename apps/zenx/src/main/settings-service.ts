@@ -62,6 +62,7 @@ import { resolveZenXHostConfig } from "./host-config.js";
 import {
   probeOpenAiCompatibleImage,
   type ImageCapabilityProbeOutcome,
+  type ModelOperationExecutor,
 } from "./image-capability-probe.js";
 import {
   type ProjectPathIdentity,
@@ -800,6 +801,7 @@ export class ZenXSettingsService {
     modelId: string,
     options: {
       resolveTransport?: ProviderOperationTransportResolver;
+      runModelOperation?: ModelOperationExecutor;
       signal?: AbortSignal;
     } = {},
   ): Promise<ZenXImageCapabilityProbeResult> {
@@ -819,6 +821,7 @@ export class ZenXSettingsService {
     modelId: string,
     options: {
       resolveTransport?: ProviderOperationTransportResolver;
+      runModelOperation?: ModelOperationExecutor;
       signal?: AbortSignal;
     } = {},
   ): Promise<ZenXImageCapabilityProbeResult> {
@@ -832,10 +835,10 @@ export class ZenXSettingsService {
       target,
       "image capability probe",
     );
-    const fetch = this.#providerFetchFactory(transport);
-    let outcome: ImageCapabilityProbeOutcome;
-    try {
-      outcome = await probeOpenAiCompatibleImage({
+    if (!options.runModelOperation)
+      throw new Error("Canonical probe Host executor is unavailable");
+    const outcome: ImageCapabilityProbeOutcome =
+      await probeOpenAiCompatibleImage({
         baseUrl: target.provider.baseUrl,
         ...(target.provider.protocol === undefined
           ? {}
@@ -843,12 +846,12 @@ export class ZenXSettingsService {
         apiKey: target.apiKey,
         provider: target.provider.name,
         model: target.model!.id,
-        fetch,
+        metadata: target.model!,
+        providerProfileId: target.provider.providerProfileId,
+        ...(transport === undefined ? {} : { transport }),
+        execute: options.runModelOperation,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
-    } finally {
-      await fetch.close?.();
-    }
     if (outcome === "inconclusive") {
       await this.#assertProviderOperationCurrent(
         target,
@@ -906,6 +909,33 @@ export class ZenXSettingsService {
 
   computerForegroundControlEnabled(): boolean {
     return this.#requireProfile().computerForegroundControlEnabled === true;
+  }
+
+  async titleOperationConfiguration() {
+    const release = this.#beginAuxiliaryOperation();
+    try {
+      await this.#profileOperations;
+      const profile = this.#appliedProfile ?? this.#requireProfile();
+      const reference = profile.titleModel;
+      const config = await this.#hostConfigForProfile(profile);
+      const provider = config.providers?.find(
+        (entry) => entry.providerProfileId === reference.providerProfileId,
+      );
+      if (!provider)
+        throw new Error("Configured title Provider is unavailable");
+      return {
+        selection: {
+          providerProfileId: reference.providerProfileId,
+          modelId: reference.modelId,
+        },
+        provider,
+        titlePrompt: profile.titlePrompt,
+        release,
+      };
+    } catch (error) {
+      await release();
+      throw error;
+    }
   }
 
   async titleModel() {

@@ -249,7 +249,7 @@ test("auxiliary cancellation preserves observed partial model text, records one 
     terminal.content?.[0]?.type === "text" && terminal.content[0].text,
     "partial model text",
   );
-  assert.match(terminal.error!, /synthetic cancellation/);
+  assert.match(terminal.error!, /cancelled/);
   const restarted = fixture(plain, f.journal);
   await restarted.server.readThread(result.threadId);
   assert.equal(calls, 1);
@@ -482,3 +482,106 @@ for (const protocol of ["chat", "responses"] as const)
     assert.equal(result.status, "completed");
     assert.equal(calls, 1);
   });
+
+test("borrowed draft execution preserves selection and the same journal without publishing a provider", async () => {
+  const f = fixture(plain);
+  let calls = 0;
+  const draftSelection = {
+    providerProfileId: "unapplied-draft",
+    modelId: "draft",
+    reasoningEffort: null,
+  };
+  const model = new StaticModelCatalog([
+    {
+      id: "draft",
+      isDefault: true,
+      contextWindow: null,
+      supportedReasoningEfforts: null,
+      defaultReasoningEffort: null,
+    },
+  ]).get("draft")!;
+  const adapter: ModelAdapter = {
+    provider: "draft",
+    async *stream(request) {
+      calls++;
+      assert.equal(request.model, "draft");
+      const items = await f.journal.read(request.debugContext!.threadId);
+      assert(
+        items.some(
+          (item) =>
+            item.type === "model_operation" &&
+            item.selection.providerProfileId === "unapplied-draft",
+        ),
+      );
+      assert(
+        items.some(
+          (item) =>
+            item.type === "context_message" &&
+            item.content.some((part) => part.type === "image"),
+        ),
+      );
+      yield { type: "text_delta", delta: "OK" };
+    },
+  };
+  const execution = { adapter, model, selection: draftSelection };
+  await assert.rejects(
+    f.server.runModelOperation(
+      { kind: "image-capability-probe", selection: draftSelection },
+      undefined,
+      { ...execution, model: { ...model, id: "different-model" } },
+    ),
+    /does not match/,
+  );
+  await assert.rejects(
+    f.server.runModelOperation(
+      {
+        kind: "image-capability-probe",
+        selection: { ...draftSelection, reasoningEffort: "high" },
+      },
+      undefined,
+      {
+        ...execution,
+        selection: { ...draftSelection, reasoningEffort: "high" },
+      },
+    ),
+    /metadata reasoning default/,
+  );
+  await assert.rejects(
+    f.server.runModelOperation(
+      {
+        kind: "title",
+        threadId: "not-admitted",
+        sourceItemId: "not-admitted",
+        selection: draftSelection,
+      },
+      undefined,
+      execution,
+    ),
+    /known supported model capabilities/,
+  );
+
+  await assert.rejects(
+    f.server.runModelOperation(
+      { kind: "image-capability-probe", selection },
+      undefined,
+      execution,
+    ),
+    /does not match/,
+  );
+  assert.equal(calls, 0);
+  const result = await f.server.runModelOperation(
+    { kind: "image-capability-probe", selection: draftSelection },
+    undefined,
+    execution,
+  );
+  assert.equal(result.status, "completed");
+  assert.equal(calls, 1);
+  assert.equal(f.server.activitySnapshot().rootOperations.length, 0);
+  await assert.rejects(
+    f.server.runModelOperation({
+      kind: "image-capability-probe",
+      selection: draftSelection,
+    }),
+    /Provider profile is not available/,
+  );
+});

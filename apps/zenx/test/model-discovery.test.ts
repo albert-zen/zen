@@ -404,6 +404,16 @@ test("a conclusive image probe cannot overwrite changed model metadata", async (
     await service.initialize({});
     const probe = service.probeProviderModelImage("selected", "shared", {
       resolveTransport: async () => undefined,
+      runModelOperation: async () => {
+        requestStarted.resolve();
+        await response.promise;
+        return {
+          threadId: "synthetic-probe",
+          operationItemId: "synthetic-operation",
+          status: "completed",
+          probeOutcome: "supported",
+        };
+      },
     });
     await requestStarted.promise;
     const changedModel = {
@@ -620,6 +630,14 @@ test("a conclusive explicit image probe persists through the existing Host catal
     const result = await service.probeProviderModelImage(
       "selected",
       "unknown-image",
+      {
+        runModelOperation: async () => ({
+          threadId: "synthetic-probe",
+          operationItemId: "synthetic-operation",
+          status: "completed",
+          probeOutcome: "supported",
+        }),
+      },
     );
     assert.equal(result.outcome, "supported");
     assert.deepEqual(result.model.inputModalities, ["text", "image"]);

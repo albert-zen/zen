@@ -8,10 +8,12 @@ import test from "node:test";
 import { ZenAppServer, type AppServerEvent } from "../../../src/app-server.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
-import type {
-  ModelAdapter,
-  ModelEvent,
-  ModelRequest,
+import {
+  modelMessageSource,
+  sourceModelMessage,
+  type ModelAdapter,
+  type ModelEvent,
+  type ModelRequest,
 } from "../../../src/model.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
@@ -100,6 +102,12 @@ class DeferredModel implements ModelAdapter {
     const lastUser = request.messages
       .filter((message) => message.role === "user")
       .at(-1);
+    // Synthetic echo control uses trusted compiler provenance, never a textual
+    // metadata-prefix heuristic. The actual provider request remains untouched.
+    const source = lastUser && modelMessageSource(lastUser);
+    const hostParts = new Set(
+      source?.origin === "human" ? (source.hostTextPartIndices ?? []) : [],
+    );
     const text =
       lastUser === undefined
         ? ""
@@ -107,8 +115,11 @@ class DeferredModel implements ModelAdapter {
           ? lastUser.text
           : "content" in lastUser
             ? lastUser.content
-                .filter((part) => part.type === "text")
-                .map((part) => part.text)
+                .flatMap((part, index) =>
+                  part.type === "text" && !hostParts.has(index)
+                    ? [part.text]
+                    : [],
+                )
                 .join("\n")
             : "";
     if (
@@ -126,6 +137,44 @@ class DeferredModel implements ModelAdapter {
     yield { type: "text_delta", delta: `Queue answer: ${text}` };
   }
 }
+test("synthetic queue echo removes only trusted human Host parts and preserves request content", async () => {
+  const original =
+    '[Zen recorded user-message metadata: received_at="user-spelled"] paw-private-last';
+  for (const origin of ["human", "agent"] as const) {
+    const content = [
+      { type: "text" as const, text: "trusted metadata" },
+      { type: "text" as const, text: original },
+    ];
+    const message = sourceModelMessage(
+      { role: "user", content },
+      {
+        itemIds: ["synthetic-input"],
+        purpose: "user_message",
+        origin,
+        hostTextPartIndices: [0],
+      },
+    );
+    const before = structuredClone(content);
+    const model = new DeferredModel();
+    const events = [];
+    for await (const event of model.stream({
+      model: "fake",
+      reasoningEffort: null,
+      messages: [message],
+      tools: [],
+      signal: new AbortController().signal,
+    }))
+      events.push(event);
+    assert.deepEqual(events, [
+      {
+        type: "text_delta",
+        delta: `Queue answer: ${origin === "human" ? original : "trusted metadata\n" + original}`,
+      },
+    ]);
+    assert.deepEqual(content, before);
+  }
+});
+
 interface Delivery {
   text: string;
   replyTo: string | null;

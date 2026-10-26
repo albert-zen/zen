@@ -322,15 +322,31 @@ setTimeout(() => process.exit(1), 30000);
     assert.equal(recent.source, "zenx.app-server");
     const turns = recent.turns as Array<{
       status: string;
-      items: Array<{ type: string; item?: { clientId?: string } }>;
+      items: Array<{
+        type: string;
+        itemId: string;
+        read: Record<string, unknown>;
+        item?: { clientId?: string };
+      }>;
     }>;
     assert(turns.some((turn) => turn.status === "interrupted"));
+    const delivered = [];
+    for (const item of turns
+      .flatMap((turn) => turn.items)
+      .filter((item) => item.type === "user_message")) {
+      // The canonical metadata can move a small input beyond the 500-character preview;
+      // use the exact bounded history read instead of assuming preview includes the full Item.
+      if (item.item) delivered.push(item.item);
+      else {
+        const full = await invoke(tools, "zenx_threads_read", item.read);
+        assert.equal(full.truncated, false);
+        delivered.push(
+          JSON.parse(String(full.content)) as { clientId?: string },
+        );
+      }
+    }
     assert(
-      turns.some((turn) =>
-        turn.items.some(
-          (item) => item.item?.clientId === followUp.clientUserMessageId,
-        ),
-      ),
+      delivered.some((item) => item.clientId === followUp.clientUserMessageId),
     );
 
     const projects = await invoke(tools, "zenx_projects_list", { limit: 10 });
@@ -1099,7 +1115,12 @@ function waitForManagerTurnCompleted(
 }
 
 function selfControlResult(text: string): { threadId: string } {
-  const envelope = JSON.parse(text) as {
+  const receipt = "Exit code: 0\n";
+  assert(
+    text.startsWith(receipt),
+    "successful tool receipt framing must be canonical",
+  );
+  const envelope = JSON.parse(text.slice(receipt.length)) as {
     capabilityId: string;
     result: { threadId: string };
   };
