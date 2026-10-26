@@ -76,8 +76,8 @@ await withPreviewBrowser(
         );
     };
     try {
-      for (const platform of ["darwin", "win32"])
-        for (const width of [600, 760, 1000, 1440])
+      for (const platform of ["darwin", "win32", "linux"])
+        for (const width of [600, 720, 721, 760, 1000, 1440])
           for (const sidebar of ["open", "closed"]) {
             const name = `${platform}-${width}-${sidebar}`;
             const item = { name, states: [] };
@@ -94,11 +94,23 @@ await withPreviewBrowser(
               `location.href===${JSON.stringify(destination)}&&document.body?.dataset.previewReady==='true'`,
             );
             await stable();
-            for (const expanded of [false, true]) {
+            for (const expanded of [false, true, false, true]) {
               let m = await evaluate(measure);
               if ((m.expanded === "true") !== expanded) {
+                await evaluate(
+                  `window.__expandFrames=[];window.__expandSampling=true;requestAnimationFrame(function tick(){window.__expandFrames.push(${measure});if(window.__expandSampling)requestAnimationFrame(tick)})`,
+                );
                 await click(".auxiliary-heading > .icon-button[aria-pressed]");
                 await stable();
+                await evaluate("window.__expandSampling=false");
+                const expandFrames = await evaluate("window.__expandFrames");
+                assert.ok(
+                  expandFrames.length > 0,
+                  "expansion transition sampled",
+                );
+                for (const frame of expandFrames) safe(frame, platform, width);
+                item.expansionAnimationFrames =
+                  (item.expansionAnimationFrames ?? 0) + expandFrames.length;
                 m = await evaluate(measure);
               }
               safe(m, platform, width);
