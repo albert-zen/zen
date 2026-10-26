@@ -946,6 +946,30 @@ test("profile Hosts isolate temporary output capture roots and cleanup", async (
     await secondCapabilities.initialize();
     await first.start();
     await second.start();
+    // Host transport readiness does not await asynchronous spool initialization.
+    // A completed tool result crosses the real capture.finish() readiness boundary.
+    for (const [manager, name] of [
+      [first, "first"],
+      [second, "second"],
+    ] as const) {
+      const thread = (await manager.request("thread/start", {})).thread;
+      await runTurn(
+        manager,
+        thread.id,
+        '!tool zenx_plugin {"operation":"discover"}',
+      );
+      const items = await journalItems(
+        path.join(
+          directory,
+          `${name}-zen-data`,
+          "threads",
+          `${thread.id}.jsonl`,
+        ),
+      );
+      const result = items.findLast((item) => item.type === "tool_result");
+      assert.ok(result?.type === "tool_result");
+      assert.ok(Array.isArray(JSON.parse(result.output).plugins));
+    }
     const firstRoot = path.join(directory, "first-tool-output-spool");
     const secondRoot = path.join(directory, "second-tool-output-spool");
     assert.equal((await readdir(firstRoot)).length, 1);
