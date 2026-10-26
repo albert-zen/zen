@@ -432,6 +432,8 @@
   Attachment setup 从 attach 开始共享一个 10 秒总预算；Page/Runtime enable 各只发送一次，所有调用者等待同一
   setup barrier，且每个 CDP 响应必须匹配请求的精确 session route。该预算是有限启动等待契约，不承诺冻结 renderer
   会恢复；setup 过期/取消仍保留 unknown 并补偿 detach，导航/页代码/Input 的既有 2 秒 outcome deadline 不变。
+  在注册精确 route 与 lifecycle 状态后，两域并行订阅但共同结算后才发布 ready；任一失败由原 attachment
+  统一补偿一次 detach，各域已发送而未知的结果保持独立证据，迟到响应不恢复 readiness 或重发命令。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA JSON
   投影为既有的有界 opaque observation 与按真实影响分类的 computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
@@ -469,6 +471,7 @@
 - **VerifiedArtifactAcquisition** — ZenX release assembly 只以 artifact name、URL、SHA-256、deadline 与 cache location 取得 digest-addressed immutable file，并在内部以 per-digest 跨进程 transaction 收口 proxy-aware bounded transport、stream size、partial cleanup、no-follow cache revalidation 与 atomic publication；它不成为运行时下载器或第二条 packaging pipeline。
 - Windows packaged UIA smoke 的文件观察 helper 仅在既有观察期限内重读 owned fixture 的 ENOENT/EBUSY，不重放 UIA 动作；文本匹配与文件可读性共用同一观察期限。
 - Windows packaged UIA fixture 的 ready receipt 仅由目标 UI 线程实际处理的 posted callback 原子发布，保留原 HWND/PID 绑定；它证明消息循环已处理回调，UIA 可服务性仍须由首次真实 inspect 验证，不增加预热、重试或等待预算。
+- Windows packaged UIA failure diagnostics observe only the owned synthetic target's atomic UI-timer and WM_GETOBJECT counters; a bounded background writer keeps pipe I/O off the UI thread, and the smoke logs fixed-field samples plus native transport timing before ordinary cleanup. Samples do not authorize actions, prove uninterrupted message pumping or change dispatch, deadlines, guards, exceptions or native acceptance.
 - Windows foreground smoke 的 guard 启动诊断只记录本次自有 helper 的定额阶段、PID 与各进程单调相对时间；失败 artifact 经过固定字段白名单投影，不上传原始目录或用户内容，不改变输入、期限、失败结果，也不把直接子进程关闭当作整棵进程树清理证明。
 - Windows foreground smoke 的预编译 guard 只从本次已 stage 的 JS 提取唯一 C# 原文，编译到同次私有 staging 并把源码与程序集摘要绑定到 smoke bundle；运行子进程只加载摘要匹配的实际字节，无现场编译回退，不进入产品 app、发布产物或共享缓存，所有输入与期限合同不变。
 - **ZenXPackagingRunStaging** — portable app 与 packaged smoke 继续复用同一 provider assembly、digest injection 与 Electron packager，但每次只在私有 run directory 内写 build/resources/app/artifact，以 target lock 拒绝同目标并在完整 staging 后发布稳定产物；Windows 上仅对 staging 发布 rename 的 EPERM 做有界退避，每次失败先回滚旧产物，跨等待以 no-follow 目录身份核对源与目标、异常即失败且保留可恢复备份；目录身份预检不构成抵抗非合作写者在检查与 rename 间竞态的 OS 级原子保证；它不复制 release pipeline。
@@ -1496,3 +1499,7 @@ Known Host admission and local-program results wait outside the snapshot mutatio
 ### Message local-path presentation
 
 ZenX renders conservative local file-path tokens as disposable Markdown links to the existing current-Host workspace file viewer; linkification performs no filesystem reads, grants no access, and does not alter canonical message text or model input. Host realpath containment and permissions remain authoritative.
+
+### Packaged renderer style authorization
+
+ZenX main's existing file-loading session transforms only its exact trusted packaged renderer entry, generating a cryptographically random style nonce per document response; all CodeMirror editors consume that document nonce. The existing CSP remains unchanged except for this narrowly authorized style source, and script policy is never broadened. Adjacent local assets retain the built-in file fetch path without recursive interception; no nonce becomes Thread/Turn/history state or a stored preference.

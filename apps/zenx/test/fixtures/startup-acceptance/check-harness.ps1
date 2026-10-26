@@ -1,15 +1,23 @@
 param([string] $HarnessPath)
 $ErrorActionPreference = "Stop"
+$diagnosticClock = [Diagnostics.Stopwatch]::StartNew()
+function Write-Phase([string] $Phase) {
+  [Console]::Error.WriteLine("StartupHarness phase={0} elapsedMs={1} utc={2:O}", $Phase, $diagnosticClock.ElapsedMilliseconds, [DateTime]::UtcNow)
+}
+Write-Phase "ast-load-start"
 $tokens = $null
 $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($HarnessPath, [ref] $tokens, [ref] $parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+Write-Phase "ast-load-complete"
 # Load only the real harness helpers. Never execute its package or process launcher.
 foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtures", "Get-EventUtcTime", "Get-OwnedProcessState", "Assert-RendererPresentation")) {
   $functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true))
   if ($functions.Count -ne 1) { throw "Missing unique helper $name" }
   . ([scriptblock]::Create($functions[0].Extent.Text))
 }
+Write-Phase "helpers-loaded"
+Write-Phase "add-type-start"
 Add-Type -TypeDefinition @'
 using System;
 public static class StartupWindows {
@@ -19,6 +27,8 @@ public static class StartupWindows {
   public static bool IsIconic(IntPtr hwnd) { return Minimized; }
 }
 '@
+Write-Phase "add-type-complete"
+Write-Phase "assertions-start"
 function Assert-True($Value, $Message) { if (!$Value) { throw $Message } }
 function Assert-Throws([scriptblock] $Action, $Pattern) {
   $caught = $null
@@ -80,6 +90,7 @@ Assert-Throws { Assert-SoleVisibleWindow 123 ([IntPtr]::new(42)) } "sole, visibl
 [StartupWindows]::Handles = [long[]]@(42)
 [StartupWindows]::Minimized = $true
 Assert-Throws { Assert-SoleVisibleWindow 123 ([IntPtr]::new(42)) } "non-minimized"
+Write-Phase "assertions-complete"
 
 $utf8 = [Text.UTF8Encoding]::new($false)
 $directory = Join-Path ([IO.Path]::GetTempPath()) ("zenx-cleanup-unit-" + [guid]::NewGuid().ToString("N"))
@@ -93,6 +104,7 @@ function Fake-Process($Id) {
   return $value
 }
 try {
+  Write-Phase "mock-cleanup-start"
   $process = Fake-Process 123
   Stop-Fixture $process $directory
   Assert-True ($global:kills -eq 1 -and $process.Waits -eq 2) "Force cleanup must check post-taskkill exit"
@@ -112,7 +124,10 @@ try {
   $quitFailure = Fake-Process 128
   Assert-Throws { Stop-Fixture $quitFailure $file } "Quit signal"
   Assert-True ($quitFailure.Waits -eq 2) "Failed quit signalling must still try owned-process cleanup"
+  Write-Phase "mock-cleanup-complete"
   Write-Host "Startup harness helper checks passed (mock Win32/process boundary; no native timing claim)."
 } finally {
+  Write-Phase "temporary-directory-cleanup-start"
   Remove-Item -LiteralPath $directory -Recurse -Force
+  Write-Phase "temporary-directory-cleanup-complete"
 }

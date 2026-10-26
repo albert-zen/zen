@@ -81,25 +81,38 @@ test(
         ? "PowerShell/Windows-only harness check"
         : false,
   },
-  () => {
-    const result = execFileSync(
-      "pwsh",
-      [
-        "-NoProfile",
-        "-File",
-        fileURLToPath(
-          new URL(
-            "./fixtures/startup-acceptance/check-harness.ps1",
-            import.meta.url,
+  (t) => {
+    let result;
+    try {
+      result = execFileSync(
+        "pwsh",
+        [
+          "-NoProfile",
+          "-File",
+          fileURLToPath(
+            new URL(
+              "./fixtures/startup-acceptance/check-harness.ps1",
+              import.meta.url,
+            ),
           ),
-        ),
-        "-HarnessPath",
-        fileURLToPath(
-          new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),
-        ),
-      ],
-      { encoding: "utf8", timeout: 30_000 },
-    );
+          "-HarnessPath",
+          fileURLToPath(
+            new URL(
+              "../scripts/windows-startup-acceptance.ps1",
+              import.meta.url,
+            ),
+          ),
+        ],
+        { encoding: "utf8", timeout: 30_000 },
+      );
+    } catch (error) {
+      for (const stream of ["stdout", "stderr"]) {
+        t.diagnostic(
+          `${stream}: ${String(error[stream] ?? "").slice(-16_384)}`,
+        );
+      }
+      throw error;
+    }
     assert.match(result, /Startup harness helper checks passed/u);
   },
 );

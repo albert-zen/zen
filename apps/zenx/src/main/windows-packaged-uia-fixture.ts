@@ -58,8 +58,53 @@ public static class ZenXPackagedFixture {
     form.Controls.Add(editor);
     return editor;
   }
+  // Fixture-only observation. UI callbacks only update atomic numeric fields;
+  // JSON/pipe writes run on a background thread and can never block WndProc.
+  public sealed class TargetDiagnostic : IDisposable {
+    readonly Stopwatch clock = Stopwatch.StartNew();
+    long ticks, lastTickMs = -1, entered, exited, lastEnterMs = -1, lastExitMs = -1;
+    int objectKind;
+    volatile bool stopped;
+    Thread writer;
+    public void Tick() { Interlocked.Increment(ref ticks); Interlocked.Exchange(ref lastTickMs, clock.ElapsedMilliseconds); }
+    public void Enter(IntPtr objectId) {
+      long id = objectId.ToInt64();
+      Interlocked.Exchange(ref objectKind, id == -25 ? -25 : id == -4 ? -4 : 0);
+      Interlocked.Exchange(ref lastEnterMs, clock.ElapsedMilliseconds);
+      Interlocked.Increment(ref entered);
+    }
+    public void Exit() { Interlocked.Exchange(ref lastExitMs, clock.ElapsedMilliseconds); Interlocked.Increment(ref exited); }
+    public object Snapshot() {
+      // Independently sampled counters, not a transactional snapshot or proof of
+      // UIA availability. In-flight messages can change between these reads.
+      return new { elapsedMs = clock.ElapsedMilliseconds, ticks = Interlocked.Read(ref ticks), lastTickMs = Interlocked.Read(ref lastTickMs), getObjectEntered = Interlocked.Read(ref entered), getObjectExited = Interlocked.Read(ref exited), lastEnterMs = Interlocked.Read(ref lastEnterMs), lastExitMs = Interlocked.Read(ref lastExitMs), objectKind = Volatile.Read(ref objectKind) };
+    }
+    public void Start() {
+      writer = new Thread(delegate() {
+        try {
+          for (int count = 0; count < 151 && !stopped; count++) {
+            Console.Error.WriteLine("ZENX_UIA_TARGET_DIAGNOSTIC " + new JavaScriptSerializer().Serialize(Snapshot()));
+            for (int wait = 0; wait < 10 && !stopped; wait++) Thread.Sleep(100);
+          }
+        } catch { /* Diagnostics never change native dispatch or its outcome. */ }
+      });
+      writer.IsBackground = true; writer.Start();
+    }
+    public void Dispose() { stopped = true; if (writer != null) writer.Join(500); }
+  }
+  public sealed class ObservedForm : Form {
+    readonly TargetDiagnostic diagnostic;
+    public ObservedForm(TargetDiagnostic value) { diagnostic = value; }
+    protected override void WndProc(ref Message message) {
+      if (message.Msg != 0x003D || diagnostic == null) { base.WndProc(ref message); return; }
+      diagnostic.Enter(message.LParam);
+      try { base.WndProc(ref message); }
+      finally { diagnostic.Exit(); }
+    }
+  }
   static void Target(string title) {
-    var form = new Form();
+    var diagnostic = new TargetDiagnostic();
+    var form = new ObservedForm(diagnostic);
     form.Text = title; form.SetBounds(40, 40, 620, 320); form.StartPosition = FormStartPosition.Manual;
     BlockingEditor editor = Editor(form);
     var button = new Button();
@@ -87,6 +132,7 @@ public static class ZenXPackagedFixture {
     var timer = new System.Windows.Forms.Timer(); timer.Interval = 10;
     timer.Tick += delegate {
       string currentEditorValue = editor.Text;
+      diagnostic.Tick();
       if (!string.Equals(observedEditorValue, currentEditorValue, StringComparison.Ordinal)) {
         Write("editor-value", currentEditorValue);
         observedEditorValue = currentEditorValue;
@@ -116,7 +162,9 @@ public static class ZenXPackagedFixture {
     form.BeginInvoke(new MethodInvoker(delegate {
       Json("target.json", new { pid = Process.GetCurrentProcess().Id, hwnd = form.Handle.ToInt64().ToString(), title = title, editorHwnd = editor.Handle.ToInt64().ToString(), buttonHwnd = button.Handle.ToInt64().ToString(), messageLoopReady = true });
     }));
-    timer.Start(); Application.Run(form); timer.Dispose();
+    diagnostic.Start();
+    try { timer.Start(); Application.Run(form); }
+    finally { timer.Dispose(); diagnostic.Dispose(); }
   }
   [StructLayout(LayoutKind.Sequential)] struct Point { public int X, Y; }
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();

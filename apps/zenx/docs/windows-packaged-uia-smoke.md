@@ -48,6 +48,26 @@ has to succeed without warm-up calls, retries, or a changed timeout. The Windows
 readiness contract test compiles the actual callback registration with a paused
 synthetic dispatcher. It proves publication ordering, not native UIA behavior.
 
+On failure, the smoke retains a bounded diagnostic in the job log before
+releasing and closing its fixtures. It includes the current fixed phase, up to
+eight native transport durations/outcomes, child PID/exit observations and up to
+24 numeric target samples. The target's UI timer and `WM_GETOBJECT` handler only
+update atomic counters; a bounded background thread serializes samples to its
+private stderr pipe. The original `WndProc` runs exactly once, with its return
+value and exceptions unchanged. There is no UI-thread diagnostic I/O, injected
+probe message, UIA warm-up, retry, extra timeout or focus restoration.
+
+The samples independently read counters and may be stale or absent; they do not
+prove continuous responsiveness, UIA readiness or operation success. An entered
+but not yet exited `WM_GETOBJECT` differs from a handler that returned while the
+client still timed out. Object IDs are limited to UIA root (`-25`), MSAA client
+(`-4`) or other (`0`); no title, text, HWND, request body, environment or raw stderr
+is copied into this diagnostic. Native-call duration includes the production
+transport's verification and process lifecycle, not only the COM call. The
+Windows observer contract test deliberately blocks the diagnostic writer and
+checks unchanged synthetic dispatch/exception behavior; only packaged Windows
+CI can establish real native behavior.
+
 - A pre-aborted package call must cause no subprocess launch or editor effect.
 - A fixture-only editor blocks inside the real native `WM_SETTEXT` operation.
   Cancellation starts only after that native entry marker appears. The actual

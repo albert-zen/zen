@@ -764,3 +764,11 @@ Message Markdown may render clear local paths as keyboard-focusable links. Activ
 Unquoted automatic paths require a directory and file extension; paths containing spaces must be quoted or inline-code delimited. Extensionless automatic paths additionally require an absolute path or an explicit `./` or `../` prefix (for example, `./docs/README`); a quoted bare relative `docs/README` remains inert. Fenced code, ordinary standalone filenames and ambiguous prose are not auto-linked. Existing explicit Markdown links remain supported. Windows drive paths and local file URLs use the same Host containment checks. Conventional `#L12`, `#L12C4`, `:12` or `:12:4` suffixes on file paths open the underlying file; this does not claim exact-line scrolling. Percent-encoded filename punctuation remains literal. Canonical content and copy text are unchanged.
 
 A closed top-level `text` or `plaintext` fenced block containing exactly one whitespace-free local path offers a separate **Open file** header action alongside Copy. Code remains literal and copy remains unchanged; incomplete, multiline, command-like, reference-bearing and other-language blocks have no file action. Activation uses the same current-Thread Host workspace reader, never execution or an external app.
+
+### Packaged editor style security
+
+File/source editors and the inline composer share the current renderer document's
+trusted style nonce for CodeMirror runtime styles. Packaged acceptance uses the
+actual renderer CSP, not a permissive preview policy; missing/incorrect nonce
+styles remain blocked. Fixing layout or focus must never broadly permit inline
+styles or scripts, and editor scrolling stays inside its bounded pane.
