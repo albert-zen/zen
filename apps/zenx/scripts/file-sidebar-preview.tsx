@@ -189,15 +189,22 @@ function Preview() {
             <div data-local-path-preview style={{ maxWidth: 480 }}>
               <MessageLinkContext.Provider
                 value={(target) => {
+                  if (target.kind === "browser") {
+                    // Record the existing message navigation callback only;
+                    // this renderer fixture must never visit a real endpoint.
+                    record("browser", threadId, target.value);
+                    return;
+                  }
                   setMessageLinkRequest({ ...target, id: ++sequence.current });
                   setOpen(true);
                 }}
               >
                 <Markdown
                   text={
-                    language === "zh-CN"
+                    (language === "zh-CN"
                       ? "请查看 docs/long-notes.md，然后检查 `src/long-source.ts`。\n\n绝对路径也可以：`/synthetic/file-sidebar-preview/docs/long-notes.md`。\n\n没有自动访问文件，只有点击后才打开右侧文件栏。\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```"
-                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click.\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```"
+                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click.\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```") +
+                    "\n\n合成 URL / Synthetic URLs: `http://127.0.0.1:40123/review?q=one#details` · `https://example.test/report`"
                   }
                 />
               </MessageLinkContext.Provider>

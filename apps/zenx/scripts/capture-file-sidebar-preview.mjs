@@ -211,8 +211,10 @@ try {
     const point = await evaluate(`(() => {
       const e=document.querySelector(${JSON.stringify(selector)});
       if (!e) throw new Error('Missing pointer target: ' + ${JSON.stringify(selector)});
-      const r=e.getBoundingClientRect();
-      if (!r.width || !r.height) throw new Error('Hidden pointer target: ' + ${JSON.stringify(selector)});
+      // An inline anchor may wrap: its bounding-box center can lie outside
+      // every painted fragment. Aim at the first real fragment, still hit-test.
+      const r=[...e.getClientRects()].find(r=>r.width>0 && r.height>0);
+      if (!r) throw new Error('Hidden pointer target: ' + ${JSON.stringify(selector)});
       const x=r.x+r.width/2, y=r.y+r.height/2;
       const hit=document.elementFromPoint(x,y);
       if (!hit || !e.contains(hit)) throw new Error('Obscured pointer target: ' + ${JSON.stringify(selector)} + '; hit=' + (hit?.className ?? 'none'));
@@ -572,7 +574,7 @@ try {
       receipt,
       "links-use-existing-file-flow",
       await evaluate(
-        `document.querySelectorAll('[data-local-path-preview] a').length===3`,
+        `document.querySelectorAll('[data-local-path-preview] a').length===5`,
       ),
     );
     const before = await evaluate(`window.__fileSidebarPreview.calls.length`);
@@ -582,6 +584,35 @@ try {
       "render-does-not-read-files",
       await evaluate(`window.__fileSidebarPreview.calls.length===${before}`),
     );
+    const webSelector =
+      '[data-local-path-preview] a[href^="http://127.0.0.1:"]';
+    check(
+      receipt,
+      "inline-web-link-retains-code-style",
+      await evaluate(
+        `Boolean(document.querySelector(${JSON.stringify(webSelector)})?.querySelector('code'))`,
+      ),
+    );
+    await clickSelector(webSelector);
+    check(
+      receipt,
+      "inline-web-pointer-routes-exactly-once",
+      await evaluate(
+        `window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').length===1`,
+      ),
+    );
+    await evaluate(
+      `document.querySelector(${JSON.stringify(webSelector)}).focus()`,
+    );
+    await key("Enter", "Enter", 13);
+    check(
+      receipt,
+      "inline-web-pointer-and-keyboard-route-once-each",
+      await evaluate(
+        `window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').length===2 && window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').every(c=>c.threadId==='synthetic-file-sidebar-thread' && c.path==='http://127.0.0.1:40123/review?q=one#details')`,
+      ),
+    );
+    await screenshot(`inline-web-links-${lang}-activated.png`);
     await clickSelector("[data-local-path-preview] a");
     await waitFor(
       `document.querySelector('.auxiliary-content:not([hidden]) .cm-editor') && document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-notes')`,
