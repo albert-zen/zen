@@ -526,7 +526,16 @@ test("a failed native resubscribe keeps successor-socket legacy turn events", as
         socket.send(
           JSON.stringify(
             generation === 0
-              ? { id: message.id, result: {} }
+              ? {
+                  id: message.id,
+                  result: {
+                    threadId: "thread-1",
+                    thread: { id: "thread-1" },
+                    processEpoch: "fixture",
+                    watermark: 0,
+                    events: [],
+                  },
+                }
               : {
                   id: message.id,
                   error: { code: -32000, message: "resume unavailable" },

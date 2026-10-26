@@ -18,6 +18,7 @@
 - **ZenX reading state** — One App-owned, memory-only renderer cache retains scroll/follow intent per exact Thread and explicit disclosure choices by exact Thread/Turn/Item identity across navigation, without retaining hidden transcripts or changing execution, canonical history or Host storage. Explicit return to the bottom resumes following; content/viewport growth, including completion and delayed media layout, preserves that intent until the reader navigates away. The return-to-live affordance reflects actual distance from the bottom.
 
 - **ZenX activity observation** — Renderer derives one disposable per-Turn task-receipt index and contiguous action-set summaries from existing tool identities/Items; operation counts never infer file counts, and request acknowledgement, call disposition and underlying task lifetime remain separate, without new runtime authority.
+- **ZenX workflow status presentation** — Running, recovery, terminal outcomes and compaction summaries share renderer-only capsule geometry and theme tokens; native status/alert/disclosure semantics and canonical state remain owned by each existing workflow.
 - **ZenX approval review** — Composer-attached requests and user-opened full details share exact request-scoped transient response/focus ownership and existing Host decisions; presentation never creates or broadens permission.
 - **ZenX pending-message shelf** — A renderer-only view of canonical queued identity, order, revision and input, with local disclosure, transient edit drafts and request feedback; native exact-target edit/cancellation/resume commands remain the authority, without reorder or optimistic removal.
 
@@ -1417,9 +1418,27 @@ ZenX's unified-reference v2 text envelope extends the existing client-ID-bound q
 
 ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
 
+ZenX shared native connection delivery owns only generation-local event watermarks and coalesces identical in-flight Thread resume reads: validated resume overlap is synchronously fanned out at the raw response boundary before later frames, while callers retain the complete recovery snapshot and their existing epoch/watermark projection fences. Reconnect retains its separate ready-then-recovery publication boundary; no new Thread authority or durable state is introduced.
+
 ZenX external file opening is a local desktop UI operation: the main process resolves a local Host Thread's workspace-relative file through the existing realpath boundary, then reveals it with the OS file manager or launches a chosen application with literal argv and no shell. Application paths are Settings-owned host-profile preferences, not Thread facts, tool approvals, or a remote execution route; Fleet locators are unsupported and never fall back to a same-path local file.
 
 ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.
+
+### Native Computer target sessions
+
+ZenX's native macOS Computer provider owns an ephemeral, thread-scoped target
+session in its native helper: explicit window selection and scoped window
+capture bind the same retained AX window, while foreground input revalidates
+that binding after existing approval/arbitration. This host device-control state
+is not conversation truth, is never journaled or restored, and cannot authorize
+input without the existing foreground consent. Helper termination invalidates
+all bindings; uncertain input is never automatically replayed.
+
+The existing foreground presenter supplies only live, painted, mouse-ignoring
+edge-indicator native window IDs through a trusted main-only read projection;
+bound pointer input may ignore those exact windows only when native ownership
+matches the helper parent. Interactive indicators and all other occluders still
+refuse input; the projection is neither model input nor durable authorization.
 
 - **Plugin storage generation ownership** — A Host-process namespace has one mutation queue and current value shared by runtime and first-party storage views. Replacement fences old writers before migration; candidate startup writes are owned by that candidate, rollback restores only its frozen snapshot, and publication revokes old runtime storage handles. Busy/stale access fails explicitly rather than waiting for a lease held by the replacement caller; ordinary Host views follow the current same-version value. This adds no durable journal or automatic retry and does not coordinate separate Host processes sharing one data directory.
 

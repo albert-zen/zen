@@ -3,6 +3,7 @@ import type { ToolInvocation } from "../../../../src/tool.js";
 
 /** Host presentation only. This does not grant foreground consent or own a Turn. */
 export interface ForegroundActivityRunner {
+  pointerPassthroughWindowIds?(): readonly number[];
   run<T>(
     invocation: ToolInvocation,
     operation: (signal: AbortSignal, onStopping?: () => void) => Promise<T>,
@@ -14,6 +15,7 @@ export interface ForegroundActivitySnapshot {
 }
 
 export interface ForegroundActivityPresenter {
+  pointerPassthroughWindowIds?(): readonly number[];
   /** Resolves only after the non-activating indicator has been painted. */
   update(snapshot: ForegroundActivitySnapshot): Promise<void>;
   close(): void;
@@ -57,6 +59,11 @@ export class ForegroundActivity implements ForegroundActivityRunner {
         stopping: activity.stopping || activity.signal.aborted,
       })),
     };
+  }
+
+  pointerPassthroughWindowIds(): readonly number[] {
+    if (this.#closed || this.#active.size === 0) return [];
+    return this.#presenter.pointerPassthroughWindowIds?.() ?? [];
   }
 
   async run<T>(
