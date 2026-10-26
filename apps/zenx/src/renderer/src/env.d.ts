@@ -68,6 +68,7 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      threadSidebar?: import("../../thread-sidebar-state.js").ThreadSidebarApi;
       modelRequestDebug?: {
         request(
           input: import("../../../../cli/src/model-request-debug-types.js").ModelRequestDebugCommand,
