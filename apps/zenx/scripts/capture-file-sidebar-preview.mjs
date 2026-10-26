@@ -572,7 +572,7 @@ try {
       receipt,
       "links-use-existing-file-flow",
       await evaluate(
-        `document.querySelectorAll('[data-local-path-preview] a').length===3`,
+        `document.querySelectorAll('[data-local-path-preview] a').length===5`,
       ),
     );
     const before = await evaluate(`window.__fileSidebarPreview.calls.length`);
@@ -582,6 +582,28 @@ try {
       "render-does-not-read-files",
       await evaluate(`window.__fileSidebarPreview.calls.length===${before}`),
     );
+    const webSelector =
+      '[data-local-path-preview] a[href^="http://127.0.0.1:"]';
+    check(
+      receipt,
+      "inline-web-link-retains-code-style",
+      await evaluate(
+        `Boolean(document.querySelector(${JSON.stringify(webSelector)})?.querySelector('code'))`,
+      ),
+    );
+    await clickSelector(webSelector);
+    await evaluate(
+      `document.querySelector(${JSON.stringify(webSelector)}).focus()`,
+    );
+    await key("Enter", "Enter", 13);
+    check(
+      receipt,
+      "inline-web-pointer-and-keyboard-route-once-each",
+      await evaluate(
+        `window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').length===2 && window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').every(c=>c.threadId==='synthetic-file-sidebar-thread' && c.path==='http://127.0.0.1:40123/review?q=one#details')`,
+      ),
+    );
+    await screenshot(`inline-web-links-${lang}-activated.png`);
     await clickSelector("[data-local-path-preview] a");
     await waitFor(
       `document.querySelector('.auxiliary-content:not([hidden]) .cm-editor') && document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-notes')`,
