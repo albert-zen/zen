@@ -1,4 +1,9 @@
 import type {
+  SidebarOwner,
+  ThreadSidebarState,
+  ThreadSidebarUpdate,
+} from "../thread-sidebar-state.js";
+import type {
   ModelRequestDebugCommand,
   ModelRequestDebugResult,
 } from "../../../../apps/cli/src/model-request-debug-types.js";
@@ -79,6 +84,21 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  threadSidebar: {
+    read: (threadId: SidebarOwner | string) =>
+      ipcRenderer.invoke(ipcChannels.threadSidebarRead, threadId),
+    update: (request: ThreadSidebarUpdate) =>
+      ipcRenderer.invoke(ipcChannels.threadSidebarUpdate, request),
+    onChanged: (listener: (state: ThreadSidebarState) => void) => {
+      const receive = (
+        _event: Electron.IpcRendererEvent,
+        state: ThreadSidebarState,
+      ) => listener(state);
+      ipcRenderer.on(ipcChannels.threadSidebarChanged, receive);
+      return () =>
+        ipcRenderer.removeListener(ipcChannels.threadSidebarChanged, receive);
+    },
+  },
   modelRequestDebug: {
     request: (
       input: ModelRequestDebugCommand,

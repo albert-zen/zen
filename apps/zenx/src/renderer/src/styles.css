@@ -7776,23 +7776,17 @@ button:disabled {
 }
 .context-compaction-event,
 .context-compaction-progress {
-  width: min(680px, 100%);
-  margin: 4px auto;
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
-}
-.context-compaction-toggle {
   width: 100%;
-  min-height: 48px;
+  min-width: 0;
+  margin: 4px auto;
+}
+.context-compaction-toggle.workflow-status {
+  width: 100%;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 14px;
+  grid-template-columns: 14px minmax(0, 1fr) 14px;
   align-items: center;
-  gap: 9px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
+  gap: 6px;
+  padding: 4px 8px;
   color: var(--text-2);
   text-align: left;
   cursor: pointer;
@@ -7802,35 +7796,45 @@ button:disabled {
   background: var(--surface-2);
   color: var(--text);
 }
-.context-compaction-toggle > span:nth-child(2) {
+.context-compaction-label {
   min-width: 0;
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  overflow-wrap: anywhere;
 }
-.context-compaction-toggle strong {
+.context-compaction-label strong,
+.context-compaction-label small {
+  line-height: var(--workflow-status-line-height);
+}
+.context-compaction-label strong {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
 }
-.context-compaction-toggle small {
+.context-compaction-label small {
   color: var(--text-3);
   font-size: var(--font-size-caption);
 }
 .context-compaction-mark {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--text-accent);
+  width: 14px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  color: inherit;
 }
-.context-compaction-toggle[aria-expanded="true"] > svg {
+.context-compaction-mark > * {
+  flex-shrink: 0;
+}
+.context-compaction-toggle[aria-expanded="true"] > svg:last-child {
   transform: rotate(180deg);
 }
 .context-compaction-detail {
   display: grid;
   gap: 10px;
-  padding: 0 12px 12px 47px;
+  padding: 10px 12px;
 }
 .context-compaction-detail > p {
   margin: 0;
@@ -7875,59 +7879,89 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.context-compaction-progress {
-  min-height: 48px;
+.context-compaction-progress-summary.workflow-status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  padding: 10px 13px;
+  gap: 4px 6px;
+  padding: 4px 8px;
   color: var(--text-2);
-  font-size: 12px;
-}
-.context-compaction-progress.is-error {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-soft));
-  color: var(--danger);
 }
 .context-compaction-progress-content {
   min-width: 0;
   flex: 1;
+  overflow-wrap: anywhere;
 }
 .context-compaction-progress.is-error {
   margin-bottom: 9px;
-  align-items: flex-start;
-  background: var(--surface-2);
+}
+.context-compaction-progress.is-error .context-compaction-mark {
+  color: var(--warn);
 }
 .context-compaction-error-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 16px;
-  margin-top: 6px;
+  min-width: 0;
+  margin-top: 4px;
   color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+.context-compaction-error-detail {
+  min-width: 0;
 }
 .context-compaction-error-detail summary,
-.context-compaction-error-actions button {
+.context-compaction-dismiss {
+  min-height: var(--workflow-status-control-height, 28px);
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   cursor: pointer;
   color: inherit;
   font: inherit;
+  line-height: var(--workflow-status-line-height, 20px);
 }
-.context-compaction-error-actions button {
-  border: 0;
-  background: transparent;
-  text-decoration: underline;
+.context-compaction-dismiss {
+  flex: 0 0 auto;
+}
+.context-compaction-error-detail summary {
+  width: fit-content;
+  max-width: 100%;
+}
+.context-compaction-dismiss:hover,
+.context-compaction-error-detail summary:hover {
+  background: var(--surface-2);
 }
 .context-compaction-error-detail p {
-  margin: 6px 0 0;
-  max-width: 70ch;
+  max-height: min(240px, 30dvh);
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-wash);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .context-compaction-error-detail summary:focus-visible,
-.context-compaction-error-actions button:focus-visible {
+.context-compaction-error-detail p:focus-visible,
+.context-compaction-dismiss:focus-visible {
   outline: 1px solid var(--color-focus-ring);
   outline-offset: 2px;
-  border-radius: 3px;
 }
+@media (max-width: 480px) {
+  .context-compaction-toggle.workflow-status,
+  .context-compaction-progress-summary.workflow-status {
+    padding-inline: 6px;
+  }
+}
+@media (pointer: coarse) {
+  .context-compaction-toggle.workflow-status,
+  .context-compaction-error-detail summary,
+  .context-compaction-dismiss {
+    min-height: 44px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .context-compaction-progress .mini-spinner {
     animation-duration: 2s;
@@ -8736,15 +8770,6 @@ button:disabled {
   padding: 10px 0;
   cursor: pointer;
   color: var(--color-text-secondary);
-}
-.context-compaction-toggle {
-  min-height: 44px;
-}
-.context-compaction-toggle small {
-  font-size: var(--font-size-caption);
-}
-.context-compaction-toggle[aria-expanded="true"] > svg:last-child {
-  rotate: 180deg;
 }
 .context-compaction-detail p {
   font-size: var(--font-size-caption);

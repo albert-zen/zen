@@ -1,3 +1,5 @@
+import { ComputerTargetSession } from "./computer-target-session.js";
+import { NativeComputerTargetTransport } from "./computer-target-transport.js";
 import type { ForegroundActivityRunner } from "../foreground-activity.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -29,6 +31,19 @@ import {
   OBSERVATION_CAPTURE,
   type ObservationCapture,
 } from "./observation-capture.js";
+
+export const COMPUTER_SHORTCUT_KEYS = [
+  ...Array.from("abcdefghijklmnopqrstuvwxyz0123456789"),
+  "enter",
+  "escape",
+  "tab",
+  "backspace",
+  "space",
+  "arrowUp",
+  "arrowDown",
+  "arrowLeft",
+  "arrowRight",
+];
 
 export interface ComputerTarget {
   pid?: number;
@@ -126,6 +141,7 @@ export type ComputerLiveObservationListener = (
 ) => void;
 
 export interface ZenXComputerBackend {
+  readonly targetSession?: ComputerTargetSession;
   observeWindow?(
     target: ComputerTarget,
     listener: ComputerLiveObservationListener,
@@ -163,6 +179,7 @@ export interface ZenXComputerBackend {
   screenshot(
     target: ComputerTarget,
     signal?: AbortSignal,
+    owner?: string,
   ): Promise<{
     artifactPath: string;
     target: ComputerInspection["target"];
@@ -383,6 +400,109 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   ],
 };
 
+/** Native-only replacement; other providers retain their separate capability contract. */
+export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
+  ...structuredClone(computerCapabilityManifest),
+  version: "1.1.0",
+  mainDocument:
+    computerCapabilityManifest.mainDocument +
+    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee.",
+  tools: [
+    ...computerCapabilityManifest.tools.map((tool) =>
+      tool.name === "computer_foreground_click"
+        ? {
+            ...tool,
+            description:
+              "FOREGROUND TAKEOVER: click image-pixel x/y in this thread's selected exact window. Requires current window screenshot captureId; validates window/focus immediately before native posting.",
+            inputSchema: objectSchema(
+              {
+                x: { type: "number" },
+                y: { type: "number" },
+                button: { type: "string", enum: ["left", "right"] },
+                captureId: stringSchema(),
+              },
+              ["x", "y", "captureId"],
+            ),
+          }
+        : tool.name.startsWith("computer_foreground_")
+          ? {
+              ...tool,
+              inputSchema: {
+                ...tool.inputSchema,
+                properties: {
+                  ...(tool.inputSchema.properties as Record<string, unknown>),
+                  bindingId: stringSchema(),
+                },
+                required: [
+                  ...(tool.inputSchema.required as string[]),
+                  "bindingId",
+                ],
+              },
+            }
+          : tool,
+    ),
+    {
+      name: "computer_foreground_type",
+      description:
+        "FOREGROUND TAKEOVER: type up to 1024 Unicode scalars into this thread's selected exact window using Unicode keyboard events, without clipboard access. Does not guarantee application acceptance. Partial/cancelled input must not be replayed automatically; no text is echoed in the receipt.",
+      inputSchema: objectSchema(
+        {
+          text: { type: "string", minLength: 1, maxLength: 1024 },
+          bindingId: stringSchema(),
+        },
+        ["text", "bindingId"],
+      ),
+      permissions: ["computer.foreground.control"],
+      interactionMode: "foreground_required",
+      capabilities: [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound",
+      ],
+    },
+    {
+      name: "computer_foreground_shortcut",
+      description:
+        "FOREGROUND TAKEOVER: send one shortcut to this thread's selected exact window. key is a logical unshifted letter/digit in the current Command layout when command is present, otherwise the current base layout; modifiers apply separately. Navigation keys are layout-independent. Missing or ambiguous character mappings/input-source changes fail closed; no ANSI fallback.",
+      inputSchema: objectSchema(
+        {
+          bindingId: stringSchema(),
+          key: { type: "string", enum: COMPUTER_SHORTCUT_KEYS },
+          modifiers: {
+            type: "array",
+            minItems: 1,
+            maxItems: 4,
+            uniqueItems: true,
+            items: {
+              type: "string",
+              enum: ["command", "control", "option", "shift"],
+            },
+          },
+        },
+        ["key", "modifiers", "bindingId"],
+      ),
+      permissions: ["computer.foreground.control"],
+      interactionMode: "foreground_required",
+      capabilities: [
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "target_bound",
+      ],
+    },
+    {
+      name: "computer_select_target",
+      description:
+        "Select this thread's exact application/window for subsequent foreground input without activating it. Supply an exact listed window target; application-only targets must resolve to exactly one window.",
+      inputSchema: objectSchema({ target: targetSchema() }, ["target"]),
+      permissions: ["computer.accessibility.inspect"],
+      interactionMode: "background_safe",
+      capabilities: ["app_targeted", "no_global_input"],
+    },
+  ],
+};
+
 export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXComputerBackend;
@@ -410,14 +530,18 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
 
   constructor(
     backend: ZenXComputerBackend,
-    manifest: ZenXPluginManifestV2 = computerCapabilityManifest,
+    manifest?: ZenXPluginManifestV2,
     foregroundControlAllowed = false,
     foregroundActivity?: ForegroundActivityRunner,
   ) {
     this.#backend = backend;
     this.#foregroundActivity = foregroundActivity;
     this.#threadObservation = new ComputerThreadObservation(backend);
-    this.manifest = manifest;
+    this.manifest =
+      manifest ??
+      (backend.targetSession
+        ? boundComputerCapabilityManifest
+        : computerCapabilityManifest);
     this.#foregroundControlAllowed = foregroundControlAllowed;
     if (!foregroundControlAllowed) this.#revokeForegroundConsent();
   }
@@ -440,6 +564,17 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           "This Computer provider does not support window discovery",
         );
       return await this.#backend.listWindows(query, invocation.signal);
+    }
+    if (toolName === "computer_select_target") {
+      if (!this.#backend.targetSession)
+        throw new Error(
+          "This provider does not support bound target selection",
+        );
+      return await this.#backend.targetSession.select(
+        requiredComputerOwner(invocation),
+        requiredTarget(invocation.arguments),
+        invocation.signal,
+      );
     }
     if (toolName.startsWith("computer_foreground_")) {
       return await this.#invokeForeground(toolName, invocation);
@@ -574,7 +709,13 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         if (target.windowTitle === undefined) {
           throw new Error("computer_screenshot requires target.windowTitle");
         }
-        result = await this.#backend.screenshot(target, invocation.signal);
+        result = await this.#backend.screenshot(
+          target,
+          invocation.signal,
+          this.#backend.targetSession
+            ? requiredComputerOwner(invocation)
+            : undefined,
+        );
         break;
       default:
         throw new Error(`Unsupported computer tool: ${toolName}`);
@@ -638,6 +779,19 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     invocation: ToolInvocation,
   ): Promise<unknown> {
     this.#assertForegroundControlAllowed(toolName);
+    // Freeze intent before waiting for activity arbitration or its visible notice.
+    const selectedBindingId = this.#backend.targetSession?.selectedBindingId(
+      requiredComputerOwner(invocation),
+    );
+    if (
+      this.#backend.targetSession &&
+      toolName !== "computer_foreground_click" &&
+      requiredString(invocation.arguments, "bindingId") !== selectedBindingId
+    ) {
+      throw new Error(
+        "bindingId no longer matches this thread's selected target; no input dispatched",
+      );
+    }
     const signal = AbortSignal.any([
       invocation.signal,
       this.#foregroundConsent.signal,
@@ -656,6 +810,23 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           async (signal, onStopping) => {
             this.#assertForegroundControlAllowed(toolName);
             this.#presentation.invalidateAll();
+            if (this.#backend.targetSession) {
+              await this.#backend.targetSession.input(
+                requiredComputerOwner(invocation),
+                {
+                  operation: "click",
+                  x,
+                  y,
+                  button,
+                  captureId: requiredString(invocation.arguments, "captureId"),
+                },
+                signal,
+                onStopping,
+                selectedBindingId,
+                this.#foregroundActivity?.pointerPassthroughWindowIds?.() ?? [],
+              );
+              return;
+            }
             await this.#backend.foregroundClick(
               x,
               y,
@@ -665,7 +836,16 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             );
           },
         );
-        return { action: "click", x, y, button, impact: "foreground_takeover" };
+        return {
+          action: "click",
+          x,
+          y,
+          button,
+          impact: "foreground_takeover",
+          ...(this.#backend.targetSession
+            ? { dispatch: "posted", applicationEffect: "unverified" }
+            : {}),
+        };
       }
       case "computer_foreground_key_press": {
         const key = requiredComputerKey(invocation.arguments);
@@ -675,10 +855,69 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           async (signal, onStopping) => {
             this.#assertForegroundControlAllowed(toolName);
             this.#presentation.invalidateAll();
+            if (this.#backend.targetSession) {
+              await this.#backend.targetSession.input(
+                requiredComputerOwner(invocation),
+                { operation: "key", key },
+                signal,
+                onStopping,
+                selectedBindingId,
+              );
+              return;
+            }
             await this.#backend.foregroundKeyPress(key, signal, onStopping);
           },
         );
-        return { action: "key_press", key, impact: "foreground_takeover" };
+        return {
+          action: "key_press",
+          key,
+          impact: "foreground_takeover",
+          ...(this.#backend.targetSession
+            ? { dispatch: "posted", applicationEffect: "unverified" }
+            : {}),
+        };
+      }
+      case "computer_foreground_type":
+      case "computer_foreground_shortcut": {
+        const session = this.#backend.targetSession;
+        if (!session)
+          throw new Error(
+            "This provider does not support bound native keyboard input",
+          );
+        const action =
+          toolName === "computer_foreground_type"
+            ? {
+                operation: "type" as const,
+                text: requiredComputerTypingText(invocation.arguments),
+              }
+            : {
+                operation: "shortcut" as const,
+                ...requiredComputerShortcut(invocation.arguments),
+              };
+        await this.#withForegroundActivity(
+          invocation,
+          signal,
+          async (signal, onStopping) => {
+            this.#assertForegroundControlAllowed(toolName);
+            this.#presentation.invalidateAll();
+            await session.input(
+              requiredComputerOwner(invocation),
+              action,
+              signal,
+              onStopping,
+              selectedBindingId,
+            );
+          },
+        );
+        return {
+          action: action.operation,
+          ...(action.operation === "type"
+            ? { characterCount: Array.from(action.text).length }
+            : { key: action.key, modifiers: action.modifiers }),
+          impact: "foreground_takeover",
+          dispatch: "posted",
+          applicationEffect: "unverified",
+        };
       }
       case "computer_foreground_scroll": {
         const deltaY = requiredFiniteNumber(invocation.arguments, "deltaY");
@@ -693,10 +932,28 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           async (signal, onStopping) => {
             this.#assertForegroundControlAllowed(toolName);
             this.#presentation.invalidateAll();
+            if (this.#backend.targetSession) {
+              await this.#backend.targetSession.input(
+                requiredComputerOwner(invocation),
+                { operation: "scroll", deltaY },
+                signal,
+                onStopping,
+                selectedBindingId,
+                this.#foregroundActivity?.pointerPassthroughWindowIds?.() ?? [],
+              );
+              return;
+            }
             await this.#backend.foregroundScroll(deltaY, signal, onStopping);
           },
         );
-        return { action: "scroll", deltaY, impact: "foreground_takeover" };
+        return {
+          action: "scroll",
+          deltaY,
+          impact: "foreground_takeover",
+          ...(this.#backend.targetSession
+            ? { dispatch: "posted", applicationEffect: "unverified" }
+            : {}),
+        };
       }
       default:
         throw new Error(`Unsupported foreground computer tool: ${toolName}`);
@@ -981,6 +1238,7 @@ function boundedDesktopCaptureError(error: unknown): string {
 }
 
 export class ElectronMacComputerBackend implements ZenXComputerBackend {
+  readonly targetSession: ComputerTargetSession;
   readonly #captureScope = randomUUID();
   readonly #artifactDirectory: string;
   readonly #expiryTimers = new Set<NodeJS.Timeout>();
@@ -997,6 +1255,30 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     this.#artifactDirectory = artifactDirectory;
     this.#accessibility = new MacAccessibilityDriver(artifactDirectory);
     this.#foregroundInput = new MacForegroundInputDriver(artifactDirectory);
+    let executable: Promise<string> | undefined;
+    this.targetSession = new ComputerTargetSession(
+      new NativeComputerTargetTransport(
+        () =>
+          (executable ??= resolveMacNativeHelperExecutable(
+            "zenx-bound-target",
+            async () => {
+              await mkdir(artifactDirectory, { recursive: true, mode: 0o700 });
+              const source = path.join(
+                artifactDirectory,
+                "zenx-bound-target.swift",
+              );
+              const binary = path.join(artifactDirectory, "zenx-bound-target");
+              await writeFile(source, MAC_BOUND_TARGET_SOURCE, { mode: 0o600 });
+              await runProcess(
+                "/usr/bin/swiftc",
+                ["-O", source, "-o", binary],
+                60_000,
+              );
+              return binary;
+            },
+          )),
+      ),
+    );
   }
 
   async listWindows(
@@ -1176,7 +1458,11 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     return { ...response, control };
   }
 
-  async screenshot(target: ComputerTarget): Promise<{
+  async screenshot(
+    target: ComputerTarget,
+    signal = new AbortController().signal,
+    owner?: string,
+  ): Promise<{
     artifactPath: string;
     target: ComputerInspection["target"];
     width: number;
@@ -1185,7 +1471,25 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     expiresAt: string;
   }> {
     requireMacOs();
+    if (owner !== undefined) {
+      return await this.targetSession.capture(
+        owner,
+        target,
+        signal,
+        async (binding) => {
+          const image = await this.#captureWindowId(binding.windowId);
+          return await this.#saveScreenshot(binding.target, image);
+        },
+      );
+    }
     const { target: resolvedTarget, image } = await this.#captureWindow(target);
+    return await this.#saveScreenshot(resolvedTarget, image);
+  }
+
+  async #saveScreenshot(
+    resolvedTarget: ComputerInspection["target"],
+    image: import("electron").NativeImage,
+  ) {
     await mkdir(this.#artifactDirectory, { recursive: true, mode: 0o700 });
     const artifactPath = path.join(
       this.#artifactDirectory,
@@ -1329,6 +1633,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   }
 
   async close(): Promise<void> {
+    await this.targetSession.close();
     this.#observations.clear();
     for (const timer of this.#expiryTimers) clearTimeout(timer);
     this.#expiryTimers.clear();
@@ -1467,7 +1772,8 @@ class MacAccessibilityDriver {
 }
 
 export async function resolveMacNativeHelperExecutable(
-  helperName: "zenx-accessibility" | "zenx-foreground-input",
+  helperName:
+    "zenx-accessibility" | "zenx-foreground-input" | "zenx-bound-target",
   compileDevelopmentHelper: () => Promise<string>,
   runtime: {
     resourcesPath?: string;
@@ -2447,4 +2753,339 @@ function requireMacOs(): void {
       "The bundled computer provider currently supports macOS only",
     );
   }
+}
+
+export const MAC_BOUND_TARGET_SOURCE = `import AppKit
+import ApplicationServices
+import Carbon
+import Foundation
+
+struct TargetError: Error { let message: String }
+func refuse(_ message: String) throws -> Never { throw TargetError(message: message) }
+func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, name, &value) == .success else { return nil }
+  return value
+}
+func windows(_ app: AXUIElement) -> [AXUIElement] {
+  return attribute(app, kAXWindowsAttribute as CFString) as? [AXUIElement] ?? []
+}
+func frame(_ window: AXUIElement) -> CGRect? {
+  guard let p = attribute(window, kAXPositionAttribute as CFString), CFGetTypeID(p) == AXValueGetTypeID(),
+        let s = attribute(window, kAXSizeAttribute as CFString), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
+  var point = CGPoint.zero; var size = CGSize.zero
+  guard AXValueGetValue(p as! AXValue, .cgPoint, &point), AXValueGetValue(s as! AXValue, .cgSize, &size),
+        point.x.isFinite, point.y.isFinite, size.width.isFinite, size.height.isFinite,
+        size.width > 0, size.height > 0 else { return nil }
+  return CGRect(origin: point, size: size)
+}
+func cgId(_ app: NSRunningApplication, _ window: AXUIElement, _ bounds: CGRect) throws -> Int {
+  let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  let matches = entries.filter { item in
+    guard (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == app.processIdentifier,
+          (item[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          let raw = item[kCGWindowBounds as String] as? [String: Any],
+          let x = raw["X"] as? Double, let y = raw["Y"] as? Double,
+          let width = raw["Width"] as? Double, let height = raw["Height"] as? Double else { return false }
+    return CGRect(x: x, y: y, width: width, height: height) == bounds
+  }
+  guard matches.count == 1, let id = matches[0][kCGWindowNumber as String] as? NSNumber else {
+    try refuse("Window capture mapping is unavailable or ambiguous; reobserve")
+  }
+  return id.intValue
+}
+func pointerWindow(_ point: CGPoint, _ windowId: Int, _ appElement: AXUIElement, _ passthrough: Set<Int>) throws -> AXUIElement {
+  // CGWindowList is front-to-back. Be conservative even for mouse-ignoring
+  // overlays: foreground/focused AX state alone does not identify a pointer recipient.
+  guard let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+    try refuse("Pointer window ordering is unavailable")
+  }
+  var matched = false
+  for item in entries {
+    // Only main-owned, explicitly noninteractive edge indicators are exempt.
+    // Same PID alone, window titles, alpha, and the interactive Stop card are not.
+    if let id = item[kCGWindowNumber as String] as? NSNumber,
+       passthrough.contains(id.intValue),
+       (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == getppid() { continue }
+    // Alpha and accessibility visibility are not proof that a window ignores
+    // input. Even transparent containing windows are conservatively occluders.
+    guard let raw = item[kCGWindowBounds as String] as? [String: Any],
+          let x = raw["X"] as? Double, let y = raw["Y"] as? Double,
+          let width = raw["Width"] as? Double, let height = raw["Height"] as? Double,
+          x.isFinite, y.isFinite, width.isFinite, height.isFinite, width >= 0, height >= 0 else { try refuse("Pointer occlusion geometry is unavailable") }
+    if !CGRect(x: x, y: y, width: width, height: height).contains(point) { continue }
+    guard (item[kCGWindowNumber as String] as? NSNumber)?.intValue == windowId else { try refuse("Selected window is occluded at the input point") }
+    matched = true
+    break
+  }
+  guard matched else { try refuse("Selected window is not the visible pointer recipient") }
+  var hit: AXUIElement?
+  guard AXUIElementCopyElementAtPosition(appElement, Float(point.x), Float(point.y), &hit) == .success,
+        let hit else { try refuse("Pointer recipient is unavailable") }
+  if attribute(hit, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String { return hit }
+  guard let window = attribute(hit, kAXWindowAttribute as CFString), CFGetTypeID(window) == AXUIElementGetTypeID() else { try refuse("Pointer recipient window is ambiguous") }
+  return window as! AXUIElement
+}
+final class Binding {
+  let id = UUID().uuidString
+  let app: NSRunningApplication
+  let appElement: AXUIElement
+  let window: AXUIElement
+  let launch: Date
+  let bounds: CGRect
+  let windowId: Int
+  let title: String
+  init(_ target: [String: Any]) throws {
+    let apps = NSWorkspace.shared.runningApplications.filter { app in
+      if let pid = target["pid"] as? NSNumber, app.processIdentifier != pid.int32Value { return false }
+      if let bundle = (target["bundleId"] ?? target["applicationId"]) as? String, app.bundleIdentifier != bundle { return false }
+      return target["pid"] != nil || target["bundleId"] != nil || target["applicationId"] != nil
+    }
+    guard apps.count == 1, let app = apps.first, let launch = app.launchDate, !app.isTerminated else { try refuse("Application target is missing or ambiguous") }
+    let element = AXUIElementCreateApplication(app.processIdentifier)
+    let candidates = windows(element).filter { window in
+      guard let requested = target["windowTitle"] as? String else { return true }
+      return attribute(window, kAXTitleAttribute as CFString) as? String == requested
+    }
+    // Application-only selection is permitted only when it has one unambiguous window.
+    guard candidates.count == 1, let window = candidates.first, let bounds = frame(window) else { try refuse("Select one exact available window") }
+    self.app = app; self.appElement = element; self.window = window; self.launch = launch; self.bounds = bounds
+    self.windowId = try cgId(app, window, bounds)
+    self.title = attribute(window, kAXTitleAttribute as CFString) as? String ?? ""
+  }
+  func verify() throws {
+    guard !app.isTerminated, let current = NSRunningApplication(processIdentifier: app.processIdentifier), current.launchDate == launch,
+          windows(appElement).contains(where: { CFEqual($0, window) }) else { try refuse("Selected window or application ended; reselect target") }
+    guard frame(window) == bounds else { try refuse("Window geometry changed; recapture or reselect before input") }
+    guard try cgId(app, window, bounds) == windowId else { try refuse("Window capture identity changed; reobserve") }
+  }
+  func focused() -> Bool {
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+          let focused = attribute(appElement, kAXFocusedWindowAttribute as CFString), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
+    return CFEqual(focused, window)
+  }
+  func activate() throws {
+    try verify()
+    guard app.activate(options: [.activateIgnoringOtherApps]) else { try refuse("Could not activate selected application") }
+    guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { try refuse("Could not raise selected window") }
+    for _ in 0..<30 {
+      try verify()
+      if focused() { return }
+      usleep(10_000)
+    }
+    try refuse("Selected window did not acquire foreground focus; no input dispatched")
+  }
+  func fence() throws {
+    try verify()
+    guard focused() else { try refuse("Foreground focus changed; reobserve target") }
+  }
+  func pointerFence(_ point: CGPoint, _ passthrough: Set<Int>) throws {
+    guard CFEqual(try pointerWindow(point, windowId, appElement, passthrough), window) else { try refuse("Pointer recipient is not the selected window") }
+  }
+  func receipt() -> [String: Any] {
+    return ["bindingId": id, "windowId": windowId,
+      "target": ["pid": Int(app.processIdentifier), "applicationName": app.localizedName ?? "", "bundleId": app.bundleIdentifier ?? "", "windowTitle": title],
+      "bounds": ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]]
+  }
+}
+struct KeyboardLayout {
+  let id: String
+  let translate: (CGKeyCode, Bool) throws -> String
+}
+func readKeyboardLayout() throws -> KeyboardLayout {
+  guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+        let active = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+        let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData),
+        let rawId = TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
+        let activeId = TISGetInputSourceProperty(active, kTISPropertyInputSourceID) else { try refuse("Current keyboard layout is unavailable; no ANSI fallback") }
+  let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue()
+  let id = (Unmanaged<CFString>.fromOpaque(rawId).takeUnretainedValue() as String) + ":" + (Unmanaged<CFString>.fromOpaque(activeId).takeUnretainedValue() as String)
+  let keyboardType = UInt32(LMGetKbdType())
+  return KeyboardLayout(id: id + ":" + String(keyboardType), translate: { code, command in
+    guard let bytes = CFDataGetBytePtr(data) else { try refuse("Keyboard layout data is unavailable") }
+    let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+    var dead: UInt32 = 0
+    var length = 0
+    var output = [UniChar](repeating: 0, count: 8)
+    let status = UCKeyTranslate(layout, code, UInt16(kUCKeyActionDown), command ? UInt32(cmdKey) >> 8 : 0,
+      keyboardType, OptionBits(kUCKeyTranslateNoDeadKeysMask), &dead, output.count, &length, &output)
+    guard status == noErr, dead == 0 else { return "" }
+    return String(utf16CodeUnits: output, count: length)
+  })
+}
+func resolveShortcut(_ key: String, _ modifiers: [String]) throws -> (CGKeyCode, CGEventFlags, String?) {
+  guard !modifiers.isEmpty, modifiers.count <= 4, Set(modifiers).count == modifiers.count,
+        modifiers.allSatisfy({ ["command", "control", "option", "shift"].contains($0) }) else { try refuse("Invalid shortcut modifiers") }
+  var flags: CGEventFlags = []
+  if modifiers.contains("command") { flags.insert(.maskCommand) }
+  if modifiers.contains("control") { flags.insert(.maskControl) }
+  if modifiers.contains("option") { flags.insert(.maskAlternate) }
+  if modifiers.contains("shift") { flags.insert(.maskShift) }
+  if let code = keyCodes[key] { return (code, flags, nil) }
+  guard key.utf8.count == 1, "abcdefghijklmnopqrstuvwxyz0123456789".contains(key) else { try refuse("Unsupported logical shortcut key") }
+  let layout = try readKeyboardLayout()
+  var matches: [CGKeyCode] = []
+  // Logical base key under the current Command layout when Command is present.
+  // Other modifiers apply separately; do not search Option/dead-key output text.
+  for code in CGKeyCode(0)...CGKeyCode(63) {
+    if try layout.translate(code, modifiers.contains("command")).lowercased() == key { matches.append(code) }
+  }
+  guard matches.count == 1 else { try refuse("Logical shortcut key has no unique mapping in current keyboard layout") }
+  return (matches[0], flags, layout.id)
+}
+func unicodeChunks(_ text: String) throws -> [[UniChar]] {
+  guard !text.isEmpty, text.unicodeScalars.count <= 1024 else { try refuse("Typing requires 1 to 1024 Unicode scalars") }
+  var chunks: [[UniChar]] = []; var current: [UniChar] = []
+  for scalar in text.unicodeScalars {
+    let units = Array(String(scalar).utf16)
+    if current.count + units.count > 16 { chunks.append(current); current = [] }
+    current.append(contentsOf: units)
+  }
+  if !current.isEmpty { chunks.append(current) }
+  return chunks
+}
+
+let keyCodes: [String: CGKeyCode] = ["enter":36, "escape":53, "tab":48, "backspace":51, "space":49, "arrowUp":126, "arrowDown":125, "arrowLeft":123, "arrowRight":124]
+var bindings: [String: Binding] = [:]
+while let line = readLine() {
+  var posted = 0
+  var owner = ""
+  var expectedBindingId: String?
+  var reply: [String: Any]
+  do {
+    guard AXIsProcessTrusted() else { try refuse("macOS Accessibility permission is not granted") }
+    guard let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let operation = request["operation"] as? String, let requestedOwner = request["owner"] as? String, !requestedOwner.isEmpty else { try refuse("Invalid target request") }
+    owner = requestedOwner
+    expectedBindingId = request["bindingId"] as? String
+    if operation == "select" {
+      bindings.removeValue(forKey: owner)
+      guard bindings.count < 32, let target = request["target"] as? [String: Any] else { try refuse("Target capacity reached or target missing") }
+      let binding = try Binding(target)
+      bindings[owner] = binding
+      reply = ["result": binding.receipt()]
+    } else {
+      guard let binding = bindings[owner], request["bindingId"] as? String == binding.id else { try refuse("Target binding expired; select again") }
+      try binding.verify()
+      if operation == "verify" { reply = ["result": binding.receipt()] }
+      else {
+        // All target activation occurs after the host's approval and foreground arbitration.
+        try binding.activate()
+        var shortcutFence: (() throws -> Void)?
+        var pointerPoint: CGPoint?
+        let passthroughIds = request["pointerPassthroughWindowIds"] as? [Int] ?? []
+        guard passthroughIds.count <= 64, passthroughIds.allSatisfy({ $0 > 0 }) else { try refuse("Invalid foreground indicator identity") }
+        let passthrough = Set(passthroughIds)
+        func post(_ event: CGEvent?) throws {
+          guard let event else { try refuse("Could not construct native input") }
+          try binding.fence()
+          try shortcutFence?()
+          if let pointerPoint { try binding.pointerFence(pointerPoint, passthrough) }
+          event.post(tap: .cghidEventTap)
+          posted += 1
+        }
+        switch operation {
+        case "click":
+          guard let x = request["x"] as? Double, let y = request["y"] as? Double, x.isFinite, y.isFinite,
+                let buttonName = request["button"] as? String, ["left", "right"].contains(buttonName),
+                binding.bounds.contains(CGPoint(x: x, y: y)) else { try refuse("Invalid bound click point") }
+          let point = CGPoint(x: x, y: y); let right = buttonName == "right"; let button: CGMouseButton = right ? .right : .left
+          pointerPoint = point
+          try post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button))
+          try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseDown : .leftMouseDown, mouseCursorPosition: point, mouseButton: button))
+          usleep(30_000)
+          try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseUp : .leftMouseUp, mouseCursorPosition: point, mouseButton: button))
+        case "key":
+          guard let key = request["key"] as? String, let code = keyCodes[key] else { try refuse("Unsupported bound key") }
+          try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true))
+          usleep(20_000)
+          try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false))
+        case "type":
+          guard let text = request["text"] as? String else { try refuse("Typing text is required") }
+          let chunks = try unicodeChunks(text)
+          for units in chunks {
+            for down in [true, false] {
+              let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down)
+              event?.flags = []
+              units.withUnsafeBufferPointer { buffer in
+                event?.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+              }
+              try post(event)
+              if down { usleep(5_000) }
+            }
+          }
+        case "shortcut":
+          guard let key = request["key"] as? String, let modifiers = request["modifiers"] as? [String] else { try refuse("Shortcut key and modifiers are required") }
+          let (code, flags, layoutId) = try resolveShortcut(key, modifiers)
+          shortcutFence = {
+            let fresh = try resolveShortcut(key, modifiers)
+            guard fresh.0 == code, fresh.1 == flags, fresh.2 == layoutId else { try refuse("Keyboard input source or mapping changed; reobserve before shortcut") }
+          }
+          let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)
+          down?.flags = flags
+          try post(down)
+          usleep(20_000)
+          let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
+          up?.flags = flags
+          try post(up)
+        case "scroll":
+          guard let value = request["deltaY"] as? Double, value.isFinite, abs(value) <= 10000, value.rounded() != 0 else { try refuse("Invalid scroll pixels") }
+          let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -Int32(value.rounded()), wheel2: 0, wheel3: 0)
+          event?.location = CGPoint(x: binding.bounds.midX, y: binding.bounds.midY)
+          pointerPoint = CGPoint(x: binding.bounds.midX, y: binding.bounds.midY)
+          try post(event)
+        default: try refuse("Unsupported bound operation")
+        }
+        reply = ["result": ["dispatch": "posted", "applicationEffect": "unverified"]]
+      }
+    }
+  } catch {
+    // A stale request must not revoke a newer selection for the same owner.
+    if let expectedBindingId, bindings[owner]?.id == expectedBindingId {
+      bindings.removeValue(forKey: owner)
+    }
+    let message = (error as? TargetError)?.message ?? "Invalid native target request"
+    let outcome = posted == 0 ? "; no input dispatched" : "; input partially dispatched; outcome unknown; do not retry automatically"
+    reply = ["error": message + outcome]
+  }
+  if let output = try? JSONSerialization.data(withJSONObject: reply) {
+    FileHandle.standardOutput.write(output); FileHandle.standardOutput.write(Data([10]))
+  } else { exit(1) }
+}
+`;
+
+function requiredComputerOwner(invocation: ToolInvocation): string {
+  if (!invocation.threadId)
+    throw new Error("Bound Computer input requires a host-owned threadId");
+  return invocation.threadId;
+}
+
+function requiredComputerTypingText(
+  arguments_: Record<string, unknown>,
+): string {
+  const text = requiredString(arguments_, "text");
+  if (Array.from(text).length > 1024 || /[\uD800-\uDFFF]/u.test(text))
+    throw new Error("text must contain 1 to 1024 well-formed Unicode scalars");
+  return text;
+}
+function requiredComputerShortcut(arguments_: Record<string, unknown>): {
+  key: string;
+  modifiers: string[];
+} {
+  const key = requiredString(arguments_, "key");
+  const modifiers = arguments_.modifiers;
+  if (
+    !COMPUTER_SHORTCUT_KEYS.includes(key) ||
+    !Array.isArray(modifiers) ||
+    modifiers.length < 1 ||
+    modifiers.length > 4 ||
+    new Set(modifiers).size !== modifiers.length ||
+    !modifiers.every(
+      (value): value is string =>
+        typeof value === "string" &&
+        ["command", "control", "option", "shift"].includes(value),
+    )
+  )
+    throw new Error("Unsupported shortcut key or modifiers");
+  return { key, modifiers };
 }

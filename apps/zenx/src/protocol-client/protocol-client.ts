@@ -75,6 +75,8 @@ export class ZenXProtocolClient {
     RequestId,
     {
       method: ClientRequestMethod;
+      resumeThreadId?: string;
+      publishResume: boolean;
       resolve: (value: unknown) => void;
       reject: (error: Error) => void;
     }
@@ -92,6 +94,16 @@ export class ZenXProtocolClient {
   >();
   readonly #subscribedThreads = new Set<string>();
   readonly #nativeSubscriptions = new Set<string>();
+  // Transport-local delivery cursors, never canonical Thread state.
+  readonly #nativeWatermarks = new Map<
+    string,
+    { epoch: string; watermark: number }
+  >();
+  readonly #resumes = new Map<
+    string,
+    Promise<ClientRequestResults["zen/thread/resume"]>
+  >();
+  #processEpoch: string | undefined;
   #socket: WebSocket | undefined;
   #nextRequestId = 1;
   #connectionGeneration = 0;
@@ -165,6 +177,21 @@ export class ZenXProtocolClient {
     }
     if (!this.#ready) {
       throw new Error("App Server connection is not ready");
+    }
+    if (method === "zen/thread/resume") {
+      const threadId = (params as ClientRequestParams["zen/thread/resume"])
+        .threadId;
+      let resume = this.#resumes.get(threadId);
+      if (resume === undefined) {
+        resume = this.#rawRequest("zen/thread/resume", { threadId });
+        this.#resumes.set(threadId, resume);
+        const clear = () => {
+          if (this.#resumes.get(threadId) === resume)
+            this.#resumes.delete(threadId);
+        };
+        void resume.then(clear, clear);
+      }
+      return (await resume) as ClientRequestResults[M];
     }
     const result = await this.#rawRequest(method, params);
     this.#recordSubscription(method, params, result);
@@ -249,6 +276,9 @@ export class ZenXProtocolClient {
     // Native projection ownership belongs to one WebSocket generation. Until
     // a resume succeeds on this socket, legacy events remain the live fallback.
     this.#nativeSubscriptions.clear();
+    this.#nativeWatermarks.clear();
+    this.#resumes.clear();
+    this.#processEpoch = undefined;
     const socket = new WebSocket(this.#url, {
       ...(this.#bearerToken === undefined
         ? {}
@@ -278,7 +308,8 @@ export class ZenXProtocolClient {
       capabilities: null,
     });
     this.#send({ method: "initialized" });
-    await this.#rawRequest("zen/initialize", {});
+    const initialized = await this.#rawRequest("zen/initialize", {});
+    this.#processEpoch = initialized.processEpoch;
   }
 
   async #rawRequest<M extends ClientRequestMethod>(
@@ -287,7 +318,19 @@ export class ZenXProtocolClient {
   ): Promise<ClientRequestResults[M]> {
     const id = this.#nextRequestId++;
     const response = new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(id, { method, resolve, reject });
+      this.#pending.set(id, {
+        method,
+        ...(method === "zen/thread/resume"
+          ? {
+              resumeThreadId: (
+                params as ClientRequestParams["zen/thread/resume"]
+              ).threadId,
+            }
+          : {}),
+        publishResume: this.#ready,
+        resolve,
+        reject,
+      });
     });
     try {
       this.#send({ id, method, params });
@@ -346,7 +389,48 @@ export class ZenXProtocolClient {
           ),
         );
       } else {
-        pending.resolve(message.result);
+        try {
+          if (pending.resumeThreadId !== undefined) {
+            const recovery = validateResume(
+              message.result,
+              pending.resumeThreadId,
+              this.#processEpoch,
+            );
+            if (pending.publishResume) {
+              this.#subscribedThreads.add(recovery.threadId);
+              this.#nativeSubscriptions.add(recovery.threadId);
+              // No await here: every observer must see transferred overlap before
+              // a later WebSocket frame can advance its projection watermark.
+              for (const event of recovery.events) {
+                if (
+                  socket !== this.#socket ||
+                  connectionGeneration !== this.#connectionGeneration
+                )
+                  break;
+                const previous = this.#nativeWatermarks.get(event.threadId);
+                if (
+                  previous?.epoch === event.processEpoch &&
+                  previous.watermark >= event.watermark
+                )
+                  continue;
+                this.#publishNativeEvent(event);
+              }
+              if (
+                socket === this.#socket &&
+                connectionGeneration === this.#connectionGeneration
+              ) {
+                this.#recordNativeWatermark(
+                  recovery.threadId,
+                  recovery.processEpoch,
+                  recovery.watermark,
+                );
+              }
+            }
+          }
+          pending.resolve(message.result);
+        } catch (error) {
+          pending.reject(asError(error));
+        }
       }
       return;
     }
@@ -379,6 +463,10 @@ export class ZenXProtocolClient {
     }
 
     if (isNotification(message)) {
+      if (message.method === "zen/thread/event") {
+        this.#publishNativeEvent(message.params as NativeProjectedThreadEvent);
+        return;
+      }
       const nativeThreadId = notificationThreadId(message.params);
       if (
         nativeThreadId !== null &&
@@ -389,6 +477,42 @@ export class ZenXProtocolClient {
       const handlers = this.#notificationHandlers.get(message.method);
       if (handlers === undefined) return;
       for (const handler of handlers) await handler(message.params);
+    }
+  }
+
+  #recordNativeWatermark(
+    threadId: string,
+    epoch: string,
+    watermark: number,
+  ): void {
+    const previous = this.#nativeWatermarks.get(threadId);
+    if (previous?.epoch !== epoch || previous.watermark < watermark) {
+      this.#nativeWatermarks.set(threadId, { epoch, watermark });
+    }
+  }
+
+  #publishNativeEvent(event: NativeProjectedThreadEvent): void {
+    const socket = this.#socket;
+    const generation = this.#connectionGeneration;
+    this.#recordNativeWatermark(
+      event.threadId,
+      event.processEpoch,
+      event.watermark,
+    );
+    // Invoke synchronously, but do not await observer promises (including those
+    // awaiting this RPC). Such observers cannot own transport progress.
+    for (const handler of this.#notificationHandlers.get("zen/thread/event") ??
+      []) {
+      if (socket !== this.#socket || generation !== this.#connectionGeneration)
+        break;
+      void Promise.resolve(handler(event)).catch((error: unknown) => {
+        try {
+          this.#emitStatus({ type: "protocolError", error: asError(error) });
+        } catch {
+          // Status observers cannot turn an observed consumer failure into an
+          // unhandled rejection or change settlement of the successful RPC.
+        }
+      });
     }
   }
 
@@ -460,6 +584,11 @@ export class ZenXProtocolClient {
             generation !== this.#connectionGeneration
           )
             break;
+          this.#recordNativeWatermark(
+            event.threadId,
+            event.processEpoch,
+            event.watermark,
+          );
           for (const handler of this.#notificationHandlers.get(
             "zen/thread/event",
           ) ?? []) {
@@ -499,6 +628,11 @@ export class ZenXProtocolClient {
           threadId,
         });
         this.#nativeSubscriptions.add(threadId);
+        this.#recordNativeWatermark(
+          threadId,
+          result.processEpoch,
+          result.watermark,
+        );
         if (result.threadId === threadId && result.thread.id === threadId) {
           recovered.push(
             ...result.events.filter(
@@ -556,6 +690,7 @@ export class ZenXProtocolClient {
         .threadId;
       this.#subscribedThreads.delete(threadId);
       this.#nativeSubscriptions.delete(threadId);
+      this.#nativeWatermarks.delete(threadId);
     }
   }
 
@@ -658,4 +793,46 @@ function delay(milliseconds: number): Promise<void> {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function validateResume(
+  value: unknown,
+  threadId: string,
+  processEpoch: string | undefined,
+): ClientRequestResults["zen/thread/resume"] {
+  const invalid = () => new Error("Malformed native Thread resume response");
+  if (typeof value !== "object" || value === null) throw invalid();
+  const recovery = value as ClientRequestResults["zen/thread/resume"];
+  if (
+    recovery.threadId !== threadId ||
+    recovery.thread?.id !== threadId ||
+    typeof recovery.processEpoch !== "string" ||
+    recovery.processEpoch.length === 0 ||
+    (processEpoch !== undefined && recovery.processEpoch !== processEpoch) ||
+    !Number.isSafeInteger(recovery.watermark) ||
+    recovery.watermark < 0 ||
+    !Array.isArray(recovery.events)
+  )
+    throw invalid();
+  let previous = 0;
+  for (const event of recovery.events) {
+    if (
+      event === null ||
+      typeof event !== "object" ||
+      event.threadId !== threadId ||
+      event.processEpoch !== recovery.processEpoch ||
+      !Number.isSafeInteger(event.watermark) ||
+      event.watermark <= previous ||
+      event.watermark > recovery.watermark ||
+      event.event === null ||
+      typeof event.event !== "object" ||
+      typeof event.event.type !== "string" ||
+      (event.event.type === "item_completed"
+        ? event.event.item?.threadId
+        : (event.event as { threadId?: string }).threadId) !== threadId
+    )
+      throw invalid();
+    previous = event.watermark;
+  }
+  return recovery;
 }
