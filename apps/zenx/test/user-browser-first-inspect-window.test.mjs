@@ -239,7 +239,7 @@ async function start(f, signal, expectedIdentity) {
   return { result, request: f.main().at(-1) };
 }
 
-test("first exact inspection borrows only original remaining time, including prior setup/frame/world cost", async () => {
+test("first exact inspection starts its own window after setup, including frame and world cost", async () => {
   const f = fixture({
     delay: (r) =>
       r.method === "Runtime.enable"
@@ -251,8 +251,8 @@ test("first exact inspection borrows only original remaining time, including pri
             : 0,
   });
   const { result, request } = await start(f);
-  assert.equal(request.timer.ms, 2_500);
-  assert.equal(request.timer.due, 10_100);
+  assert.equal(request.timer.ms, 5_500);
+  assert.equal(request.timer.due, 13_100);
   assert.equal(f.client.testEpoch().setupDeadline, 10_100);
   f.advance(1_728);
   f.complete(request);
@@ -261,8 +261,8 @@ test("first exact inspection borrows only original remaining time, including pri
   for (const r of f.sends.filter((r) => r.method === "Page.getFrameTree"))
     assert.equal(r.timer.ms, 2_000, r.method);
   const world = f.sends.find((r) => r.method === "Page.createIsolatedWorld");
-  assert.equal(world.timer.ms, 6_000);
-  assert.equal(world.timer.due, 10_100);
+  assert.equal(world.timer.ms, 9_000);
+  assert.equal(world.timer.due, 13_100);
   assert.equal(
     f.sends.find((r) => r.params.expression === "void 0").timer.ms,
     2_000,
@@ -270,16 +270,25 @@ test("first exact inspection borrows only original remaining time, including pri
 });
 
 for (const elapsed of [8_000, 8_500, 10_001, 50_000]) {
-  test(`first inspection after ${elapsed}ms retains ordinary 2s without renewal`, async () => {
+  test(`first inspection after ${elapsed}ms claims once independently of attachment age`, async () => {
     const f = fixture();
     await f.client.testFence();
     f.advance(elapsed);
     const { result, request } = await start(f);
-    assert.equal(request.timer.ms, 2_000);
+    assert.equal(request.timer.ms, 10_000);
+    assert.equal(request.timer.due, 10_100 + elapsed);
     assert.equal(f.client.testEpoch().setupDeadline, 10_100);
     assert.equal(f.client.testEpoch().firstInspectClaimed, true);
     f.complete(request);
     await result;
+    const next = await start(f);
+    assert.equal(next.request.timer.ms, 2_000);
+    assert.equal(
+      f.client.testEpoch().firstInspectGrantedDeadline,
+      request.timer.due,
+    );
+    f.complete(next.request);
+    await next.result;
   });
 }
 
@@ -310,12 +319,78 @@ test("cached attachment and concurrent first inspections can claim only once", a
   await third.result;
 });
 
+test("slow successful setup cannot starve the first observation's original response", async () => {
+  const f = fixture({
+    delay: (r) =>
+      r.method === "Runtime.enable"
+        ? 7_800
+        : r.method === "Page.createIsolatedWorld"
+          ? 600
+          : r.method === "Page.getFrameTree"
+            ? 200
+            : 0,
+  });
+  const { result, request } = await start(f);
+  const epoch = f.client.testEpoch();
+  assert.equal(epoch.setupDeadline, 10_100);
+  assert.equal(epoch.firstInspectGrantedDeadline, 17_900);
+  assert.equal(request.timer.ms, 8_800);
+  assert.equal(epoch.setupDeadline - f.now(), 1_000);
+  f.advance(2_300);
+  assert.ok(f.now() > epoch.setupDeadline);
+  f.complete(request);
+  assert.deepEqual((await result).value, value);
+  assert.equal(f.main().length, 1);
+  for (const method of [
+    "Target.attachToTarget",
+    "Page.enable",
+    "Runtime.enable",
+    "Page.navigate",
+  ])
+    assert.equal(
+      f.sends.filter((r) => r.method === method).length,
+      method === "Page.navigate" ? 0 : 1,
+    );
+});
+
+test("a returned observation reservation after slow setup keeps its own original deadline", async () => {
+  const f = fixture({
+    delay: (r) => (r.method === "Runtime.enable" ? 6_000 : 0),
+  });
+  f.hook((event) => {
+    if (event.kind !== "timer-armed" || event.method !== "Page.getFrameTree")
+      return;
+    f.hook(undefined);
+    f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+  });
+  await assert.rejects(
+    f.inspect(),
+    UserBrowserDocumentChangedBeforeDispatchError,
+  );
+  const epoch = f.client.testEpoch();
+  assert.equal(epoch.setupDeadline, 10_100);
+  assert.equal(epoch.firstInspectGrantedDeadline, 16_100);
+  assert.equal(epoch.firstInspectClaimed, false);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Page.createIsolatedWorld").length,
+    0,
+  );
+  f.advance(8_500);
+  const { result, request } = await start(f);
+  assert.equal(request.timer.due, 16_100);
+  assert.equal(request.timer.ms, 1_500);
+  assert.equal(epoch.firstInspectGrantedDeadline, 16_100);
+  f.complete(request);
+  await result;
+});
+
 test("first deadline timeout keeps original unknown after its same-route late response", async () => {
   const f = fixture({
     delay: (r) => (r.method === "Runtime.enable" ? 5_500 : 0),
   });
   const { result, request } = await start(f);
-  assert.equal(request.timer.ms, 4_500);
+  assert.equal(request.timer.ms, 10_000);
+  assert.equal(request.timer.due, 15_600);
   f.fire(request.timer);
   let original;
   await assert.rejects(result, (error) => {
@@ -338,10 +413,7 @@ test("reply observed after absolute deadline cannot beat an overdue timer into s
   const { result, request } = await start(f);
   f.advance(10_001); // Deliberately do not deliver the timer callback yet.
   f.complete(request);
-  await assert.rejects(
-    result,
-    /original attachment inspection deadline elapsed/,
-  );
+  await assert.rejects(result, /original reserved deadline elapsed/);
   assert.equal(f.main().length, 1);
   assert.equal(
     f.sends.filter((r) => r.params.expression === "void 0").length,
@@ -464,7 +536,7 @@ test("arbitrary evaluate, input snapshot, input dispatch and cleanup keep existi
   assert.equal(f.sends.at(-1).timer.ms, 2_000);
 });
 
-test("claim does not reset the absolute timer when synchronous dispatch work consumes startup time", async () => {
+test("claim does not reset the absolute timer when synchronous dispatch work consumes observation time", async () => {
   const f = fixture();
   f.hook((event) => {
     if (event.kind === "timer-armed" && event.method === "Runtime.evaluate") {
@@ -503,7 +575,7 @@ test("abort after dispatch retains the original unknown and no renewed inspectio
   );
 });
 
-test("ordinary action evaluation still times out once at 2s while startup time remains", async () => {
+test("ordinary action evaluation still times out once at 2s without claiming observation time", async () => {
   const expression = "document.querySelector('button').click()";
   const f = fixture({
     hold: (request) => request.params.expression === expression,
@@ -549,7 +621,7 @@ for (const elapsed of [10_000, 10_001]) {
       original = error;
       return (
         error instanceof UserBrowserMutationOutcomeUnknownError &&
-        /original attachment inspection deadline elapsed/.test(error.message) &&
+        /original reserved deadline elapsed/.test(error.message) &&
         /Execution context was destroyed/.test(error.message)
       );
     });
@@ -655,7 +727,7 @@ for (const elapsed of [10_000, 10_001]) {
         result,
         (error) =>
           error instanceof UserBrowserCdpOutcomeUnknownError &&
-          /original attachment inspection deadline elapsed/.test(error.message),
+          /original reserved deadline elapsed/.test(error.message),
       );
       assert.equal(f.main().length, 0);
       assert.equal(f.client.testEpoch().firstInspectClaimed, true);
@@ -679,7 +751,7 @@ test("on-time world protocol rejection stays known despite late continuation", a
   assert.equal(f.main().length, 0);
 });
 
-test("setup and world leave less than ordinary budget without a fresh 2s fallback", async () => {
+test("world can consume its independent window below 2s without a fresh fallback", async () => {
   const f = fixture({
     delay: (r) =>
       r.method === "Page.enable"
@@ -687,15 +759,15 @@ test("setup and world leave less than ordinary budget without a fresh 2s fallbac
         : r.method === "Runtime.enable"
           ? 1_500
           : r.method === "Page.createIsolatedWorld"
-            ? 5_000
+            ? 8_700
             : 0,
   });
   const { result, request } = await start(f);
   const world = f.sends.find((r) => r.method === "Page.createIsolatedWorld");
-  assert.equal(world.timer.ms, 6_300);
-  assert.equal(world.timer.due, 10_100);
+  assert.equal(world.timer.ms, 10_000);
+  assert.equal(world.timer.due, 13_800);
   assert.equal(request.timer.ms, 1_300);
-  assert.equal(request.timer.due, 10_100);
+  assert.equal(request.timer.due, 13_800);
   f.complete(request);
   await result;
 });
@@ -1094,8 +1166,8 @@ for (const first of [0, 1]) {
     f.advance(500);
     f.reply(requests[1 - first]);
     await until(() => f.main().length === 1);
-    assert.equal(f.main()[0].timer.ms, 6_500);
-    assert.equal(f.main()[0].timer.due, epoch.setupDeadline);
+    assert.equal(f.main()[0].timer.ms, 10_000);
+    assert.equal(f.main()[0].timer.due, epoch.setupDeadline + 3_500);
     f.complete(f.main()[0]);
     await result;
     assertSingleSetup(f, 0);
@@ -1341,7 +1413,7 @@ test("synchronous setup dispatch work cannot renew the original absolute deadlin
   assertNoDocumentDispatch(f);
 });
 
-test("joint setup readiness crossing its deadline cannot fall back to a fresh ordinary inspection", async () => {
+test("joint setup readiness crossing its deadline cannot grant a fresh inspection window", async () => {
   const { f, result, requests, epoch } = await pendingDomains();
   let settled = false;
   void result.then(
@@ -1361,7 +1433,7 @@ test("joint setup readiness crossing its deadline cannot fall back to a fresh or
   assertNoDocumentDispatch(f);
   // Both domain continuations passed on time; only their aggregate readiness
   // continuation is delayed. An expired *ready* attachment would otherwise
-  // make the first-inspect grant fall back to the ordinary two-second budget.
+  // incorrectly grant a separate first-inspection window.
   f.advance(10_000);
   await until(() => settled || f.main().length > 0);
   assertNoDocumentDispatch(f);
