@@ -39,6 +39,19 @@ test("native resize sends no input until measured bounds and exposed split maxim
       0,
       "Not even mouseDown is sent with the old ResizeObserver limit",
     );
+    // An animated pane can agree with ResizeObserver before reaching its target.
+    panel.getBoundingClientRect = () => ({ width: 599.9375 }) as DOMRect;
+    body.getBoundingClientRect = () =>
+      ({ x: 801.0625, y: 44, width: 598.9375, height: 856 }) as DOMRect;
+    separator.setAttribute("aria-valuemax", "358.9375");
+    const moving = fileEditorResizeState(document);
+    assert.equal(moving.maximum, moving.expectedMaximum);
+    assert.equal(moving.ready, false, "The last animated pixel is not settled");
+    assert.throws(drag, /not ready/);
+    assert.equal(sent.length, 0, "No native input while outer width is moving");
+    panel.getBoundingClientRect = () => ({ width: 600 }) as DOMRect;
+    body.getBoundingClientRect = () =>
+      ({ x: 801, y: 44, width: 599, height: 856 }) as DOMRect;
     separator.setAttribute("aria-valuemax", "359");
     assert.equal(fileEditorResizeState(document).ready, true);
     drag();
