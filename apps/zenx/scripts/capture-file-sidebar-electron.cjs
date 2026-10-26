@@ -258,7 +258,7 @@ async function runCase(width, precise, productionCsp = false) {
     await key("Down", ["command"]);
     try {
       await until(
-        `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_SOURCE_LINE')`,
+        `(() => {const root=document.querySelector(${JSON.stringify(selector)}),scroller=root.querySelector('.cm-scroller').getBoundingClientRect();return Array.from(root.querySelectorAll('.cm-line')).some(line=>{const r=line.getBoundingClientRect();return line.textContent.includes('LAST_SOURCE_LINE')&&r.bottom>scroller.top&&r.top<scroller.bottom;});})()`,
         "Source native document-end layout committed",
       );
       receipt.sourceEnd = await evaluate(measure);
@@ -399,11 +399,24 @@ async function runCase(width, precise, productionCsp = false) {
   receipt.immediateEnd = await evaluate(measure);
   try {
     await until(
-      `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_MARKDOWN_SECTION')`,
+      `(() => {const root=document.querySelector(${JSON.stringify(selector)}),scroller=root.querySelector('.cm-scroller').getBoundingClientRect();return Array.from(root.querySelectorAll('.cm-line')).some(line=>{const r=line.getBoundingClientRect();return line.textContent.includes('LAST_MARKDOWN_SECTION')&&r.bottom>scroller.top&&r.top<scroller.bottom;});})()`,
       "native document-end layout committed",
     );
   } catch (error) {
     receipt.originalEndFailureState = await evaluate(measure);
+    receipt.failureCoordinates = await evaluate(
+      "window.__nativeEditorCoordinates()",
+    );
+    await screenshot(`${receipt.name}-original-end-failure`);
+    // Move one character left from the trailing empty EOF line, using native
+    // keyboard input. Keep original failure regardless of this diagnostic result.
+    await key("Left");
+    await pause(300);
+    receipt.previousCharacter = await evaluate(measure);
+    receipt.previousCharacterCoordinates = await evaluate(
+      "window.__nativeEditorCoordinates()",
+    );
+
     // Native Find exposes source with Decoration.none, preserving the same
     // document and line-wrapping. This is a differential diagnostic, not a pass.
     try {
@@ -415,7 +428,7 @@ async function runCase(width, precise, productionCsp = false) {
       await click(`${selector} .cm-content`);
       await key("Down", ["command"]);
       await until(
-        `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_MARKDOWN_SECTION')`,
+        `(() => {const root=document.querySelector(${JSON.stringify(selector)}),scroller=root.querySelector('.cm-scroller').getBoundingClientRect();return Array.from(root.querySelectorAll('.cm-line')).some(line=>{const r=line.getBoundingClientRect();return line.textContent.includes('LAST_MARKDOWN_SECTION')&&r.bottom>scroller.top&&r.top<scroller.bottom;});})()`,
         "Source-mode wrapped Markdown document end",
       );
       receipt.findModeEnd = await evaluate(measure);

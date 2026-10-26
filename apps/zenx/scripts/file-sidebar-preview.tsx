@@ -47,7 +47,26 @@ if (diagnosticPreview)
       if (!view || observedEditors.has(view)) return;
       observedEditors.add(view);
       view.dispatch({
-        effects: StateEffect.appendConfig.of(
+        effects: StateEffect.appendConfig.of([
+          EditorView.scrollHandler.of((view, range) => {
+            const pos = view.domAtPos(range.head),
+              element =
+                pos.node.nodeType === 1
+                  ? (pos.node as Element)
+                  : pos.node.parentElement;
+            const r = element?.getBoundingClientRect();
+            nativeEditorUpdates.push({
+              kind: "default-scroll-request",
+              head: range.head,
+              scrollTop: view.scrollDOM.scrollTop,
+              dom: element?.outerHTML.slice(-150),
+              rect: r
+                ? { top: r.top, bottom: r.bottom, left: r.left, right: r.right }
+                : null,
+            });
+            if (nativeEditorUpdates.length > 24) nativeEditorUpdates.shift();
+            return false; // Observe only; preserve CodeMirror default scrolling.
+          }),
           EditorView.updateListener.of((update) => {
             nativeEditorUpdates.push({
               head: update.state.selection.main.head,
@@ -62,8 +81,36 @@ if (diagnosticPreview)
             });
             if (nativeEditorUpdates.length > 24) nativeEditorUpdates.shift();
           }),
-        ),
+        ]),
       });
+    },
+    // Explicit diagnostic only AFTER the original assertion/failure receipt:
+    // coordsAtPos may flush CodeMirror measurements, so never call during pass criteria.
+    __nativeEditorCoordinates: () => {
+      const view = activeNativeEditor();
+      if (!view) return null;
+      const serialize = (
+        r:
+          | DOMRect
+          | { left: number; right: number; top: number; bottom: number }
+          | null,
+      ) =>
+        r
+          ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom }
+          : null;
+      const line = view.contentDOM.querySelector(".cm-line:last-child");
+      const last = line?.lastElementChild;
+      const selection = getSelection();
+      return {
+        headCoords: serialize(view.coordsAtPos(view.state.selection.main.head)),
+        lastLineHTML: line?.innerHTML,
+        lastChildRects: last
+          ? Array.from(last.getClientRects(), serialize)
+          : [],
+        selectionRect: selection?.rangeCount
+          ? serialize(selection.getRangeAt(0).getBoundingClientRect())
+          : null,
+      };
     },
     __nativeEditorState: () => {
       const view = activeNativeEditor();
@@ -75,7 +122,7 @@ if (diagnosticPreview)
             viewport: view.viewport,
             visibleRanges: view.visibleRanges,
             hasFocus: view.hasFocus,
-            headCoords: view.coordsAtPos(view.state.selection.main.head),
+
             contentHeight: view.contentHeight,
             lastRenderedLine: (() => {
               const line = view.contentDOM.querySelector(".cm-line:last-child");
