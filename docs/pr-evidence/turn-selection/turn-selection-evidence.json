@@ -1,0 +1,172 @@
+{
+  "source": "Production ThreadView and quote controls; synthetic messages and history; cloud Chromium desktop-input emulation, not native user-device acceptance; no Provider calls.",
+  "scenes": [
+    {
+      "width": 1280,
+      "before": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 114,
+        "height": 272.25,
+        "scroll": 0,
+        "overflow": false
+      },
+      "selected": {
+        "expanded": "false",
+        "history": false,
+        "selected": "建议把执行细节留在对话",
+        "top": 114,
+        "height": 272.25,
+        "scroll": 0,
+        "overflow": false
+      },
+      "quoted": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 114,
+        "height": 272.25,
+        "scroll": 0,
+        "overflow": false
+      },
+      "keyboardDisclosure": true,
+      "pointerDisclosure": true
+    },
+    {
+      "width": 420,
+      "before": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 116,
+        "height": 283.953125,
+        "scroll": 0,
+        "overflow": false
+      },
+      "selected": {
+        "expanded": "false",
+        "history": false,
+        "selected": "建议把执行细节留在对话",
+        "top": 116,
+        "height": 283.953125,
+        "scroll": 0,
+        "overflow": false
+      },
+      "quoted": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 116,
+        "height": 283.953125,
+        "scroll": 0,
+        "overflow": false
+      },
+      "keyboardDisclosure": true,
+      "pointerDisclosure": true
+    }
+  ],
+  "checkpoints": [
+    {
+      "stage": "keyboard Enter",
+      "focused": true,
+      "before": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 114,
+        "height": 272.25,
+        "scroll": 0,
+        "overflow": false
+      }
+    },
+    {
+      "stage": "Enter complete",
+      "after": {
+        "expanded": "true",
+        "history": true,
+        "selected": "",
+        "top": 156,
+        "height": 272.25,
+        "scroll": 0,
+        "overflow": false
+      }
+    },
+    {
+      "stage": "keyboard Space",
+      "focused": true,
+      "before": {
+        "expanded": "true",
+        "history": true,
+        "selected": "",
+        "top": 156,
+        "height": 272.25,
+        "scroll": 0,
+        "overflow": false
+      }
+    },
+    {
+      "stage": "Space complete",
+      "after": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 114,
+        "height": 272.25,
+        "scroll": 0,
+        "overflow": false
+      }
+    },
+    {
+      "stage": "keyboard Enter",
+      "focused": true,
+      "before": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 116,
+        "height": 283.953125,
+        "scroll": 0,
+        "overflow": false
+      }
+    },
+    {
+      "stage": "Enter complete",
+      "after": {
+        "expanded": "true",
+        "history": true,
+        "selected": "",
+        "top": 168,
+        "height": 283.953125,
+        "scroll": 0,
+        "overflow": false
+      }
+    },
+    {
+      "stage": "keyboard Space",
+      "focused": true,
+      "before": {
+        "expanded": "true",
+        "history": true,
+        "selected": "",
+        "top": 168,
+        "height": 283.953125,
+        "scroll": 0,
+        "overflow": false
+      }
+    },
+    {
+      "stage": "Space complete",
+      "after": {
+        "expanded": "false",
+        "history": false,
+        "selected": "",
+        "top": 116,
+        "height": 283.953125,
+        "scroll": 0,
+        "overflow": false
+      }
+    }
+  ],
+  "checkpoint": "420: explicit pointer disclosure"
+}
