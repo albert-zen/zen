@@ -1691,6 +1691,11 @@ async function assertBlankThemePixels(port: number): Promise<void> {
         name,
         appearance,
         expected,
+        nativeThemeSource: nativeTheme.themeSource,
+        nativeShouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+        pagePrefersDark: await view!.webContents.executeJavaScript(
+          'matchMedia("(prefers-color-scheme: dark)").matches',
+        ),
         status: "mounting",
         webContentsId: contentsId,
         tabId: tab.tabId,
@@ -1744,7 +1749,14 @@ async function assertBlankThemePixels(port: number): Promise<void> {
     // App appearance may be forced light while the OS/Electron theme is dark.
     // Test the native surface independently, without restyling any website.
     nativeTheme.themeSource = "dark";
-    await sample("blank-light-system-dark", "light", 255);
+    try {
+      await sample("blank-light-system-dark", "light", 255);
+    } catch (error) {
+      failures.push(error);
+    }
+    // Diagnostic A/B: distinguish stale native base color from page styling.
+    view!.setBackgroundColor("#ffffff");
+    await sample("blank-light-system-dark-reapplied", "light", 255);
     nativeTheme.themeSource = "light";
     await sample("blank-dark-system-light", "dark", 0);
     nativeTheme.themeSource = originalThemeSource;
@@ -1757,7 +1769,7 @@ async function assertBlankThemePixels(port: number): Promise<void> {
     await sample("website-light", "light", 80);
     await browser.navigate("blank-theme-session", tab.tabId, "about:blank");
     await sample("blank-dark-return", "dark", 0);
-    passed = true;
+    passed = failures.length === 0;
     console.log("Native blank appearance pixels", JSON.stringify(records));
   } catch (error) {
     failures.push(error);
