@@ -37,6 +37,7 @@ const evidence = {
   osRelease: os.release(),
   cases: [],
   rendererErrors: [],
+  rendererWarnings: [],
   expectedPolicyErrors: [],
   blockedRequests: [],
 };
@@ -252,6 +253,23 @@ async function runCase(width, precise, productionCsp = false) {
       receipt.sourceAfter.scroller.scrollTop > 100,
       "Source editor also scrolls under strict CSP",
     );
+    await click(`${selector} .cm-scroller`);
+    await evaluate("window.__observeNativeEditor()");
+    await key("Down", ["command"]);
+    try {
+      await until(
+        `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_SOURCE_LINE')`,
+        "Source native document-end layout committed",
+      );
+      receipt.sourceEnd = await evaluate(measure);
+      assert.equal(
+        receipt.sourceEnd.editorState.head,
+        receipt.sourceEnd.editorState.documentLength,
+      );
+    } catch (error) {
+      receipt.sourceEndFailure = String(error);
+      receipt.sourceEnd = await evaluate(measure);
+    }
     await click("[data-native-composer-diagnostic] .cm-content");
     input({ type: "char", keyCode: "x" });
     await until(
@@ -375,13 +393,38 @@ async function runCase(width, precise, productionCsp = false) {
   bounded(receipt.scrolled);
   await screenshot(`${receipt.name}-scrolled`);
   receipt.phase = "meta-down";
+  await evaluate("window.__observeNativeEditor()");
   receipt.beforeEnd = await evaluate(measure);
   await key("Down", ["command"]);
   receipt.immediateEnd = await evaluate(measure);
-  await until(
-    `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_MARKDOWN_SECTION')`,
-    "native document-end layout committed",
-  );
+  try {
+    await until(
+      `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_MARKDOWN_SECTION')`,
+      "native document-end layout committed",
+    );
+  } catch (error) {
+    receipt.originalEndFailureState = await evaluate(measure);
+    // Native Find exposes source with Decoration.none, preserving the same
+    // document and line-wrapping. This is a differential diagnostic, not a pass.
+    try {
+      await key("f", ["command"]);
+      await until(
+        `!!document.querySelector('.cm-file-search')`,
+        "Native Find panel",
+      );
+      await click(`${selector} .cm-content`);
+      await key("Down", ["command"]);
+      await until(
+        `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_MARKDOWN_SECTION')`,
+        "Source-mode wrapped Markdown document end",
+      );
+      receipt.findModeEnd = await evaluate(measure);
+    } catch (controlError) {
+      receipt.findModeEndFailure = String(controlError);
+      receipt.findModeEnd = await evaluate(measure);
+    }
+    throw error;
+  }
   receipt.end = await evaluate(measure);
   assert.ok(
     receipt.end.keyEvents.some((e) => e.key === "ArrowDown" && e.metaKey),
@@ -399,6 +442,10 @@ async function runCase(width, precise, productionCsp = false) {
   assert.ok(
     !receipt.initialLayoutFailure,
     "Production layout contract must also pass",
+  );
+  assert.ok(
+    !receipt.sourceEndFailure,
+    "Source document-end navigation must also pass",
   );
   receipt.status = "passed";
 }
@@ -484,6 +531,10 @@ const watchdog = setTimeout(
     },
   );
   window.webContents.on("console-message", (event) => {
+    if (event.level === "warning")
+      evidence.rendererWarnings.push(
+        event.message.replace(/'nonce-[^']+'/gu, "'nonce-[redacted]'"),
+      );
     if (event.level === "error") {
       const message = event.message.replace(
         /'nonce-[^']+'/gu,

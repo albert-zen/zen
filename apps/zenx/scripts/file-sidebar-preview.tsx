@@ -1,6 +1,11 @@
+import { StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { InlineComposerEditor } from "../src/renderer/src/InlineComposerEditor.js";
 import type { ComposerInput } from "../src/renderer/src/composer-input.js";
+import type {
+  ExternalApplicationId,
+  ExternalOpenRequest,
+} from "../src/main/workspace-external-open.js";
 /** Actual workspace components with synthetic, memory-only file data. */
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -25,14 +30,43 @@ const search = new URLSearchParams(
 const language = search.get("lang") === "zh-CN" ? "zh-CN" : "en";
 const diagnosticPreview = search.get("diagnostic") === "true";
 const previewPlatform = diagnosticPreview ? "darwin" : "linux";
-// Read-only fixture observation of the actual editor; never dispatches state.
+// Fixture-only passive update receipt; never changes selection, content or scroll.
+const nativeEditorUpdates: unknown[] = [];
+const observedEditors = new WeakSet<EditorView>();
+const activeNativeEditor = () => {
+  const dom = document.querySelector(
+    '.auxiliary-content[role="tabpanel"]:not([hidden]) .cm-editor',
+  );
+  return dom ? EditorView.findFromDOM(dom as HTMLElement) : null;
+};
 if (diagnosticPreview)
   Object.assign(window, {
+    __observeNativeEditor: () => {
+      const view = activeNativeEditor();
+      nativeEditorUpdates.length = 0;
+      if (!view || observedEditors.has(view)) return;
+      observedEditors.add(view);
+      view.dispatch({
+        effects: StateEffect.appendConfig.of(
+          EditorView.updateListener.of((update) => {
+            nativeEditorUpdates.push({
+              head: update.state.selection.main.head,
+              documentLength: update.state.doc.length,
+              selectionSet: update.selectionSet,
+              viewportChanged: update.viewportChanged,
+              viewport: update.view.viewport,
+              scrollIntoView: update.transactions.some(
+                (tr) => tr.scrollIntoView,
+              ),
+              scrollTop: update.view.scrollDOM.scrollTop,
+            });
+            if (nativeEditorUpdates.length > 24) nativeEditorUpdates.shift();
+          }),
+        ),
+      });
+    },
     __nativeEditorState: () => {
-      const dom = document.querySelector(
-        '.auxiliary-content[role="tabpanel"]:not([hidden]) .cm-editor',
-      );
-      const view = dom ? EditorView.findFromDOM(dom as HTMLElement) : null;
+      const view = activeNativeEditor();
       return view
         ? {
             head: view.state.selection.main.head,
@@ -41,11 +75,24 @@ if (diagnosticPreview)
             viewport: view.viewport,
             visibleRanges: view.visibleRanges,
             hasFocus: view.hasFocus,
+            headCoords: view.coordsAtPos(view.state.selection.main.head),
+            contentHeight: view.contentHeight,
+            lastRenderedLine: (() => {
+              const line = view.contentDOM.querySelector(".cm-line:last-child");
+              const rect = line?.getBoundingClientRect();
+              return line
+                ? {
+                    text: line.textContent?.slice(-100),
+                    top: rect?.top,
+                    bottom: rect?.bottom,
+                  }
+                : null;
+            })(),
+            updates: nativeEditorUpdates.slice(),
           }
         : null;
     },
   });
-
 const linkPreview = search.get("links") === "true";
 const appearance = search.get("theme") === "light" ? "light" : "dark";
 const threadId = "synthetic-file-sidebar-thread";
@@ -98,10 +145,53 @@ document.documentElement.dataset.appearance = appearance;
 document.documentElement.dataset.themePreset = "graphite";
 document.documentElement.dataset.platform = previewPlatform;
 void i18n.changeLanguage(language);
+const externalCalls: unknown[] = [];
+const externalState = {
+  rejectRemote: false,
+  rejectConfigure: false,
+  cancelConfigure: false,
+};
+const applications: Partial<Record<ExternalApplicationId, string>> = {
+  vscode: "/synthetic/apps/VS Code",
+  cursor: "/synthetic/apps/Cursor",
+  editor: "/synthetic/apps/Text Editor",
+};
 Object.assign(window, {
   zenx: {
     platform: previewPlatform,
     workspaceFiles: {
+      applications: async () => ({
+        platform: "linux",
+        applications: { ...applications },
+      }),
+      configureApplication: async (
+        id: ExternalApplicationId,
+        reset: boolean,
+      ) => {
+        externalCalls.push({ operation: "synthetic-picker", id, reset });
+        if (externalState.rejectConfigure)
+          throw new Error("Synthetic application selection failed. Try again.");
+        // Model the real API cancellation receipt: return the unchanged catalog.
+        // This is memory-only configuration, never a native application picker.
+        if (externalState.cancelConfigure)
+          return { platform: "linux", applications: { ...applications } };
+        if (reset) delete applications[id];
+        else applications[id] = "/synthetic/apps/Chosen Editor";
+        return { platform: "linux", applications: { ...applications } };
+      },
+      openExternal: async (input: ExternalOpenRequest) => {
+        if (
+          input.host !== "local" ||
+          input.threadId !== threadId ||
+          !files.has(input.path)
+        )
+          throw new Error("Invalid synthetic file identity");
+        if (externalState.rejectRemote)
+          throw new Error(
+            "External opening supports local Host files only. No local fallback was attempted.",
+          );
+        externalCalls.push({ operation: "synthetic-open", ...input });
+      },
       read: async (owner: string, path: string) => {
         record("read", owner, path);
         const file = files.get(path);
@@ -152,6 +242,8 @@ Object.assign(window, {
     markdownPath,
     threadId,
     calls,
+    externalCalls,
+    externalState,
     synthetic: true,
   },
 });
@@ -231,15 +323,22 @@ function Preview() {
             <div data-local-path-preview style={{ maxWidth: 480 }}>
               <MessageLinkContext.Provider
                 value={(target) => {
+                  if (target.kind === "browser") {
+                    // Record the existing message navigation callback only;
+                    // this renderer fixture must never visit a real endpoint.
+                    record("browser", threadId, target.value);
+                    return;
+                  }
                   setMessageLinkRequest({ ...target, id: ++sequence.current });
                   setOpen(true);
                 }}
               >
                 <Markdown
                   text={
-                    language === "zh-CN"
+                    (language === "zh-CN"
                       ? "请查看 docs/long-notes.md，然后检查 `src/long-source.ts`。\n\n绝对路径也可以：`/synthetic/file-sidebar-preview/docs/long-notes.md`。\n\n没有自动访问文件，只有点击后才打开右侧文件栏。\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```"
-                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click.\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```"
+                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click.\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```") +
+                    "\n\n合成 URL / Synthetic URLs: `http://127.0.0.1:40123/review?q=one#details` · `https://example.test/report`"
                   }
                 />
               </MessageLinkContext.Provider>

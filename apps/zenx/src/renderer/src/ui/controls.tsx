@@ -183,11 +183,16 @@ export function ActionMenu({
   label,
   items,
   compact = false,
+  triggerIcon,
+  onOpen,
 }: {
   label: string;
   compact?: boolean;
+  triggerIcon?: ReactNode;
+  onOpen?(): void;
   items: Array<{
     label: string;
+    icon?: ReactNode;
     disabled?: boolean;
     danger?: boolean;
     description?: string;
@@ -199,8 +204,12 @@ export function ActionMenu({
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const selected = useRef(false);
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    if (next) onOpen?.();
+  };
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
         <button
           ref={trigger}
@@ -208,15 +217,16 @@ export function ActionMenu({
           className="quiet-button"
           aria-label={label}
           aria-haspopup="menu"
+          title={label}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              setOpen(true);
+              changeOpen(true);
             }
           }}
         >
           {compact ? (
-            <Icon name="more" size={16} />
+            (triggerIcon ?? <Icon name="more" size={16} />)
           ) : (
             <>
               {i18n.t("panels:moreActions")}
@@ -286,7 +296,16 @@ export function ActionMenu({
               item.onSelect(trigger.current);
             }}
           >
-            <strong>{item.label}</strong>
+            <strong
+              className={item.icon ? "ui-action-label-with-icon" : undefined}
+            >
+              {item.icon ? (
+                <span className="ui-action-icon" aria-hidden="true">
+                  {item.icon}
+                </span>
+              ) : null}
+              <span>{item.label}</span>
+            </strong>
             {item.description ? <small>{item.description}</small> : null}
           </button>
         ))}

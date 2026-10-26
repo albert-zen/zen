@@ -46,6 +46,7 @@ test("inline editors autosave real files, preserve in-flight input, and expose c
   const writes: string[] = [];
   (window as any).zenx = {
     workspaceFiles: {
+      applications: async () => ({ platform: "linux", applications: {} }),
       list: (_thread: string, relative: string) =>
         listWorkspaceFiles(workspace, relative),
       read: (_thread: string, relative: string) =>
@@ -265,6 +266,7 @@ test("switching from a pending file read to another Thread's browser clears load
   let release!: (value: any) => void;
   (window as any).zenx = {
     workspaceFiles: {
+      applications: async () => ({ platform: "linux", applications: {} }),
       read: () =>
         new Promise((resolve) => {
           release = resolve;

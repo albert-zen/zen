@@ -279,7 +279,7 @@ export type WorkspaceFileSaveResult = {
 // A bounded text editor of the selected Thread's cwd, not a tool permission policy.
 // Path checks bound ordinary navigation; they do not sandbox a hostile local process
 // concurrently replacing filesystem entries (Node has no portable openat confinement).
-async function resolveWorkspacePath(root: string, relative: unknown) {
+export async function resolveWorkspacePath(root: string, relative: unknown) {
   if (
     typeof relative !== "string" ||
     relative.length > 4096 ||
