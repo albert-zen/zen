@@ -211,8 +211,10 @@ try {
     const point = await evaluate(`(() => {
       const e=document.querySelector(${JSON.stringify(selector)});
       if (!e) throw new Error('Missing pointer target: ' + ${JSON.stringify(selector)});
-      const r=e.getBoundingClientRect();
-      if (!r.width || !r.height) throw new Error('Hidden pointer target: ' + ${JSON.stringify(selector)});
+      // An inline anchor may wrap: its bounding-box center can lie outside
+      // every painted fragment. Aim at the first real fragment, still hit-test.
+      const r=[...e.getClientRects()].find(r=>r.width>0 && r.height>0);
+      if (!r) throw new Error('Hidden pointer target: ' + ${JSON.stringify(selector)});
       const x=r.x+r.width/2, y=r.y+r.height/2;
       const hit=document.elementFromPoint(x,y);
       if (!hit || !e.contains(hit)) throw new Error('Obscured pointer target: ' + ${JSON.stringify(selector)} + '; hit=' + (hit?.className ?? 'none'));
