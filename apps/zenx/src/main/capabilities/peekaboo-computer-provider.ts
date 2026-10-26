@@ -185,6 +185,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     target: ComputerTarget,
     control: ComputerControlSelector,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
@@ -192,7 +193,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     const observed = this.#consume(target, control, COMPUTER_ACTION_PRESS);
     let fresh: { rawElementId: string; snapshotId: string } | undefined;
     try {
-      fresh = await this.#revalidate(target, observed, signal);
+      fresh = await this.#revalidate(target, observed, signal, onStopping);
       await this.#run(
         [
           "click",
@@ -203,10 +204,12 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
           ...peekabooTargetArguments(target),
         ],
         signal,
+        onStopping,
       );
     } finally {
-      await this.#cleanSnapshot(observed.snapshotId);
-      if (fresh !== undefined) await this.#cleanSnapshot(fresh.snapshotId);
+      await this.#cleanSnapshot(observed.snapshotId, onStopping);
+      if (fresh !== undefined)
+        await this.#cleanSnapshot(fresh.snapshotId, onStopping);
     }
     return { target: targetSummary(target), control };
   }
@@ -216,6 +219,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     control: ComputerControlSelector,
     value: string,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
@@ -224,7 +228,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     const observed = this.#consume(target, control, COMPUTER_ACTION_SET_VALUE);
     let fresh: { rawElementId: string; snapshotId: string } | undefined;
     try {
-      fresh = await this.#revalidate(target, observed, signal);
+      fresh = await this.#revalidate(target, observed, signal, onStopping);
       await this.#run(
         [
           "set-value",
@@ -235,10 +239,12 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
           fresh.snapshotId,
         ],
         signal,
+        onStopping,
       );
     } finally {
-      await this.#cleanSnapshot(observed.snapshotId);
-      if (fresh !== undefined) await this.#cleanSnapshot(fresh.snapshotId);
+      await this.#cleanSnapshot(observed.snapshotId, onStopping);
+      if (fresh !== undefined)
+        await this.#cleanSnapshot(fresh.snapshotId, onStopping);
     }
     return {
       target: targetSummary(target),
@@ -300,6 +306,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     y: number,
     button: "left" | "right",
     signal: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void> {
     await this.#run(
       [
@@ -311,17 +318,27 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
         ...(button === "right" ? ["--right"] : []),
       ],
       signal,
+      onStopping,
     );
   }
 
   async foregroundKeyPress(
     key: ComputerKey,
     signal: AbortSignal,
+    onStopping?: () => void,
   ): Promise<void> {
-    await this.#run(["press", peekabooKey(key), "--foreground"], signal);
+    await this.#run(
+      ["press", peekabooKey(key), "--foreground"],
+      signal,
+      onStopping,
+    );
   }
 
-  async foregroundScroll(deltaY: number, signal: AbortSignal): Promise<void> {
+  async foregroundScroll(
+    deltaY: number,
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<void> {
     await this.#run(
       [
         "scroll",
@@ -332,6 +349,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
         "--foreground",
       ],
       signal,
+      onStopping,
     );
   }
 
@@ -374,6 +392,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     target: ComputerTarget,
     observed: PeekabooObservedTarget,
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<{ rawElementId: string; snapshotId: string }> {
     const response = await this.#run(
       [
@@ -385,6 +404,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
         "20",
       ],
       signal,
+      onStopping,
     );
     const data = requirePeekabooData(response, "see");
     const snapshotId = requiredString(data, "snapshot_id", "see.data");
@@ -404,17 +424,21 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
       }
       return { rawElementId: matches[0]!.id, snapshotId };
     } catch (error) {
-      await this.#cleanSnapshot(snapshotId);
+      await this.#cleanSnapshot(snapshotId, onStopping);
       throw error;
     }
   }
 
-  async #cleanSnapshot(snapshotId: string): Promise<void> {
+  async #cleanSnapshot(
+    snapshotId: string,
+    onStopping?: () => void,
+  ): Promise<void> {
     if (snapshotId.length === 0) return;
     if (!this.#snapshotIds.delete(snapshotId)) return;
     await this.#runner
       .run(this.#executable, ["clean", "--snapshot", snapshotId, "--json"], {
         timeoutMs: 5_000,
+        onStopping,
         maxOutputBytes: 64 * 1024,
       })
       .catch(() => undefined);
@@ -423,6 +447,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
   async #run(
     args: readonly string[],
     signal?: AbortSignal,
+    onStopping?: () => void,
   ): Promise<Record<string, unknown>> {
     const result = await this.#runner.run(
       this.#executable,
@@ -430,6 +455,7 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
       {
         timeoutMs: PEEKABOO_TIMEOUT_MS,
         signal,
+        onStopping,
         maxOutputBytes: 512 * 1024,
       },
     );

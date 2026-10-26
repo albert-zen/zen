@@ -54,6 +54,21 @@ jobs:
           cache: npm
       - run: npm ci
         id: zenx-dependencies
+      - name: Capture foreground activity renderer (synthetic, not native OS acceptance)
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          mkdir -p "${{ runner.temp }}/zenx-foreground-activity"
+          node apps/zenx/scripts/preview-foreground-activity.mjs "${{ runner.temp }}/zenx-foreground-activity/foreground-activity.html" > "${{ runner.temp }}/zenx-foreground-activity/source.json"
+          node apps/zenx/scripts/capture-foreground-activity-preview.mjs "${{ runner.temp }}/zenx-foreground-activity"
+      - name: Retain foreground activity synthetic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-foreground-activity-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-foreground-activity
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture titlebar leading-safe-area matrix (synthetic production components)
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"

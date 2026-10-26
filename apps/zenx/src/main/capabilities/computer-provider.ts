@@ -661,6 +661,8 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             ...(await this.#backend.press(target, native, signal, onStopping)),
             control,
             ...(foregroundRequired ? { impact: "foreground_takeover" } : {}),
+            dispatch: "completed",
+            applicationEffect: "unverified",
           };
         };
         result = foregroundRequired
@@ -698,6 +700,8 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             )),
             control,
             ...(foregroundRequired ? { impact: "foreground_takeover" } : {}),
+            dispatch: "completed",
+            applicationEffect: "unverified",
           };
         };
         result = foregroundRequired

@@ -1,3 +1,4 @@
+import { LifecycleWaitUnconfirmedError } from "./lifecycle-wait.js";
 import {
   externalApplicationCatalog,
   externalApplicationIds,
@@ -258,8 +259,15 @@ const hostLifecycle = new ZenXHostLifecycle({
   },
   stopHost: stopZenXHost,
   finishQuit: () => app.quit(),
-  reportStopFailure: (error) =>
-    console.error("Could not fully stop ZenX before quit", error),
+  reportStopFailure: (error) => {
+    console.error("Could not fully stop ZenX before quit", error);
+    if (error instanceof LifecycleWaitUnconfirmedError) {
+      dialog.showErrorBox(
+        nativeText("quitStopUnconfirmed"),
+        nativeText("quitStopUnconfirmedDetail"),
+      );
+    }
+  },
 });
 if (!ownsSingleInstance && !nativeHostMode) app.quit();
 const projectWorkspaceAcceptanceEnvironment =
