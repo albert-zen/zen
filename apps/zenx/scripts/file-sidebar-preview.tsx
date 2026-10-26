@@ -1,6 +1,7 @@
 import { StateEffect } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import { observeFileEditorGaps } from "./file-editor-gap-observer.js";
+import { probeFileEditorStylesAfterFailure } from "./file-editor-style-probe.js";
 import { InlineComposerEditor } from "../src/renderer/src/InlineComposerEditor.js";
 import type { ComposerInput } from "../src/renderer/src/composer-input.js";
 import type {
@@ -100,6 +101,10 @@ if (diagnosticPreview)
           }),
         ]),
       });
+    },
+    __nativeEditorStyleProbeAfterFailure: () => {
+      const view = activeNativeEditor();
+      return view ? probeFileEditorStylesAfterFailure(view) : null;
     },
     // Explicit diagnostic only AFTER the original assertion/failure receipt:
     // coordsAtPos may flush CodeMirror measurements, so never call during pass criteria.

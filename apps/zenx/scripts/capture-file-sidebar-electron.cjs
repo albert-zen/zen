@@ -15,6 +15,9 @@ const {
   fileEditorResizeState,
   fileEditorResizeEvents,
 } = require("./file-editor-resize-readiness.cjs");
+const {
+  fileEditorAfterFailureProbe,
+} = require("./file-editor-style-probe-receipt.cjs");
 const resizeState = `(${fileEditorResizeState.toString()})(document)`;
 const scope = fileEditorDiagnosticScope(process.argv.slice(3));
 // Independent diagnostic only. Default scope and every navigation assertion stay intact.
@@ -56,7 +59,7 @@ const evidence = {
   diagnosticScope: scope,
   navigationObserver,
   observerEffect:
-    "Geometry reads may force browser layout. Compare the independent observer-off run; an observed pass is not a production fix. Original assertion polling/measurements remain in both runs.",
+    "Geometry/computed-style/animation reads may force browser layout or style updates. Compare the independent observer-off run; an observed pass is not a production fix. Original assertion polling/measurements remain in both runs.",
   navigationAssertionsIncluded: scope !== "scroll-security",
   scope:
     "Actual file sidebar components in macOS Electron, synthetic memory-only CJK files; owned-window Electron sendInputEvent and capturePage. No Host, user profile, private file, desktop capture, AX, or physical trackpad acceptance.",
@@ -275,6 +278,31 @@ async function resizeEditor(width, caseReceipt, editor) {
     );
   }
 }
+async function afterFailureStyleProbe(name, failure, originalState) {
+  if (navigationObserver !== "gaps") return;
+  return fileEditorAfterFailureProbe({
+    // Both original artifacts must succeed before any probe DOM is inserted.
+    persistOriginal: () =>
+      fs.writeFile(
+        path.join(directory, `${name}-pre-style-probe-failure.json`),
+        JSON.stringify(
+          { status: "failed", failure: String(failure), originalState },
+          null,
+          2,
+        ) + "\n",
+      ),
+    captureOriginal: () => screenshot(`${name}-pre-style-probe`),
+    runProbe: () =>
+      window.webContents.executeJavaScript(
+        "window.__nativeEditorStyleProbeAfterFailure()",
+      ),
+    persistProbe: (result) =>
+      fs.writeFile(
+        path.join(directory, `${name}-after-failure-style-probe.json`),
+        JSON.stringify(result, null, 2) + "\n",
+      ),
+  });
+}
 async function runColdEndCase(markdown) {
   const receipt = {
     editor: markdown ? "markdown" : "source",
@@ -314,10 +342,16 @@ async function runColdEndCase(markdown) {
     receipt.failure = String(error);
   }
   receipt.after = await evaluate(measure);
-  if (receipt.status === "failed")
+  if (receipt.status === "failed") {
+    receipt.styleProbe = await afterFailureStyleProbe(
+      `macos-cold-${receipt.editor}-end`,
+      receipt.failure,
+      receipt.after,
+    );
     receipt.failureCoordinates = await evaluate(
       "window.__nativeEditorCoordinates()",
     );
+  }
   await screenshot(`macos-cold-${receipt.editor}-end`);
 }
 async function runCase(width, precise, productionCsp = false) {
@@ -545,6 +579,11 @@ async function runCase(width, precise, productionCsp = false) {
     );
   } catch (error) {
     receipt.originalEndFailureState = await evaluate(measure);
+    receipt.styleProbe = await afterFailureStyleProbe(
+      receipt.name,
+      error,
+      receipt.originalEndFailureState,
+    );
     receipt.failureCoordinates = await evaluate(
       "window.__nativeEditorCoordinates()",
     );

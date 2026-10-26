@@ -97,6 +97,8 @@ const sources = [
   "src/renderer/src/theme.css",
   "scripts/file-sidebar-preview.tsx",
   "scripts/file-editor-gap-observer.ts",
+  "scripts/file-editor-style-probe.ts",
+  "scripts/file-editor-style-probe-receipt.cjs",
   "scripts/build-file-sidebar-preview.mjs",
   "scripts/capture-file-sidebar-preview.mjs",
   "src/renderer/index.html",

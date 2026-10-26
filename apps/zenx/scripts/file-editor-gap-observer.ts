@@ -24,12 +24,24 @@ export function observeFileEditorGaps(
     return {
       className: element.className,
       inlineStyle: element.getAttribute("style"),
+      inlineHeight: element.style.height,
+      inlineHeightPriority: element.style.getPropertyPriority("height"),
       rect: rect(element),
       clientHeight: element.clientHeight,
       scrollHeight: element.scrollHeight,
       scrollTop: element.scrollTop,
       computed: {
         height: style.height,
+        blockSize: style.blockSize,
+        writingMode: style.writingMode,
+        boxSizing: style.boxSizing,
+        contentVisibility: style.contentVisibility,
+        transitionProperty: style.transitionProperty,
+        transitionDuration: style.transitionDuration,
+        transitionDelay: style.transitionDelay,
+        animationName: style.animationName,
+        animationDuration: style.animationDuration,
+        animationDelay: style.animationDelay,
         minHeight: style.minHeight,
         maxHeight: style.maxHeight,
         display: style.display,
@@ -39,6 +51,13 @@ export function observeFileEditorGaps(
         flexShrink: style.flexShrink,
         transform: style.transform,
       },
+      animations:
+        element.getAnimations?.().map((animation) => ({
+          playState: animation.playState,
+          currentTime: String(animation.currentTime),
+          startTime: String(animation.startTime),
+          timing: animation.effect?.getComputedTiming(),
+        })) ?? [],
     };
   };
   const snapshot = () => ({

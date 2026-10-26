@@ -5,9 +5,13 @@ on:
     paths:
       - .github/workflows/file-end-navigation-diagnostic.yml
       - apps/zenx/scripts/file-editor-gap-observer.ts
+      - apps/zenx/scripts/file-editor-style-probe.ts
+      - apps/zenx/scripts/file-editor-style-probe-receipt.cjs
       - apps/zenx/scripts/file-sidebar-preview.tsx
       - apps/zenx/scripts/capture-file-sidebar-electron.cjs
       - apps/zenx/test/file-editor-gap-observer.test.ts
+      - apps/zenx/test/file-editor-style-probe.test.ts
+      - apps/zenx/test/file-editor-style-probe-receipt.test.ts
 
 permissions:
   contents: read
