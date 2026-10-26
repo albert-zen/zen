@@ -17,6 +17,13 @@ const {
 } = require("./file-editor-resize-readiness.cjs");
 const resizeState = `(${fileEditorResizeState.toString()})(document)`;
 const scope = fileEditorDiagnosticScope(process.argv.slice(3));
+// Optional owned-renderer media emulation only; default/system behavior is unchanged.
+const motionPreference = process.env.ZENX_FILE_MOTION;
+assert.ok(
+  motionPreference === undefined ||
+    ["reduce", "no-preference"].includes(motionPreference),
+  "Known optional motion preference",
+);
 
 assert.equal(
   process.platform,
@@ -39,6 +46,7 @@ let policyProbeActive = false;
 let originProbeUrl;
 const evidence = {
   diagnosticScope: scope,
+  motionPreference: motionPreference ?? "system",
   navigationAssertionsIncluded: scope !== "scroll-security",
   scope:
     "Actual file sidebar components in macOS Electron, synthetic memory-only CJK files; owned-window Electron sendInputEvent and capturePage. No Host, user profile, private file, desktop capture, AX, or physical trackpad acceptance.",
@@ -257,6 +265,17 @@ async function resizeEditor(width, caseReceipt, editor) {
     );
   }
 }
+async function verifyMotionPreference() {
+  const actual = await evaluate(
+    "matchMedia('(prefers-reduced-motion: reduce)').matches",
+  );
+  assert.equal(
+    actual,
+    motionPreference === "reduce",
+    "Owned renderer uses the requested motion preference",
+  );
+  return { requested: motionPreference, reducedMotion: actual };
+}
 async function runColdEndCase(markdown) {
   const receipt = {
     editor: markdown ? "markdown" : "source",
@@ -274,6 +293,7 @@ async function runColdEndCase(markdown) {
     "document.body?.dataset.previewReady==='true' && document.querySelector('.cm-scroller')",
     "cold component ready",
   );
+  if (motionPreference) receipt.motion = await verifyMotionPreference();
   await until(
     `(() => {const p=document.querySelector('.auxiliary-panel').getBoundingClientRect(),b=document.querySelector('.window-titlebar').getBoundingClientRect();return Math.abs(b.right-p.x)<1;})()`,
     "cold titlebar settled",
@@ -327,6 +347,7 @@ async function runCase(width, precise, productionCsp = false) {
     "document.body?.dataset.previewReady==='true' && document.querySelector('.cm-scroller')",
     "component ready",
   );
+  if (motionPreference) receipt.motion = await verifyMotionPreference();
   await until(
     `(() => {const p=document.querySelector('.auxiliary-panel').getBoundingClientRect(),b=document.querySelector('.window-titlebar').getBoundingClientRect();return Math.abs(b.right-p.x)<1;})()`,
     "integrated titlebar settled",
@@ -649,6 +670,15 @@ const watchdog = setTimeout(
       nodeIntegration: false,
     },
   });
+  if (motionPreference) {
+    window.webContents.debugger.attach("1.3");
+    await window.webContents.debugger.sendCommand(
+      "Emulation.setEmulatedMedia",
+      {
+        features: [{ name: "prefers-reduced-motion", value: motionPreference }],
+      },
+    );
+  }
   window.webContents.session.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),
   );

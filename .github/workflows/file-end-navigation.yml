@@ -1,0 +1,65 @@
+name: Native file end-navigation regression
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/file-end-navigation.yml
+      - package-lock.json
+      - apps/zenx/package.json
+      - apps/zenx/scripts/build-file-sidebar-preview.mjs
+      - apps/zenx/scripts/capture-file-sidebar-electron.cjs
+      - apps/zenx/scripts/file-sidebar-preview.tsx
+      - apps/zenx/scripts/file-editor-diagnostic-scope.cjs
+      - apps/zenx/scripts/file-editor-resize-readiness.cjs
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/workspace-files.css
+      - apps/zenx/src/renderer/src/SourceEditor.tsx
+      - apps/zenx/src/renderer/src/InlineMarkdownEditor.tsx
+      - apps/zenx/src/renderer/src/editor-style-nonce.ts
+      - apps/zenx/src/main/renderer-file-protocol.ts
+      - apps/zenx/src/main/renderer-style-policy.ts
+      - apps/zenx/src/renderer/index.html
+      - apps/zenx/test/reduced-motion-layout.test.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: file-end-navigation-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-navigation:
+    name: Native document end with motion ${{ matrix.motion }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        motion: [reduce, no-preference]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build production renderer and synthetic fixture
+        run: |
+          npm --workspace apps/zenx run build
+          node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-end-navigation"
+      - name: Preserve native navigation, wheel, layout and CSP assertions
+        timeout-minutes: 3
+        env:
+          ZENX_FILE_MOTION: ${{ matrix.motion }}
+        run: |
+          cd apps/zenx
+          npx --no-install electron scripts/capture-file-sidebar-electron.cjs "${{ runner.temp }}/zenx-end-navigation" --scope=end-navigation
+      - name: Retain exact-source native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-end-navigation-${{ matrix.motion }}-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-end-navigation
+          if-no-files-found: warn
+          retention-days: 14
