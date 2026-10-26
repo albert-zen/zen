@@ -67,9 +67,16 @@ await withPreviewBrowser(
       const editable = await evaluate(
         `(() => {const e=document.querySelector('.inline-composer-editor'),t=e.querySelector('.reference-token'),b=e.querySelector('.reference-token-remove');const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width}};return {editor:rect(e),token:rect(t),remove:rect(b)};})()`,
       );
+      const editorComparisons = await evaluate(
+        `(() => {const host=document.querySelector('.editor-fixture');const style=document.createElement('style');document.head.append(style);const measure=()=>{const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width,clientWidth:n.clientWidth,scrollWidth:n.scrollWidth}};return {editor:rect(host.querySelector('.inline-composer-editor')),content:rect(host.querySelector('.cm-content')),token:rect(host.querySelector('.reference-token')),remove:rect(host.querySelector('.reference-token-remove'))}};const fixed=measure();style.textContent='.editor-fixture .cm-content{min-width:auto}';const wrapperOnly=measure();style.textContent+='.editor-fixture .reference-token-wrap{display:contents}.editor-fixture .reference-token{max-width:min(300px,100%)}.editor-fixture .inline-composer-reference .reference-token{max-width:100%}';const baseline=measure();style.remove();return {baseline,wrapperOnly,fixed}})()`,
+      );
       await writeFile(
         path.join(directory, `geometry-${width}.json`),
-        JSON.stringify({ width, metrics, editable }, null, 2),
+        JSON.stringify(
+          { width, metrics, editable, editorComparisons },
+          null,
+          2,
+        ),
       );
       await screenshot(`reference-width-${width}-fixed.png`);
       assert.ok(
@@ -186,7 +193,7 @@ await withPreviewBrowser(
         6,
         "removing draft reference does not mutate sent references",
       );
-      const scene = { width, metrics, editable };
+      const scene = { width, metrics, editable, editorComparisons };
       evidence.scenes.push(scene);
       console.log("REFERENCE_WIDTH_MEASUREMENTS " + JSON.stringify(scene));
     }
