@@ -29,7 +29,9 @@ await withPreviewBrowser(
       const metrics = await evaluate("window.layoutMetrics");
       assert.equal(metrics?.length, 5, "all real-component cases mounted");
       assert.equal(
-        await evaluate("document.querySelectorAll('.reference-token').length"),
+        await evaluate(
+          "document.querySelectorAll('section .reference-token').length",
+        ),
         6,
         "canonical references parsed into production tokens",
       );
@@ -62,6 +64,19 @@ await withPreviewBrowser(
           "short reference remains content-sized",
         );
       }
+      const editable = await evaluate(
+        `(() => {const e=document.querySelector('.inline-composer-editor'),t=e.querySelector('.reference-token'),b=e.querySelector('.reference-token-remove');const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width}};return {editor:rect(e),token:rect(t),remove:rect(b)};})()`,
+      );
+      assert.ok(
+        editable.token.left >= editable.editor.left - 1 &&
+          editable.token.right <= editable.editor.right + 1,
+        "editable long token is contained",
+      );
+      assert.ok(
+        editable.remove.width >= 24 &&
+          editable.remove.right <= editable.token.right + 1,
+        "remove remains visible and usable",
+      );
       await screenshot(`reference-width-${width}-fixed.png`);
       await evaluate(
         "document.querySelector('.reference-token-details').click()",
@@ -92,7 +107,73 @@ await withPreviewBrowser(
         metrics,
         "opening/closing detail never changes inline bubble geometry",
       );
-      const scene = { width, metrics };
+      await evaluate(
+        "document.querySelector('section .reference-token-details').focus()",
+      );
+      await send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+      });
+      await delay(200);
+      assert.ok(
+        await evaluate(
+          "!!document.querySelector('.reference-details-popover')",
+        ),
+        "keyboard Enter opens details",
+      );
+      await send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      await send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+      await delay(200);
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.reference-details-popover').length",
+        ),
+        0,
+        "Escape dismisses details",
+      );
+      assert.ok(
+        await evaluate(
+          "document.activeElement===document.querySelector('section .reference-token-details')",
+        ),
+        "dismissal restores trigger focus",
+      );
+      await evaluate(
+        "document.querySelector('.editor-fixture .reference-token-remove').click()",
+      );
+      await delay(200);
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('.editor-fixture .reference-token').length",
+        ),
+        0,
+        "editable remove works",
+      );
+      assert.equal(
+        await evaluate(
+          "document.querySelectorAll('section .reference-token').length",
+        ),
+        6,
+        "removing draft reference does not mutate sent references",
+      );
+      const scene = { width, metrics, editable };
       evidence.scenes.push(scene);
       console.log("REFERENCE_WIDTH_MEASUREMENTS " + JSON.stringify(scene));
     }
