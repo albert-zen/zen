@@ -5254,6 +5254,10 @@ button:disabled {
   color: var(--text-3);
   font-size: var(--font-size-caption);
 }
+.markdown-code-actions {
+  display: inline-flex;
+  gap: 8px;
+}
 .markdown-code-header button {
   border: 0;
   background: transparent;

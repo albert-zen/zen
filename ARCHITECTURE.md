@@ -1474,3 +1474,7 @@ First-party automation startup/shutdown uses the candidate SDK storage only for 
 First-party automation pauses new wakeup admission while either of its Host storage namespaces is being replaced. Host-only ephemeral storage fence notifications preserve existing due times, do not abort admitted programs or grant candidate writes to callbacks, and trigger a serialized read of the published or rolled-back ordinary Host snapshot before scheduling resumes. Generation-scoped subscriptions are disposed on stop; stale publication observations cannot reactivate a retired service. This is transaction-bound admission, not automatic replay of attempted effects.
 
 Known Host admission and local-program results wait outside the snapshot mutation slot while a replacement fence is closed; retirement releases these waiters without replay. Only explicitly pure result projections may be reapplied after a typed storage-fence rejection against the refreshed Host snapshot; general I/O failures remain fail-closed, and external effects are never retried.
+
+### Message local-path presentation
+
+ZenX renders conservative local file-path tokens as disposable Markdown links to the existing current-Host workspace file viewer; linkification performs no filesystem reads, grants no access, and does not alter canonical message text or model input. Host realpath containment and permissions remain authoritative.

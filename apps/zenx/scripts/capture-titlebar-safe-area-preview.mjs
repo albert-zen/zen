@@ -61,6 +61,7 @@ await withPreviewBrowser(
       assert.ok(m.pageWidth <= width, "no document horizontal overflow");
       assert.equal(m.headingDrag, "drag");
       assert.equal(m.railDrag, "no-drag");
+      assert.equal(m.buttonDrag, "no-drag");
       if (platform === "darwin" && m.heading.y < 44) {
         assert.ok(
           m.rail.x >= 128 - 1,
@@ -104,7 +105,12 @@ await withPreviewBrowser(
               item.states.push(m);
               // The narrow sidebar is an intentional drawer over the workspace.
               if (width > 720 || sidebar === "closed") {
-                await click("[role=tab][aria-selected=true]");
+                await click('[role=tab][aria-selected="false"]');
+                await stable();
+                assert.ok(
+                  (await evaluate(measure)).selected.endsWith("synthetic-1"),
+                  "pointer selects another tab",
+                );
                 await key("End", "End", 35);
                 await stable();
                 m = await evaluate(measure);
