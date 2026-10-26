@@ -56,6 +56,7 @@ const sources = [
   "scripts/titlebar-safe-area-preview.tsx",
   "scripts/build-titlebar-safe-area-preview.mjs",
   "scripts/capture-titlebar-safe-area-preview.mjs",
+  "scripts/capture-workspace-tab-overflow.mjs",
 ];
 await writeFile(
   path.join(directory, "source.json"),

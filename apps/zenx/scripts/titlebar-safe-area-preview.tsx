@@ -12,10 +12,29 @@ document.documentElement.dataset.platform = platform;
 document.documentElement.dataset.appearance = query.get("theme") ?? "light";
 document.documentElement.dataset.themePreset = "graphite";
 Object.assign(window, { zenx: { platform } });
-void i18n.changeLanguage("en");
+void i18n.changeLanguage(query.get("lang") ?? "en");
+const overflowLabels = [
+  "app.ts",
+  "Workspace acceptance and verification.md",
+  "侧栏标签与编辑器草稿保留说明.md",
+  "Browser: synthetic documentation",
+  "x.go",
+  "Long resource title with multiple words and suffix.tsx",
+  "工作区滚动与键盘导航验收.md",
+  "README.md",
+  "Synthetic production screenshot review.md",
+  "计划.md",
+  "workspace-panel-overflow-regression.test.ts",
+  "最后一个资源.md",
+];
 const customTabs = Array.from({ length: 12 }, (_, index) => ({
   id: `synthetic-${index}`,
-  title: index === 0 ? "workspace.md" : `Synthetic review ${index}`,
+  title:
+    query.get("tabs") === "overflow"
+      ? overflowLabels[index]!
+      : index === 0
+        ? "workspace.md"
+        : `Synthetic review ${index}`,
   icon: "file" as const,
   render: () => (
     <p style={{ padding: 24 }}>
@@ -30,7 +49,9 @@ function Preview() {
   const [selected, setSelected] = useState("custom:synthetic-0");
   const [tabs, setTabs] = useState(customTabs.map((tab) => `custom:${tab.id}`));
   useEffect(() => {
-    Object.assign(window, { __titlebarPreview: { setCollapsed } });
+    Object.assign(window, {
+      __titlebarPreview: { setCollapsed, setSelected, setTabs },
+    });
     void document.fonts.ready.then(() => {
       document.body.dataset.previewReady = "true";
     });
