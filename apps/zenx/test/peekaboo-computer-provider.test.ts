@@ -13,7 +13,7 @@ const target = {
   windowTitle: "Fixture",
 };
 
-test("Peekaboo provider keeps semantic actions background-first and opaque", async () => {
+test("Peekaboo provider keeps targeted selectors opaque without claiming focus isolation", async () => {
   const runner = new FakePeekabooRunner();
   const backend = new PeekabooComputerBackend({
     executable: "/opt/peekaboo",

@@ -1081,3 +1081,31 @@ It uses the actual composer with fixture Host responses; it does not start ZAS.
 ### Concurrent browsers
 
 The ordinary Browser settings now add an explicitly connected Chrome or Edge alongside the shared Workspace browser. Backend-qualified references and separate tool-name approvals prevent cross-routing. See [the concurrency contract](../../docs/browser-concurrency.md) for setup, migration, single-external-connection limits and validation boundaries.
+
+### Pinned build dependency reuse
+
+Portable packaging retains disposable per-run staging. RTK v0.48.0 (macOS
+arm64 only) archives now survive those runs under
+`.packaged/cache/rtk/v0.48.0/darwin-arm64/sha256/`. The existing verified
+acquisition boundary rehashes every cache hit, serializes concurrent acquisitions,
+bounds the download, and atomically publishes only the expected archive digest.
+Extraction remains staging-local, bounded to 60 seconds, and checks the binary
+pin before restoring executable permissions and the bundled notice. Corrupt or
+incomplete cache bytes are not accepted. The cache can be removed to force a new
+acquisition; no runtime download, hook installation, or PATH change is added.
+
+Electron packaging still uses `@electron/packager` and its existing
+`@electron/get` ZIP cache. Its `download.checksums` comes from the
+`checksums.json` shipped in the installed, lockfile-pinned Electron npm package,
+just as Electron's own installer does. The package version must exactly match
+the packaging pin, and the requested platform/architecture must have a valid
+SHA-256. Missing or malformed metadata fails instead of trusting a separately
+cached `SHASUMS256.txt`, fetching a replacement authority, or disabling checksums.
+The downloader still verifies cold and warm ZIPs; its existing transport and
+cache behavior is unchanged. No global cache, proxy or network setting is changed.
+
+This removes repeat acquisition for these **already warmed and intact** pins;
+it does not promise that an initial build, npm install, provider assembly, or an
+otherwise incomplete toolchain works offline. Tests use only deterministic data
+archives and synthetic downloads; they never execute downloaded RTK/Electron
+binaries or perform a release/install.

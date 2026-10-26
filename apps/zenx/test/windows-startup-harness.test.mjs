@@ -5,6 +5,24 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
 
+test("mock startup boundary does not start a C# compiler inside the assertion deadline", () => {
+  const source = readFileSync(
+    new URL("./fixtures/startup-acceptance/check-harness.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /Add-Type|DllImport|Start-Process/u);
+  assert.match(source, /class StartupWindows \{/u);
+  assert.match(
+    source,
+    /static \[long\[\]\] Visible\(\[uint32\] \$ProcessId\) \{ return \[StartupWindows\]::Handles \}/u,
+  );
+  assert.match(
+    source,
+    /static \[bool\] IsIconic\(\[IntPtr\] \$WindowHandle\) \{ return \[StartupWindows\]::Minimized \}/u,
+  );
+  assert.match(source, /Write-Phase "mock-boundary-ready"/u);
+});
+
 test("secondary failure state is captured before cleanup without replacing the original error", () => {
   const source = readFileSync(
     new URL("../scripts/windows-startup-acceptance.ps1", import.meta.url),

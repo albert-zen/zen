@@ -1,5 +1,9 @@
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
+import {
+  ELECTRON_VERSION,
+  electronDownloadOptions,
+} from "./prepare-electron-checksums.mjs";
 import { prepareWindowsSmokeGuard } from "./prepare-windows-smoke-guard.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -108,7 +112,8 @@ export async function packageZenX(arguments_, options = {}) {
         platform: process.platform,
         arch: process.arch,
         name: productName,
-        electronVersion: "43.2.0",
+        electronVersion: ELECTRON_VERSION,
+        download: await electronDownloadOptions(),
         ...macOsPackagerOptions(
           process.platform,
           target,

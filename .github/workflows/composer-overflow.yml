@@ -1,0 +1,80 @@
+name: Composer overflow regression
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/composer-overflow.yml
+      - apps/zenx/scripts/build-composer-overflow-preview.mjs
+      - apps/zenx/scripts/capture-composer-overflow-preview.mjs
+      - apps/zenx/test/fixtures/composer-overflow-visual.tsx
+      - package-lock.json
+      - apps/zenx/src/renderer/src/ThreadView.tsx
+      - apps/zenx/src/renderer/src/Composer.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/ReferenceToken.tsx
+      - apps/zenx/src/renderer/src/reference-token.css
+      - apps/zenx/scripts/prepare-cjk-fonts.mjs
+      - apps/zenx/src/renderer/src/InlineComposerEditor.tsx
+      - apps/zenx/src/renderer/src/inline-composer.css
+      - apps/zenx/src/renderer/src/editor-style-nonce.ts
+      - apps/zenx/src/main/renderer-style-policy.ts
+      - apps/zenx/src/renderer/index.html
+
+permissions:
+  contents: read
+
+concurrency:
+  group: composer-overflow-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  composer-overflow:
+    name: Composer overflow under production CSP
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Shared authenticated helper; budget 2m resolve + 4m install + 3m capture.
+      # The whole job remains capped at 10m including checkout/dependencies/cache.
+      - name: Test authenticated CJK prerequisite contracts
+        run: node --test apps/zenx/test/cjk-font-prerequisite.test.mjs
+      - name: Resolve CJK font from authenticated Ubuntu package indexes
+        id: cjk-package
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Restore exact verified CJK package archive
+        id: cjk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Install and verify CJK fonts before Composer capture
+        id: zenx-fonts
+        timeout-minutes: 4
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Cache only the verified CJK package archive
+        if: ${{ steps.zenx-fonts.outcome == 'success' && steps.cjk-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Build and exercise the production Composer
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-composer-overflow-preview.mjs "${{ runner.temp }}/composer-overflow"
+          cp "${{ runner.temp }}/zenx-cjk-fonts/package.json" "${{ runner.temp }}/composer-overflow/cjk-package.json"
+          fc-match ':lang=zh' > "${{ runner.temp }}/composer-overflow/cjk-font.txt"
+          node --import tsx apps/zenx/scripts/capture-composer-overflow-preview.mjs "${{ runner.temp }}/composer-overflow"
+      - name: Retain screenshots and measured geometry
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: composer-overflow-${{ github.sha }}
+          path: ${{ runner.temp }}/composer-overflow
+          if-no-files-found: warn
+          retention-days: 14
