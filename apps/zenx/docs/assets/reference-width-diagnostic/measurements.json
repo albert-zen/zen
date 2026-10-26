@@ -1,0 +1,297 @@
+{
+  "source": "Production InlineReferenceContent, Markdown, ReferenceToken and CSS; synthetic identities, supplied visible excerpt; no Provider or user computer access.",
+  "scenes": [
+    {
+      "width": 1280,
+      "metrics": [
+        {
+          "name": "三行摘录（合成身份）",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 424,
+              "width": 700,
+              "height": 54.296875,
+              "scrollWidth": 698
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 440,
+              "width": 668,
+              "height": 28.296875,
+              "scrollWidth": 668
+            },
+            {
+              "class": "markdown-body",
+              "x": 440,
+              "width": 668,
+              "height": 28.296875,
+              "scrollWidth": 668
+            },
+            {
+              "class": "P",
+              "x": 440,
+              "width": 668,
+              "height": 28.296875,
+              "scrollWidth": 668
+            },
+            {
+              "class": "reference-token",
+              "x": 442,
+              "width": 300,
+              "height": 28,
+              "scrollWidth": 298
+            },
+            {
+              "class": "reference-token-details",
+              "x": 443,
+              "width": 298,
+              "height": 24,
+              "scrollWidth": 298
+            }
+          ]
+        },
+        {
+          "name": "短引用对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 973.984375,
+              "width": 150.015625,
+              "height": 54.296875,
+              "scrollWidth": 148
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 989.984375,
+              "width": 118.015625,
+              "height": 28.296875,
+              "scrollWidth": 118
+            },
+            {
+              "class": "markdown-body",
+              "x": 989.984375,
+              "width": 118.015625,
+              "height": 28.296875,
+              "scrollWidth": 118
+            },
+            {
+              "class": "P",
+              "x": 989.984375,
+              "width": 118.015625,
+              "height": 28.296875,
+              "scrollWidth": 118
+            },
+            {
+              "class": "reference-token",
+              "x": 991.984375,
+              "width": 72.015625,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 992.984375,
+              "width": 70.015625,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "相同摘录单行对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 424,
+              "width": 700,
+              "height": 54.296875,
+              "scrollWidth": 698
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 440,
+              "width": 668,
+              "height": 28.296875,
+              "scrollWidth": 668
+            },
+            {
+              "class": "markdown-body",
+              "x": 440,
+              "width": 668,
+              "height": 28.296875,
+              "scrollWidth": 668
+            },
+            {
+              "class": "P",
+              "x": 440,
+              "width": 668,
+              "height": 28.296875,
+              "scrollWidth": 668
+            },
+            {
+              "class": "reference-token",
+              "x": 442,
+              "width": 300,
+              "height": 28,
+              "scrollWidth": 298
+            },
+            {
+              "class": "reference-token-details",
+              "x": 443,
+              "width": 298,
+              "height": 24,
+              "scrollWidth": 298
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 420,
+      "metrics": [
+        {
+          "name": "三行摘录（合成身份）",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 70.546875,
+              "width": 305.453125,
+              "height": 78.6875,
+              "scrollWidth": 303
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 86.546875,
+              "width": 273.453125,
+              "height": 52.6875,
+              "scrollWidth": 277
+            },
+            {
+              "class": "markdown-body",
+              "x": 86.546875,
+              "width": 273.453125,
+              "height": 52.6875,
+              "scrollWidth": 277
+            },
+            {
+              "class": "P",
+              "x": 86.546875,
+              "width": 273.453125,
+              "height": 52.6875,
+              "scrollWidth": 277
+            },
+            {
+              "class": "reference-token",
+              "x": 88.546875,
+              "width": 273.453125,
+              "height": 28,
+              "scrollWidth": 271
+            },
+            {
+              "class": "reference-token-details",
+              "x": 89.546875,
+              "width": 271.453125,
+              "height": 24,
+              "scrollWidth": 271
+            }
+          ]
+        },
+        {
+          "name": "短引用对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 228.96875,
+              "width": 147.03125,
+              "height": 54,
+              "scrollWidth": 145
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 244.96875,
+              "width": 115.03125,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "markdown-body",
+              "x": 244.96875,
+              "width": 115.03125,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "P",
+              "x": 244.96875,
+              "width": 115.03125,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "reference-token",
+              "x": 246.96875,
+              "width": 72.015625,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 247.96875,
+              "width": 70.015625,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "相同摘录单行对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 70.546875,
+              "width": 305.453125,
+              "height": 78.6875,
+              "scrollWidth": 303
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 86.546875,
+              "width": 273.453125,
+              "height": 52.6875,
+              "scrollWidth": 277
+            },
+            {
+              "class": "markdown-body",
+              "x": 86.546875,
+              "width": 273.453125,
+              "height": 52.6875,
+              "scrollWidth": 277
+            },
+            {
+              "class": "P",
+              "x": 86.546875,
+              "width": 273.453125,
+              "height": 52.6875,
+              "scrollWidth": 277
+            },
+            {
+              "class": "reference-token",
+              "x": 88.546875,
+              "width": 273.453125,
+              "height": 28,
+              "scrollWidth": 271
+            },
+            {
+              "class": "reference-token-details",
+              "x": 89.546875,
+              "width": 271.453125,
+              "height": 24,
+              "scrollWidth": 271
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
