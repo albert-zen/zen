@@ -10,6 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import { WorkspaceBrowser } from "../src/main/workspace-browser.js";
 import { BrowserZenXCapabilityPackage } from "../src/main/capabilities/browser-provider.js";
@@ -1107,6 +1108,10 @@ class FakeImage {
 }
 
 class FakeWebContents extends EventEmitter {
+  appearanceScripts: string[] = [];
+  async executeJavaScript(script: string) {
+    this.appearanceScripts.push(script);
+  }
   frame?: (image: {
     isEmpty(): boolean;
     getSize(): { width: number; height: number };
@@ -2184,8 +2189,30 @@ test("blank browser native background follows appearance without recoloring webs
     assert.equal(view.backgroundColor, "#000000");
     mount("light");
     assert.equal(view.backgroundColor, "#ffffff");
+    const script = view.webContents.appearanceScripts.at(-1)!;
+    const style: Record<string, string> = {};
+    runInNewContext(script, {
+      location: { href: "about:blank" },
+      document: { documentElement: { style } },
+    });
+    assert.deepEqual(style, {
+      colorScheme: "light",
+      backgroundColor: "#ffffff",
+    });
+    const siteStyle = {};
+    runInNewContext(script, {
+      location: { href: "https://example.test/" },
+      document: { documentElement: { style: siteStyle } },
+    });
+    assert.deepEqual(
+      siteStyle,
+      {},
+      "navigation before execution cannot restyle a website",
+    );
     mount("dark");
+    const blankScripts = view.webContents.appearanceScripts.length;
     view.webContents.finishLoad("https://example.test/");
+    assert.equal(view.webContents.appearanceScripts.length, blankScripts);
     assert.equal(
       view.backgroundColor,
       "#ffffff",
