@@ -102,6 +102,7 @@ const sources = [
   "src/renderer/index.html",
   "scripts/capture-file-sidebar-electron.cjs",
   "scripts/file-editor-diagnostic-scope.cjs",
+  "scripts/file-editor-cold-capture.cjs",
   "scripts/file-editor-motion-preference.cjs",
   "scripts/file-editor-resize-readiness.cjs",
 ];

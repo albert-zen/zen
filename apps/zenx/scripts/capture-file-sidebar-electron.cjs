@@ -18,6 +18,7 @@ const {
 const {
   prepareFileEditorMotion,
 } = require("./file-editor-motion-preference.cjs");
+const { observeColdCapture } = require("./file-editor-cold-capture.cjs");
 const resizeState = `(${fileEditorResizeState.toString()})(document)`;
 const scope = fileEditorDiagnosticScope(process.argv.slice(3));
 // Optional owned-renderer media emulation only; default/system behavior is unchanged.
@@ -327,6 +328,23 @@ async function runColdEndCase(markdown) {
       "window.__nativeEditorCoordinates()",
     );
   await screenshot(`macos-cold-${receipt.editor}-end`);
+  // Retain the original PNG/verdict. This follow-up only distinguishes a stale
+  // captured surface from a DOM viewport that actually rolls back after capture.
+  const captureState = `(() => {
+    const result=(${measure}),root=document.querySelector(${JSON.stringify(selector)});
+    const scroller=root.querySelector('.cm-scroller').getBoundingClientRect();
+    const visible=Array.from(root.querySelectorAll('.cm-line')).map(line=>{const r=line.getBoundingClientRect();return {text:line.textContent,top:r.top,bottom:r.bottom};}).filter(line=>line.bottom>scroller.top&&line.top<scroller.bottom);
+    const selection=getSelection();
+    return {...result,url:location.href,documentState:document.readyState,at:performance.now(),domSelection:selection?{anchorOffset:selection.anchorOffset,focusOffset:selection.focusOffset,isCollapsed:selection.isCollapsed,anchorParent:selection.anchorNode?.parentElement?.className,focusParent:selection.focusNode?.parentElement?.className}:null,lastVisibleLine:visible.at(-1)||null,markerVisible:visible.some(line=>line.text.includes(${JSON.stringify(marker)}))};
+  })()`;
+  receipt.captureObservation = await observeColdCapture(
+    () => evaluate(captureState),
+    () =>
+      window.webContents.executeJavaScript(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      ),
+    () => screenshot(`macos-cold-${receipt.editor}-end-after-two-frames`),
+  );
 }
 async function runCase(width, precise, productionCsp = false) {
   const receipt = {
