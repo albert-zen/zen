@@ -67,6 +67,8 @@ const SELF_CONTROL_TOOL_NAMES = [
   "zenx_self_control_workflows_update",
   "zenx_self_control_devices",
   "zenx_self_control_threads_wait",
+  "zenx_self_control_sidebar_read",
+  "zenx_self_control_sidebar_update",
 ];
 
 test("bundled and ordinary self-control manifests expose the same exact or readable selectors", async () => {

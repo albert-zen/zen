@@ -71,6 +71,8 @@ await writeFile(
   `<!doctype html><html data-native-file-diagnostic><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${productionCsp}"><title>ZenX synthetic file diagnostic · production CSP</title><link rel="stylesheet" href="file-sidebar-production.css"><script src="file-sidebar-policy-observer.js"></script></head><body><div id="root"></div><script src="file-sidebar-production.js"></script></body></html>`,
 );
 const sources = [
+  "src/renderer/src/workspace-file-viewport.ts",
+  "src/renderer/src/workspace-file-drafts.ts",
   "src/renderer/src/Markdown.tsx",
   "src/renderer/src/i18n/panels.ts",
   "src/renderer/src/local-path-links.ts",
@@ -83,7 +85,6 @@ const sources = [
   "src/renderer/src/icons.tsx",
   "src/renderer/src/workspace-file-picker.tsx",
   "src/renderer/src/workspace-file-explorer.tsx",
-  "src/renderer/src/workspace-file-drafts.ts",
   "src/renderer/src/SourceEditor.tsx",
   "src/renderer/src/InlineMarkdownEditor.tsx",
   "src/renderer/src/InlineComposerEditor.tsx",

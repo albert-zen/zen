@@ -7,6 +7,8 @@ import {
   validateExternalApplication,
   type ExternalApplicationId,
 } from "./workspace-external-open.js";
+import type { SidebarOwner } from "../thread-sidebar-state.js";
+import { ThreadSidebarStore } from "./thread-sidebar-store.js";
 import { validateModelRequestDebugCommand } from "../../../../apps/cli/src/model-request-debug.js";
 import { ForegroundActivity } from "./foreground-activity.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
@@ -410,6 +412,20 @@ async function bootstrapZenX(): Promise<void> {
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
   );
   const skills = new SkillsService(zenDataDirectory);
+  const threadSidebar = new ThreadSidebarStore(
+    join(zenDataDirectory, "product-state", "sidebars"),
+  );
+  ipcMain.handle(
+    ipcChannels.threadSidebarRead,
+    (_event, owner: SidebarOwner | string) => threadSidebar.read(owner),
+  );
+  ipcMain.handle(ipcChannels.threadSidebarUpdate, (_event, request) =>
+    threadSidebar.update(request),
+  );
+  threadSidebar.onChanged((state) => {
+    for (const window of appWindows())
+      window.webContents.send(ipcChannels.threadSidebarChanged, state);
+  });
   ipcMain.handle(ipcChannels.modelRequestDebug, (_event, input: unknown) => {
     if (appServerManager === undefined)
       throw new Error("Local Host unavailable");
@@ -609,6 +625,11 @@ async function bootstrapZenX(): Promise<void> {
       },
     );
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+      sidebar: threadSidebar,
+      sidebarRooms: () =>
+        automationService?.roomsAvailable()
+          ? automationService.snapshot().rooms
+          : [],
       fleet: fleetSettingsService.router,
       appServer: selfControlPort,
       workflows: {

@@ -88,6 +88,18 @@ jobs:
           path: ${{ runner.temp }}/zenx-titlebar-safe-area
           if-no-files-found: warn
           retention-days: 14
+      - name: Capture compaction capsules (production components, synthetic records)
+        run: |
+          node apps/zenx/scripts/build-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
+          node apps/zenx/scripts/capture-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
+      - name: Retain compaction capsule synthetic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-compaction-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-compaction
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture reference bubble width diagnostic (production components, synthetic identity)
         run: |
           node apps/zenx/scripts/build-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
@@ -181,6 +193,20 @@ jobs:
           path: ${{ runner.temp }}/zenx-file-sidebar-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Build and capture thread and Room sidebar state preview
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-sidebar-state-preview.mjs "${{ runner.temp }}/zenx-sidebar-state-preview"
+          node apps/zenx/scripts/capture-sidebar-state-preview.mjs "${{ runner.temp }}/zenx-sidebar-state-preview"
+      - name: Retain sidebar state synthetic UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-sidebar-state-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-sidebar-state-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture read-only Settings audit evidence
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 3
@@ -255,7 +281,7 @@ jobs:
       - name: Verify macOS input construction without desktop input
         env:
           ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
-        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts
       - name: Retain construction-only CoreGraphics metadata
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

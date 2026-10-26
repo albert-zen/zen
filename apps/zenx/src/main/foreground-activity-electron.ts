@@ -111,6 +111,32 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
     return work;
   }
 
+  /** Trusted main-process identity, never a renderer/model-supplied exemption. */
+  pointerPassthroughWindowIds(): readonly number[] {
+    if (this.#closed || this.#failure || this.#snapshot.activities.length === 0)
+      return [];
+    return [...this.#overlays.values()].flatMap((overlay) => {
+      if (
+        overlay.kind !== "edges" ||
+        overlay.window.isDestroyed() ||
+        !overlay.window.isVisible() ||
+        overlay.pending ||
+        overlay.paintedVersion !== overlay.sentVersion ||
+        overlay.paintedVersion === 0
+      )
+        return [];
+      const match = /^window:(\d+):\d+$/.exec(
+        overlay.window.getMediaSourceId(),
+      );
+      const id = match ? Number(match[1]) : NaN;
+      if (!Number.isSafeInteger(id) || id <= 0)
+        throw new Error(
+          "Foreground edge window native identity is unavailable",
+        );
+      return [id];
+    });
+  }
+
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
