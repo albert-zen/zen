@@ -13,6 +13,7 @@ import {
 } from "./capabilities/automation-control-package.js";
 import {
   JsonPluginStorage,
+  PluginStorageReplacementPendingError,
   type PluginStorageFileSystem,
   type ZenXPluginHostSdkV1,
 } from "./plugin-host-sdk.js";
@@ -305,6 +306,25 @@ class PluginAutomationStore implements ZenXTriggerStorePort {
     );
   }
 
+  wakeupStorageAvailable(): boolean {
+    return [this.#storage, this.#roomProjection].every(
+      (storage) =>
+        !(storage instanceof JsonPluginStorage) || !storage.replacementPending,
+    );
+  }
+
+  onStorageReplacementChange(listener: () => void): () => void {
+    const disposers = [this.#storage, this.#roomProjection].flatMap(
+      (storage) =>
+        storage instanceof JsonPluginStorage
+          ? [storage.onReplacementChange(listener)]
+          : [],
+    );
+    return () => {
+      for (const dispose of disposers) dispose();
+    };
+  }
+
   async read(): Promise<TriggerSnapshot> {
     await this.#storage.reload?.();
     const data = await this.#storage.get();
@@ -394,7 +414,20 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     this.#targets = targets;
     this.#targetDefaults = targetDefaults;
     this.#startThread = startThread;
-    this.#service = new ZenXTriggerService(appServer, store, { titles });
+    this.#service = new ZenXTriggerService(appServer, store, {
+      titles,
+      ...(store instanceof PluginAutomationStore
+        ? {
+            wakeupGate: {
+              isOpen: () => store.wakeupStorageAvailable(),
+              isBlockedError: (error: unknown) =>
+                error instanceof PluginStorageReplacementPendingError,
+              subscribe: (listener: () => void) =>
+                store.onStorageReplacementChange(listener),
+            },
+          }
+        : {}),
+    });
   }
 
   async startPlugin(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void> {

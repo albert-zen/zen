@@ -9,6 +9,14 @@ export const ZENX_PLUGIN_HOST_SDK_VERSION = 1 as const;
 const MAX_STORAGE_VERSION = 1_000;
 const MAX_STORAGE_BYTES = 1024 * 1024;
 
+export class PluginStorageReplacementPendingError extends Error {
+  constructor() {
+    super(
+      "Plugin storage replacement is being prepared; this storage operation was not performed",
+    );
+  }
+}
+
 export type PluginStorageValue = Readonly<Record<string, unknown>>;
 
 export interface PluginStorageMigration {
@@ -283,6 +291,7 @@ interface StorageAuthority {
   data: StoredPluginData | undefined;
   generation: symbol;
   staging?: symbol;
+  replacementListeners: Set<() => void>;
 }
 
 // Host process owns one namespace queue. Weak values do not retain dead test or
@@ -303,10 +312,20 @@ function storageAuthority(
       tail: Promise.resolve(),
       data: undefined,
       generation: Symbol("plugin storage"),
+      replacementListeners: new Set(),
     };
     namespaces.set(filename, new WeakRef(authority));
   }
   return authority;
+}
+function notifyStorageReplacement(authority: StorageAuthority): void {
+  for (const listener of authority.replacementListeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.error("Plugin storage replacement observer failed", error);
+    }
+  }
 }
 function queueStorage<T>(
   authority: StorageAuthority,
@@ -351,6 +370,15 @@ export class JsonPluginStorage {
     this.version = version;
     this.#generation = generation;
     this.#candidate = candidate;
+  }
+
+  get replacementPending(): boolean {
+    return this.#authority.staging !== undefined;
+  }
+
+  onReplacementChange(listener: () => void): () => void {
+    this.#authority.replacementListeners.add(listener);
+    return () => this.#authority.replacementListeners.delete(listener);
   }
 
   static async open(
@@ -409,6 +437,7 @@ export class JsonPluginStorage {
         authority.data = previous;
         authority.generation = oldGeneration;
         delete authority.staging;
+        notifyStorageReplacement(authority);
       });
     };
     try {
@@ -428,6 +457,7 @@ export class JsonPluginStorage {
             ? undefined
             : decodeStoredPluginData(previousBytes);
         authority.staging = candidate;
+        notifyStorageReplacement(authority);
         const { data } = await this.#readAndMigrate(
           options,
           filename,
@@ -455,6 +485,7 @@ export class JsonPluginStorage {
         authority.generation = candidate;
         delete authority.staging;
         published = true;
+        notifyStorageReplacement(authority);
       },
       rollback,
     };
@@ -522,9 +553,7 @@ export class JsonPluginStorage {
     const candidateActive =
       this.#candidate !== undefined && authority.staging === this.#candidate;
     if (authority.staging !== undefined && !candidateActive)
-      throw new Error(
-        "Plugin storage replacement is being prepared; this storage operation was not performed",
-      );
+      throw new PluginStorageReplacementPendingError();
     if (
       this.#generation !== undefined &&
       authority.generation !== this.#generation &&

@@ -596,3 +596,43 @@ test("preparation drains an admitted write before taking its rollback snapshot",
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Host replacement observers see every fence edge without gaining candidate access", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-storage-observer-"));
+  const options = {
+    root,
+    pluginId: "observer-fixture",
+    version: 1,
+    initialValue: { value: "original" },
+  };
+  const host = await JsonPluginStorage.open(options);
+  const states: boolean[] = [];
+  const dispose = host.onReplacementChange(() =>
+    states.push(host.replacementPending),
+  );
+  const disposeThrowing = host.onReplacementChange(() => {
+    throw new Error("synthetic observer failure");
+  });
+  try {
+    const first = await JsonPluginStorage.prepare(options);
+    assert.equal(host.replacementPending, true);
+    await assert.rejects(host.get(), /replacement is being prepared/u);
+    await first.storage.set({ value: "candidate" });
+    await first.rollback();
+    assert.deepEqual(await host.get(), { value: "original" });
+    const second = await JsonPluginStorage.prepare(options);
+    await second.storage.set({ value: "published" });
+    second.publish();
+    assert.deepEqual(await host.get(), { value: "published" });
+    assert.deepEqual(states, [true, false, true, false]);
+    dispose();
+    disposeThrowing();
+    const third = await JsonPluginStorage.prepare(options);
+    await third.rollback();
+    assert.deepEqual(states, [true, false, true, false]);
+  } finally {
+    dispose();
+    disposeThrowing();
+    await rm(root, { recursive: true, force: true });
+  }
+});
