@@ -609,25 +609,57 @@ export function AuxiliaryPanel({
   useLayoutEffect(() => {
     const rail = tabRail.current;
     if (!rail || !open) return;
+    const items = [
+      ...rail.querySelectorAll<HTMLElement>(".workspace-content-tab"),
+    ];
+    const measure = () => {
+      const origin = rail.getBoundingClientRect().left - rail.scrollLeft;
+      return items.map((item) => {
+        const bounds = item.getBoundingClientRect();
+        return {
+          item,
+          left: bounds.left - origin,
+          right: bounds.right - origin,
+        };
+      });
+    };
     const reveal = () => {
-      const tab = active ? document.getElementById(`aux-tab-${active}`) : null;
-      const item = tab?.closest<HTMLElement>(".workspace-content-tab");
-      if (!item || !rail.contains(item) || rail.clientWidth <= 0) return;
-      const bounds = item.getBoundingClientRect();
-      const railBounds = rail.getBoundingClientRect();
-      const left = bounds.left - railBounds.left + rail.scrollLeft;
-      const right = bounds.right - railBounds.left + rail.scrollLeft;
-      const visibleEnd = rail.scrollLeft + rail.clientWidth;
-      const next =
-        left < rail.scrollLeft || bounds.width > rail.clientWidth
-          ? left
-          : right > visibleEnd
-            ? right - rail.clientWidth
-            : rail.scrollLeft;
-      rail.scrollLeft = Math.max(
-        0,
-        Math.min(next, rail.scrollWidth - rail.clientWidth),
+      if (rail.clientWidth <= 0) return;
+      const bounds = measure();
+      const last = bounds.at(-1);
+      // Reserve only the missing fraction of a tab at the end. Without this
+      // slack, maxScroll clamps the last reveal halfway through an earlier tab.
+      const maximum = Math.max(0, (last?.right ?? 0) + 2 - rail.clientWidth);
+      const end = bounds.find((tab) => tab.left - 2 >= maximum - 0.5)?.left;
+      rail.style.setProperty(
+        "--workspace-tab-end-gap",
+        `${Math.ceil(Math.max(0, (end ?? maximum + 2) - 2 - maximum))}px`,
       );
+      const selected = bounds.find(
+        ({ item }) =>
+          item.querySelector('[role="tab"]')?.id === `aux-tab-${active}`,
+      );
+      if (selected) {
+        const minimum = selected.right + 2 - rail.clientWidth;
+        // Keep as many complete preceding tabs as fit, never a title-only tail.
+        const candidates = bounds
+          .map((tab) => tab.left - 2)
+          .filter(
+            (left) => left >= minimum - 0.5 && left <= selected.left - 2 + 0.5,
+          );
+        const next = candidates.reduce(
+          (nearest, left) =>
+            Math.abs(left - rail.scrollLeft) <
+            Math.abs(nearest - rail.scrollLeft)
+              ? left
+              : nearest,
+          candidates[0] ?? selected.left - 2,
+        );
+        rail.scrollLeft = Math.max(
+          0,
+          Math.min(next, rail.scrollWidth - rail.clientWidth),
+        );
+      }
     };
     reveal();
     const observer =
@@ -635,7 +667,10 @@ export function AuxiliaryPanel({
         ? undefined
         : new ResizeObserver(reveal);
     observer?.observe(rail);
-    return () => observer?.disconnect();
+    for (const item of items) observer?.observe(item);
+    return () => {
+      observer?.disconnect();
+    };
   }, [active, open, signature, width, expanded]);
   useLayoutEffect(() => {
     const target = pendingTabFocus.current;
@@ -1164,10 +1199,7 @@ export function AuxiliaryPanel({
                               : -1;
                     if (next >= 0) {
                       event.preventDefault();
-                      select(tabs[next]!.id);
-                      document
-                        .getElementById(`aux-tab-${tabs[next]!.id}`)
-                        ?.focus();
+                      select(tabs[next]!.id, true);
                     }
                   }}
                 >

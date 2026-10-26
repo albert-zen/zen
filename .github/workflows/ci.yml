@@ -68,7 +68,7 @@ jobs:
           retention-days: 14
       - name: Install CJK fonts for synthetic UI acceptance
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-      - name: Reproduce workspace tab overflow on production components
+      - name: Verify workspace tab overflow on production components
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-tab-overflow"
           node apps/zenx/scripts/capture-workspace-tab-overflow.mjs "${{ runner.temp }}/zenx-tab-overflow"

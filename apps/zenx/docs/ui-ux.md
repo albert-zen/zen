@@ -130,6 +130,7 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
 - Thread header 只保留一个按需工作区 icon entry；上下文与 cache telemetry 位于 Composer。不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
 - 右侧工作区只有一个并排容器和一个顶部入口，不再叠加旧 Workspace 模态抽屉。顶层只显示实际内容 Tab（文件名、浏览器页面、Computer 或插件注册的视图），加号选择新内容类型；不再先按 Browser / Files 分类再选择二级内容。插件贡献进入加号选择器，打开后按自身 surface 展示；Trigger 与 Room 不硬编码为核心 tabs。关闭和展开始终避开原生标题栏控件。Markdown 使用连续可编辑的实时预览：光标进入或触及格式节点时局部露出源码，离开后恢复渲染，自动保存，不提供常规 Edit / Preview / Save 按钮；失败与磁盘冲突在文件内处理，不覆盖未保存输入。
+- 工作区 Tab 的自动 reveal（选择、重排或可见宽度变化）按完整标签的 leading edge 对齐，保留 active Tab 的图标、标题和关闭入口；末端只补足对齐所需的尾部空间。窄栏可缩短标签文字，不固定最小 Tab 宽度。原生水平滚动仍可自由停在标签中段；不为本修新增导航按钮、强制 wheel 吸附或持久化滚动状态，键盘切换不让浏览器再次改写 reveal 位置。
 
 ## 4. Interaction 与 state rules
 

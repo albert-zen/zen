@@ -4,7 +4,9 @@ import path from "node:path";
 import { delay, withPreviewBrowser } from "./preview-browser.mjs";
 
 const directory = path.resolve(process.argv[2] ?? ".workspace-tab-overflow");
+const baseline = process.argv.includes("--baseline");
 const evidence = {
+  mode: baseline ? "baseline" : "fixed",
   scope:
     "Actual production AuxiliaryPanel and WindowTitleBar, synthetic English/CJK labels and native-control markers only. No user files, profile, Host, or network; browser input and platform CSS, not native OS acceptance.",
   cases: [],
@@ -33,9 +35,54 @@ await withPreviewBrowser(
       evaluate(
         `new Promise((resolve,reject)=>{let old='',count=0;const deadline=performance.now()+3000;const tick=()=>{if(performance.now()>deadline){reject(new Error('Tab rail did not settle within 3 seconds'));return;}const now=JSON.stringify(${measure});count=now===old?count+1:0;old=now;if(count>=4)resolve(true);else requestAnimationFrame(tick)};requestAnimationFrame(tick)})`,
       );
+    const click = async (selector) => {
+      const p = await evaluate(`(() => {
+        const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();
+        const rail=e.closest('[role=tablist]')?.getBoundingClientRect();
+        const left=Math.max(r.left,rail?.left??r.left),right=Math.min(r.right,rail?.right??r.right);
+        const x=(left+right)/2,y=r.top+r.height/2;
+        if(right<=left||!e.contains(document.elementFromPoint(x,y)))throw new Error('Obscured '+${JSON.stringify(selector)});
+        return {x,y};
+      })()`);
+      for (const type of ["mousePressed", "mouseReleased"])
+        await send("Input.dispatchMouseEvent", {
+          type,
+          ...p,
+          button: "left",
+          clickCount: 1,
+        });
+      await stable();
+    };
+    const key = async (key, code, windowsVirtualKeyCode) => {
+      for (const type of ["rawKeyDown", "keyUp"])
+        await send("Input.dispatchKeyEvent", {
+          type,
+          key,
+          code,
+          windowsVirtualKeyCode,
+        });
+      await stable();
+    };
+    const valid = (m) => {
+      assert.ok(
+        !m.tabs.some((tab) => tab.iconlessLeading),
+        "automatic reveal must not leave iconless leading titles",
+      );
+      const active = m.tabs.find((tab) => tab.active);
+      assert.ok(active, "an active tab remains available");
+      assert.ok(
+        active.bounds.left >= m.rail.left - 1,
+        "active tab icon remains visible",
+      );
+      if (active.bounds.width <= m.clientWidth)
+        assert.ok(
+          active.bounds.right <= m.rail.right + 1,
+          "active tab close control remains visible",
+        );
+    };
     try {
       for (const platform of ["darwin", "win32", "linux"])
-        for (const width of [600, 760, 1440])
+        for (const width of [360, 600, 760, 1440])
           for (const sidebar of ["closed", "open"]) {
             const name = `${platform}-${width}-${sidebar}`;
             const item = { name, states: [] };
@@ -47,6 +94,14 @@ await withPreviewBrowser(
               mobile: false,
             });
             const destination = `${url}/titlebar-safe-area.html?${new URLSearchParams({ platform, sidebar, tabs: "overflow", lang: sidebar === "open" ? "zh-CN" : "en", theme: sidebar === "open" ? "dark" : "light" })}`;
+            await send("Emulation.setEmulatedMedia", {
+              features: [
+                {
+                  name: "prefers-reduced-motion",
+                  value: sidebar === "open" ? "reduce" : "no-preference",
+                },
+              ],
+            });
             await send("Page.navigate", { url: destination });
             await wait(
               `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true'`,
@@ -74,8 +129,19 @@ await withPreviewBrowser(
                   ),
                 );
                 item.states.push({ index, expanded, ...m });
+                if (!baseline) valid(m);
                 if (
+                  !baseline &&
+                  index === 4 &&
+                  (width > 720 || sidebar === "closed")
+                )
+                  await screenshot(
+                    `${name}-${expanded ? "expanded" : "normal"}-after.png`,
+                  );
+                if (
+                  baseline &&
                   !item.fragment &&
+                  (width > 720 || sidebar === "closed") &&
                   m.tabs.some((tab) => tab.iconlessLeading)
                 ) {
                   item.fragment = {
@@ -87,15 +153,116 @@ await withPreviewBrowser(
                 }
               }
             }
-            item.status = "observed";
+            if (!baseline && (width > 720 || sidebar === "closed")) {
+              await evaluate(
+                "window.__titlebarPreview.setSelected('custom:synthetic-0')",
+              );
+              await stable();
+              await click('[id="aux-tab-custom:synthetic-1"]');
+              assert.ok(
+                (await evaluate(measure)).tabs[1].active,
+                "pointer selects a partially visible trailing tab",
+              );
+              for (const [k, c, v, index] of [
+                ["End", "End", 35, 11],
+                ["Home", "Home", 36, 0],
+                ["ArrowRight", "ArrowRight", 39, 1],
+                ["ArrowLeft", "ArrowLeft", 37, 0],
+              ]) {
+                await key(k, c, v);
+                const m = await evaluate(measure);
+                valid(m);
+                assert.ok(m.tabs[index].active);
+                assert.equal(m.focused, `aux-tab-custom:synthetic-${index}`);
+              }
+              const r = (await evaluate(measure)).rail;
+              await send("Input.dispatchMouseEvent", {
+                type: "mouseWheel",
+                x: r.left + r.width / 2,
+                y: r.top + r.height / 2,
+                deltaX: 87,
+                deltaY: 0,
+              });
+              await delay(250);
+              await stable();
+              const manual = await evaluate(measure);
+              assert.ok(
+                manual.scrollLeft > 0,
+                "native horizontal wheel remains available",
+              );
+              assert.ok(
+                manual.tabs[0].active,
+                "manual scrolling does not select another tab",
+              );
+              item.manualScroll = manual.scrollLeft;
+              await evaluate(
+                "window.__titlebarPreview.setSelected('custom:synthetic-11')",
+              );
+              await stable();
+              valid(await evaluate(measure));
+              await send("Emulation.setDeviceMetricsOverride", {
+                width: width + 80,
+                height: 820,
+                deviceScaleFactor: 1,
+                mobile: false,
+              });
+              await stable();
+              valid(await evaluate(measure));
+              await send("Emulation.setDeviceMetricsOverride", {
+                width,
+                height: 820,
+                deviceScaleFactor: 1,
+                mobile: false,
+              });
+              await stable();
+              valid(await evaluate(measure));
+              await evaluate(
+                "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+(11-i)))",
+              );
+              await stable();
+              valid(await evaluate(measure));
+              assert.ok(
+                (await evaluate(measure)).tabs[0].active,
+                "owner reorder preserves selection",
+              );
+              await evaluate(
+                "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+i));window.__titlebarPreview.setSelected('custom:synthetic-0')",
+              );
+              await stable();
+              for (let cycle = 0; cycle < 2; cycle++) {
+                await click(
+                  '.workspace-content-tab[data-active="true"] .workspace-tab-close',
+                );
+                assert.equal((await evaluate(measure)).tabs.length, 11);
+                await click(".workspace-add-tab");
+                await click(".workspace-tab-types > button");
+                const m = await evaluate(measure);
+                valid(m);
+                assert.equal(m.tabs.length, 12);
+                assert.equal(m.focused, "aux-tab-custom:synthetic-0");
+              }
+              await click(".workspace-add-tab");
+              await key("Escape", "Escape", 27);
+              assert.equal(
+                await evaluate(
+                  "document.querySelector('.auxiliary-panel').dataset.open",
+                ),
+                "true",
+              );
+              valid(await evaluate(measure));
+              item.interactions =
+                "pointer, keyboard, manual horizontal wheel, resize, owner reorder, close/reopen twice, chooser Escape";
+            }
+            item.status = baseline ? "observed" : "passed";
           }
       const reproduced = evidence.cases.filter((item) => item.fragment);
-      assert.ok(
-        reproduced.length > 0,
-        "current production component must reproduce an iconless leading fragment",
-      );
+      if (baseline)
+        assert.ok(
+          reproduced.length > 0,
+          "current production component must reproduce an iconless leading fragment",
+        );
       evidence.reproducedCases = reproduced.length;
-      evidence.status = "baseline-reproduced";
+      evidence.status = baseline ? "baseline-reproduced" : "passed";
     } catch (error) {
       evidence.status = "failed";
       evidence.failure = String(error);
