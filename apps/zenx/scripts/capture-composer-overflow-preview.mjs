@@ -42,7 +42,7 @@ server.listen(0, "127.0.0.1");
 await once(server, "listening");
 const url = `http://127.0.0.1:${server.address().port}/index.html`;
 process.env.ZENX_PREVIEW_DESKTOP_INPUT = "1";
-const measure = `(()=>{const read=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,display:c.display,position:c.position,overflowY:c.overflowY,inlineStyle:e.getAttribute('style')}};return {state:window.composerFixture.snapshot(),shell:read('.composer'),rail:read('.composer-rail'),plain:read('.composer > textarea'),editor:read('.cm-editor'),scroller:read('.cm-scroller'),content:read('.cm-content'),layers:[...document.querySelectorAll('.cm-layer')].map(e=>({class:e.className,height:e.getBoundingClientRect().height,position:getComputedStyle(e).position})),violations:window.composerCspViolations};})()`;
+const measure = `(()=>{const read=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,display:c.display,position:c.position,overflowY:c.overflowY,inlineStyle:e.getAttribute('style')}};return {state:window.composerFixture.snapshot(),shell:read('.composer'),rail:read('.composer-rail'),plain:read('.composer > textarea'),announced:read('.cm-announced'),announcedText:document.querySelector('.cm-announced')?.textContent,editor:read('.cm-editor'),scroller:read('.cm-scroller'),content:read('.cm-content'),layers:[...document.querySelectorAll('.cm-layer')].map(e=>({class:e.className,height:e.getBoundingClientRect().height,position:getComputedStyle(e).position})),violations:window.composerCspViolations};})()`;
 const report = [];
 let browserVersion;
 const exactExcerpt = "Exact synthetic excerpt\nwith whitespace preserved.";
@@ -66,6 +66,9 @@ try {
         throw Error(`Timed out: ${label}`);
       }
       async function key(key, code, modifiers = 0) {
+        // Real Shift+letter KeyboardEvents expose the uppercase key. Sending
+        // lowercase z with shift would match CodeMirror's unshifted undo first.
+        if (modifiers & 8 && code.startsWith("Key")) key = key.toUpperCase();
         const virtual =
           { Backspace: 8, Home: 36, End: 35, ArrowDown: 40 }[key] ??
           (code.startsWith("Key") ? code.charCodeAt(3) : 0);
@@ -178,6 +181,19 @@ try {
           const short = await capture("short");
           assert.equal(short.state.draft.references.length, 1);
           await screenshot(`${prefix}-short.png`);
+          result.phase = "short backspace control";
+          for (let i = 0; i < short.state.editorText.length; i++)
+            await key("Backspace", "Backspace");
+          await until(
+            "window.composerFixture.snapshot().draft.text===''",
+            "short backspace clears all",
+          );
+          const emptyAfterBackspace = await capture("emptyAfterBackspace");
+          await screenshot(`${prefix}-empty-backspace.png`);
+          // Keep select-all deletion as a separate control: CodeMirror announces
+          // selection deletion, unlike ordinary character/token Backspace.
+          await addReference();
+          await send("Input.insertText", { text: " Short synthetic draft." });
           await clear();
           const emptyAfterShort = await capture("emptyAfterShort");
           assert.equal(emptyAfterShort.state.draft.references.length, 0);
@@ -234,6 +250,7 @@ try {
             for (const [label, value] of Object.entries({
               short,
               emptyAfterShort,
+              emptyAfterBackspace,
               long,
               longTop,
               afterWheel,
@@ -248,7 +265,11 @@ try {
               afterWheel.scroller.scrollTop > longTop.scroller.scrollTop,
               "real wheel scrolls the editor",
             );
-            for (const empty of [emptyAfterShort, emptyAfterLong]) {
+            for (const empty of [
+              emptyAfterBackspace,
+              emptyAfterShort,
+              emptyAfterLong,
+            ]) {
               assert.equal(empty.state.draft.text, "");
               assert.equal(empty.state.editorText, "");
               assert.equal(empty.state.draft.references.length, 0);
