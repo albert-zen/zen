@@ -37,6 +37,7 @@ export interface OpenAiResponsesModelOptions {
 /** Public API-key Responses transport. Never uses subscription authentication or server continuation state. */
 export class OpenAiResponsesModel implements ModelAdapter {
   readonly provider: string;
+  readonly contextInstructions: string;
   readonly requestPayloadFormat = "responses" as const;
   readonly #endpoint: string;
   readonly #apiKey: string;
@@ -58,6 +59,10 @@ export class OpenAiResponsesModel implements ModelAdapter {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#attachments = options.attachments;
     this.#params = { ...options.defaultParams };
+    const instructions = this.#params.instructions;
+    if (instructions != null && typeof instructions !== "string")
+      throw new Error("Public Responses instructions must be a string or null");
+    this.contextInstructions = instructions ?? "";
     for (const key of [
       "input",
       "messages",

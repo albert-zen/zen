@@ -85,6 +85,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     this.#attachments = options.attachments;
   }
 
+  get contextInstructions(): string {
+    return this.#instructions;
+  }
+
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
     const tools = request.tools.map(toResponsesTool);

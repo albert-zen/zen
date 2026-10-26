@@ -744,3 +744,6 @@ A compact release-notes icon sits at the right of Settings in the same Sidebar f
 ### Explicit API protocol (Responses draft)
 
 The existing compatible Provider dialog offers a shared Select for Chat Completions or Responses. Missing protocol remains Chat Completions without a migration. The hint states that Responses requires endpoint support and never silently falls back. This choice affects model sampling, title generation and explicitly requested image capability checks; it does not trigger a model call when changed or saved.
+### Context pressure details
+
+上下文圆圈 hover/click 默认只展示彩色分段占用条、系统/工具/插件/对话四个短标签及数值；颜色与文字一一对应，不依赖颜色独自传达含义。分项之和等于估算总数，剩余窗口保留底色。面板仅展示产品的单一统计，不显示说明段落、估算详情或第二个历史值；缓存项写全“线程缓存命中率”。工具项包含已披露插件 SDK；插件项是注入消息，不重复计算。当前沿用字符启发式而非 tokenizer，对中文等内容可能明显偏差；媒体和协议开销也不是精确计费，不能把估算称为准确值。不展示不存在的 MCP 分类，不因 hover/click 向外发送历史或草稿进行网络计数。

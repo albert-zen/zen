@@ -611,3 +611,41 @@ test("same-profile protocol changes keep Chat text history usable but reject pub
   await collect(chat.stream(request({ messages })));
   assert.equal(chatCalls, 1);
 });
+
+test("public Responses static instructions match the exact wire value", async () => {
+  for (const instructions of [
+    undefined,
+    null,
+    "",
+    "  keep whitespace\n",
+    "s".repeat(20000),
+  ]) {
+    let body: any;
+    const adapter = new OpenAiResponsesModel({
+      baseUrl,
+      apiKey,
+      defaultParams: { instructions },
+      fetch: async (_target, init) => {
+        body = JSON.parse(String(init?.body));
+        return sse();
+      },
+    });
+    await collect(adapter.stream(request()));
+    assert.equal(adapter.contextInstructions, instructions ?? "");
+    assert.equal(body.instructions, instructions);
+  }
+});
+
+test("public Responses rejects non-string static instructions", () => {
+  for (const instructions of [0, 1, true, false, {}, []]) {
+    assert.throws(
+      () =>
+        new OpenAiResponsesModel({
+          baseUrl,
+          apiKey,
+          defaultParams: { instructions },
+        }),
+      /instructions must be a string or null/,
+    );
+  }
+});
