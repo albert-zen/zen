@@ -9,7 +9,7 @@ import { ToolEnvironment } from "../src/tool.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import type { ModelAdapter, ModelEvent } from "../src/model.js";
-import { textFromUserInput } from "../src/item.js";
+import { textFromUserInput, originalUserInput } from "../src/item.js";
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
 import type { NativeTurnSendResult } from "../src/protocol/native/wire.js";
@@ -294,7 +294,7 @@ test("combined native omitted-mode image start and soft steer coexist with expli
     assert.equal(messages.length, 3);
     const consumed = messages.find((item) => item.clientId === "queue-image")!;
     assert.notEqual(consumed.turnId, started.turnId);
-    assert.equal(textFromUserInput(consumed.content!), "queue");
+    assert.equal(textFromUserInput(originalUserInput(consumed)), "queue");
     const hashes = messages.map(
       (item) =>
         item.content?.find((part) => part.type === "image")?.attachment.sha256,

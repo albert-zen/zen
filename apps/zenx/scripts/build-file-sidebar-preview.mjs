@@ -47,6 +47,11 @@ await writeFile(
   `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'"><title>ZenX File sidebar · synthetic component preview</title><style>${css}</style></head><body><div id="root"></div><script>${js.replaceAll("</script", "<\\/script")}</script></body></html>`,
 );
 const sources = [
+  "src/renderer/src/Markdown.tsx",
+  "src/renderer/src/i18n/panels.ts",
+  "src/renderer/src/local-path-links.ts",
+  "src/renderer/src/message-file-path.ts",
+  "src/external-link-policy.ts",
   "src/renderer/src/auxiliary-panel.tsx",
   "src/renderer/src/workspace-files-panel.tsx",
   "src/renderer/src/workspace-file-picker.tsx",

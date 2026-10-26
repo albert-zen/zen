@@ -124,3 +124,55 @@ to actual tested revisions in the release handoff.
 
 Replace this draft wording with the final verified scope; do not advertise
 unmerged fixes, universal provider support or an installed update from a PR alone.
+
+## Current content-format contract and preparation evidence
+
+The integrated reader recognizes `context_format { contentVersion: 1 }`,
+`context_message`, `model_operation` and `model_operation_completed`. The format
+marker commits before the first authority-bearing user content, including paths
+that cancel or fail before a context message exists. A legacy reader must reject
+that marker; merely ignoring a new optional user field is not a downgrade gate.
+This is a **journal decoder gate**, not a client/Host wire-version handshake.
+
+The new authority marker does not retroactively make legacy text exact historical
+provider input. Continue uses append-only materialization; fork remaps structural
+source IDs while retaining content. An unfinished auxiliary operation is history,
+not a job to restart. `context_message.content` may be the only attachment owner
+in a probe Thread and must be included in backup and audit reachability.
+
+The migration tests exercise the actual disk journal and new Host: legacy
+continuation with its original CRLF prefix unchanged, fork content preservation,
+auxiliary operation/results with context-only probe media, backup/restore with
+identical audit results, and read-only restart without model dispatch. An unknown
+context append outcome leaves the format marker, sends no request and does not
+resume on read. The existing canonical-content and operation suites additionally
+exercise cancellation with partial output, marker-append failure and serializer
+closure. All models/transports are synthetic; none use a paid API.
+
+Compatibility observations are revision-specific. The integration baseline is
+Core `5c24875a6ddb341498337856e5bfab9f14dcdd2a` (public equivalent
+`32f2682d7d9d1feef185fec8c05f6790d250dc38`) with main
+`daa39d7afafbb155a5ee0668d0598bfd098797db`. A separate check against the preserved
+built decoder from `6222cbb7c6d32bee3782e5d7b6ccf86bc35e7b4e` confirms it rejects
+`context_format`, while the integrated decoder accepts contentVersion 1. This
+is not a claim that every historical binary or mixed UI/Host pair was tested.
+The final distribution must name its own integrated commit and CI result.
+
+## Reuse packaged build provenance, do not create another manifest
+
+The existing [build-provenance PR #293](https://github.com/albert-zen/zen/pull/293)
+provides the intended packaging seam: `build-info.json` written in the private app
+snapshot before signing, with the same object in packaging output. Its fields
+include source commit/exact tags/state, platform/architecture, package version,
+app/smoke target and provider manifest digest. Its documented locations are
+`Contents/Resources/app/build-info.json` on macOS and
+`resources/app/build-info.json` on Windows/Linux.
+
+That PR requires its own current-main integration and verification before the
+release can rely on it; this migration PR does not implement or imply its merge.
+Reuse that writer and format rather than add a second manifest. Clean source
+provenance is diagnostic, not signed attestation or reproducible-binary proof;
+`dirty`, `unknown` and `changed-during-build` cannot establish an exact clean
+artifact from a commit. A bundled Host shares the artifact source, but a remote
+Host's actual build cannot be inferred from the client's file. Capability/version
+negotiation and visible installed-build reporting remain separate release gates.

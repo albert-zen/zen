@@ -15,6 +15,7 @@ import {
 } from "../src/input-queue.js";
 import {
   textFromUserInput,
+  originalUserInput,
   type CanonicalItem,
   type UserInput,
 } from "../src/item.js";
@@ -218,7 +219,8 @@ test("active promotion preserves edited images, original timestamp and client id
         item.type === "user_message" && item.clientId === queued.clientId,
     );
     assert(delivered?.type === "user_message");
-    assert.deepEqual(delivered.content, content);
+    assert.deepEqual(originalUserInput(delivered), content);
+    assert.deepEqual(delivered.contentAuthority?.hostTextPartIndices, [0]);
     assert.ok(delivered.deliveryAfter);
     assert(
       !after.items.some((item) => item.type === "user_message_queue_cancelled"),
