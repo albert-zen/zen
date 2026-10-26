@@ -68,7 +68,7 @@ await writeFile(
 );
 await writeFile(
   path.join(directory, "file-sidebar-production-csp.html"),
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${productionCsp}"><title>ZenX synthetic file diagnostic · production CSP</title><link rel="stylesheet" href="file-sidebar-production.css"><script src="file-sidebar-policy-observer.js"></script></head><body><div id="root"></div><script src="file-sidebar-production.js"></script></body></html>`,
+  `<!doctype html><html data-native-file-diagnostic><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${productionCsp}"><title>ZenX synthetic file diagnostic · production CSP</title><link rel="stylesheet" href="file-sidebar-production.css"><script src="file-sidebar-policy-observer.js"></script></head><body><div id="root"></div><script src="file-sidebar-production.js"></script></body></html>`,
 );
 const sources = [
   "src/renderer/src/Markdown.tsx",
@@ -83,6 +83,10 @@ const sources = [
   "src/renderer/src/workspace-file-drafts.ts",
   "src/renderer/src/SourceEditor.tsx",
   "src/renderer/src/InlineMarkdownEditor.tsx",
+  "src/renderer/src/InlineComposerEditor.tsx",
+  "src/renderer/src/editor-style-nonce.ts",
+  "src/main/renderer-file-protocol.ts",
+  "src/main/renderer-style-policy.ts",
   "src/renderer/src/file-content-search.ts",
   "src/renderer/src/styles.css",
   "src/renderer/src/workspace-files.css",

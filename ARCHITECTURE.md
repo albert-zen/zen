@@ -1478,3 +1478,7 @@ Known Host admission and local-program results wait outside the snapshot mutatio
 ### Message local-path presentation
 
 ZenX renders conservative local file-path tokens as disposable Markdown links to the existing current-Host workspace file viewer; linkification performs no filesystem reads, grants no access, and does not alter canonical message text or model input. Host realpath containment and permissions remain authoritative.
+
+### Packaged renderer style authorization
+
+ZenX main's existing file-loading session transforms only its exact trusted packaged renderer entry, generating a cryptographically random style nonce per document response; all CodeMirror editors consume that document nonce. The existing CSP remains unchanged except for this narrowly authorized style source, and script policy is never broadened. Adjacent local assets retain the built-in file fetch path without recursive interception; no nonce becomes Thread/Turn/history state or a stored preference.

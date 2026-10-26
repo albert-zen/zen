@@ -4,6 +4,8 @@ const fs = require("node:fs/promises");
 const { mkdtempSync, mkdirSync } = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const { createServer } = require("node:http");
+const { pathToFileURL } = require("node:url");
 const { createHash } = require("node:crypto");
 const { app, BrowserWindow, screen } = require("electron");
 
@@ -23,6 +25,9 @@ assert.ok(process.argv[2], "Pass the built synthetic preview directory");
 let window;
 let profile;
 let finishing = false;
+let previousDocumentNonce;
+let policyProbeActive = false;
+let originProbeUrl;
 const evidence = {
   scope:
     "Actual file sidebar components in macOS Electron, synthetic memory-only CJK files; owned-window Electron sendInputEvent and capturePage. No Host, user profile, private file, desktop capture, AX, or physical trackpad acceptance.",
@@ -32,6 +37,7 @@ const evidence = {
   osRelease: os.release(),
   cases: [],
   rendererErrors: [],
+  expectedPolicyErrors: [],
   blockedRequests: [],
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -117,6 +123,68 @@ async function wheel(precise) {
   });
   await pause(500);
 }
+async function verifyOriginIsolation() {
+  const marker = path.join(profile, "synthetic-file-denial-marker.txt");
+  await fs.writeFile(marker, "SYNTHETIC_FILE_READ_MUST_BE_DENIED");
+  const targets = [
+    {
+      name: "entry",
+      url: pathToFileURL(
+        path.join(directory, "file-sidebar-production-csp.html"),
+      ).href,
+    },
+    {
+      name: "adjacent-asset",
+      url: pathToFileURL(path.join(directory, "file-sidebar-production.css"))
+        .href,
+    },
+    { name: "outside-resource-root", url: pathToFileURL(marker).href },
+  ];
+  const server = createServer((_request, response) =>
+    response.end("<!doctype html><title>Synthetic non-file origin</title>"),
+  );
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  originProbeUrl = `http://127.0.0.1:${server.address().port}/`;
+  const probe = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      session: window.webContents.session,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  probe.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  evidence.originIsolation = [];
+  try {
+    for (const origin of [
+      "data:text/html,<title>Synthetic opaque origin</title>",
+      originProbeUrl,
+    ]) {
+      await probe.loadURL(origin);
+      const result = await probe.webContents.executeJavaScript(`(async()=>{
+        const results=[];
+        for(const target of ${JSON.stringify(targets)})for(const mode of ['cors','no-cors']){
+          try{const response=await fetch(target.url,{mode});const text=await response.text();results.push({target:target.name,mode,readable:response.type!=='opaque'&&text.length>0,responseType:response.type});}
+          catch{results.push({target:target.name,mode,readable:false,blocked:true});}
+        }
+        return results;
+      })()`);
+      evidence.originIsolation.push({
+        origin: origin.startsWith("data:") ? "opaque-data" : "loopback-http",
+        results: result,
+      });
+      assert.ok(
+        result.every((item) => !item.readable),
+        "Non-file document must not gain file reads through main's handler",
+      );
+    }
+  } finally {
+    probe.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    originProbeUrl = undefined;
+  }
+}
 async function runCase(width, precise, productionCsp = false) {
   const receipt = {
     name: `macos-cjk-${width}-${precise ? "precise" : "wheel"}${productionCsp ? "-production-csp" : ""}`,
@@ -131,9 +199,9 @@ async function runCase(width, precise, productionCsp = false) {
       directory,
       productionCsp ? "file-sidebar-production-csp.html" : "file-sidebar.html",
     ),
-    {
-      query: { lang: "zh-CN", theme: "light", diagnostic: "true" },
-    },
+    productionCsp
+      ? {}
+      : { query: { lang: "zh-CN", theme: "light", diagnostic: "true" } },
   );
   window.show();
   window.focus();
@@ -153,6 +221,68 @@ async function runCase(width, precise, productionCsp = false) {
     1400,
     "CI window must preserve desktop CSS viewport",
   );
+  if (productionCsp) {
+    const nonce = await evaluate(
+      `document.querySelector('meta[name="zenx-style-nonce"]')?.content`,
+    );
+    assert.ok(
+      typeof nonce === "string" && nonce.length === 32,
+      "Trusted document nonce present",
+    );
+    assert.ok(
+      nonce !== previousDocumentNonce,
+      "Navigation creates a fresh nonce",
+    );
+    previousDocumentNonce = nonce;
+    receipt.freshDocumentNonce = true;
+    assert.equal(
+      (await evaluate("window.__fileCspViolations||[]")).length,
+      0,
+      "Runtime editor styles pass strict CSP",
+    );
+    receipt.sourceBefore = await evaluate(measure);
+    bounded(receipt.sourceBefore);
+    await wheel(false);
+    receipt.sourceAfter = await evaluate(measure);
+    assert.ok(
+      receipt.sourceAfter.scroller.scrollTop > 100,
+      "Source editor also scrolls under strict CSP",
+    );
+    await click("[data-native-composer-diagnostic] .cm-content");
+    input({ type: "char", keyCode: "x" });
+    await until(
+      `document.querySelector('[data-native-composer-diagnostic] .cm-content').textContent.includes('x')`,
+      "Composer native character input",
+    );
+    receipt.composerInput = true;
+    if (evidence.cases.length === 1) {
+      policyProbeActive = true;
+      try {
+        receipt.policyProbes = await evaluate(`(() => {
+          const nonce=document.querySelector('meta[name="zenx-style-nonce"]').content;
+          const probes=[['none',null],['wrong','AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],['valid',nonce]];
+          const result={};const elements=[];
+          for(const [name,value] of probes){const e=document.createElement('style');if(value)e.nonce=value;e.textContent='html { --zenx-policy-'+name+': accepted; }';document.head.appendChild(e);elements.push(e);}
+          for(const [name] of probes)result[name]=getComputedStyle(document.documentElement).getPropertyValue('--zenx-policy-'+name).trim();
+          elements.forEach(e=>e.remove());return result;
+        })()`);
+        await pause(150);
+        assert.equal(receipt.policyProbes.none, "");
+        assert.equal(receipt.policyProbes.wrong, "");
+        assert.equal(receipt.policyProbes.valid, "accepted");
+        receipt.policyProbeViolations = await evaluate(
+          "window.__fileCspViolations",
+        );
+        assert.equal(
+          receipt.policyProbeViolations.length,
+          2,
+          "Both unauthorized inline styles remain blocked",
+        );
+      } finally {
+        policyProbeActive = false;
+      }
+    }
+  }
   receipt.phase = "select-markdown";
   await click('.auxiliary-heading [id="aux-tab-file:docs/long-notes.md"]');
   await until(
@@ -242,7 +372,10 @@ async function runCase(width, precise, productionCsp = false) {
   await screenshot(`${receipt.name}-scrolled`);
   receipt.phase = "meta-down";
   await key("Down", ["command"]);
-  await pause(500);
+  await until(
+    `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_MARKDOWN_SECTION')`,
+    "native document-end layout committed",
+  );
   receipt.end = await evaluate(measure);
   assert.ok(
     receipt.end.keyEvents.some((e) => e.key === "ArrowDown" && e.metaKey),
@@ -336,22 +469,44 @@ const watchdog = setTimeout(
   window.webContents.session.webRequest.onBeforeRequest(
     { urls: ["http://*/*", "https://*/*"] },
     (details, callback) => {
+      if (originProbeUrl && details.url.startsWith(originProbeUrl)) {
+        callback({ cancel: false });
+        return;
+      }
       evidence.blockedRequests.push(details.url);
       callback({ cancel: true });
     },
   );
   window.webContents.on("console-message", (event) => {
-    if (event.level === "error") evidence.rendererErrors.push(event.message);
+    if (event.level === "error") {
+      const message = event.message.replace(
+        /'nonce-[^']+'/gu,
+        "'nonce-[redacted]'",
+      );
+      (policyProbeActive
+        ? evidence.expectedPolicyErrors
+        : evidence.rendererErrors
+      ).push(message);
+    }
   });
   window.webContents.on(
     "render-process-gone",
     (_event, details) =>
       void finish(new Error(`Renderer gone: ${details.reason}`)),
   );
+  const { installRendererFileProtocol } =
+    await import("../out/main/renderer-file-protocol.js");
+  installRendererFileProtocol(
+    window.webContents.session,
+    path.join(directory, "file-sidebar-production-csp.html"),
+  );
+  await verifyOriginIsolation();
+  evidence.runtimeSecurity =
+    "Production file handler, exact generated strict-CSP entry, fresh document style nonce";
   for (const width of [256, 384]) {
     for (const precise of [false, true]) {
       try {
-        await runCase(width, precise);
+        await runCase(width, precise, true);
       } catch (error) {
         const receipt = evidence.cases.at(-1);
         receipt.status = "failed";
@@ -360,15 +515,6 @@ const watchdog = setTimeout(
         await screenshot(`${receipt.name}-failure`);
       }
     }
-  }
-  try {
-    await runCase(256, false, true);
-  } catch (error) {
-    const receipt = evidence.cases.at(-1);
-    receipt.status = "failed";
-    receipt.failure = String(error.stack || error);
-    receipt.failureState = await evaluate(measure);
-    await screenshot(`${receipt.name}-failure`);
   }
   assert.ok(
     evidence.cases.every((c) => c.status === "passed"),

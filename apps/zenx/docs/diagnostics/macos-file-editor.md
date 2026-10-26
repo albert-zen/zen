@@ -39,3 +39,21 @@ viewport is not clamped into the product's <=1099px full-width layout (whose
 outer splitter is intentionally hidden). This changes only this temporary
 window, never the system display resolution. Input and capture remain Electron
 owned-surface operations, not physical input to offscreen desktop coordinates.
+
+## Production policy reproduction and regression
+
+The permissive preview's `style-src 'unsafe-inline'` concealed a real packaged
+policy difference. In macOS run 40298352578, the exact production `style-src
+'self'` twin blocked CodeMirror's runtime style element. The scroller grew to
+34761px (clientHeight equaled scrollHeight) and native wheel deltaY=720 left
+scrollTop at zero, while the same permissive component scrolled 0→720→1440.
+This is evidence for the production policy/style failure, not a trackpad issue.
+
+The regression now loads the strict twin through the same compiled main-process
+file handler used by the packaged renderer. Only the exact known entry response
+gets a fresh random style nonce; all three CodeMirror editors use it. Tests also
+exercise source scrolling and composer character input, navigation nonce renewal,
+and rejection of style elements with no nonce or a wrong nonce. Expected negative
+probe violations are recorded separately; nonce values are never recorded.
+Other CSP directives, including script-src, are unchanged. The original permissive
+fixture remains available as a comparison, but is not production-CSP acceptance.

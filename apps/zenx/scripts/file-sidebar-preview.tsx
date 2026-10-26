@@ -1,3 +1,5 @@
+import { InlineComposerEditor } from "../src/renderer/src/InlineComposerEditor.js";
+import type { ComposerInput } from "../src/renderer/src/composer-input.js";
 /** Actual workspace components with synthetic, memory-only file data. */
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -13,7 +15,12 @@ import { i18n } from "../src/renderer/src/i18n.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 
-const search = new URLSearchParams(location.search);
+const search = new URLSearchParams(
+  location.search ||
+    (document.documentElement.hasAttribute("data-native-file-diagnostic")
+      ? "diagnostic=true&lang=zh-CN&theme=light"
+      : ""),
+);
 const language = search.get("lang") === "zh-CN" ? "zh-CN" : "en";
 const diagnosticPreview = search.get("diagnostic") === "true";
 const previewPlatform = diagnosticPreview ? "darwin" : "linux";
@@ -128,6 +135,8 @@ Object.assign(window, {
 });
 
 function Preview() {
+  const composerRef = useRef<ComposerInput | null>(null);
+  const [composerValue, setComposerValue] = useState("合成输入框内容");
   const [selectedTab, setSelectedTab] = useState(`file:${sourcePath}`);
   const [openedTabs, setOpenedTabs] = useState([
     `file:${sourcePath}`,
@@ -185,6 +194,17 @@ function Preview() {
             editors. Synthetic long source and Markdown only. No Host, private
             files or external access.
           </p>
+          {diagnosticPreview && (
+            <div data-native-composer-diagnostic>
+              <InlineComposerEditor
+                value={composerValue}
+                references={[]}
+                onChange={setComposerValue}
+                editorRef={composerRef}
+                aria-label="Synthetic diagnostic composer"
+              />
+            </div>
+          )}
           {linkPreview && (
             <div data-local-path-preview style={{ maxWidth: 480 }}>
               <MessageLinkContext.Provider

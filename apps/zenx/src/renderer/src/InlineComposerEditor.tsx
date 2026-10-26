@@ -1,3 +1,4 @@
+import { editorStyleNonce } from "./editor-style-nonce.js";
 import {
   defaultKeymap,
   history,
@@ -431,6 +432,7 @@ export function InlineComposerEditor(props: InlineComposerEditorProps) {
             }
           : undefined,
         extensions: [
+          editorStyleNonce(),
           EditorState.lineSeparator.of("\n"),
           referencesField.init(() =>
             initialEntries(initialValue, initialReferences, nextKey),

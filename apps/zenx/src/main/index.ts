@@ -1,3 +1,4 @@
+import { installRendererFileProtocol } from "./renderer-file-protocol.js";
 import { validateModelRequestDebugCommand } from "../../../../apps/cli/src/model-request-debug.js";
 import { ForegroundActivity } from "./foreground-activity.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
@@ -283,7 +284,11 @@ let bootstrapFailure: string | undefined;
 function loadAppRenderer(window: BrowserWindow): void {
   if (process.env["ELECTRON_RENDERER_URL"])
     void window.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-  else void window.loadFile(join(__dirname, "../renderer/index.html"));
+  else {
+    const entry = join(__dirname, "../renderer/index.html");
+    installRendererFileProtocol(window.webContents.session, entry);
+    void window.loadFile(entry);
+  }
 }
 
 function loadStartupPage(window: BrowserWindow): void {
