@@ -605,3 +605,13 @@ test("callbacks from a finished or failed sample cannot append obsolete captures
   });
   assert.equal(store.control({ action: "status" }).retainedCount, 0);
 });
+
+test("observation preserves adapter-owned context instructions for budgeting", () => {
+  const store = new ModelRequestDebugStore();
+  const model: ModelAdapter = {
+    provider: "synthetic",
+    contextInstructions: "static instruction",
+    async *stream() {},
+  };
+  assert.equal(store.observe(model).contextInstructions, "static instruction");
+});

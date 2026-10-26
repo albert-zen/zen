@@ -1,4 +1,8 @@
 import {
+  ContextCalibration,
+  type ContextEstimateRequest,
+} from "./context-calibration.js";
+import {
   MAX_TURN_RECOVERY_SAMPLES,
   recoveryIsBlocked,
   recoveryDelay,
@@ -60,7 +64,11 @@ import {
   type ModelMessage,
   type ModelTool,
 } from "./model.js";
-import { estimateModelMessageInputTokens } from "./model-usage.js";
+import {
+  estimateModelMessageInputTokens,
+  estimateModelInput,
+  ModelContextBudgetError,
+} from "./model-usage.js";
 import {
   buildToolPresentation,
   type ToolPresentation,
@@ -91,6 +99,7 @@ export interface RuntimeConfiguration {
   approvalPolicy: ApprovalPolicy;
   /** null preserves the existing Unknown capability semantics. */
   inputModalities?: readonly string[] | null;
+  contextWindow?: number | null;
   /** Present only when Host admission enables agent-authored context resets. */
   agenticContextCompaction?: {
     contextWindow: number;
@@ -239,6 +248,12 @@ function assertPositiveExecutionLimit(value: number, label: string): void {
 }
 
 export class AgentRuntime {
+  readonly #contextCalibration = new ContextCalibration();
+
+  estimateContextInput(request: ContextEstimateRequest) {
+    return this.#contextCalibration.prepare(request).estimate;
+  }
+
   readonly #tools: ToolEnvironment;
   readonly #id: () => string;
   readonly #now: () => string;
@@ -619,6 +634,25 @@ export class AgentRuntime {
     }
   }
 
+  /** Same disclosed snapshot used for admission, UI estimates, and the actual sample. */
+  projectToolPresentation(
+    items: readonly CanonicalItem[],
+    agenticCompaction: boolean,
+  ): ToolPresentationSnapshot {
+    const projected =
+      this.#toolDefinitionProjection?.(items) ?? this.#tools.definitions;
+    const definitions = agenticCompaction
+      ? [...projected, AGENTIC_CONTEXT_COMPACTION_TOOL]
+      : projected;
+    return buildToolPresentation(
+      definitions,
+      this.#toolPresentation ??
+        (definitions.some((definition) => definition.name === "run_code")
+          ? "both"
+          : "direct"),
+    );
+  }
+
   /** Every repair is recorded before sampling and consumes the existing episode budget. */
   async #runModel(
     turnId: string,
@@ -647,6 +681,7 @@ export class AgentRuntime {
       options.signal.throwIfAborted();
       // Control outcomes keep their identity even after an earlier repair.
       if (
+        result.error instanceof ModelContextBudgetError ||
         recoveryIsBlocked(result.error) ||
         isAbortError(result.error) ||
         isDeterministicProviderRejection(result.error)
@@ -844,30 +879,41 @@ export class AgentRuntime {
     if (contextBoundaryItemId === undefined) {
       throw new Error("Model sample requires a canonical context boundary");
     }
-    const projectedDefinitions =
-      this.#toolDefinitionProjection?.(options.thread.items) ??
-      this.#tools.definitions;
-    const definitions =
-      options.configuration.agenticContextCompaction === undefined
-        ? projectedDefinitions
-        : [...projectedDefinitions, AGENTIC_CONTEXT_COMPACTION_TOOL];
-    const presentation = buildToolPresentation(
-      definitions,
-      this.#toolPresentation ??
-        (definitions.some((definition) => definition.name === "run_code")
-          ? "both"
-          : "direct"),
+    const presentation = this.projectToolPresentation(
+      options.thread.items,
+      options.configuration.agenticContextCompaction !== undefined,
     );
+    const projectedMessages = projectModelMessages(
+      messages,
+      options.configuration.inputModalities,
+      (source, projected) => mediaOrigins.set(projected, source),
+    );
+    const contextRequest = this.#contextCalibration.prepare({
+      threadId: options.thread.id,
+      items: options.thread.items,
+      messages: projectedMessages,
+      tools: presentation.modelTools,
+      adapter: options.modelAdapter,
+      selection: {
+        providerProfileId: options.configuration.providerProfileId,
+        modelId: options.configuration.model,
+        reasoningEffort: options.configuration.reasoningEffort,
+      },
+      inputModalities: options.configuration.inputModalities ?? null,
+    });
+    const estimate = contextRequest.estimate;
+    const contextWindow = options.configuration.contextWindow;
+    if (contextWindow != null && estimate.total >= contextWindow) {
+      throw new ModelContextBudgetError(
+        `Model input exceeds the configured context window (${estimate.total} estimated tokens, including ${estimate.toolDefinitions} tool-definition tokens, window ${contextWindow}). Reduce tool exposure or compact history.`,
+      );
+    }
 
     try {
       for await (const event of options.modelAdapter.stream({
         model: options.configuration.model,
         reasoningEffort: options.configuration.reasoningEffort,
-        messages: projectModelMessages(
-          messages,
-          options.configuration.inputModalities,
-          (source, projected) => mediaOrigins.set(projected, source),
-        ),
+        messages: projectedMessages,
         tools: presentation.modelTools.map((definition) =>
           structuredClone(definition),
         ),
@@ -1075,6 +1121,12 @@ export class AgentRuntime {
       }
     }
     if (latestUsage !== undefined) {
+      if (failure === undefined)
+        this.#contextCalibration.record(
+          options.thread.id,
+          contextRequest.receipt,
+          latestUsage.inputTokens,
+        );
       const usage: ModelUsageItem = {
         id: this.#id(),
         threadId: options.thread.id,
@@ -1365,9 +1417,11 @@ export class AgentRuntime {
               text: compactionSummaryText(compaction),
             },
           ]);
-          const instructionTokens = estimateModelMessageInputTokens(
+          const instructionTokens = estimateModelInput(
             compileWorkspaceInstructionMessages(workspaceInstructions),
-          );
+            this.projectToolPresentation(options.thread.items, true).modelTools,
+            options.modelAdapter.contextInstructions,
+          ).total;
           if (summaryTokens + instructionTokens > configuration.contextWindow) {
             throw new Error(
               "Compacted context and repository instructions exceed the selected model context window",
@@ -1386,18 +1440,29 @@ export class AgentRuntime {
               retention,
               estimateRetainedTokens: (retainedItems) =>
                 estimateModelMessageInputTokens(
-                  compileModelMessages(retainedItems),
+                  projectModelMessages(
+                    compileModelMessages(retainedItems),
+                    options.configuration.inputModalities,
+                  ),
                 ),
             },
           );
           refreshed.retainedItemIds = planned.retainedItemIds;
-          const fullProjectionTokens = estimateModelMessageInputTokens(
-            compileModelMessages(
-              [...options.thread.items, refreshed],
-              undefined,
-              workspaceInstructions,
+          const fullProjectionTokens = estimateModelInput(
+            projectModelMessages(
+              compileModelMessages(
+                [...options.thread.items, refreshed],
+                undefined,
+                workspaceInstructions,
+              ),
+              options.configuration.inputModalities,
             ),
-          );
+            this.projectToolPresentation(
+              [...options.thread.items, refreshed],
+              true,
+            ).modelTools,
+            options.modelAdapter.contextInstructions,
+          ).total;
           if (fullProjectionTokens > configuration.contextWindow) {
             throw new Error(
               `Compacted projection exceeds the selected model context window (${String(fullProjectionTokens)} > ${String(configuration.contextWindow)} estimated input tokens)`,

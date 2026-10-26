@@ -261,13 +261,16 @@ export class ZenXTriggerService {
       ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   }
 
-  async start(wakeupAdmission = true): Promise<void> {
-    if (this.#generation !== null) await this.stop();
+  async start(
+    wakeupAdmission = true,
+    lifecycleStore: ZenXTriggerStorePort = this.#store,
+  ): Promise<void> {
+    if (this.#generation !== null) await this.stop(lifecycleStore);
     const generation = newGeneration(wakeupAdmission);
     this.#generation = generation;
     try {
       await this.#mutation;
-      const snapshot = await this.#store.read();
+      const snapshot = await lifecycleStore.read();
       for (const entry of snapshot.history) {
         if (entry.status === "starting" || entry.status === "running") {
           if (entry.delivery !== undefined || entry.turnId !== null)
@@ -295,7 +298,7 @@ export class ZenXTriggerService {
           }
         }
       }
-      await this.#store.write(snapshot);
+      await lifecycleStore.write(snapshot);
       this.#assertMutationGeneration(generation);
       this.#snapshot = snapshot;
       this.#syncRemoteWatches(generation);
@@ -920,7 +923,9 @@ export class ZenXTriggerService {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(
+    lifecycleStore: ZenXTriggerStorePort = this.#store,
+  ): Promise<void> {
     const generation = this.#generation;
     if (generation === null) return;
     generation.retiring = true;
@@ -961,6 +966,8 @@ export class ZenXTriggerService {
           return undefined;
         },
         true,
+        undefined,
+        lifecycleStore,
       );
     } finally {
       generation.active = false;
@@ -3081,6 +3088,7 @@ export class ZenXTriggerService {
     operation: (snapshot: TriggerSnapshot) => Promise<T>,
     allowRetiring = false,
     includeCurrentTerminalTriggerId?: string,
+    store: ZenXTriggerStorePort = this.#store,
   ): Promise<T> {
     this.#assertMutationGeneration(generation, allowRetiring);
     const previous = this.#mutation;
@@ -3095,7 +3103,7 @@ export class ZenXTriggerService {
       const result = await operation(snapshot);
       this.#assertMutationGeneration(generation, allowRetiring);
       retainSnapshot(snapshot);
-      await this.#store.write(snapshot);
+      await store.write(snapshot);
       this.#assertMutationGeneration(generation, allowRetiring);
       this.#snapshot = snapshot;
       this.#syncRemoteWatches(generation, includeCurrentTerminalTriggerId);

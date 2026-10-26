@@ -274,22 +274,39 @@ async function resolveAutomationDirectory(workspace: string): Promise<string> {
 }
 
 class PluginAutomationStore implements ZenXTriggerStorePort {
-  readonly #storage: JsonPluginStorage;
+  readonly #storage: Pick<JsonPluginStorage, "get" | "set"> & {
+    reload?(): Promise<void>;
+  };
   readonly #active: ReadonlySet<string>;
-  readonly #roomProjection: JsonPluginStorage | undefined;
+  readonly #roomProjection: Pick<JsonPluginStorage, "get" | "set"> | undefined;
 
   constructor(
-    storage: JsonPluginStorage,
+    storage: Pick<JsonPluginStorage, "get" | "set"> & {
+      reload?(): Promise<void>;
+    },
     active: ReadonlySet<string>,
-    roomProjection: JsonPluginStorage | undefined,
+    roomProjection: Pick<JsonPluginStorage, "get" | "set"> | undefined,
   ) {
     this.#storage = storage;
     this.#active = active;
     this.#roomProjection = roomProjection;
   }
 
+  forLifecycle(
+    pluginId: string,
+    sdk: ZenXPluginHostSdkV1,
+  ): PluginAutomationStore {
+    return new PluginAutomationStore(
+      pluginId === ZENX_TRIGGERS_CAPABILITY_ID ? sdk.storage : this.#storage,
+      this.#active,
+      pluginId === ZENX_ROOMS_CAPABILITY_ID
+        ? sdk.storage
+        : this.#roomProjection,
+    );
+  }
+
   async read(): Promise<TriggerSnapshot> {
-    await this.#storage.reload();
+    await this.#storage.reload?.();
     const data = await this.#storage.get();
     return canonicalTriggerSnapshot({
       triggers: data["triggers"],
@@ -331,6 +348,7 @@ class PluginAutomationStore implements ZenXTriggerStorePort {
 
 export class ZenXBundledAutomationPluginService implements ZenXAutomationControlPort {
   readonly #service: ZenXTriggerService;
+  readonly #store: ZenXTriggerStorePort;
   readonly #active: Set<string>;
   // A bundled profile replacement may start its new runtime before the old
   // generation closes. Catalog enablement is one logical capability, but
@@ -371,6 +389,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     >,
   ) {
     this.#active = active;
+    this.#store = store;
     this.#appServer = appServer;
     this.#targets = targets;
     this.#targetDefaults = targetDefaults;
@@ -380,6 +399,11 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
 
   async startPlugin(pluginId: string, sdk: ZenXPluginHostSdkV1): Promise<void> {
     await this.#serialize(async () => {
+      const lifecycleStore =
+        sdk.storage !== undefined &&
+        this.#store instanceof PluginAutomationStore
+          ? this.#store.forLifecycle(pluginId, sdk)
+          : this.#store;
       if (!this.#serviceRunning && this.#active.size > 0) {
         const admitted = this.#active.has(pluginId);
         if (!admitted) {
@@ -394,6 +418,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         try {
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
           );
           this.#serviceRunning = true;
         } catch (error) {
@@ -448,6 +473,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         try {
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
           );
           this.#serviceRunning = true;
         } catch (error) {
@@ -461,7 +487,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         }
       } else {
         try {
-          await this.#service.stop();
+          await this.#service.stop(lifecycleStore);
           this.#serviceRunning = false;
         } catch (error) {
           this.#serviceRunning = false;
@@ -476,6 +502,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         try {
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
           );
           this.#serviceRunning = true;
         } catch (error) {
@@ -487,6 +514,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
           if (roomLease) this.#roomRuntimeLeases.pop();
           await this.#service.start(
             this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+            lifecycleStore,
           );
           this.#serviceRunning = true;
           throw error;
@@ -500,6 +528,16 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     runtimeSdk?: ZenXPluginHostSdkV1,
   ): Promise<void> {
     await this.#serialize(async () => {
+      const sdk =
+        runtimeSdk ??
+        (pluginId === ZENX_TRIGGERS_CAPABILITY_ID
+          ? this.#triggerRuntimeSdks[0]
+          : this.#roomRuntimeLeases[0]);
+      const lifecycleStore =
+        sdk?.storage !== undefined &&
+        this.#store instanceof PluginAutomationStore
+          ? this.#store.forLifecycle(pluginId, sdk)
+          : this.#store;
       if (pluginId === ZENX_ROOMS_CAPABILITY_ID) {
         // Old 1.0.x runtimes close without a token. Their lease was admitted
         // first; never let that close retire the already staged new runtime.
@@ -514,15 +552,27 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       if (!this.#active.has(pluginId)) return;
       if (
         pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
+        runtimeSdk !== undefined &&
+        !this.#triggerRuntimeSdks.includes(runtimeSdk)
+      )
+        return;
+      if (
+        pluginId === ZENX_TRIGGERS_CAPABILITY_ID &&
         this.#triggerRuntimeLeases > 1
       ) {
+        const index =
+          runtimeSdk === undefined
+            ? 0
+            : this.#triggerRuntimeSdks.indexOf(runtimeSdk);
+        if (index < 0) return;
         this.#triggerRuntimeLeases--;
-        this.#triggerRuntimeSdks.shift();
+        this.#triggerRuntimeSdks.splice(index, 1);
         return;
       }
       const last = this.#active.size === 1;
       try {
-        if (last && this.#serviceRunning) await this.#service.stop();
+        if (last && this.#serviceRunning)
+          await this.#service.stop(lifecycleStore);
       } catch (error) {
         // TriggerService.stop retires the generation even when its durable
         // write fails. This invocation must not retain a ghost lease.

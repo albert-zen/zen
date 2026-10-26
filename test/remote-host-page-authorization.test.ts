@@ -76,6 +76,10 @@ async function fixture(t: TestContext) {
     cwd: dir,
     dataDirectory: path.join(dir, "data"),
     model: "fake",
+    // Pagination authorization needs >300 KiB of completed history. Keep this
+    // synthetic model window large enough for the full disclosed input; these
+    // tests do not exercise context compaction/admission failures.
+    modelCatalog: [{ id: "fake", isDefault: true, contextWindow: 1_000_000 }],
     provider: { type: "fake" },
     journal: new InMemoryThreadJournal(),
     approvalPolicy: "never",

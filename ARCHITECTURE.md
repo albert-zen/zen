@@ -52,7 +52,7 @@
 - **Fleet Settings / Host** — 桌面设置保存设备定位与加密凭证，App Server 所在 Host 子进程持有原生 TLS gateway；授权摘要持久化且可撤销，进程重启不自动撤销配对，关闭进程停止服务。
 - **Fleet Relay** — 可选自托管 TLS relay 按预授权 Host 身份转发出站连接中的原生配对、请求与事件；relay 是可见消息与 grant 的受信任 TLS 终止端，不提供端到端加密、不拥有会话状态。
 - **Fleet Rooms** — Host 对已授权 workspace 内的助手 Room 投影有限消息与原生 Room 操作，客户端沿用 operation epoch 和幂等键，不复制 Room 状态机。
-- **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。
+- **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。首次完整恢复快照固定历史基线；后续 canonical 快照中新出现的已完成 Turn 必须被交付，即使 start/end 通知已被该快照 watermark 吸收，不能依赖磁盘延迟或事件提示恰好先到。观察边界只保留最后一个 canonical Turn ID（常量空间），后续完整快照必须仍包含该边界，否则明确停止观察并报告错误，不淘汰 ID 后重放历史。
 
 - **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。共享工具 ownership identity 定义于无 runtime 依赖的纯类型模块，原生 wire 的 TypeScript import graph 不进入 Node/Host 工具实现。
 - **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
@@ -90,7 +90,7 @@
 - **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
 - **Host Provider 资源** — Host 按连接身份复用 adapter/transport，由配置快照与执行持有共同决定寿命，最后引用结束后异步关闭。
-- **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。
+- **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。快照读取失败不截断既有订阅：连接按原顺序释放同 epoch 的临时事件，仍服从删除、退订及关闭栅栏；首次恢复失败不创建普通事件订阅，不自动重试。
 - **远程设备接入边界** — 可选的 Host-owned 原生 ZAS 网关以独立设备凭证、Host 身份和当前授权 workspace 约束读取/创建/发送/停止，只转交唯一 AppServer 的 canonical 权威，不暴露本机 descriptor、不复制 Thread 或改变默认 loopback listener。
 - **有界远程恢复页** — ZAS 网关以同一 Host epoch/watermark 与首次读取的 canonical Item 数为边界，按字节有界地逐页重读 append-only 前缀，并在单连接内暂存有界新事件与最近页重试位置；断线或水位失配重读权威快照，不持有完整镜像或另建日志。
 - **公开文本片段** — 单条合法的大文本 Item 可在多个恢复页按 UTF-16 offset 分片，客户端只在收到完整片段后合成该公开 Item，不将部分文本当作 canonical 完成事实。
@@ -1423,4 +1423,50 @@ ZenX trigger message bubbles are a disposable UI projection: only the exact know
 
 - **Plugin postcommit activation failure** — Runtime activation follows Catalog, tool-bundle and storage publication. A synchronous activation exception retains the committed generation and any successful writes, fences further invocation, and projects an explicit committed-but-failed reason through existing plugin availability/status snapshots and mutation results; it never triggers destructive rollback, old-SDK reactivation or automatic retry.
 
+### Context pressure projection
+
+Context budgeting is a disposable projection of compiled messages, the exact disclosed tool-presentation snapshot (including generated run_code SDK), and adapter-owned static instructions; it is not canonical state or provider billing. The same estimate drives compaction admission and ZenX's next-input breakdown. Message categories are out-of-band projection metadata, never serialized as model text. Last provider-reported input remains a separate historical observation.
+
+### Context usage calibration
+
+Runtime keeps one ephemeral input-usage anchor per thread. The anchor pairs the
+raw local estimate of one capability-projected request with that same sample's
+provider input usage. It stores only counts and SHA-256 fingerprints, not a
+second prompt payload. Provider input already includes its cached subset.
+A compatible append-only request uses the measured anchor plus the locally
+estimated delta. UI, admission, and compaction call the same product estimator.
+Four local category weights allocate the corrected total with integer remainders;
+they are not provider-reported per-category measurements.
+
+The scope includes provider/model/reasoning selection, adapter protocol and object
+generation, tool schemas, static instructions, input capabilities, and compaction
+boundary. The original message prefix must hash identically. Changing/replacing
+the adapter (including endpoint/configuration reload), rewriting history or media
+receipts, and compaction invalidate reuse. Invalid or absent usage does not create
+an anchor. Process restart starts uncalibrated until the next response; no journal
+migration, tokenizer download, or preflight network request is introduced.
+The underlying character heuristic remains imperfect, especially for dense text;
+the product reports one context statistic, not a second historical usage counter.
+
+Primary-source comparison (inspected 2026-10-25):
+
+- OpenCode uses a measured prompt anchor plus locally estimated later messages,
+  with provider compatibility checks:
+  https://github.com/anomalyco/opencode/blob/32b57015e5b491a789fba1534ecb472e676c9d8e/packages/core/src/session/compaction.ts
+- Cline estimates complete request payloads with a character heuristic and media
+  allowance; its compaction code bounds underestimation adjustments:
+  https://github.com/cline/cline/blob/40c5d99031fe1128189c5b52e40638d2b7787754/sdk/packages/shared/src/llms/tokens.ts
+  https://github.com/cline/cline/blob/40c5d99031fe1128189c5b52e40638d2b7787754/sdk/packages/core/src/extensions/context/compaction-shared.ts
+- Roo adds the last-message estimate to prior context tokens, and recounts after
+  truncation rather than retaining an invalid old anchor:
+  https://github.com/RooCodeInc/Roo-Code/blob/main/src/core/context-management/index.ts
+
+These are design references, not claims that their cache normalization or hidden
+reasoning policies can be copied across adapters. The product does not send
+history or unsent drafts to a provider merely because a user opens the context UI.
+
+- **Disposable Thread summary persistence** — Canonical commits await journal durability and ordered in-memory summary derivation, never projection disk I/O. A single cache writer coalesces changes with one dirty flag; shutdown offers a one-second best-effort drain, and missing/stale cache snapshots rebuild from canonical journals on restart. No mutation replay or extra durable authority is introduced.
+
 - **Synthetic UI capture lifecycle** — CI-only Chrome observers share bounded startup and teardown phases with failure receipts; they do not restart browsers, retry UI actions, change product timeouts, or own runtime state.
+
+First-party automation startup/shutdown uses the candidate SDK storage only for its awaited lifecycle read/write transaction; the shared running service keeps its normal Host storage view. Candidate authority is not installed globally or inherited by timers, old runtime writes remain fenced, and rollback closes the exact staged runtime lease before restoring its storage snapshot.
