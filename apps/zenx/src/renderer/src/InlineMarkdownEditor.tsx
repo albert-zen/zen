@@ -1,3 +1,4 @@
+import type { WorkspaceFileViewport } from "./workspace-file-viewport.js";
 import { history, historyKeymap, defaultKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
@@ -214,11 +215,13 @@ export function InlineMarkdownEditor({
   text,
   onChange,
   findRequest = 0,
+  viewport,
 }: {
   path: string;
   text: string;
   onChange(text: string): void;
   findRequest?: number;
+  viewport?: WorkspaceFileViewport;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -232,6 +235,7 @@ export function InlineMarkdownEditor({
     const host = hostRef.current;
     if (host === null) return;
     const view = new EditorView({
+      scrollTo: viewport?.initial(normalizedSource(text)),
       parent: host,
       state: EditorState.create({
         doc: normalizedSource(text),
@@ -277,11 +281,13 @@ export function InlineMarkdownEditor({
       }),
     });
     viewRef.current = view;
+    const releaseViewport = viewport?.bind(view);
     return () => {
+      releaseViewport?.();
       viewRef.current = undefined;
       view.destroy();
     };
-  }, [path]);
+  }, [path, viewport]);
 
   useEffect(() => {
     if (findRequest !== previousFindRequest.current && viewRef.current)

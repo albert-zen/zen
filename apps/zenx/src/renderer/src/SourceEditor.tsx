@@ -1,3 +1,4 @@
+import type { WorkspaceFileViewport } from "./workspace-file-viewport.js";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { css } from "@codemirror/lang-css";
 import { go } from "@codemirror/lang-go";
@@ -69,12 +70,14 @@ export function SourceEditor({
   onChange,
   readOnly = false,
   findRequest = 0,
+  viewport,
 }: {
   path: string;
   text: string;
   onChange?(text: string): void;
   readOnly?: boolean;
   findRequest?: number;
+  viewport?: WorkspaceFileViewport;
 }) {
   useTranslation("panels");
   const host = useRef<HTMLDivElement>(null);
@@ -92,6 +95,7 @@ export function SourceEditor({
   useEffect(() => {
     if (!host.current) return;
     const view = new EditorView({
+      scrollTo: viewport?.initial(normalizedSource(text)),
       parent: host.current,
       state: EditorState.create({
         doc: normalizedSource(text),
@@ -125,11 +129,13 @@ export function SourceEditor({
       }),
     });
     viewRef.current = view;
+    const releaseViewport = viewport?.bind(view);
     return () => {
+      releaseViewport?.();
       viewRef.current = undefined;
       view.destroy();
     };
-  }, [path, readOnly]);
+  }, [path, readOnly, viewport]);
   useEffect(() => {
     if (findRequest !== previousFindRequest.current && viewRef.current)
       openSearchPanel(viewRef.current);

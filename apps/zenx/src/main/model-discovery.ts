@@ -177,12 +177,30 @@ export async function discoverOpenAiSubscriptionModels(options: {
   });
 }
 
+/** Provider-declared values, not catalog/default inference. Ephemeral discovery evidence. */
+export interface DeclaredInputModalities {
+  readonly id: string;
+  readonly inputModalities: readonly ModelInputModality[];
+}
+
 export async function discoverOpenAiCompatibleModels(options: {
   baseUrl: string;
   apiKey: string;
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
 }): Promise<readonly DiscoveredModelCatalogEntry[]> {
+  return (await discoverOpenAiCompatibleCatalog(options)).models;
+}
+
+export async function discoverOpenAiCompatibleCatalog(options: {
+  baseUrl: string;
+  apiKey: string;
+  fetch?: typeof globalThis.fetch;
+  signal?: AbortSignal;
+}): Promise<{
+  models: readonly DiscoveredModelCatalogEntry[];
+  declaredInputModalities: readonly DeclaredInputModalities[];
+}> {
   const fetch = options.fetch ?? globalThis.fetch;
   const endpoint = new URL(`${options.baseUrl.replace(/\/+$/u, "")}/models`);
   let response: Response;
@@ -217,6 +235,7 @@ export async function discoverOpenAiCompatibleModels(options: {
     throw new Error("Model discovery returned too many models");
   }
   const seen = new Set<string>();
+  const declaredInputModalities: DeclaredInputModalities[] = [];
   const models = body.data.map((value): DiscoveredModelCatalogEntry => {
     if (!isRecord(value) || typeof value.id !== "string") {
       throw new Error("Model discovery returned a malformed model entry");
@@ -237,6 +256,12 @@ export async function discoverOpenAiCompatibleModels(options: {
       (entry) => entry.id === id,
     );
     const providerModalities = readInputModalities(value);
+    const declaredModalities = readDeclaredInputModalities(value);
+    if (declaredModalities !== null) {
+      declaredInputModalities.push(
+        Object.freeze({ id, inputModalities: declaredModalities }),
+      );
+    }
     return Object.freeze({
       id,
       displayName: catalog?.displayName ?? id,
@@ -254,7 +279,10 @@ export async function discoverOpenAiCompatibleModels(options: {
       contextWindow: catalog?.contextWindow ?? null,
     });
   });
-  return Object.freeze(models);
+  return {
+    models: Object.freeze(models),
+    declaredInputModalities: Object.freeze(declaredInputModalities),
+  };
 }
 
 function readSubscriptionModels(
@@ -471,6 +499,33 @@ function readCachedSubscriptionCatalog(
     ...(value.etag === undefined ? {} : { etag: value.etag }),
     models: Object.freeze(models),
   });
+}
+
+// A vision boolean is only a partial claim: it establishes neither text nor
+// audio support. Existing catalog fallbacks below are not declaration evidence.
+function readDeclaredInputModalities(
+  value: Record<string, unknown>,
+): readonly ModelInputModality[] | null {
+  const architecture = isRecord(value.architecture)
+    ? value.architecture
+    : undefined;
+  const modalities = isRecord(value.modalities) ? value.modalities : undefined;
+  const capabilities = isRecord(value.capabilities)
+    ? value.capabilities
+    : undefined;
+  const candidate =
+    value.input_modalities ??
+    architecture?.input_modalities ??
+    modalities?.input ??
+    capabilities?.input_modalities;
+  if (
+    !Array.isArray(candidate) ||
+    !candidate.every(
+      (entry) => entry === "text" || entry === "image" || entry === "audio",
+    )
+  )
+    return null;
+  return Object.freeze([...new Set(candidate)] as ModelInputModality[]);
 }
 
 function readInputModalities(

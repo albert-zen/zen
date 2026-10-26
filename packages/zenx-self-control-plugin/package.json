@@ -1,6 +1,6 @@
 {
   "name": "@zenx/self-control-plugin",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "First-party ZenX self-control plugin",
   "type": "module",
   "files": [

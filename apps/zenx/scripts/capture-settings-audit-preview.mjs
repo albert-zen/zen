@@ -236,8 +236,12 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    const navigate = async (initialFailure = false, deferredSave = false) => {
-      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0", deferredSave: deferredSave ? "1" : "0" })}`;
+    const navigate = async (
+      initialFailure = false,
+      metadata = false,
+      deferredSave = false,
+    ) => {
+      const destination = `${url}/settings-audit.html?${new URLSearchParams({ lang: options.lang, theme: options.theme, initialFailure: initialFailure ? "1" : "0", metadata: metadata ? "1" : "0", deferredSave: deferredSave ? "1" : "0" })}`;
       await send("Page.navigate", { url: destination });
       await waitFor(
         `location.href===${JSON.stringify(destination)} && ${initialFailure ? "!!document.querySelector('.page-loading [role=alert]')" : "document.querySelectorAll('.provider-profile-card').length===4"}`,
@@ -333,7 +337,7 @@ try {
     );
     // Real Chromium disables focused native controls unlike DOM-only harnesses.
     for (const newerNavigation of [false, true]) {
-      await navigate(false, true);
+      await navigate(false, false, true);
       await clickSelector(".provider-profile-actions button:first-child", 3);
       await waitFor("!!document.querySelector('.provider-editor')");
       await clickSelector('.provider-editor-actions [type="submit"]');
@@ -372,7 +376,7 @@ try {
       true,
       "Late Save does not steal General tab focus",
     );
-    await navigate(false, true);
+    await navigate(false, false, true);
     await clickSelector(".provider-profile-actions button:first-child", 3);
     await evaluate(
       `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
@@ -413,6 +417,51 @@ try {
     await clickSelector('.provider-editor-actions [type="submit"]');
     await waitFor("!!document.querySelector('.provider-editor-error-summary')");
     await capture("10-new-provider-validation");
+    await navigate(false, true);
+    await clickSelector(".provider-profile-actions button:first-child", 0);
+    await clickSelector(".model-catalog-head button");
+    await waitFor("!!document.querySelector('.model-catalog-status button')");
+    await capture("11-declared-input-available");
+    await clickSelector(".model-catalog-status button");
+    await waitFor("!document.querySelector('.model-catalog-status button')");
+    assert.equal(
+      await evaluate(
+        "window.__settingsAudit.calls.some(x=>x.includes('save'))",
+      ),
+      false,
+    );
+    await capture("12-declared-input-draft");
+    const firstRow = await evaluate(
+      "document.querySelector('.provider-model-row').textContent",
+    );
+    assert.match(
+      firstRow,
+      /text \+ image/u,
+      "Existing row actually receives declared inputs",
+    );
+    assert.match(
+      firstRow,
+      options.lang === "zh-CN" ? /推理未知/u : /reasoning unknown/u,
+      "Reasoning remains Unknown",
+    );
+    assert.match(
+      firstRow,
+      options.lang === "zh-CN" ? /需要上下文/u : /context required/u,
+      "Context remains Unknown",
+    );
+    const manualRow = await evaluate(
+      "document.querySelectorAll('.provider-model-row')[1].textContent",
+    );
+    assert.match(
+      manualRow,
+      /32,?768|32k/u,
+      "Existing manual context remains unchanged",
+    );
+    await clickSelector(".provider-model-capabilities summary", 0);
+    await evaluate(
+      "document.querySelector('.provider-model-row').scrollIntoView({block:'start'})",
+    );
+    await capture("13-existing-row-input-filled");
     receipt.status = "captured";
   }
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");
