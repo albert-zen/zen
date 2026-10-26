@@ -57,7 +57,7 @@ const measure = `(() => {
   const nodes=[...root?.querySelectorAll('.markdown-live-editor,.cm-editor,.cm-scroller,.cm-content')||[]].map(style);
   const ancestors=[];for(let e=scroller?.parentElement;e;e=e.parentElement)ancestors.push(style(e));
   const tree=document.querySelector('.workspace-file-navigation');
-  return {scroller:style(scroller),nodes,ancestors,treeVisible:!!tree?.getClientRects().length,tree:style(tree),panel:style(document.querySelector('.auxiliary-panel')),heading:style(document.querySelector('.auxiliary-heading')),location:style(root?.querySelector('.file-location')),titlebar:style(document.querySelector('.window-titlebar')),titlebarSession:style(document.querySelector('.window-titlebar-session')),activeElement:document.activeElement?.outerHTML.slice(0,500),renderedTail:root?.querySelector('.cm-editor')?.textContent.slice(-600),hitStack:r?document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).map(e=>e.tagName+'.'+e.className):[],wheelEvents:window.__nativeFileWheelEvents||[],keyEvents:window.__nativeFileKeyEvents||[],page:{width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,widthLimit:innerWidth,heightLimit:innerHeight},navigatorPlatform:navigator.platform,devicePixelRatio,platformMarker:document.documentElement.dataset.platform};
+  return {scroller:style(scroller),nodes,ancestors,treeVisible:!!tree?.getClientRects().length,tree:style(tree),panel:style(document.querySelector('.auxiliary-panel')),heading:style(document.querySelector('.auxiliary-heading')),location:style(root?.querySelector('.file-location')),titlebar:style(document.querySelector('.window-titlebar')),titlebarSession:style(document.querySelector('.window-titlebar-session')),activeElement:document.activeElement?.outerHTML.slice(0,500),renderedTail:root?.querySelector('.cm-editor')?.textContent.slice(-600),hitStack:r?document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).map(e=>e.tagName+'.'+e.className):[],wheelEvents:window.__nativeFileWheelEvents||[],keyEvents:window.__nativeFileKeyEvents||[],cspViolations:window.__fileCspViolations||[],page:{width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,widthLimit:innerWidth,heightLimit:innerHeight},navigatorPlatform:navigator.platform,devicePixelRatio,platformMarker:document.documentElement.dataset.platform};
 })()`;
 function requireFocus() {
   assert.ok(window.isFocused(), "Owned BrowserWindow must have OS focus");
@@ -74,7 +74,7 @@ async function key(keyCode, modifiers = []) {
 }
 async function pointFor(target) {
   return evaluate(
-    `(() => {const e=document.querySelector(${JSON.stringify(target)});if(!e)throw Error('Missing target');const r=e.getBoundingClientRect(),x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),hit=document.elementFromPoint(x,y);if(!r.width||!r.height||!hit||!e.contains(hit))throw Error('Hidden/obscured target: '+${JSON.stringify(target)}+' hit='+hit?.className);return {x,y};})()`,
+    `(() => {const e=document.querySelector(${JSON.stringify(target)});if(!e)throw Error('Missing target');const r=e.getBoundingClientRect(),x=Math.round((Math.max(0,r.x)+Math.min(innerWidth,r.right))/2),y=Math.round((Math.max(0,r.y)+Math.min(innerHeight,r.bottom))/2),hit=document.elementFromPoint(x,y);if(!r.width||!r.height||!hit||!e.contains(hit))throw Error('Hidden/obscured target: '+${JSON.stringify(target)}+' hit='+hit?.className);return {x,y};})()`,
   );
 }
 async function click(target) {
@@ -117,17 +117,24 @@ async function wheel(precise) {
   });
   await pause(500);
 }
-async function runCase(width, precise) {
+async function runCase(width, precise, productionCsp = false) {
   const receipt = {
-    name: `macos-cjk-${width}-${precise ? "precise" : "wheel"}`,
+    name: `macos-cjk-${width}-${precise ? "precise" : "wheel"}${productionCsp ? "-production-csp" : ""}`,
+    productionCsp,
     width,
     precise,
     status: "running",
   };
   evidence.cases.push(receipt);
-  await window.loadFile(path.join(directory, "file-sidebar.html"), {
-    query: { lang: "zh-CN", theme: "light", diagnostic: "true" },
-  });
+  await window.loadFile(
+    path.join(
+      directory,
+      productionCsp ? "file-sidebar-production-csp.html" : "file-sidebar.html",
+    ),
+    {
+      query: { lang: "zh-CN", theme: "light", diagnostic: "true" },
+    },
+  );
   window.show();
   window.focus();
   window.webContents.focus();
@@ -195,7 +202,14 @@ async function runCase(width, precise) {
     Math.abs(receipt.before.scroller.width - width) <= 3,
     `Requested width ${width}, actual ${receipt.before.scroller.width}`,
   );
-  bounded(receipt.before);
+  try {
+    bounded(receipt.before);
+  } catch (error) {
+    if (!productionCsp) throw error;
+    // Retain the failed layout contract, but still measure one native wheel
+    // over the visible editor portion to diagnose the reported symptom.
+    receipt.initialLayoutFailure = String(error);
+  }
   await screenshot(`${receipt.name}-before`);
   receipt.phase = "wheel";
   await wheel(precise);
@@ -243,6 +257,10 @@ async function runCase(width, precise) {
   );
   bounded(receipt.end);
   await screenshot(`${receipt.name}-end`);
+  assert.ok(
+    !receipt.initialLayoutFailure,
+    "Production layout contract must also pass",
+  );
   receipt.status = "passed";
 }
 async function finish(error) {
@@ -342,6 +360,15 @@ const watchdog = setTimeout(
         await screenshot(`${receipt.name}-failure`);
       }
     }
+  }
+  try {
+    await runCase(256, false, true);
+  } catch (error) {
+    const receipt = evidence.cases.at(-1);
+    receipt.status = "failed";
+    receipt.failure = String(error.stack || error);
+    receipt.failureState = await evaluate(measure);
+    await screenshot(`${receipt.name}-failure`);
   }
   assert.ok(
     evidence.cases.every((c) => c.status === "passed"),

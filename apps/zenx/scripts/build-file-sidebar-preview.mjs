@@ -46,6 +46,30 @@ await writeFile(
   path.join(directory, "file-sidebar.html"),
   `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'"><title>ZenX File sidebar · synthetic component preview</title><style>${css}</style></head><body><div id="root"></div><script>${js.replaceAll("</script", "<\\/script")}</script></body></html>`,
 );
+// Production-CSP twin: external same-origin assets retain the actual renderer
+// policy, so runtime style-module injection cannot hide behind unsafe-inline.
+const rendererHtml = await readFile(
+  path.join(root, "src/renderer/index.html"),
+  "utf8",
+);
+const productionCsp =
+  /http-equiv="Content-Security-Policy"\s+content="([^"]+)"/u.exec(
+    rendererHtml,
+  )?.[1];
+assert.ok(
+  productionCsp?.includes("style-src 'self'"),
+  "Read exact production CSP",
+);
+await writeFile(path.join(directory, "file-sidebar-production.css"), css);
+await writeFile(path.join(directory, "file-sidebar-production.js"), js);
+await writeFile(
+  path.join(directory, "file-sidebar-policy-observer.js"),
+  "window.__fileCspViolations=[];addEventListener('securitypolicyviolation',e=>window.__fileCspViolations.push({effectiveDirective:e.effectiveDirective,blockedURI:e.blockedURI,violatedDirective:e.violatedDirective,disposition:e.disposition}));",
+);
+await writeFile(
+  path.join(directory, "file-sidebar-production-csp.html"),
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${productionCsp}"><title>ZenX synthetic file diagnostic · production CSP</title><link rel="stylesheet" href="file-sidebar-production.css"><script src="file-sidebar-policy-observer.js"></script></head><body><div id="root"></div><script src="file-sidebar-production.js"></script></body></html>`,
+);
 const sources = [
   "src/renderer/src/Markdown.tsx",
   "src/renderer/src/i18n/panels.ts",
@@ -66,6 +90,8 @@ const sources = [
   "scripts/file-sidebar-preview.tsx",
   "scripts/build-file-sidebar-preview.mjs",
   "scripts/capture-file-sidebar-preview.mjs",
+  "src/renderer/index.html",
+  "scripts/capture-file-sidebar-electron.cjs",
 ];
 await writeFile(
   path.join(directory, "source.json"),
