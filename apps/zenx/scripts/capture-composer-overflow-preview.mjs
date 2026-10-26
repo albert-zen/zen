@@ -70,7 +70,7 @@ try {
         // lowercase z with shift would match CodeMirror's unshifted undo first.
         if (modifiers & 8 && code.startsWith("Key")) key = key.toUpperCase();
         const virtual =
-          { Backspace: 8, Home: 36, End: 35, ArrowDown: 40 }[key] ??
+          { Backspace: 8, Escape: 27, Home: 36, End: 35, ArrowDown: 40 }[key] ??
           (code.startsWith("Key") ? code.charCodeAt(3) : 0);
         await send("Input.dispatchKeyEvent", {
           type: "keyDown",
@@ -241,6 +241,29 @@ try {
           });
           await delay(300);
           const afterWheel = await capture("afterWheel");
+          if (!baseline) {
+            result.phase = "long draft toolbar interaction";
+            await click(".composer-model-menu > .composer-model-trigger");
+            await until(
+              "document.querySelector('.composer-model-menu > button').getAttribute('aria-expanded')==='true'",
+              "model menu remains pointer reachable below long input",
+            );
+            await screenshot(`${prefix}-long-model-menu.png`);
+            await key("Escape", "Escape");
+            await until(
+              "document.querySelector('.composer-model-menu > button').getAttribute('aria-expanded')==='false'",
+              "model menu closes without changing draft",
+            );
+            assert.equal(
+              (await evaluate(measure)).state.editorText,
+              long.state.editorText,
+            );
+            await click(".cm-scroller");
+            await until(
+              "document.activeElement===document.querySelector('.cm-content')",
+              "return pointer focus to editor",
+            );
+          }
           await clear();
           const emptyAfterLong = await capture("emptyAfterLong");
           await screenshot(`${prefix}-empty-long.png`);

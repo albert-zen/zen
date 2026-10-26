@@ -2,6 +2,8 @@
 import React, { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { EditorView } from "@codemirror/view";
+import { encodeModelKey } from "../../../../src/protocol/model-key.js";
+import type { ModelSummary } from "../../src/protocol-client/index.js";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import {
   editComposer,
@@ -33,6 +35,29 @@ const thread = {
   ),
   name: "Synthetic Composer regression",
   cwd: "/synthetic/composer",
+};
+const model: ModelSummary = {
+  id: encodeModelKey({
+    providerProfileId: "synthetic-provider",
+    modelId: "synthetic-model",
+  }),
+  model: "synthetic-model",
+  displayName: "Synthetic Model",
+  description: "Synthetic fixture only",
+  hidden: false,
+  supportedReasoningEfforts: [
+    { reasoningEffort: "medium", description: "medium" },
+  ],
+  defaultReasoningEffort: "medium",
+  inputModalities: ["text"],
+  isDefault: true,
+  upgrade: null,
+  upgradeInfo: null,
+  availabilityNux: null,
+  supportsPersonality: false,
+  additionalSpeedTiers: [],
+  serviceTiers: [],
+  defaultServiceTier: null,
 };
 function Fixture() {
   const [composer, setComposer] = useState(emptyComposerState);
@@ -96,6 +121,27 @@ function Fixture() {
             thread={thread}
             composer={composer}
             approvals={[]}
+            models={[model]}
+            selectedModel={model.id}
+            selectedReasoningEffort="medium"
+            onModelChange={() => {}}
+            onReasoningChange={() => {}}
+            onPermissionChange={() => {}}
+            threadUsage={{
+              thread: {
+                responseCount: 1,
+                inputTokens: 2400,
+                outputTokens: 120,
+                cacheHitRate: 0.5,
+              },
+              turns: {},
+              context: {
+                inputTokens: 2400,
+                inputTokenSource: "provider",
+                contextWindow: 32000,
+                ratio: 0.075,
+              },
+            }}
             onDraftChange={(text) =>
               setComposer((state) => editComposer(state, text))
             }
