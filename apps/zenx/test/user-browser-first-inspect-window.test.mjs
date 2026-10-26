@@ -1030,3 +1030,349 @@ test("refund compares the captured owner fence, not a subsequently mutated calle
     0,
   );
 });
+
+// Both subscriptions are independent CDP commands, but together form one
+// attachment-owned readiness barrier. These tests execute the actual client and
+// its transport, not a duplicated setup algorithm or a faster fake provider.
+const attachmentDomains = ["Page.enable", "Runtime.enable"];
+async function pendingDomains(options = {}) {
+  const f = fixture({
+    ...options,
+    hold: (request) => attachmentDomains.includes(request.method),
+  });
+  const result = f.inspect(options.signal);
+  void result.catch(() => undefined);
+  await until(() =>
+    attachmentDomains.every((method) =>
+      f.sends.some((request) => request.method === method),
+    ),
+  );
+  const requests = attachmentDomains.map((method) =>
+    f.sends.find((request) => request.method === method),
+  );
+  return { f, result, requests, epoch: f.client.testEpoch() };
+}
+function assertNoDocumentDispatch(f) {
+  assert.equal(
+    f.sends.filter(
+      (r) =>
+        [
+          "Page.navigate",
+          "Page.getFrameTree",
+          "Page.createIsolatedWorld",
+          "Runtime.evaluate",
+        ].includes(r.method) || r.method.startsWith("Input."),
+    ).length,
+    0,
+  );
+}
+function assertSingleSetup(f, detached = 1) {
+  for (const method of ["Target.attachToTarget", ...attachmentDomains])
+    assert.equal(f.sends.filter((r) => r.method === method).length, 1, method);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Target.detachFromTarget").length,
+    detached,
+  );
+}
+for (const first of [0, 1]) {
+  test(`parallel attachment waits for both subscriptions, reply order ${first}`, async () => {
+    const { f, result, requests, epoch } = await pendingDomains();
+    // Both commands were sent before either reply, under the original deadline.
+    assert.equal(requests[0].timer.at, requests[1].timer.at);
+    for (const request of requests) {
+      assert.equal(request.sessionId, epoch.cdpSessionId);
+      assert.equal(request.timer.due, epoch.setupDeadline);
+      assert.equal(request.timer.ms, 10_000);
+    }
+    assertNoDocumentDispatch(f);
+    f.advance(3_000);
+    f.reply(requests[first]);
+    await until(
+      () => epoch[first === 0 ? "enable" : "runtimeEnable"] === "known-success",
+    );
+    assertNoDocumentDispatch(f);
+    f.advance(500);
+    f.reply(requests[1 - first]);
+    await until(() => f.main().length === 1);
+    assert.equal(f.main()[0].timer.ms, 6_500);
+    assert.equal(f.main()[0].timer.due, epoch.setupDeadline);
+    f.complete(f.main()[0]);
+    await result;
+    assertSingleSetup(f, 0);
+    await f.client.detachTarget("target-1", owner);
+    assertSingleSetup(f);
+  });
+}
+for (const failed of [0, 1]) {
+  test(`known ${attachmentDomains[failed]} failure joins sibling before one compensation`, async () => {
+    const { f, result, requests } = await pendingDomains();
+    f.protocolError(requests[failed]);
+    await until(() => !f.timers.has(requests[failed].timer.id));
+    assertSingleSetup(f, 0);
+    assertNoDocumentDispatch(f);
+    f.reply(requests[1 - failed]);
+    await assert.rejects(result, /Execution context was destroyed/);
+    assertNoDocumentDispatch(f);
+    assertSingleSetup(f);
+    assert.equal(f.client.closureProblem(["target-1"], owner), undefined);
+  });
+
+  test(`unknown ${attachmentDomains[failed]} remains unknown after sibling success and late reply`, async () => {
+    const { f, result, requests, epoch } = await pendingDomains();
+    f.reply(requests[1 - failed]);
+    f.fire(requests[failed].timer);
+    await assert.rejects(
+      result,
+      (error) => error instanceof UserBrowserCdpOutcomeUnknownError,
+    );
+    assertNoDocumentDispatch(f);
+    assertSingleSetup(f);
+    const field = failed === 0 ? "enable" : "runtimeEnable";
+    assert.equal(epoch[field], "outcome-unknown");
+    assert.match(epoch.unknownEvidence[field], /timed out after dispatch/);
+    f.reply(requests[failed]);
+    await Promise.resolve();
+    assert.equal(epoch[field], "outcome-unknown");
+    await assert.rejects(f.inspect(), /outcome is unknown/);
+    assertSingleSetup(f);
+    assertNoDocumentDispatch(f);
+  });
+
+  test(`known sibling failure cannot hide unknown ${attachmentDomains[failed]}`, async () => {
+    const { f, result, requests } = await pendingDomains();
+    f.protocolError(requests[1 - failed]);
+    f.fire(requests[failed].timer);
+    await assert.rejects(
+      result,
+      (error) =>
+        error instanceof UserBrowserCdpOutcomeUnknownError &&
+        error.message.includes(attachmentDomains[failed]),
+    );
+    assertSingleSetup(f);
+    assertNoDocumentDispatch(f);
+  });
+}
+
+test("both known setup failures compensate once and preserve a known rejection", async () => {
+  const { f, result, requests } = await pendingDomains();
+  requests.forEach(f.protocolError);
+  await assert.rejects(
+    result,
+    (error) =>
+      !(error instanceof UserBrowserCdpOutcomeUnknownError) &&
+      /Execution context was destroyed/.test(error.message),
+  );
+  assertSingleSetup(f);
+  assertNoDocumentDispatch(f);
+  assert.equal(f.client.closureProblem(["target-1"], owner), undefined);
+});
+
+test("both setup timeouts retain both unknown receipts and compensate once", async () => {
+  const { f, result, requests, epoch } = await pendingDomains();
+  requests.forEach((request) => f.fire(request.timer));
+  await assert.rejects(
+    result,
+    (error) => error instanceof UserBrowserCdpOutcomeUnknownError,
+  );
+  assert.equal(epoch.enable, "outcome-unknown");
+  assert.equal(epoch.runtimeEnable, "outcome-unknown");
+  assert.deepEqual(Object.keys(epoch.unknownEvidence), [
+    "enable",
+    "runtimeEnable",
+  ]);
+  assertSingleSetup(f);
+  assertNoDocumentDispatch(f);
+  requests.forEach((request) => f.reply(request));
+  await assert.rejects(f.inspect(), /outcome is unknown/);
+  assertSingleSetup(f);
+});
+
+test("abort after both setup sends joins both unknown outcomes without retry", async () => {
+  const controller = new AbortController();
+  const { f, result, requests, epoch } = await pendingDomains({
+    signal: controller.signal,
+  });
+  controller.abort(new Error("synthetic setup abort"));
+  await assert.rejects(
+    result,
+    (error) => error instanceof UserBrowserCdpOutcomeUnknownError,
+  );
+  assert.equal(epoch.enable, "outcome-unknown");
+  assert.equal(epoch.runtimeEnable, "outcome-unknown");
+  assertSingleSetup(f);
+  assertNoDocumentDispatch(f);
+  requests.forEach((request) => f.reply(request));
+  await assert.rejects(f.inspect(), /outcome is unknown/);
+  assertSingleSetup(f);
+});
+
+test("connection close in parallel setup observes both failures and never publishes ready", async () => {
+  const { f, result, requests, epoch } = await pendingDomains();
+  await f.client.close();
+  await assert.rejects(
+    result,
+    (error) => error instanceof UserBrowserCdpOutcomeUnknownError,
+  );
+  assert.equal(epoch.enable, "outcome-unknown");
+  assert.equal(epoch.runtimeEnable, "outcome-unknown");
+  assert.match(epoch.taint, /setup closure failed/);
+  // Closed transport cannot send compensation; retain the honest closure failure.
+  assertSingleSetup(f, 0);
+  assertNoDocumentDispatch(f);
+  requests.forEach((request) => f.reply(request));
+  await assert.rejects(f.inspect(), /outcome is unknown/);
+  assertSingleSetup(f, 0);
+});
+
+for (const event of [
+  [
+    "Page.frameStartedNavigating",
+    { frameId: "frame-1", url: "https://owned.test/next" },
+  ],
+  ["Runtime.executionContextDestroyed", { executionContextId: 42 }],
+]) {
+  test(`${event[0]} during parallel subscriptions reaches the document fence`, async () => {
+    const { f, result, requests } = await pendingDomains();
+    f.event(...event);
+    requests.forEach((request) => f.reply(request));
+    await assert.rejects(
+      result,
+      (error) => error instanceof UserBrowserDocumentChangedBeforeDispatchError,
+    );
+    assert.equal(f.main().length, 0);
+    assertSingleSetup(f, 0);
+    await f.client.detachTarget("target-1", owner);
+    assertSingleSetup(f);
+  });
+}
+
+for (const reply of ["success", "error"]) {
+  test(`parallel setup ${reply} reply cannot beat an overdue original timer`, async () => {
+    const { f, result, requests, epoch } = await pendingDomains();
+    f.reply(requests[0]);
+    await until(() => epoch.enable === "known-success");
+    f.advance(10_000);
+    if (reply === "success") f.reply(requests[1]);
+    else f.protocolError(requests[1]);
+    await assert.rejects(
+      result,
+      (error) => error instanceof UserBrowserCdpOutcomeUnknownError,
+    );
+    assert.equal(epoch.runtimeEnable, "outcome-unknown");
+    assertNoDocumentDispatch(f);
+    assertSingleSetup(f);
+  });
+}
+
+test("parallel setup shares the pending barrier with a concurrent caller", async () => {
+  const { f, result, requests } = await pendingDomains();
+  const concurrent = f.inspect();
+  void concurrent.catch(() => undefined);
+  f.reply(requests[1]);
+  await Promise.resolve();
+  assertNoDocumentDispatch(f);
+  assertSingleSetup(f, 0);
+  f.reply(requests[0]);
+  await until(() => f.main().length === 2);
+  f.main().forEach(f.complete);
+  await Promise.all([result, concurrent]);
+  assertSingleSetup(f, 0);
+  await f.client.detachTarget("target-1", owner);
+  assertSingleSetup(f);
+});
+
+test("detach while parallel setup is pending waits on the same barrier and never repeats cleanup", async () => {
+  const { f, result, requests } = await pendingDomains();
+  const detached = f.client.detachTarget("target-1", owner);
+  void detached.catch(() => undefined);
+  f.protocolError(requests[0]);
+  await Promise.resolve();
+  assertSingleSetup(f, 0);
+  assertNoDocumentDispatch(f);
+  f.reply(requests[1]);
+  await assert.rejects(result, /Execution context was destroyed/);
+  await detached;
+  assertSingleSetup(f);
+  assertNoDocumentDispatch(f);
+});
+
+test("abort during first setup send prevents the sibling send and retains the dispatched unknown", async () => {
+  const controller = new AbortController();
+  const f = fixture({
+    hold: (request) => attachmentDomains.includes(request.method),
+  });
+  f.hook((event) => {
+    if (event.kind === "dispatch-accepted" && event.method === "Page.enable")
+      controller.abort(new Error("abort at first domain dispatch"));
+  });
+  await assert.rejects(
+    f.inspect(controller.signal),
+    (error) => error instanceof UserBrowserCdpOutcomeUnknownError,
+  );
+  const epoch = f.client.testEpoch();
+  assert.equal(epoch.enable, "outcome-unknown");
+  assert.equal(epoch.runtimeEnable, "known-failure");
+  assert.equal(f.sends.filter((r) => r.method === "Page.enable").length, 1);
+  assert.equal(f.sends.filter((r) => r.method === "Runtime.enable").length, 0);
+  assert.equal(
+    f.sends.filter((r) => r.method === "Target.detachFromTarget").length,
+    1,
+  );
+  assertNoDocumentDispatch(f);
+});
+
+test("synchronous setup dispatch work cannot renew the original absolute deadline", async () => {
+  const f = fixture({
+    hold: (request) => attachmentDomains.includes(request.method),
+  });
+  f.hook((event) => {
+    if (event.kind === "dispatch-attempt" && event.method === "Page.enable")
+      f.advance(10_000);
+  });
+  await assert.rejects(f.inspect(), /deadline elapsed before dispatch/);
+  assert.equal(
+    f.sends.filter((r) => attachmentDomains.includes(r.method)).length,
+    0,
+  );
+  assert.equal(
+    f.sends.filter((r) => r.method === "Target.detachFromTarget").length,
+    1,
+  );
+  assertNoDocumentDispatch(f);
+});
+
+test("joint setup readiness crossing its deadline cannot fall back to a fresh ordinary inspection", async () => {
+  const { f, result, requests, epoch } = await pendingDomains();
+  let settled = false;
+  void result.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  requests.forEach((request) => f.reply(request));
+  await until(
+    () =>
+      epoch.enable === "known-success" &&
+      epoch.runtimeEnable === "known-success",
+  );
+  assertNoDocumentDispatch(f);
+  // Both domain continuations passed on time; only their aggregate readiness
+  // continuation is delayed. An expired *ready* attachment would otherwise
+  // make the first-inspect grant fall back to the ordinary two-second budget.
+  f.advance(10_000);
+  await until(() => settled || f.main().length > 0);
+  assertNoDocumentDispatch(f);
+  await assert.rejects(
+    result,
+    (error) =>
+      !(error instanceof UserBrowserCdpOutcomeUnknownError) &&
+      /deadline elapsed before readiness/.test(error.message),
+  );
+  assert.equal(epoch.enable, "known-success");
+  assert.equal(epoch.runtimeEnable, "known-success");
+  assert.equal(f.client.closureProblem(["target-1"], owner), undefined);
+  assertSingleSetup(f);
+});

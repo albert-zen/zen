@@ -13,6 +13,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createHostedAppServer } from "../../../apps/cli/src/host.js";
 
 import {
   ZenXCredentialVault,
@@ -1218,12 +1219,21 @@ test("title inference renews a subscription lease rejected after acquisition", a
   const authorizations: string[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_input, init) => {
+    if (String(_input) === "https://auth.openai.com/oauth/token") {
+      assert.match(String(init?.body), /synthetic-refresh/);
+      renewals++;
+      return Response.json({
+        access_token: renewed,
+        refresh_token: "synthetic-refreshed",
+        expires_in: 3600,
+      });
+    }
     const authorization = new Headers(init?.headers).get("authorization")!;
     authorizations.push(authorization);
     return authorization === `Bearer ${rejected}`
       ? new Response(null, { status: 401 })
       : new Response(
-          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\r\n\r\ndata: [DONE]\r\n\r\n',
+          'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"title","role":"assistant","content":[]}}\n\ndata: {"type":"response.output_text.delta","item_id":"title","output_index":0,"content_index":0,"delta":"Synthetic renewed title"}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n',
           { status: 200 },
         );
   };
@@ -1239,20 +1249,34 @@ test("title inference renews a subscription lease rejected after acquisition", a
       subscription,
     });
     await service.initialize({});
-    const configured = await service.titleModel();
-    assert.equal(configured.model, "gpt-5.6-luna");
-    const adapter = configured.adapter;
-    assert.notEqual(adapter, null);
-    if (adapter === null) throw new Error("expected a title model adapter");
-    for await (const _event of adapter.stream({
-      model: configured.model,
-      reasoningEffort: "medium",
-      messages: [{ role: "user", text: "Name this Thread" }],
-      tools: [],
-      signal: new AbortController().signal,
-    })) {
-      // Completion without content is sufficient to prove the retry boundary.
-    }
+    const { configuration } = await runConfiguredTitle(
+      service,
+      directory,
+      async (configured) => {
+        assert.equal(configured.selection.modelId, "gpt-5.6-luna");
+        assert.equal(configured.provider.provider.type, "openai-subscription");
+        if (configured.provider.provider.type !== "openai-subscription")
+          throw Error("expected subscription");
+        const file = configured.provider.provider.profilePath;
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(
+          file,
+          JSON.stringify({
+            version: 1,
+            provider: "openai-codex",
+            credential: {
+              type: "oauth",
+              access: rejected,
+              refresh: "synthetic-refresh",
+              expires: Date.now() + 3600000,
+              accountId: "acct_zenx_settings_test",
+            },
+          }),
+          { mode: 0o600 },
+        );
+      },
+    );
+    assert.equal(configuration.selection.modelId, "gpt-5.6-luna");
     assert.equal(renewals, 1);
     assert.deepEqual(authorizations, [
       `Bearer ${rejected}`,
@@ -2163,7 +2187,7 @@ test("Provider profile write that may have committed remains unconfirmed", async
   }
 });
 
-test("title inference resolves the selected profile's adapter and credential", async () => {
+test("title inference resolves the selected profile and credential through canonical Host", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-title-profile-"),
   );
@@ -2225,20 +2249,18 @@ test("title inference resolves the selected profile's adapter and credential", a
       subscription: inactiveSubscription(),
     });
     await service.initialize({});
-    const configured = await service.titleModel();
-    assert.equal(configured.reasoningEffort, "high");
-    let output = "";
-    for await (const event of configured.adapter!.stream({
-      model: configured.model,
-      reasoningEffort: "medium",
-      messages: [{ role: "user", text: "title me" }],
-      tools: [],
-      signal: new AbortController().signal,
-    })) {
-      if (event.type === "text_delta") output += event.delta;
-    }
+    const { configuration, output } = await runConfiguredTitle(
+      service,
+      directory,
+    );
+    assert.equal(
+      configuration.provider.modelCatalog?.find(
+        (model) => model.id === "second-model",
+      )?.defaultReasoningEffort,
+      "high",
+    );
     assert.equal(output, "Title second-key");
-    assert.equal(configured.model, "second-model");
+    assert.equal(configuration.selection.modelId, "second-model");
     assert.equal(authorization, "Bearer second-key");
     assert.match(requestUrl, /^https:\/\/second\.example\.test/u);
   } finally {
@@ -2777,3 +2799,94 @@ test("external applications persist independently and concurrent choices do not 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+async function runConfiguredTitle(
+  service: ZenXSettingsService,
+  directory: string,
+  beforeDispatch?: (
+    configuration: Awaited<
+      ReturnType<ZenXSettingsService["titleOperationConfiguration"]>
+    >,
+  ) => Promise<void>,
+) {
+  const configuration = await service.titleOperationConfiguration();
+  const host = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: path.join(directory, "canonical-title-host"),
+    provider: { type: "fake" },
+    model: "fake",
+    approvalPolicy: "never",
+    toolPresentation: "direct",
+  });
+  try {
+    await beforeDispatch?.(configuration);
+    const thread = await host.startThread();
+    await (
+      await host.startTurn(thread.id, "Name this Thread")
+    ).done;
+    const source = (await host.readThread(thread.id)).items.find(
+      (item) => item.type === "user_message",
+    );
+    assert.ok(source);
+    const result = await host.runConfiguredModelOperation(
+      {
+        kind: "title",
+        threadId: thread.id,
+        sourceItemId: source.id,
+        selection: configuration.selection,
+        ...(configuration.titlePrompt === undefined
+          ? {}
+          : { titleTemplate: configuration.titlePrompt }),
+      },
+      configuration.provider,
+    );
+    assert.equal(result.status, "completed", JSON.stringify(result));
+    const history = (await host.readThread(thread.id)).items;
+    const operations = history.filter(
+      (item) => item.type === "model_operation",
+    );
+    assert.equal(operations.length, 1);
+    const operation = operations[0]!;
+    assert.equal(operation.kind, "title");
+    assert.deepEqual(operation.sourceItemIds, [source.id]);
+    assert.equal(
+      operation.selection.providerProfileId,
+      configuration.selection.providerProfileId,
+    );
+    assert.equal(operation.selection.modelId, configuration.selection.modelId);
+    const context = history.find(
+      (item) =>
+        item.type === "context_message" && item.purpose === "auxiliary-title",
+    );
+    assert.ok(context?.type === "context_message");
+    assert.deepEqual(context.sourceItemIds, [operation.id, source.id]);
+    assert.equal(context.origin, "host");
+    assert.ok(
+      context.content.some(
+        (part) =>
+          part.type === "text" && part.text.includes("Name this Thread"),
+      ),
+    );
+    const completions = history.filter(
+      (item) => item.type === "model_operation_completed",
+    );
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]!.operationItemId, operation.id);
+    assert.equal(completions[0]!.status, "completed");
+    assert.deepEqual(completions[0]!.content, result.content);
+    return {
+      configuration,
+      output:
+        result.content
+          ?.filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("") ?? "",
+    };
+  } finally {
+    try {
+      await host.closeHostResources();
+    } finally {
+      await configuration.release();
+    }
+  }
+}

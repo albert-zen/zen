@@ -83,6 +83,33 @@ try {
           ),
         );
         await screenshot(`message-input-${lang}-${theme}-${width}.png`);
+        const capturedSelector =
+          ".message-context-debug > details section > pre";
+        // Preserve the original overview, then use real scrolling to expose the
+        // payload rather than accepting textContent that is below the viewport.
+        await evaluate(
+          `(() => { const pre = document.querySelector(${JSON.stringify(capturedSelector)}); pre.scrollTop = 0; pre.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }); })()`,
+        );
+        const captureJsonVisible = await waitForVisibleText(
+          evaluate,
+          capturedSelector,
+          '"role": "user"',
+        );
+        const captureMetadataVisible = await waitForVisibleText(
+          evaluate,
+          capturedSelector,
+          "received_at",
+        );
+        await screenshot(`captured-json-start-${lang}-${theme}-${width}.png`);
+        await evaluate(
+          `document.querySelector(${JSON.stringify(capturedSelector)}).scrollTop = document.querySelector(${JSON.stringify(capturedSelector)}).scrollHeight`,
+        );
+        const captureJsonEndVisible = await waitForVisibleText(
+          evaluate,
+          capturedSelector,
+          "pointer",
+        );
+        await screenshot(`captured-json-end-${lang}-${theme}-${width}.png`);
         await send("Input.dispatchKeyEvent", {
           type: "keyDown",
           key: "Escape",
@@ -153,12 +180,33 @@ try {
           ),
         );
         await screenshot(`operation-history-${lang}-${theme}-${width}.png`);
+        const terminalSelector =
+          ".operation-history-panel [data-item-id=synthetic-completed]";
+        await evaluate(
+          `document.querySelector(${JSON.stringify(terminalSelector)}).scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" })`,
+        );
+        const operationStatusVisible = await waitForVisibleText(
+          evaluate,
+          `${terminalSelector} .canonical-message-content > p`,
+          "completed",
+        );
+        const operationOutputVisible = await waitForVisibleText(
+          evaluate,
+          `${terminalSelector} .canonical-message-part > pre`,
+          "Blue",
+        );
+        await screenshot(`operation-terminal-${lang}-${theme}-${width}.png`);
         evidence.cases.push({
           lang,
           theme,
           width,
           height,
           measured,
+          captureJsonVisible,
+          captureMetadataVisible,
+          captureJsonEndVisible,
+          operationStatusVisible,
+          operationOutputVisible,
           escapeAndFocusRestoration: true,
         });
       }
@@ -169,4 +217,96 @@ try {
     path.join(directory, "measurements.json"),
     JSON.stringify(evidence, null, 2),
   );
+}
+
+async function waitForVisibleText(evaluate, selector, expected) {
+  const expression = `(${visibleText.toString()})(${JSON.stringify(selector)}, ${JSON.stringify(expected)})`;
+  let measured;
+  // Match this fixture's existing readiness bound: at most 100 checks, 50ms apart.
+  for (let attempt = 0; attempt < 100; attempt++) {
+    measured = await evaluate(expression);
+    if (measured.visible && !measured.pageOverflow) break;
+    if (attempt < 99) await delay(50);
+  }
+  assert.equal(measured.visible, true, JSON.stringify(measured));
+  assert.equal(measured.pageOverflow, false, JSON.stringify(measured));
+  return measured;
+}
+
+// Runs in the browser. A DOM match alone is insufficient: every rendered text
+// fragment must fit inside the viewport and every clipping/scrolling ancestor.
+function visibleText(selector, expected) {
+  const element = document.querySelector(selector);
+  if (!element)
+    return { selector, expected, visible: false, reason: "missing" };
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let node;
+  let range;
+  while ((node = walker.nextNode())) {
+    const start = node.textContent.indexOf(expected);
+    if (start < 0) continue;
+    range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + expected.length);
+    break;
+  }
+  const clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+  const scroll = [];
+  let painted = true;
+  for (let parent = element; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    painted &&=
+      style.display !== "none" &&
+      style.visibility === "visible" &&
+      Number(style.opacity) > 0;
+    const rect = parent.getBoundingClientRect();
+    if (style.overflowX !== "visible") {
+      clip.left = Math.max(clip.left, rect.left + parent.clientLeft);
+      clip.right = Math.min(
+        clip.right,
+        rect.left + parent.clientLeft + parent.clientWidth,
+      );
+    }
+    if (style.overflowY !== "visible") {
+      clip.top = Math.max(clip.top, rect.top + parent.clientTop);
+      clip.bottom = Math.min(
+        clip.bottom,
+        rect.top + parent.clientTop + parent.clientHeight,
+      );
+    }
+    if (parent.scrollHeight > parent.clientHeight)
+      scroll.push({ className: parent.className, top: parent.scrollTop });
+  }
+  const rectangles = range
+    ? [...range.getClientRects()].map(
+        ({ left, top, right, bottom, width, height }) => ({
+          left,
+          top,
+          right,
+          bottom,
+          width,
+          height,
+        }),
+      )
+    : [];
+  return {
+    selector,
+    expected,
+    visible:
+      painted &&
+      rectangles.length > 0 &&
+      rectangles.every(
+        (rect) =>
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.left >= clip.left - 1 &&
+          rect.top >= clip.top - 1 &&
+          rect.right <= clip.right + 1 &&
+          rect.bottom <= clip.bottom + 1,
+      ),
+    pageOverflow: document.documentElement.scrollWidth > innerWidth,
+    clip,
+    rectangles,
+    scroll,
+  };
 }
