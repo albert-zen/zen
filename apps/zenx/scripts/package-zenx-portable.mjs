@@ -393,6 +393,7 @@ export function macLocalSignOptionsForFile(filePath) {
   const pathComponents = filePath.split(/[\\/]/u);
   const executableName = pathComponents.at(-1);
   const helperIdentifiers = {
+    "zenx-bound-target": "com.electron.zenx.native-helper.zenx-bound-target",
     "zenx-accessibility": "com.electron.zenx.native-helper.zenx-accessibility",
     "zenx-foreground-input":
       "com.electron.zenx.native-helper.zenx-foreground-input",
@@ -428,6 +429,7 @@ export function extractMacNativeHelperSources(source) {
     ts.ScriptKind.TS,
   );
   const names = new Set([
+    "MAC_BOUND_TARGET_SOURCE",
     "MAC_ACCESSIBILITY_SOURCE",
     "MAC_FOREGROUND_INPUT_SOURCE",
   ]);
@@ -481,6 +483,7 @@ export async function compileMacNativeHelpers(options) {
   );
   try {
     for (const [name, source] of [
+      ["zenx-bound-target", sources.MAC_BOUND_TARGET_SOURCE],
       ["zenx-accessibility", sources.MAC_ACCESSIBILITY_SOURCE],
       ["zenx-foreground-input", sources.MAC_FOREGROUND_INPUT_SOURCE],
     ]) {

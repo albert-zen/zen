@@ -61,6 +61,20 @@ const drafts = new WorkspaceFileDrafts(100);
 (window as any).zenx = {
   plugins: { executeCommand: async () => null, readHandle: async () => null },
   workspaceFiles: {
+    applications: async () => ({
+      platform: "darwin",
+      applications: {
+        vscode: "/Applications/Visual Studio Code.app",
+        cursor: "/Applications/Cursor.app",
+        editor: "/System/Applications/TextEdit.app",
+      },
+    }),
+    openExternal: async () => {
+      throw new Error("Synthetic preview: no application is launched");
+    },
+    configureApplication: async () => {
+      throw new Error("Synthetic preview: no native picker is opened");
+    },
     list: async (_thread: string, relative: string) => {
       const prefix = relative === "." ? "" : relative + "/";
       const entries = new Map<

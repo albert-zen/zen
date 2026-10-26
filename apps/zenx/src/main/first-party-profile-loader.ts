@@ -16,7 +16,7 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   computer: {
     pluginId: "computer",
     packageName: "@zenx/computer-plugin",
-    tarball: "zenx-computer-plugin-macos-1.0.2.tgz",
+    tarball: "zenx-computer-plugin-macos-1.1.0.tgz",
   },
   subagents: {
     pluginId: "zenx-subagents",
@@ -125,7 +125,7 @@ export function firstPartyProviderTarball(
   }
   if (pluginId === "computer") {
     if (providerId === "macos-desktop")
-      return "zenx-computer-plugin-macos-1.0.2.tgz";
+      return "zenx-computer-plugin-macos-1.1.0.tgz";
     if (providerId === "zenx-winapp-uia")
       return "zenx-computer-plugin-win32-strict-1.2.0.tgz";
     if (providerId === "microsoft-winapp-cli")
