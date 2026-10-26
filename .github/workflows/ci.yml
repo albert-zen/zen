@@ -85,6 +85,7 @@ jobs:
           node --import tsx apps/zenx/scripts/capture-inline-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context-v3"
           node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
           node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+          ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-turn-selection-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
       - name: Retain synthetic quote visual evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
