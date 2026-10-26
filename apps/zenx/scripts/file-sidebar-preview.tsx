@@ -1,3 +1,7 @@
+import { StateEffect } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { InlineComposerEditor } from "../src/renderer/src/InlineComposerEditor.js";
+import type { ComposerInput } from "../src/renderer/src/composer-input.js";
 import type {
   ExternalApplicationId,
   ExternalOpenRequest,
@@ -17,10 +21,125 @@ import { i18n } from "../src/renderer/src/i18n.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 
-const search = new URLSearchParams(location.search);
+const search = new URLSearchParams(
+  location.search ||
+    (document.documentElement.hasAttribute("data-native-file-diagnostic")
+      ? "diagnostic=true&lang=zh-CN&theme=light"
+      : ""),
+);
 const language = search.get("lang") === "zh-CN" ? "zh-CN" : "en";
 const diagnosticPreview = search.get("diagnostic") === "true";
 const previewPlatform = diagnosticPreview ? "darwin" : "linux";
+// Fixture-only passive update receipt; never changes selection, content or scroll.
+const nativeEditorUpdates: unknown[] = [];
+const observedEditors = new WeakSet<EditorView>();
+const activeNativeEditor = () => {
+  const dom = document.querySelector(
+    '.auxiliary-content[role="tabpanel"]:not([hidden]) .cm-editor',
+  );
+  return dom ? EditorView.findFromDOM(dom as HTMLElement) : null;
+};
+if (diagnosticPreview)
+  Object.assign(window, {
+    __observeNativeEditor: () => {
+      const view = activeNativeEditor();
+      nativeEditorUpdates.length = 0;
+      if (!view || observedEditors.has(view)) return;
+      observedEditors.add(view);
+      view.dispatch({
+        effects: StateEffect.appendConfig.of([
+          EditorView.scrollHandler.of((view, range) => {
+            const pos = view.domAtPos(range.head),
+              element =
+                pos.node.nodeType === 1
+                  ? (pos.node as Element)
+                  : pos.node.parentElement;
+            const r = element?.getBoundingClientRect();
+            nativeEditorUpdates.push({
+              kind: "default-scroll-request",
+              head: range.head,
+              scrollTop: view.scrollDOM.scrollTop,
+              dom: element?.outerHTML.slice(-150),
+              rect: r
+                ? { top: r.top, bottom: r.bottom, left: r.left, right: r.right }
+                : null,
+            });
+            if (nativeEditorUpdates.length > 24) nativeEditorUpdates.shift();
+            return false; // Observe only; preserve CodeMirror default scrolling.
+          }),
+          EditorView.updateListener.of((update) => {
+            nativeEditorUpdates.push({
+              head: update.state.selection.main.head,
+              documentLength: update.state.doc.length,
+              selectionSet: update.selectionSet,
+              viewportChanged: update.viewportChanged,
+              viewport: update.view.viewport,
+              scrollIntoView: update.transactions.some(
+                (tr) => tr.scrollIntoView,
+              ),
+              scrollTop: update.view.scrollDOM.scrollTop,
+            });
+            if (nativeEditorUpdates.length > 24) nativeEditorUpdates.shift();
+          }),
+        ]),
+      });
+    },
+    // Explicit diagnostic only AFTER the original assertion/failure receipt:
+    // coordsAtPos may flush CodeMirror measurements, so never call during pass criteria.
+    __nativeEditorCoordinates: () => {
+      const view = activeNativeEditor();
+      if (!view) return null;
+      const serialize = (
+        r:
+          | DOMRect
+          | { left: number; right: number; top: number; bottom: number }
+          | null,
+      ) =>
+        r
+          ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom }
+          : null;
+      const line = view.contentDOM.querySelector(".cm-line:last-child");
+      const last = line?.lastElementChild;
+      const selection = getSelection();
+      return {
+        headCoords: serialize(view.coordsAtPos(view.state.selection.main.head)),
+        lastLineHTML: line?.innerHTML,
+        lastChildRects: last
+          ? Array.from(last.getClientRects(), serialize)
+          : [],
+        selectionRect: selection?.rangeCount
+          ? serialize(selection.getRangeAt(0).getBoundingClientRect())
+          : null,
+      };
+    },
+    __nativeEditorState: () => {
+      const view = activeNativeEditor();
+      return view
+        ? {
+            head: view.state.selection.main.head,
+            anchor: view.state.selection.main.anchor,
+            documentLength: view.state.doc.length,
+            viewport: view.viewport,
+            visibleRanges: view.visibleRanges,
+            hasFocus: view.hasFocus,
+
+            contentHeight: view.contentHeight,
+            lastRenderedLine: (() => {
+              const line = view.contentDOM.querySelector(".cm-line:last-child");
+              const rect = line?.getBoundingClientRect();
+              return line
+                ? {
+                    text: line.textContent?.slice(-100),
+                    top: rect?.top,
+                    bottom: rect?.bottom,
+                  }
+                : null;
+            })(),
+            updates: nativeEditorUpdates.slice(),
+          }
+        : null;
+    },
+  });
 const linkPreview = search.get("links") === "true";
 const appearance = search.get("theme") === "light" ? "light" : "dark";
 const threadId = "synthetic-file-sidebar-thread";
@@ -177,6 +296,8 @@ Object.assign(window, {
 });
 
 function Preview() {
+  const composerRef = useRef<ComposerInput | null>(null);
+  const [composerValue, setComposerValue] = useState("合成输入框内容");
   const [selectedTab, setSelectedTab] = useState(`file:${sourcePath}`);
   const [openedTabs, setOpenedTabs] = useState([
     `file:${sourcePath}`,
@@ -234,6 +355,17 @@ function Preview() {
             editors. Synthetic long source and Markdown only. No Host, private
             files or external access.
           </p>
+          {diagnosticPreview && (
+            <div data-native-composer-diagnostic>
+              <InlineComposerEditor
+                value={composerValue}
+                references={[]}
+                onChange={setComposerValue}
+                editorRef={composerRef}
+                aria-label="Synthetic diagnostic composer"
+              />
+            </div>
+          )}
           {linkPreview && (
             <div data-local-path-preview style={{ maxWidth: 480 }}>
               <MessageLinkContext.Provider
