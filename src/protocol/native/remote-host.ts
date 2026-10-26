@@ -47,7 +47,11 @@ import type {
   HostOperationLease,
 } from "../../app-server.js";
 import { AppServerError } from "../../app-server.js";
-import type { CanonicalItem } from "../../item.js";
+import {
+  originalUserInput,
+  textFromUserInput,
+  type CanonicalItem,
+} from "../../item.js";
 import {
   REMOTE_HOST_VERSION,
   REMOTE_UNARCHIVED_SEND_CAPABILITY,
@@ -107,12 +111,7 @@ export function projectRemoteItem(item: CanonicalItem): RemoteItemView | null {
     return {
       ...base,
       type: item.type,
-      text:
-        item.text ??
-        item.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n"),
+      text: textFromUserInput(originalUserInput(item)),
     };
   if (item.type === "host_message")
     return {

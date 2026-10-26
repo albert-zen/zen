@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createHostedAppServer } from "../../../apps/cli/src/host.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -6,6 +10,16 @@ import { probeOpenAiCompatibleImage } from "../src/main/image-capability-probe.j
 
 test("explicit image probe uses the real adapter request and classifies supported, unsupported, and inconclusive", async () => {
   const requests: Array<Record<string, unknown>> = [];
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-probe-canonical-"),
+  );
+  const host = createHostedAppServer({
+    cwd: "/tmp",
+    dataDirectory: directory,
+    provider: { type: "fake" },
+    model: "fake",
+    approvalPolicy: "never",
+  });
   const server = createServer((request, response) => {
     let body = "";
     request.setEncoding("utf8");
@@ -74,11 +88,19 @@ test("explicit image probe uses the real adapter request and classifies supporte
           apiKey: "probe-secret",
           provider: "fake-http-provider",
           model,
+          execute: (request, signal) =>
+            host.runConfiguredModelOperation(
+              request.input,
+              request.profile,
+              signal,
+            ),
         }),
         expected,
       );
     }
   } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
     await new Promise<void>((resolve, reject) =>
       server.close((error) =>
         error === undefined ? resolve() : reject(error),
@@ -118,9 +140,13 @@ test("probe transport failures are inconclusive", async () => {
       apiKey: "secret",
       provider: "provider",
       model: "model",
-      fetch: async () => {
-        throw new Error("network unavailable");
-      },
+      execute: async () => ({
+        threadId: "synthetic",
+        operationItemId: "synthetic",
+        status: "failed",
+        error: "Model operation failed",
+        probeOutcome: "inconclusive",
+      }),
     }),
     "inconclusive",
   );

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZenAppServer } from "../../../src/app-server.ts";
+import { originalUserInput } from "../../../src/item.ts";
 import { AgentRuntime } from "../../../src/runtime.ts";
 import { InMemoryThreadJournal } from "../../../src/journal.ts";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.ts";
@@ -309,9 +310,9 @@ try {
       const saved = await journal.read(target.id);
       const userMessage = saved.find((item) => item.type === "user_message");
       assert.ok(userMessage && userMessage.type === "user_message");
-      assert.ok(
-        JSON.stringify(userMessage.content) === JSON.stringify(nativeInput),
-      );
+      assert.deepEqual(originalUserInput(userMessage), nativeInput);
+      assert.deepEqual(userMessage.contentAuthority.hostTextPartIndices, [0]);
+      assert.match(userMessage.content[0].text, /received_at=/);
       assert.equal(userMessage.clientId, clientId);
       assert.ok(requestCount >= 1);
       assert.ok(matchingUserMessageCaptures >= 1);
@@ -331,6 +332,13 @@ try {
           ? actualUserMessage.content
           : [{ type: "text", text: actualUserMessage.content }]
       ).filter((part) => ["text", "input_text"].includes(part.type));
+      assert.deepEqual(
+        textParts.map((part) => part.text),
+        userMessage.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text),
+        "all provider-visible user text equals committed canonical content",
+      );
       const actualUserText = textParts
         .map((part) => part.text)
         .find((value) => value === outgoing);
@@ -345,13 +353,25 @@ try {
           actualUserText === capturedUserMessage,
           "provider formats agree on the exact v3 string",
         );
+      await writeFile(
+        path.join(output, `${format}.complete-user-message.json`),
+        JSON.stringify(
+          {
+            canonicalContent: userMessage.content,
+            serializedUserMessage: actualUserMessage,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
       captureReports.push({
         format,
         requestCount,
         matchingUserMessageCaptures,
         networkRequests: 0,
         canonicalJournalMatch: true,
-        providerUserMessageMatch: true,
+        originalUserMatch: true,
+        completeCanonicalTextMatch: true,
         threadAId: threadA.id,
         subagentBId: subagentB.id,
         sourceMessageAId: messageA.id,
@@ -366,6 +386,8 @@ try {
           references: orderedReferences,
           clientId,
           payload: actualUserText,
+          payloadScope:
+            "original-user-text-only; see complete-user-message files for model input",
           threadAId: threadA.id,
           subagentBId: subagentB.id,
           sourceMessageAId: messageA.id,
@@ -403,12 +425,14 @@ await writeFile(
       assertions: "passed",
       reports: captureReports,
       capturesOnlyUserMessage: true,
+      modelUserMessageTxtScope: "original-user-text-only",
+      completeUserMessagesIncludeHostMetadata: true,
       fullProviderRequestsWritten: false,
       systemAndToolPromptsWritten: false,
       networkRequests: 0,
       notes: [
         "The captured string came from each production provider adapter request at an injected fake transport boundary.",
-        "Only the exact user text part, synthetic reference metadata, and these verification facts are persisted.",
+        "model-user-message.txt is the original v3 user text only (legacy UI fixture filename), not the complete model input. Per-format complete-user-message.json stores the complete ordered canonical content and actual serialized user message, including received_at.",
         "Source threads, source messages, and the synthetic file are created only in memory or a temporary directory and are not included as bodies in the captured user string unless an exact excerpt is explicitly referenced.",
         "Thread and file references are pointers, not evidence that the source body was read or included.",
       ],

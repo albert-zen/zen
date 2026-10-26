@@ -68,6 +68,11 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      modelOperationHistory?: (
+        threadId?: string,
+      ) => Promise<
+        import("../../main/model-operation-messages.js").HostModelOperationHistory
+      >;
       modelRequestDebug?: {
         request(
           input: import("../../../../cli/src/model-request-debug-types.js").ModelRequestDebugCommand,
