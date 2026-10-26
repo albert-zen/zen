@@ -127,6 +127,7 @@
 - **Code Runtime** — 每次调用在可硬终止的 Worker 内用独立 JavaScript module context 编排同一个 Tool Environment 的工具；guest 无 Node、文件、网络或模块加载能力，执行生命期由统一工具任务管理器持有。
 - **Code State** — 线程内有界 JSON 数据从 append-only `code_state` Items 重建，`store/load` 只提供显式写入和当前程序的快照读取，不保存函数、执行栈或另一份会话权威。
 - **Canonical Context Content** — 编译器拥有模型消息语义的唯一构造入口；AppServer 保持唯一物理提交入口。新 user 消息的时间文本与原文均在同一 `content` 内，`contentAuthority.hostTextPartIndices` 区分 Host 生成 part，不从用户相同字面前缀推断可信来源。
+- **ContextFormatItem** — 首次提交新格式 user content 前，先追加一次 `context_format { contentVersion: 1 }` 格式能力事实；使没有生成上下文记录的纯 user/取消路径也能被旧 Host 明确拒绝，不是模型输入或新的状态仓库。
 - **ContextMessageItem** — `context_message` 是一个或多个既有源事实的按需、一次性 canonical 消息内容，保存精确来源 ID、真实 role/origin、编译策略版本、语义变体与 typed `content`；不是完整 request 快照、插件披露账本或第二份会话日志。
 - **Model Content Projection** — 编译阶段按本次媒体能力与有效恢复 occurrence 决定内容；任何新增替代文字须先提交为 source-linked content，附件 payload 仍在 AttachmentStore。下游仅编码已提交内容，不增加语义。
 - **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
@@ -1389,6 +1390,7 @@ Browser coordinate click and named-key input are transient, observation-bound CD
 - 已有新 user content 直接复用，不生成第二份记录。旧 text/output、Host/agent 来源包装、仓库规则、失败恢复、摘要/压缩指令、工具退出状态和媒体替代说明按源事实落一次 `context_message`。原始 source 永不回写；旧请求是否曾发过哪些文字仍未知，新增记录只证明升级后此次语义。
 - 先按原源事实做 compaction membership/排序，再解析对应内容记录；内容记录自己不成为独立的新 user 输入。索引完全从完整 ItemList 重建，无独立持久 store。相同 source/purpose/role/origin/policy/语义变体只允许一份内容；已物化文字优先，不能由新模板或时钟悄悄替换。wire base64/URL 等编码不产生新变体。
 - 媒体变体区分能力和仍有效的恢复 occurrence；exact 拒绝保留，未归因诊断随 Turn 终态到期。公开 reasoning 文本/摘要受内容合同约束；opaque reasoning payload、工具参数及调用配对 ID 是原 canonical 结构协议事实，不改成自然语言。
+- 协议许可映射：Chat/Responses 的 tool-origin 媒体可能需要单独 wire user media message，仍只读取同一 tool-origin canonical content 的 parts；该 wire 角色编码不使其成为人类消息或新授权。工具 callId 与导入 ID 映射继续用于配对，不当作提示词文本。
 - Provider 非秘密静态 instructions 的生效来源为 Turn admission，先以 system-role content 提交；adapter 使用 request 显式内容，不再暗加默认指令。凭证、headers、endpoint 与连接状态不写入 content。ToolEnvironment 的结构化 definitions 和 direct/code/both presentation 仍来自本次已解析能力表；schema 描述属于结构化工具定义，不另加 Catalog/Disclosure snapshot。若今后将说明转为消息文字，必须走内容提交合同。
 - Fork 仅重映内部 source IDs，已物化 content 保持历史字节；文本中的历史来源地址不通过正则改写。新 Item 类型让旧 Host decoder 明确拒绝，不支持通过跳过未知 Item 降级继续写入。用户真实数据不自动批量迁移；仅继续运行所需语义按需追加。
 - 逐消息 inspection 默认读取 canonical content/raw Item；可选捕获复用有界内存观察与 serializer source identity，不是第二真相。UI 不猜补时间戳。离线 upgrade audit 仅复用 canonical decoder/replay 与可达附件读取，生成可丢弃证据，不执行迁移或改变权威。

@@ -76,7 +76,7 @@ import type {
   QueuedUserMessageEditedItem,
 } from "./item.js";
 import {
-  contentFromUserMessage,
+  originalUserInput,
   SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   normalizeUserInput,
   validateUserInput,
@@ -1516,7 +1516,7 @@ export class ZenAppServer {
           );
     const priorInput =
       prior?.type === "user_message"
-        ? contentFromUserMessage(prior)
+        ? originalUserInput(prior)
         : prior?.type === "user_message_queued"
           ? prior.input
           : prior?.type === "turn_replacement_requested"
@@ -1720,7 +1720,7 @@ export class ZenAppServer {
         if (
           !sameUserInput(
             legacy.type === "user_message"
-              ? contentFromUserMessage(legacy)
+              ? originalUserInput(legacy)
               : legacy.input,
             content,
           )
@@ -3229,7 +3229,7 @@ export class ZenAppServer {
           if (
             !matchesSkillInputSnapshot(
               requestedInput,
-              contentFromUserMessage(duplicate),
+              originalUserInput(duplicate),
             )
           ) {
             throw new AppServerError(
@@ -4099,7 +4099,7 @@ export class ZenAppServer {
         if (duplicate !== undefined) {
           if (
             duplicate.turnId === expectedTurnId &&
-            sameUserInput(contentFromUserMessage(duplicate), input)
+            sameUserInput(originalUserInput(duplicate), input)
           ) {
             const duplicateActive = this.#activeTurns.get(threadId);
             return {
@@ -4917,6 +4917,20 @@ export class ZenAppServer {
       );
     }
     await this.#ensureThreadSummaries();
+    if (
+      item.type === "user_message" &&
+      !thread.items.some((prior) => prior.type === "context_format")
+    ) {
+      const marker: CanonicalItem = {
+        type: "context_format",
+        contentVersion: 1,
+        id: this.#id(),
+        threadId: thread.id,
+        createdAt: this.#now(),
+      };
+      await this.#commit(thread, marker);
+      this.#emit({ type: "item_completed", item: marker });
+    }
     const materialized = materializeCanonicalInput(item, thread.items);
     // Keep the caller's Item identity: item_completed must expose exactly the
     // content committed below, never a pre-compilation admission object.
@@ -5540,6 +5554,13 @@ function forkablePrefix(
       item.type !== "thread_configuration_changed" &&
       item.type !== "thread_deleted" &&
       item.type !== "thread_restored" &&
+      !(
+        item.type === "context_message" &&
+        item.turnId === undefined &&
+        item.sourceItemIds.every((id) =>
+          items.slice(0, end).some((source) => source.id === id),
+        )
+      ) &&
       !(item.type === "context_compaction" && item.turnId === undefined)
     ) {
       break;

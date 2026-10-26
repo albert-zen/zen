@@ -27,6 +27,7 @@ export interface WorkspaceInstructionFile {
 }
 
 export type ItemType =
+  | "context_format"
   | "context_message"
   | "thread_metadata"
   | "thread_forked"
@@ -58,6 +59,7 @@ export type ItemType =
   | "failure";
 
 const CANONICAL_ITEM_TYPES = {
+  context_format: true,
   context_message: true,
   thread_metadata: true,
   thread_forked: true,
@@ -95,6 +97,12 @@ export interface ItemBase {
   turnId?: string;
   createdAt: string;
   type: ItemType;
+}
+
+/** One append-only format gate; older Hosts must not write new content histories. */
+export interface ContextFormatItem extends ItemBase {
+  type: "context_format";
+  contentVersion: 1;
 }
 
 /** A source-linked, once-materialized message, never a request/history snapshot. */
@@ -595,6 +603,7 @@ export interface CodeStateItem extends ItemBase {
 }
 
 export type CanonicalItem =
+  | ContextFormatItem
   | ContextMessageItem
   | HostMessageItem
   | QueuedHostMessageItem
@@ -649,6 +658,13 @@ export function normalizeUserInput(input: string | UserInput): UserInput {
 
 export function contentFromUserMessage(item: UserMessageItem): UserInput {
   return item.content ?? [{ type: "text", text: item.text }];
+}
+
+/** Original admission/ordinary UI only. Model compilation must use full content. */
+export function originalUserInput(item: UserMessageItem): UserInput {
+  const content = contentFromUserMessage(item);
+  const hostParts = new Set(item.contentAuthority?.hostTextPartIndices ?? []);
+  return content.filter((_part, index) => !hostParts.has(index));
 }
 
 export function textFromUserInput(input: UserInput): string {
@@ -731,10 +747,19 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
   }
 
   switch (type) {
+    case "context_format":
+      if (item.contentVersion !== 1)
+        throw new Error("Unsupported canonical content format");
+      break;
     case "context_message":
       if (item.compilerPolicyVersion !== 1)
         throw new Error("Unsupported compiler policy version");
       requireStringArray(item.sourceItemIds, "context_message.sourceItemIds");
+      if (
+        new Set(item.sourceItemIds as string[]).size !==
+        (item.sourceItemIds as string[]).length
+      )
+        throw new Error("Duplicate context source identity");
       if ((item.sourceItemIds as string[]).length === 0)
         throw new Error("Context message requires a canonical source");
       requireEnum(

@@ -1,3 +1,4 @@
+import { canonicalMediaPart, linkCanonicalMediaPart } from "./media-content.js";
 /** Compiler-owned materialization planning. AppServer alone performs commits. */
 import type { CanonicalItem, ContextMessageItem, UserInput } from "./item.js";
 import {
@@ -12,6 +13,13 @@ interface MessageBinding {
   content: UserInput;
 }
 const bindings = new WeakMap<object, MessageBinding>();
+/** Passive inspection identity; absence never authorizes dispatch. */
+export function committedModelContentItemId(
+  message: object,
+): string | undefined {
+  return bindings.get(message)?.itemId;
+}
+
 export function copyCommittedMessageBinding(
   source: object,
   target: object,
@@ -124,6 +132,13 @@ export function planContextMaterialization(options: {
     };
     const prior = existing.get(key(draft));
     if (prior) {
+      if (
+        source.purpose === "provider-instructions" &&
+        !sameContent(prior.content, content)
+      )
+        throw new Error(
+          "Provider instructions changed within a canonical admission; start a new Turn before sampling",
+        );
       // This semantic state already has an authority. Current templates are
       // not allowed to silently rewrite the text established by that record.
       return prior.id;
@@ -185,19 +200,25 @@ export function planContextMaterialization(options: {
     );
     return requireRecord(content, message.role, {
       ...source,
-      itemIds: [...source.itemIds, ...recoveries.map((item) => item.id)],
+      itemIds: [
+        ...new Set([...source.itemIds, ...recoveries.map((item) => item.id)]),
+      ],
       variant: JSON.stringify([
         source.variant ?? "base",
         "media",
-        [...(options.inputModalities ?? ["text"])].sort(),
+        [...new Set(options.inputModalities ?? ["text"])].sort(),
       ]),
     });
   });
   const instructionsId = options.instructions
     ? requireRecord([{ type: "text", text: options.instructions }], "system", {
         itemIds: [
-          options.items.findLast((item) => item.type === "turn_started")?.id ??
-            options.items[0]!.id,
+          options.items.findLast(
+            (item) =>
+              item.type === "turn_started" ||
+              (item.type === "thread_configuration_changed" &&
+                !("permissions" in item)),
+          )?.id ?? options.items[0]!.id,
         ],
         purpose: "provider-instructions",
         origin: "host",
@@ -224,27 +245,24 @@ export function planContextMaterialization(options: {
         const id = targets[index];
         if (id === undefined) return message;
         const content = contentFor(id);
-        // Keep native media occurrence identity for precise recovery. Only
-        // immutable equal AttachmentRefs are reused; text comes from the record.
-        const sourceIds = modelMessageSource(message)?.itemIds ?? [];
-        const nativeParts = sourceIds.flatMap((sourceId) => {
-          const source = byId.get(sourceId);
-          return source?.type === "user_message" ||
-            source?.type === "thread_message"
-            ? (source.content ?? [])
-            : source?.type === "tool_result"
-              ? (source.modelContent ?? [])
-              : [];
+        // Follow the compiler's exact ephemeral occurrence identity, never a
+        // hash/value search: equal blobs can be distinct canonical occurrences.
+        const plannedContent = messageSemanticContent(message);
+        const resolvedContent = content.map((part, index) => {
+          const cloned = structuredClone(part);
+          if (part.type === "text") return cloned;
+          const planned = plannedContent[index];
+          if (
+            planned === undefined ||
+            planned.type === "text" ||
+            JSON.stringify(planned) !== JSON.stringify(part)
+          )
+            throw new Error(
+              "Canonical media occurrence no longer matches the selected source",
+            );
+          linkCanonicalMediaPart(canonicalMediaPart(planned), cloned);
+          return cloned;
         });
-        const resolvedContent = content.map((part) =>
-          part.type === "text"
-            ? part
-            : (nativeParts.find(
-                (candidate) =>
-                  candidate.type !== "text" &&
-                  JSON.stringify(candidate) === JSON.stringify(part),
-              ) ?? part),
-        );
         const resolved = restoreMessageContent(message, resolvedContent);
         copyModelMessageContextCategory(message, resolved);
         bindings.set(resolved, { itemId: id, content });
@@ -273,7 +291,15 @@ function restoreMessageContent(
     if (part?.type !== "text") throw new Error("Expected canonical text part");
     return part.text;
   };
-  if (message.role === "user") return { role: "user", content };
+  if (message.role === "user") {
+    if (
+      "text" in message &&
+      content.length === 1 &&
+      content[0]?.type === "text"
+    )
+      return { ...message, text: content[0].text };
+    return { ...message, content };
+  }
   if (message.role === "tool")
     return {
       ...message,

@@ -323,6 +323,7 @@ export function projectCompletedItem(
       };
     case "tool_call":
       return projectCommandStarted(item, "");
+    case "context_format":
     case "context_message":
     case "host_message":
     case "host_message_queued":

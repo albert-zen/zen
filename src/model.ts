@@ -22,6 +22,7 @@ export interface ModelMessageSource {
   itemIds: string[];
   purpose: string;
   variant?: string;
+  hostTextPartIndices?: readonly number[];
   origin: "human" | "agent" | "host" | "model" | "tool";
 }
 const messageSources = new WeakMap<object, ModelMessageSource>();
@@ -698,6 +699,7 @@ function compileCanonicalModelMessages(
             ),
           );
         break;
+      case "context_format":
       case "context_message":
       case "context_compaction":
       case "model_usage":
@@ -717,6 +719,9 @@ function compileCanonicalModelMessages(
       sourceModelMessage(message, {
         itemIds: [item.id],
         purpose: item.type,
+        ...(item.type === "user_message" && item.contentAuthority
+          ? { hostTextPartIndices: item.contentAuthority.hostTextPartIndices }
+          : {}),
         origin:
           item.type === "user_message"
             ? "human"
@@ -1032,7 +1037,14 @@ export class FakeModel implements ModelAdapter {
       latestUser !== undefined &&
       "content" in latestUser &&
       latestUser.content !== undefined
-        ? textFromUserInput(latestUser.content)
+        ? textFromUserInput(
+            latestUser.content.filter(
+              (_part, index) =>
+                !modelMessageSource(latestUser)?.hostTextPartIndices?.includes(
+                  index,
+                ),
+            ),
+          )
         : ((latestUser as TextModelMessage | undefined)?.text ?? "");
     if (text.startsWith("!shell ")) {
       yield {

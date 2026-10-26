@@ -14,11 +14,12 @@ import {
   validateContextCompactionItem,
   type ContextCompactionConfig,
 } from "../src/context-compaction.js";
-import type {
-  CanonicalItem,
-  ContextCompactionItem,
-  ProviderGeneratedContextCompactionItem,
-  ThreadMetadataItem,
+import {
+  decodeCanonicalItem,
+  type CanonicalItem,
+  type ContextCompactionItem,
+  type ProviderGeneratedContextCompactionItem,
+  type ThreadMetadataItem,
 } from "../src/item.js";
 import {
   InMemoryThreadJournal,
@@ -42,6 +43,50 @@ import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
 const SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
+
+/** Failed summary attempts may retain their committed inputs, never a reset or rewritten source. */
+function assertOnlyMaterializedInputsAppended(
+  actual: readonly CanonicalItem[],
+  before: readonly CanonicalItem[],
+): void {
+  assert.deepEqual(
+    actual.slice(0, before.length),
+    before,
+    "source history bytes and order are immutable",
+  );
+  for (const item of actual.slice(before.length)) {
+    assert.equal(
+      item.type,
+      "context_message",
+      "failed compaction must not append a reset or execution fact",
+    );
+    decodeCanonicalItem(item);
+  }
+  if (actual.length) new Thread(actual[0]!.threadId, actual);
+}
+
+/** Separate new content bookkeeping only after validating its complete canonical source closure. */
+function sourceFactTypes(items: readonly CanonicalItem[]): string[] {
+  for (const item of items) decodeCanonicalItem(item);
+  if (items.length) new Thread(items[0]!.threadId, items);
+  return items
+    .filter(
+      (item) =>
+        item.type !== "context_message" && item.type !== "context_format",
+    )
+    .map((item) => item.type);
+}
+
+function receivedContent(text: string, at: string | undefined) {
+  assert(at !== undefined);
+  return [
+    {
+      type: "text",
+      text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(at)}]`,
+    },
+    { type: "text", text },
+  ];
+}
 
 test("R1 regression: second reset selects admitted late steer by full-journal Turn identity", () => {
   const base = {
@@ -350,7 +395,14 @@ test("R1 Host: forbidden hidden range cannot append a fake successful reset", as
       error.code === "compaction_budget_exceeded" &&
       !error.message.includes("PRIVATE_NOT_FOR_OUTPUT"),
   );
-  assert.deepEqual(await journal.read(thread.id), before);
+  const afterRejectedReset = await journal.read(thread.id);
+  assertOnlyMaterializedInputsAppended(afterRejectedReset, before);
+  assert(
+    !JSON.stringify(afterRejectedReset.slice(before.length)).includes(
+      "PRIVATE_NOT_FOR_OUTPUT",
+    ),
+    "materialized summary inputs must not expose opaque reasoning",
+  );
   assert.equal(
     (await server.readThread(thread.id)).items.some(
       (item) => item.type === "context_compaction",
@@ -586,7 +638,7 @@ test("agentic compaction preserves user steering unseen by its model sample", as
     { role: "user", text: "[Zen compacted context]\ncontinuation" },
     {
       role: "user",
-      content: [{ type: "text", text: "new instruction" }],
+      content: receivedContent("new instruction", userTimestamps[1]),
       userTimestamp: userTimestamps[1],
     },
   ]);
@@ -1187,8 +1239,11 @@ test("agentic compaction stays off by default and mixed calls fail locally", asy
           (message) =>
             message.role === "user" &&
             "content" in message &&
-            message.content[0]?.type === "text" &&
-            message.content[0].text === "keep the original context",
+            message.content.some(
+              (part) =>
+                part.type === "text" &&
+                part.text === "keep the original context",
+            ),
         ),
       );
     });
@@ -1451,7 +1506,7 @@ test("manually compacts long history without changing the complete transcript", 
   assert.deepEqual(postCompactionRequest.messages, [
     {
       role: "user",
-      content: [{ type: "text", text: "third" }],
+      content: receivedContent("third", userTimestamps[2]),
       userTimestamp: userTimestamps[2],
     },
     { role: "assistant", text: "answer-3" },
@@ -1461,7 +1516,7 @@ test("manually compacts long history without changing the complete transcript", 
     },
     {
       role: "user",
-      content: [{ type: "text", text: "after compaction" }],
+      content: receivedContent("after compaction", userTimestamps[3]),
       userTimestamp: userTimestamps[3],
     },
   ]);
@@ -1827,22 +1882,19 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
 
   const completed = await server.readThread(thread.id);
   assert.equal(summaryCalls, 1);
-  assert.deepEqual(
-    completed.items.map((item) => item.type),
-    [
-      "thread_metadata",
-      "turn_started",
-      "user_message",
-      "model_usage",
-      "tool_call",
-      "tool_result",
-      "reasoning",
-      "model_usage",
-      "agent_message",
-      "turn_completed",
-      "context_compaction",
-    ],
-  );
+  assert.deepEqual(sourceFactTypes(completed.items), [
+    "thread_metadata",
+    "turn_started",
+    "user_message",
+    "model_usage",
+    "tool_call",
+    "tool_result",
+    "reasoning",
+    "model_usage",
+    "agent_message",
+    "turn_completed",
+    "context_compaction",
+  ]);
   assert.equal(
     completed.items.filter((item) => item.type === "context_compaction").length,
     1,
@@ -1992,7 +2044,7 @@ test("does not append when explicit selected Items exceed the target", async () 
     server.compactThread(thread.id, { includeOriginalReference: false }),
     "compaction_budget_exceeded",
   );
-  assert.deepEqual(await journal.read(thread.id), before);
+  assertOnlyMaterializedInputsAppended(await journal.read(thread.id), before);
 });
 
 test("fails closed when tool schemas plus a first-Turn result exceed the window, preserving tool lifecycle", async () => {
@@ -2147,7 +2199,7 @@ test("does not append a compaction when its summary alone exceeds the target", a
     "compaction_budget_exceeded",
   );
 
-  assert.deepEqual(await journal.read(thread.id), before);
+  assertOnlyMaterializedInputsAppended(await journal.read(thread.id), before);
 });
 
 test("automatic compaction does not guess below threshold or from missing or invalid usage", async (t) => {
@@ -2772,7 +2824,10 @@ test("generation, abort, invalid summary, and journal failures append no compact
         scenario.code,
       );
       assert.equal(summaryCalls, 1);
-      assert.deepEqual(await journal.read(thread.id), before);
+      assertOnlyMaterializedInputsAppended(
+        await journal.read(thread.id),
+        before,
+      );
     });
   }
 
@@ -2813,7 +2868,10 @@ test("generation, abort, invalid summary, and journal failures append no compact
   controller.abort(new DOMException("stop", "AbortError"));
   await expectAppServerCode(compaction, "compaction_aborted");
   assert.equal(abortCalls, 1);
-  assert.deepEqual(await abortJournal.read(abortThread.id), beforeAbort);
+  assertOnlyMaterializedInputsAppended(
+    await abortJournal.read(abortThread.id),
+    beforeAbort,
+  );
 
   const backing = new InMemoryThreadJournal();
   const failingJournal: ThreadJournal = {
@@ -2844,7 +2902,10 @@ test("generation, abort, invalid summary, and journal failures append no compact
     ThreadJournalAppendOutcomeUnknownError,
   );
   assert.equal(persistenceSummaryCalls, 1);
-  assert.deepEqual(await backing.read(persistenceThread.id), beforePersistence);
+  assertOnlyMaterializedInputsAppended(
+    await backing.read(persistenceThread.id),
+    beforePersistence,
+  );
 });
 
 test("later compaction supersedes projection deterministically and restart is byte-equivalent", async () => {
@@ -2882,7 +2943,7 @@ test("later compaction supersedes projection deterministically and restart is by
   assert.deepEqual(projectedBefore, [
     {
       role: "user",
-      content: [{ type: "text", text: "third" }],
+      content: receivedContent("third", userTimestamps[2]),
       userTimestamp: userTimestamps[2],
     },
     { role: "assistant", text: "answer" },

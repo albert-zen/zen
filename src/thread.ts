@@ -90,6 +90,11 @@ export class Thread {
     ) {
       throw new Error(`Turn ${item.turnId} already has a terminal Item`);
     }
+    if (
+      item.type === "context_format" &&
+      this.#items.some((prior) => prior.type === "context_format")
+    )
+      throw new Error("Duplicate canonical content format marker");
     if (item.type === "context_message") {
       const sources = item.sourceItemIds.map((id) =>
         this.#items.find((source) => source.id === id),
@@ -115,13 +120,54 @@ export class Thread {
           sources.length !== 1 ||
           !(
             sources[0]?.type === "turn_started" ||
-            sources[0]?.type === "thread_metadata"
+            sources[0]?.type === "thread_metadata" ||
+            (sources[0]?.type === "thread_configuration_changed" &&
+              !("permissions" in sources[0]))
           ))
       )
         throw new Error(
           "Only explicit provider instructions may use system context",
         );
       const first = sources[0];
+      const generatedPurposes = new Set([
+        "provider-instructions",
+        "workspace-instructions",
+        "compaction-summary",
+        "file-permissions",
+        "compaction-notice",
+        "compaction-instruction",
+        "compaction-excerpt",
+      ]);
+      if (item.purpose !== first?.type && !generatedPurposes.has(item.purpose))
+        throw new Error("Unknown canonical context purpose");
+      if (
+        generatedPurposes.has(item.purpose) &&
+        item.purpose !== "provider-instructions" &&
+        (item.origin !== "host" || item.role !== "user")
+      )
+        throw new Error(
+          "Generated context must retain Host user-role provenance",
+        );
+      if (
+        item.purpose === "workspace-instructions" &&
+        !(
+          first?.type === "turn_started" || first?.type === "context_compaction"
+        )
+      )
+        throw new Error("Workspace context requires its instruction snapshot");
+      if (
+        item.purpose === "compaction-summary" &&
+        first?.type !== "context_compaction"
+      )
+        throw new Error("Compaction summary requires its source fact");
+      if (
+        item.purpose === "file-permissions" &&
+        !(
+          first?.type === "thread_metadata" ||
+          first?.type === "thread_configuration_changed"
+        )
+      )
+        throw new Error("File permissions require a canonical policy fact");
       const expected =
         first?.type === "user_message"
           ? ["human", "user"]
@@ -134,6 +180,16 @@ export class Thread {
                 : first?.type === "reasoning"
                   ? ["model", "reasoning"]
                   : undefined;
+      if (
+        item.purpose === first?.type &&
+        expected === undefined &&
+        (item.origin !== "host" ||
+          !(
+            item.role === "user" ||
+            (first?.type === "failure" && item.role === "assistant")
+          ))
+      )
+        throw new Error("Host context cannot change source authority");
       if (
         item.purpose === first?.type &&
         expected &&
