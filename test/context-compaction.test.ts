@@ -3506,6 +3506,87 @@ test("active compaction preserves unknown journal outcomes and stop handling", a
   });
 });
 
+test("compaction budgets frozen canonical input rather than a shorter current Host template", async () => {
+  const journal = new InMemoryThreadJournal();
+  const history = canonicalToolHistory();
+  const userIndex = history.findIndex((item) => item.type === "user_message");
+  const user = history[userIndex]!;
+  history[userIndex] = {
+    id: user.id,
+    threadId: user.threadId,
+    turnId: "turn",
+    createdAt: user.createdAt,
+    type: "host_message",
+    sender: "host",
+    mode: "start",
+    clientId: "synthetic-bootstrap",
+    source: "bootstrap",
+    text: "short canonical Host fact",
+  };
+  // Synthetic prior policy: the source fact is unchanged, but its once-committed
+  // wrapper is longer than today's template. Replaying it must not reformat it.
+  const frozen: CanonicalItem = {
+    id: "frozen-host-context",
+    threadId: "thread",
+    createdAt: "2026-01-01T00:00:01.000Z",
+    type: "context_message",
+    compilerPolicyVersion: 1,
+    sourceItemIds: [user.id],
+    role: "user",
+    origin: "host",
+    purpose: "host_message",
+    variant: "base",
+    content: [
+      {
+        type: "text",
+        text:
+          "Previously committed Host context. " +
+          "recorded explanation ".repeat(2_000),
+      },
+    ],
+  };
+  history.push(frozen);
+  for (const item of history) decodeCanonicalItem(item);
+  new Thread("thread", history);
+  for (const item of history) await journal.append(item);
+  const before = await journal.read("thread");
+  assert(
+    estimateModelMessageInputTokens(compileModelMessages(before)) < 1_000,
+    "current-template chunk estimate fits; the frozen content is the oversized input",
+  );
+  let dispatches = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream() {
+      dispatches++;
+      yield { type: "text_delta", delta: "must not be requested" };
+    },
+  };
+  const server = createServer({
+    journal,
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+    ]),
+  });
+  await expectAppServerCode(
+    server.compactThread("thread", { includeOriginalReference: false }),
+    "compaction_budget_exceeded",
+  );
+  assert.equal(
+    dispatches,
+    0,
+    "budget-check the actual committed content before provider dispatch",
+  );
+  const after = await journal.read("thread");
+  assertOnlyMaterializedInputsAppended(after, before);
+  assert.deepEqual(
+    after.find((item) => item.id === frozen.id),
+    frozen,
+  );
+  assert(!after.some((item) => item.type === "context_compaction"));
+});
+
 // These tests exercise history/retention with deliberately tiny windows. Use a
 // tiny disclosed-schema fixture, not production shell documentation that alone
 // exceeds those windows. Full real-schema admission is covered in context-budget.test.ts.

@@ -12,7 +12,7 @@ import type {
   ToolCallItem,
   ToolResultItem,
 } from "../../item.js";
-import { previewFromUserMessage, textFromUserMessage } from "../../item.js";
+import { previewFromUserMessage, originalUserInput } from "../../item.js";
 import type { DerivedTurn } from "../../thread.js";
 import type { NativeThreadSummary } from "../../thread-summary.js";
 import { encodeModelKey } from "../model-key.js";
@@ -298,7 +298,11 @@ export function projectCompletedItem(
         id: item.id,
         clientId: item.clientId ?? null,
         content: [
-          { type: "text", text: textFromUserMessage(item), text_elements: [] },
+          {
+            type: "text",
+            text: textFromUserInput(originalUserInput(item)),
+            text_elements: [],
+          },
         ],
         ...(item.deliveryAfter === undefined
           ? {}
@@ -323,6 +327,8 @@ export function projectCompletedItem(
       };
     case "tool_call":
       return projectCommandStarted(item, "");
+    case "model_operation":
+    case "model_operation_completed":
     case "context_format":
     case "context_message":
     case "host_message":

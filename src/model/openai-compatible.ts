@@ -221,6 +221,9 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
     const body = serializeRequest({
       ...this.#defaultParams,
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_tokens: request.maxOutputTokens }),
       model: requiredLabel(request.model, "model"),
       messages,
       n: 1,

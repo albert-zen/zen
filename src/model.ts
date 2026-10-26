@@ -161,7 +161,7 @@ export type ReasoningEffort = string;
 /** Passive identity for a single Runtime sample, never replay state. */
 export interface ModelRequestDebugContext {
   threadId: string;
-  purpose: "turn" | "compaction";
+  purpose: "turn" | "compaction" | "operation";
   turnId: string | null;
   sampleId: string;
   contextBoundaryItemId: string;
@@ -186,6 +186,8 @@ export interface ModelRequest {
   messages: ModelMessage[];
   /** Already committed system-role content, never an adapter default. */
   instructions?: string;
+  /** Explicit non-semantic output budget (auxiliary probe uses one token). */
+  maxOutputTokens?: number;
   tools: ModelTool[];
   signal: AbortSignal;
   /**
@@ -699,6 +701,8 @@ function compileCanonicalModelMessages(
             ),
           );
         break;
+      case "model_operation":
+      case "model_operation_completed":
       case "context_format":
       case "context_message":
       case "context_compaction":

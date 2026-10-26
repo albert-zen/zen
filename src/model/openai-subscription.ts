@@ -139,6 +139,9 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       store: false,
       stream: true,
       instructions: request.instructions ?? "",
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_output_tokens: request.maxOutputTokens }),
       input,
       include: ["reasoning.encrypted_content"],
       text: { verbosity: "low" },

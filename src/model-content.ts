@@ -134,11 +134,13 @@ function referencedAttachments(
 ): AttachmentRef[] {
   return items.flatMap((item) => {
     const content =
-      item.type === "user_message"
-        ? contentFromUserMessage(item)
-        : item.type === "tool_result"
-          ? item.modelContent
-          : undefined;
+      item.type === "context_message"
+        ? item.content
+        : item.type === "user_message"
+          ? contentFromUserMessage(item)
+          : item.type === "tool_result"
+            ? item.modelContent
+            : undefined;
     return (content ?? []).flatMap((part) =>
       part.type === "text" ? [] : [part.attachment],
     );

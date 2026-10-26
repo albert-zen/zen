@@ -1,4 +1,8 @@
 import {
+  compileModelOperationMessage,
+  MODEL_PROBE_IMAGE_BASE64,
+} from "./model-operations.js";
+import {
   planContextMaterialization,
   assertCommittedModelContent,
 } from "./context-materialization.js";
@@ -142,6 +146,24 @@ export interface AppServerDefaults {
   reasoningEffort: string | null;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
+}
+
+export type RunModelOperationInput =
+  | {
+      kind: "title";
+      threadId: string;
+      sourceItemId: string;
+      selection: ProviderSelectionInput;
+      titleTemplate?: string;
+    }
+  | { kind: "image-capability-probe"; selection: ProviderSelectionInput };
+export interface ModelOperationResult {
+  threadId: string;
+  operationItemId: string;
+  status: "completed" | "failed" | "cancelled";
+  content?: UserInput;
+  error?: string;
+  probeOutcome?: "supported" | "unsupported" | "inconclusive";
 }
 
 export interface StartThreadInput {
@@ -658,6 +680,11 @@ export class ZenAppServer {
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
+    if ("purpose" in input)
+      throw new AppServerError(
+        "operation_forbidden",
+        "System operation purpose is Host-only",
+      );
     return await this.#startThread(input);
   }
 
@@ -948,6 +975,7 @@ export class ZenAppServer {
   async #startThread(
     input: StartThreadInput,
     parentThreadId?: string,
+    purpose?: "image-capability-probe",
   ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("turn", "thread/start");
     try {
@@ -962,6 +990,7 @@ export class ZenAppServer {
         createdAt: this.#now(),
         type: "thread_metadata",
         workspaceInstructionPolicy: "repo-root-on-first-message",
+        ...(purpose === undefined ? {} : { purpose }),
         cwd: path.resolve(input.cwd ?? defaults.cwd),
         ...(parentThreadId === undefined ? {} : { parentThreadId }),
         ...selection,
@@ -982,10 +1011,256 @@ export class ZenAppServer {
         throw error;
       }
       const snapshot = await this.#snapshot(thread);
-      this.#emit({ type: "thread_started", threadId, thread: snapshot });
+      if (purpose === undefined)
+        this.#emit({ type: "thread_started", threadId, thread: snapshot });
       return snapshot;
     } finally {
       admission.release();
+    }
+  }
+
+  /** Trusted Host-local API only: deliberately absent from native/model/Fleet method maps. */
+  async runModelOperation(
+    input: RunModelOperationInput,
+    signal = new AbortController().signal,
+  ): Promise<ModelOperationResult> {
+    signal.throwIfAborted();
+    if (input.kind !== "title" && input.kind !== "image-capability-probe")
+      throw new AppServerError(
+        "invalid_operation_input",
+        "Unknown model operation kind",
+      );
+    const admission = this.#admitProviderOperation(
+      "compaction",
+      `model-operation/${input.kind}`,
+      input.selection,
+    );
+    const resolved = admission.provider;
+    let thread: Thread | undefined;
+    let operation: import("./item.js").ModelOperationItem | undefined;
+    let text = "";
+    try {
+      if (input.kind === "image-capability-probe") {
+        const snapshot = await this.#startThread(
+          { selection: resolved.selection },
+          undefined,
+          "image-capability-probe",
+        );
+        thread = await this.#requireThread(snapshot.id);
+      } else {
+        thread = await this.#requireThread(input.threadId);
+        const source = thread.items.find(
+          (item) => item.id === input.sourceItemId,
+        );
+        if (source?.type !== "user_message")
+          throw new AppServerError(
+            "invalid_operation_source",
+            "Title source must be an existing canonical human message",
+          );
+        if (
+          input.titleTemplate !== undefined &&
+          (input.titleTemplate.length > 32768 ||
+            !input.titleTemplate.includes("{{request}}"))
+        )
+          throw new AppServerError(
+            "invalid_operation_input",
+            "Title template must include {{request}} and fit the configured limit",
+          );
+      }
+      const target = thread;
+      operation = await this.#withThreadMutation(target.id, async () => {
+        signal.throwIfAborted();
+        if (!target.items.some((item) => item.type === "context_format"))
+          await this.#commit(target, {
+            type: "context_format",
+            contentVersion: 1,
+            id: this.#id(),
+            threadId: target.id,
+            createdAt: this.#now(),
+          });
+        const item: import("./item.js").ModelOperationItem = {
+          type: "model_operation",
+          id: this.#id(),
+          threadId: target.id,
+          createdAt: this.#now(),
+          kind: input.kind,
+          sourceItemIds:
+            input.kind === "title"
+              ? [input.sourceItemId]
+              : [target.items[0]!.id],
+          selection: {
+            providerProfileId: resolved.selection.providerProfileId,
+            modelId: resolved.selection.modelId,
+            reasoningEffort: resolved.selection.reasoningEffort,
+          },
+          ...(input.kind === "image-capability-probe"
+            ? { maxOutputTokens: 1 }
+            : {}),
+        };
+        await this.#commit(target, item);
+        if (input.kind === "title")
+          this.#emit({ type: "item_completed", item });
+        return item;
+      });
+      const admitted = operation;
+      const probeAttachment =
+        input.kind === "image-capability-probe"
+          ? await this.#attachments.importBytes(
+              Buffer.from(MODEL_PROBE_IMAGE_BASE64, "base64"),
+              "image/png",
+            )
+          : undefined;
+      const prepared = await this.#withThreadMutation(target.id, async () => {
+        signal.throwIfAborted();
+        const message = compileModelOperationMessage(admitted, target.items, {
+          ...(input.kind === "title" && input.titleTemplate !== undefined
+            ? { titleTemplate: input.titleTemplate }
+            : {}),
+          ...(probeAttachment === undefined ? {} : { probeAttachment }),
+        });
+        const plan = planContextMaterialization({
+          items: target.items,
+          messages: [message],
+          threadId: target.id,
+          instructions: resolved.adapter.contextInstructions,
+          instructionsSourceItemId: admitted.id,
+          inputModalities:
+            input.kind === "image-capability-probe"
+              ? ["text", "image"]
+              : ["text"],
+          id: this.#id,
+          now: this.#now,
+        });
+        for (const item of plan.pending) {
+          await this.#commit(target, item);
+          if (input.kind === "title")
+            this.#emit({ type: "item_completed", item });
+        }
+        const result = plan.resolve(target.items);
+        assertCommittedModelContent(
+          target.items,
+          result.messages,
+          result.instructions,
+          result.instructionsItemId,
+        );
+        if (
+          resolved.model.contextWindow !== null &&
+          estimateModelInput(result.messages, [], result.instructions).total >=
+            resolved.model.contextWindow
+        )
+          throw new AppServerError(
+            "context_window_exceeded",
+            "Committed model operation input exceeds the selected context window",
+          );
+        return { ...result, contextBoundaryItemId: target.items.at(-1)!.id };
+      });
+      signal.throwIfAborted();
+      for await (const event of resolved.adapter.stream({
+        model: resolved.selection.modelId,
+        reasoningEffort: resolved.selection.reasoningEffort,
+        messages: prepared.messages,
+        ...(prepared.instructions === undefined
+          ? {}
+          : { instructions: prepared.instructions }),
+        ...(admitted.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: admitted.maxOutputTokens }),
+        tools: [],
+        signal,
+        debugContext: {
+          threadId: target.id,
+          purpose: "operation",
+          turnId: null,
+          sampleId: admitted.id,
+          contextBoundaryItemId: prepared.contextBoundaryItemId,
+          sampleAttempt: 1,
+        },
+      })) {
+        signal.throwIfAborted();
+        if (event.type === "text_delta") text += event.delta;
+        if (event.type === "tool_call")
+          throw new Error("Auxiliary model operations must not call tools");
+      }
+      signal.throwIfAborted();
+      const completed: import("./item.js").ModelOperationCompletedItem = {
+        type: "model_operation_completed",
+        id: this.#id(),
+        threadId: target.id,
+        createdAt: this.#now(),
+        operationItemId: admitted.id,
+        status: "completed",
+        ...(text ? { content: [{ type: "text", text }] } : {}),
+        ...(input.kind === "image-capability-probe"
+          ? { probeOutcome: "supported" }
+          : {}),
+      };
+      await this.#withThreadMutation(target.id, async () => {
+        await this.#commit(target, completed);
+        if (input.kind === "title")
+          this.#emit({ type: "item_completed", item: completed });
+      });
+      return {
+        threadId: target.id,
+        operationItemId: admitted.id,
+        status: "completed",
+        ...(completed.content ? { content: completed.content } : {}),
+        ...(completed.probeOutcome
+          ? { probeOutcome: completed.probeOutcome }
+          : {}),
+      };
+    } catch (error) {
+      if (
+        error instanceof ThreadJournalAppendOutcomeUnknownError ||
+        !thread ||
+        !operation
+      )
+        throw error;
+      const status = signal.aborted
+        ? ("cancelled" as const)
+        : ("failed" as const);
+      const candidate = error as {
+        kind?: string;
+        status?: number;
+        explicitlyRejectsImageInput?: boolean;
+      };
+      const unsupported =
+        !signal.aborted &&
+        candidate.kind === "http" &&
+        candidate.explicitlyRejectsImageInput === true &&
+        ![401, 402, 403, 404, 408, 409, 429].includes(candidate.status ?? 0) &&
+        (candidate.status ?? 500) < 500;
+      const result: import("./item.js").ModelOperationCompletedItem = {
+        type: "model_operation_completed",
+        id: this.#id(),
+        threadId: thread.id,
+        createdAt: this.#now(),
+        operationItemId: operation.id,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+        ...(text
+          ? { content: [{ type: "text", text }], incomplete: true }
+          : {}),
+        ...(input.kind === "image-capability-probe"
+          ? { probeOutcome: unsupported ? "unsupported" : "inconclusive" }
+          : {}),
+      };
+      const target = thread;
+      await this.#withThreadMutation(target.id, async () => {
+        await this.#commit(target, result);
+        if (input.kind === "title")
+          this.#emit({ type: "item_completed", item: result });
+      });
+      return {
+        threadId: target.id,
+        operationItemId: operation.id,
+        status,
+        error: result.error!,
+        ...(result.content ? { content: result.content } : {}),
+        ...(result.probeOutcome ? { probeOutcome: result.probeOutcome } : {}),
+      };
+    } finally {
+      admission.provider.release();
+      admission.operation.release();
     }
   }
 
@@ -1157,14 +1432,22 @@ export class ZenAppServer {
   }
 
   async listThreads(
-    options: { archived?: boolean } = {},
+    options: { archived?: boolean; includeOperations?: boolean } = {},
   ): Promise<ThreadListEntry[]> {
     const threadIds = await this.#journal.listThreadIds();
     const snapshots: ThreadListEntry[] = [];
     for (const threadId of threadIds) {
       try {
         const thread = await this.#loadThread(threadId);
-        if (thread !== undefined && thread.deletion === undefined) {
+        if (
+          thread !== undefined &&
+          thread.deletion === undefined &&
+          (options.includeOperations === true ||
+            !thread.items.some(
+              (item) =>
+                item.type === "thread_metadata" && item.purpose !== undefined,
+            ))
+        ) {
           snapshots.push(await this.#snapshot(thread));
         }
       } catch (error) {
@@ -1185,7 +1468,12 @@ export class ZenAppServer {
     const archived = options.archived ?? false;
     return structuredClone(
       [...this.#threadSummaries!.values()]
-        .filter((summary) => summary.archived === archived)
+        .filter(
+          (summary) =>
+            summary.archived === archived &&
+            (options.includeOperations === true ||
+              summary.purpose === undefined),
+        )
         .sort((left, right) => left.threadId.localeCompare(right.threadId)),
     );
   }
@@ -3141,6 +3429,17 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (
+        thread.items.some(
+          (item) =>
+            item.type === "thread_metadata" && item.purpose !== undefined,
+        )
+      )
+        throw new AppServerError(
+          "operation_forbidden",
+          "System model-operation history cannot accept conversation messages",
+        );
+
       const admitting = this.#activeTurns.get(threadId);
       if (
         internal.expectedTerminalTurnId !== undefined &&
@@ -4900,6 +5199,16 @@ export class ZenAppServer {
 
   /** Call under the same mutation lock used by setThreadArchived. */
   async #requireUnarchived(threadId: string): Promise<void> {
+    const thread = await this.#requireThread(threadId);
+    if (
+      thread.items.some(
+        (item) => item.type === "thread_metadata" && item.purpose !== undefined,
+      )
+    )
+      throw new AppServerError(
+        "operation_forbidden",
+        "System model-operation history cannot accept conversation messages",
+      );
     if ((await this.#threadMetadata.read(threadId)).archived === true) {
       throw new AppServerError(
         "operation_forbidden",
@@ -5203,6 +5512,7 @@ export class ZenAppServer {
       threadId: thread.id,
       lastItemId: items.at(-1)!.id,
       currentMetadata: configuration,
+      ...(metadata.purpose === undefined ? {} : { purpose: metadata.purpose }),
       ...(metadata.parentThreadId === undefined
         ? {}
         : { parentThreadId: metadata.parentThreadId }),
@@ -5555,11 +5865,22 @@ function forkablePrefix(
       item.type !== "thread_deleted" &&
       item.type !== "thread_restored" &&
       !(
-        item.type === "context_message" &&
+        (item.type === "context_message" || item.type === "model_operation") &&
         item.turnId === undefined &&
         item.sourceItemIds.every((id) =>
           items.slice(0, end).some((source) => source.id === id),
         )
+      ) &&
+      !(
+        item.type === "model_operation_completed" &&
+        item.turnId === undefined &&
+        items
+          .slice(0, end)
+          .some(
+            (source) =>
+              source.type === "model_operation" &&
+              source.id === item.operationItemId,
+          )
       ) &&
       !(item.type === "context_compaction" && item.turnId === undefined)
     ) {
@@ -5671,8 +5992,10 @@ function remapForkItems(
   return items.map((item) => {
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
-    if (copied.type === "context_message")
+    if (copied.type === "context_message" || copied.type === "model_operation")
       copied.sourceItemIds = copied.sourceItemIds.map(remap);
+    if (copied.type === "model_operation_completed")
+      copied.operationItemId = remap(copied.operationItemId);
     if (copied.type === "thread_metadata") delete copied.parentThreadId;
     if (copied.type === "thread_restored")
       copied.deletionItemId = remap(copied.deletionItemId);
@@ -5905,6 +6228,14 @@ async function generateContextCompactionSummary(options: {
         ),
       ];
       const prepared = await options.prepare(messages);
+      if (
+        estimateModelInput(prepared.messages, [], prepared.instructions).total >
+        options.inputTokenBudget
+      )
+        throw new AppServerError(
+          "compaction_budget_exceeded",
+          "Committed compaction input exceeds the model context budget; no request was dispatched",
+        );
       for await (const event of options.adapter.stream({
         debugContext: {
           threadId: options.debugThreadId,

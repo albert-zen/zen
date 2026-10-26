@@ -71,7 +71,8 @@ test("model continues independent work then observes a generic task through cano
       } else if (samples === 3) {
         assert(
           results.some(
-            (result) => result.text === "independent read succeeded",
+            (result) =>
+              result.text === "Exit code: 0\nindependent read succeeded",
           ),
         );
         finish();

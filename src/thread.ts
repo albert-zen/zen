@@ -64,6 +64,33 @@ export class Thread {
     if (this.#items.some((existing) => existing.id === item.id)) {
       throw new Error(`Duplicate item id ${item.id}`);
     }
+    const metadata = this.#items[0];
+    if (
+      metadata?.type === "thread_metadata" &&
+      metadata.purpose !== undefined &&
+      [
+        "turn_started",
+        "turn_completed",
+        "turn_aborted",
+        "turn_replacement_requested",
+        "user_message",
+        "user_message_queued",
+        "user_message_queue_edited",
+        "host_message",
+        "host_message_queued",
+        "thread_message",
+        "thread_message_queued",
+        "agent_message",
+        "reasoning",
+        "tool_call",
+        "tool_result",
+        "failure",
+        "context_compaction",
+      ].includes(item.type)
+    )
+      throw new Error(
+        "System model-operation history cannot accept conversation messages",
+      );
     const deletion = this.deletion;
     if (deletion !== undefined && item.type !== "thread_restored") {
       throw new Error(
@@ -95,6 +122,76 @@ export class Thread {
       this.#items.some((prior) => prior.type === "context_format")
     )
       throw new Error("Duplicate canonical content format marker");
+    if (item.type === "model_operation") {
+      const sources = item.sourceItemIds.map((id) =>
+        this.#items.find((source) => source.id === id),
+      );
+      if (
+        sources.length !== 1 ||
+        !sources[0] ||
+        sources[0].type === "model_operation_completed"
+      )
+        throw new Error(
+          "Model operation requires one earlier canonical source",
+        );
+      if (item.kind === "title" && sources[0].type !== "user_message")
+        throw new Error("Title operation requires a human message source");
+      if (
+        item.kind === "image-capability-probe" &&
+        !(
+          sources[0].type === "thread_metadata" &&
+          sources[0].purpose === "image-capability-probe"
+        )
+      )
+        throw new Error(
+          "Image probe requires trusted operation Thread provenance",
+        );
+      if (!this.#items.some((prior) => prior.type === "context_format"))
+        throw new Error(
+          "Model operation requires the canonical content format gate",
+        );
+    }
+    if (item.type === "model_operation_completed") {
+      const operation = this.#items.find(
+        (source) => source.id === item.operationItemId,
+      );
+      if (operation?.type !== "model_operation")
+        throw new Error("Operation result requires its preceding admission");
+      if (
+        this.#items.some(
+          (prior) =>
+            prior.type === "model_operation_completed" &&
+            prior.operationItemId === item.operationItemId,
+        )
+      )
+        throw new Error("Model operation already has a terminal result");
+      if (
+        item.status === "completed" &&
+        (item.error !== undefined || item.incomplete !== undefined)
+      )
+        throw new Error(
+          "Completed model operation cannot carry a failure diagnostic",
+        );
+      if (
+        item.status !== "completed" &&
+        item.content !== undefined &&
+        item.incomplete !== true
+      )
+        throw new Error("Partial model output requires incomplete provenance");
+      if (item.content?.some((part) => part.type !== "text"))
+        throw new Error(
+          "Auxiliary result must contain only observed model text",
+        );
+      if (item.probeOutcome === "supported" && item.status !== "completed")
+        throw new Error("Supported probe requires successful completion");
+      if (item.probeOutcome === "unsupported" && item.status !== "failed")
+        throw new Error("Unsupported probe requires a failed response");
+      if (
+        item.probeOutcome !== undefined &&
+        operation.kind !== "image-capability-probe"
+      )
+        throw new Error("Probe outcome requires an image probe operation");
+    }
     if (item.type === "context_message") {
       const sources = item.sourceItemIds.map((id) =>
         this.#items.find((source) => source.id === id),
@@ -121,6 +218,7 @@ export class Thread {
           !(
             sources[0]?.type === "turn_started" ||
             sources[0]?.type === "thread_metadata" ||
+            sources[0]?.type === "model_operation" ||
             (sources[0]?.type === "thread_configuration_changed" &&
               !("permissions" in sources[0]))
           ))
@@ -131,6 +229,8 @@ export class Thread {
       const first = sources[0];
       const generatedPurposes = new Set([
         "provider-instructions",
+        "auxiliary-title",
+        "auxiliary-image-probe",
         "workspace-instructions",
         "compaction-summary",
         "file-permissions",
@@ -148,6 +248,30 @@ export class Thread {
         throw new Error(
           "Generated context must retain Host user-role provenance",
         );
+      if (
+        item.purpose === "auxiliary-title" ||
+        item.purpose === "auxiliary-image-probe"
+      ) {
+        if (
+          first?.type !== "model_operation" ||
+          (item.purpose === "auxiliary-title"
+            ? first.kind !== "title"
+            : first.kind !== "image-capability-probe")
+        )
+          throw new Error(
+            "Auxiliary context requires its matching operation admission",
+          );
+        const expectedSources =
+          first.kind === "title"
+            ? [first.id, ...first.sourceItemIds]
+            : [first.id];
+        if (
+          JSON.stringify(item.sourceItemIds) !== JSON.stringify(expectedSources)
+        )
+          throw new Error(
+            "Auxiliary context must preserve the exact admitted source binding",
+          );
+      }
       if (
         item.purpose === "workspace-instructions" &&
         !(

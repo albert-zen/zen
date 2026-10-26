@@ -13,7 +13,7 @@ import {
   type AttachmentRef,
   type AttachmentStore,
 } from "../src/attachment.js";
-import type { CanonicalItem } from "../src/item.js";
+import { originalUserInput, type CanonicalItem } from "../src/item.js";
 import {
   InMemoryThreadJournal,
   JsonlThreadJournal,
@@ -84,7 +84,7 @@ test("view_image imports a cwd-relative file and sends its image content to the 
     assert.deepEqual(requests[1]?.at(-1), {
       role: "tool",
       callId: "view-1",
-      text: result.output,
+      text: `Exit code: 0\n${result.output}`,
       exitCode: 0,
       modelContent: result.modelContent,
     });
@@ -159,7 +159,7 @@ test("view_image accepts only current-thread AttachmentRefs and replays model co
       {
         role: "tool",
         callId: "view-ref",
-        text: result.output,
+        text: `Exit code: 0\n${result.output}`,
         exitCode: 0,
         modelContent: [{ type: "image", attachment: ref }],
       },
@@ -413,7 +413,7 @@ test("an initial user-message journal failure leaves an interrupted start withou
   );
   assert.deepEqual(
     (await backing.read(thread.id)).map((item) => item.type),
-    ["thread_metadata", "turn_started"],
+    ["thread_metadata", "turn_started", "context_format"],
   );
 });
 
@@ -581,7 +581,7 @@ test("hard replace keeps typed image input in its canonical public seam", async 
       item.clientId === "typed-image-replacement",
   );
   assert.equal(replacementMessage?.type, "user_message");
-  assert.equal(replacementMessage.content?.[0]?.type, "image");
+  assert.equal(originalUserInput(replacementMessage)[0]?.type, "image");
 });
 
 test("uses a provider-neutral preview for image-only input", async () => {
@@ -665,7 +665,7 @@ test("nested view_image content follows the visible parent tool result", async (
   assert.deepEqual(messages.at(-1), {
     role: "tool",
     callId: "outer",
-    text: "done",
+    text: "Exit code: 0\ndone",
     exitCode: 0,
     modelContent: [{ type: "image", attachment: ref }],
   });
@@ -711,6 +711,10 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
         (item) => item.type === "user_message",
       )?.createdAt,
       content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at="${beforeRestart.items.find((item) => item.type === "user_message")?.createdAt}"]`,
+        },
         { type: "text", text: "remember this image" },
         { type: "image", attachment: ref },
       ],
@@ -754,7 +758,13 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
       ...projectedBefore,
       {
         role: "user",
-        content: [{ type: "text", text: "continue" }],
+        content: [
+          {
+            type: "text",
+            text: `[Zen recorded user-message metadata: received_at="${(await restarted.readThread(thread.id)).items.findLast((item) => item.type === "user_message")?.createdAt}"]`,
+          },
+          { type: "text", text: "continue" },
+        ],
         userTimestamp: (await restarted.readThread(thread.id)).items.findLast(
           (item) => item.type === "user_message",
         )?.createdAt,

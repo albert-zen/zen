@@ -88,6 +88,7 @@ export function planContextMaterialization(options: {
   threadId: string;
   turnId?: string;
   instructions?: string | undefined;
+  instructionsSourceItemId?: string;
   inputModalities?: readonly string[] | null | undefined;
   id: () => string;
   now: () => string;
@@ -213,12 +214,14 @@ export function planContextMaterialization(options: {
   const instructionsId = options.instructions
     ? requireRecord([{ type: "text", text: options.instructions }], "system", {
         itemIds: [
-          options.items.findLast(
-            (item) =>
-              item.type === "turn_started" ||
-              (item.type === "thread_configuration_changed" &&
-                !("permissions" in item)),
-          )?.id ?? options.items[0]!.id,
+          options.instructionsSourceItemId ??
+            options.items.findLast(
+              (item) =>
+                item.type === "turn_started" ||
+                (item.type === "thread_configuration_changed" &&
+                  !("permissions" in item)),
+            )?.id ??
+            options.items[0]!.id,
         ],
         purpose: "provider-instructions",
         origin: "host",
