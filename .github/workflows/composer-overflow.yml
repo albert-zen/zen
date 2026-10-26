@@ -7,6 +7,13 @@ on:
       - apps/zenx/scripts/build-composer-overflow-preview.mjs
       - apps/zenx/scripts/capture-composer-overflow-preview.mjs
       - apps/zenx/test/fixtures/composer-overflow-visual.tsx
+      - package-lock.json
+      - apps/zenx/src/renderer/src/ThreadView.tsx
+      - apps/zenx/src/renderer/src/Composer.tsx
+      - apps/zenx/src/renderer/src/styles.css
+      - apps/zenx/src/renderer/src/ReferenceToken.tsx
+      - apps/zenx/src/renderer/src/reference-token.css
+      - apps/zenx/scripts/prepare-cjk-fonts.mjs
       - apps/zenx/src/renderer/src/InlineComposerEditor.tsx
       - apps/zenx/src/renderer/src/inline-composer.css
       - apps/zenx/src/renderer/src/editor-style-nonce.ts
