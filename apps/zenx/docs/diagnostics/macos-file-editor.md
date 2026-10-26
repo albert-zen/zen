@@ -1,25 +1,34 @@
 # macOS file editor diagnostic
 
-This test-only diagnostic runs in the existing macOS provider CI job. It loads the
-same real file-sidebar component fixture as the Linux browser checks, using only
-synthetic CJK files and a fresh temporary Electron profile. No production change
-is proposed and passing this diagnostic does not claim the reported scrolling or
-yellow-outline problem is fixed.
+This synthetic diagnostic runs in the existing macOS provider CI job, using the
+actual file-sidebar components, CJK fixtures, and a fresh temporary Electron profile.
+It accompanies the confirmed packaged-CSP scrolling fix; document-end navigation
+is a separate known failure and is not claimed fixed by that change.
 
 Build with `node apps/zenx/scripts/build-file-sidebar-preview.mjs "$OUTPUT"`.
-On the disposable macOS CI runner, from `apps/zenx`, run
-`npx --no-install electron scripts/capture-file-sidebar-electron.cjs "$OUTPUT"`.
+From `apps/zenx` on the disposable macOS CI runner:
+
+- Required scrolling/security contract: `npx --no-install electron scripts/capture-file-sidebar-electron.cjs "$OUTPUT" --scope=scroll-security`.
+- Separate, still-failing document-end investigation: same command with `--scope=end-navigation`.
+- Omit scope or use `--scope=all` to retain every assertion. Unknown/extra scope arguments fail closed.
+
+Each run writes `electron-<scope>-measurements.json` with its exact scope and
+whether navigation assertions were included. CI explicitly names its scroll-security
+step/artifact; a green scrolling result never means document-end navigation passed.
+No failing navigation assertion is removed or rewritten as passed. The navigation
+entry retains cold/no-wheel, after-wheel, EOF geometry and Find-mode controls.
 
 The actual macOS Electron runtime creates and focuses its own BrowserWindow with
 production-equivalent hidden-titlebar, opaque-backdrop and sandbox settings.
 The fixture deliberately excludes the production Host and preload. Its real
 sidebar uses memory-only scoped APIs. Native Electron `sendInputEvent` exercises
 256px/384px tree-open editors with discrete and precise wheel events before and
-after content focus, then the macOS Meta+ArrowDown document-end binding. No
+after content focus. The all/end-navigation entry additionally checks the macOS
+Meta+ArrowDown document-end binding. No
 scrollTop assignment, DOM click, CSS override or CDP fallback can fake a pass.
 Titlebar readiness and hit-test checks precede pointer input.
 
-`electron-measurements.json` records versions, source and driver hashes, focus,
+The scope-specific measurements JSON records versions, source and driver hashes, focus,
 computed outlines/borders, hit stacks, delivered wheel events and scroll metrics.
 Before/focused/scrolled/end PNGs are captured only from the owned renderer with
 `capturePage`, not the desktop. Failure keeps measurements and a failure PNG.
@@ -29,9 +38,8 @@ runner cleans it up after process teardown. A 90-second driver watchdog and
 AX input, permission prompt, system setting change or paid API is used.
 
 This is Electron input acceptance, not physical trackpad/keyboard acceptance.
-A synthetic macOS pass remains a negative reproduction result; actual installed
-build/version, input device/mode, zoom and OS settings may still differ. Do not
-close the user's bug solely on that basis.
+Actual installed
+build/version, input device/mode, zoom and OS settings may still differ. Do not claim every input mode or the separate document-end issue is accepted.
 
 The CI screen is 1024×768. The owned diagnostic window explicitly enables
 Electron's macOS `enableLargerThanScreen` option so its asserted 1400px desktop
@@ -57,3 +65,14 @@ and rejection of style elements with no nonce or a wrong nonce. Expected negativ
 probe violations are recorded separately; nonce values are never recorded.
 Other CSP directives, including script-src, are unchanged. The original permissive
 fixture remains available as a comparison, but is not production-CSP acceptance.
+
+## Separate known document-end failure
+
+Before nonce production changes, head `1628c637` / run `40297891089` (test-merge
+source `6c0fd4b3`, artifact `12639590336`) already failed all four Markdown
+Meta+ArrowDown cases after successful wheels. After nonce, run `40303859922`
+(artifact `12641424552`) reproduces the same failure with selection at document
+length but a viewport near the start. This proves that Markdown failure is not
+introduced by the nonce fix. Source-editor navigation was first measured later;
+its pre-fix baseline has not been established. This investigation remains open,
+owned by the file-editor diagnostic task, independently of scrolling/security acceptance.

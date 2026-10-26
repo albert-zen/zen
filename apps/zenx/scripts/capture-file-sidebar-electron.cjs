@@ -8,6 +8,10 @@ const { createServer } = require("node:http");
 const { pathToFileURL } = require("node:url");
 const { createHash } = require("node:crypto");
 const { app, BrowserWindow, screen } = require("electron");
+const {
+  fileEditorDiagnosticScope,
+} = require("./file-editor-diagnostic-scope.cjs");
+const scope = fileEditorDiagnosticScope(process.argv.slice(3));
 
 assert.equal(
   process.platform,
@@ -29,6 +33,8 @@ let previousDocumentNonce;
 let policyProbeActive = false;
 let originProbeUrl;
 const evidence = {
+  diagnosticScope: scope,
+  navigationAssertionsIncluded: scope !== "scroll-security",
   scope:
     "Actual file sidebar components in macOS Electron, synthetic memory-only CJK files; owned-window Electron sendInputEvent and capturePage. No Host, user profile, private file, desktop capture, AX, or physical trackpad acceptance.",
   versions: process.versions,
@@ -186,6 +192,32 @@ async function verifyOriginIsolation() {
     originProbeUrl = undefined;
   }
 }
+async function resizeEditor(width) {
+  await click(".auxiliary-panel > .browser-panel-resizer");
+  for (let i = 0; i < 4 && (await evaluate(measure)).panel.width < 600; i++)
+    await key("Left");
+  await pause(300);
+  const beforeResize = await evaluate(measure);
+  const handle = await pointFor(".workspace-file-resizer");
+  const end = {
+    x: Math.round(handle.x + beforeResize.scroller.width - width),
+    y: handle.y,
+  };
+  input({ type: "mouseMove", ...handle });
+  input({ type: "mouseDown", button: "left", clickCount: 1, ...handle });
+  input({
+    type: "mouseMove",
+    button: "left",
+    modifiers: ["leftButtonDown"],
+    ...end,
+  });
+  input({ type: "mouseUp", button: "left", clickCount: 1, ...end });
+  await pause(300);
+  await until(
+    `Math.abs(document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-scroller').getBoundingClientRect().width-${width})<=3`,
+    "resized editor layout committed",
+  );
+}
 async function runColdEndCase(markdown) {
   const receipt = {
     editor: markdown ? "markdown" : "source",
@@ -286,9 +318,10 @@ async function runCase(width, precise, productionCsp = false) {
       0,
       "Runtime editor styles pass strict CSP",
     );
+    await resizeEditor(width);
     receipt.sourceBefore = await evaluate(measure);
     bounded(receipt.sourceBefore);
-    await wheel(false);
+    await wheel(precise);
     await until(
       `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-scroller').scrollTop>100`,
       "Source native wheel layout committed",
@@ -299,21 +332,38 @@ async function runCase(width, precise, productionCsp = false) {
       "Source editor also scrolls under strict CSP",
     );
     await click(`${selector} .cm-scroller`);
-    await evaluate("window.__observeNativeEditor()");
-    await key("Down", ["command"]);
-    try {
-      await until(
-        `(() => {const root=document.querySelector(${JSON.stringify(selector)}),scroller=root.querySelector('.cm-scroller').getBoundingClientRect();return Array.from(root.querySelectorAll('.cm-line')).some(line=>{const r=line.getBoundingClientRect();return line.textContent.includes('LAST_SOURCE_LINE')&&r.bottom>scroller.top&&r.top<scroller.bottom;});})()`,
-        "Source native document-end layout committed",
-      );
-      receipt.sourceEnd = await evaluate(measure);
-      assert.equal(
-        receipt.sourceEnd.editorState.head,
-        receipt.sourceEnd.editorState.documentLength,
-      );
-    } catch (error) {
-      receipt.sourceEndFailure = String(error);
-      receipt.sourceEnd = await evaluate(measure);
+    receipt.sourceFocused = await evaluate(measure);
+    assert.ok(
+      receipt.sourceFocused.nodes.some((e) =>
+        e.className.includes("cm-focused"),
+      ),
+      "Source editor truly focused",
+    );
+    await wheel(precise);
+    await until(
+      `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-scroller').scrollTop>${receipt.sourceAfter.scroller.scrollTop + 100}`,
+      "Source focused wheel committed",
+    );
+    receipt.sourceFocusedWheel = await evaluate(measure);
+    bounded(receipt.sourceFocusedWheel);
+    await screenshot(`${receipt.name}-source-focused-scrolled`);
+    if (scope !== "scroll-security") {
+      await evaluate("window.__observeNativeEditor()");
+      await key("Down", ["command"]);
+      try {
+        await until(
+          `(() => {const root=document.querySelector(${JSON.stringify(selector)}),scroller=root.querySelector('.cm-scroller').getBoundingClientRect();return Array.from(root.querySelectorAll('.cm-line')).some(line=>{const r=line.getBoundingClientRect();return line.textContent.includes('LAST_SOURCE_LINE')&&r.bottom>scroller.top&&r.top<scroller.bottom;});})()`,
+          "Source native document-end layout committed",
+        );
+        receipt.sourceEnd = await evaluate(measure);
+        assert.equal(
+          receipt.sourceEnd.editorState.head,
+          receipt.sourceEnd.editorState.documentLength,
+        );
+      } catch (error) {
+        receipt.sourceEndFailure = String(error);
+        receipt.sourceEnd = await evaluate(measure);
+      }
     }
     await click("[data-native-composer-diagnostic] .cm-content");
     input({ type: "char", keyCode: "x" });
@@ -356,27 +406,8 @@ async function runCase(width, precise, productionCsp = false) {
     `document.querySelector(${JSON.stringify(selector)})?.id==='aux-content-file:docs/long-notes.md'`,
     "Markdown active",
   );
-  receipt.phase = "resize-panel";
-  await click(".auxiliary-panel > .browser-panel-resizer");
-  for (let i = 0; i < 4; i++) await key("Left");
-  await pause(300);
-  const beforeResize = await evaluate(measure);
-  receipt.phase = "resize-tree";
-  const handle = await pointFor(".workspace-file-resizer");
-  const end = {
-    x: Math.round(handle.x + beforeResize.scroller.width - width),
-    y: handle.y,
-  };
-  input({ type: "mouseMove", ...handle });
-  input({ type: "mouseDown", button: "left", clickCount: 1, ...handle });
-  input({
-    type: "mouseMove",
-    button: "left",
-    modifiers: ["leftButtonDown"],
-    ...end,
-  });
-  input({ type: "mouseUp", button: "left", clickCount: 1, ...end });
-  await pause(300);
+  receipt.phase = "resize-editor";
+  await resizeEditor(width);
   await evaluate(
     `(() => {window.__nativeFileWheelEvents=[];window.__nativeFileKeyEvents=[];document.addEventListener('keydown',event=>{const e={key:event.key,code:event.code,metaKey:event.metaKey,ctrlKey:event.ctrlKey,altKey:event.altKey,shiftKey:event.shiftKey,target:event.target?.className};window.__nativeFileKeyEvents.push(e);setTimeout(()=>e.defaultPrevented=event.defaultPrevented,0);},{capture:true,passive:true});document.addEventListener('wheel',event=>{const e={target:event.target?.className,deltaX:event.deltaX,deltaY:event.deltaY,deltaMode:event.deltaMode,defaultPreventedAtCapture:event.defaultPrevented};window.__nativeFileWheelEvents.push(e);setTimeout(()=>e.defaultPreventedAfterDispatch=event.defaultPrevented,0);},{capture:true,passive:true});})()`,
   );
@@ -437,6 +468,14 @@ async function runCase(width, precise, productionCsp = false) {
   );
   bounded(receipt.scrolled);
   await screenshot(`${receipt.name}-scrolled`);
+  assert.ok(
+    !receipt.initialLayoutFailure,
+    "Production layout contract must also pass",
+  );
+  if (scope === "scroll-security") {
+    receipt.status = "passed";
+    return;
+  }
   receipt.phase = "meta-down";
   await evaluate("window.__observeNativeEditor()");
   receipt.beforeEnd = await evaluate(measure);
@@ -523,7 +562,7 @@ async function finish(error) {
   }
   try {
     await fs.writeFile(
-      path.join(directory, "electron-measurements.json"),
+      path.join(directory, `electron-${scope}-measurements.json`),
       JSON.stringify(evidence, null, 2) + "\n",
     );
   } finally {
@@ -618,8 +657,10 @@ const watchdog = setTimeout(
   await verifyOriginIsolation();
   evidence.runtimeSecurity =
     "Production file handler, exact generated strict-CSP entry, fresh document style nonce";
-  await runColdEndCase(false);
-  await runColdEndCase(true);
+  if (scope !== "scroll-security") {
+    await runColdEndCase(false);
+    await runColdEndCase(true);
+  }
   for (const width of [256, 384]) {
     for (const precise of [false, true]) {
       try {
@@ -637,6 +678,11 @@ const watchdog = setTimeout(
     evidence.cases.every((c) => c.status === "passed"),
     "All native cases must pass; see per-case failure evidence",
   );
+  if (scope !== "scroll-security")
+    assert.ok(
+      evidence.coldEndCases.every((c) => c.status === "passed"),
+      "Cold document-end cases must pass",
+    );
   assert.equal(evidence.rendererErrors.length, 0, "No renderer errors");
   assert.equal(evidence.blockedRequests.length, 0, "No external requests");
   await finish();

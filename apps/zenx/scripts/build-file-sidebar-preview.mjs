@@ -100,6 +100,7 @@ const sources = [
   "scripts/capture-file-sidebar-preview.mjs",
   "src/renderer/index.html",
   "scripts/capture-file-sidebar-electron.cjs",
+  "scripts/file-editor-diagnostic-scope.cjs",
 ];
 await writeFile(
   path.join(directory, "source.json"),
