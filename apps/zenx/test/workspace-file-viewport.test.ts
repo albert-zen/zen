@@ -72,3 +72,32 @@ test("changed/shorter file offsets are clamped; a retired editor cannot restore 
     undefined,
   );
 });
+
+test("same-file rebind fences older cleanup and scrolling does not flatten an unchanged document", () => {
+  const drafts = new WorkspaceFileDrafts();
+  const position = drafts.viewport(fileDraftKey("A", "file.ts"));
+  const old = fixture("text", 400, 200);
+  const releaseOld = position.bind(old.view);
+  old.scrollDOM.dispatchEvent(new Event("scroll"));
+  const fresh = fixture("text", 500, 300);
+  let flattened = 0;
+  fresh.view.state.doc.toString = () => {
+    flattened++;
+    return "text";
+  };
+  const releaseFresh = position.bind(fresh.view);
+  for (let i = 0; i < 100; i++)
+    fresh.scrollDOM.dispatchEvent(new Event("scroll"));
+  assert.equal(
+    flattened,
+    2,
+    "one bind comparison and one immutable-document cache fill",
+  );
+  releaseOld();
+  assert.equal(
+    position.initial("text"),
+    fresh.snapshot,
+    "old cleanup cannot overwrite newer binding",
+  );
+  releaseFresh();
+});

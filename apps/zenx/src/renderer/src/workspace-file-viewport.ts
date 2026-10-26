@@ -4,6 +4,8 @@ import type { EditorView } from "@codemirror/view";
 export class WorkspaceFileViewport {
   #snapshot?: ReturnType<EditorView["scrollSnapshot"]>;
   #text?: string;
+  #doc?: EditorView["state"]["doc"];
+  #generation = 0;
   #top = 0;
   #left = 0;
   initial(text: string) {
@@ -11,11 +13,15 @@ export class WorkspaceFileViewport {
   }
   bind(view: EditorView): () => void {
     const unchanged = view.state.doc.toString() === this.#text;
+    const generation = ++this.#generation;
     let live = true;
     const save = () => {
-      if (!live) return;
+      if (!live || generation !== this.#generation) return;
       this.#snapshot = view.scrollSnapshot();
-      this.#text = view.state.doc.toString();
+      if (this.#doc !== view.state.doc) {
+        this.#doc = view.state.doc;
+        this.#text = this.#doc.toString();
+      }
       this.#top = view.scrollDOM.scrollTop;
       this.#left = view.scrollDOM.scrollLeft;
     };
@@ -42,7 +48,7 @@ export class WorkspaceFileViewport {
           ),
         }),
         write: (position) => {
-          if (!live) return;
+          if (!live || generation !== this.#generation) return;
           view.scrollDOM.scrollTop = position.top;
           view.scrollDOM.scrollLeft = position.left;
         },
