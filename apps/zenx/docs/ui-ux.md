@@ -772,3 +772,11 @@ Unquoted automatic paths require a directory and file extension; paths containin
 A closed top-level `text` or `plaintext` fenced block containing exactly one whitespace-free local path offers a separate **Open file** header action alongside Copy. Code remains literal and copy remains unchanged; incomplete, multiline, command-like, reference-bearing and other-language blocks have no file action. Activation uses the same current-Thread Host workspace reader, never execution or an external app.
 
 The local debugger also provides an explicit read-only System operation histories tab for trusted probe histories. Opening it neither starts a probe nor enables capture. Actual provider/model selection comes from each `model_operation`, not the container's default metadata; terminal model output and Host diagnostics remain distinct. Title operations remain in their source Thread. Canonical context attachments use their exact recorded AttachmentRef and the existing Host reader.
+
+### Packaged editor style security
+
+File/source editors and the inline composer share the current renderer document's
+trusted style nonce for CodeMirror runtime styles. Packaged acceptance uses the
+actual renderer CSP, not a permissive preview policy; missing/incorrect nonce
+styles remain blocked. Fixing layout or focus must never broadly permit inline
+styles or scripts, and editor scrolling stays inside its bounded pane.

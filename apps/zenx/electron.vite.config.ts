@@ -113,6 +113,10 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
+          "renderer-file-protocol": resolve(
+            __dirname,
+            "src/main/renderer-file-protocol.ts",
+          ),
           index: resolve(__dirname, "src/main/index.ts"),
           "fleet-bridge": resolve(__dirname, "src/main/fleet-bridge.ts"),
           "fleet-relay-cli": resolve(__dirname, "src/main/fleet-relay-cli.ts"),

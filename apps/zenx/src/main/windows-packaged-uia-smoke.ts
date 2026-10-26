@@ -22,6 +22,7 @@ import { waitForFile, waitForText } from "./windows-packaged-uia-files.js";
 import { WINDOWS_PACKAGED_UIA_FIXTURE } from "./windows-packaged-uia-fixture.js";
 import {
   assertWindowsPackagedUiaFocusEvidence,
+  windowsUiaTargetDiagnostics,
   type WindowsPackagedUiaFocusEvidence,
 } from "./windows-packaged-uia-evidence.js";
 
@@ -80,12 +81,45 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
   let spawnCount = 0;
   let lastPid: number | undefined;
   let closedLaunches = 0;
+  const started = performance.now();
+  let phase = "provider-selection";
+  const nativeCalls: Array<{
+    operation: "inspect" | "set_value" | "invoke" | "invalid";
+    startedMs: number;
+    elapsedMs: number | null;
+    outcome:
+      "running" | "completed" | "not_dispatched" | "unknown" | "unavailable";
+    rootAcquisitionTimeout: boolean;
+  }> = [];
   // The trace delegates every byte and launch option to the production transport.
   // It cannot manufacture availability, UIA receipts, or cancellation evidence.
   const trace: WinAppCliRunner = {
     async run(executable, args, launchOptions) {
-      if (args.includes("--zenx-uia-strict"))
+      let call: (typeof nativeCalls)[number] | undefined;
+      if (args.includes("--zenx-uia-strict")) {
         nativeLaunch = { executable, args, options: launchOptions };
+        let operation: unknown;
+        try {
+          operation = JSON.parse(launchOptions.stdin ?? "{}").operation;
+        } catch {
+          /* Observation must not replace native request validation. */
+        }
+        call = {
+          operation:
+            operation === "inspect" ||
+            operation === "set_value" ||
+            operation === "invoke"
+              ? operation
+              : "invalid",
+          startedMs: Math.round(performance.now() - started),
+          elapsedMs: null,
+          outcome: "running",
+          rootAcquisitionTimeout: false,
+        };
+        nativeCalls.push(call);
+        if (nativeCalls.length > 8) nativeCalls.shift();
+      }
+      const callStarted = performance.now();
       let spawned = false;
       try {
         const result = await runner.run(executable, args, {
@@ -99,6 +133,16 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
         });
         if (args.includes("--zenx-uia-strict")) {
           const receipt = JSON.parse(result.stdout) as NativeReceipt;
+          if (call) {
+            call.outcome =
+              receipt.outcome === "completed" ||
+              receipt.outcome === "not_dispatched" ||
+              receipt.outcome === "unknown"
+                ? receipt.outcome
+                : "unavailable";
+            call.rootAcquisitionTimeout =
+              receipt.error === "provider_error_inspect_element_com_h80131505";
+          }
           if (
             receipt.operation === "inspect" &&
             receipt.outcome === "completed"
@@ -112,6 +156,10 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
         }
         return result;
       } finally {
+        if (call) {
+          call.elapsedMs = Math.round(performance.now() - callStarted);
+          if (call.outcome === "running") call.outcome = "unavailable";
+        }
         // Production runBoundedProcess settles only after ChildProcess 'close',
         // including stdout/stderr pipes, and after releasing the asset binding.
         if (spawned) closedLaunches++;
@@ -186,6 +234,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
     const script = path.join(directory, "fixture.ps1");
     await writeFile(script, WINDOWS_PACKAGED_UIA_FIXTURE, "utf8");
     const title = `ZenX packaged UIA ${randomUUID()}`;
+    phase = "target-readiness";
     fixtures.push(
       startFixture(script, [
         "-Mode",
@@ -204,6 +253,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       messageLoopReady: boolean;
     }>(directory, "target.json", signal, fixtures);
     assert.equal(target.messageLoopReady, true);
+    phase = "guard-readiness";
     fixtures.push(
       startFixture(script, [
         "-Mode",
@@ -225,6 +275,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
     assert.notEqual(target.pid, guard.pid);
     assert.equal(guard.hookInstalled, true);
 
+    phase = "target-discovery";
     const windows = await invoke<ComputerWindowList>("computer_list_windows", {
       query: title,
     });
@@ -239,6 +290,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       "packaged discovery must find exactly the native target",
     );
     const selectedTarget = matches[0]!.target;
+    phase = "native-uia-operations";
     const first = await invoke<ComputerInspection>("computer_inspect", {
       target: selectedTarget,
     });
@@ -587,6 +639,26 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       scope:
         "Observed fixture epoch only; target-owned side effects and races prevent a global focus guarantee",
     };
+  } catch (error) {
+    // Preserve only bounded fixed-field synthetic observations BEFORE cleanup.
+    // A missing/stale sample remains missing/stale; it is not UIA success or
+    // proof that the target kept pumping throughout a native timeout.
+    console.error(
+      "Windows packaged UIA failure diagnostic",
+      JSON.stringify({
+        phase,
+        elapsedMs: Math.round(performance.now() - started),
+        nativeCalls,
+        fixtures: fixtures.map((fixture, index) => ({
+          role: index === 0 ? "target" : "guard",
+          pid: fixture.child.pid ?? null,
+          exitCode: fixture.child.exitCode,
+          signalCode: fixture.child.signalCode,
+          snapshots: windowsUiaTargetDiagnostics(fixture.diagnostic()),
+        })),
+      }),
+    );
+    throw error;
   } finally {
     clearTimeout(timeout);
     controller.abort(new Error("Packaged UIA smoke cleanup"));

@@ -1,3 +1,4 @@
+import { editorStyleNonce } from "./editor-style-nonce.js";
 import { history, historyKeymap, defaultKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
@@ -236,6 +237,7 @@ export function InlineMarkdownEditor({
       state: EditorState.create({
         doc: normalizedSource(text),
         extensions: [
+          editorStyleNonce(),
           rawSource.init(() => text),
           preserveRawSource,
           fileContentSearch,
