@@ -57,7 +57,7 @@ const measure = `(() => {
   const nodes=[...root?.querySelectorAll('.markdown-live-editor,.cm-editor,.cm-scroller,.cm-content')||[]].map(style);
   const ancestors=[];for(let e=scroller?.parentElement;e;e=e.parentElement)ancestors.push(style(e));
   const tree=document.querySelector('.workspace-file-navigation');
-  return {scroller:style(scroller),nodes,ancestors,treeVisible:!!tree?.getClientRects().length,tree:style(tree),panel:style(document.querySelector('.auxiliary-panel')),heading:style(document.querySelector('.auxiliary-heading')),location:style(root?.querySelector('.file-location')),titlebar:style(document.querySelector('.window-titlebar')),titlebarSession:style(document.querySelector('.window-titlebar-session')),activeElement:document.activeElement?.outerHTML.slice(0,500),renderedTail:root?.querySelector('.cm-editor')?.textContent.slice(-600),hitStack:r?document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).map(e=>e.tagName+'.'+e.className):[],wheelEvents:window.__nativeFileWheelEvents||[],page:{width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,widthLimit:innerWidth,heightLimit:innerHeight},navigatorPlatform:navigator.platform,devicePixelRatio,platformMarker:document.documentElement.dataset.platform};
+  return {scroller:style(scroller),nodes,ancestors,treeVisible:!!tree?.getClientRects().length,tree:style(tree),panel:style(document.querySelector('.auxiliary-panel')),heading:style(document.querySelector('.auxiliary-heading')),location:style(root?.querySelector('.file-location')),titlebar:style(document.querySelector('.window-titlebar')),titlebarSession:style(document.querySelector('.window-titlebar-session')),activeElement:document.activeElement?.outerHTML.slice(0,500),renderedTail:root?.querySelector('.cm-editor')?.textContent.slice(-600),hitStack:r?document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).map(e=>e.tagName+'.'+e.className):[],wheelEvents:window.__nativeFileWheelEvents||[],keyEvents:window.__nativeFileKeyEvents||[],page:{width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,widthLimit:innerWidth,heightLimit:innerHeight},navigatorPlatform:navigator.platform,devicePixelRatio,platformMarker:document.documentElement.dataset.platform};
 })()`;
 function requireFocus() {
   assert.ok(window.isFocused(), "Owned BrowserWindow must have OS focus");
@@ -174,7 +174,7 @@ async function runCase(width, precise) {
   input({ type: "mouseUp", button: "left", clickCount: 1, ...end });
   await pause(300);
   await evaluate(
-    `(() => {window.__nativeFileWheelEvents=[];document.addEventListener('wheel',event=>{const e={target:event.target?.className,deltaX:event.deltaX,deltaY:event.deltaY,deltaMode:event.deltaMode,defaultPreventedAtCapture:event.defaultPrevented};window.__nativeFileWheelEvents.push(e);setTimeout(()=>e.defaultPreventedAfterDispatch=event.defaultPrevented,0);},{capture:true,passive:true});})()`,
+    `(() => {window.__nativeFileWheelEvents=[];window.__nativeFileKeyEvents=[];document.addEventListener('keydown',event=>{const e={key:event.key,code:event.code,metaKey:event.metaKey,ctrlKey:event.ctrlKey,altKey:event.altKey,shiftKey:event.shiftKey,target:event.target?.className};window.__nativeFileKeyEvents.push(e);setTimeout(()=>e.defaultPrevented=event.defaultPrevented,0);},{capture:true,passive:true});document.addEventListener('wheel',event=>{const e={target:event.target?.className,deltaX:event.deltaX,deltaY:event.deltaY,deltaMode:event.deltaMode,defaultPreventedAtCapture:event.defaultPrevented};window.__nativeFileWheelEvents.push(e);setTimeout(()=>e.defaultPreventedAfterDispatch=event.defaultPrevented,0);},{capture:true,passive:true});})()`,
   );
   receipt.afterResize = await evaluate(measure);
   receipt.nativeWindow = {
@@ -227,9 +227,13 @@ async function runCase(width, precise) {
   bounded(receipt.scrolled);
   await screenshot(`${receipt.name}-scrolled`);
   receipt.phase = "meta-down";
-  await key("Down", ["meta"]);
+  await key("Down", ["command"]);
   await pause(500);
   receipt.end = await evaluate(measure);
+  assert.ok(
+    receipt.end.keyEvents.some((e) => e.key === "ArrowDown" && e.metaKey),
+    "Native Command+Down must arrive as DOM metaKey ArrowDown",
+  );
   assert.ok(
     receipt.end.renderedTail.includes("LAST_MARKDOWN_SECTION"),
     "Meta+ArrowDown reaches final synthetic marker",
@@ -326,8 +330,23 @@ const watchdog = setTimeout(
     (_event, details) =>
       void finish(new Error(`Renderer gone: ${details.reason}`)),
   );
-  for (const width of [256, 384])
-    for (const precise of [false, true]) await runCase(width, precise);
+  for (const width of [256, 384]) {
+    for (const precise of [false, true]) {
+      try {
+        await runCase(width, precise);
+      } catch (error) {
+        const receipt = evidence.cases.at(-1);
+        receipt.status = "failed";
+        receipt.failure = String(error.stack || error);
+        receipt.failureState = await evaluate(measure);
+        await screenshot(`${receipt.name}-failure`);
+      }
+    }
+  }
+  assert.ok(
+    evidence.cases.every((c) => c.status === "passed"),
+    "All native cases must pass; see per-case failure evidence",
+  );
   assert.equal(evidence.rendererErrors.length, 0, "No renderer errors");
   assert.equal(evidence.blockedRequests.length, 0, "No external requests");
   await finish();
