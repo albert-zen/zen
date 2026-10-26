@@ -196,7 +196,12 @@ async function resizeEditor(width) {
   await click(".auxiliary-panel > .browser-panel-resizer");
   for (let i = 0; i < 4 && (await evaluate(measure)).panel.width < 600; i++)
     await key("Left");
-  await pause(300);
+  // Native keyboard handling can commit React size state before Chromium's
+  // actual grid geometry. Do not derive a tree drag from the previous 520px pane.
+  await until(
+    `Math.abs(document.querySelector('.auxiliary-panel').getBoundingClientRect().width-600)<1`,
+    "outer panel geometry committed",
+  );
   const beforeResize = await evaluate(measure);
   const handle = await pointFor(".workspace-file-resizer");
   const end = {
