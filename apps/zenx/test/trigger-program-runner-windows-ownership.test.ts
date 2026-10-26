@@ -162,6 +162,48 @@ for (const nested of [false, true]) {
   });
 }
 
+for (const tickDifference of [-10n, 0n, 10n]) {
+  test(`Windows runner preserves creation-tick order at a ${String(tickDifference)} tick difference beyond Number precision`, async (t) => {
+    const f = fixture(t);
+    f.root.startTime = "639286200000000000";
+    const descendant = {
+      ...f.root,
+      pid: 303,
+      parentPid: f.root.pid,
+      startTime: String(BigInt(f.root.startTime) + tickDifference),
+    };
+    // CIM has microsecond (10-tick) precision. At contemporary .NET dates,
+    // Number conversion would erase this difference; decimal strings do not.
+    assert.equal(Number(descendant.startTime), Number(f.root.startTime));
+    let captures = 0;
+    const actual = await f.run(async () => {
+      captures += 1;
+      return {
+        entries:
+          captures === 1
+            ? [descendant, f.root]
+            : captures === 2
+              ? [descendant]
+              : [],
+      };
+    });
+    assert.equal(actual.status, "cancelled");
+    if (tickDifference < 0n) {
+      // A real child born after a backward wall-clock adjustment and an old
+      // orphan with this recycled PPID have identical snapshot evidence.
+      // Neither can be silently discarded or adopted as a verified child.
+      assert.match(
+        actual.error ?? "",
+        /PID 303 predates parent PID 101 \(creation ticks 639286199999999990 < 639286200000000000\); containment was not proven/u,
+      );
+      assert.deepEqual(f.kills, []);
+    } else {
+      assert.equal(actual.error, "fixture cancellation");
+      assert.deepEqual(f.kills, [descendant]);
+    }
+  });
+}
+
 test("Windows runner rejects newly observed descendants after the root exits", async (t) => {
   const f = fixture(t);
   let captures = 0;

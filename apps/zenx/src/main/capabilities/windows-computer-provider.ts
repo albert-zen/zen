@@ -272,9 +272,11 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
       loadScreenshotImage?: WinAppScreenshotImageLoader;
     } = {},
   ) {
-    this.#artifactDirectory =
+    this.#artifactDirectory = path.join(
       options.artifactDirectory ??
-      path.join(os.tmpdir(), `zenx-winapp-artifacts-${String(process.pid)}`);
+        path.join(os.tmpdir(), `zenx-winapp-artifacts-${String(process.pid)}`),
+      randomUUID(),
+    );
     this.#command = options.command ?? "winapp";
     this.#platform = options.platform ?? process.platform;
     this.#runner = options.runner ?? new SpawnWinAppCliRunner();

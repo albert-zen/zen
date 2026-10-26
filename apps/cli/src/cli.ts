@@ -222,6 +222,7 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
   const zenHome = dataDirectory(args);
   const hostConfig = hostOptions(args);
   const host = createHostedAppServer(hostConfig);
+  let stop: (() => void) | undefined;
   try {
     if (listen === "stdio://" || listen === "stdio") {
       if (remoteHostConfigFile !== undefined) {
@@ -241,18 +242,25 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
       return;
     }
 
-    const server = await serveCodexWebSocket({
-      appServer: host,
-      zenHome,
-      listen,
-      ...(bearerToken === undefined ? {} : { bearerToken }),
+    // Install signal handlers before startup can publish either ready message.
+    // Signals only record intent; the finally blocks own all resource cleanup.
+    const shutdown = new Promise<void>((resolve) => {
+      stop = resolve;
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
     });
+    let server: CodexWebSocketServer | undefined;
     let access: RemoteHostAccess | undefined;
     let remoteServer: Awaited<ReturnType<typeof serveRemoteHost>> | undefined;
     let admin: ReturnType<typeof createInterface> | undefined;
     let pairingFile: string | undefined;
-    let loopbackClosed = false;
     try {
+      server = await serveCodexWebSocket({
+        appServer: host,
+        zenHome,
+        listen,
+        ...(bearerToken === undefined ? {} : { bearerToken }),
+      });
       if (remoteHostConfigFile !== undefined) {
         const config = await loadRemoteHostConfig(remoteHostConfigFile);
         access = new RemoteHostAccess({
@@ -303,14 +311,13 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
         }
       }
       process.stderr.write(`Zen App Server listening on ${server.url}\n`);
-      await waitForShutdown(server);
-      loopbackClosed = true;
+      await shutdown;
     } finally {
       admin?.close();
       const cleanup = await Promise.allSettled([
         remoteServer?.close(),
         pairingFile === undefined ? undefined : unlink(pairingFile),
-        loopbackClosed ? undefined : server.close(),
+        server?.close(),
       ]);
       access?.close();
       const errors = cleanup.flatMap((result) =>
@@ -320,7 +327,14 @@ async function appServerCommand(args: ParsedArguments): Promise<void> {
         throw new AggregateError(errors, "Remote Host shutdown failed");
     }
   } finally {
-    await host.closeHostResources();
+    try {
+      await host.closeHostResources();
+    } finally {
+      if (stop !== undefined) {
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
+      }
+    }
   }
 }
 
@@ -1103,19 +1117,6 @@ function assertNoPositionals(args: ParsedArguments): void {
   if (args.positionals.length > 0) {
     throw new Error(`Unexpected arguments: ${args.positionals.join(" ")}`);
   }
-}
-
-async function waitForShutdown(server: CodexWebSocketServer): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const stop = (): void => {
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      resolve();
-    };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
-  });
-  await server.close();
 }
 
 async function waitForProcessShutdown(): Promise<void> {

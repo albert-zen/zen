@@ -543,6 +543,83 @@ test("names the artifact and source without leaking URL credentials", async () =
   }
 });
 
+test("release redirects require explicit exact origins and retain digest validation", async () => {
+  const bytes = Buffer.from("redirected release fixture");
+  let assetRequests = 0;
+  const destination = await createFixture((_request, response) => {
+    assetRequests += 1;
+    response.end(bytes);
+  });
+  const source = await createFixture((_request, response) => {
+    response.writeHead(302, { location: `${destination.url}/asset` }).end();
+  });
+  const options = {
+    artifactName: "redirected release",
+    url: `${source.url}/release`,
+    digest: sha256(bytes),
+    deadline: Date.now() + 5_000,
+    cacheLocation: source.cacheLocation,
+  };
+  try {
+    await assert.rejects(
+      acquireVerifiedArtifact(options),
+      /redirect origin is not allowed/,
+    );
+    await assert.rejects(
+      acquireVerifiedArtifact({ ...options, redirectOrigins: [source.url] }),
+      /redirect origin is not allowed/,
+    );
+    assert.equal(assetRequests, 0);
+    const allowed = { ...options, redirectOrigins: [destination.url] };
+    await assert.rejects(
+      acquireVerifiedArtifact({ ...allowed, digest: sha256("different pin") }),
+      /digest mismatch/,
+    );
+    assert.deepEqual(await cacheFiles(source.cacheLocation), []);
+    const cached = await acquireVerifiedArtifact(allowed);
+    assert.deepEqual(await readFile(cached), bytes);
+    await source.closeServer();
+    await destination.closeServer();
+    assert.equal(await acquireVerifiedArtifact(allowed), cached);
+    assert.equal(assetRequests, 2);
+  } finally {
+    await source.close();
+    await destination.close();
+  }
+});
+
+test("allowed release redirects stop after three hops and preserve the total deadline", async () => {
+  let requests = 0;
+  let hang = false;
+  const fixture = await createFixture((request, response) => {
+    requests += 1;
+    if (hang && request.url === "/hung") return;
+    response.writeHead(302, { location: hang ? "/hung" : "/loop" }).end();
+  });
+  const options = {
+    artifactName: "bounded redirects",
+    url: `${fixture.url}/release`,
+    digest: sha256("unused"),
+    deadline: Date.now() + 2_000,
+    cacheLocation: fixture.cacheLocation,
+    redirectOrigins: [fixture.url],
+  };
+  try {
+    await assert.rejects(acquireVerifiedArtifact(options), /redirect limit/);
+    assert.equal(requests, 4);
+    hang = true;
+    const started = Date.now();
+    await assert.rejects(
+      acquireVerifiedArtifact({ ...options, deadline: started + 200 }),
+      /overall deadline/,
+    );
+    assert.ok(Date.now() - started < 3_000);
+    assert.deepEqual(await cacheFiles(fixture.cacheLocation), []);
+  } finally {
+    await fixture.close();
+  }
+});
+
 async function createFixture(listener) {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-artifact-test-"),

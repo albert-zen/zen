@@ -78,7 +78,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-peekaboo-1.0.1.tgz",
+    "zenx-computer-plugin-peekaboo-1.0.2.tgz",
     "variants/peekaboo.zenx.plugin.json",
   ),
   plugin(

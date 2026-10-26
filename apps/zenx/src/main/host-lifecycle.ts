@@ -1,4 +1,9 @@
 import {
+  LifecycleWaitUnconfirmedError,
+  waitForLifecycle,
+} from "./lifecycle-wait.js";
+
+import {
   activationNeedsWindow,
   windowAllClosedDisposition,
   type ZenXDesktopPlatform,
@@ -14,6 +19,8 @@ export interface ZenXHostLifecycleOptions {
   stopHost(): Promise<void>;
   finishQuit(): void;
   reportStopFailure?(error: unknown): void;
+  /** Reporting deadline per Quit phase, not proof of provider termination. */
+  shutdownWaitMs?: number;
 }
 
 class ZenXBootstrapCancelledError extends Error {
@@ -73,6 +80,9 @@ export class ZenXHostLifecycle {
   #quitting = false;
   #quitReady = false;
   #quitCompletion: Promise<void> | undefined;
+  #bootstrapJoin: Promise<void> | undefined;
+  #hostStop: Promise<void> | undefined;
+  #unconfirmedReported = false;
 
   constructor(options: ZenXHostLifecycleOptions) {
     this.#options = options;
@@ -107,25 +117,40 @@ export class ZenXHostLifecycle {
     preventDefault();
     if (this.#quitCompletion !== undefined) return;
     this.#quitting = true;
-    let bootstrapJoin: Promise<void>;
-    try {
-      bootstrapJoin = this.#options.cancelBootstrap?.() ?? Promise.resolve();
-    } catch (error) {
-      bootstrapJoin = Promise.reject(error);
+    if (this.#bootstrapJoin === undefined) {
+      try {
+        this.#bootstrapJoin =
+          this.#options.cancelBootstrap?.() ?? Promise.resolve();
+      } catch (error) {
+        this.#bootstrapJoin = Promise.reject(error);
+      }
     }
-    this.#quitCompletion = this.#finishQuit(bootstrapJoin);
+    this.#quitCompletion = this.#finishQuit();
   }
 
-  async #finishQuit(bootstrapJoin: Promise<void>): Promise<void> {
+  async #finishQuit(): Promise<void> {
     const failures: unknown[] = [];
     try {
-      await bootstrapJoin;
+      await this.#joinBootstrapWithinBudget();
     } catch (error) {
+      if (error instanceof LifecycleWaitUnconfirmedError) {
+        this.#blockQuit(error);
+        return;
+      }
       failures.push(error);
     }
     try {
-      await this.#options.stopHost();
+      this.#hostStop ??= Promise.resolve().then(() => this.#options.stopHost());
+      await waitForLifecycle(
+        this.#hostStop,
+        "ZenX Host cleanup",
+        this.#options.shutdownWaitMs ?? 5_000,
+      );
     } catch (error) {
+      if (error instanceof LifecycleWaitUnconfirmedError) {
+        this.#blockQuit(error);
+        return;
+      }
       failures.push(error);
     }
     if (failures.length > 0) {
@@ -144,5 +169,48 @@ export class ZenXHostLifecycle {
     }
     this.#quitReady = true;
     this.#options.finishQuit();
+  }
+
+  async #joinBootstrapWithinBudget(): Promise<void> {
+    const timeoutMs = this.#options.shutdownWaitMs ?? 5_000;
+    const deadline = performance.now() + timeoutMs;
+    const phase = "ZenX bootstrap cancellation/join";
+    while (true) {
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) {
+        throw new LifecycleWaitUnconfirmedError(
+          phase,
+          timeoutMs,
+          this.#bootstrapJoin!,
+        );
+      }
+      try {
+        await waitForLifecycle(this.#bootstrapJoin!, phase, remaining);
+        return;
+      } catch (error) {
+        if (!(error instanceof LifecycleWaitUnconfirmedError)) throw error;
+        // A previous readiness observer may have failed before its source
+        // actually settled. Unwrap that source during this explicit Quit,
+        // without granting a fresh deadline or restarting any operation.
+        this.#bootstrapJoin = error.completion.then(() => undefined);
+        this.#bootstrapJoin.catch(() => undefined);
+        if (performance.now() >= deadline) throw error;
+      }
+    }
+  }
+
+  #blockQuit(error: LifecycleWaitUnconfirmedError): void {
+    // Failure reporting cannot turn unconfirmed termination into successful Quit.
+    // Keep native activity and the process alive. Another deliberate Quit may
+    // re-observe the same source promises; late close never quits automatically.
+    if (!this.#unconfirmedReported) {
+      this.#unconfirmedReported = true;
+      try {
+        this.#options.reportStopFailure?.(error);
+      } catch {
+        /* Remain blocked even if presentation failed. */
+      }
+    }
+    this.#quitCompletion = undefined;
   }
 }
