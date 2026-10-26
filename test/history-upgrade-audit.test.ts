@@ -207,7 +207,10 @@ test("audit blocks unknown future Item types and corrupt reachable attachment by
 import { ZenAppServer } from "../src/app-server.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { ToolEnvironment } from "../src/tool.js";
-import { JsonlThreadJournal } from "../src/journal.js";
+import {
+  JsonlThreadJournal,
+  ThreadJournalAppendOutcomeUnknownError,
+} from "../src/journal.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
@@ -332,48 +335,59 @@ test("real new Host continues and forks legacy disk history, audits auxiliary-on
   }
 });
 
-test("unknown canonical append outcome leaves upgrade marker, no provider dispatch or automatic replay", async () => {
-  const f = await fixture();
-  try {
-    class UncertainJournal extends JsonlThreadJournal {
-      override async append(item: CanonicalItem) {
-        if (item.type === "context_message")
-          throw new Error("synthetic unknown context append");
-        await super.append(item);
+for (const writeBeforeUnknown of [false, true])
+  test(`unknown canonical append outcome (${writeBeforeUnknown ? "after write" : "before write"}) leaves upgrade marker, no provider dispatch or automatic replay`, async () => {
+    const f = await fixture();
+    try {
+      class UncertainJournal extends JsonlThreadJournal {
+        override async append(item: CanonicalItem) {
+          if (item.type === "context_message") {
+            if (writeBeforeUnknown) await super.append(item);
+            throw new ThreadJournalAppendOutcomeUnknownError(
+              new Error("synthetic unknown context append"),
+            );
+          }
+          await super.append(item);
+        }
       }
+      let calls = 0;
+      const adapter: ModelAdapter = {
+        provider: "test",
+        async *stream() {
+          calls++;
+          yield { type: "text_delta", delta: "must not dispatch" };
+        },
+      };
+      const journal = new UncertainJournal(f.journals);
+      const server = diskServer(journal, f.attachments, adapter);
+      const turn = await server.startTurn(
+        "legacy",
+        "New input before uncertain append",
+      );
+      await assert.rejects(turn.done, /synthetic unknown context append/u);
+      assert.equal(calls, 0);
+      assert.ok(
+        (await journal.read("legacy")).some((x) => x.type === "context_format"),
+      );
+      assert.equal(
+        (await journal.read("legacy")).some(
+          (x) => x.type === "context_message",
+        ),
+        writeBeforeUnknown,
+      );
+      assert.ok(
+        (
+          await readFile(path.join(f.journals, "legacy.jsonl"), "utf8")
+        ).startsWith(f.bytes),
+      );
+      assert.equal((await audit(f.journals, f.attachments)).ok, true);
+      await diskServer(
+        new JsonlThreadJournal(f.journals),
+        f.attachments,
+        adapter,
+      ).readThread("legacy");
+      assert.equal(calls, 0);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
     }
-    let calls = 0;
-    const adapter: ModelAdapter = {
-      provider: "test",
-      async *stream() {
-        calls++;
-        yield { type: "text_delta", delta: "must not dispatch" };
-      },
-    };
-    const journal = new UncertainJournal(f.journals);
-    const server = diskServer(journal, f.attachments, adapter);
-    const turn = await server.startTurn(
-      "legacy",
-      "New input before uncertain append",
-    );
-    await assert.rejects(turn.done, /synthetic unknown context append/u);
-    assert.equal(calls, 0);
-    assert.ok(
-      (await journal.read("legacy")).some((x) => x.type === "context_format"),
-    );
-    assert.ok(
-      (
-        await readFile(path.join(f.journals, "legacy.jsonl"), "utf8")
-      ).startsWith(f.bytes),
-    );
-    assert.equal((await audit(f.journals, f.attachments)).ok, true);
-    await diskServer(
-      new JsonlThreadJournal(f.journals),
-      f.attachments,
-      adapter,
-    ).readThread("legacy");
-    assert.equal(calls, 0);
-  } finally {
-    await rm(f.root, { recursive: true, force: true });
-  }
-});
+  });
