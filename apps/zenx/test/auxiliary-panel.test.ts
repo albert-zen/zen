@@ -124,6 +124,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     },
     plugins: { executeCommand: async () => null, readHandle: async () => null },
     workspaceFiles: {
+      applications: async () => ({ platform: "linux", applications: {} }),
       save: async (_threadId: string, _path: string, text: string) => {
         savingText = text;
         return await new Promise((resolve) => {
@@ -370,6 +371,7 @@ for (const throughHostSdk of [false, true]) {
         },
       },
       workspaceFiles: {
+        applications: async () => ({ platform: "linux", applications: {} }),
         list: async () => ({
           path: ".",
           entries: [{ name: "README.md", path: "README.md", kind: "file" }],
@@ -563,6 +565,7 @@ test("file navigation remains mounted across file tabs and hide/show while dirty
   });
   (window as any).zenx = {
     workspaceFiles: {
+      applications: async () => ({ platform: "linux", applications: {} }),
       list: async (_id: string, path: string) => ({
         path,
         entries:
@@ -812,7 +815,12 @@ function r4Fixture(api: any) {
     top: 0,
     width: 0,
   });
-  (window as any).zenx = { workspaceFiles: api };
+  (window as any).zenx = {
+    workspaceFiles: {
+      ...api,
+      applications: async () => ({ platform: "linux", applications: {} }),
+    },
+  };
   const root = createRoot(document.getElementById("root")!);
   return {
     dom,

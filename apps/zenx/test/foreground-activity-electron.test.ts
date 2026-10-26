@@ -51,6 +51,11 @@ class FakeContents extends EventEmitter {
   }
 }
 class FakeWindow extends EventEmitter {
+  static nextId = 1;
+  nativeId = FakeWindow.nextId++;
+  getMediaSourceId() {
+    return `window:${this.nativeId}:0`;
+  }
   readonly webContents: FakeContents;
   destroyed = false;
   shown = 0;
@@ -197,6 +202,10 @@ test("native overlays cover every current display without activating and isolate
     f.windows.map((window) => window.ignored),
     [true, false, true, false],
   );
+  assert.deepEqual(f.presenter.pointerPassthroughWindowIds(), [
+    f.windows[0]!.nativeId,
+    f.windows[2]!.nativeId,
+  ]);
   assert.deepEqual(f.windows[2]!.bounds, {
     x: -1440,
     y: 0,
@@ -210,6 +219,7 @@ test("native overlays cover every current display without activating and isolate
     height: 64,
   });
   await f.presenter.update(state([]));
+  assert.deepEqual(f.presenter.pointerPassthroughWindowIds(), []);
   assert.ok(f.windows.every((window) => window.destroyed));
   f.presenter.close();
   assert.equal(f.ipc.listenerCount(foregroundActivityChannels.stop), 0);
