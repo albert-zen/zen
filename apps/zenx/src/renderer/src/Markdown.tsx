@@ -87,6 +87,32 @@ export function Markdown({
         ],
       ]
     : [];
+  // Code delimiters preserve styling, but a complete web address remains an
+  // explicit navigation target. Never inspect fenced code or nested links.
+  const inlineWebLinks = () => (tree: Root) => {
+    const visit = (parent: Parent) => {
+      parent.children = parent.children.map((node) => {
+        if (
+          ["link", "linkReference", "image", "imageReference"].includes(
+            node.type,
+          )
+        )
+          return node;
+        if (
+          node.type === "inlineCode" &&
+          /^https?:\/\/[^\s<>]+$/iu.test(node.value) &&
+          !inlineTokens.some((token) => node.value.includes(token.marker))
+        ) {
+          const target = classifyMessageLink(node.value);
+          if (target.kind === "browser")
+            return { type: "link", url: target.value, children: [node] };
+        }
+        if ("children" in node) visit(node as Parent);
+        return node;
+      }) as Parent["children"];
+    };
+    visit(tree);
+  };
   const components: Components = {
     ...markdownComponents,
     a: messageAnchor(onOpen),
@@ -235,6 +261,7 @@ export function Markdown({
           remarkPlugins={[
             remarkGfm,
             remarkBareAutolinkResidue,
+            inlineWebLinks,
             ...localPathPlugins,
             ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
           ]}
@@ -259,6 +286,7 @@ export function Markdown({
         remarkPlugins={[
           remarkGfm,
           remarkBareAutolinkResidue,
+          inlineWebLinks,
           ...localPathPlugins,
           ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
         ]}
