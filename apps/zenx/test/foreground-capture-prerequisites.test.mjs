@@ -20,7 +20,10 @@ test("foreground CI evidence requires installed CJK fonts and uses the productio
   const captureIndex = workflow.indexOf("Capture foreground activity renderer");
   assert.ok(installIndex >= 0 && captureIndex > installIndex);
   assert.match(
-    workflow.slice(captureIndex, workflow.indexOf("timeout-minutes:", captureIndex)),
+    workflow.slice(
+      captureIndex,
+      workflow.indexOf("timeout-minutes:", captureIndex),
+    ),
     /steps\.zenx-fonts\.outcome == 'success'/,
   );
   assert.match(capture, /assert\.ok\(\s*evidence\.cjkFonts\.length > 0/);
