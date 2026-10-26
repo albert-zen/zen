@@ -1480,3 +1480,5 @@ Known Host admission and local-program results wait outside the snapshot mutatio
 ### Message local-path presentation
 
 ZenX renders conservative local file-path tokens as disposable Markdown links to the existing current-Host workspace file viewer; linkification performs no filesystem reads, grants no access, and does not alter canonical message text or model input. Host realpath containment and permissions remain authoritative.
+
+File reading positions are disposable window-owned state beside `WorkspaceFileDrafts`, keyed by actual resource Thread and canonical path. An editor captures its own viewport before unmount; reopening can restore it without keeping background editors alive or reading background resources. Explicit close discards the position; changed content restores only bounded offsets. This state never enters journal or model content.

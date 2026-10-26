@@ -102,3 +102,13 @@ test("integrated title bar aligns the product controls and conversation row arou
   );
   assert.match(styles, /\.workspace-header\s*\{[^}]*border-bottom:\s*0;/su);
 });
+
+test("macOS leading controls reserve one shared safe area outside workspace tabs", async () => {
+  const styles = await readFile(new URL("styles.css", rendererRoot), "utf8");
+  assert.match(styles, /--native-leading-safe-area:\s*128px/u);
+  assert.match(styles, /min-width:\s*var\(--native-leading-safe-area\)/u);
+  assert.match(
+    styles,
+    /padding-inline-start:\s*max\(\s*8px,\s*calc\(var\(--native-leading-safe-area\) - 100vw \+ 100%\)\s*\)/u,
+  );
+});

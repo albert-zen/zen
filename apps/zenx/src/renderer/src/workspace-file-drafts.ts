@@ -1,3 +1,4 @@
+import { WorkspaceFileViewport } from "./workspace-file-viewport.js";
 import { useEffect, useState } from "react";
 import type { WorkspaceTextFile } from "../../main/workspace-files.js";
 import type { WorkspaceFileSaveResult } from "../../main/workspace-files.js";
@@ -22,6 +23,12 @@ export type WorkspaceFileSaver = (
 // Window-owned UI state, shared across Thread panels, never written to the journal.
 export class WorkspaceFileDrafts {
   #entries = new Map<string, WorkspaceFileDraft>();
+  #viewports = new Map<string, WorkspaceFileViewport>();
+  viewport(key: string) {
+    let value = this.#viewports.get(key);
+    if (!value) this.#viewports.set(key, (value = new WorkspaceFileViewport()));
+    return value;
+  }
   #listeners = new Set<() => void>();
   #timers = new Map<string, ReturnType<typeof setTimeout>>();
   #saving = new Set<string>();
@@ -85,6 +92,7 @@ export class WorkspaceFileDrafts {
     done?.();
   }
   remove(key: string) {
+    this.#viewports.delete(key);
     this.#closed.delete(key);
     this.#clearTimer(key);
     this.#pending.delete(key);
