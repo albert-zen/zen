@@ -1,5 +1,10 @@
 import type { CanonicalItem, ModelUsageItem, UserInput } from "./item.js";
-import { modelUserContent, type ModelMessage } from "./model.js";
+import {
+  modelUserContent,
+  modelMessageContextCategory,
+  type ModelMessage,
+  type ModelTool,
+} from "./model.js";
 
 export interface ModelUsageAggregate {
   responseCount: number;
@@ -17,7 +22,57 @@ export interface ModelUsageProjection {
   context: ModelContextUsageProjection;
 }
 
+export interface ModelInputEstimate {
+  total: number;
+  instructions: number;
+  toolDefinitions: number;
+  pluginContext: number;
+  conversation: number;
+}
+
+/** Includes every disclosed tool (also generated run_code SDK), not the undisclosed registry.
+ * Four-character text heuristic and media reserve, NOT provider tokenizer/billing.
+ * Provider-specific framing/resize/reasoning behavior remains approximate.
+ */
+export function estimateModelInput(
+  messages: readonly ModelMessage[],
+  tools: readonly ModelTool[],
+  instructions = "",
+): ModelInputEstimate {
+  const estimate: ModelInputEstimate = {
+    total: 0,
+    instructions: instructions ? estimateText(instructions) : 0,
+    toolDefinitions: 0,
+    pluginContext: 0,
+    conversation: 0,
+  };
+  for (const message of messages) {
+    const category = modelMessageContextCategory(message);
+    estimate[category] = add(estimate[category], estimateModelMessage(message));
+  }
+  for (const tool of tools)
+    estimate.toolDefinitions = add(
+      estimate.toolDefinitions,
+      estimateText(JSON.stringify(tool)),
+    );
+  estimate.total = [
+    estimate.instructions,
+    estimate.toolDefinitions,
+    estimate.pluginContext,
+    estimate.conversation,
+  ].reduce(add, 0);
+  return estimate;
+}
+
+export class ModelContextBudgetError extends Error {
+  readonly retryable = false;
+  readonly contextBudgetExceeded = true;
+}
+
 export interface ModelContextUsageProjection {
+  /** Next-request estimate; independent from the last provider-reported input. */
+  estimate?: ModelInputEstimate;
+  lastProviderInputTokens?: number;
   inputTokens: number | null;
   inputTokenSource: "provider" | "estimated" | null;
   contextWindow: number | null;
@@ -29,6 +84,7 @@ export function projectModelUsage(
   options: {
     contextWindow?: number | null;
     estimatedInputTokens?: number;
+    estimate?: ModelInputEstimate;
     providerContextUsageCompatible?: boolean;
   } = {},
 ): ModelUsageProjection {
@@ -57,6 +113,7 @@ export function projectModelUsage(
     ),
     context: contextProjection({
       contextWindow: options.contextWindow ?? null,
+      ...(options.estimate === undefined ? {} : { estimate: options.estimate }),
       ...(options.estimatedInputTokens === undefined
         ? {}
         : { estimatedInputTokens: options.estimatedInputTokens }),
@@ -163,6 +220,7 @@ function aggregate(usages: readonly ModelUsageItem[]): ModelUsageAggregate {
 function contextProjection(options: {
   contextWindow: number | null;
   estimatedInputTokens?: number;
+  estimate?: ModelInputEstimate;
   providerContextUsageCompatible: boolean;
   latestCompactionIndex: number;
   latestUsage?: { item: ModelUsageItem; index: number };
@@ -175,15 +233,20 @@ function contextProjection(options: {
   const providerInputTokens = canUseProviderUsage
     ? options.latestUsage?.item.inputTokens
     : undefined;
-  const inputTokens = providerInputTokens ?? estimatedInputTokens;
+  const inputTokens =
+    options.estimate?.total ?? providerInputTokens ?? estimatedInputTokens;
   const source: ModelContextUsageProjection["inputTokenSource"] =
     inputTokens === undefined
       ? null
-      : canUseProviderUsage
+      : canUseProviderUsage && options.estimate === undefined
         ? "provider"
         : "estimated";
   const normalizedInput = inputTokens ?? null;
   return {
+    ...(options.estimate === undefined ? {} : { estimate: options.estimate }),
+    ...(options.estimate === undefined || providerInputTokens === undefined
+      ? {}
+      : { lastProviderInputTokens: providerInputTokens }),
     inputTokens: normalizedInput,
     inputTokenSource: source,
     contextWindow: options.contextWindow,
@@ -198,7 +261,24 @@ function isContextProjection(
   value: unknown,
 ): value is ModelContextUsageProjection {
   if (!isRecord(value)) return false;
+  const estimate = value.estimate;
   return (
+    (estimate === undefined ||
+      (isRecord(estimate) &&
+        [
+          "total",
+          "instructions",
+          "toolDefinitions",
+          "pluginContext",
+          "conversation",
+        ].every((key) => isCount(estimate[key])) &&
+        estimate.total ===
+          Number(estimate.instructions) +
+            Number(estimate.toolDefinitions) +
+            Number(estimate.pluginContext) +
+            Number(estimate.conversation))) &&
+    (value.lastProviderInputTokens === undefined ||
+      isCount(value.lastProviderInputTokens)) &&
     (value.inputTokens === null || isCount(value.inputTokens)) &&
     (value.inputTokenSource === null ||
       value.inputTokenSource === "provider" ||

@@ -63,7 +63,9 @@ export function classifyMessageLink(
         (url.hash && !/^#L[1-9]\d*(?:C[1-9]\d*)?$/u.test(url.hash))
       )
         return { kind: "rejected" };
-      const decoded = decodeURIComponent(url.pathname);
+      const decoded = decodeURIComponent(
+        messageFileLocation(url.pathname).path,
+      );
       const value = /^\/[a-z]:\//iu.test(decoded) ? decoded.slice(1) : decoded;
       return /[\u0000-\u001f\u007f]/u.test(value)
         ? { kind: "rejected" }

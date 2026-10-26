@@ -244,3 +244,25 @@ test("Chinese sentence punctuation delimits bare paths without changing quoted f
   );
   assert.match(markup("`docs/报告（修订）.md`"), /<a /u);
 });
+
+test("file URL line suffixes resolve before decoding literal punctuation", () => {
+  for (const [href, cwd, expected] of [
+    ["file:///work/main.ts:12", "/work", "main.ts"],
+    ["file:///work/main.ts:12:4", "/work", "main.ts"],
+    ["file:///C:/work/main.ts:12:4", "C:/work", "main.ts"],
+    ["file:///work/main.ts%3A12", "/work", "main.ts:12"],
+    ["file:///work/main.ts%3A12%3A4", "/work", "main.ts:12:4"],
+  ]) {
+    const target = classifyMessageLink(href!);
+    assert.equal(target.kind, "file");
+    if (target.kind === "file")
+      assert.equal(messageFilePath(target.value, cwd), expected);
+  }
+});
+
+test("extensionless automatic paths require explicit relative or absolute prefixes", () => {
+  assert.match(markup("`./docs/README`"), /<a /u);
+  assert.match(markup('"../docs/README"'), /<a /u);
+  assert.doesNotMatch(markup("`docs/README`"), /<a /u);
+  assert.doesNotMatch(markup('"docs/README"'), /<a /u);
+});

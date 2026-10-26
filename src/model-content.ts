@@ -10,7 +10,7 @@ import {
   type UserInput,
   type UserInputPart,
 } from "./item.js";
-import type { ModelMessage } from "./model.js";
+import { copyModelMessageContextCategory, type ModelMessage } from "./model.js";
 import { deduplicateMediaContent } from "./media-content.js";
 
 export { deduplicateMediaContent } from "./media-content.js";
@@ -107,11 +107,14 @@ export function projectModelMessages(
       return { type: "text", text: mediaReceipt(part.type, part.attachment) };
     });
   return messages.map((message) => {
-    if (message.role === "user" && "content" in message)
-      return { ...message, content: project(message.content) };
-    if (message.role === "tool" && message.modelContent !== undefined)
-      return { ...message, modelContent: project(message.modelContent) };
-    return structuredClone(message);
+    const projected: ModelMessage =
+      message.role === "user" && "content" in message
+        ? { ...message, content: project(message.content) }
+        : message.role === "tool" && message.modelContent !== undefined
+          ? { ...message, modelContent: project(message.modelContent) }
+          : structuredClone(message);
+    copyModelMessageContextCategory(message, projected);
+    return projected;
   });
 }
 
