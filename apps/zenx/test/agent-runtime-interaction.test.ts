@@ -437,6 +437,45 @@ test("transcript selection pauses live following; explicit Back to live clears i
   });
 });
 
+test("selecting a completed answer keeps its history collapsed and selection mounted", async () => {
+  await withRuntimeDom(async (h) => {
+    const value = runtimeThread(
+      [
+        runtimeCommand("history"),
+        runtimeMessage(
+          "answer",
+          "Select this answer to quote without moving it.",
+        ),
+      ],
+      "completed",
+    );
+    await h.render(value);
+    const answer = document.querySelector(".turn-final article p")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".turn-toggle")!;
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    await act(async () => {
+      const range = document.createRange();
+      range.selectNodeContents(answer);
+      document.getSelection()!.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.querySelector(".turn-history"), null);
+    assert.equal(document.querySelector(".turn-final article p"), answer);
+    assert.equal(document.getSelection()!.toString(), answer.textContent);
+    // Projection refreshes and repeated selection events are not disclosure intent.
+    await h.render({ ...value });
+    await act(async () => document.dispatchEvent(new Event("selectionchange")));
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.getSelection()!.toString(), answer.textContent);
+    // The explicit disclosure remains operable even with a live answer selection.
+    await h.click(".turn-toggle");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    await h.click(".turn-toggle");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  });
+});
+
 test("terminal commit observes an existing selection even before queued selectionchange fires", async () => {
   await withRuntimeDom(async (h) => {
     const items = [runtimeCommand("one"), runtimeCommand("two")];

@@ -165,6 +165,9 @@ export class ModelRequestDebugStore {
     const store = this;
     return {
       provider: adapter.provider,
+      ...(adapter.contextInstructions === undefined
+        ? {}
+        : { contextInstructions: adapter.contextInstructions }),
       ...(adapter.requestPayloadFormat === undefined
         ? {}
         : { requestPayloadFormat: adapter.requestPayloadFormat }),

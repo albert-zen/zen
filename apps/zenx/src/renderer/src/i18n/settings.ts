@@ -1,5 +1,7 @@
 // Settings UI copy. Keep keys stable across locales; product data and user content stay unchanged.
 export const en = {
+  "settingsView.finishProviderEditBeforeSwitching":
+    "Save or cancel the current provider edit before editing or deleting another provider. Your changes stay in this editor until then.",
   "settingsView.importConversations": "Import conversations",
   "settingsView.importConversationsHelp":
     "Bring a Codex conversation into ZenX from a local rollout file.",
@@ -1304,6 +1306,8 @@ export const en = {
 } as const;
 
 export const zhCN: Record<keyof typeof en, string> = {
+  "settingsView.finishProviderEditBeforeSwitching":
+    "请先保存或取消当前服务商的编辑，再编辑或删除其他服务商。在此之前，修改会保留在当前编辑器中。",
   "settingsView.importConversations": "导入会话",
   "settingsView.importConversationsHelp":
     "从本地 rollout 文件将 Codex 会话导入 ZenX。",

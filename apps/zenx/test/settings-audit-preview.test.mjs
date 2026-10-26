@@ -154,7 +154,7 @@ test("Settings audit uses actual language controller and recovers synthetic init
       "utf8",
     );
     dom = new JSDOM(html, {
-      url: "http://localhost/settings-audit.html?lang=zh-CN&initialFailure=1",
+      url: "http://localhost/settings-audit.html?lang=zh-CN&initialFailure=1&deferredSave=1",
       runScripts: "dangerously",
       pretendToBeVisual: true,
       virtualConsole: new VirtualConsole(),
@@ -194,6 +194,31 @@ test("Settings audit uses actual language controller and recovers synthetic init
       dom.window.__settingsAudit.calls.filter((x) => x === "settings-get")
         .length,
       2,
+    );
+    const snapshot = await dom.window.zenx.settings.get();
+    for (const outcome of ["success", "failure"]) {
+      const pending = dom.window.zenx.settings.editProvider(
+        "synthetic-3",
+        snapshot.profile.providerProfiles[3],
+        {},
+        "fixture-attempt",
+      );
+      dom.window.__settingsAudit.settleProviderEdit(outcome);
+      const reply = await pending;
+      assert.equal(reply.attemptId, "fixture-attempt");
+      assert.equal(reply.ok, outcome === "success");
+      if (reply.ok) {
+        assert.equal(reply.outcome, "success");
+        assert.deepEqual(reply.settings, snapshot);
+      } else {
+        assert.equal(reply.outcome, "failed");
+        assert.equal(reply.code, "save-rejected");
+      }
+    }
+    await assert.rejects(dom.window.zenx.settings.addProvider({}), /no Host/);
+    await assert.rejects(
+      dom.window.zenx.settings.deleteProvider("synthetic-3"),
+      /no Host/,
     );
     assert.equal(
       dom.window.localStorage.length,

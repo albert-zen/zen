@@ -7,7 +7,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import WebSocket from "ws";
+import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
 
 assert.equal(
   process.env.GITHUB_ACTIONS,
@@ -62,8 +62,7 @@ let server;
 let child;
 let socket;
 let profile;
-let stderr = "";
-let spawnError;
+let lifecycle;
 const pending = new Map();
 let evaluate;
 let screenshot;
@@ -125,35 +124,8 @@ try {
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  child.on("error", (error) => {
-    spawnError = error;
-  });
-  child.stderr.on("data", (data) => {
-    stderr = (stderr + String(data)).slice(-65_536);
-  });
-  let port;
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (spawnError) throw spawnError;
-    if (child.exitCode !== null || child.signalCode !== null)
-      throw new Error(`Existing Chrome exited before capture: ${stderr}`);
-    try {
-      port = Number(
-        (
-          await readFile(path.join(profile, "DevToolsActivePort"), "utf8")
-        ).split("\n")[0],
-      );
-      if (port) break;
-    } catch {}
-    await delay(50);
-  }
-  assert.ok(port, `Existing Chrome did not become ready: ${stderr}`);
-  const pages = await (
-    await fetch(`http://127.0.0.1:${port}/json/list`)
-  ).json();
-  const target = pages.find((page) => page.type === "page");
-  assert.ok(target, "Existing Chrome exposed a page target.");
-  socket = new WebSocket(target.webSocketDebuggerUrl);
-  await once(socket, "open");
+  lifecycle = observePreviewChrome(child, profile);
+  socket = await lifecycle.connect();
   let id = 0;
   socket.on("message", (data) => {
     const message = JSON.parse(String(data));
@@ -173,6 +145,7 @@ try {
   });
   const send = (method, params = {}) =>
     new Promise((resolve, reject) => {
+      lifecycle.commandStarted(method);
       const requestId = ++id;
       const timeout = setTimeout(() => {
         pending.delete(requestId);
@@ -203,7 +176,7 @@ try {
   };
   const waitFor = async (expression) => {
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (await evaluate(expression)) return;
+      if (await evaluate(`Boolean(${expression})`)) return;
       await delay(50);
     }
     throw new Error(`Fixture condition timed out: ${expression}`);
@@ -238,8 +211,10 @@ try {
     const point = await evaluate(`(() => {
       const e=document.querySelector(${JSON.stringify(selector)});
       if (!e) throw new Error('Missing pointer target: ' + ${JSON.stringify(selector)});
-      const r=e.getBoundingClientRect();
-      if (!r.width || !r.height) throw new Error('Hidden pointer target: ' + ${JSON.stringify(selector)});
+      // An inline anchor may wrap: its bounding-box center can lie outside
+      // every painted fragment. Aim at the first real fragment, still hit-test.
+      const r=[...e.getClientRects()].find(r=>r.width>0 && r.height>0);
+      if (!r) throw new Error('Hidden pointer target: ' + ${JSON.stringify(selector)});
       const x=r.x+r.width/2, y=r.y+r.height/2;
       const hit=document.elementFromPoint(x,y);
       if (!hit || !e.contains(hit)) throw new Error('Obscured pointer target: ' + ${JSON.stringify(selector)} + '; hit=' + (hit?.className ?? 'none'));
@@ -343,6 +318,7 @@ try {
   const toggleSelector = `${fileSelector} .workspace-navigation-toggle`;
   await send("Page.enable");
   await send("Runtime.enable");
+  lifecycle.captureStarted();
   await send("Network.enable");
   for (const options of [
     { name: "desktop-en", lang: "en", theme: "dark", width: 1100, height: 760 },
@@ -578,6 +554,257 @@ try {
         : "visual-blocked"
       : "failed";
   }
+
+  for (const lang of ["en", "zh-CN"]) {
+    const receipt = { name: `local-paths-${lang}`, checks: [] };
+    evidence.cases.push(receipt);
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1100,
+      height: 760,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const destination = `${url}/file-sidebar.html?${new URLSearchParams({ lang, theme: lang === "en" ? "dark" : "light", links: "true" })}`;
+    await send("Page.navigate", { url: destination });
+    await waitFor(
+      `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && document.querySelector('[data-local-path-preview] a')`,
+    );
+    await screenshot(`local-paths-${lang}-before.png`);
+    check(
+      receipt,
+      "links-use-existing-file-flow",
+      await evaluate(
+        `document.querySelectorAll('[data-local-path-preview] a').length===5`,
+      ),
+    );
+    const before = await evaluate(`window.__fileSidebarPreview.calls.length`);
+    await delay(250);
+    check(
+      receipt,
+      "render-does-not-read-files",
+      await evaluate(`window.__fileSidebarPreview.calls.length===${before}`),
+    );
+    const webSelector =
+      '[data-local-path-preview] a[href^="http://127.0.0.1:"]';
+    check(
+      receipt,
+      "inline-web-link-retains-code-style",
+      await evaluate(
+        `Boolean(document.querySelector(${JSON.stringify(webSelector)})?.querySelector('code'))`,
+      ),
+    );
+    await clickSelector(webSelector);
+    check(
+      receipt,
+      "inline-web-pointer-routes-exactly-once",
+      await evaluate(
+        `window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').length===1`,
+      ),
+    );
+    await evaluate(
+      `document.querySelector(${JSON.stringify(webSelector)}).focus()`,
+    );
+    await key("Enter", "Enter", 13);
+    check(
+      receipt,
+      "inline-web-pointer-and-keyboard-route-once-each",
+      await evaluate(
+        `window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').length===2 && window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').every(c=>c.threadId==='synthetic-file-sidebar-thread' && c.path==='http://127.0.0.1:40123/review?q=one#details')`,
+      ),
+    );
+    await screenshot(`inline-web-links-${lang}-activated.png`);
+    await clickSelector("[data-local-path-preview] a");
+    await waitFor(
+      `document.querySelector('.auxiliary-content:not([hidden]) .cm-editor') && document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-notes')`,
+    );
+    receipt.after = await evaluate(measure);
+    await screenshot(`local-paths-${lang}-opened.png`);
+    check(
+      receipt,
+      "click-opens-requested-markdown-file",
+      receipt.after.activeId.includes("long-notes"),
+    );
+    check(
+      receipt,
+      "same-thread-file-ownership",
+      receipt.after.calls.every(
+        (call) => call.threadId === "synthetic-file-sidebar-thread",
+      ),
+    );
+    await clickSelector(
+      "[data-local-path-preview] .markdown-code-actions button",
+    );
+    await waitFor(
+      `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
+    );
+    check(
+      receipt,
+      "text-path-action-opens-requested-file",
+      await evaluate(
+        `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
+      ),
+    );
+    check(
+      receipt,
+      "text-path-copy-remains-separate",
+      await evaluate(
+        `document.querySelectorAll('[data-local-path-preview] .markdown-code-actions button').length===2 && document.querySelector('[data-local-path-preview] pre code').textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'`,
+      ),
+    );
+    await screenshot(`local-paths-${lang}-text-block-opened.png`);
+    receipt.status = receipt.checks.every((check) => check.status === "passed")
+      ? "passed"
+      : "failed";
+  }
+  // Diagnostic-only matrix: real components, no production-style overrides.
+  // Darwin is a renderer marker; this remains Linux Chromium, not macOS acceptance.
+  for (const targetWidth of [256, 384]) {
+    const receipt = {
+      name: `tree-open-cjk-${targetWidth}`,
+      checks: [],
+      platformScope: "darwin renderer marker on Linux Chrome",
+    };
+    evidence.cases.push(receipt);
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1400,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const destination = `${url}/file-sidebar.html?lang=zh-CN&theme=light&diagnostic=true`;
+    await send("Page.navigate", { url: destination });
+    await waitFor(
+      `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && document.querySelector('.auxiliary-content:not([hidden]) .cm-scroller')`,
+    );
+    const titlebarLayout = `(() => {
+      const bar=document.querySelector('.window-titlebar');
+      const session=document.querySelector('.window-titlebar-session');
+      const panel=document.querySelector('.auxiliary-panel');
+      const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+      return {bar:rect(bar),session:rect(session),panel:rect(panel),workspaceWidth:getComputedStyle(document.querySelector('.app-shell')).getPropertyValue('--workspace-panel-width'),transitionDuration:getComputedStyle(bar).transitionDuration};
+    })()`;
+    receipt.titlebarBeforeReady = await evaluate(titlebarLayout);
+    // Wait for actual layout animation settlement, retaining pointer hit tests.
+    await waitFor(`(() => {
+      const bar=document.querySelector('.window-titlebar').getBoundingClientRect();
+      const panel=document.querySelector('.auxiliary-panel').getBoundingClientRect();
+      const session=document.querySelector('.window-titlebar-session').getBoundingClientRect();
+      const width=parseFloat(getComputedStyle(document.querySelector('.app-shell')).getPropertyValue('--workspace-panel-width'));
+      const last=window.__fileTitlebarReady;
+      const stable=bar.right<=panel.left+1 && session.right<=panel.left+1 && Math.abs(width-panel.width)<=1 && last && Math.abs(last.right-bar.right)<0.5;
+      window.__fileTitlebarReady={right:bar.right,count:stable?last.count+1:0};
+      return window.__fileTitlebarReady.count>=3;
+    })()`);
+    receipt.titlebarAfterReady = await evaluate(titlebarLayout);
+    await selectTab(markdownId);
+    // Resize through the actual public separator, never mutate CSS or scrollTop.
+    await clickSelector(".auxiliary-panel > .browser-panel-resizer");
+    for (let i = 0; i < 4; i++) await key("ArrowLeft", "ArrowLeft", 37);
+    await delay(250);
+    const initial = await evaluate(measure);
+    const separator = await evaluate(
+      `(() => { const r=document.querySelector('.workspace-file-resizer').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`,
+    );
+    const destinationX = separator.x + initial.scroller.width - targetWidth;
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      ...separator,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      ...separator,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: destinationX,
+      y: separator.y,
+      button: "left",
+      buttons: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: destinationX,
+      y: separator.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await delay(350);
+    await evaluate(`(() => {
+      window.__fileWheelDiagnostics=[];
+      document.addEventListener('wheel', event => {
+        const entry={target:event.target?.className, deltaX:event.deltaX, deltaY:event.deltaY, defaultPreventedAtCapture:event.defaultPrevented, path:event.composedPath().filter(e=>e instanceof Element).map(e=>e.tagName+'.'+e.className)};
+        window.__fileWheelDiagnostics.push(entry);
+        setTimeout(()=>{entry.defaultPreventedAfterDispatch=event.defaultPrevented;}, 0);
+      }, {capture:true, passive:true});
+    })()`);
+    const diagnostics = `(() => {
+      const active=document.querySelector('.auxiliary-content[role="tabpanel"]:not([hidden])');
+      const scroller=active.querySelector('.cm-scroller');
+      const rect=scroller.getBoundingClientRect();
+      const styles=e=>{const s=getComputedStyle(e);return {tag:e.tagName,className:e.className,focusVisible:e.matches(':focus-visible'),outline:s.outline,border:s.border,overflowX:s.overflowX,overflowY:s.overflowY,width:s.width,height:s.height,minWidth:s.minWidth,minHeight:s.minHeight,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop};};
+      const chain=[];for(let e=scroller;e;e=e.parentElement)chain.push(styles(e));
+      return {activeElement:document.activeElement?.outerHTML.slice(0,500),chain,editorNodes:[...active.querySelectorAll('.markdown-live-editor,.cm-editor,.cm-scroller,.cm-content')].map(styles),hitStack:document.elementsFromPoint(rect.x+rect.width/2,rect.y+rect.height/2).map(e=>e.tagName+'.'+e.className),wheelEvents:window.__fileWheelDiagnostics};
+    })()`;
+    receipt.before = await evaluate(measure);
+    receipt.beforeDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "tree-remains-open",
+      receipt.before.treeVisible && receipt.before.togglePressed === "true",
+    );
+    check(
+      receipt,
+      "requested-content-width",
+      Math.abs(receipt.before.scroller.width - targetWidth) <= 3,
+      JSON.stringify(receipt.before.scroller),
+    );
+    bounded(receipt, "before", receipt.before);
+    await screenshot(`${receipt.name}-before.png`);
+    await wheel(0, 720);
+    receipt.unfocusedWheel = await evaluate(measure);
+    receipt.unfocusedDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "wheel-before-editor-focus",
+      receipt.unfocusedWheel.scroller.scrollTop >
+        receipt.before.scroller.scrollTop + 100,
+    );
+    await clickSelector(`${fileSelector} .cm-scroller`);
+    receipt.focusedDiagnostics = await evaluate(diagnostics);
+    await screenshot(`${receipt.name}-focused.png`);
+    await wheel(0, 720);
+    receipt.focusedWheel = await evaluate(measure);
+    receipt.focusedWheelDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "wheel-after-editor-focus",
+      receipt.focusedWheel.scroller.scrollTop >
+        receipt.unfocusedWheel.scroller.scrollTop + 100,
+    );
+    bounded(receipt, "after-wheel", receipt.focusedWheel);
+    await screenshot(`${receipt.name}-scrolled.png`);
+    // CodeMirror sees the actual Linux browser platform, so use Ctrl+End.
+    await key("End", "End", 35, 2);
+    await delay(400);
+    receipt.end = await evaluate(measure);
+    receipt.endDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "keyboard-reaches-end",
+      receipt.end.renderedText.includes("LAST_MARKDOWN_SECTION") &&
+        receipt.end.scroller.scrollTop >
+          receipt.focusedWheel.scroller.scrollTop,
+    );
+    check(receipt, "tree-still-open-after-navigation", receipt.end.treeVisible);
+    bounded(receipt, "end", receipt.end);
+    await screenshot(`${receipt.name}-end.png`);
+    receipt.status = receipt.checks.every((check) => check.status === "passed")
+      ? "passed"
+      : "failed";
+  }
   evidence.failures = failures;
   assert.equal(evidence.rendererErrors.length, 0, "No renderer exceptions.");
   assert.equal(evidence.externalRequests.length, 0, "No external requests.");
@@ -590,11 +817,18 @@ try {
     [],
     "Actual file viewport interactions must pass.",
   );
+  lifecycle.captureFinished("passed");
   evidence.status = "passed";
   console.log(
     "Captured actual file sidebar EN/ZH desktop/narrow scrolling and tree scope.",
   );
 } catch (error) {
+  lifecycle?.captureFinished(
+    lifecycle.receipt.captureStatus === "not-started"
+      ? "not-started"
+      : "failed",
+    error,
+  );
   evidence.status = "failed";
   evidence.failure = error instanceof Error ? error.message : String(error);
   if (evaluate && screenshot) {
@@ -610,28 +844,31 @@ try {
     request.reject(new Error("Preview capture closed."));
   }
   socket?.terminate();
-  if (child && child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
-    for (
-      let attempt = 0;
-      attempt < 50 && child.exitCode === null && child.signalCode === null;
-      attempt++
-    )
-      await delay(100);
-    if (child.exitCode === null && child.signalCode === null)
-      child.kill("SIGKILL");
+  let stopped = false;
+  try {
+    stopped = await lifecycle?.close(directory);
+  } finally {
+    server?.closeAllConnections();
+    if (server?.listening)
+      await new Promise((resolve) => server.close(resolve));
+    if (profile && lifecycle?.receipt.cleanupComplete)
+      await rm(profile, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
   }
-  server?.close();
   await writeFile(
     path.join(directory, "measurements.json"),
     JSON.stringify(evidence, null, 2) + "\n",
   );
-  await writeFile(path.join(directory, "chrome.log"), stderr);
-  if (profile)
-    await rm(profile, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    });
+  if (
+    lifecycle &&
+    (!stopped || lifecycle.receipt.artifactErrors.length) &&
+    evidence.status === "passed"
+  )
+    throw new Error(
+      "Preview Chrome cleanup or artifact persistence incomplete; see lifecycle receipt and stderr.",
+    );
 }

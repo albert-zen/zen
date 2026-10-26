@@ -34,7 +34,13 @@ export function CompanionWorkspace({
   onViewChange,
   renderConversation,
   onRenameThread,
+  triggerSourceRequest,
 }: {
+  triggerSourceRequest?: {
+    threadId: string;
+    triggerId: string;
+    requestId: number;
+  };
   onRenameThread?(threadId: string, title: string): Promise<void>;
   renderConversation?(threadId: string): React.ReactNode;
   room: RoomConversation;
@@ -591,7 +597,7 @@ export function CompanionWorkspace({
       openedTabs={tabs}
       onTabsChange={setTabs}
       navigate={navigate}
-      threadContext={{ threads }}
+      threadContext={{ threads, triggerSourceRequest }}
       customTabs={tabsContent}
       contextControl={
         <label className="companion-context">

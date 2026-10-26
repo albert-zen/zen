@@ -14,14 +14,7 @@ import type {
 } from "./capabilities/computer-thread-observation.js";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  mkdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 
 import {
   ToolEnvironment,
@@ -66,7 +59,10 @@ import type {
   PluginHostAppServerPort,
   PluginHostUiPort,
 } from "./plugin-host-sdk.js";
-import { createZenXPluginHostSdk } from "./plugin-host-sdk.js";
+import {
+  createZenXPluginHostSdk,
+  JsonPluginStorage,
+} from "./plugin-host-sdk.js";
 import { clearBundledAutomationRoomsData } from "./automation-plugin-service.js";
 import type { AppServerRequestPort } from "./capabilities/self-control-package.js";
 import type { ZenXProjectProjection } from "./project-projection.js";
@@ -235,44 +231,39 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           hostSdkFor: async (registration) => {
             const manifest = registration.package.manifest;
             const storage = registration.package.storage;
-            const storageFile = path.join(
-              options.userDataDirectory,
-              "plugin-data",
-              manifest.id,
-              "storage.json",
-            );
-            let previousStorage: Buffer | undefined;
-            try {
-              previousStorage = await readFile(storageFile);
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-                throw error;
-            }
-            const sdk = await createZenXPluginHostSdk({
+            const preparedStorage = await JsonPluginStorage.prepare({
               pluginId: manifest.id,
-              storageRoot: path.join(options.userDataDirectory, "plugin-data"),
-              storageVersion: storage?.version ?? manifest.storageVersion ?? 1,
+              root: path.join(options.userDataDirectory, "plugin-data"),
+              version: storage?.version ?? manifest.storageVersion ?? 1,
               migrations: storage?.migrations,
-              initialStorage: storage?.initialValue,
-              queryProjects: async () => await this.#queryProjects(),
-              appServer: this.#appServerPort ?? unavailablePluginAppServerPort,
-              ui: this.#pluginUiPort(manifest.id),
+              initialValue: storage?.initialValue,
             });
+            let sdk;
+            try {
+              sdk = await createZenXPluginHostSdk({
+                storage: preparedStorage.storage,
+                pluginId: manifest.id,
+                storageRoot: path.join(
+                  options.userDataDirectory,
+                  "plugin-data",
+                ),
+                storageVersion:
+                  storage?.version ?? manifest.storageVersion ?? 1,
+                migrations: storage?.migrations,
+                initialStorage: storage?.initialValue,
+                queryProjects: async () => await this.#queryProjects(),
+                appServer:
+                  this.#appServerPort ?? unavailablePluginAppServerPort,
+                ui: this.#pluginUiPort(manifest.id),
+              });
+            } catch (error) {
+              await preparedStorage.rollback();
+              throw error;
+            }
             return {
               sdk,
-              rollback: async () => {
-                if (previousStorage === undefined) {
-                  await rm(storageFile, { force: true });
-                  return;
-                }
-                await mkdir(path.dirname(storageFile), {
-                  recursive: true,
-                  mode: 0o700,
-                });
-                const temporary = `${storageFile}.${String(process.pid)}.rollback`;
-                await writeFile(temporary, previousStorage, { mode: 0o600 });
-                await rename(temporary, storageFile);
-              },
+              publish: preparedStorage.publish,
+              rollback: preparedStorage.rollback,
             };
           },
         }),

@@ -1,4 +1,4 @@
-/** Audit fixture: actual SettingsView, synthetic read-only services, no Host. */
+/** Audit fixture: actual SettingsView, synthetic isolated services, no Host or persistence. */
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -78,6 +78,38 @@ if (query.get("metadata") === "1") {
   existing.source = "legacy";
 }
 const calls: string[] = [];
+let settleProviderEdit: ((outcome: "success" | "failure") => void) | undefined;
+const deferredProviderEdit: Window["zenx"]["settings"]["editProvider"] = async (
+  _id,
+  _provider,
+  _options,
+  attemptId,
+) => {
+  if (query.get("deferredSave") !== "1") return unavailable();
+  calls.push("synthetic-deferred-edit");
+  return new Promise<
+    Awaited<ReturnType<Window["zenx"]["settings"]["editProvider"]>>
+  >((resolve) => {
+    settleProviderEdit = (outcome) => {
+      settleProviderEdit = undefined;
+      resolve(
+        outcome === "failure"
+          ? {
+              ok: false,
+              outcome: "failed",
+              code: "save-rejected",
+              attemptId: attemptId ?? "synthetic-save",
+            }
+          : {
+              ok: true,
+              settings: structuredClone(settings),
+              outcome: "success",
+              attemptId: attemptId ?? "synthetic-save",
+            },
+      );
+    };
+  });
+};
 let initialFailure = query.get("initialFailure") === "1";
 const unavailable = async () => {
   throw new Error(
@@ -121,13 +153,19 @@ Object.assign(window, {
         };
       },
       addProvider: unavailable,
-      editProvider: unavailable,
+      editProvider: deferredProviderEdit,
       deleteProvider: unavailable,
       save: unavailable,
       probeProviderImage: unavailable,
     },
   },
-  __settingsAudit: { calls },
+  __settingsAudit: {
+    calls,
+    settleProviderEdit: (outcome: "success" | "failure" = "success") => {
+      if (!settleProviderEdit) throw new Error("No synthetic edit pending");
+      settleProviderEdit(outcome);
+    },
+  },
 });
 function Preview() {
   const [tab, setTab] = useState<SettingsTab>("models");
