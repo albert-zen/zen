@@ -69,6 +69,11 @@ try {
     .split("\n")
     .filter(Boolean);
 
+  assert.ok(
+    evidence.cjkFonts.length > 0,
+    "CJK fonts must be installed before foreground fixture capture",
+  );
+
   const html = await readFile(path.join(directory, "foreground-activity.html"));
   server = createServer((req, res) => {
     if (
