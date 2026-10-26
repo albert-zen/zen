@@ -67,10 +67,15 @@ await withPreviewBrowser(
       const editable = await evaluate(
         `(() => {const e=document.querySelector('.inline-composer-editor'),t=e.querySelector('.reference-token'),b=e.querySelector('.reference-token-remove');const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width}};return {editor:rect(e),token:rect(t),remove:rect(b)};})()`,
       );
+      await writeFile(
+        path.join(directory, `geometry-${width}.json`),
+        JSON.stringify({ width, metrics, editable }, null, 2),
+      );
+      await screenshot(`reference-width-${width}-fixed.png`);
       assert.ok(
         editable.token.left >= editable.editor.left - 1 &&
           editable.token.right <= editable.editor.right + 1,
-        "editable long token is contained",
+        `editable long token is contained at ${width}: ${JSON.stringify(editable)}`,
       );
       assert.ok(
         editable.remove.width >= 24 &&
