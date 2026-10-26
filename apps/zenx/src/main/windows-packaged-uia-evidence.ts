@@ -1,5 +1,53 @@
 import assert from "node:assert/strict";
 
+/** Only fixed numeric fixture fields can leave the private stderr tail. */
+export function windowsUiaTargetDiagnostics(stderr: string) {
+  const fields = [
+    "elapsedMs",
+    "ticks",
+    "lastTickMs",
+    "getObjectEntered",
+    "getObjectExited",
+    "lastEnterMs",
+    "lastExitMs",
+    "objectKind",
+  ] as const;
+  const snapshots: Record<(typeof fields)[number], number>[] = [];
+  for (const line of stderr.slice(-16_384).split(/\r?\n/u)) {
+    if (!line.startsWith("ZENX_UIA_TARGET_DIAGNOSTIC ") || line.length > 1024)
+      continue;
+    try {
+      const value = JSON.parse(
+        line.slice("ZENX_UIA_TARGET_DIAGNOSTIC ".length),
+      );
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      if (
+        !fields.every(
+          (field) =>
+            Number.isSafeInteger(value[field]) &&
+            value[field] >=
+              (field === "objectKind"
+                ? -25
+                : field.startsWith("last")
+                  ? -1
+                  : 0) &&
+            value[field] <= 1_000_000_000,
+        )
+      )
+        continue;
+      if (![-25, -4, 0].includes(value.objectKind)) continue;
+      snapshots.push(
+        Object.fromEntries(
+          fields.map((field) => [field, value[field]]),
+        ) as Record<(typeof fields)[number], number>,
+      );
+    } catch {
+      /* A partial/invalid diagnostic is not native success evidence. */
+    }
+  }
+  return snapshots.slice(-24);
+}
+
 export interface WindowsPackagedUiaFocusEvidence {
   guardPid: number;
   targetPid: number;

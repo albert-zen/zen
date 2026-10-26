@@ -1,4 +1,5 @@
 import type { WorkspaceFileViewport } from "./workspace-file-viewport.js";
+import { editorStyleNonce } from "./editor-style-nonce.js";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { css } from "@codemirror/lang-css";
 import { go } from "@codemirror/lang-go";
@@ -100,6 +101,7 @@ export function SourceEditor({
       state: EditorState.create({
         doc: normalizedSource(text),
         extensions: [
+          editorStyleNonce(),
           rawSource.init(() => text),
           preserveRawSource,
           fileContentSearch,
