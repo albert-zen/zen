@@ -226,7 +226,7 @@ await withPreviewBrowser(
                 "owner reorder preserves selection",
               );
               await evaluate(
-                "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+i));window.__titlebarPreview.setSelected('custom:synthetic-0')",
+                "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+i));window.__titlebarPreview.setSelected('custom:synthetic-4')",
               );
               await stable();
               for (let cycle = 0; cycle < 2; cycle++) {
@@ -235,11 +235,50 @@ await withPreviewBrowser(
                 );
                 assert.equal((await evaluate(measure)).tabs.length, 11);
                 await click(".workspace-add-tab");
-                await click(".workspace-tab-types > button");
+                if (cycle === 0) {
+                  const probe = () =>
+                    evaluate(`(() => {
+                    const first=document.querySelector('.workspace-tab-types > button'),r=first.getBoundingClientRect();
+                    const x=r.left+r.width/2,y=r.top+r.height/2;
+                    return {top:r.top,bottom:r.bottom,focused:document.activeElement===first,reachable:y>=0&&y<innerHeight&&first.contains(document.elementFromPoint(x,y)),scrolls:[...document.querySelectorAll('.auxiliary-panel *')].filter(e=>e.scrollHeight>e.clientHeight+1).map(e=>({className:e.className,top:e.scrollTop,height:e.clientHeight,scrollHeight:e.scrollHeight}))};
+                  })()`);
+                  const before = await probe();
+                  const body = await evaluate(
+                    `(() => {const r=document.querySelector('.auxiliary-body').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+Math.min(200,r.height/2)}})()`,
+                  );
+                  await send("Input.dispatchMouseEvent", {
+                    type: "mouseWheel",
+                    ...body,
+                    deltaX: 0,
+                    deltaY: -2000,
+                  });
+                  await delay(250);
+                  const afterWheel = await probe();
+                  // Start at the already-focused plus control and use real Tab
+                  // navigation, not programmatic focus/scroll, to reach choice one.
+                  let afterKeyboard = afterWheel;
+                  for (let n = 0; n < 12 && !afterKeyboard.focused; n++) {
+                    await key("Tab", "Tab", 9);
+                    afterKeyboard = await probe();
+                  }
+                  item.firstChoiceProbe = { before, afterWheel, afterKeyboard };
+                  if (afterKeyboard.reachable) {
+                    await click(".workspace-tab-types > button");
+                    assert.ok(
+                      (await evaluate(measure)).tabs.some(
+                        (tab) => tab.active && tab.id.endsWith("synthetic-0"),
+                      ),
+                    );
+                    await click(".workspace-add-tab");
+                  }
+                }
+                // Reopen the closed middle type. Keep the first-choice probe
+                // as separate evidence even if that unrelated tall chooser clips it.
+                await click(".workspace-tab-types > button:nth-of-type(5)");
                 const m = await evaluate(measure);
                 valid(m);
                 assert.equal(m.tabs.length, 12);
-                assert.equal(m.focused, "aux-tab-custom:synthetic-0");
+                assert.equal(m.focused, "aux-tab-custom:synthetic-4");
               }
               await click(".workspace-add-tab");
               await key("Escape", "Escape", 27);
