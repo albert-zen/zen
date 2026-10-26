@@ -627,7 +627,7 @@ test("program runner contains a descendant after cancellation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-program-kill-"));
   const marker = path.join(directory, "late-marker");
   const ready = path.join(directory, "ready");
-  const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),5000);`;
+  const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},process.pid+'|'+process.ppid);setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),5000);`;
   const ignoreTermination =
     process.platform === "win32" ? "" : "process.on('SIGTERM',()=>{});";
   const parent = `const {spawn}=require('node:child_process');${ignoreTermination}spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});setInterval(()=>process.stdout.write(JSON.stringify({ok:true})+'\\n'),50);`;
@@ -642,12 +642,20 @@ test("program runner contains a descendant after cancellation", async () => {
       { invocationId: "contained-cancel", stage: "action", event: {} },
       controller.signal,
     );
-    const descendantPid = Number(await waitForFile(ready));
+    const [descendantPid, rootPid] = (await waitForFile(ready))
+      .split("|")
+      .map(Number);
+    assert(descendantPid !== undefined && rootPid !== undefined);
     assert(Number.isInteger(descendantPid) && descendantPid > 0);
+    assert(Number.isInteger(rootPid) && rootPid > 0);
     controller.abort(new Error("cancel fixture"));
     const result = await running;
     assert.equal(result.status, "cancelled");
-    assert.doesNotMatch(result.error ?? "", /containment/u);
+    assert.doesNotMatch(
+      result.error ?? "",
+      /containment/u,
+      `fixture root PID ${String(rootPid)}, descendant PID ${String(descendantPid)}: ${result.error ?? ""}`,
+    );
     assert.equal(result.output, null);
     await waitForProcessExit(descendantPid);
     await assert.rejects(stat(marker), { code: "ENOENT" });
@@ -663,7 +671,7 @@ test("program runner contains descendants when the direct child exits", async ()
   );
   const marker = path.join(directory, "late-marker");
   const ready = path.join(directory, "ready");
-  const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),5000);`;
+  const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},process.pid+'|'+process.ppid);setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},'late'),5000);`;
   const exitOnTermination =
     process.platform === "win32"
       ? ""
@@ -676,12 +684,20 @@ test("program runner contains descendants when the direct child exits", async ()
       { invocationId: "tree-close", stage: "action", event: {} },
       controller.signal,
     );
-    const descendantPid = Number(await waitForFile(ready));
+    const [descendantPid, rootPid] = (await waitForFile(ready))
+      .split("|")
+      .map(Number);
+    assert(descendantPid !== undefined && rootPid !== undefined);
     assert(Number.isInteger(descendantPid) && descendantPid > 0);
+    assert(Number.isInteger(rootPid) && rootPid > 0);
     controller.abort(new Error("tree close fixture"));
     const outcome = await running;
     assert.equal(outcome.status, "cancelled");
-    assert.doesNotMatch(outcome.error ?? "", /containment/u);
+    assert.doesNotMatch(
+      outcome.error ?? "",
+      /containment/u,
+      `fixture root PID ${String(rootPid)}, descendant PID ${String(descendantPid)}: ${outcome.error ?? ""}`,
+    );
     await waitForProcessExit(descendantPid);
     await assert.rejects(stat(marker), { code: "ENOENT" });
   } finally {
