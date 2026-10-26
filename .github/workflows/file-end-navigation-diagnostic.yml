@@ -1,6 +1,11 @@
 name: File end-navigation diagnostic (not a release gate)
 
 on:
+  # A diagnostic-only branch can intentionally diverge from current product main.
+  # Keep the same native contract runnable without merging unrelated product code.
+  push:
+    branches:
+      - test/macos-end-navigation-gap
   pull_request:
     paths:
       - .github/workflows/file-end-navigation-diagnostic.yml
