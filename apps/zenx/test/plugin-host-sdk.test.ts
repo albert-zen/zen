@@ -404,3 +404,235 @@ test("bundled, process, and HTTP adapters expose the same logical SDK operation 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("replacement fences old runtime storage, shares host views, and rolls back only the candidate", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-generation-"));
+  const options = {
+    pluginId: "fixture",
+    root,
+    version: 1,
+    initialValue: { count: 0 },
+  };
+  try {
+    const old = await JsonPluginStorage.open({
+      ...options,
+      bindGeneration: true,
+    });
+    const hostView = await JsonPluginStorage.open(options);
+    await old.set({ count: 1 });
+    assert.deepEqual(await hostView.get(), { count: 1 });
+    const staged = await JsonPluginStorage.prepare(options);
+    await assert.rejects(
+      old.set({ count: 2 }),
+      /replacement is being prepared/,
+    );
+    await assert.rejects(
+      hostView.set({ count: 3 }),
+      /replacement is being prepared/,
+    );
+    await staged.storage.set({ count: 4 });
+    await staged.rollback();
+    assert.deepEqual(await old.get(), { count: 1 });
+    assert.deepEqual(await hostView.get(), { count: 1 });
+    await assert.rejects(
+      staged.storage.set({ count: 999 }),
+      /generation was replaced/,
+    );
+    await old.set({ count: 5 });
+    await staged.rollback();
+    assert.deepEqual(await hostView.get(), { count: 5 });
+    assert.throws(() => staged.publish(), /candidate is no longer current/);
+    assert.deepEqual(await hostView.get(), { count: 5 });
+
+    const replacement = await JsonPluginStorage.prepare(options);
+    await replacement.storage.set({ count: 6 });
+    replacement.publish();
+    await assert.rejects(old.set({ count: 7 }), /generation was replaced/);
+    assert.deepEqual(await hostView.get(), { count: 6 });
+    await hostView.set({ count: 8 });
+    assert.deepEqual(await replacement.storage.get(), { count: 8 });
+    await replacement.rollback();
+    assert.deepEqual(await replacement.storage.get(), { count: 8 });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(root, "fixture/storage.json"), "utf8"),
+      ),
+      { version: 1, value: { count: 8 } },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("migration cannot be overwritten by a draining generation and failed initial preparation leaves no file", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-migration-fence-"));
+  try {
+    const old = await JsonPluginStorage.open({
+      pluginId: "fixture",
+      root,
+      version: 1,
+      initialValue: { count: 1 },
+      bindGeneration: true,
+    });
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = JsonPluginStorage.prepare({
+      pluginId: "fixture",
+      root,
+      version: 2,
+      migrations: [
+        {
+          fromVersion: 1,
+          toVersion: 2,
+          async migrate(value) {
+            enter();
+            await assert.rejects(
+              old.set({ count: 100 }),
+              /replacement is being prepared/,
+            );
+            await gate;
+            return { ...value, addedByMigration: true };
+          },
+        },
+      ],
+    });
+    await entered;
+    await assert.rejects(
+      old.set({ count: 2 }),
+      /replacement is being prepared/,
+    );
+    release();
+    const candidate = await pending;
+    candidate.publish();
+    await assert.rejects(old.set({ count: 3 }), /generation was replaced/);
+    assert.deepEqual(await candidate.storage.get(), {
+      count: 1,
+      addedByMigration: true,
+    });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(root, "fixture/storage.json"), "utf8"),
+      ),
+      { version: 2, value: { count: 1, addedByMigration: true } },
+    );
+    const initiallyAbsent = await JsonPluginStorage.prepare({
+      pluginId: "absent",
+      root,
+      version: 1,
+    });
+    await initiallyAbsent.storage.set({ candidateOnly: true });
+    await initiallyAbsent.rollback();
+    await assert.rejects(readFile(path.join(root, "absent/storage.json")), {
+      code: "ENOENT",
+    });
+    const fresh = await JsonPluginStorage.open({
+      pluginId: "absent",
+      root,
+      version: 1,
+      initialValue: { fresh: true },
+    });
+    assert.deepEqual(await fresh.get(), { fresh: true });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preparation drains an admitted write before taking its rollback snapshot", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-storage-drain-"));
+  let hold = false;
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fileSystem = {
+    readFile,
+    mkdir,
+    writeFile,
+    unlink,
+    async rename(from: string, to: string) {
+      if (hold) {
+        enter();
+        await gate;
+      }
+      await rename(from, to);
+    },
+  };
+  const options = {
+    pluginId: "fixture",
+    root,
+    version: 1,
+    fileSystem,
+    initialValue: { count: 0 },
+  };
+  try {
+    const old = await JsonPluginStorage.open({
+      ...options,
+      bindGeneration: true,
+    });
+    hold = true;
+    const write = old.set({ count: 1 });
+    await entered;
+    const preparing = JsonPluginStorage.prepare(options);
+    hold = false;
+    release();
+    await write;
+    const candidate = await preparing;
+    assert.deepEqual(await candidate.storage.get(), { count: 1 });
+    await candidate.storage.set({ candidateOnly: true });
+    await candidate.rollback();
+    assert.deepEqual(await old.get(), { count: 1 });
+  } finally {
+    release();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Host replacement observers see every fence edge without gaining candidate access", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-storage-observer-"));
+  const options = {
+    root,
+    pluginId: "observer-fixture",
+    version: 1,
+    initialValue: { value: "original" },
+  };
+  const host = await JsonPluginStorage.open(options);
+  const states: boolean[] = [];
+  const dispose = host.onReplacementChange(() =>
+    states.push(host.replacementPending),
+  );
+  const disposeThrowing = host.onReplacementChange(() => {
+    throw new Error("synthetic observer failure");
+  });
+  try {
+    const first = await JsonPluginStorage.prepare(options);
+    assert.equal(host.replacementPending, true);
+    await assert.rejects(host.get(), /replacement is being prepared/u);
+    await first.storage.set({ value: "candidate" });
+    await first.rollback();
+    assert.deepEqual(await host.get(), { value: "original" });
+    const second = await JsonPluginStorage.prepare(options);
+    await second.storage.set({ value: "published" });
+    second.publish();
+    assert.deepEqual(await host.get(), { value: "published" });
+    assert.deepEqual(states, [true, false, true, false]);
+    dispose();
+    disposeThrowing();
+    const third = await JsonPluginStorage.prepare(options);
+    await third.rollback();
+    assert.deepEqual(states, [true, false, true, false]);
+  } finally {
+    dispose();
+    disposeThrowing();
+    await rm(root, { recursive: true, force: true });
+  }
+});

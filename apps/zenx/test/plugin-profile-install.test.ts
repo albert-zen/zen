@@ -883,6 +883,11 @@ function profileManager(
     hostConfig: {
       cwd: directory,
       dataDirectory: path.join(directory, `${name}-zen-data`),
+      // Test workers can share /tmp across isolated PID namespaces. Keep this
+      // Host's spool away from another worker's stale-PID cleanup authority.
+      toolOutputSpoolOptions: {
+        rootDirectory: path.join(directory, `${name}-tool-output-spool`),
+      },
       model: "fake",
       models: ["fake"],
       approvalPolicy: "never",
@@ -927,6 +932,48 @@ async function assertAgentPluginFlow(
   );
   assert.equal(results.at(-1)!.output, JSON.stringify({ probe }));
 }
+
+test("profile Hosts isolate temporary output capture roots and cleanup", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-profile-spool-"),
+  );
+  const firstCapabilities = profileService(path.join(directory, "first"), {});
+  const secondCapabilities = profileService(path.join(directory, "second"), {});
+  const first = profileManager(directory, "first", firstCapabilities);
+  const second = profileManager(directory, "second", secondCapabilities);
+  try {
+    await firstCapabilities.initialize();
+    await secondCapabilities.initialize();
+    await first.start();
+    await second.start();
+    const firstRoot = path.join(directory, "first-tool-output-spool");
+    const secondRoot = path.join(directory, "second-tool-output-spool");
+    assert.equal((await readdir(firstRoot)).length, 1);
+    const secondInstances = await readdir(secondRoot);
+    assert.equal(secondInstances.length, 1);
+    await first.stop();
+    assert.deepEqual(await readdir(firstRoot), []);
+    assert.deepEqual(await readdir(secondRoot), secondInstances);
+    const thread = (await second.request("thread/start", {})).thread;
+    await runTurn(
+      second,
+      thread.id,
+      '!tool zenx_plugin {"operation":"discover"}',
+    );
+    const items = await journalItems(
+      path.join(directory, "second-zen-data", "threads", `${thread.id}.jsonl`),
+    );
+    const result = items.findLast((item) => item.type === "tool_result");
+    assert.ok(result?.type === "tool_result");
+    assert.ok(Array.isArray(JSON.parse(result.output).plugins));
+  } finally {
+    await first.stop();
+    await second.stop();
+    await firstCapabilities.close();
+    await secondCapabilities.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("restart loads only the Catalog-selected generation without the source tarball or pnpm", async () => {
   const directory = await mkdtemp(
@@ -2995,3 +3042,117 @@ async function journalItems(journalPath: string): Promise<CanonicalItem[]> {
     .filter(Boolean)
     .map((line) => JSON.parse(line) as CanonicalItem);
 }
+
+test("profile update caller receives committed activation failure without rolling back storage or profile", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-activation-commit-"),
+  );
+  const resourcesDirectory = path.join(directory, "resources");
+  const pluginResources = path.join(resourcesDirectory, "plugins");
+  await mkdir(pluginResources, { recursive: true });
+  const tarballs: string[] = [];
+  for (const version of ["1.0.0", "2.0.0"])
+    tarballs.push(
+      await createTarballFixture(pluginResources, {
+        id: "activation-fixture",
+        packageName: "@zenx-test/activation-fixture",
+        version,
+        runtimeType: "bundled",
+        runtimeModule: 'export const fixture = "activation";\n',
+      }),
+    );
+  const sdks: Awaited<ReturnType<typeof createZenXPluginHostSdk>>[] = [];
+  let failActivation = false;
+  let committedWrite: Promise<void> | undefined;
+  const userDataDirectory = path.join(directory, "user-data");
+  const service = new ZenXCapabilityService({
+    userDataDirectory,
+    resourcesDirectory,
+    pnpmCliPath: pnpmCli,
+    bundledProvidersOnly: true,
+    trustedProfileLoaders: {
+      "activation-fixture": () => {
+        let sdk: Awaited<ReturnType<typeof createZenXPluginHostSdk>>;
+        return {
+          start(value) {
+            sdk = value;
+            sdks.push(value);
+          },
+          activate() {
+            if (failActivation) {
+              committedWrite = sdk.storage.set({
+                committedAfterPublication: true,
+              });
+              throw new Error("synthetic postcommit activation failure");
+            }
+          },
+          async invoke() {
+            return { output: "available", exitCode: 0 };
+          },
+        };
+      },
+    },
+  });
+  try {
+    await service.initialize();
+    const expected = {
+      pluginId: "activation-fixture",
+      packageName: "@zenx-test/activation-fixture",
+    };
+    await service.installBundledPluginPackage(tarballs[0]!, expected);
+    await sdks[0]!.storage.set({ old: true });
+    failActivation = true;
+    const result = await service.installBundledPluginPackage(
+      tarballs[1]!,
+      expected,
+    );
+    await committedWrite;
+    const plugin = result.plugins.find(
+      (entry) => entry.id === expected.pluginId,
+    )!;
+    assert.equal(plugin.version, "2.0.0");
+    assert.equal(plugin.enabled, true);
+    assert.equal(plugin.available, false);
+    assert.match(
+      plugin.unavailableReason!,
+      /committed but activation failed.*synthetic postcommit/,
+    );
+    assert.deepEqual(
+      service
+        .pluginSnapshot()
+        .plugins.find((entry) => entry.id === expected.pluginId),
+      plugin,
+    );
+    const durable = await new JsonZenXPluginCatalogStore(
+      path.join(userDataDirectory, "capability-grants.json"),
+    ).load();
+    assert.equal(
+      durable.packages?.[expected.pluginId]?.manifest.version,
+      "2.0.0",
+    );
+    await assert.rejects(
+      sdks[0]!.storage.set({ stale: true }),
+      /generation was replaced/,
+    );
+    assert.deepEqual(await sdks[1]!.storage.get(), {
+      committedAfterPublication: true,
+    });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(
+          path.join(
+            userDataDirectory,
+            "plugin-data",
+            expected.pluginId,
+            "storage.json",
+          ),
+          "utf8",
+        ),
+      ),
+      { version: 1, value: { committedAfterPublication: true } },
+    );
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

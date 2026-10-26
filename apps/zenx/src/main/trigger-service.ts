@@ -211,6 +211,10 @@ interface TriggerGeneration {
   activeWakeups: Map<string, ActiveWakeup>;
   programControllers: Map<string, AbortController>;
   disposeNotifications: (() => void) | undefined;
+  disposeWakeupGate?: () => void;
+  storageGateOpen?: boolean;
+  storageGateEpoch?: symbol;
+  storageWaiters: Set<() => void>;
 }
 
 interface RemoteWatch {
@@ -230,6 +234,13 @@ export class ZenXTriggerService {
   >();
   readonly #store: ZenXTriggerStorePort;
   readonly #titles: ZenXTriggerTitlePort | undefined;
+  readonly #wakeupGate:
+    | {
+        isOpen(): boolean;
+        isBlockedError?(error: unknown): boolean;
+        subscribe(listener: () => void): () => void;
+      }
+    | undefined;
   readonly #programs: TriggerProgramRunner;
   readonly #listeners = new Set<(snapshot: TriggerSnapshot) => void>();
   readonly #now: () => number;
@@ -247,12 +258,18 @@ export class ZenXTriggerService {
       schedule?: (callback: () => void, delayMs: number) => unknown;
       cancelScheduled?: (handle: unknown) => void;
       titles?: ZenXTriggerTitlePort;
+      wakeupGate?: {
+        isOpen(): boolean;
+        isBlockedError?(error: unknown): boolean;
+        subscribe(listener: () => void): () => void;
+      };
       programs?: TriggerProgramRunner;
     } = {},
   ) {
     this.#manager = manager;
     this.#store = store;
     this.#titles = options.titles;
+    this.#wakeupGate = options.wakeupGate;
     this.#programs = options.programs ?? new ZenXTriggerProgramRunner();
     this.#now = options.now ?? Date.now;
     this.#schedule = options.schedule ?? setTimeout;
@@ -261,13 +278,19 @@ export class ZenXTriggerService {
       ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   }
 
-  async start(wakeupAdmission = true): Promise<void> {
-    if (this.#generation !== null) await this.stop();
+  async start(
+    wakeupAdmission = true,
+    lifecycleStore: ZenXTriggerStorePort = this.#store,
+  ): Promise<void> {
+    if (this.#generation !== null) await this.stop(lifecycleStore);
     const generation = newGeneration(wakeupAdmission);
     this.#generation = generation;
+    generation.disposeWakeupGate = this.#wakeupGate?.subscribe(() =>
+      this.#refreshWakeupGate(generation),
+    );
     try {
       await this.#mutation;
-      const snapshot = await this.#store.read();
+      const snapshot = await lifecycleStore.read();
       for (const entry of snapshot.history) {
         if (entry.status === "starting" || entry.status === "running") {
           if (entry.delivery !== undefined || entry.turnId !== null)
@@ -295,7 +318,7 @@ export class ZenXTriggerService {
           }
         }
       }
-      await this.#store.write(snapshot);
+      await lifecycleStore.write(snapshot);
       this.#assertMutationGeneration(generation);
       this.#snapshot = snapshot;
       this.#syncRemoteWatches(generation);
@@ -313,6 +336,8 @@ export class ZenXTriggerService {
     } catch (error) {
       generation.active = false;
       if (this.#generation === generation) this.#generation = null;
+      generation.disposeWakeupGate?.();
+      generation.disposeWakeupGate = undefined;
       generation.disposeNotifications?.();
       generation.disposeNotifications = undefined;
       this.#disposeRemoteWatches(generation);
@@ -349,6 +374,67 @@ export class ZenXTriggerService {
     generation.timers.clear();
     for (const controller of generation.programControllers.values())
       controller.abort();
+  }
+
+  #refreshWakeupGate(generation: TriggerGeneration): void {
+    if (!this.#isOperational(generation)) return;
+    const epoch = Symbol("storage publication");
+    generation.storageGateEpoch = epoch;
+    generation.storageGateOpen = false;
+    // Preserve dueAt and already admitted work: do not abort programs or replay
+    // effects. Remove registrations so an elapsed timer can be scheduled anew.
+    for (const timer of generation.timers.values())
+      this.#cancelScheduled(timer.handle);
+    generation.timers.clear();
+    generation.observationEpoch = undefined;
+    generation.recoveringThreads.clear();
+    generation.disposeNotifications?.();
+    generation.disposeNotifications = undefined;
+    this.#disposeRemoteWatches(generation);
+    if (!(this.#wakeupGate?.isOpen() ?? true)) return;
+    const current = () =>
+      this.#isOperational(generation) &&
+      generation.storageGateEpoch === epoch &&
+      (this.#wakeupGate?.isOpen() ?? true);
+    // Reload the committed or rolled-back Host snapshot before scheduling.
+    // Serialize with normal mutations; a candidate lifecycle snapshot is not
+    // authoritative after rollback, even when the shared service survives.
+    const previous = this.#mutation;
+    let release!: () => void;
+    this.#mutation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    void (async () => {
+      try {
+        await previous;
+        if (!current()) return;
+        const snapshot = await this.#store.read();
+        if (!current()) return;
+        this.#snapshot = snapshot;
+        generation.storageGateOpen = true;
+        this.#releaseStorageWaiters(generation);
+        this.#notify();
+        this.#subscribeWakeups(generation);
+        this.#syncRemoteWatches(generation);
+        this.#rescheduleTimers(generation);
+        void this.#recoverWakeups(generation).catch((error) => {
+          if (current())
+            console.warn(
+              `Could not recover Trigger observation: ${describeError(error)}`,
+            );
+        });
+      } catch (error) {
+        if (current()) {
+          generation.storeUnavailable = true;
+          this.#releaseStorageWaiters(generation);
+          console.error(
+            `Trigger storage publication could not be observed: ${describeError(error)}`,
+          );
+        }
+      } finally {
+        release();
+      }
+    })();
   }
 
   #subscribeWakeups(generation: TriggerGeneration): void {
@@ -920,10 +1006,13 @@ export class ZenXTriggerService {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(
+    lifecycleStore: ZenXTriggerStorePort = this.#store,
+  ): Promise<void> {
     const generation = this.#generation;
     if (generation === null) return;
     generation.retiring = true;
+    this.#releaseStorageWaiters(generation);
     this.#disposeRemoteWatches(generation);
     for (const controller of generation.programControllers.values())
       controller.abort();
@@ -961,10 +1050,14 @@ export class ZenXTriggerService {
           return undefined;
         },
         true,
+        undefined,
+        lifecycleStore,
       );
     } finally {
       generation.active = false;
       if (this.#generation === generation) this.#generation = null;
+      generation.disposeWakeupGate?.();
+      generation.disposeWakeupGate = undefined;
       generation.disposeNotifications?.();
       generation.disposeNotifications = undefined;
       for (const timer of generation.timers.values())
@@ -2639,7 +2732,7 @@ export class ZenXTriggerService {
         throw new Error(
           "Host wakeup admission is unconfirmed; inspect the Thread before retrying",
         );
-      await this.#mutate(generation, async (snapshot) => {
+      await this.#projectResult(generation, async (snapshot) => {
         const entry = snapshot.history.find(
           (item) => item.id === active.historyId,
         );
@@ -2722,8 +2815,7 @@ export class ZenXTriggerService {
     completedItems: readonly ThreadItem[],
     isCurrent: () => boolean = () => this.#isOperational(generation),
   ): Promise<void> {
-    let released = false;
-    await this.#mutate(generation, async (snapshot) => {
+    const released = await this.#projectResult(generation, async (snapshot) => {
       if (!isCurrent()) return;
       const entry = snapshot.history.find(
         (candidate) => candidate.id === historyId,
@@ -2777,7 +2869,7 @@ export class ZenXTriggerService {
           );
         }
       }
-      released = true;
+      return true;
     });
     if (released) this.#releaseActiveWakeup(generation, historyId);
   }
@@ -2787,7 +2879,7 @@ export class ZenXTriggerService {
     active: ActiveWakeup,
     outcome: TriggerProgramOutcome,
   ): Promise<void> {
-    await this.#mutate(generation, async (snapshot) => {
+    await this.#projectResult(generation, async (snapshot) => {
       const entry = snapshot.history.find(
         (candidate) => candidate.id === active.historyId,
       );
@@ -2806,7 +2898,7 @@ export class ZenXTriggerService {
     active: ActiveWakeup,
     invocationId: string,
   ): Promise<void> {
-    await this.#mutate(generation, async (snapshot) => {
+    await this.#projectResult(generation, async (snapshot) => {
       const entry = snapshot.history.find(
         (candidate) => candidate.id === active.historyId,
       );
@@ -2822,8 +2914,7 @@ export class ZenXTriggerService {
     status: "completed" | "failed",
     error: string | null,
   ): Promise<void> {
-    let released = false;
-    await this.#mutate(generation, async (snapshot) => {
+    const released = await this.#projectResult(generation, async (snapshot) => {
       const entry = snapshot.history.find(
         (candidate) => candidate.id === active.historyId,
       );
@@ -2837,7 +2928,7 @@ export class ZenXTriggerService {
         entry.programOutcomes,
         outcome,
       );
-      released = true;
+      return true;
     });
     if (released) this.#releaseActiveWakeup(generation, active.historyId);
   }
@@ -2852,8 +2943,7 @@ export class ZenXTriggerService {
       isCurrent?: () => boolean;
     } = {},
   ): Promise<void> {
-    let released = false;
-    await this.#mutate(generation, async (snapshot) => {
+    const released = await this.#projectResult(generation, async (snapshot) => {
       if (options.isCurrent && !options.isCurrent()) return;
       const entry = snapshot.history.find(
         (candidate) => candidate.id === historyId,
@@ -2878,7 +2968,7 @@ export class ZenXTriggerService {
       else if (entry.delivery === "queued") entry.delivery = "failed";
       entry.completedAt = this.#now();
       entry.error = bounded(error, MAX_ERROR_BYTES);
-      released = true;
+      return true;
     });
     if (released) this.#releaseActiveWakeup(generation, historyId);
   }
@@ -3076,33 +3166,94 @@ export class ZenXTriggerService {
     generation.timers.set(triggerId, timer);
   }
 
+  #projectResult<T>(
+    generation: TriggerGeneration,
+    projection: (snapshot: TriggerSnapshot) => Promise<T>,
+  ): Promise<T> {
+    return this.#mutate(
+      generation,
+      projection,
+      false,
+      undefined,
+      this.#store,
+      true,
+    );
+  }
+
+  #releaseStorageWaiters(generation: TriggerGeneration): void {
+    for (const resolve of generation.storageWaiters) resolve();
+    generation.storageWaiters.clear();
+  }
+
+  async #waitForStoragePublication(
+    generation: TriggerGeneration,
+  ): Promise<void> {
+    for (;;) {
+      this.#assertMutationGeneration(generation);
+      if (generation.storeUnavailable)
+        throw new Error("ZenX Trigger persistence is unavailable");
+      if (
+        generation.storageGateOpen !== false &&
+        (this.#wakeupGate?.isOpen() ?? true)
+      )
+        return;
+      await new Promise<void>((resolve) => {
+        generation.storageWaiters.add(resolve);
+      });
+    }
+  }
+
   async #mutate<T>(
     generation: TriggerGeneration,
     operation: (snapshot: TriggerSnapshot) => Promise<T>,
     allowRetiring = false,
     includeCurrentTerminalTriggerId?: string,
+    store: ZenXTriggerStorePort = this.#store,
+    reapplyProjectionAfterFence = false,
   ): Promise<T> {
-    this.#assertMutationGeneration(generation, allowRetiring);
-    const previous = this.#mutation;
-    let release!: () => void;
-    this.#mutation = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
+    // Wait outside the slot so runtime rollback/retirement can still finish.
+    // Only explicitly pure result projections may be reapplied after a fence;
+    // arbitrary mutation callbacks (which may update closure state) are not.
+    for (;;) {
+      if (!allowRetiring) await this.#waitForStoragePublication(generation);
       this.#assertMutationGeneration(generation, allowRetiring);
-      const snapshot = structuredClone(this.#snapshot);
-      const result = await operation(snapshot);
-      this.#assertMutationGeneration(generation, allowRetiring);
-      retainSnapshot(snapshot);
-      await this.#store.write(snapshot);
-      this.#assertMutationGeneration(generation, allowRetiring);
-      this.#snapshot = snapshot;
-      this.#syncRemoteWatches(generation, includeCurrentTerminalTriggerId);
-      this.#notify();
-      return result;
-    } finally {
-      release();
+      const previous = this.#mutation;
+      let release!: () => void;
+      this.#mutation = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        this.#assertMutationGeneration(generation, allowRetiring);
+        if (
+          !allowRetiring &&
+          (generation.storageGateOpen === false ||
+            !(this.#wakeupGate?.isOpen() ?? true))
+        )
+          continue;
+        const snapshot = structuredClone(this.#snapshot);
+        const result = await operation(snapshot);
+        this.#assertMutationGeneration(generation, allowRetiring);
+        retainSnapshot(snapshot);
+        try {
+          await store.write(snapshot);
+        } catch (error) {
+          if (
+            reapplyProjectionAfterFence &&
+            !allowRetiring &&
+            this.#wakeupGate?.isBlockedError?.(error)
+          )
+            continue;
+          throw error;
+        }
+        this.#assertMutationGeneration(generation, allowRetiring);
+        this.#snapshot = snapshot;
+        this.#syncRemoteWatches(generation, includeCurrentTerminalTriggerId);
+        this.#notify();
+        return result;
+      } finally {
+        release();
+      }
     }
   }
 
@@ -3123,7 +3274,12 @@ export class ZenXTriggerService {
   }
 
   #isWakeupOperational(generation: TriggerGeneration): boolean {
-    return generation.wakeupAdmission && this.#isOperational(generation);
+    return (
+      generation.wakeupAdmission &&
+      generation.storageGateOpen !== false &&
+      (this.#wakeupGate?.isOpen() ?? true) &&
+      this.#isOperational(generation)
+    );
   }
 
   #assertMutationGeneration(
@@ -3289,6 +3445,7 @@ function newGeneration(wakeupAdmission = true): TriggerGeneration {
     retiring: false,
     storeUnavailable: false,
     wakeupAdmission,
+    storageWaiters: new Set(),
     recoveringThreads: new Map(),
     timers: new Map(),
     remoteWatches: new Map(),
