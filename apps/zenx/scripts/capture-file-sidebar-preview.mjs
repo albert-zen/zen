@@ -592,6 +592,13 @@ try {
       ),
     );
     await clickSelector(webSelector);
+    check(
+      receipt,
+      "inline-web-pointer-routes-exactly-once",
+      await evaluate(
+        `window.__fileSidebarPreview.calls.filter(c=>c.method==='browser').length===1`,
+      ),
+    );
     await evaluate(
       `document.querySelector(${JSON.stringify(webSelector)}).focus()`,
     );
