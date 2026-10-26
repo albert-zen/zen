@@ -43,6 +43,7 @@ function fixture(inspectionGate: Promise<void> = Promise.resolve()) {
   const view = {
     webContents: {
       id: 7,
+      executeJavaScript: async () => false,
       getURL: () => url,
       capturePage: () => {
         directCaptures++;
@@ -107,6 +108,7 @@ function fixture(inspectionGate: Promise<void> = Promise.resolve()) {
       options.onCreateView(view);
       return browser;
     },
+    nativeTheme: { themeSource: "system", shouldUseDarkColors: false },
     nativeImage: {
       createFromBuffer: (buffer: Buffer) => ({
         isEmpty: () => false,
@@ -135,7 +137,7 @@ function fixture(inspectionGate: Promise<void> = Promise.resolve()) {
   };
 }
 
-test("blank smoke waits for each production inspection, preserves target/lease, and writes six native artifacts", async () => {
+test("blank smoke waits for each production inspection, preserves target/lease, and writes eight native artifacts", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -152,7 +154,7 @@ test("blank smoke waits for each production inspection, preserves target/lease, 
   release();
   await running;
   assert.deepEqual(f.counts(), {
-    inspectCount: 6,
+    inspectCount: 8,
     shutdowns: 1,
     destroyed: 1,
     directCaptures: 0,
@@ -165,14 +167,14 @@ test("blank smoke waits for each production inspection, preserves target/lease, 
   );
   assert.deepEqual(
     f.mounts.map((mount) => mount.appearance),
-    ["light", "dark", "light", "dark", "light", "dark"],
+    ["light", "dark", "light", "light", "dark", "dark", "light", "dark"],
   );
   const receipt = f.receipt();
   assert.equal(receipt.passed, true);
   assert.equal(receipt.head, "exact-head");
   assert.deepEqual(
     receipt.records.map((record: any) => record.pixel),
-    [255, 0, 255, 80, 80, 0].map((value) => [value, value, value, 255]),
+    [255, 0, 255, 255, 0, 80, 80, 0].map((value) => [value, value, value, 255]),
   );
   assert.ok(
     receipt.records.every(
@@ -181,7 +183,7 @@ test("blank smoke waits for each production inspection, preserves target/lease, 
   );
   assert.equal(
     [...f.writes.keys()].filter((file) => file.endsWith(".png")).length,
-    6,
+    8,
   );
 });
 
