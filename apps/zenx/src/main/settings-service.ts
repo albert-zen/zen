@@ -24,12 +24,7 @@ import {
 } from "../../../../apps/cli/src/host.js";
 import { builtInModelCatalogPreset } from "../../../../apps/cli/src/model-presets.js";
 import { OpenAiSubscriptionAuthProfile } from "../../../../apps/cli/src/subscription-auth.js";
-import type { ModelAdapter } from "../../../../src/model.js";
-import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
-import {
-  extractChatGptAccountId,
-  OpenAiSubscriptionModel,
-} from "../../../../src/model/openai-subscription.js";
+import { extractChatGptAccountId } from "../../../../src/model/openai-subscription.js";
 import type {
   ZenXHostConfig,
   HostConfigurationCandidate,
@@ -65,6 +60,7 @@ import { resolveZenXHostConfig } from "./host-config.js";
 import {
   probeOpenAiCompatibleImage,
   type ImageCapabilityProbeOutcome,
+  type ModelOperationExecutor,
 } from "./image-capability-probe.js";
 import {
   type ProjectPathIdentity,
@@ -800,6 +796,7 @@ export class ZenXSettingsService {
     modelId: string,
     options: {
       resolveTransport?: ProviderOperationTransportResolver;
+      runModelOperation?: ModelOperationExecutor;
       signal?: AbortSignal;
     } = {},
   ): Promise<ZenXImageCapabilityProbeResult> {
@@ -819,6 +816,7 @@ export class ZenXSettingsService {
     modelId: string,
     options: {
       resolveTransport?: ProviderOperationTransportResolver;
+      runModelOperation?: ModelOperationExecutor;
       signal?: AbortSignal;
     } = {},
   ): Promise<ZenXImageCapabilityProbeResult> {
@@ -832,20 +830,20 @@ export class ZenXSettingsService {
       target,
       "image capability probe",
     );
-    const fetch = this.#providerFetchFactory(transport);
-    let outcome: ImageCapabilityProbeOutcome;
-    try {
-      outcome = await probeOpenAiCompatibleImage({
+    if (!options.runModelOperation)
+      throw new Error("Canonical probe Host executor is unavailable");
+    const outcome: ImageCapabilityProbeOutcome =
+      await probeOpenAiCompatibleImage({
         baseUrl: target.provider.baseUrl,
         apiKey: target.apiKey,
         provider: target.provider.name,
         model: target.model!.id,
-        fetch,
+        metadata: target.model!,
+        providerProfileId: target.provider.providerProfileId,
+        ...(transport === undefined ? {} : { transport }),
+        execute: options.runModelOperation,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
-    } finally {
-      await fetch.close?.();
-    }
     if (outcome === "inconclusive") {
       await this.#assertProviderOperationCurrent(
         target,
@@ -905,88 +903,31 @@ export class ZenXSettingsService {
     return this.#requireProfile().computerForegroundControlEnabled === true;
   }
 
-  async titleModel() {
+  async titleOperationConfiguration() {
     const release = this.#beginAuxiliaryOperation();
     try {
-      return { ...(await this.#titleModel()), release };
+      await this.#profileOperations;
+      const profile = this.#appliedProfile ?? this.#requireProfile();
+      const reference = profile.titleModel;
+      const config = await this.#hostConfigForProfile(profile);
+      const provider = config.providers?.find(
+        (entry) => entry.providerProfileId === reference.providerProfileId,
+      );
+      if (!provider)
+        throw new Error("Configured title Provider is unavailable");
+      return {
+        selection: {
+          providerProfileId: reference.providerProfileId,
+          modelId: reference.modelId,
+        },
+        provider,
+        titlePrompt: profile.titlePrompt,
+        release,
+      };
     } catch (error) {
       await release();
       throw error;
     }
-  }
-  async #titleModel(): Promise<{
-    adapter: ModelAdapter | null;
-    model: string;
-    reasoningEffort: string | null;
-  }> {
-    await this.#profileOperations;
-    const profile = this.#appliedProfile ?? this.#requireProfile();
-    const titleReference = profile.titleModel;
-    const provider = profile.providerProfiles.find(
-      (candidate) =>
-        candidate.providerProfileId === titleReference.providerProfileId,
-    )!;
-    const modelMetadata = provider.models.find(
-      (model) => model.id === titleReference.modelId,
-    )!;
-    if (modelMetadata.contextWindow === null) {
-      throw new Error(
-        `ZenX title model ${modelMetadata.id} requires a positive context window`,
-      );
-    }
-    const reasoningEffort = modelMetadata.defaultReasoningEffort;
-    if (provider.type === "fake") {
-      return { adapter: null, model: titleReference.modelId, reasoningEffort };
-    }
-    if (provider.type === "openai-subscription") {
-      const subscription = this.#subscriptionForProfile(
-        provider.providerProfileId,
-      );
-      const acquireAccessLease = subscription.acquireAccessLease;
-      if (acquireAccessLease === undefined) {
-        throw new Error("Title model subscription is unavailable");
-      }
-      const renewAccessLease = subscription.renewAccessLease;
-      return {
-        adapter: new OpenAiSubscriptionModel({
-          acquireAccessLease: async (signal) =>
-            await acquireAccessLease.call(subscription, signal),
-          ...(renewAccessLease === undefined
-            ? {}
-            : {
-                renewAccessLease: async (rejectedAccessToken, signal) =>
-                  await renewAccessLease.call(
-                    subscription,
-                    rejectedAccessToken,
-                    signal,
-                  ),
-              }),
-          instructions:
-            "Return only a concise display title of at most 64 characters. Do not include quotes, IDs, labels, or punctuation boilerplate.",
-        }),
-        model: titleReference.modelId,
-        reasoningEffort,
-      };
-    }
-    const apiKey = await this.#vault.readApiKey(
-      this.#credentialReference(provider.providerProfileId, profile),
-    );
-    if (apiKey === undefined)
-      throw new Error(
-        `Title model Provider profile ${provider.providerProfileId} has no API key`,
-      );
-    return {
-      adapter: new OpenAiCompatibleModel({
-        baseUrl: provider.baseUrl,
-        apiKey,
-        provider: provider.name,
-        // Reasoning and visible output share this budget on compatible providers.
-        // A 40-token cap can end with finish_reason=length before any title.
-        defaultParams: { temperature: 0.2, max_tokens: 4096 },
-      }),
-      model: titleReference.modelId,
-      reasoningEffort,
-    };
   }
 
   async save(settings: ZenXSettingsUpdate, apiKey?: string): Promise<void> {

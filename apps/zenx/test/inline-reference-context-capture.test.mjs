@@ -29,10 +29,21 @@ test("five ordered inline references reach both provider user-message boundaries
 
     assert.deepEqual(
       (await readdir(output)).sort(),
-      ["fixture-metadata.json", "model-user-message.txt", "verification.json"],
-      "only user-message text, fixture metadata and verification are persisted",
+      [
+        "chat-completions.complete-user-message.json",
+        "fixture-metadata.json",
+        "model-user-message.txt",
+        "responses.complete-user-message.json",
+        "verification.json",
+      ],
+      "complete user-message evidence, original user text, and metadata only",
     );
-    for (const file of ["fixture-metadata.json", "verification.json"]) {
+    for (const file of [
+      "fixture-metadata.json",
+      "verification.json",
+      "chat-completions.complete-user-message.json",
+      "responses.complete-user-message.json",
+    ]) {
       assert.deepEqual(
         JSON.parse(await readFile(path.join(output, file), "utf8")),
         JSON.parse(await readFile(path.join(expected, file), "utf8")),
@@ -79,12 +90,31 @@ test("five ordered inline references reach both provider user-message boundaries
       verification.reports.every(
         (report) =>
           report.networkRequests === 0 &&
-          report.providerUserMessageMatch === true &&
+          report.originalUserMatch === true &&
+          report.completeCanonicalTextMatch === true &&
           report.canonicalJournalMatch === true &&
           report.matchingUserMessageCaptures >= 1,
       ),
     );
     assert.equal(verification.capturesOnlyUserMessage, true);
+    assert.equal(
+      verification.modelUserMessageTxtScope,
+      "original-user-text-only",
+    );
+    assert.equal(verification.completeUserMessagesIncludeHostMetadata, true);
+    for (const format of ["chat-completions", "responses"]) {
+      const complete = JSON.parse(
+        await readFile(
+          path.join(output, `${format}.complete-user-message.json`),
+          "utf8",
+        ),
+      );
+      assert.match(complete.canonicalContent[0].text, /received_at=/);
+      assert.deepEqual(
+        complete.serializedUserMessage.content.map((part) => part.text),
+        complete.canonicalContent.map((part) => part.text),
+      );
+    }
     assert.equal(verification.fullProviderRequestsWritten, false);
     assert.equal(verification.systemAndToolPromptsWritten, false);
     assert.equal(verification.networkRequests, 0);

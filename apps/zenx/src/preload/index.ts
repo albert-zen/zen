@@ -79,6 +79,11 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  modelOperationHistory: (
+    threadId?: string,
+  ): Promise<
+    import("../main/model-operation-messages.js").HostModelOperationHistory
+  > => ipcRenderer.invoke(ipcChannels.modelOperationHistory, threadId),
   modelRequestDebug: {
     request: (
       input: ModelRequestDebugCommand,

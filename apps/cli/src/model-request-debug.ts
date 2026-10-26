@@ -3,7 +3,10 @@ import type {
   ModelAdapter,
   ModelRequestObservation,
 } from "../../../src/model.js";
-import { observeRequestBody } from "../../../src/model/request-observation.js";
+import {
+  observeRequestBody,
+  sanitizeToolMediaTransportSummary,
+} from "../../../src/model/request-observation.js";
 import type {
   ModelRequestDebugCommand,
   ModelRequestDebugResult,
@@ -220,6 +223,13 @@ export class ModelRequestDebugStore {
               transportAttempt: event.transportAttempt,
               redacted: event.redacted,
               originalBytes: event.originalBytes,
+              ...(event.toolMediaTransport === undefined
+                ? {}
+                : {
+                    toolMediaTransport: sanitizeToolMediaTransportSummary(
+                      event.toolMediaTransport,
+                    ),
+                  }),
               sourceAttachments,
               sourceAttachmentCount: attachmentRefs.length,
             },

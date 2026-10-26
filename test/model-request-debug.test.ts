@@ -310,7 +310,7 @@ test("Chat Completions captures the exact final body including image bytes and p
   assert(!readAll(store, entries[0]!.id).includes("never-capture-url"));
 });
 
-test("Responses capture includes injected instructions and configuration and fences observer failures", async () => {
+test("Responses capture includes explicit compiler instructions and configuration and fences observer failures", async () => {
   const observations: string[] = [];
   const bodies: string[] = [];
   const adapter = new OpenAiSubscriptionModel({
@@ -328,6 +328,7 @@ test("Responses capture includes injected instructions and configuration and fen
   });
   const input = {
     ...request(),
+    instructions: "synthetic system instructions",
     reasoningEffort: "medium",
     onRequest: (event: import("../src/model.js").ModelRequestObservation) => {
       observations.push(event.body);
@@ -603,6 +604,59 @@ test("callbacks from a finished or failed sample cannot append obsolete captures
     provider: "synthetic",
     model: "synthetic",
   });
+  assert.equal(store.control({ action: "status" }).retainedCount, 0);
+});
+
+test("tool transport summary is opt-in, bounded and allowlisted separately from actual payload", async () => {
+  const store = new ModelRequestDebugStore();
+  const adapter: ModelAdapter = {
+    provider: "synthetic",
+    requestPayloadFormat: "chat-completions",
+    async *stream(req) {
+      req.onRequest?.({
+        format: "chat-completions",
+        body: '{"messages":[]}',
+        originalBytes: 15,
+        redacted: false,
+        transportAttempt: 1,
+        provider: "synthetic",
+        model: "synthetic",
+        toolMediaTransport: {
+          nativeToolContent: 2,
+          compatibilitySupplement: 3,
+          unknownTarget: -1,
+          undeclaredMedia: Infinity,
+          nativeSupportUnverified: 2_000_000,
+          conflictingEvidence: 0,
+          endpoint: "secret-url",
+          evidence: "secret evidence",
+        } as any,
+      });
+      yield { type: "text_delta", delta: "ok" };
+    },
+  };
+  for await (const _event of store.observe(adapter).stream(request())) {
+  }
+  assert.equal(store.control({ action: "status" }).retainedCount, 0);
+  store.control({ action: "setEnabled", enabled: true });
+  for await (const _event of store.observe(adapter).stream(request())) {
+  }
+  const record = store.control({ action: "list", threadId: "thread-1" })
+    .records![0]!;
+  assert.deepEqual(record.toolMediaTransport, {
+    nativeToolContent: 2,
+    compatibilitySupplement: 3,
+    unknownTarget: 0,
+    undeclaredMedia: 0,
+    nativeSupportUnverified: 1_000_000,
+    conflictingEvidence: 0,
+  });
+  assert.doesNotMatch(JSON.stringify(record), /secret-url|secret evidence/);
+  assert.equal(
+    store.control({ action: "read", id: record.id }).page!.text,
+    '{"messages":[]}',
+  );
+  store.control({ action: "setEnabled", enabled: false });
   assert.equal(store.control({ action: "status" }).retainedCount, 0);
 });
 

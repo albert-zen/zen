@@ -13,5 +13,10 @@ export interface ThreadTitleProjection {
 export type ThreadTitleSnapshot = Record<string, ThreadTitleProjection>;
 
 export interface ThreadTitleInference {
-  generate(input: string, model: string, signal: AbortSignal): Promise<string>;
+  generate(
+    input: string,
+    model: string,
+    signal: AbortSignal,
+    context?: { threadId: string },
+  ): Promise<string>;
 }

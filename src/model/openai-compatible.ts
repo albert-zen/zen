@@ -1,4 +1,9 @@
 import {
+  selectChatToolMediaTransport,
+  type ChatToolMediaCapability,
+  type ChatToolMediaEvidenceConflict,
+} from "./tool-media-transport.js";
+import {
   safeProviderErrorIdentity,
   safeProviderErrorParameter,
   providerRecoveryBlocked,
@@ -20,6 +25,7 @@ import type {
   ModelMessage,
   ModelRequest,
   ModelTool,
+  ToolMediaTransportSummary,
 } from "../model.js";
 import type { AttachmentStore } from "../attachment.js";
 
@@ -42,6 +48,9 @@ export interface ModelStreamDiagnostic {
 export interface OpenAiCompatibleModelOptions {
   onStreamFailure?: (event: ModelStreamDiagnostic) => Promise<void>;
 
+  /** Explicit exact-target transport support; absent means compatibility encoding. */
+  toolMediaCapabilities?: readonly ChatToolMediaCapability[];
+  toolMediaEvidenceConflicts?: readonly ChatToolMediaEvidenceConflict[];
   baseUrl: string;
   apiKey: string;
   provider?: string;
@@ -111,6 +120,8 @@ export class OpenAiCompatibleModel implements ModelAdapter {
   readonly requestPayloadFormat = "chat-completions" as const;
 
   readonly #onStreamFailure: OpenAiCompatibleModelOptions["onStreamFailure"];
+  readonly #toolMediaEvidenceConflicts: readonly ChatToolMediaEvidenceConflict[];
+  readonly #toolMediaCapabilities: readonly ChatToolMediaCapability[];
   readonly #apiKey: string;
   readonly #defaultParams: Readonly<Record<string, unknown>>;
   readonly #endpoint: string;
@@ -119,6 +130,12 @@ export class OpenAiCompatibleModel implements ModelAdapter {
 
   constructor(options: OpenAiCompatibleModelOptions) {
     this.#endpoint = chatCompletionsEndpoint(options.baseUrl);
+    this.#toolMediaCapabilities = (options.toolMediaCapabilities ?? []).map(
+      (entry) => ({ ...entry, media: [...entry.media] }),
+    );
+    this.#toolMediaEvidenceConflicts = (
+      options.toolMediaEvidenceConflicts ?? []
+    ).map((entry) => ({ ...entry }));
     this.#apiKey = requiredSecret(options.apiKey);
     this.provider = requiredLabel(
       options.provider ?? "openai-compatible",
@@ -132,6 +149,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
+    const model = requiredLabel(request.model, "model");
     const tools = request.tools.map(toChatTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
     const reasoningPolicy = compatibleReasoningPolicy({
@@ -142,6 +160,14 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     });
     const messages: Readonly<Record<string, unknown>>[] = [];
     const mediaPaths = new Map<string, object>();
+    const toolMediaTransport: ToolMediaTransportSummary = {
+      nativeToolContent: 0,
+      compatibilitySupplement: 0,
+      unknownTarget: 0,
+      undeclaredMedia: 0,
+      nativeSupportUnverified: 0,
+      conflictingEvidence: 0,
+    };
     // Chat tool replies are a contiguous batch. Supplemental user-role media
     // follows the entire batch, never another tool's still-pending reply.
     const pendingToolMedia: Array<{
@@ -172,7 +198,42 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         continue;
       }
       if (message.role !== "tool") flushToolMedia();
-      const encoded = await toChatMessage(message, this.#attachments);
+      let encoded = await toChatMessage(message, this.#attachments);
+      const decision =
+        message.role === "tool" && message.modelContent !== undefined
+          ? selectChatToolMediaTransport(
+              this.#toolMediaCapabilities,
+              this.#endpoint,
+              model,
+              message.modelContent,
+              this.#toolMediaEvidenceConflicts,
+            )
+          : undefined;
+      const nativeToolMedia = decision?.encoding === "native-tool-content";
+      if (decision !== undefined) {
+        if (nativeToolMedia) toolMediaTransport.nativeToolContent++;
+        else toolMediaTransport.compatibilitySupplement++;
+        if (decision.reason === "conflicting-evidence")
+          toolMediaTransport.conflictingEvidence++;
+        if (decision.reason === "unknown-target")
+          toolMediaTransport.unknownTarget++;
+        if (decision.reason === "undeclared-media")
+          toolMediaTransport.undeclaredMedia++;
+      }
+      let nativeContent: import("../item.js").UserInput | undefined;
+      if (
+        nativeToolMedia &&
+        message.role === "tool" &&
+        message.modelContent !== undefined
+      ) {
+        const content = [
+          { type: "text" as const, text: String(encoded.content) },
+          ...message.modelContent,
+        ];
+        const media = await toChatUserContent(content, this.#attachments);
+        encoded = { ...encoded, content: media.content };
+        nativeContent = content;
+      }
       if (pendingReasoning.length > 0) {
         if (shouldReplayReasoning(reasoningPolicy.replay, message)) {
           messages.push({ ...encoded, reasoning_content: pendingReasoning });
@@ -191,6 +252,12 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         }
         pendingReasoning = "";
       }
+      if (nativeContent !== undefined)
+        recordMediaPaths(
+          mediaPaths,
+          `messages[${messages.length}]`,
+          nativeContent,
+        );
       if (message.role === "user")
         recordMediaPaths(
           mediaPaths,
@@ -198,7 +265,11 @@ export class OpenAiCompatibleModel implements ModelAdapter {
           modelUserContent(message),
         );
       messages.push(encoded);
-      if (message.role === "tool" && message.modelContent !== undefined) {
+      if (
+        message.role === "tool" &&
+        message.modelContent !== undefined &&
+        !nativeToolMedia
+      ) {
         pendingToolMedia.push({
           content: message.modelContent,
           encoded: await toChatUserContent(
@@ -221,7 +292,10 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
     const body = serializeRequest({
       ...this.#defaultParams,
-      model: requiredLabel(request.model, "model"),
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_tokens: request.maxOutputTokens }),
+      model,
       messages,
       n: 1,
       stream: true,
@@ -255,6 +329,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             this.provider,
             ++transportAttempt,
             [this.#apiKey],
+            toolMediaTransport,
           );
           return this.#fetch(this.#endpoint, {
             method: "POST",
@@ -705,7 +780,7 @@ async function toChatMessage(
         message.exitCode === null
           ? historicalCallId(message.callId)
           : requiredLabel(message.callId, "tool call id"),
-      content: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+      content: message.text,
     };
   }
 

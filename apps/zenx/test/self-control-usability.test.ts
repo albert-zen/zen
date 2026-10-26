@@ -14,6 +14,7 @@ import { AgentRuntime } from "../../../src/runtime.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
+import type { ClientRequestResults } from "../src/protocol-client/index.js";
 import { ZenXProtocolClient } from "../src/protocol-client/index.js";
 import {
   MutableAppServerRequestPort,
@@ -318,7 +319,7 @@ for (const skillMode of ["auto", "manual"] as const) {
         if (sendMode !== "start")
           await f.app.startTurn(target, "existing work");
         const original =
-          "Original request mentions Available Skills (metadata only) literally.";
+          '[Zen recorded user-message metadata: received_at="user-spelled"] Original request mentions Available Skills (metadata only) literally.';
         const send = async (text = original) =>
           (await f.control.invoke("zenx_threads_send", {
             name: "zenx_threads_send",
@@ -354,6 +355,36 @@ for (const skillMode of ["auto", "manual"] as const) {
           skill.id,
           skillMode === "auto" ? "manual" : "auto",
         );
+        // Simulate legacy read encoding; never rewrite the actual journal.
+        if (skillMode === "manual" && sendMode !== "start") {
+          await f.port.attach({
+            request: async (method, params) => {
+              const result = await f.client.request(method, params);
+              if (method !== "zen/thread/read" || !("thread" in result))
+                return result;
+              const legacy = structuredClone(
+                result as ClientRequestResults["zen/thread/read"],
+              );
+              for (const item of legacy.thread.items) {
+                if (
+                  (item.type === "user_message_queued" ||
+                    item.type === "turn_replacement_requested") &&
+                  item.input
+                ) {
+                  const text = item.input
+                    .map((part) => {
+                      assert.equal(part.type, "text");
+                      return part.type === "text" ? part.text : "";
+                    })
+                    .join("\n");
+                  Object.assign(item, { text });
+                  Reflect.deleteProperty(item, "input");
+                }
+              }
+              return legacy as typeof result;
+            },
+          });
+        }
         const retry = await send();
         assert.equal(retry.duplicate, true);
         assert.equal(retry.clientUserMessageId, first.clientUserMessageId);
@@ -891,7 +922,10 @@ test("a model calls the advertised bounded original-history tool after compactio
           (message) => message.role === "tool",
         );
         assert(resultMessage?.role === "tool");
-        const result = JSON.parse(resultMessage.text);
+        assert.ok(resultMessage.text.startsWith("Exit code: 0\n"));
+        const result = JSON.parse(
+          resultMessage.text.slice("Exit code: 0\n".length),
+        );
         if (result.granularity === "items") {
           const preview = result.items.find(
             (item: { type: string }) => item.type === "tool_result",

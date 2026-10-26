@@ -1,4 +1,8 @@
-import type { ModelRequest, ModelRequestObservation } from "../model.js";
+import type {
+  ModelRequest,
+  ModelRequestObservation,
+  ToolMediaTransportSummary,
+} from "../model.js";
 
 const credentialField =
   /^(?:authorization|proxy-authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password)$/iu;
@@ -11,6 +15,7 @@ export function observeRequestBody(
   provider: string,
   transportAttempt: number,
   secrets: readonly string[] = [],
+  toolMediaTransport?: ToolMediaTransportSummary,
 ): void {
   if (request.onRequest === undefined) return;
   try {
@@ -45,6 +50,12 @@ export function observeRequestBody(
     const safeModel = scrub(request.model);
     request.onRequest({
       format,
+      ...(toolMediaTransport === undefined
+        ? {}
+        : {
+            toolMediaTransport:
+              sanitizeToolMediaTransportSummary(toolMediaTransport),
+          }),
       body: redacted ? JSON.stringify(value) : body,
       originalBytes: Buffer.byteLength(body, "utf8"),
       redacted,
@@ -55,4 +66,20 @@ export function observeRequestBody(
   } catch {
     // Debugging is observational: it cannot fail, retry or alter a sample.
   }
+}
+
+/** Explicit allowlist prevents accidental transport metadata from reaching capture. */
+export function sanitizeToolMediaTransportSummary(
+  value: ToolMediaTransportSummary,
+): ToolMediaTransportSummary {
+  const count = (n: number) =>
+    Number.isSafeInteger(n) && n >= 0 ? Math.min(n, 1_000_000) : 0;
+  return {
+    nativeToolContent: count(value.nativeToolContent),
+    compatibilitySupplement: count(value.compatibilitySupplement),
+    unknownTarget: count(value.unknownTarget),
+    undeclaredMedia: count(value.undeclaredMedia),
+    nativeSupportUnverified: count(value.nativeSupportUnverified),
+    conflictingEvidence: count(value.conflictingEvidence),
+  };
 }

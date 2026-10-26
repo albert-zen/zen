@@ -18,6 +18,34 @@ import {
   latestCompaction,
 } from "./context-compaction.js";
 
+export interface ModelMessageSource {
+  itemIds: string[];
+  purpose: string;
+  variant?: string;
+  hostTextPartIndices?: readonly number[];
+  origin: "human" | "agent" | "host" | "model" | "tool";
+}
+const messageSources = new WeakMap<object, ModelMessageSource>();
+export function modelMessageSource(
+  message: ModelMessage,
+): ModelMessageSource | undefined {
+  return messageSources.get(message);
+}
+export function sourceModelMessage<T extends ModelMessage>(
+  message: T,
+  source: ModelMessageSource,
+): T {
+  messageSources.set(message, source);
+  return message;
+}
+export function copyModelMessageSource(
+  source: ModelMessage,
+  target: ModelMessage,
+): void {
+  const provenance = messageSources.get(source);
+  if (provenance) messageSources.set(target, provenance);
+}
+
 /** Disposable classification of projected input; never serialized or journaled. */
 const contextCategories = new WeakMap<
   object,
@@ -32,6 +60,7 @@ export function copyModelMessageContextCategory(
   source: ModelMessage,
   target: ModelMessage,
 ): void {
+  copyModelMessageSource(source, target);
   const category = contextCategories.get(source);
   if (category !== undefined) contextCategories.set(target, category);
 }
@@ -57,23 +86,40 @@ export interface TypedUserModelMessage {
   userTimestamp?: string | null;
 }
 
-/** Provider text metadata is a separate part; canonical text/media remain untouched. */
+/** Protocol adapters consume already materialized text; never invent metadata. */
 export function modelUserContent(
   message: TextModelMessage | TypedUserModelMessage,
 ): UserInput {
-  const content: UserInput =
-    "content" in message
-      ? message.content
-      : [{ type: "text", text: message.text }];
-  if (message.role !== "user" || message.userTimestamp === undefined)
-    return content;
-  return [
-    {
-      type: "text",
-      text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(message.userTimestamp)}${message.userTimestamp === null ? " (unknown)" : ""}]`,
-    },
-    ...content,
-  ];
+  return "content" in message
+    ? message.content
+    : [{ type: "text", text: message.text }];
+}
+
+/**
+ * Sole admission-time semantic constructor. AppServer calls this before its
+ * existing journal transaction; no I/O or second content store belongs here.
+ * Returns the original human parts unchanged after a distinctly Host-owned part.
+ */
+export function materializeCanonicalInput(
+  item: CanonicalItem,
+  history: readonly CanonicalItem[],
+): CanonicalItem {
+  if (item.type !== "user_message" || item.contentAuthority !== undefined)
+    return item;
+  const timestamp =
+    recordedUserTimestamps([...history, item]).get(item.id) ?? null;
+  const { text: _legacyText, ...base } = item;
+  return {
+    ...base,
+    content: [
+      {
+        type: "text" as const,
+        text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(timestamp)}${timestamp === null ? " (unknown)" : ""}]`,
+      },
+      ...contentFromUserMessage(item),
+    ],
+    contentAuthority: { version: 1 as const, hostTextPartIndices: [0] },
+  };
 }
 
 export interface ToolCallModelMessage {
@@ -115,17 +161,28 @@ export type ReasoningEffort = string;
 /** Passive identity for a single Runtime sample, never replay state. */
 export interface ModelRequestDebugContext {
   threadId: string;
-  purpose: "turn" | "compaction";
+  purpose: "turn" | "compaction" | "operation";
   turnId: string | null;
   sampleId: string;
   contextBoundaryItemId: string;
   sampleAttempt: number;
 }
 
-/** Only the serialized body, never URL, transport headers or credentials. */
+/** Bounded adapter decisions only; never endpoint URLs, profile text or credentials. */
+export interface ToolMediaTransportSummary {
+  nativeToolContent: number;
+  compatibilitySupplement: number;
+  unknownTarget: number;
+  undeclaredMedia: number;
+  nativeSupportUnverified: number;
+  conflictingEvidence: number;
+}
+
+/** Only the serialized body and bounded decisions, never URL, headers or credentials. */
 export interface ModelRequestObservation {
   format: "chat-completions" | "responses" | "model-input";
   body: string;
+  toolMediaTransport?: ToolMediaTransportSummary;
   originalBytes: number;
   redacted: boolean;
   transportAttempt: number;
@@ -138,6 +195,10 @@ export interface ModelRequest {
   /** null leaves Provider-specific reasoning controls out of the request. */
   reasoningEffort: ReasoningEffort | null;
   messages: ModelMessage[];
+  /** Already committed system-role content, never an adapter default. */
+  instructions?: string;
+  /** Explicit non-semantic output budget (auxiliary probe uses one token). */
+  maxOutputTokens?: number;
   tools: ModelTool[];
   signal: AbortSignal;
   /**
@@ -250,7 +311,15 @@ export function compileModelMessages(
       ? snapshot.workspaceInstructions
       : undefined);
   return [
-    ...compileWorkspaceInstructionMessages(files),
+    ...compileWorkspaceInstructionMessages(files).map((message) =>
+      sourceModelMessage(message, {
+        itemIds: snapshot
+          ? [snapshot.id]
+          : items.slice(0, 1).map((item) => item.id),
+        purpose: "workspace-instructions",
+        origin: "host",
+      }),
+    ),
     ...compileConversationMessages(items, targetSelection),
   ];
 }
@@ -345,10 +414,17 @@ function compileConversationMessages(
       turnSelections,
       userTimestamps,
     ),
-    {
-      role: "user",
-      text: compactionSummaryText(compaction),
-    },
+    sourceModelMessage(
+      {
+        role: "user",
+        text: compactionSummaryText(compaction),
+      },
+      {
+        itemIds: [compaction.id],
+        purpose: "compaction-summary",
+        origin: "host",
+      },
+    ),
     ...compileCanonicalModelMessages(
       instructions,
       targetSelection,
@@ -360,7 +436,14 @@ function compileConversationMessages(
       policyItem?.type === "thread_configuration_changed")
       ? [
           classifyContext(
-            { role: "user" as const, text: filePermissionContext(policy) },
+            sourceModelMessage(
+              { role: "user" as const, text: filePermissionContext(policy) },
+              {
+                itemIds: policyItem ? [policyItem.id] : [],
+                purpose: "file-permissions",
+                origin: "host",
+              },
+            ),
             "instructions",
           ),
         ]
@@ -452,6 +535,7 @@ function compileCanonicalModelMessages(
     if (item === undefined) {
       continue;
     }
+    const messageStart = messages.length;
     switch (item.type) {
       case "thread_instruction":
         messages.push(
@@ -549,7 +633,7 @@ function compileCanonicalModelMessages(
         messages.push({
           role: "tool",
           callId: item.callId,
-          text: item.output,
+          text: `${item.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(item.exitCode)}`}\n${item.output}`,
           exitCode: item.exitCode,
           ...(item.modelContent === undefined
             ? {}
@@ -628,6 +712,10 @@ function compileCanonicalModelMessages(
             ),
           );
         break;
+      case "model_operation":
+      case "model_operation_completed":
+      case "context_format":
+      case "context_message":
       case "context_compaction":
       case "model_usage":
       case "thread_forked":
@@ -641,6 +729,27 @@ function compileCanonicalModelMessages(
       case "turn_replacement_requested":
       case "turn_started":
         break;
+    }
+    for (const message of messages.slice(messageStart)) {
+      sourceModelMessage(message, {
+        itemIds: [item.id],
+        purpose: item.type,
+        ...(item.type === "user_message" && item.contentAuthority
+          ? { hostTextPartIndices: item.contentAuthority.hostTextPartIndices }
+          : {}),
+        origin:
+          item.type === "user_message"
+            ? "human"
+            : item.type === "thread_message"
+              ? "agent"
+              : item.type === "agent_message" ||
+                  item.type === "reasoning" ||
+                  item.type === "tool_call"
+                ? "model"
+                : item.type === "tool_result"
+                  ? "tool"
+                  : "host",
+      });
     }
   }
   return messages;
@@ -943,7 +1052,14 @@ export class FakeModel implements ModelAdapter {
       latestUser !== undefined &&
       "content" in latestUser &&
       latestUser.content !== undefined
-        ? textFromUserInput(latestUser.content)
+        ? textFromUserInput(
+            latestUser.content.filter(
+              (_part, index) =>
+                !modelMessageSource(latestUser)?.hostTextPartIndices?.includes(
+                  index,
+                ),
+            ),
+          )
         : ((latestUser as TextModelMessage | undefined)?.text ?? "");
     if (text.startsWith("!shell ")) {
       yield {
