@@ -15,6 +15,8 @@ import "../src/renderer/src/styles.css";
 
 const search = new URLSearchParams(location.search);
 const language = search.get("lang") === "zh-CN" ? "zh-CN" : "en";
+const diagnosticPreview = search.get("diagnostic") === "true";
+const previewPlatform = diagnosticPreview ? "darwin" : "linux";
 const linkPreview = search.get("links") === "true";
 const appearance = search.get("theme") === "light" ? "light" : "dark";
 const threadId = "synthetic-file-sidebar-thread";
@@ -27,14 +29,19 @@ const source =
     (_, index) =>
       `export const line${String(index + 1).padStart(3, "0")} = ${index + 1}; // ${"A wide synthetic source line keeps horizontal navigation measurable. ".repeat(4)}`,
   ).join("\n") + "\n// LAST_SOURCE_LINE: end of the synthetic source file.\n";
-const markdown =
-  "# Long file reading preview\n\n" +
-  Array.from(
-    { length: 100 },
-    (_, index) =>
-      `## Section ${index + 1}\n\nThis is synthetic Markdown for checking a bounded editor viewport. Reading should scroll the editor, not move its breadcrumbs or the workspace tab row.\n\n- Item ${index + 1}: **bold content** and an inline \`code sample\`.\n- Another item with enough ordinary text to wrap naturally in a narrow pane.\n\n`,
-  ).join("") +
-  "## LAST_MARKDOWN_SECTION\n\nEnd of the synthetic Markdown file.\n";
+const markdown = diagnosticPreview
+  ? Array.from(
+      { length: 100 },
+      (_, index) =>
+        `## 合成诊断段落 ${index + 1}\n\n${"这里是完全合成的中文长段落，用来检查文件树保持开启时窄正文区域能否正确换行与滚动，不包含任何用户文件内容。".repeat(10)}\n\n`,
+    ).join("") + "## LAST_MARKDOWN_SECTION\n\n合成内容结束。\n"
+  : "# Long file reading preview\n\n" +
+    Array.from(
+      { length: 100 },
+      (_, index) =>
+        `## Section ${index + 1}\n\nThis is synthetic Markdown for checking a bounded editor viewport. Reading should scroll the editor, not move its breadcrumbs or the workspace tab row.\n\n- Item ${index + 1}: **bold content** and an inline \`code sample\`.\n- Another item with enough ordinary text to wrap naturally in a narrow pane.\n\n`,
+    ).join("") +
+    "## LAST_MARKDOWN_SECTION\n\nEnd of the synthetic Markdown file.\n";
 const files = new Map<string, WorkspaceTextFile>([
   [
     sourcePath,
@@ -60,11 +67,11 @@ const record = (method: string, owner: string, path: string) => {
 document.documentElement.lang = language;
 document.documentElement.dataset.appearance = appearance;
 document.documentElement.dataset.themePreset = "graphite";
-document.documentElement.dataset.platform = "linux";
+document.documentElement.dataset.platform = previewPlatform;
 void i18n.changeLanguage(language);
 Object.assign(window, {
   zenx: {
-    platform: "linux",
+    platform: previewPlatform,
     workspaceFiles: {
       read: async (owner: string, path: string) => {
         record("read", owner, path);
@@ -189,8 +196,8 @@ function Preview() {
                 <Markdown
                   text={
                     language === "zh-CN"
-                      ? "请查看 docs/long-notes.md，然后检查 `src/long-source.ts`。\n\n绝对路径也可以：`/synthetic/file-sidebar-preview/docs/long-notes.md`。\n\n没有自动访问文件，只有点击后才打开右侧文件栏。"
-                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click."
+                      ? "请查看 docs/long-notes.md，然后检查 `src/long-source.ts`。\n\n绝对路径也可以：`/synthetic/file-sidebar-preview/docs/long-notes.md`。\n\n没有自动访问文件，只有点击后才打开右侧文件栏。\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```"
+                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click.\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```"
                   }
                 />
               </MessageLinkContext.Provider>

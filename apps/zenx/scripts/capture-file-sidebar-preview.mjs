@@ -552,6 +552,136 @@ try {
         : "visual-blocked"
       : "failed";
   }
+
+  // Diagnostic-only matrix: real components, no production-style overrides.
+  // Darwin is a renderer marker; this remains Linux Chromium, not macOS acceptance.
+  for (const targetWidth of [256, 384]) {
+    const receipt = {
+      name: `tree-open-cjk-${targetWidth}`,
+      checks: [],
+      platformScope: "darwin renderer marker on Linux Chrome",
+    };
+    evidence.cases.push(receipt);
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1400,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const destination = `${url}/file-sidebar.html?lang=zh-CN&theme=light&diagnostic=true`;
+    await send("Page.navigate", { url: destination });
+    await waitFor(
+      `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && document.querySelector('.auxiliary-content:not([hidden]) .cm-scroller')`,
+    );
+    await selectTab(markdownId);
+    // Resize through the actual public separator, never mutate CSS or scrollTop.
+    await clickSelector(".auxiliary-panel > .browser-panel-resizer");
+    for (let i = 0; i < 4; i++) await key("ArrowLeft", "ArrowLeft", 37);
+    await delay(250);
+    const initial = await evaluate(measure);
+    const separator = await evaluate(
+      `(() => { const r=document.querySelector('.workspace-file-resizer').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`,
+    );
+    const destinationX = separator.x + initial.scroller.width - targetWidth;
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      ...separator,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      ...separator,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: destinationX,
+      y: separator.y,
+      button: "left",
+      buttons: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: destinationX,
+      y: separator.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await delay(350);
+    await evaluate(`(() => {
+      window.__fileWheelDiagnostics=[];
+      document.addEventListener('wheel', event => {
+        const entry={target:event.target?.className, deltaX:event.deltaX, deltaY:event.deltaY, defaultPreventedAtCapture:event.defaultPrevented, path:event.composedPath().filter(e=>e instanceof Element).map(e=>e.tagName+'.'+e.className)};
+        window.__fileWheelDiagnostics.push(entry);
+        setTimeout(()=>{entry.defaultPreventedAfterDispatch=event.defaultPrevented;}, 0);
+      }, {capture:true, passive:true});
+    })()`);
+    const diagnostics = `(() => {
+      const active=document.querySelector('.auxiliary-content[role="tabpanel"]:not([hidden])');
+      const scroller=active.querySelector('.cm-scroller');
+      const rect=scroller.getBoundingClientRect();
+      const styles=e=>{const s=getComputedStyle(e);return {tag:e.tagName,className:e.className,focusVisible:e.matches(':focus-visible'),outline:s.outline,border:s.border,overflowX:s.overflowX,overflowY:s.overflowY,width:s.width,height:s.height,minWidth:s.minWidth,minHeight:s.minHeight,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop};};
+      const chain=[];for(let e=scroller;e;e=e.parentElement)chain.push(styles(e));
+      return {activeElement:document.activeElement?.outerHTML.slice(0,500),chain,editorNodes:[...active.querySelectorAll('.markdown-live-editor,.cm-editor,.cm-scroller,.cm-content')].map(styles),hitStack:document.elementsFromPoint(rect.x+rect.width/2,rect.y+rect.height/2).map(e=>e.tagName+'.'+e.className),wheelEvents:window.__fileWheelDiagnostics};
+    })()`;
+    receipt.before = await evaluate(measure);
+    receipt.beforeDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "tree-remains-open",
+      receipt.before.treeVisible && receipt.before.togglePressed === "true",
+    );
+    check(
+      receipt,
+      "requested-content-width",
+      Math.abs(receipt.before.scroller.width - targetWidth) <= 3,
+      JSON.stringify(receipt.before.scroller),
+    );
+    bounded(receipt, "before", receipt.before);
+    await screenshot(`${receipt.name}-before.png`);
+    await wheel(0, 720);
+    receipt.unfocusedWheel = await evaluate(measure);
+    receipt.unfocusedDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "wheel-before-editor-focus",
+      receipt.unfocusedWheel.scroller.scrollTop >
+        receipt.before.scroller.scrollTop + 100,
+    );
+    await clickSelector(`${fileSelector} .cm-scroller`);
+    receipt.focusedDiagnostics = await evaluate(diagnostics);
+    await screenshot(`${receipt.name}-focused.png`);
+    await wheel(0, 720);
+    receipt.focusedWheel = await evaluate(measure);
+    receipt.focusedWheelDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "wheel-after-editor-focus",
+      receipt.focusedWheel.scroller.scrollTop >
+        receipt.unfocusedWheel.scroller.scrollTop + 100,
+    );
+    bounded(receipt, "after-wheel", receipt.focusedWheel);
+    await screenshot(`${receipt.name}-scrolled.png`);
+    // CodeMirror sees the actual Linux browser platform, so use Ctrl+End.
+    await key("End", "End", 35, 2);
+    await delay(400);
+    receipt.end = await evaluate(measure);
+    receipt.endDiagnostics = await evaluate(diagnostics);
+    check(
+      receipt,
+      "keyboard-reaches-end",
+      receipt.end.renderedText.includes("LAST_MARKDOWN_SECTION") &&
+        receipt.end.scroller.scrollTop >
+          receipt.focusedWheel.scroller.scrollTop,
+    );
+    check(receipt, "tree-still-open-after-navigation", receipt.end.treeVisible);
+    bounded(receipt, "end", receipt.end);
+    await screenshot(`${receipt.name}-end.png`);
+    receipt.status = receipt.checks.every((check) => check.status === "passed")
+      ? "passed"
+      : "failed";
+  }
   for (const lang of ["en", "zh-CN"]) {
     const receipt = { name: `local-paths-${lang}`, checks: [] };
     evidence.cases.push(receipt);
@@ -599,6 +729,27 @@ try {
         (call) => call.threadId === "synthetic-file-sidebar-thread",
       ),
     );
+    await clickSelector(
+      "[data-local-path-preview] .markdown-code-actions button",
+    );
+    await waitFor(
+      `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
+    );
+    check(
+      receipt,
+      "text-path-action-opens-requested-file",
+      await evaluate(
+        `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
+      ),
+    );
+    check(
+      receipt,
+      "text-path-copy-remains-separate",
+      await evaluate(
+        `document.querySelectorAll('[data-local-path-preview] .markdown-code-actions button').length===2 && document.querySelector('[data-local-path-preview] pre code').textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'`,
+      ),
+    );
+    await screenshot(`local-paths-${lang}-text-block-opened.png`);
     receipt.status = receipt.checks.every((check) => check.status === "passed")
       ? "passed"
       : "failed";

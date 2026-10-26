@@ -266,3 +266,116 @@ test("extensionless automatic paths require explicit relative or absolute prefix
   assert.doesNotMatch(markup("`docs/README`"), /<a /u);
   assert.doesNotMatch(markup('"docs/README"'), /<a /u);
 });
+
+test("only closed text single-path blocks offer a separate file action", () => {
+  for (const language of ["text", "plaintext"]) {
+    const html = markup(`\`\`\`${language}\n/synthetic/work/AGENTS.md\n\`\`\``);
+    assert.match(html, />Open file<|>打开文件</u);
+    assert.match(
+      html,
+      /<pre><code>\/synthetic\/work\/AGENTS.md<\/code><\/pre>/u,
+    );
+    assert.doesNotMatch(html, /<a /u);
+  }
+  for (const source of [
+    "```text\n/synthetic/work/AGENTS.md",
+    "> ```text\n> /synthetic/a.md",
+    "- ```text\n  /synthetic/a.md",
+    "> ```text\n> /synthetic/a.md\n> ```",
+    "```sh\n/synthetic/work/AGENTS.md\n```",
+    "```\n/synthetic/work/AGENTS.md\n```",
+    "```text\n/synthetic/a.md\n/synthetic/b.md\n```",
+    "```text\ncat /synthetic/a.md\n```",
+    "```text\n/synthetic/a.md;whoami\n```",
+    "```text\n/synthetic/a.md&&whoami\n```",
+    "```text\n/synthetic/my file.md\n```",
+    "```text\nfile://remote/a.md\n```",
+  ])
+    assert.doesNotMatch(markup(source), />Open file<|>打开文件</u, source);
+  assert.doesNotMatch(
+    markup("```text\n/synthetic/a.md\n```", false),
+    />Open file<|>打开文件</u,
+  );
+});
+
+test("text path action opens once only on activation and preserves code copy", async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const previousNavigator = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "navigator",
+  );
+  const copied: string[] = [];
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async (value: string) => {
+          copied.push(value);
+        },
+      },
+    },
+  });
+  const opened: unknown[] = [];
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(
+        createElement(
+          MessageLinkContext.Provider,
+          { value: (target) => opened.push(target) },
+          createElement(Markdown, {
+            text: "```text\n/synthetic/work/100%.md\n```",
+          }),
+        ),
+      ),
+    );
+    assert.deepEqual(opened, []);
+    assert.equal(
+      document.querySelector("pre code")?.textContent,
+      "/synthetic/work/100%.md",
+    );
+    const buttons = document.querySelectorAll<HTMLButtonElement>(
+      ".markdown-code-header button",
+    );
+    assert.equal(buttons.length, 2);
+    await act(async () => buttons[0]!.click());
+    assert.deepEqual(opened, [
+      { kind: "file", value: "/synthetic/work/100%.md" },
+    ]);
+    await act(async () => buttons[1]!.click());
+    assert.deepEqual(copied, ["/synthetic/work/100%.md"]);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    if (previousNavigator)
+      Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+  }
+});
+
+test("reference-bearing text blocks never offer a file action", () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      MessageLinkContext.Provider,
+      { value: () => {} },
+      createElement(Markdown, {
+        text: "```text\n/synthetic/ZENXMARKER.md\n```",
+        inlineTokens: [
+          {
+            marker: "ZENXMARKER",
+            copyText: "reference",
+            node: createElement("button", null, "Reference"),
+          },
+        ],
+      }),
+    ),
+  );
+  assert.doesNotMatch(html, />Open file<|>打开文件</u);
+  assert.match(html, />Reference</u);
+});

@@ -48,6 +48,7 @@ await writeFile(
 );
 const sources = [
   "src/renderer/src/Markdown.tsx",
+  "src/renderer/src/i18n/panels.ts",
   "src/renderer/src/local-path-links.ts",
   "src/renderer/src/message-file-path.ts",
   "src/external-link-policy.ts",
