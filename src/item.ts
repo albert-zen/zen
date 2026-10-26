@@ -27,6 +27,7 @@ export interface WorkspaceInstructionFile {
 }
 
 export type ItemType =
+  | "context_message"
   | "thread_metadata"
   | "thread_forked"
   | "thread_instruction"
@@ -57,6 +58,7 @@ export type ItemType =
   | "failure";
 
 const CANONICAL_ITEM_TYPES = {
+  context_message: true,
   thread_metadata: true,
   thread_forked: true,
   thread_instruction: true,
@@ -93,6 +95,19 @@ export interface ItemBase {
   turnId?: string;
   createdAt: string;
   type: ItemType;
+}
+
+/** A source-linked, once-materialized message, never a request/history snapshot. */
+export interface ContextMessageItem extends ItemBase {
+  type: "context_message";
+  compilerPolicyVersion: 1;
+  sourceItemIds: string[];
+  role: "user" | "assistant" | "tool" | "reasoning" | "system";
+  origin: "human" | "agent" | "host" | "model" | "tool";
+  purpose: string;
+  /** Stable semantic digest, not a sample identity or transport encoding. */
+  variant: string;
+  content: UserInput;
 }
 
 interface ThreadMetadataItemBase extends ItemBase {
@@ -259,6 +274,8 @@ export type UserInputPart =
 export type UserInput = readonly UserInputPart[];
 
 interface UserMessageItemBase extends ItemBase {
+  /** Compiler-owned positions; incoming user parts cannot claim Host provenance. */
+  contentAuthority?: { version: 1; hostTextPartIndices: number[] };
   type: "user_message";
   turnId: string;
   clientId?: string;
@@ -578,6 +595,7 @@ export interface CodeStateItem extends ItemBase {
 }
 
 export type CanonicalItem =
+  | ContextMessageItem
   | HostMessageItem
   | QueuedHostMessageItem
   | HostMessageCancelledItem
@@ -713,6 +731,26 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
   }
 
   switch (type) {
+    case "context_message":
+      if (item.compilerPolicyVersion !== 1)
+        throw new Error("Unsupported compiler policy version");
+      requireStringArray(item.sourceItemIds, "context_message.sourceItemIds");
+      if ((item.sourceItemIds as string[]).length === 0)
+        throw new Error("Context message requires a canonical source");
+      requireEnum(
+        item.role,
+        ["user", "assistant", "tool", "reasoning", "system"],
+        "context_message.role",
+      );
+      requireEnum(
+        item.origin,
+        ["human", "agent", "host", "model", "tool"],
+        "context_message.origin",
+      );
+      requireNonEmptyString(item.purpose, "context_message.purpose");
+      requireNonEmptyString(item.variant, "context_message.variant");
+      validateUserInput(item.content, "context_message.content");
+      break;
     case "thread_metadata":
       requireNoTurnId(item);
       if (item.importedFrom !== undefined) {
@@ -1111,6 +1149,33 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       if (hasOwn(item, "text"))
         requireNonEmptyString(item.text, `${type}.text`);
       else validateUserInput(item.content, `${type}.content`);
+      if (item.contentAuthority !== undefined) {
+        const authority = requireRecord(
+          item.contentAuthority,
+          `${type}.contentAuthority`,
+        );
+        if (
+          authority.version !== 1 ||
+          !Array.isArray(authority.hostTextPartIndices)
+        )
+          throw new Error("Invalid canonical content authority");
+        if (!Array.isArray(item.content) || hasOwn(item, "text"))
+          throw new Error("Canonical content authority requires typed content");
+        const indices = authority.hostTextPartIndices;
+        if (
+          new Set(indices).size !== indices.length ||
+          indices.some(
+            (index) =>
+              !Number.isSafeInteger(index) ||
+              index < 0 ||
+              !Array.isArray(item.content) ||
+              item.content[index]?.type !== "text",
+          )
+        )
+          throw new Error(
+            "Host content provenance must reference unique text parts",
+          );
+      }
       break;
     case "agent_message":
       requireTurnId(item, type);

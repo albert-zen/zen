@@ -126,8 +126,9 @@
 - **Tool Presentation** — AgentRuntime 把同一个 Tool Environment 以 `direct`、`code` 或 `both` 形态投影给模型；它只改变模型调用入口，不拥有第二套工具、权限或会话语义。
 - **Code Runtime** — 每次调用在可硬终止的 Worker 内用独立 JavaScript module context 编排同一个 Tool Environment 的工具；guest 无 Node、文件、网络或模块加载能力，执行生命期由统一工具任务管理器持有。
 - **Code State** — 线程内有界 JSON 数据从 append-only `code_state` Items 重建，`store/load` 只提供显式写入和当前程序的快照读取，不保存函数、执行栈或另一份会话权威。
-- **User Message Time Projection** — 模型请求为每条 canonical `user_message` 单独携带明确时区的原始 `createdAt`；队列与替换输入从同一 ItemList 的最早准入 Item 派生，先于压缩过滤，fork/replay 不重取时钟。未知或无时区旧记录标为 null；replacement-history 导入前缀因旧记录无法区分 checkpoint 时间与原消息时间而保守标为未知（含导入尾部），后续本地输入不受影响；Provider 以独立文本 part 标明 Host 元数据，不改写用户正文、媒体或授权。
-- **Model Content Projection** — 根据本次模型的输入能力投影历史与当前媒体内容，只改变 ModelRequest，不改写 canonical Items 或附件。
+- **Canonical Context Content** — 编译器拥有模型消息语义的唯一构造入口；AppServer 保持唯一物理提交入口。新 user 消息的时间文本与原文均在同一 `content` 内，`contentAuthority.hostTextPartIndices` 区分 Host 生成 part，不从用户相同字面前缀推断可信来源。
+- **ContextMessageItem** — `context_message` 是一个或多个既有源事实的按需、一次性 canonical 消息内容，保存精确来源 ID、真实 role/origin、编译策略版本、语义变体与 typed `content`；不是完整 request 快照、插件披露账本或第二份会话日志。
+- **Model Content Projection** — 编译阶段按本次媒体能力与有效恢复 occurrence 决定内容；任何新增替代文字须先提交为 source-linked content，附件 payload 仍在 AttachmentStore。下游仅编码已提交内容，不增加语义。
 - **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
 - **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。
@@ -194,7 +195,7 @@
   使用 Core 默认，配置本身不写入 Thread canonical ItemList。
 - **Active-Turn Host Compaction** — Runtime 在工具结果提交后的下一次模型采样边界同时使用最近一次
   Provider usage 与完整 canonical projection 的保守估算评估上下文压力；Agentic 模式先注入一次
-  易失的 Host context notice，硬预算或关闭 Agentic 时复用同一 provider-generated projection
+  已提交的 Host context notice（同一事实重试复用），硬预算或关闭 Agentic 时复用同一 provider-generated projection
   压缩已完成历史并继续原 Turn。没有可压缩的 completed boundary 且下一次 projection 已填满窗口时，
   Host 明确结束当前 Turn，避免发出已知超窗的模型请求；空闲 Thread 不会因此创建新 Turn。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
@@ -1379,6 +1380,18 @@ Extension-created tab groups are ephemeral visual organization scoped to the cur
 Browser coordinate click and named-key input are transient, observation-bound CDP operations: one captured screenshot, CSS viewport, page-local focus and document/control generation authorize a bounded event pair on the exact tab; uncertain held input blocks further mutations until that tab is closed, with no OS-input fallback, automatic retry, or durable recovery state. CDP acknowledgement and exact Host fences authorize the planned pair; page-consumable event counters are supplementary interference evidence. Bounded open-shadow resolution and mutation observation reuse this per-document state; exact-node CDP shadow metadata distinguishes ordinary containers from actual closed roots without a tag denylist, while known closed or untracked surfaces remain locally unsupported. Structured probe denials have a bounded shared classification; arbitrary Runtime exceptions are never classified as native-surface refusal.
 
 **Original history reader** — `zen/thread/original/read` and `zenx_threads_read` with `throughItemId` share the existing public Item projection and exact enabled compaction-prefix validation. Native reads page at most 50 Item previews; explicit Item reads return 8,000-character public JSON chunks, preserving original public text, source IDs and tool results while omitting opaque provider payloads. Cursors bind the Thread, cutoff, granularity and Item. The older `thread/original/read` retains its CAS display shape. All reads derive from the existing authorized AppServer snapshot and append-only journal; the `zen-thread://` locator is logical, never a physical file or second history authority. Core prompts do not claim that any particular product tool is installed.
+
+### Canonical model content authority
+
+`model.ts` 负责源事实选择/排序和语义构造；`context-materialization.ts` 负责生成待提交内容计划及已提交内容闭包。普通采样在现有 Thread mutation fence 内执行：选择源事实 → 编译/能力投影 → 计划待追加 `context_message` → AppServer 校验、journal append、Thread append → 仅从确认提交内容重建消息 → Runtime 再校验 → adapter。压缩摘要请求采用同一提交和检查路径。追加失败或结果未知时零依赖该内容的 dispatch，不增加第二 journal 或补偿重放工具。
+
+- 新 human 消息在首次提交前生成独立 received_at text part，原始正文/媒体 part 逐字保留；时间使用最早 queue/replacement 准入时间，不是采样时间。未知时间明确为 unknown。普通 API 不接受用户自称的 compiler provenance；历史 import 不接受 Host authority 字段。
+- 已有新 user content 直接复用，不生成第二份记录。旧 text/output、Host/agent 来源包装、仓库规则、失败恢复、摘要/压缩指令、工具退出状态和媒体替代说明按源事实落一次 `context_message`。原始 source 永不回写；旧请求是否曾发过哪些文字仍未知，新增记录只证明升级后此次语义。
+- 先按原源事实做 compaction membership/排序，再解析对应内容记录；内容记录自己不成为独立的新 user 输入。索引完全从完整 ItemList 重建，无独立持久 store。相同 source/purpose/role/origin/policy/语义变体只允许一份内容；已物化文字优先，不能由新模板或时钟悄悄替换。wire base64/URL 等编码不产生新变体。
+- 媒体变体区分能力和仍有效的恢复 occurrence；exact 拒绝保留，未归因诊断随 Turn 终态到期。公开 reasoning 文本/摘要受内容合同约束；opaque reasoning payload、工具参数及调用配对 ID 是原 canonical 结构协议事实，不改成自然语言。
+- Provider 非秘密静态 instructions 的生效来源为 Turn admission，先以 system-role content 提交；adapter 使用 request 显式内容，不再暗加默认指令。凭证、headers、endpoint 与连接状态不写入 content。ToolEnvironment 的结构化 definitions 和 direct/code/both presentation 仍来自本次已解析能力表；schema 描述属于结构化工具定义，不另加 Catalog/Disclosure snapshot。若今后将说明转为消息文字，必须走内容提交合同。
+- Fork 仅重映内部 source IDs，已物化 content 保持历史字节；文本中的历史来源地址不通过正则改写。新 Item 类型让旧 Host decoder 明确拒绝，不支持通过跳过未知 Item 降级继续写入。用户真实数据不自动批量迁移；仅继续运行所需语义按需追加。
+- 逐消息 inspection 默认读取 canonical content/raw Item；可选捕获复用有界内存观察与 serializer source identity，不是第二真相。UI 不猜补时间戳。离线 upgrade audit 仅复用 canonical decoder/replay 与可达附件读取，生成可丢弃证据，不执行迁移或改变权威。
 
 ### Opt-in model request observations
 

@@ -90,6 +90,92 @@ export class Thread {
     ) {
       throw new Error(`Turn ${item.turnId} already has a terminal Item`);
     }
+    if (item.type === "context_message") {
+      const sources = item.sourceItemIds.map((id) =>
+        this.#items.find((source) => source.id === id),
+      );
+      if (
+        !sources.length ||
+        sources.some(
+          (source) => source === undefined || source.type === "context_message",
+        )
+      )
+        throw new Error(
+          "Context content requires preceding canonical source facts",
+        );
+      if (
+        item.role === "tool" &&
+        !sources.some((source) => source?.type === "tool_result")
+      )
+        throw new Error("Tool context must retain its tool result source");
+      if (
+        item.role === "system" &&
+        (item.origin !== "host" ||
+          item.purpose !== "provider-instructions" ||
+          sources.length !== 1 ||
+          !(
+            sources[0]?.type === "turn_started" ||
+            sources[0]?.type === "thread_metadata"
+          ))
+      )
+        throw new Error(
+          "Only explicit provider instructions may use system context",
+        );
+      const first = sources[0];
+      const expected =
+        first?.type === "user_message"
+          ? ["human", "user"]
+          : first?.type === "thread_message"
+            ? ["agent", "user"]
+            : first?.type === "agent_message"
+              ? ["model", "assistant"]
+              : first?.type === "tool_result"
+                ? ["tool", "tool"]
+                : first?.type === "reasoning"
+                  ? ["model", "reasoning"]
+                  : undefined;
+      if (
+        item.purpose === first?.type &&
+        expected &&
+        (item.origin !== expected[0] || item.role !== expected[1])
+      )
+        throw new Error(
+          "Canonical content cannot change source role or authority",
+        );
+      if (
+        (item.purpose === "compaction-excerpt" ||
+          item.purpose === "compaction-instruction" ||
+          item.purpose === "compaction-notice") &&
+        (item.origin !== "host" || item.role !== "user")
+      )
+        throw new Error("Compaction context cannot promote source authority");
+      if (item.origin === "human" && sources[0]?.type !== "user_message")
+        throw new Error("Non-human context cannot claim human provenance");
+      if (item.origin === "agent" && sources[0]?.type !== "thread_message")
+        throw new Error("Agent context requires verified source provenance");
+      if (
+        sources[0]?.type === "thread_message" &&
+        item.origin !== "agent" &&
+        item.purpose !== "compaction-excerpt"
+      )
+        throw new Error("Agent source cannot be promoted to another origin");
+      const key = (value: typeof item) =>
+        JSON.stringify([
+          value.sourceItemIds,
+          value.role,
+          value.origin,
+          value.purpose,
+          value.compilerPolicyVersion,
+          value.variant,
+        ]);
+      if (
+        this.#items.some(
+          (prior) =>
+            prior.type === "context_message" && key(prior) === key(item),
+        )
+      )
+        throw new Error("Duplicate canonical context materialization");
+    }
     if (item.type === "failure" && item.recovery !== undefined) {
       const recovery = item.recovery;
       const previous = this.#items.filter(

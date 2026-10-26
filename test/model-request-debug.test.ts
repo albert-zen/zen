@@ -310,7 +310,7 @@ test("Chat Completions captures the exact final body including image bytes and p
   assert(!readAll(store, entries[0]!.id).includes("never-capture-url"));
 });
 
-test("Responses capture includes injected instructions and configuration and fences observer failures", async () => {
+test("Responses capture includes explicit compiler instructions and configuration and fences observer failures", async () => {
   const observations: string[] = [];
   const bodies: string[] = [];
   const adapter = new OpenAiSubscriptionModel({
@@ -328,6 +328,7 @@ test("Responses capture includes injected instructions and configuration and fen
   });
   const input = {
     ...request(),
+    instructions: "synthetic system instructions",
     reasoningEffort: "medium",
     onRequest: (event: import("../src/model.js").ModelRequestObservation) => {
       observations.push(event.body);

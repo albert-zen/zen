@@ -1,3 +1,7 @@
+import {
+  planContextMaterialization,
+  assertCommittedModelContent,
+} from "./context-materialization.js";
 import { projectModelMessages } from "./model-content.js";
 import {
   matchesSkillInputSnapshot,
@@ -85,6 +89,9 @@ import {
 } from "./journal.js";
 import {
   compileModelMessages,
+  materializeCanonicalInput,
+  sourceModelMessage,
+  modelMessageSource,
   type ModelAdapter,
   type ModelEvent,
   type ModelMessage,
@@ -773,6 +780,7 @@ export class ZenAppServer {
             if (
               (entry.type === "user_message" &&
                 ("content" in entry ||
+                  "contentAuthority" in entry ||
                   "clientId" in entry ||
                   "deliveryAfter" in entry)) ||
               (entry.type === "reasoning" && "reasoningContent" in entry) ||
@@ -3600,9 +3608,9 @@ export class ZenAppServer {
                         "Model sample has no canonical context boundary",
                       );
                     }
-                    const messages = compileModelMessages(
-                      items,
-                      resolved.selection,
+                    const messages = projectModelMessages(
+                      compileModelMessages(items, resolved.selection),
+                      resolved.model.inputModalities,
                     );
                     const notice =
                       active.contextCompactionNotice !== undefined &&
@@ -3610,20 +3618,53 @@ export class ZenAppServer {
                         ? active.contextCompactionNotice
                         : undefined;
                     if (notice !== undefined) {
-                      active.contextCompactionNoticeIssued = true;
+                      const source = items.findLast(
+                        (item) =>
+                          item.type !== "context_message" &&
+                          item.turnId === turnId,
+                      );
+                      if (!source)
+                        throw new Error(
+                          "Compaction notice has no canonical source",
+                        );
+                      messages.push(
+                        sourceModelMessage(
+                          { role: "user", text: notice },
+                          {
+                            itemIds: [source.id],
+                            purpose: "compaction-notice",
+                            origin: "host",
+                          },
+                        ),
+                      );
                     }
+                    const plan = planContextMaterialization({
+                      items,
+                      messages,
+                      threadId,
+                      turnId,
+                      instructions: resolved.adapter.contextInstructions,
+                      inputModalities: resolved.model.inputModalities,
+                      id: this.#id,
+                      now: this.#now,
+                    });
+                    for (const item of plan.pending) {
+                      await this.#commit(thread, item);
+                      this.#emit({ type: "item_completed", item });
+                    }
+                    const prepared = plan.resolve(thread.items);
+                    assertCommittedModelContent(
+                      thread.items,
+                      prepared.messages,
+                      prepared.instructions,
+                      prepared.instructionsItemId,
+                    );
+                    if (notice !== undefined)
+                      active.contextCompactionNoticeIssued = true;
                     return {
-                      messages:
-                        notice === undefined
-                          ? messages
-                          : [
-                              ...messages,
-                              {
-                                role: "user" as const,
-                                text: notice,
-                              },
-                            ],
-                      contextBoundaryItemId,
+                      ...prepared,
+                      contextBoundaryItemId:
+                        thread.items.at(-1)?.id ?? contextBoundaryItemId,
                     };
                   }),
                 commitFinal: async (message, modelResponseId) =>
@@ -4625,6 +4666,30 @@ export class ZenAppServer {
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
       messages: sourceMessages,
+      prepare: async (messages) => {
+        options.signal.throwIfAborted();
+        const plan = planContextMaterialization({
+          items: options.thread.items,
+          messages,
+          threadId: options.thread.id,
+          instructions: options.selection.adapter.contextInstructions,
+          inputModalities: options.selection.model.inputModalities,
+          id: this.#id,
+          now: this.#now,
+        });
+        for (const item of plan.pending) {
+          await this.#commit(options.thread, item);
+          this.#emit({ type: "item_completed", item });
+        }
+        const prepared = plan.resolve(options.thread.items);
+        assertCommittedModelContent(
+          options.thread.items,
+          prepared.messages,
+          prepared.instructions,
+          prepared.instructionsItemId,
+        );
+        return prepared;
+      },
       summaryInstruction: options.contextCompaction.summaryInstruction,
       inputTokenBudget: options.selection.model.contextWindow,
       signal: options.signal,
@@ -4852,6 +4917,13 @@ export class ZenAppServer {
       );
     }
     await this.#ensureThreadSummaries();
+    const materialized = materializeCanonicalInput(item, thread.items);
+    // Keep the caller's Item identity: item_completed must expose exactly the
+    // content committed below, never a pre-compilation admission object.
+    if (materialized !== item) {
+      if (item.type === "user_message") delete item.text;
+      Object.assign(item, materialized);
+    }
     thread.validateAppend(item);
     try {
       await this.#journal.append(item);
@@ -5578,6 +5650,8 @@ function remapForkItems(
   return items.map((item) => {
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
+    if (copied.type === "context_message")
+      copied.sourceItemIds = copied.sourceItemIds.map(remap);
     if (copied.type === "thread_metadata") delete copied.parentThreadId;
     if (copied.type === "thread_restored")
       copied.deletionItemId = remap(copied.deletionItemId);
@@ -5770,6 +5844,9 @@ async function generateContextCompactionSummary(options: {
   model: string;
   reasoningEffort: string | null;
   messages: ModelMessage[];
+  prepare: (
+    messages: ModelMessage[],
+  ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
   summaryInstruction: string;
   inputTokenBudget: number | null;
   signal: AbortSignal;
@@ -5797,8 +5874,16 @@ async function generateContextCompactionSummary(options: {
       let text = "";
       const messages: ModelMessage[] = [
         ...chunk,
-        { role: "user", text: options.summaryInstruction },
+        sourceModelMessage(
+          { role: "user", text: options.summaryInstruction },
+          {
+            itemIds: [options.debugBoundaryItemId],
+            purpose: "compaction-instruction",
+            origin: "host",
+          },
+        ),
       ];
+      const prepared = await options.prepare(messages);
       for await (const event of options.adapter.stream({
         debugContext: {
           threadId: options.debugThreadId,
@@ -5810,7 +5895,10 @@ async function generateContextCompactionSummary(options: {
         },
         model: options.model,
         reasoningEffort: options.reasoningEffort,
-        messages,
+        messages: prepared.messages,
+        ...(prepared.instructions === undefined
+          ? {}
+          : { instructions: prepared.instructions }),
         tools: [],
         signal: options.signal,
       })) {
@@ -5950,10 +6038,24 @@ function fitSummaryMessageGroup(
   const excerpts: ModelMessage[][] = [];
   for (let offset = 0; offset < source.length; offset += payloadCharacters) {
     excerpts.push([
-      {
-        role: "user",
-        text: `${prefix}${source.slice(offset, offset + payloadCharacters)}`,
-      },
+      sourceModelMessage(
+        {
+          role: "user",
+          text: `${prefix}${source.slice(offset, offset + payloadCharacters)}`,
+        },
+        {
+          itemIds: [
+            ...new Set(
+              group.flatMap(
+                (message) => modelMessageSource(message)?.itemIds ?? [],
+              ),
+            ),
+          ],
+          purpose: "compaction-excerpt",
+          variant: `${offset}:${payloadCharacters}`,
+          origin: "host",
+        },
+      ),
     ]);
   }
   return excerpts;

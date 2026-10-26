@@ -1,4 +1,8 @@
 import {
+  assertCommittedModelContent,
+  copyCommittedMessageBinding,
+} from "./context-materialization.js";
+import {
   ContextCalibration,
   type ContextEstimateRequest,
 } from "./context-calibration.js";
@@ -111,6 +115,8 @@ export interface RuntimeConfiguration {
 }
 
 export interface PreparedModelSample {
+  instructions?: string;
+  instructionsItemId?: string;
   messages: ModelMessage[];
   /** Last canonical Item included in the atomically captured projection. */
   contextBoundaryItemId: string;
@@ -888,6 +894,22 @@ export class AgentRuntime {
       options.configuration.inputModalities,
       (source, projected) => mediaOrigins.set(projected, source),
     );
+    projectedMessages.forEach((message, index) => {
+      const source = messages[index];
+      if (source) copyCommittedMessageBinding(source, message);
+    });
+    const instructions = Array.isArray(preparedSample)
+      ? undefined
+      : preparedSample.instructions;
+    const instructionsItemId = Array.isArray(preparedSample)
+      ? undefined
+      : preparedSample.instructionsItemId;
+    assertCommittedModelContent(
+      options.thread.items,
+      projectedMessages,
+      instructions,
+      instructionsItemId,
+    );
     const contextRequest = this.#contextCalibration.prepare({
       threadId: options.thread.id,
       items: options.thread.items,
@@ -914,6 +936,7 @@ export class AgentRuntime {
         model: options.configuration.model,
         reasoningEffort: options.configuration.reasoningEffort,
         messages: projectedMessages,
+        ...(instructions === undefined ? {} : { instructions }),
         tools: presentation.modelTools.map((definition) =>
           structuredClone(definition),
         ),

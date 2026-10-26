@@ -705,7 +705,7 @@ async function toChatMessage(
         message.exitCode === null
           ? historicalCallId(message.callId)
           : requiredLabel(message.callId, "tool call id"),
-      content: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+      content: message.text,
     };
   }
 
