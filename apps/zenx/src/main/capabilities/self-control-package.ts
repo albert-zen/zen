@@ -8,7 +8,11 @@ import { matchesSkillInputSnapshot } from "../../../../../src/skill-input.js";
 import { resolveThreadTarget } from "../thread-target.js";
 
 import type { ToolInvocation } from "../../../../../src/tool.js";
-import type { CanonicalItem, UserInput } from "../../../../../src/item.js";
+import {
+  originalUserInput,
+  type CanonicalItem,
+  type UserInput,
+} from "../../../../../src/item.js";
 import type {
   ClientRequestMethod,
   ClientRequestParams,
@@ -1207,14 +1211,10 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         previous.type === "user_message_queued" ||
         previous.type === "turn_replacement_requested")
     ) {
-      const captured: UserInput | undefined =
-        "input" in previous && previous.input !== undefined
-          ? previous.input
-          : "content" in previous && previous.content !== undefined
-            ? previous.content
-            : "text" in previous && previous.text !== undefined
-              ? [{ type: "text", text: previous.text }]
-              : undefined;
+      const captured: UserInput =
+        previous.type === "user_message"
+          ? originalUserInput(previous)
+          : (previous.input ?? [{ type: "text", text: previous.text! }]);
       if (captured === undefined || !matchesSkillInputSnapshot(text, captured))
         throw new Error("Tool invocation was already used for different input");
       if (previous.type === "turn_replacement_requested") {

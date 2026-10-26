@@ -266,7 +266,9 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
   );
   assert(
     samples[1]!.messages.some(
-      (message) => message.role === "tool" && message.text === read.output,
+      (message) =>
+        message.role === "tool" &&
+        message.text === `Exit code: 0\n${read.output}`,
     ),
   );
   assert(samples[1]!.tools.some((tool) => tool.name === "zenx_fleet_tools"));

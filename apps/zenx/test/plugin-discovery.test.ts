@@ -370,13 +370,14 @@ class DiscoveryFlowModel implements ModelAdapter {
       return;
     }
     if (latest.callId === "invoke") {
-      assert.equal(latest.text, exactOutput);
+      assert.equal(latest.text, `Exit code: 7\n${exactOutput}`);
       assert.equal(latest.exitCode, 7);
       yield { type: "text_delta", delta: "done" };
       return;
     }
     assert(["discover", "read"].includes(latest.callId));
-    const result = parseRecord(latest.text);
+    assert.ok(latest.text.startsWith("Exit code: 0\n"));
+    const result = parseRecord(latest.text.slice("Exit code: 0\n".length));
     assert.equal(result.operation, latest.callId);
     if (result.operation === "discover") {
       yield toolCall("read", "zenx_plugin", {

@@ -25,7 +25,9 @@ import type {
   ThreadMetadataItem,
   UserMessageItem,
 } from "../src/item.js";
-import { textFromUserMessage } from "../src/item.js";
+import { originalUserInput, textFromUserInput } from "../src/item.js";
+const originalUserText = (item: UserMessageItem) =>
+  textFromUserInput(originalUserInput(item));
 import {
   InMemoryThreadJournal,
   JsonlThreadJournal,
@@ -538,13 +540,25 @@ test("derives each turn model from append-only configuration changes", async () 
   assert.deepEqual(requestedMessages[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "first" }],
+      content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(userTimestamps[0])}]`,
+        },
+        { type: "text", text: "first" },
+      ],
       userTimestamp: userTimestamps[0],
     },
     { role: "assistant", text: "model-one" },
     {
       role: "user",
-      content: [{ type: "text", text: "second" }],
+      content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(userTimestamps[1])}]`,
+        },
+        { type: "text", text: "second" },
+      ],
       userTimestamp: userTimestamps[1],
     },
   ]);
@@ -1410,6 +1424,7 @@ test("runs a deterministic in-memory turn from append-only items", async () => {
     [
       "thread_metadata",
       "turn_started",
+      "context_format",
       "user_message",
       "model_usage",
       "agent_message",
@@ -1580,6 +1595,7 @@ test("journal stores only complete canonical items, never deltas", async () => {
       [
         "thread_metadata",
         "turn_started",
+        "context_format",
         "user_message",
         "model_usage",
         "agent_message",
@@ -2594,9 +2610,11 @@ test("shell tool has a separate approval decision and execution result", async (
     [
       "thread_metadata",
       "turn_started",
+      "context_format",
       "user_message",
       "tool_call",
       "tool_result",
+      "context_message",
       "agent_message",
       "turn_completed",
     ],
@@ -2975,11 +2993,14 @@ test("persists parallel tool calls before results and recompiles one assistant m
     [
       "thread_metadata",
       "turn_started",
+      "context_format",
       "user_message",
       "tool_call",
       "tool_call",
       "tool_result",
       "tool_result",
+      "context_message",
+      "context_message",
       "agent_message",
       "turn_completed",
     ],
@@ -3462,18 +3483,36 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   assert.deepEqual(requests[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "initial request" }],
+      content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(userTimestamps[0])}]`,
+        },
+        { type: "text", text: "initial request" },
+      ],
       userTimestamp: userTimestamps[0],
     },
     { role: "assistant", text: "first answer" },
     {
       role: "user",
-      content: [{ type: "text", text: "follow this correction" }],
+      content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(userTimestamps[1])}]`,
+        },
+        { type: "text", text: "follow this correction" },
+      ],
       userTimestamp: userTimestamps[1],
     },
     {
       role: "user",
-      content: [{ type: "text", text: "then preserve the tests" }],
+      content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(userTimestamps[2])}]`,
+        },
+        { type: "text", text: "then preserve the tests" },
+      ],
       userTimestamp: userTimestamps[2],
     },
   ]);
@@ -3484,7 +3523,7 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   assert.deepEqual(
     snapshot.items
       .filter((item) => item.type === "user_message")
-      .map(textFromUserMessage),
+      .map(originalUserText),
     ["initial request", "follow this correction", "then preserve the tests"],
   );
   assert.equal(
@@ -3567,7 +3606,13 @@ test("soft steer waits behind a tool result and does not cancel approval", async
   assert.deepEqual(requests[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "use a tool" }],
+      content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(userTimestamps[0])}]`,
+        },
+        { type: "text", text: "use a tool" },
+      ],
       userTimestamp: userTimestamps[0],
     },
     {
@@ -3580,10 +3625,21 @@ test("soft steer waits behind a tool result and does not cancel approval", async
         },
       ],
     },
-    { role: "tool", callId: "steer-call", text: "tool complete", exitCode: 0 },
+    {
+      role: "tool",
+      callId: "steer-call",
+      text: "Exit code: 0\ntool complete",
+      exitCode: 0,
+    },
     {
       role: "user",
-      content: [{ type: "text", text: "change the final response" }],
+      content: [
+        {
+          type: "text",
+          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(userTimestamps[1])}]`,
+        },
+        { type: "text", text: "change the final response" },
+      ],
       userTimestamp: userTimestamps[1],
     },
   ]);
@@ -3595,7 +3651,7 @@ test("soft steer append rejection stops the active Turn without a replacement te
     append: async (item) => {
       if (
         item.type === "user_message" &&
-        textFromUserMessage(item) === "must not persist"
+        originalUserText(item) === "must not persist"
       ) {
         throw new Error("steer journal unavailable");
       }
@@ -3684,7 +3740,7 @@ test("an interrupt that wins the mutation fence rejects a racing soft steer", as
     snapshot.items.some(
       (item) =>
         item.type === "user_message" &&
-        textFromUserMessage(item) === "must lose the fence",
+        originalUserText(item) === "must lose the fence",
     ),
     false,
   );
@@ -4051,10 +4107,22 @@ test("opted-in queued messages share one next Turn without losing canonical iden
       .map((item) => item.clientId),
     [undefined, "batch-0", "batch-1", "batch-2"],
   );
-  assert.deepEqual(sampled[1]?.slice(-3), ["same", "same", "third"]);
+  const admittedUsers = snapshot.items
+    .filter((item) => item.type === "user_message")
+    .slice(-3);
+  assert.deepEqual(admittedUsers.map(originalUserText), [
+    "same",
+    "same",
+    "third",
+  ]);
   assert.deepEqual(
-    snapshot.items.filter((item) => item.type === "user_message").at(-1)
-      ?.content,
+    sampled[1]?.slice(-3),
+    admittedUsers.map((item) => textFromUserInput(item.content!)),
+  );
+  assert.deepEqual(
+    originalUserInput(
+      snapshot.items.filter((item) => item.type === "user_message").at(-1)!,
+    ),
     [
       { type: "text", text: "third" },
       { type: "image", attachment },
@@ -4220,7 +4288,7 @@ test("queued input waits for the active turn and drains in FIFO order", async ()
   assert.deepEqual(
     snapshot.items
       .filter((item) => item.type === "user_message")
-      .map(textFromUserMessage),
+      .map(originalUserText),
     ["first", "second", "third"],
   );
 });
