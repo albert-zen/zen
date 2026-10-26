@@ -351,6 +351,8 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 以下内容尚未获得最终产品确认，不能作为 durable UI contract：
 
+- Agent 侧栏导航原型：self-control 下的固定 show / set_fullscreen / open_file / open_website / list_pages / open_page 命令。fullscreen 只展开右侧内容区，不切换 OS 全屏；页面/面板只接受当前注册精确 ID；用户已确认 StartAgent 指 Subagents，对应现有 `zenx-subagents:subagents` panel，不猜测页面路由。默认未注册，必须先补齐可信调用到精确客户端世代与 Thread 的绑定，再由用户单独启用实验；只提交 UI 导航，不隐式授予文件、网站或插件执行权限。
+
 - manifest、version 与 Provider diagnostics 的准确用户呈现；
 - Plugin contributions 的准确数量、label、排序、稳定 key、次级 routes 与冲突处理；
 - 禁用/卸载时 in-flight calls 的准确 UI，以及安装、更新、重装的具体 controls 和 action contract；

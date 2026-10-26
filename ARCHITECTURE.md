@@ -27,6 +27,8 @@
 
 ## 核心概念
 
+- **实验 Agent 侧栏导航** — 默认未接入的 Host 原型只把可信单次 Tool invocation 绑定到精确客户端世代与当前 Thread，在既有授权后派发固定 UI 导航命令并等待回执；绑定和展示均易失，不接受模型指定客户端、广播窗口、重放命令或建立会话权威。
+
 - **ZenX 更新内容** — Renderer 仅展示随构建分发、以稳定条目 ID 标识的本地更新说明；打开状态为易失 UI 状态，不联网、不检查更新、不进入 Core journal。
 
 - **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
