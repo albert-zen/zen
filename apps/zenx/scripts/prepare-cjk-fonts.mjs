@@ -5,6 +5,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  copyFileSync,
+  mkdtempSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -348,10 +350,29 @@ export function installPackage(
     );
   }
   verifyDeb(file, metadata);
+  // APT may prefer the repository copy over an explicit local .deb of the
+  // same version. Stage its normal archive filename and forbid any download;
+  // missing dependencies fail closed instead of re-entering the slow mirror.
+  const archives = mkdtempSync(path.join(directory, "apt-archives-"));
+  const staged = path.join(
+    archives,
+    `${PACKAGE}_${metadata.version.replaceAll(":", "%3a")}_${metadata.packageArch}.deb`,
+  );
+  copyFileSync(file, staged);
+  verifyDeb(staged, metadata);
   console.log(
     run(
       "apt-get",
-      [...APT_OPTIONS, "install", "-y", "--no-install-recommends", file],
+      [
+        ...APT_OPTIONS,
+        "-o",
+        `Dir::Cache::archives=${archives}`,
+        "--no-download",
+        "install",
+        "-y",
+        "--no-install-recommends",
+        `${PACKAGE}=${metadata.version}`,
+      ],
       90,
       true,
     ),

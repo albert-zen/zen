@@ -89,7 +89,19 @@ function fixture(t, mode = "cold", transport = "success") {
       assert.equal(privileged, true);
       assert.equal(seconds, 90);
       assert.deepEqual(readFileSync(file), bytes);
-      assert.ok(args.includes(file));
+      assert.ok(args.includes("--no-download"));
+      assert.ok(args.includes(`fonts-noto-cjk=${metadata().version}`));
+      const archives = args
+        .find((arg) => arg.startsWith("Dir::Cache::archives="))
+        .slice("Dir::Cache::archives=".length);
+      assert.ok(archives.startsWith(path.join(directory, "apt-archives-")));
+      assert.deepEqual(
+        readFileSync(
+          path.join(archives, "fonts-noto-cjk_1%3a20230817+repack1-3_all.deb"),
+        ),
+        bytes,
+      );
+      assert.ok(!args.includes(file));
       return "synthetic normal apt install";
     }
     if (program === "dpkg-query") return metadata().version;
@@ -127,7 +139,7 @@ test("cold miss downloads authenticated hash then installs normally and verifies
   );
 });
 
-test("warm cache is rehashed without a network download", (t) => {
+test("warm cache is rehashed and normal APT installation forbids all downloads", (t) => {
   const f = fixture(t, "warm");
   installPackage(f.directory, metadata(), f);
   assert.deepEqual(
@@ -247,6 +259,24 @@ test("unknown mirrors and URL authority/path escapes are never downloaded", () =
           ? "https://unknown.test/ubuntu/"
           : source,
     }),
+  );
+});
+
+test("offline APT dependency/installation failure is final, never retried online", (t) => {
+  const f = fixture(t, "warm");
+  const run = (...args) => {
+    f.run(...args);
+    if (args[0] === "apt-get")
+      throw new Error("synthetic offline dependency unavailable");
+    return "";
+  };
+  assert.throws(
+    () => installPackage(f.directory, metadata(), { ...f, run }),
+    /offline dependency unavailable/,
+  );
+  assert.deepEqual(
+    f.calls.map((call) => call.program),
+    ["apt-get"],
   );
 });
 
