@@ -1,0 +1,2262 @@
+{
+  "scope": "Synthetic production-component Chromium renderer acceptance, not packaged or physical-device validation. No private user data. Existing main CSP nonce fix only; no new product patch.",
+  "head": "6ba76a0db625b596186c9e7c2cec11c09af1a47c",
+  "base": "9aa04afe7d92407102c91de74cf009031ade082c",
+  "run": 40325300860,
+  "job": 121580337159,
+  "artifact": 12650413241,
+  "artifactDigest": "sha256:b4b09bad90bdedca5de96e90e6ee78cf890f8037bbd633a8c7584853236f5206",
+  "source": {
+    "commit": "5422beb8d26096128c11386728f3d3a40e250414",
+    "tree": "c2099ff71ecb1a760d6cf5d0baada5937523eede",
+    "dirty": "",
+    "inputs": [
+      {
+        "path": ".github/workflows/composer-overflow.yml",
+        "sha256": "79a69be27b310783e028a9805612785c6fd3be832a40cb1fcb4f7c6092881bc5"
+      },
+      {
+        "path": "apps/zenx/scripts/build-composer-overflow-preview.mjs",
+        "sha256": "eb7e9e60db58b223a752ca1541e7b9624dd3fd38070718a71672877821097f40"
+      },
+      {
+        "path": "apps/zenx/scripts/capture-composer-overflow-preview.mjs",
+        "sha256": "46d94523a03c20c30db4dbb399072a40cb65bf6aa798322b1d209f5b28f3dfa7"
+      },
+      {
+        "path": "apps/zenx/scripts/prepare-cjk-fonts.mjs",
+        "sha256": "3d8d27857fbce268f6cfd11a2ac72585618d7a1c86952bde16d186a5f878fa32"
+      },
+      {
+        "path": "apps/zenx/scripts/preview-browser-lifecycle.mjs",
+        "sha256": "71ee505a535bbd4701e48668a66e26821f335a4dc0dc44bbf7af80274dde84fa"
+      },
+      {
+        "path": "apps/zenx/scripts/preview-browser.mjs",
+        "sha256": "fa825e48b1196dff7da7617004452e3a9bab46b8492614e4d17bed84d54f24be"
+      },
+      {
+        "path": "apps/zenx/src/external-link-policy.ts",
+        "sha256": "4c25348967364aaae14d3696798f5eb17e49b826471e95d430a3eea6283dafe0"
+      },
+      {
+        "path": "apps/zenx/src/image-source.ts",
+        "sha256": "089d01918a27fcc9aba3f386c8214d2cb412605a200db8f295ab8ca56a6e08c9"
+      },
+      {
+        "path": "apps/zenx/src/main/renderer-style-policy.ts",
+        "sha256": "ac418ab32d33033221dcf0b2d970b7f65a89d4ac9c0003feb30742afc8839553"
+      },
+      {
+        "path": "apps/zenx/src/renderer/index.html",
+        "sha256": "60a06cafede4b759c0a8e821cce593745aea789d5e31e69a1ed5bb99ddcf749e"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ActivityText.tsx",
+        "sha256": "ff48eac06bca8296b85f5b9c4e5120a1ee04ceff64f04cf18f4a4d85ec9a3fdc"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ApprovalRequestCard.tsx",
+        "sha256": "3438eca687408304acac5f9c66734d1c7ef3010d20cc8d754f71a549994e227c"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/Composer.tsx",
+        "sha256": "c4c26ff967b13a23907606ec50165dbfbf5bfbe9b7404d99d2bcf9c552c6f674"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ComposerModelMenu.tsx",
+        "sha256": "1cc07a715fa5c36a2def1678c4c5eca593aaee7e7f2a417d98b04feb12e4bb22"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ComposerSendControl.css",
+        "sha256": "455a4490cca98810e725057dc268996b43b2395e5cf6950c790edeb92ea7a677"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ComposerSendControl.tsx",
+        "sha256": "f11d7010fa300168762da56db9978055ec7740b71f9000f5169ea3e52b0d1181"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ComposerSuggestions.tsx",
+        "sha256": "eb965d286b40bb2ae6f1e09f4c76bb3930a5a443019edfec885857b6d372ecdb"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ContextUsageIndicator.css",
+        "sha256": "fe0845f5f040ee6868132b129693b688c8ad2bd3334f8ef151603e3f48af54a5"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/HostMessageContent.tsx",
+        "sha256": "9b6a692cf86a86314235ae49e6c39281a6cbc352d849904809a66f8f95d7e7c4"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ImagePresentation.tsx",
+        "sha256": "f2b7fca0b9c979ae7ca220bfcfb0e92674471ce9dd2c00e3f7b87b8861e0ed02"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ImportedThreadNotice.tsx",
+        "sha256": "afa5c0e444a1aa9e2c2b29917b0b6c196b37b6eb1c4e1481ce63d2520c23483d"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/InlineComposerEditor.tsx",
+        "sha256": "6a449fd6837fecaaa7275cbbf8d67f31ff9e51d052a04cf29abad3c52acf4103"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/InlineReferenceContent.tsx",
+        "sha256": "10b03240b2b259a95d8674f947abc0e140271fd869eb10c6ae6918a6e2d5ce93"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/Markdown.tsx",
+        "sha256": "e01d4963b0c50f2af86a79628a475ad67f868e7d774394247b5b4d12310a5537"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/MarkdownImage.tsx",
+        "sha256": "5ce52f2fbab925fc6c27b9f8f2f0a6f3cbb1caec2d53f57a350d4ca8748c7750"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ModelRequestDebugDialog.tsx",
+        "sha256": "689c73aafe69d01a74164d9981f7f4d9d3f97538c70ee5bbe20dc48f22455c70"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/OriginalHistory.tsx",
+        "sha256": "66e4c727068d386cbd7f7f511546e3cac7a822e453c9d15245ae8fff666696f8"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/PermissionSelect.tsx",
+        "sha256": "00a447ffa87327675cf8499f871cd115aecbd32c5d29a4ec4ea5d663378c3987"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ProviderLogo.tsx",
+        "sha256": "c9f4a1d80ee16c72d475b644295d1a9e2c73a1f979682da7153d13965e8717c9"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/QueuedMessageEditor.tsx",
+        "sha256": "3925f1493c280e260dc44689b6f35da7f7e834764a38074d2e1160d2cbbb963c"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/QueuedMessages.tsx",
+        "sha256": "d2531741b72de328815909e4dd9aa17972ceabd3aa4377bee776347b5ee306c8"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ReferenceToken.tsx",
+        "sha256": "4a327522765bb5e95282970a8339863cc37b12ad44ebe85a54fd1f165d7103b0"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ThreadDebugger.tsx",
+        "sha256": "8b1223be7139d3951f349f6ccc3a7edd6c84686f4c8ccffbfa7ee645f7cf1bdf"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ThreadView.tsx",
+        "sha256": "6ed7d02ebaebba3a6c91af6f65dc8d0d92ed037a9caeb8e12ea2890669b1f43c"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ToolResultRenderer.tsx",
+        "sha256": "9b0093855c4bc294896c6403253398edf8a8a476d0a147fd7797caf3190c774d"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/WorkflowCommandMenu.tsx",
+        "sha256": "cb32e0c3fde5a2b409cf71f92be4169f159b91eeac6719cace4957d9fd634371"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/activity-text.css",
+        "sha256": "8f34f02d8b3489a2de323915d3a5a9d7158e00feec74726d7ff7b3ad286c4461"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/approval-request.css",
+        "sha256": "569756d57b1c7b0086ae0f8e62254aad402f7db914e40531421827c374289a4a"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/compact-command.ts",
+        "sha256": "d5fe68f98ce238850c24aff88bfd60e5596d2d6b26bd3bc2b63f0b74334a89fe"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/composer-input.ts",
+        "sha256": "2e85779c1219656ce7b8bf52cf1eb21291424b8c8f07f0adf9158ef5619dbd00"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/composer-selector.ts",
+        "sha256": "0783f5a8f374b446ca8746582e678f0196f50806f7f4436ee1fd8a383b5265de"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/composer-state.ts",
+        "sha256": "bf45dac5a51effbd0be2110d53892f05e17343648090c6c132da6a07f3879c07"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/context-compaction-projection.ts",
+        "sha256": "54ca060e208ed131c94064a566a16d0d6cd44f11e51b51e22b8530784cc52c38"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/conversation-read-state.ts",
+        "sha256": "128c81994851e0c6bfeed2da7ba02d4b59b1806ddcf625be3874223000e1c80b"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/editor-style-nonce.ts",
+        "sha256": "2a5e0e66586b2def83b6479ec67f73f1f7542ace88bbfbc38a96f56d6ffb5351"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/fleet-ui.css",
+        "sha256": "8938aeee96151bf5851a64d51faf79d0eee2ca56958fa864703c2fa414322069"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/host-message.css",
+        "sha256": "edf85da732355fd994b4e455157811592f7a0700ee5ec21300e90c39ef65af16"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/i18n.ts",
+        "sha256": "96f9181b7318ff52a04b267849b32b8591a7ac621c19b015c4b5fa7804d6d350"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/i18n/common.ts",
+        "sha256": "c2fc159e36976ad672dc415706aa03ada0691f1f5ebe87690ce8baf82f36345c"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/i18n/panels.ts",
+        "sha256": "91fdc70975a2629ad03a8d3fd36547cf031f82f7758deccc5ba73f9e885fca26"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/i18n/selector.ts",
+        "sha256": "68431ca2011c334a923812fe094b65683cf6cbb99ea857c6f146ea4f25771fb8"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/i18n/settings.ts",
+        "sha256": "6943b32b516b926c4b6f66d6277d1495f7753fb7fc159894b6516125f933a1db"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/i18n/shell.ts",
+        "sha256": "5fe8f5ea2d4a0bb783436e7f418c532272095c241e23943d963bd7786058c501"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/icons.tsx",
+        "sha256": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/inline-composer.css",
+        "sha256": "8d72cbc6e8dedd931d63ff674e1dd8d386950a5bdfa8159a9c6e9c14ab7ae9d8"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/local-path-links.ts",
+        "sha256": "ea64add5a70111ff2f95c6a887472f36873aae984328bd91e28df6eb0fe01d0f"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/message-quote.css",
+        "sha256": "3ccbc382587a4e54b902379a51ce3b1ced627a688b3702b6dd7ea6ef11b37ea7"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/message-quote.tsx",
+        "sha256": "9ea5d9f65dc82b931c0d08fb792d9bd5d3f9865fa21d3b67394dddea73773185"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/message-source-navigation.tsx",
+        "sha256": "1266ce838de4337d8909597932da296b860c7f8517c8b5597800d2500eedfc4e"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/model-settings.ts",
+        "sha256": "d5630c91f3d8ff19f858c784e11787805a47fadaf69ee9c0dd10db43ab652fee"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/plugin-ui-host.tsx",
+        "sha256": "3c349b035271a40491781631dc1df67187a8b57f8c3dcbc817689d5bb009f8e7"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/queue-edit-draft.ts",
+        "sha256": "a1139e491fef451d20cfa655b58cb140989235e56dc89b31e4906a186ece4b98"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/queue-edit-state.ts",
+        "sha256": "be901584a630cec04991665b3919dd50d43b176d4b24552b61f1786ddbbb29cb"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/queued-message-editor.css",
+        "sha256": "76e24710856f3949d1533398f992777fe63ca49dd794719798c5fb7bc4c3735b"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/queued-message-images.ts",
+        "sha256": "4983cd95d041ff06b4bf5a4dbdf9a82c74531c59879843ce5e7fc64b0f31f971"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/queued-messages.css",
+        "sha256": "b69e6838ebf3f0e982d37e6451866b8550262422d8cff6d8d8921fca9b63e3a6"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/reference-draft.ts",
+        "sha256": "6aa05109d0fe2febdf9cc03f83457503453aa132cebd660c8e118ad4d669a38a"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/reference-token.css",
+        "sha256": "63d2cc7e179d9f09e69d4e311e74f7d05a64221bd2d6b8d2ce05efe8b3915565"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/session-import.css",
+        "sha256": "db83f458e5f3635fa72a07304a02ef0d9be95a19c35297170b7aa94e17dcf082"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/skill-draft.ts",
+        "sha256": "fa5cee338e029ab1610d39d18f1cf8f2ff57c76c9a0f9747725056d92e5b4ed0"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/styles.css",
+        "sha256": "f45609c0c40a79d151d8ccdd763a420745063f3fb73222143b5b89f918620f95"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/subagents.css",
+        "sha256": "dc6603d37925f8d9661ff1cd56edd0b3a06d4e8864ff87710caa161a965c1561"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/theme.css",
+        "sha256": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/thread-list.ts",
+        "sha256": "a3a93ef13dc0306cc92c62eff5a3781beb7a0e3f8f848f444eb154194b08eccb"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/thread-reading-state.tsx",
+        "sha256": "e54804fc759303b2201d8b9f615e0f6186df69c4680b1412302f4b18af67d462"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/thread-view-state.ts",
+        "sha256": "b0103ed50511e7cfe9e4997748ce60151b0740a3d95cf0bcde4ba3d97c661865"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/tool-presentation.ts",
+        "sha256": "95811b229f795c8171a43edbb9699137e4611f1f3743e36d649e9c41493adcb8"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/trigger-message-presentation.ts",
+        "sha256": "be51356033fa941eae2a7f6b7deefee4734cdba976b1efd470c0620dd82a87ab"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/turn-projection.ts",
+        "sha256": "94e0ccfcce75074df4477a1414bb8573197b04759c13340f38debdb500110f1e"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ui/controls.tsx",
+        "sha256": "f3f8dc81868f42c7a64faeb76ed4414b171377981440592d5a3791f18412a1c1"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/ui/plugin-theme.ts",
+        "sha256": "48a88ccde298b45b16d03cf4dfde86988f7952745e51d37d7ad28f85c4f57b63"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/use-composer-selector.ts",
+        "sha256": "71bfef66b94fe165f17d7c42e37b40d5ef26b8157d1bf9de0f26dc197316582e"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/workflow-commands.ts",
+        "sha256": "951c0dc661d785ea3283a63746f1693eecd93139d97e74a8395d4f5afe2aa543"
+      },
+      {
+        "path": "apps/zenx/src/renderer/src/workspace-files.css",
+        "sha256": "03b163f8dc5df3c76990d517c25c82ffb22bf85d0a55a61279fb0ac54666ac5b"
+      },
+      {
+        "path": "apps/zenx/src/thread-attachment-projection.ts",
+        "sha256": "133f0e50934deebc8284241fee371b875d07fb81c4c723617246cecd061cecc5"
+      },
+      {
+        "path": "apps/zenx/test/fixtures/agent-runtime-data.ts",
+        "sha256": "c9ea4b0beb4a0c4e3fd45b884a6657e55f619f86a4b1e082aaa8ab2f99b90658"
+      },
+      {
+        "path": "apps/zenx/test/fixtures/composer-overflow-visual.tsx",
+        "sha256": "2fc1d79f1df7fe800d6cd6502d8c1caef0a2e0ee905a8951e5c1ed088b775033"
+      },
+      {
+        "path": "node_modules/@codemirror/commands/dist/index.js",
+        "sha256": "395c41fb17d4966162e8d29106e438278123bc3a3fa1b11825debdf1523594a4"
+      },
+      {
+        "path": "node_modules/@codemirror/language/dist/index.js",
+        "sha256": "875ce988fbbed53c47cf4b2aad962afe1d6b23c15ecc40466cdc6be5b59d647e"
+      },
+      {
+        "path": "node_modules/@codemirror/state/dist/index.js",
+        "sha256": "739618b0e9be94924690161d2f27588fc4861a39dc945f50c8e67d266569676c"
+      },
+      {
+        "path": "node_modules/@codemirror/view/dist/index.js",
+        "sha256": "aadf68d18b4388c6f8dcf61b99919857a88d84837e75b1bea8057a408891d797"
+      },
+      {
+        "path": "node_modules/@floating-ui/core/dist/floating-ui.core.mjs",
+        "sha256": "c6c359d91fbc6636f6143aae9ff47105eeacea869b14afe7d54e120444ab8f37"
+      },
+      {
+        "path": "node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs",
+        "sha256": "a1c916ed18ed8bb2c586079f7946d35797b45bc79eafae1d99ec6f812672ef54"
+      },
+      {
+        "path": "node_modules/@floating-ui/react-dom/dist/floating-ui.react-dom.mjs",
+        "sha256": "2f39fd6f12c3989fa13d9ac5104e7739e5f15cc8dee01d63fc06e0f44bba8771"
+      },
+      {
+        "path": "node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs",
+        "sha256": "b6658b1eac47e2917e6d10ebbeefb9c4ac9a166f0052bed6e08c871ed848b680"
+      },
+      {
+        "path": "node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs",
+        "sha256": "f53b3ea1eec15af77ca9def295b8f40f6d65706acfc5aaac4801ca3ca21ef7bd"
+      },
+      {
+        "path": "node_modules/@lezer/common/dist/index.js",
+        "sha256": "dab441db7948aae93b8a210d30a0481125bcb8943b129a8c5ebec1354a029e8d"
+      },
+      {
+        "path": "node_modules/@lezer/highlight/dist/index.js",
+        "sha256": "01969c7657e12fa125543d7bfd1d6591f411fa92e5cae468ef00222a1018322f"
+      },
+      {
+        "path": "node_modules/@marijn/find-cluster-break/src/index.js",
+        "sha256": "4e9e441fac9db54e09e4e3b1cb0b0393da207ebe943f2ff9efc577821fc03751"
+      },
+      {
+        "path": "node_modules/@radix-ui/number/dist/index.mjs",
+        "sha256": "6ca4c4b633451a8a7d0078b6195a13ceeb4bef277633a66c3fc75561b8ceb5b7"
+      },
+      {
+        "path": "node_modules/@radix-ui/primitive/dist/index.mjs",
+        "sha256": "76c2ee4c9e784f66766f1fa37ec6419387edaea9f4ec2f581472571a4f50c303"
+      },
+      {
+        "path": "node_modules/@radix-ui/primitive/dist/internal/is-development.false.mjs",
+        "sha256": "60b2a28fa5bcd9d7e27c0a8e54f7c9c7c2dda8b5135ed5fb6f0c0d67b3c2f6cc"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-arrow/dist/index.mjs",
+        "sha256": "72a60586d47e4e3f436c0b998a39b7fcdec5be52c8047893c477e09e784af9aa"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-collection/dist/index.mjs",
+        "sha256": "162ee5f0412eb6c1bd8eb49a2100a9443408f1814f82976f4509db0751a1f1f7"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-compose-refs/dist/index.mjs",
+        "sha256": "b2d325c2cb3f942349c49a45c3dd61b343624c08ec9d3d44bdfaabd8639a78c2"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-context/dist/index.mjs",
+        "sha256": "adacd67aa2bb5fc3e8304b7d64500e5d47e506560692731f1a9956a42e75ab9d"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-dialog/dist/index.mjs",
+        "sha256": "a37daaef3f67c502500404ee93f60a04fdf05d2b0ce4783c858b1027c7f54792"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-direction/dist/index.mjs",
+        "sha256": "a4875e97c11526c85fcd5011d262090238dafc2c2f69b98465e1dec7fbcc63d8"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs",
+        "sha256": "01df449a23d65bab1f2f2215a953cba74741419496ebd9a7932533f267cc873d"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-focus-guards/dist/index.mjs",
+        "sha256": "352e0ddb4aa82deaa5cbcde3a47cdff740f96fc08b6548bbe88e97a59fb7780c"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-focus-scope/dist/index.mjs",
+        "sha256": "798184fbe00268a6c4a539fd2073b85b6dfef6d89bd2cd547d9a66ae1024e55d"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-id/dist/index.mjs",
+        "sha256": "d763c4f45606a4d55b73ddbbae84fb3d37b714e2b3b7a1d478ac431657271c46"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-popover/dist/index.mjs",
+        "sha256": "a704aa3ccd74475a504e7f55d6ffb6238547a549c82fe67a1b78120abefb3d31"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-popper/dist/index.mjs",
+        "sha256": "7e8940e5e1567b38070ffb4cf8d3461827f86d5f0999ecf53312d4e5f288010e"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-portal/dist/index.mjs",
+        "sha256": "7b50c725bd4c6f80b7f677fac98708e646b50a998072f295b912b9373f0f7a3a"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-presence/dist/index.mjs",
+        "sha256": "c8c890cbddf4b74e31ff49aaa0df908a1e1c98f3aa2c0ac465eb5a6e4c0389b9"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-primitive/dist/index.mjs",
+        "sha256": "8c9ad6de7f0feab2b96887e8598b1589edb336aef0536c3ae528e3e9ddce9a53"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-select/dist/index.mjs",
+        "sha256": "5956a0d1d0c2793d908b751361cdc7a1f9786e07c9a0f2d1ead07747357a0df9"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-slot/dist/index.mjs",
+        "sha256": "7a8e90b981d570a3568f70c67cf830d185b908a5eb882754c7b79069fc965a45"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-use-callback-ref/dist/index.mjs",
+        "sha256": "6b646f3f43c4b90fbc6e44b67e2502f4d97d9e9c5e9c4f681d8077582c086aac"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-use-controllable-state/dist/index.mjs",
+        "sha256": "b6d63311993e2b9e788ae3ed8703c90b35493436a6c360520ba235509ee65e0e"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-use-effect-event/dist/index.mjs",
+        "sha256": "20eff37b454e6a2e3833b2a936418d2cb1c21141fa1e0b71970e351decc3be2a"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-use-layout-effect/dist/index.mjs",
+        "sha256": "0536577f323396a80926162d987638f33b296386b62c6275b4373a2070a41c7d"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-use-previous/dist/index.mjs",
+        "sha256": "f8cf7b15904fafd1eb60d2369afdc15772fd47cbef5d2f27c0ac0d090a5d292c"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-use-size/dist/index.mjs",
+        "sha256": "05c2b5e4c178dfde21d5c270eaeb190e518aa52a7df195e4924fea2350ebd53d"
+      },
+      {
+        "path": "node_modules/@radix-ui/react-visually-hidden/dist/index.mjs",
+        "sha256": "4f52019686d18d5c55c733bd783356c5be6159572c632af021c1fcee86f69ed1"
+      },
+      {
+        "path": "node_modules/@ungap/structured-clone/esm/deserialize.js",
+        "sha256": "8b95daab1771f76508653ad7ffe201ab4aec8471cfbd7b8370176647a3b7e125"
+      },
+      {
+        "path": "node_modules/@ungap/structured-clone/esm/index.js",
+        "sha256": "7ddb0560a1215343ca695210f659fb348ec5d93d0b0e76bbc5959f88cdc2036b"
+      },
+      {
+        "path": "node_modules/@ungap/structured-clone/esm/serialize.js",
+        "sha256": "39e2c7338e5f2dc17eb7dac6d8b6ada9e76234fa2d7aeb287d6654f34eec0a80"
+      },
+      {
+        "path": "node_modules/@ungap/structured-clone/esm/types.js",
+        "sha256": "c0978dfc8d304b12d62aadc583977355f714ee8c1e4d1290620226fb78247800"
+      },
+      {
+        "path": "node_modules/aria-hidden/dist/es2015/index.js",
+        "sha256": "6a644a5eb6f1a5a59948f72f0a5c8dd08ae882420d520a63609b1ce9e13a4c22"
+      },
+      {
+        "path": "node_modules/bail/index.js",
+        "sha256": "bf9c61413349a74801f2583d1922c323b4b41ca520a70461b438fd08d1381bae"
+      },
+      {
+        "path": "node_modules/ccount/index.js",
+        "sha256": "cbba065a9f66c5909d49f740a64f12cfde03220303a845b2273d54af59e70af9"
+      },
+      {
+        "path": "node_modules/comma-separated-tokens/index.js",
+        "sha256": "a62eb07c352878a940619595a2e2d11221bc02a16f9a64501612105fddbc2c0b"
+      },
+      {
+        "path": "node_modules/crelt/index.js",
+        "sha256": "924800defa2bf95a0bfd16dde589ecebbcd9e36b03635274da84968c77a3721e"
+      },
+      {
+        "path": "node_modules/decode-named-character-reference/index.dom.js",
+        "sha256": "bbfdff9072ab38fb0669b2fe2fef28e9b36e5cbbeed3592cd13fc29748755dd3"
+      },
+      {
+        "path": "node_modules/detect-node-es/esm/browser.js",
+        "sha256": "64bea63f623c73c00876260497387f692170fee35ebb15df50595422d2ff6d2c"
+      },
+      {
+        "path": "node_modules/devlop/lib/default.js",
+        "sha256": "702fcb7d6bfdfe7b673b8bb7fa9d531d9b7d02693bed89f8dbb0a2c461604cf6"
+      },
+      {
+        "path": "node_modules/escape-string-regexp/index.js",
+        "sha256": "af2065ad2f2d2b91946c2121e21618daa3f4b18787af9226f8c953ca54cca2f5"
+      },
+      {
+        "path": "node_modules/estree-util-is-identifier-name/index.js",
+        "sha256": "027d2c35f1adb51f1381a5ae1d96ede90e1a5d4014eb81d9053d47831aa0e6b9"
+      },
+      {
+        "path": "node_modules/estree-util-is-identifier-name/lib/index.js",
+        "sha256": "6d8907d1847bf9d24d7a8158a89296dbf6e1be33fd97efb2e411ea5a1cc37809"
+      },
+      {
+        "path": "node_modules/extend/index.js",
+        "sha256": "b4879ec38a11a2458846788b91be630e6b1d06eb07f9515adc1ff9030af0b00b"
+      },
+      {
+        "path": "node_modules/get-nonce/dist/es2015/index.js",
+        "sha256": "d5cb2be55660881877c04ab543e44c5fc6d099d244073e00f6277888954a943d"
+      },
+      {
+        "path": "node_modules/hast-util-to-jsx-runtime/index.js",
+        "sha256": "83cd6452ebf818e02d03b39c726407b2c3c38a73b52aa8f1c7d88fff23d1894e"
+      },
+      {
+        "path": "node_modules/hast-util-to-jsx-runtime/lib/index.js",
+        "sha256": "986dd5ff765f424432ab12dc8401f33acc50a5bed9ffb2e48f88300a25f9562f"
+      },
+      {
+        "path": "node_modules/hast-util-whitespace/index.js",
+        "sha256": "1e443111d1b477b45f35f751834b5a031c1ed1272f53322c7f40e2b28d790cc2"
+      },
+      {
+        "path": "node_modules/hast-util-whitespace/lib/index.js",
+        "sha256": "8b9342003bf1956922a92d6299ec98fdd6369e0d83f3d96bc144a793137e80f7"
+      },
+      {
+        "path": "node_modules/html-parse-stringify/dist/esm/html-parse-stringify.js",
+        "sha256": "83e42e1aad0152e60bd0fefa3d1f746ee7fe0705d3aadbafc6dac400de013919"
+      },
+      {
+        "path": "node_modules/html-url-attributes/index.js",
+        "sha256": "c8f91253c03e47771a22af46551979b255447590a3cc8f50406e8a2b0f1a00e4"
+      },
+      {
+        "path": "node_modules/html-url-attributes/lib/index.js",
+        "sha256": "294ddb9a402e62c9b05253165265b6f54bd67ae3db70c55e17819557130019b9"
+      },
+      {
+        "path": "node_modules/i18next/dist/esm/i18next.js",
+        "sha256": "4c04240958fbbc854a9ac7d983dccba560c4a19a4f80dd87cddd4e82142f39da"
+      },
+      {
+        "path": "node_modules/inline-style-parser/cjs/index.js",
+        "sha256": "02245958daf61d5e477fa13dbd577a8e53aff477768c183e9c51bad775c01c42"
+      },
+      {
+        "path": "node_modules/is-plain-obj/index.js",
+        "sha256": "957e14eb5863048b3eb7a97c7cedcf62cbca2bb94745198982d8e278f7b2f89d"
+      },
+      {
+        "path": "node_modules/longest-streak/index.js",
+        "sha256": "41d5da657563b0bf09d2e5235349195276e9246e1239370d98416e27a85b989c"
+      },
+      {
+        "path": "node_modules/markdown-table/index.js",
+        "sha256": "2dd3014e8ce92317dfd819fc678217d8fdf47086a4607cc49566f0dee02b832a"
+      },
+      {
+        "path": "node_modules/mdast-util-find-and-replace/index.js",
+        "sha256": "7a4656d4f6e259733e75f160544e681c1250180db6f099907dde936bce1d8c7b"
+      },
+      {
+        "path": "node_modules/mdast-util-find-and-replace/lib/index.js",
+        "sha256": "b171699f61c99a82565a6d6f8f3a1348d7d37756f889be30def0337caa9dbe2f"
+      },
+      {
+        "path": "node_modules/mdast-util-from-markdown/index.js",
+        "sha256": "b5ac1d75a898f7e28ae90ce26ab937b5f574bd5b4e8c17745bd15ba78a4a33f5"
+      },
+      {
+        "path": "node_modules/mdast-util-from-markdown/lib/index.js",
+        "sha256": "2b19a9873232679ef08429e08c5836c865a54d8113ae5d58cb9409a60863727b"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-autolink-literal/index.js",
+        "sha256": "c3c1073e83ac96d470b41a7ace9636321578659a83e1d14d4c8ac7f7f85db8a8"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-autolink-literal/lib/index.js",
+        "sha256": "4965bd92f22009a0fd0fa4f7af73903e4d793165634c26ab5827fe5386fbcff2"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-footnote/index.js",
+        "sha256": "b94bca85a6eefc173cd3a68381c45bfdc75643ed8f901a428d311d5a01575678"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-footnote/lib/index.js",
+        "sha256": "47f5f97e3698325187eff57567e05f0a63162506cdd95f8f6468f2a7bbf69eff"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-strikethrough/index.js",
+        "sha256": "0156f05d678b6885b4e2a41248ac1366232e51e92bb0b6fc561c209062f5a721"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-strikethrough/lib/index.js",
+        "sha256": "808441e33c8419430429dba66470f34367636fac752cb89d1fb5473bc4d29d83"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-table/index.js",
+        "sha256": "9cc7b5b80a5b94d6c0803936b9a120c272e32a63f802cb960de7c6c59907ee65"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-table/lib/index.js",
+        "sha256": "5f5fc1551fe95d4e4e5a8729e52391abb9a053c0a618aa79dfb0364728299be8"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-task-list-item/index.js",
+        "sha256": "38e8209a8b251e633588fd16ad1152c33daced7ff21be821827c29be7bf37d3f"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm-task-list-item/lib/index.js",
+        "sha256": "1986b0f334e23659909982bc930ebc11784212d9331ef97efa14f268af01d852"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm/index.js",
+        "sha256": "f6d345b843a3b44d74a5e8ee123f90c7d16f0c670542810c8b06367c44a01b50"
+      },
+      {
+        "path": "node_modules/mdast-util-gfm/lib/index.js",
+        "sha256": "0ead64b5f705ade5818adf7059c62c34353f00aaf4528549aceccd342004297e"
+      },
+      {
+        "path": "node_modules/mdast-util-phrasing/index.js",
+        "sha256": "f87bb5f2c3fe0f98bd2802db6438ecf751f051c64fe502377444067a9c59ce6e"
+      },
+      {
+        "path": "node_modules/mdast-util-phrasing/lib/index.js",
+        "sha256": "cfba43614dcc2d644d7f0b2a83a172b6119aa70ba10a504f03528a0fb4c873eb"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/index.js",
+        "sha256": "681480f0d8fcae35643e8bbcc81085827be1a663106453d9549232d9b6a27721"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/footer.js",
+        "sha256": "40a9dbaa5cf1e3f3ff993bbdd7e9d8666cb620b3dabd4276af5212d1f95fe7d7"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/blockquote.js",
+        "sha256": "9744b0434bd3f70716b1208a8e580ce01cdc3b99736ddac44aafe32503a05b60"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/break.js",
+        "sha256": "bbd9617fec60951f0a0d46477cfa1a3355375f6a655adb13f11a6fd9d8aee47d"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/code.js",
+        "sha256": "60d18f00c0f40917ad26a2e112f5dd0be66e7ab1088832932ec14aa69df8eb29"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/delete.js",
+        "sha256": "20a3aa0fca3e1cb6c80e4103392168c945c97477573d13bd123f92cfea071672"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/emphasis.js",
+        "sha256": "d40b9afbcd5a1ab9f598d5ff439e73cbfa8f1cc9708115e439c030ffc5bf1edf"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/footnote-reference.js",
+        "sha256": "f5c49df607b90b1a1e89b754cfdd3290f49e5ca42b5af9ea9a01f1af1ccacae8"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/heading.js",
+        "sha256": "c54a67319a4ac1d9d25eb8a8fb73f094b2ffac385d11f64ef748d8e0a0c0aec3"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/html.js",
+        "sha256": "18af5a6b0d9eebad977bb78e60b247d4cde445bb1cc5c275f1bea61e1151b14a"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/image-reference.js",
+        "sha256": "79c616d913f42ecb997b008a3147a3a208c08c18dfd01c573976656f370b425c"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/image.js",
+        "sha256": "06c2c63d11c4ef7b0fe8f082ec2fe47ffd5bf00e7a2a2d4756515951dccad50e"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/index.js",
+        "sha256": "4de11cfac2c9486f6633a60f180e7fb772d48d005a6168b50d41c7de062098aa"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/inline-code.js",
+        "sha256": "99e74e1891add9c61f640f859308e3f907c90eb4e92c381b1f29fab2e16c19a1"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/link-reference.js",
+        "sha256": "c1dcf7f39f12ab58603197504f6707372bf936fc113aaa7625910faff37063b5"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/link.js",
+        "sha256": "ac8d90073fee56d692f964775332dce0ffda38b07f86f1b412212f21f1d19d1e"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/list-item.js",
+        "sha256": "0da607553981392d7ce7c1bc49f74bb4eb643ee517e959fac6dbd276d7b80488"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/list.js",
+        "sha256": "f6b70088d06ca8c101c07c6dff2363c7962a5aeecd7a2b26005848b2e14100d8"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/paragraph.js",
+        "sha256": "a77301efe0f60029bd39935a64c456556f945f22c780e2c93f610a4711ab68d7"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/root.js",
+        "sha256": "aeba8659e5c4dca7c269f4ded5c39688876f3f76057b5f2459eadd956bf44a86"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/strong.js",
+        "sha256": "3dba3cfd6954bc3c52653ba74c50771e3b776b561c901f542f28e07eb6591191"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/table-cell.js",
+        "sha256": "6faa2956741b11b277e7d2189f5bb97786a13462e39e412aeaefa65325588f8f"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/table-row.js",
+        "sha256": "bec1dca051d327477166c745be7d7a51fe97ef182b57e889f17e7b57bd7ecee3"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/table.js",
+        "sha256": "f12e3d16638a2159b08e6f0cb816c34d3c2ede3ab592235621bb60cda3d0d128"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/text.js",
+        "sha256": "66aa96a1369887fe40759b200f80b609316e8cc66da424e2832400aad41eebeb"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/handlers/thematic-break.js",
+        "sha256": "bf3cfab49b184da92b8e53ddf86e13625da8d5055db3a9abc904daff1312aa56"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/index.js",
+        "sha256": "f6e0be6ee208cd0d0d6ee5a532cc61d9a6a88b87de60d2453a241f3e5a113413"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/revert.js",
+        "sha256": "09ec851551e7d2076f9a542975f480e046efd0b66db755903fb7a8855e23acff"
+      },
+      {
+        "path": "node_modules/mdast-util-to-hast/lib/state.js",
+        "sha256": "3efa2af554f55b9d6b9fde660f40886669976e73bdea09c4884fabf6a65e2803"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/index.js",
+        "sha256": "424f094d7793c73a0a94e6b11bc747d122fa409037cf13e48ac490c2e283c03a"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/configure.js",
+        "sha256": "e5264debb8cb4bbe153339e366aa790ddd2d271ae864a712eacb61e10dc11656"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/blockquote.js",
+        "sha256": "b6dd851a1714f34fabdefb0cdacc77443326c9b6b8f5e83a90cada5d3bc71354"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/break.js",
+        "sha256": "7bd4f6ce61d3b082fc679aba40b8c7944637ac1ae202d54857e5480d075fc120"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/code.js",
+        "sha256": "628bbd3ac2d8027d6c532689d0022e4f4c97740228bb7d13717b0c487bb4ce9d"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/definition.js",
+        "sha256": "83a7f5799a2622ae6256d5ee8a9612ebb1335809ffe63729cf57822816d33383"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/emphasis.js",
+        "sha256": "bea3469e986f837b2b07deb2d6018394d84d3e6ce87f5df0155b3f4b099177b5"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/heading.js",
+        "sha256": "16e615ef320f6e1f1244366abc52df0916ee7e904dc3294b5461ebd00251a35b"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/html.js",
+        "sha256": "07aae47b1697513c04efedc45f2cf10047e680d7af3c7e517ec126578a092d83"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/image-reference.js",
+        "sha256": "8da0d0564cefefdc0442961c72d33c7e8bf924f1933be9fe646ccffc5545c438"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/image.js",
+        "sha256": "6ca9becc1bc294a246d6134ad546591580eb641a38c3120ff149cf090ed1ec69"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/index.js",
+        "sha256": "490a5bac7d713e0c0576cde3bad5e18a581836540f62c2bb08ec6ecb01fd6c83"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/inline-code.js",
+        "sha256": "82024330cc4f32d476d81f572ce2c760bc43975bb1030d73c064a391df694971"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/link-reference.js",
+        "sha256": "27f4e01096422e1b897b65d3f2511240e518550968ed3e2f20a15f5459093ac6"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/link.js",
+        "sha256": "7c1f94738795ca9988655a7425ddb4bfaa1671884a598b639766608938278830"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/list-item.js",
+        "sha256": "1d386f2d5cb3af88f88ab6ae52384f64d52726b4107206782d9ea3d3c3a1f75f"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/list.js",
+        "sha256": "226202457c9f1da831f98dde5c9824b85087d61a04024eb1915f10278ea11013"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/paragraph.js",
+        "sha256": "777de9e03969c3e98ec5b1df78de243954be4008eeab44d77ee873900e397e00"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/root.js",
+        "sha256": "9689eed04d6cce3d528882e780d94e3a9932e2409a70f53ce26f28f20cf63af8"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/strong.js",
+        "sha256": "a4c417b138d263546b5e2e5f4105db9fdf64e39cd5bf32ca51ebca2bfc8f1f98"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/text.js",
+        "sha256": "82c7802143c42efbb86f81ae026ea8b21bb6181a79b5a179db668deabed42c39"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/handle/thematic-break.js",
+        "sha256": "e6ba03c46587555d686a3d9d707be2b94ecc0c4d08df302cb19aa76391e0dc27"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/index.js",
+        "sha256": "00c783f8e7168233253e04066aa9e06753754e916eacaa636e1f76e2ef8c7c38"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/join.js",
+        "sha256": "4bbacdff9179436225a16583a30a428415a106005058a3d315468526cd53cedc"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/unsafe.js",
+        "sha256": "748691eabb03fb76b35f43690f510eb23902397cc2cb2ce75371aae177857b13"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/association.js",
+        "sha256": "a7059dc12cccb03befe1d118d062240b0f08201be9da238f2056f4cfe5d3ba53"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-bullet-ordered.js",
+        "sha256": "e5b643295c4d28ca25a58701b0acf19873032ee6385d8e7bf92298cfb3010df2"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-bullet-other.js",
+        "sha256": "b5c1d4e8085dec4551dc27d79cc37995b5da2c9a620798e70a708713a27d8906"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-bullet.js",
+        "sha256": "c9e29e954a8976cf2b86b93414e4a4d40ba904fef02ba47dea4ca3790dcfdfc5"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-emphasis.js",
+        "sha256": "ed8cbf60a71d9cd433dd1af38bb690afafc45c7c657fc62cba8e161a8aee6878"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-fence.js",
+        "sha256": "2319c48816ce3d363ab42687621d64824dafabb2747540396192806e5a51992d"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-list-item-indent.js",
+        "sha256": "2966c2cae70ef1dc0a71b84cf821c65a12fb4d41da76aae3de5e33eba6265d09"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-quote.js",
+        "sha256": "ce4b9514ae41379d7156ffedd44b15e421fd0518ee8668c1914bf5baf3a0985a"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-rule-repetition.js",
+        "sha256": "ed3e4bec7a04ea73d842017a8164915e5b35f9b37470f4be99ecfe7eacaf8321"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-rule.js",
+        "sha256": "95ab8adc95f1e590e3433d739c79d2132833b3397fcc833db9c79aee582ea988"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/check-strong.js",
+        "sha256": "65a9dcd6c2e771b10c524a85ea72e985e64362f001317a4e90d7318644551bd5"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/compile-pattern.js",
+        "sha256": "cc5942773ca68186c628ae956e7734709376dbf94df3c57ef5e7be276e4ba7a6"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/container-flow.js",
+        "sha256": "462a5ba7f6fbeb0e21f5021a4f07961c0e93108660dda27b559cad88eb09dc66"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/container-phrasing.js",
+        "sha256": "9172b7a8114cf4123e6a67ccf1de5d8c6d4492fa760217fad8c04a7dcf703675"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/encode-character-reference.js",
+        "sha256": "a1aacc0ea2e4cd7fb84deaa115a5deaf4576e0701dd9441d5d6ffa70386c5dfd"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/encode-info.js",
+        "sha256": "919824b727823671cf6188fb17e5c012a29059d88e821135371e5309c103f03d"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/format-code-as-indented.js",
+        "sha256": "875735363c778c12d8a760e77420d636b7d2e111c955c2002168ba744e12d30b"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/format-heading-as-setext.js",
+        "sha256": "7efc6b494ee952b1831053decae18e702be275ec0ff93ea3069c8730f65ecb73"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/format-link-as-autolink.js",
+        "sha256": "f7ae2fab97bc8541829b81eb84f9e5e6dffec2ed38172b8242d4e7876f0a346b"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/indent-lines.js",
+        "sha256": "1f0fdb29bf49d7c189d161f16c7d3f91a9d8ce625f5a6aeaad9de9810bd93782"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/pattern-in-scope.js",
+        "sha256": "be9c737be3309735314d3b20d73afebff1d9d8d6681d43fe517fa573a193d255"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/safe.js",
+        "sha256": "8a8db3e41daf6c810cb289406fb9e46dde2dfaf4a0789c7193db90de3cfdfa77"
+      },
+      {
+        "path": "node_modules/mdast-util-to-markdown/lib/util/track.js",
+        "sha256": "a7254e9fa9b1c92e349e2fde6bbacfc9b2453806f9cf06f16ff735fdde900f8e"
+      },
+      {
+        "path": "node_modules/mdast-util-to-string/index.js",
+        "sha256": "46fb60d03aacb0a3f66c7be7f7c93e85013076f59d595c7220554b05027d8ada"
+      },
+      {
+        "path": "node_modules/mdast-util-to-string/lib/index.js",
+        "sha256": "53015b2b0b7a72aed1c2d880d3c2aaed73972241f968d4a206a18d92fbe57b21"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/index.js",
+        "sha256": "67211c138962eb4153158d185781612cb5a4f811a7f26f98863d03e7560595b6"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/attention.js",
+        "sha256": "0c4d5d13b7c56ed8e3c7b4617a1a2624c827576e652e65140478c47545526314"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/autolink.js",
+        "sha256": "d0762261ea02440fbc81b5facf994bc42ba1561d4c7bf822dd9d09a7c05a69ed"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/blank-line.js",
+        "sha256": "ef542164abcf6a5e6806720105146feba7e340a1f6d8c08c840707208ca76d69"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/block-quote.js",
+        "sha256": "dc87caa801ada12890767e83534b15746097b3cc6c9d5a99c046c1a252632366"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/character-escape.js",
+        "sha256": "8fd107627d4f0363999adf68fadd375a17a7536da8eee96799c805e3e57b3fe4"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/character-reference.js",
+        "sha256": "cc8138483321def7b2f4304df0e76ee2bcea84bb1bc5bc603534063b30ddd959"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/code-fenced.js",
+        "sha256": "ad089ec3656e37e3adbcda1fa873a8377d0b4143d556e279424b65b49f0d209f"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/code-indented.js",
+        "sha256": "179e7327f4c7565b0f1f74042e8fca37f232750f52e8bb4064a8f7602abce01c"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/code-text.js",
+        "sha256": "6e59e9b77a76a825c8cd142b0a2f0495aa5122da271770cb09322456a5207451"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/content.js",
+        "sha256": "86fe007055efee6edaecfbb2ccebb9bdd1e7887a45d1c5881bcaa7ed6a973b77"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/definition.js",
+        "sha256": "800e7ef9f722e2536dc5e9774d0e22b0dcc58770d7a8011dc2c205f5fd263009"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/hard-break-escape.js",
+        "sha256": "a84fdfcc8ad17557345f074d2cc61ac902349ae4666a86c934be7914029a80bd"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/heading-atx.js",
+        "sha256": "963cbe1d91fcbd825cb452cea673e1ca874a7533a31a5c48b674cb4817799b40"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/html-flow.js",
+        "sha256": "907e1b73e4eb1e51e818ab74698872906f3163788aeea7232b36d0d30aafedd0"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/html-text.js",
+        "sha256": "017f2b1f7be2303f4b849394f29430f4daea803dbb7eaf4ce82bb63e42e6c47c"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/label-end.js",
+        "sha256": "0fb2b950e1ed066cc1af4072bb4ff841a640aa8e02a43dc6de288ea8044e67e4"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/label-start-image.js",
+        "sha256": "60877f46d816d25fe11d86e24b703b4501240cdb89d63f7cc978d39af500abb8"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/label-start-link.js",
+        "sha256": "ffdab4c9eb7c16743e91f3b20711cdded335413c279aa4fa76d2d98d515cc0ec"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/line-ending.js",
+        "sha256": "3fa206316adeeb5a76e93c52d044f9ed32c1c1aad3a25346b913fec375ada089"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/list.js",
+        "sha256": "86115cefb14f3d7076cfe28a6f06dd805ae4e024b0897eaa897d64db1966c7e4"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/setext-underline.js",
+        "sha256": "36d333f33ee829a005a116ff464f7be89e2311650a36f3837bc20915c2d2d6c9"
+      },
+      {
+        "path": "node_modules/micromark-core-commonmark/lib/thematic-break.js",
+        "sha256": "0249d3b4ed750ed74d7b9cdcf7b0ad07048a6fcf735c22a41c43d6f54c8d4a10"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-autolink-literal/index.js",
+        "sha256": "df8add1053d02f32b6fbbd72d5d7fb213590ea32d666bc15c7f4e69467d021be"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-autolink-literal/lib/html.js",
+        "sha256": "531d28a41ae6add3cdb04ecf8be50bace69bd334df9271cd146907ac4c5eb685"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-autolink-literal/lib/syntax.js",
+        "sha256": "2b45c68982c1f80daf125b709faba88803b131a0d710b0374dd309495a74efeb"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-footnote/index.js",
+        "sha256": "9f2dd0393871a1d2db494fd4e5502ede219eda13ac05fea9ea6dd9c8ccf8dff6"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-footnote/lib/html.js",
+        "sha256": "eb300069225e67d6a71c96d16c7e69c64d14ba54c42c2ea7a3bfb5a8012d83b3"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-footnote/lib/syntax.js",
+        "sha256": "5fd8d63fcbb9918a0f7b92f2ba6adea3845e9cbf7f1e74ee239f4d018943ef6b"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-strikethrough/index.js",
+        "sha256": "0ee76753d9416266808227424eac60626edd98daeb27b74df4da71d2444c147c"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-strikethrough/lib/html.js",
+        "sha256": "6230e158b586049d3ba5612c7a2cd781bb48af69e5f3985339519d0720a7eeea"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-strikethrough/lib/syntax.js",
+        "sha256": "293e9b13a554fe569efd096cd7f1c3f4d6da861f30bba701e8b923f621181250"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-table/index.js",
+        "sha256": "bfdd4285a9f61faa334ced8f98fbbd1c3ba35f00a1613839c23c30c0786dcc97"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-table/lib/edit-map.js",
+        "sha256": "47e082373ee2022e2569ea4c0d7e05dbeae0a55885a6b5fb7efce65436b9bd82"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-table/lib/html.js",
+        "sha256": "e01378aaa7ce1f99b772f486606e3fa6fc1e48839ce6c79c4586127ccfc69852"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-table/lib/infer.js",
+        "sha256": "c2a038479872bd8026d513d528e56717fa266f09905f53192c6b5a0da6bc9ea7"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-table/lib/syntax.js",
+        "sha256": "45aac9771cc150aa2e3b62ae12fc370c07b72732d84e847b47e09dd17b3a7bfe"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-tagfilter/index.js",
+        "sha256": "11a91af64d788b9cef27855f6dad3cd2bf5f5b7a5b0ce3ba6794ef587699675f"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-tagfilter/lib/index.js",
+        "sha256": "ea626eefc8e4c741e450f31eed8476eeb1b344ea0db00363ad176c117a845a35"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-task-list-item/index.js",
+        "sha256": "9642f1c0386a40107895796c2207e55f981c762614887835e56ad18849f24788"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-task-list-item/lib/html.js",
+        "sha256": "8a90e3c2badc4eb1f640f7ae84d9ec5c6835c17c39aaec9a08c0014fdcad1623"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm-task-list-item/lib/syntax.js",
+        "sha256": "b819eb327b98387d58b3c254df11324b9291420e7b59306cc41d8a25b0820385"
+      },
+      {
+        "path": "node_modules/micromark-extension-gfm/index.js",
+        "sha256": "66b05551c6efe3d6a1c75bca914c192139bc3c998fdb2b0d0784ab6685934bbc"
+      },
+      {
+        "path": "node_modules/micromark-factory-destination/index.js",
+        "sha256": "8ef4475091af9f26c98ef6ee0fcccc8964fcbf60c7654b9f3d4af34da2adaa4b"
+      },
+      {
+        "path": "node_modules/micromark-factory-label/index.js",
+        "sha256": "011484772e200ea32f3139c0a258627af573dcabd78bd4eb514a34495cb4aea0"
+      },
+      {
+        "path": "node_modules/micromark-factory-space/index.js",
+        "sha256": "0325d6a34aeb0f069e764ea25a48874c5c1f95b70a35590b9767eef0e66a2617"
+      },
+      {
+        "path": "node_modules/micromark-factory-title/index.js",
+        "sha256": "1556b0f5d6f04b32d7178ea89b6381b936d7b8a18c92f4ca2844c4c062ed7a89"
+      },
+      {
+        "path": "node_modules/micromark-factory-whitespace/index.js",
+        "sha256": "8cdbba455b8ff17dee625a111eab27ccf3966ac3840e66a8b21aa0d800c639d4"
+      },
+      {
+        "path": "node_modules/micromark-util-character/index.js",
+        "sha256": "0ec487160ae3fa7f375698f9f951a0c5d7d752800bca2e3b1de15e3a07ee0417"
+      },
+      {
+        "path": "node_modules/micromark-util-chunked/index.js",
+        "sha256": "0776986647dd83ca16594bc02984a288f11e4c8a2d6f81b2487b3c9ef3a34f94"
+      },
+      {
+        "path": "node_modules/micromark-util-classify-character/index.js",
+        "sha256": "fa7b4a93bc117a88844216e2bb8fef3483825bac1d9186126048ca42f1ed3e57"
+      },
+      {
+        "path": "node_modules/micromark-util-combine-extensions/index.js",
+        "sha256": "b2aaec9f3549d92afb610d41b4f5ab73293fbeab0d2b6080ad7a8bd3518e46e1"
+      },
+      {
+        "path": "node_modules/micromark-util-decode-numeric-character-reference/index.js",
+        "sha256": "74d2139b3651d79a7f4c1d3b21159d9c89459256e12b263ed2eb6b4fce599f87"
+      },
+      {
+        "path": "node_modules/micromark-util-decode-string/index.js",
+        "sha256": "d38b07736ff9de94721153d910fd2966608bf8cd423f2dad9c091acf8ef3377d"
+      },
+      {
+        "path": "node_modules/micromark-util-encode/index.js",
+        "sha256": "323cc4fbd190cdcb56be068ff98e104aa2f431ea1039d7e967f3f7891cb859f0"
+      },
+      {
+        "path": "node_modules/micromark-util-html-tag-name/index.js",
+        "sha256": "da74ea4080075b3f45a13eda9a05789e7038e1560954aff6979daafa68d0f096"
+      },
+      {
+        "path": "node_modules/micromark-util-normalize-identifier/index.js",
+        "sha256": "6def6e2422ac8905df740d27603d8eaa5d2fdbe41122c40958ac785ff0c8dfe3"
+      },
+      {
+        "path": "node_modules/micromark-util-resolve-all/index.js",
+        "sha256": "fa3b71cedce7b6f31ae68720dccfd561b7191e3d7280663cee1400a2dd38698c"
+      },
+      {
+        "path": "node_modules/micromark-util-sanitize-uri/index.js",
+        "sha256": "c8c100c6e730dd6b19ecaa70ef9f1da99c10c415dc9b6539820d41756c0fc197"
+      },
+      {
+        "path": "node_modules/micromark-util-subtokenize/index.js",
+        "sha256": "a70e48d4652be4f956606dcda3e4c13707952dc74b86f6f71990eba88d4a1e79"
+      },
+      {
+        "path": "node_modules/micromark-util-subtokenize/lib/splice-buffer.js",
+        "sha256": "addce56cc7eccc0cb0ba10f7f8eab4c902f5ddf55ff43e0fb2907815ea63440e"
+      },
+      {
+        "path": "node_modules/micromark/index.js",
+        "sha256": "0abeeca43ffae89b3d911da05de284f4ea6b80bde67ee8f30d7bc9655f4dad97"
+      },
+      {
+        "path": "node_modules/micromark/lib/compile.js",
+        "sha256": "8bf26920007f3a8886c120cd863872d1372d30ccee99bfb549a15135a698e471"
+      },
+      {
+        "path": "node_modules/micromark/lib/constructs.js",
+        "sha256": "afecd299e4b5e7edb3ecba007000c311ed2b7c86e4e28729f9783da9021da2cf"
+      },
+      {
+        "path": "node_modules/micromark/lib/create-tokenizer.js",
+        "sha256": "fb3354e4cf38590a70e83f8556e96d717800b4f20e4e30949ae50d8c36ed09d1"
+      },
+      {
+        "path": "node_modules/micromark/lib/initialize/content.js",
+        "sha256": "a1e1ad9cb372cc3ad2caa172de2f0658a9d38cde01a3f1109041a8b1ea83345e"
+      },
+      {
+        "path": "node_modules/micromark/lib/initialize/document.js",
+        "sha256": "a27b0a34fe26d7000ed4e5dfbde302a3dd01eb01d20aaa74c2033694b7b9cac8"
+      },
+      {
+        "path": "node_modules/micromark/lib/initialize/flow.js",
+        "sha256": "36a507211b00526d6ec1e9d9cca7547d26a5b01db61bb6d0d94d625d2babe66f"
+      },
+      {
+        "path": "node_modules/micromark/lib/initialize/text.js",
+        "sha256": "c0e5b3edbad427ce44aac1b33ed78361c85fc521e52e534cdd43873a0d8e7982"
+      },
+      {
+        "path": "node_modules/micromark/lib/parse.js",
+        "sha256": "a8e110b17213a26a212332b2c8c39d31c302735c810bb0078e00b752f00552d9"
+      },
+      {
+        "path": "node_modules/micromark/lib/postprocess.js",
+        "sha256": "0faf397c79cefaa71f92b00aa11c5b2e954aa7560ceb1c93d85d21853136b5d6"
+      },
+      {
+        "path": "node_modules/micromark/lib/preprocess.js",
+        "sha256": "b582f16d9bc04d93d388004544be9c5293fda614eb86f8d02b97c3e57b9409e1"
+      },
+      {
+        "path": "node_modules/property-information/index.js",
+        "sha256": "c70e5d2c76ea00116e87d0fabe961f6d260e94641ab76dfb0a73c9c9498a4a3d"
+      },
+      {
+        "path": "node_modules/property-information/lib/aria.js",
+        "sha256": "e46d46194887fe65bfc84dac050b20c163f131f81f10e88f38b48925cf01602b"
+      },
+      {
+        "path": "node_modules/property-information/lib/find.js",
+        "sha256": "0e7b3a54af5d32fe6b30648b420f82ccf0bf7e2d2af9460e3c173c2785084336"
+      },
+      {
+        "path": "node_modules/property-information/lib/hast-to-react.js",
+        "sha256": "47ba04ebd32327cae23e50c70f218c17161722942616182d46ce0cde7a2d58a8"
+      },
+      {
+        "path": "node_modules/property-information/lib/html.js",
+        "sha256": "e204fcc00f9ba1c19049be6dbe1fa0c9378d8401482aead17cb0d0e47adff671"
+      },
+      {
+        "path": "node_modules/property-information/lib/normalize.js",
+        "sha256": "b682cd82e5383c9752b3fd9b354d4694150a1b70027337998bcd46e030ed3e93"
+      },
+      {
+        "path": "node_modules/property-information/lib/svg.js",
+        "sha256": "c12f46a6c616f46cf7d24f4979471402f78320d71e6642db88c3566f160f0356"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/case-insensitive-transform.js",
+        "sha256": "ed53a57e86ad3153460b9aa558206d9781bb21ace54f825b3ff8ba26c708aa5e"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/case-sensitive-transform.js",
+        "sha256": "4935f8bbb39e31920d1efe1a1feb742678113f6355b4feb7b3060118a04c9eda"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/create.js",
+        "sha256": "e1da7557afffe2afa5ee8b582fa8e302578342e9ced8bc8410fc618968730137"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/defined-info.js",
+        "sha256": "abfc5c18f95ffe73105e336370b778d4d24eb539fe609428035f690e3ded73b2"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/info.js",
+        "sha256": "9cacb8f3711acde4ef79814c4f42d97a4923ccb37e5a6ddd550ebbffb452a1e5"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/merge.js",
+        "sha256": "4f9b3be6a66510d379a3096297da53f2a5a49eebeba6b8db17a5e7b044a90c33"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/schema.js",
+        "sha256": "d97aa20f271dd5e3ea798dff8cc1fa196a074081b92e60b9335824ce00d05ba6"
+      },
+      {
+        "path": "node_modules/property-information/lib/util/types.js",
+        "sha256": "534ee498a7991c73556e49cf8031de26b193f4ffdf3da0aeac52add9d7b6ea1c"
+      },
+      {
+        "path": "node_modules/property-information/lib/xlink.js",
+        "sha256": "9a92f5105b5f4558bf1b63cb43a11c57289fb4b638e9ad4f1d99716602b95a91"
+      },
+      {
+        "path": "node_modules/property-information/lib/xml.js",
+        "sha256": "aa91faf152020c8be409ae8253d3ebaf85b2a9246c5a3ed96d9d5424c9e4064c"
+      },
+      {
+        "path": "node_modules/property-information/lib/xmlns.js",
+        "sha256": "5e3700fcaa7faf7542982e2657286be3a652744c0f3d0ee64c311ed158ef00d9"
+      },
+      {
+        "path": "node_modules/react-dom/cjs/react-dom-client.production.js",
+        "sha256": "6cf4932e0c20a4572ae395035ca2e512a42d7d49c1a659fa73d6197069c28df0"
+      },
+      {
+        "path": "node_modules/react-dom/cjs/react-dom.production.js",
+        "sha256": "291e0682e8b69643e8e213b6bc13849527fdd97800fef587d5be7b4a8f6a58ca"
+      },
+      {
+        "path": "node_modules/react-dom/client.js",
+        "sha256": "00e348ab3d6bc2eef908345d0bc4e008c95bcfecec060dfda5c4967953761396"
+      },
+      {
+        "path": "node_modules/react-dom/index.js",
+        "sha256": "ba1a3e33489f868371561777607e3ee5091df0f7ea3f1a10f789d6b86e4c1505"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/I18nextProvider.js",
+        "sha256": "ed13f529bd903e7bea291752bc2f9193eea579978b5b3d7e5149ffc260f31f2e"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/IcuTrans.js",
+        "sha256": "16a29cd5f1975ee42dc7c6c2fea6afe47175a2f8d30cbfa88e7cc41aa07f95cc"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/IcuTransUtils/TranslationParserError.js",
+        "sha256": "0c0e335768aa5566b09515502ba3c041af5d2f9644b6c027fac883173430aa56"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/IcuTransUtils/htmlEntityDecoder.js",
+        "sha256": "6f92f1f02f085aa6703fba93221814f01d4e1444cbf50600e89841d0fa50d357"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/IcuTransUtils/index.js",
+        "sha256": "9fad4fb2aea511d5d50af275392aeb0f803b5fef29becbfdf9566bcc0bf63a35"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/IcuTransUtils/renderTranslation.js",
+        "sha256": "a7bce1e90c0d12770e73b79273ab4408b1b5afb586c1670760135a0f94ad95c3"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/IcuTransUtils/tokenizer.js",
+        "sha256": "c42f95780825b5213aa1c27dc48a73fb747e2a1e001acd7f6ac2250f02c76045"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/IcuTransWithoutContext.js",
+        "sha256": "64436b1f182c9cf84ca27d866239b9b25b94e0b32f988ca0b10591297ae50332"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/Trans.js",
+        "sha256": "05dfa4c236b49ab16d625c75a5739f0862af8a64ccfcf013da82e1d7f4cfabb0"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/TransWithoutContext.js",
+        "sha256": "0c2b9efad0b362b8e957d25c29f5c59f4633c5b354de5b48fc2139c4a44371ab"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/Translation.js",
+        "sha256": "298e35f719720b590aa8bf874f1fe92a3d643177601d5e5cb5a1f0b82f79d8d2"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/context.js",
+        "sha256": "ed36ca43e04319bf9d0955e4d18d01d5499c9ad958ad9d0e069bc597b2f4a6f4"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/defaults.js",
+        "sha256": "f96aadbe215bfa24bec3ed6b1bdc1f88037bf1bcd1b5b2d52c5c9f2281b058d3"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/i18nInstance.js",
+        "sha256": "6dd7ca20fcad9d87eb2c34775933b3047872e5739fab3f58372c80ee074c1abe"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/index.js",
+        "sha256": "ef60b8fb31d0e27198de71fce359881bb93ae8995f8307aebcd575c092dcf816"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/initReactI18next.js",
+        "sha256": "4f0289eec280781d7bd04c837aee19c7bc06e92bd1025e4c2b1f4295b76c4197"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/unescape.js",
+        "sha256": "bfa5922fda4fa4757e27dd90b65479199b0c141e085c9ea2be280897e05e3bb3"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/useSSR.js",
+        "sha256": "862d1c752d97ea6ae0d43441387edf88c4e215ebd388753f027be9bb22dd44c8"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/useTranslation.js",
+        "sha256": "83e0686d820d16877ed9825e7826a30648a4e67312e11bf0c72226fecf6801c0"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/utils.js",
+        "sha256": "f65a4fd627887673f144ff8151f832324fba29f8d2aac6927374245dc987c818"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/withSSR.js",
+        "sha256": "afeafb7b463b06adbc85e6f56a26036639b6c2dc4242b30683879f176b4e8503"
+      },
+      {
+        "path": "node_modules/react-i18next/dist/es/withTranslation.js",
+        "sha256": "ac30a3924d6d50e4d44fdfa43bc6dea89bfb2b3535ca914ba855da5ed2e85b3b"
+      },
+      {
+        "path": "node_modules/react-markdown/index.js",
+        "sha256": "1420b7245c57274cbaa448e57282bba0f9a60a93ba43bdfe30ac83deba53c1e2"
+      },
+      {
+        "path": "node_modules/react-markdown/lib/index.js",
+        "sha256": "1c8d95723a74051c354dd4470fb669ae5269baf0ac62aa9b52c4516960ace5ee"
+      },
+      {
+        "path": "node_modules/react-remove-scroll-bar/dist/es2015/component.js",
+        "sha256": "3baec61523006aedf14321423427b0c50aa17bfe48faf344bebff9d883149f29"
+      },
+      {
+        "path": "node_modules/react-remove-scroll-bar/dist/es2015/constants.js",
+        "sha256": "1c73582ef730bbca1d536a6995c7eea438dcd0632fee2856337627e44b5872e2"
+      },
+      {
+        "path": "node_modules/react-remove-scroll-bar/dist/es2015/index.js",
+        "sha256": "130bc4c810a84aeae180ba8fe1e7fd96f706d5d3a0cf6728419ff2c74708185f"
+      },
+      {
+        "path": "node_modules/react-remove-scroll-bar/dist/es2015/utils.js",
+        "sha256": "2c4105ab772a5cbf4b3d1e54f49e94d03fde867d20767b46bb3e5c27f4d82f00"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/Combination.js",
+        "sha256": "1e77baa7c90a3d778f966ea437224d1db9e9563f7706ce89b78d5fd3e8c11dcf"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/SideEffect.js",
+        "sha256": "fafe1422512c0a1a3e16ebccce79adb65c8bde0528fc3edeb6b812dfc1e9f67e"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/UI.js",
+        "sha256": "1c8fa6e52fe34cf310aeafa0f350cbb5a688f71c0f1f03d2bd0407bfe32a2500"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/aggresiveCapture.js",
+        "sha256": "5563523a66337f256c031a78799d75c76c2b806aeab77c95a1d1eac867e414ba"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/handleScroll.js",
+        "sha256": "8a6f2349eedb298b4751ce806291c7b9a4f8ecb9f50d5d69a1a0f2dfa47cae0f"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/index.js",
+        "sha256": "a53ba117a718d7db256e67b4d89987b060e7b6e8e883d91869a227acb8fc8fb9"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/medium.js",
+        "sha256": "59a1090d4a50eabff072d99bf5aad24894c21bfc337c717075458c7b0b9f9a87"
+      },
+      {
+        "path": "node_modules/react-remove-scroll/dist/es2015/sidecar.js",
+        "sha256": "88f0930aaced0dfc35ac1aa6d3b29eca5f80f4344c27df7d244d0e645b26e8f0"
+      },
+      {
+        "path": "node_modules/react-style-singleton/dist/es2015/component.js",
+        "sha256": "c1598f96587abdbc79c3b78e9c1217e295488572c6a293877bbbe93d71e643ee"
+      },
+      {
+        "path": "node_modules/react-style-singleton/dist/es2015/hook.js",
+        "sha256": "c5a6c5f2ccc72b3361b32b1c85ccb9e148a696a5f48962e7af8373344a87f297"
+      },
+      {
+        "path": "node_modules/react-style-singleton/dist/es2015/index.js",
+        "sha256": "cc1621e89304e85e973822c66dd2a081ecf545cfcbc01ea276f796e29b4478b9"
+      },
+      {
+        "path": "node_modules/react-style-singleton/dist/es2015/singleton.js",
+        "sha256": "95c7ffcbdac6ebf19e85ea723995e153b90182b34843ed6b1bfc3d896081e51d"
+      },
+      {
+        "path": "node_modules/react/cjs/react-jsx-runtime.production.js",
+        "sha256": "1e46f15002696985e80c61d47aaa30dabb03c954270a690f5f7dfbbacfa9002b"
+      },
+      {
+        "path": "node_modules/react/cjs/react.production.js",
+        "sha256": "d348b80a78c8ea0bd02b1990c7b7b514f5c276f9e74fee6e3976297585385961"
+      },
+      {
+        "path": "node_modules/react/index.js",
+        "sha256": "60caffdecbdc5db3bc4ec4e83df9488345ccb271d07533b9210bf5750918d97e"
+      },
+      {
+        "path": "node_modules/react/jsx-runtime.js",
+        "sha256": "b392951a77d0a2e6a6bd017e49d768481ae5b63c4109c6c31f622cf7b2433edc"
+      },
+      {
+        "path": "node_modules/remark-gfm/index.js",
+        "sha256": "0cf2ebbaae90578f4a838505ebc3d7fd1d8339484c7f13be1a3d4d09427c2dc9"
+      },
+      {
+        "path": "node_modules/remark-gfm/lib/index.js",
+        "sha256": "9317003279e791d39b7e3482cecfb3409843378164a238a535984f644e53c7ef"
+      },
+      {
+        "path": "node_modules/remark-parse/index.js",
+        "sha256": "0cf2ebbaae90578f4a838505ebc3d7fd1d8339484c7f13be1a3d4d09427c2dc9"
+      },
+      {
+        "path": "node_modules/remark-parse/lib/index.js",
+        "sha256": "9d5a9a197d1d91a1abbf47b8cf67e1ee0decbfc9471d94c4a2ee712ff73b90c8"
+      },
+      {
+        "path": "node_modules/remark-rehype/index.js",
+        "sha256": "995628e8b0f98e9f185dfec8570bed3d8c72a291eaf8d28c7b63495f29a85ed5"
+      },
+      {
+        "path": "node_modules/remark-rehype/lib/index.js",
+        "sha256": "85f8d8985414613d2a64c4b6927e10ebd1edefe87a956190a1343dd833f689ef"
+      },
+      {
+        "path": "node_modules/scheduler/cjs/scheduler.production.js",
+        "sha256": "679adff761d31e9426604f80c0e99be44a3e6f4c6834b0218ecf0312a67c171f"
+      },
+      {
+        "path": "node_modules/scheduler/index.js",
+        "sha256": "145965504d60007bc25486ab930b0367867dcd5d579ccd343c148d69349a7cfb"
+      },
+      {
+        "path": "node_modules/space-separated-tokens/index.js",
+        "sha256": "080bce26a6623cdb189d1cd62c6bdd27fe9984b40f19d81abe113a20dae3c379"
+      },
+      {
+        "path": "node_modules/style-mod/src/style-mod.js",
+        "sha256": "4bd6b34edda52f362553d33df7e3a10f31fbdc0c95125aabec89c4de6be80b0a"
+      },
+      {
+        "path": "node_modules/style-to-js/cjs/index.js",
+        "sha256": "4d72a5338a27ea5526f6d3111e4a02129576f6238e0b346743454381c835bef2"
+      },
+      {
+        "path": "node_modules/style-to-js/cjs/utilities.js",
+        "sha256": "0463aa5f7ac6322ebcdce9bafe3b2ce018e9428e340b9e97f034cc6e8abc6a5c"
+      },
+      {
+        "path": "node_modules/style-to-object/cjs/index.js",
+        "sha256": "210c4e97e6134e0617412ce7ee84e7a0a8923a1fd4d8adbc58206d766eed55fc"
+      },
+      {
+        "path": "node_modules/trim-lines/index.js",
+        "sha256": "d784a46164df3f83ea47bedc6a5c316fd29469e79b6a99e206856961321c2460"
+      },
+      {
+        "path": "node_modules/trough/index.js",
+        "sha256": "cd3300bc71f3f23850f8b583abb140c98c63072011482a270aab544085e41e00"
+      },
+      {
+        "path": "node_modules/trough/lib/index.js",
+        "sha256": "a5a84b499ac99ebc3435fe0027de0b836cdbcb5c7413e525fd8e13f2aec5b1c2"
+      },
+      {
+        "path": "node_modules/tslib/tslib.es6.mjs",
+        "sha256": "0929993220938091ede542d688b0fdb87dad99a7e77678e1983c32d18a503339"
+      },
+      {
+        "path": "node_modules/unified/index.js",
+        "sha256": "12a98242be891512cbdec8bce2ec1a9147d9d89b2802165560411c5fe5037508"
+      },
+      {
+        "path": "node_modules/unified/lib/callable-instance.js",
+        "sha256": "28c9baa7aea87597c4eca19a2e2b3342d3017347fabf7d513278787b5a950c58"
+      },
+      {
+        "path": "node_modules/unified/lib/index.js",
+        "sha256": "4a2e5111187985134153358e282f2613d3e862ee9da6336bfb95ed1850f3914d"
+      },
+      {
+        "path": "node_modules/unist-util-is/index.js",
+        "sha256": "037c062d404356c6bbb8dad28d39445165d23e84ac35a63496a98d40aaa8d645"
+      },
+      {
+        "path": "node_modules/unist-util-is/lib/index.js",
+        "sha256": "ce90bad6b772a7e1115d76e4cc53bfade1ee1fe8ac1b8880f48b0e1512ffba44"
+      },
+      {
+        "path": "node_modules/unist-util-position/index.js",
+        "sha256": "0852ccb10e53cbe0d096e5598806e431af3c2a40ef272a56db87643b6f1f07b5"
+      },
+      {
+        "path": "node_modules/unist-util-position/lib/index.js",
+        "sha256": "3a751e6977493112a744188be93f88005f89c6490a7ee88b2e50ff3756d79e44"
+      },
+      {
+        "path": "node_modules/unist-util-stringify-position/index.js",
+        "sha256": "7b80d608db2ab15251da8c71c4ed8029102b16677d80f4977487136e6b9e5774"
+      },
+      {
+        "path": "node_modules/unist-util-stringify-position/lib/index.js",
+        "sha256": "9d66941cf43fa4f4faa5912019ad9dae3f1ea3395b0c2fe64c2bcd5c2d4b2c28"
+      },
+      {
+        "path": "node_modules/unist-util-visit-parents/index.js",
+        "sha256": "6e3e10026230a33197e56422a2d95fc1815528c0bde7c1c790fd1a733b04bd39"
+      },
+      {
+        "path": "node_modules/unist-util-visit-parents/lib/color.js",
+        "sha256": "84d02ef62d60a8e4fc8529fa6725abb85729274a873afbb8d4d9fb317ae01135"
+      },
+      {
+        "path": "node_modules/unist-util-visit-parents/lib/index.js",
+        "sha256": "8789a4f20d3e3c82bcaeec9628697752d662461bf6237ecfba61cfcc00f30bf7"
+      },
+      {
+        "path": "node_modules/unist-util-visit/index.js",
+        "sha256": "0bd7a392932d4578d13e0ab49705ba1488ecaad56fa4cf865f85dac64d34de91"
+      },
+      {
+        "path": "node_modules/unist-util-visit/lib/index.js",
+        "sha256": "83779ce32216704c4a7593fd350c48a6570f445b1bb583cbe6d1da12d86cc4bd"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/assignRef.js",
+        "sha256": "ac1344fd33c84d6761c8b3c51f67987ae272444bcdf7a3e885ffb7a0171f62f2"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/createRef.js",
+        "sha256": "a3d2031890bc20f8a499244d0d5ee65660960a67b741fcc03c79e079f2a84091"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/index.js",
+        "sha256": "d0bf1f52aedf7fa9946888aaace6e2f3cc1c1033c06fa2775e8319af5b074007"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/mergeRef.js",
+        "sha256": "622cb66adf7a7647c834c9431f5f792ce7abb9bb5d332fc4d1687c35af807973"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/refToCallback.js",
+        "sha256": "30c00168e514a86c3e940ac016a9c450b7994b1ea050d9a59c6531faa29d8c89"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/transformRef.js",
+        "sha256": "93a5c9b2515b94f76cfb60707d400ac85e33d6fbc866a129371f16d9b816cea9"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/useMergeRef.js",
+        "sha256": "b757ddc05f723a98101a9b1418c8f5859d6d5c27113fb4d7a641a2b7375a79b7"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/useRef.js",
+        "sha256": "120f5ed0fc43ae85c2bb96e3ee97b32aab810477d2fcf9446f67ecbd95344164"
+      },
+      {
+        "path": "node_modules/use-callback-ref/dist/es2015/useTransformRef.js",
+        "sha256": "f044a0befa9ea5fef1c308f9fcb6b50a8c7d3805b78be8a774a154feb30d4a0d"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/config.js",
+        "sha256": "dcc11ea9f4765ce4003e557a0e46671bfc05904e047e001808e384f1bf1fbf8c"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/env.js",
+        "sha256": "439e38bc1dd9cd733821476037e3a0ae5340abd0dc363a793f059e42d1a4f38f"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/exports.js",
+        "sha256": "002eda36f3c946855797e598429da198b73156718975ebc7d2a5bebad7397d10"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/hoc.js",
+        "sha256": "2a03ce8e80d5e246b6f90b3f18af239aaff9d9c98fabc521e2f802fed68460ef"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/hook.js",
+        "sha256": "7f4d0ddf53c06bea7ee9ae5b6481d3c1b07bae67d28279d08946ea3a59568b33"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/index.js",
+        "sha256": "5cb16ca170fceea40286cf5866d6dc0615cf6f1a59f4c82aace0fce0898a18ad"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/medium.js",
+        "sha256": "3243bdc31511a7dcee873538d5970126ea57390070303c0bea5797cf0e6260c6"
+      },
+      {
+        "path": "node_modules/use-sidecar/dist/es2015/renderProp.js",
+        "sha256": "fef8bcae6070fc67aba63b5837057bb55c90309a812097e20a7feabc77cdb02f"
+      },
+      {
+        "path": "node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.production.js",
+        "sha256": "e8c2f1808804d75c9e0ffab8c37329b34f356140275dea0efe1e75684ded14fa"
+      },
+      {
+        "path": "node_modules/use-sync-external-store/shim/index.js",
+        "sha256": "de571b60495a636e12a24000b78531994a819aba03917e679803c2b482c66a89"
+      },
+      {
+        "path": "node_modules/vfile-message/index.js",
+        "sha256": "b5a79b593628629d6e3e10dd9ea2637418b5b2822914621daf3d954396de9791"
+      },
+      {
+        "path": "node_modules/vfile-message/lib/index.js",
+        "sha256": "2aa3a64765f6708ef3a65a2a6637a4b9647d4a14ca934b157f51e1e3330cd9b8"
+      },
+      {
+        "path": "node_modules/vfile/index.js",
+        "sha256": "db1e3da681ec50cc73fa278083581a9605266615dbef264d99336c57f0f3b251"
+      },
+      {
+        "path": "node_modules/vfile/lib/index.js",
+        "sha256": "c3ace457947030204553dc06a65249cfa427649ce18949999b34029c5a270265"
+      },
+      {
+        "path": "node_modules/vfile/lib/minpath.browser.js",
+        "sha256": "6c011d74955d2c202e1af91c8616e92e0a2381dce628128553dd81b03c900f95"
+      },
+      {
+        "path": "node_modules/vfile/lib/minproc.browser.js",
+        "sha256": "f13b22707f7048a983027bec0bfefa9f4630ae4b992031cfd772642c1598f993"
+      },
+      {
+        "path": "node_modules/vfile/lib/minurl.browser.js",
+        "sha256": "c0fdbff8069606f5eef2ccb588abe8f06a7597bcf1894bd1a9ba155b1ebafc1f"
+      },
+      {
+        "path": "node_modules/vfile/lib/minurl.shared.js",
+        "sha256": "92df001e690fd3b8ec4bbe2cfb0d176da8aa9011e404a454c88158c05153b8f1"
+      },
+      {
+        "path": "node_modules/w3c-keyname/index.js",
+        "sha256": "b649dec4f01c7c5eb05be4641b5b698c6938231ee50b38e17a2f0f822ca3df2e"
+      },
+      {
+        "path": "node_modules/zwitch/index.js",
+        "sha256": "81f592d700aff8042238e7cab8e03c002e689117ecf15844ed753e08825a2873"
+      },
+      {
+        "path": "src/attachment-ref.ts",
+        "sha256": "8985665b09151a72a4697a8c57f486604cbbbc6efa1f295e5721e1fb6959df40"
+      },
+      {
+        "path": "src/context-compaction.ts",
+        "sha256": "03e849e733a14af8cf264bd4d6462377ea7aa698f98c3d10016981ec4d571ddb"
+      },
+      {
+        "path": "src/input-queue.ts",
+        "sha256": "8836a240e3238446273cb29a40919f6c16cae1dae0213dccac00d185d918fd21"
+      },
+      {
+        "path": "src/item.ts",
+        "sha256": "3b3105f841b9ec66acf2ed6c833b9fbcfb7812088492acfb48c08ba8a980120c"
+      },
+      {
+        "path": "src/loop-recovery.ts",
+        "sha256": "c112007bdb172d211b0332735bd6622dc6a141064684911409a5db9283bc3eb7"
+      },
+      {
+        "path": "src/media-content.ts",
+        "sha256": "8a8f46cdafa4cecc521737558dc813380ac6b3d2b5a4ec1210837f79ea84dadf"
+      },
+      {
+        "path": "src/model.ts",
+        "sha256": "0974bd8687d8ab2190966a420cd66392ec786ccb4632e28716c74ccf3eb20c32"
+      },
+      {
+        "path": "src/protocol/model-key.ts",
+        "sha256": "b14280766795265094b0bfb12e4ed0cf3b06d6c4819a3b988f8e4768a07de207"
+      },
+      {
+        "path": "src/thread-import.ts",
+        "sha256": "55b46c3d4684f49656f76359a66d29b93b1bc53c350208bc62d677266b8226f8"
+      },
+      {
+        "path": "src/tool-task-content.ts",
+        "sha256": "f159a40f1d9c5996f88e19ac7ab869ce29ccd42e51d835cbf4bcf0ae0d8e3520"
+      },
+      {
+        "path": "src/turn-end.ts",
+        "sha256": "36d3b9269b031ee5f2ad4bc1921ece9ad2f204e697fa439a93b62ddfc322c82e"
+      }
+    ]
+  },
+  "browserVersion": {
+    "protocolVersion": "1.3",
+    "product": "Chrome/155.0.8059.39",
+    "revision": "@3ff7ac5a9224be9156d7f8703a06e22890aafd34",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+    "jsVersion": "15.5.35.20"
+  },
+  "sourceHashesMatchedLocally": 461,
+  "screenshots": [
+    {
+      "name": "before-1000-en-light-long-top.png",
+      "sha256": "3252e92ad6a93066cbde795637810c16099cf9df89950168172fef2c429b90f2",
+      "identicalToPriorReviewedRun40321170804": true
+    },
+    {
+      "name": "before-1000-en-light-empty-backspace.png",
+      "sha256": "476ca804044e2540c006c00ecdbb9b570932736a3d3fef55c295a96afcd64f84",
+      "identicalToPriorReviewedRun40321170804": true
+    },
+    {
+      "name": "before-1000-en-light-empty-long.png",
+      "sha256": "750b14e409008705f3088b6cd009376aaf09b1aff7cd9480d00473842364a2b1",
+      "identicalToPriorReviewedRun40321170804": true
+    },
+    {
+      "name": "after-1000-en-light-long-top.png",
+      "sha256": "b95e5ab0709becbf7d4959fe0f12d5a2724403d7c43c6a1c53125a4383331e4e",
+      "identicalToPriorReviewedRun40321170804": true
+    },
+    {
+      "name": "after-1000-en-light-empty-long.png",
+      "sha256": "12f2474aa51bb592d654de988c544e95bf0b1adfad4aa6c9ca3bd493cf664f28",
+      "identicalToPriorReviewedRun40321170804": true
+    },
+    {
+      "name": "after-420-zh-CN-light-long-top.png",
+      "sha256": "d4bb19a6706e49cafcc66a9c7f02fb1dfa9f6bb5727f13fdb6b8e6bf827e60a6",
+      "identicalToPriorReviewedRun40321170804": true
+    },
+    {
+      "name": "after-420-zh-CN-light-long-model-menu.png",
+      "sha256": "4be0ed9a75c67278b7926f13b9c1d0ce3c9ec39916c9061cd3a3d0b1b7bb94f7",
+      "identicalToPriorReviewedRun40321170804": true
+    },
+    {
+      "name": "after-420-en-dark-empty-long.png",
+      "sha256": "a8db132c676bae361362191b6e66bfd6a219d9908efa492e22bb77cbb35b4aa5",
+      "identicalToPriorReviewedRun40321170804": true
+    }
+  ],
+  "scenes": [
+    {
+      "baseline": true,
+      "width": 1000,
+      "lang": "en",
+      "theme": "light",
+      "status": "passed",
+      "phase": "complete",
+      "long": {
+        "editorHeight": 134,
+        "scrollerHeight": 660,
+        "scrollHeight": 660,
+        "scrollerBottom": 1172,
+        "toolbarTop": 625,
+        "wheelBefore": 0,
+        "wheelAfter": 0
+      },
+      "clearStates": {
+        "pristineEmpty": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": null,
+          "announcementHeight": null
+        },
+        "emptyAfterBackspace": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "static",
+          "announcementHeight": 0
+        },
+        "emptyAfterShort": {
+          "shellHeight": 129,
+          "inputHeight": 57,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "static",
+          "announcementHeight": 21
+        },
+        "emptyAfterLong": {
+          "shellHeight": 129,
+          "inputHeight": 57,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "static",
+          "announcementHeight": 21
+        }
+      },
+      "violations": [
+        {
+          "directive": "style-src-elem",
+          "blockedURI": "inline"
+        }
+      ],
+      "editingRegression": null,
+      "fonts": [
+        {
+          "familyName": "Liberation Sans",
+          "postScriptName": "LiberationSans",
+          "isCustomFont": false,
+          "glyphCount": 1461
+        },
+        {
+          "familyName": "Noto Sans CJK JP",
+          "postScriptName": "NotoSansCJKjp-Regular",
+          "isCustomFont": false,
+          "glyphCount": 600
+        }
+      ]
+    },
+    {
+      "baseline": false,
+      "width": 1000,
+      "lang": "en",
+      "theme": "light",
+      "status": "passed",
+      "phase": "complete",
+      "long": {
+        "editorHeight": 134,
+        "scrollerHeight": 134,
+        "scrollHeight": 660,
+        "scrollerBottom": 625,
+        "toolbarTop": 625,
+        "wheelBefore": 0,
+        "wheelAfter": 526
+      },
+      "clearStates": {
+        "pristineEmpty": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": null,
+          "announcementHeight": null
+        },
+        "emptyAfterBackspace": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 0
+        },
+        "emptyAfterShort": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        },
+        "emptyAfterLong": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        }
+      },
+      "violations": [],
+      "editingRegression": "paste, wheel, delete-all, undo/redo, re-entry, reference removal passed",
+      "fonts": [
+        {
+          "familyName": "Liberation Sans",
+          "postScriptName": "LiberationSans",
+          "isCustomFont": false,
+          "glyphCount": 1461
+        },
+        {
+          "familyName": "Noto Sans CJK JP",
+          "postScriptName": "NotoSansCJKjp-Regular",
+          "isCustomFont": false,
+          "glyphCount": 600
+        }
+      ]
+    },
+    {
+      "baseline": false,
+      "width": 420,
+      "lang": "zh-CN",
+      "theme": "light",
+      "status": "passed",
+      "phase": "complete",
+      "long": {
+        "editorHeight": 134,
+        "scrollerHeight": 134,
+        "scrollHeight": 1290,
+        "scrollerBottom": 635,
+        "toolbarTop": 635,
+        "wheelBefore": 0,
+        "wheelAfter": 560
+      },
+      "clearStates": {
+        "pristineEmpty": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": null,
+          "announcementHeight": null
+        },
+        "emptyAfterBackspace": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 0
+        },
+        "emptyAfterShort": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        },
+        "emptyAfterLong": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        }
+      },
+      "violations": [],
+      "editingRegression": "paste, wheel, delete-all, undo/redo, re-entry, reference removal passed",
+      "fonts": [
+        {
+          "familyName": "Liberation Sans",
+          "postScriptName": "LiberationSans",
+          "isCustomFont": false,
+          "glyphCount": 1461
+        },
+        {
+          "familyName": "Noto Sans CJK JP",
+          "postScriptName": "NotoSansCJKjp-Regular",
+          "isCustomFont": false,
+          "glyphCount": 600
+        }
+      ]
+    },
+    {
+      "baseline": false,
+      "width": 420,
+      "lang": "en",
+      "theme": "dark",
+      "status": "passed",
+      "phase": "complete",
+      "long": {
+        "editorHeight": 134,
+        "scrollerHeight": 134,
+        "scrollHeight": 1290,
+        "scrollerBottom": 635,
+        "toolbarTop": 635,
+        "wheelBefore": 0,
+        "wheelAfter": 560
+      },
+      "clearStates": {
+        "pristineEmpty": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": null,
+          "announcementHeight": null
+        },
+        "emptyAfterBackspace": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 0
+        },
+        "emptyAfterShort": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        },
+        "emptyAfterLong": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        }
+      },
+      "violations": [],
+      "editingRegression": "paste, wheel, delete-all, undo/redo, re-entry, reference removal passed",
+      "fonts": [
+        {
+          "familyName": "Liberation Sans",
+          "postScriptName": "LiberationSans",
+          "isCustomFont": false,
+          "glyphCount": 1461
+        },
+        {
+          "familyName": "Noto Sans CJK JP",
+          "postScriptName": "NotoSansCJKjp-Regular",
+          "isCustomFont": false,
+          "glyphCount": 600
+        }
+      ]
+    },
+    {
+      "baseline": false,
+      "width": 1000,
+      "lang": "zh-CN",
+      "theme": "dark",
+      "status": "passed",
+      "phase": "complete",
+      "long": {
+        "editorHeight": 134,
+        "scrollerHeight": 134,
+        "scrollHeight": 660,
+        "scrollerBottom": 625,
+        "toolbarTop": 625,
+        "wheelBefore": 0,
+        "wheelAfter": 526
+      },
+      "clearStates": {
+        "pristineEmpty": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": null,
+          "announcementHeight": null
+        },
+        "emptyAfterBackspace": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 0
+        },
+        "emptyAfterShort": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        },
+        "emptyAfterLong": {
+          "shellHeight": 108,
+          "inputHeight": 36,
+          "text": "",
+          "references": 0,
+          "announcementPosition": "fixed",
+          "announcementHeight": 21
+        }
+      },
+      "violations": [],
+      "editingRegression": "paste, wheel, delete-all, undo/redo, re-entry, reference removal passed",
+      "fonts": [
+        {
+          "familyName": "Liberation Sans",
+          "postScriptName": "LiberationSans",
+          "isCustomFont": false,
+          "glyphCount": 1461
+        },
+        {
+          "familyName": "Noto Sans CJK JP",
+          "postScriptName": "NotoSansCJKjp-Regular",
+          "isCustomFont": false,
+          "glyphCount": 600
+        }
+      ]
+    }
+  ],
+  "fontInstall": {
+    "cacheKey": "zenx-cjk-deb-v1-ubuntu-24.04-noble-amd64-1:20230817+repack1-3-7d64b985f6fe128c99eae5610d5c047338e572bdcfb2bb09736be01b824a7f6c",
+    "verifiedAt": "2026-10-26T12:48:24.0332488Z",
+    "unpackedAt": "2026-10-26T12:48:28.1217925Z",
+    "archive": "fonts-noto-cjk_1%3a20230817+repack1-3_all.deb",
+    "installedVersion": "1:20230817+repack1-3",
+    "installLogGetLines": [],
+    "fontsVerified": true,
+    "scope": "Real successful warm installation section, not the earlier synthetic test output; exact normal APT install with --no-download."
+  }
+}
