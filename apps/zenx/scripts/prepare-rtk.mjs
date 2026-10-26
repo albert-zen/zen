@@ -24,55 +24,89 @@ const archiveUrl =
 const defaultDirectory = fileURLToPath(
   new URL("../resources", import.meta.url),
 );
+const defaultCacheDirectory = fileURLToPath(
+  new URL("../.packaged/cache/rtk", import.meta.url),
+);
+const noticeFile = fileURLToPath(
+  new URL("../resources/rtk-NOTICE.txt", import.meta.url),
+);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-/** Build-time dependency only: never downloads, installs hooks, or changes PATH at runtime. */
+async function matchesPin(file, digest) {
+  try {
+    return hash(await readFile(file)) === digest;
+  } catch {
+    return false;
+  }
+}
+
+async function copyNotice(destination) {
+  await copyFile(noticeFile, path.join(destination, "NOTICE.txt"));
+}
+
+async function downloadArchive(url, digest) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!response.ok)
+    throw new Error(`RTK download failed: HTTP ${response.status}`);
+  const archive = Buffer.from(await response.arrayBuffer());
+  if (hash(archive) !== digest)
+    throw new Error("RTK archive checksum mismatch");
+  return archive;
+}
+
+/**
+ * Build-time dependency only: never downloads, installs hooks, or changes PATH at
+ * runtime. The pinned release is fetched once and then reused from the build
+ * cache, so a pinned toolchain does not need network access on every build.
+ */
 export async function prepareRtkResource({
   resourcesDirectory = defaultDirectory,
+  cacheDirectory = defaultCacheDirectory,
   platform = process.platform,
   arch = process.arch,
+  expectedBinarySha256 = RTK_BINARY_SHA256,
+  expectedArchiveSha256 = RTK_ARCHIVE_SHA256,
+  acquireArchive = downloadArchive,
 } = {}) {
   if (platform !== "darwin" || arch !== "arm64") return false;
   const destination = path.join(resourcesDirectory, "rtk");
   const binary = path.join(destination, "rtk");
-  let cached = false;
-  try {
-    cached = hash(await readFile(binary)) === RTK_BINARY_SHA256;
-  } catch {
-    /* Missing build resource; fetch the pinned release below. */
-  }
-  if (cached) {
+  if (await matchesPin(binary, expectedBinarySha256)) {
     await chmod(binary, 0o755);
-    await copyFile(
-      fileURLToPath(new URL("../resources/rtk-NOTICE.txt", import.meta.url)),
-      path.join(destination, "NOTICE.txt"),
-    );
+    await copyNotice(destination);
     return true;
   }
+  const cachedBinary = path.join(cacheDirectory, "rtk");
+  if (await matchesPin(cachedBinary, expectedBinarySha256)) {
+    await mkdir(destination, { recursive: true });
+    await copyFile(cachedBinary, binary);
+    await chmod(binary, 0o755);
+    await copyNotice(destination);
+    return true;
+  }
+  const archive = await acquireArchive(archiveUrl, expectedArchiveSha256);
   await mkdir(resourcesDirectory, { recursive: true });
   const scratch = await mkdtemp(path.join(resourcesDirectory, ".rtk-build-"));
   try {
-    const response = await fetch(archiveUrl, {
-      signal: AbortSignal.timeout(60_000),
-    });
-    if (!response.ok)
-      throw new Error(`RTK download failed: HTTP ${response.status}`);
-    const archive = Buffer.from(await response.arrayBuffer());
-    if (hash(archive) !== RTK_ARCHIVE_SHA256)
-      throw new Error("RTK archive checksum mismatch");
     const tarball = path.join(scratch, "rtk.tar.gz");
     await writeFile(tarball, archive);
     // Extract only the fixed filename from an archive authenticated above.
     await run("tar", ["-xzf", tarball, "-C", scratch, "rtk"]);
-    if (hash(await readFile(path.join(scratch, "rtk"))) !== RTK_BINARY_SHA256)
+    const extracted = path.join(scratch, "rtk");
+    if (!(await matchesPin(extracted, expectedBinarySha256)))
       throw new Error("RTK binary checksum mismatch");
-    await chmod(path.join(scratch, "rtk"), 0o755);
+    await chmod(extracted, 0o755);
     await mkdir(destination, { recursive: true });
-    await copyFile(
-      fileURLToPath(new URL("../resources/rtk-NOTICE.txt", import.meta.url)),
-      path.join(destination, "NOTICE.txt"),
+    await copyNotice(destination);
+    await rename(extracted, binary);
+    await mkdir(cacheDirectory, { recursive: true });
+    const staged = path.join(
+      cacheDirectory,
+      `.rtk-${process.pid}-${Date.now()}`,
     );
-    await rename(path.join(scratch, "rtk"), binary);
+    await copyFile(binary, staged);
+    await chmod(staged, 0o755);
+    await rename(staged, cachedBinary);
     return true;
   } finally {
     await rm(scratch, { recursive: true, force: true });

@@ -1,5 +1,6 @@
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
+import { electronDownloadOptions } from "./prepare-electron-checksums.mjs";
 import { prepareWindowsSmokeGuard } from "./prepare-windows-smoke-guard.mjs";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -33,6 +34,7 @@ const artifactRoot = path.join(packagedRoot, "artifact");
 const artifactCache = path.join(packagedRoot, "cache", "artifacts");
 export const MACOS_MINIMUM_VERSION = "12.0";
 export const MACOS_CODESIGN_MODE_ENV = "ZENX_CODESIGN_MODE";
+const ELECTRON_VERSION = "43.2.0";
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
@@ -76,6 +78,7 @@ export async function packageZenX(arguments_, options = {}) {
       await packZenXFirstPartyPlugins({ outputDirectory: resources });
       const hasRtk = await prepareRtkResource({
         resourcesDirectory: resources,
+        cacheDirectory: path.join(packagedRoot, "cache", "rtk"),
       });
       const zenxPackage = JSON.parse(
         await readFile(path.join(zenx, "package.json"), "utf8"),
@@ -108,7 +111,13 @@ export async function packageZenX(arguments_, options = {}) {
         platform: process.platform,
         arch: process.arch,
         name: productName,
-        electronVersion: "43.2.0",
+        electronVersion: ELECTRON_VERSION,
+        download: await electronDownloadOptions({
+          version: ELECTRON_VERSION,
+          platform: process.platform,
+          arch: process.arch,
+          cacheDirectory: path.join(packagedRoot, "cache", "electron"),
+        }),
         ...macOsPackagerOptions(
           process.platform,
           target,
