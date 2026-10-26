@@ -16,6 +16,7 @@ import {
   app,
   BrowserWindow,
   nativeImage,
+  nativeTheme,
   screen,
   type WebContentsView,
 } from "electron";
@@ -1659,6 +1660,7 @@ async function assertStableControlLayout(): Promise<void> {
 
 /** Actual Electron pixels, independent of the renderer-only visual fixture. */
 async function assertBlankThemePixels(port: number): Promise<void> {
+  const originalThemeSource = nativeTheme.themeSource;
   let view: WebContentsView | undefined;
   const browser = createElectronWorkspaceBrowser({
     onCreateView: (value) => {
@@ -1739,6 +1741,13 @@ async function assertBlankThemePixels(port: number): Promise<void> {
     await sample("blank-light", "light", 255);
     await sample("blank-dark", "dark", 0);
     await sample("blank-light-return", "light", 255);
+    // App appearance may be forced light while the OS/Electron theme is dark.
+    // Test the native surface independently, without restyling any website.
+    nativeTheme.themeSource = "dark";
+    await sample("blank-light-system-dark", "light", 255);
+    nativeTheme.themeSource = "light";
+    await sample("blank-dark-system-light", "dark", 0);
+    nativeTheme.themeSource = originalThemeSource;
     await browser.navigate(
       "blank-theme-session",
       tab.tabId,
@@ -1753,6 +1762,7 @@ async function assertBlankThemePixels(port: number): Promise<void> {
   } catch (error) {
     failures.push(error);
   } finally {
+    nativeTheme.themeSource = originalThemeSource;
     try {
       if (evidence) {
         mkdirSync(evidence, { recursive: true });
