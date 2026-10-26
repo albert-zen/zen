@@ -67,6 +67,7 @@ export async function acquireVerifiedArtifact(options) {
           cacheDirectory,
           cacheFile,
           transaction,
+          redirectOrigins: new Set(options.redirectOrigins ?? []),
         });
       },
     });
@@ -97,11 +98,11 @@ async function downloadAndPublish(options) {
   timeout.unref();
 
   try {
-    const response = await fetch(options.url, {
+    const response = await fetchArtifact(
+      options,
       dispatcher,
-      redirect: "error",
-      signal: controller.signal,
-    });
+      controller.signal,
+    );
     if (!response.ok) {
       throw acquisitionFailure(`source responded with HTTP ${response.status}`);
     }
@@ -173,6 +174,37 @@ async function downloadAndPublish(options) {
     clearTimeout(timeout);
     await dispatcher.destroy().catch(() => {});
     await rm(partialFile, { force: true });
+  }
+}
+
+// Redirects remain disabled for existing callers. A pinned release may opt into
+// exact origins (for example GitHub's release-asset CDN), never arbitrary hosts
+// or an HTTPS downgrade. Every hop shares the original acquisition deadline.
+async function fetchArtifact(options, dispatcher, signal) {
+  let url = new URL(options.url);
+  for (let redirects = 0; ; redirects += 1) {
+    const response = await fetch(url, {
+      dispatcher,
+      redirect: "manual",
+      signal,
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    await response.body?.cancel();
+    const location = response.headers.get("location");
+    if (redirects >= 3 || location === null) {
+      throw acquisitionFailure("source redirect limit or location is invalid");
+    }
+    const next = new URL(location, url);
+    if (
+      !options.redirectOrigins.has(next.origin) ||
+      !["http:", "https:"].includes(next.protocol) ||
+      (url.protocol === "https:" && next.protocol !== "https:") ||
+      next.username ||
+      next.password
+    ) {
+      throw acquisitionFailure("source redirect origin is not allowed");
+    }
+    url = next;
   }
 }
 

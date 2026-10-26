@@ -1074,7 +1074,7 @@ function addWindowsDescendants(
         );
       if (BigInt(entry.startTime) < BigInt(parent.startTime))
         throw new Error(
-          `PID ${String(entry.pid)} predates parent PID ${String(parent.pid)}; containment was not proven`,
+          `PID ${String(entry.pid)} predates parent PID ${String(parent.pid)} (creation ticks ${entry.startTime} < ${parent.startTime}); containment was not proven`,
         );
       result.push(entry);
       known.add(entry.pid);
