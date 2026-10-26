@@ -65,17 +65,13 @@ test("native recovery keeps one live Turn until completion and terminal failure 
         assert.equal(document.querySelector(".turn-final"), null);
       }
       if (["running", "recovering", "continuing"].includes(phase)) {
-        const footer = requiredElement(".turn-status-footer");
+        const metadata = requiredElement(".turn > .turn-running-label");
         const history = requiredElement(".turn-history");
         assert.ok(
-          history.compareDocumentPosition(footer) &
+          metadata.compareDocumentPosition(history) &
             Node.DOCUMENT_POSITION_FOLLOWING,
         );
-        assert.ok(
-          document.querySelector(".turn > .turn-running-label") === null,
-        );
-        if (phase === "recovering" || phase === "continuing")
-          assert.ok(footer.classList.contains("workflow-status"));
+        assert.equal(document.querySelector(".turn-status-footer"), null);
         if (phase === "continuing") {
           const label = requiredElement(".turn-running-label");
           assert.equal(label.getAttribute("data-compact"), "false");
@@ -293,7 +289,7 @@ test("context usage renders beside the composer with concise usage and cache det
   );
   assert.match(
     html,
-    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 50%/u,
+    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate 50%/u,
   );
   assert.match(html, /aria-haspopup="dialog"/u);
   assert.match(html, /aria-expanded="false"/u);
@@ -599,7 +595,7 @@ test("context pressure above the configured window keeps the real percent in its
     }),
   );
   assert.match(html, /Context 216%/u);
-  assert.match(html, /Thread cache 96%/u);
+  assert.match(html, /Thread cache hit rate 96%/u);
   assert.match(html, /587\.5K \/ 272K tokens/u);
   assert.doesNotMatch(html, /last provider|configured window/u);
   assert.match(html, /stroke-dasharray="1 1"/u);
@@ -1171,7 +1167,7 @@ test("real compaction request rejection stays with its Thread, ignores stale com
   });
 });
 
-test("context tooltip exposes exact zero and unknown Thread cache rates", () => {
+test("context tooltip exposes exact zero and unknown Thread cache hit rate rates", () => {
   const zero = renderTurns(
     [],
     [],
@@ -1195,7 +1191,7 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
   );
   assert.match(
     zero,
-    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 0%/u,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate 0%/u,
   );
 
   const unknown = renderTurns(
@@ -1216,7 +1212,7 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
   );
   assert.match(
     unknown,
-    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache unknown/u,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate unknown/u,
   );
 });
 
@@ -1386,10 +1382,9 @@ test("one running orb switches between Stop and send without losing attachment-o
         requiredElement(".turn-running-label").getAttribute("data-phase"),
         "stopping",
       );
-      assert.ok(
-        requiredElement(".turn-status-footer").classList.contains(
-          "workflow-status",
-        ),
+      assert.equal(
+        requiredElement(".turn > .turn-running-label").className,
+        "turn-running-label",
       );
     }
     composer = editComposer(composer, "new direction");
@@ -1767,7 +1762,7 @@ test("pending approvals render in the bottom zone next to the composer", () => {
   const html = render(true, [approval]);
   assert.match(html, /class="bottom-zone[^"]*"/u);
   assert.match(html, /class="approval-request-card"/u);
-  assert.match(html, /turn-status-footer workflow-status/u);
+  assert.match(html, /class="turn-running-label"/u);
   assert.match(html, /data-phase="approval" data-compact="false"/u);
   assert.match(html, /Allow tool access\?/u);
   assert.match(
@@ -1838,7 +1833,7 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
   assert.match(
     html,
-    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span class="turn-work-label">Worked for 1s<\/span>/u,
   );
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
@@ -2111,7 +2106,7 @@ test("assistant messages omit the identity row while preserving metadata and con
   assert.doesNotMatch(html, /class="agent-(?:meta|glyph)"/u);
   assert.match(
     html,
-    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span>Worked for 1s<\/span>/u,
+    /class="user-row"[\s\S]*<\/article><button class="turn-toggle"[^>]*><span class="turn-work-label">Worked for 1s<\/span>/u,
   );
   assert.match(html, /class="agent-copy"[\s\S]*Final answer/u);
 });
@@ -2156,7 +2151,7 @@ test("renders compact token-weighted cache usage for each Turn, not the message 
     },
   );
 
-  assert.doesNotMatch(html, /Thread cache 33% · 200 in · 25 out/u);
+  assert.doesNotMatch(html, /Thread cache hit rate 33% · 200 in · 25 out/u);
   assert.match(html, /Cache 40% · 150 in · 17 out/u);
   assert.match(html, /Cache unknown · 50 in · 8 out/u);
   assert.doesNotMatch(html, /Cache 0% · 50 in/u);
@@ -2181,7 +2176,7 @@ test("assistant messages retain running reasoning and tool disclosure affordance
   );
 });
 
-test("ongoing footer avoids duplicating active traces but shows work after settled history", () => {
+test("ongoing metadata avoids duplicating active traces but shows work after settled history", () => {
   const activeCommand = {
     ...commandItem("active-no-task", "read file"),
     status: "inProgress",
@@ -2193,13 +2188,13 @@ test("ongoing footer avoids duplicating active traces but shows work after settl
   const commandHtml = renderTurns([
     turnWithItems("inProgress", [activeCommand]),
   ]);
-  assert.match(commandHtml, /turn-status-footer workflow-status/u);
+  assert.match(commandHtml, /class="turn-running-label"/u);
   assert.match(commandHtml, /data-phase="requested"/u);
   for (const item of [activeReasoning]) {
     const html = renderTurns([turnWithItems("inProgress", [item])]);
-    assert.match(html, /class="turn-status-footer"/u);
+    assert.match(html, /class="turn-running-label"/u);
     assert.match(html, /data-compact="true"/u);
-    assert.doesNotMatch(html, /turn-status-footer workflow-status/u);
+    assert.doesNotMatch(html, /turn-status-footer/u);
   }
   const settled = renderTurns([
     turnWithItems("inProgress", [
@@ -2207,7 +2202,7 @@ test("ongoing footer avoids duplicating active traces but shows work after settl
       reasoning("Done thinking"),
     ]),
   ]);
-  assert.match(settled, /turn-status-footer workflow-status/u);
+  assert.match(settled, /class="turn-running-label"/u);
   assert.match(settled, /data-compact="false"/u);
   assert.match(settled, /Working/u);
 });
@@ -3210,10 +3205,9 @@ test("yielded shell work reports the actual task receipt phase", async () => {
       requiredElement(".turn-running-label").getAttribute("data-compact"),
       "true",
     );
-    assert.ok(
-      !requiredElement(".turn-status-footer").classList.contains(
-        "workflow-status",
-      ),
+    assert.equal(
+      requiredElement(".turn > .turn-running-label").className,
+      "turn-running-label",
     );
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".trace-toggle")?.click(),
@@ -3226,10 +3220,7 @@ test("yielded shell work reports the actual task receipt phase", async () => {
       root,
       turnWithItems("inProgress", [{ ...running, toolName: "wait" }]),
     );
-    assert.equal(
-      document.querySelector(".tool-status")?.textContent,
-      "Waiting",
-    );
+    assert.equal(document.querySelector(".tool-status")?.textContent, "Waited");
     await renderInteractive(
       root,
       turnWithItems("inProgress", [
@@ -3246,14 +3237,11 @@ test("yielded shell work reports the actual task receipt phase", async () => {
         },
       ]),
     );
-    assert.equal(
-      document.querySelector(".tool-status")?.textContent,
-      "Timed out",
-    );
+    assert.equal(document.querySelector(".tool-status")?.textContent, "Ended");
   });
 });
 
-test("folded task group and expanded wait row use the same receipt phase", async () => {
+test("folded task group and expanded wait row use the invocation phase", async () => {
   await withDom(async (root) => {
     const base = commandItem("wait-item", "wait");
     if (base.type !== "commandExecution") throw new Error("missing command");
@@ -3270,12 +3258,12 @@ test("folded task group and expanded wait row use the same receipt phase", async
     );
     const group = requiredButton(".trace-toggle");
     assert.equal(group.getAttribute("aria-expanded"), "false");
-    assert.match(group.textContent ?? "", /Waiting for task/u);
+    assert.match(group.textContent ?? "", /Waited for task/u);
     await act(async () => group.click());
     assert.equal(group.getAttribute("aria-expanded"), "true");
     assert.equal(
       requiredElement(".trace-items .tool-status").textContent,
-      "Waiting",
+      "Waited",
     );
 
     await renderInteractive(
@@ -3288,10 +3276,10 @@ test("folded task group and expanded wait row use the same receipt phase", async
         },
       ]),
     );
-    assert.match(group.textContent ?? "", /Wait · timed out/u);
+    assert.match(group.textContent ?? "", /Waited for task/u);
     assert.equal(
       requiredElement(".trace-items .tool-status").textContent,
-      "Timed out",
+      "Waited",
     );
     await act(async () => group.click());
     assert.equal(group.getAttribute("aria-expanded"), "false");
@@ -3304,14 +3292,14 @@ test("generic tool task observations distinguish waiting and unconfirmed cancell
     if (base.type !== "commandExecution") throw new Error("missing command");
     const cases = [
       ["browser_click", "queued", "Queued"],
-      ["wait", "queued", "Queued"],
+      ["wait", "queued", "Waited"],
       ["image_generate", "running", "Running"],
-      ["wait", "running", "Waiting"],
-      ["wait", "cancel_requested", "Cancelling"],
-      ["wait", "cancellation_unconfirmed", "Cancellation unconfirmed"],
-      ["wait", "cancelled", "Cancelled"],
-      ["wait", "timed_out", "Timed out"],
-      ["wait", "failed", "Ended"],
+      ["wait", "running", "Waited"],
+      ["wait", "cancel_requested", "Waited"],
+      ["wait", "cancellation_unconfirmed", "Waited"],
+      ["wait", "cancelled", "Waited"],
+      ["wait", "timed_out", "Waited"],
+      ["wait", "failed", "Waited"],
       ["wait", "completed", "Waited"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
@@ -3578,8 +3566,8 @@ test("running and completed durations share second, minute and hour formatting",
       t.mock.timers.setTime(10_000 + duration);
       await renderInteractive(root, turnWithItems("inProgress", []));
       assert.equal(
-        requiredElement(".turn-running-label").textContent,
-        `Working${label}`,
+        requiredElement(".turn-running-label .turn-work-label").textContent,
+        `Working for ${label}`,
       );
       await renderInteractive(root, turnWithItems("completed", [], duration));
       assert.equal(
@@ -3595,23 +3583,23 @@ test("running duration ticks from turn start and stops on completion", async (t)
   await withDom(async (root) => {
     await renderInteractive(root, turnWithItems("inProgress", []));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working12s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 12s",
     );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working14s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 14s",
     );
     await act(async () => t.mock.timers.tick(46_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working1m 0s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 1m 0s",
     );
     await act(async () => t.mock.timers.tick(3_540_000));
     assert.equal(
-      requiredElement(".turn-running-label").textContent,
-      "Working1h 0m 0s",
+      requiredElement(".turn-running-label .turn-work-label").textContent,
+      "Working for 1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
     assert.equal(document.querySelector(".turn-running-label"), null);
@@ -4445,18 +4433,16 @@ test("earlier shell rows inherit neutral settlement across separated trace group
   }
 });
 
-test("Turn and session output rates reach the message hover and context-ring telemetry", async () => {
-  const completed = turnWithItems(
-    "completed",
-    [user("ask"), agent("answer")],
-    1000,
-  );
-  assert.equal(completed.startedAt, 10);
-  assert.equal(completed.completedAt, 11);
-  const usageProjection: ModelUsageProjection = {
-    thread: { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+test("usage telemetry never turns tool waits into model output speed", async () => {
+  const usage: ModelUsageProjection = {
+    thread: { responseCount: 2, inputTokens: 300, outputTokens: 900 },
     turns: {
-      "turn-1": { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+      "turn-1": {
+        responseCount: 2,
+        inputTokens: 300,
+        outputTokens: 900,
+        reasoningOutputTokens: 400,
+      },
     },
     context: {
       inputTokens: 120_000,
@@ -4465,118 +4451,178 @@ test("Turn and session output rates reach the message hover and context-ring tel
       ratio: 0.3,
     },
   };
-  const {
-    turnOutputRatePerSecond,
-    threadOutputRatePerSecond,
-    outputRateLabel,
-  } = await import("../src/renderer/src/ThreadView.js");
-
+  const telemetry: string[] = [];
+  // Identical model output and usage, differing only in the intervening tool
+  // wait. There is no canonical sample timing, so neither run can claim TPS.
+  for (const waitMs of [0, 60_000]) {
+    const tool = commandItem("wait", "wait for background task");
+    assert.equal(tool.type, "commandExecution");
+    const completed = turnWithItems(
+      "completed",
+      [
+        user("ask"),
+        reasoning("Thinking"),
+        agent("Checking"),
+        tool,
+        agent("answer"),
+      ],
+      1000 + waitMs,
+    );
+    const dom = new JSDOM(renderTurns([completed], [], undefined, {}, usage));
+    try {
+      const message = dom.window.document.querySelector(".message-cache")!;
+      const context = dom.window.document.querySelector(
+        ".context-usage-trigger",
+      )!;
+      assert.equal(message.getAttribute("title"), "Turn cache telemetry");
+      assert.match(message.textContent ?? "", /900/u);
+      assert.match(context.getAttribute("aria-label") ?? "", /Context 30%/u);
+      assert.doesNotMatch(
+        dom.serialize(),
+        /tok\/s|output speed|输出速度|NaN|Infinity/u,
+      );
+      telemetry.push(
+        message.outerHTML + context.outerHTML.replaceAll(/_R_[^" ]+/gu, "ID"),
+      );
+      assert.match(
+        dom.window.document.querySelector(".turn-toggle")?.textContent ?? "",
+        /Worked for/u,
+      );
+    } finally {
+      dom.window.close();
+    }
+  }
   assert.equal(
-    turnOutputRatePerSecond(usageProjection.turns["turn-1"], completed),
-    900,
-  );
-  assert.equal(turnOutputRatePerSecond(undefined, completed), null);
-  assert.equal(
-    turnOutputRatePerSecond(
-      usageProjection.turns["turn-1"],
-      turnWithItems("inProgress", []),
-    ),
-    null,
-    "running Turns never invent a rate",
-  );
-  assert.equal(
-    threadOutputRatePerSecond(thread([completed]), usageProjection),
-    900,
-  );
-  assert.equal(
-    threadOutputRatePerSecond(thread([completed]), {
-      ...usageProjection,
-      turns: {},
-    }),
-    null,
-    "turns without usage telemetry are excluded, not guessed",
-  );
-  assert.equal(
-    outputRateLabel(null),
-    "output speed unknown",
-    "Unknown mirrors the cache telemetry semantics",
-  );
-  assert.equal(outputRateLabel(45.2), "output 45 tok/s (Turn duration)");
-  assert.equal(outputRateLabel(3.26), "output 3.3 tok/s (Turn duration)");
-
-  const html = renderTurns([completed], [], undefined, {}, usageProjection);
-  assert.match(
-    html,
-    /class="message-cache" title="Turn cache telemetry[^"]*output 900 tok\/s/u,
-    "the final message hover carries its own Turn rate",
-  );
-  assert.match(
-    html,
-    /aria-label="[^"]*output 900 tok\/s[^"]*"/u,
-    "the context ring hover carries the session rate",
+    telemetry[0],
+    telemetry[1],
+    "tool waits cannot change usage telemetry",
   );
 
-  // A Thread whose Turn lacks usage keeps the ring honest.
-  const bare = renderTurns(
-    [completed],
-    [],
-    undefined,
-    {},
-    {
-      ...usageProjection,
-      turns: {},
-    },
-  );
-  assert.match(bare, /output speed unknown/u);
-  assert.doesNotMatch(bare, /message-cache/u);
+  // The opened context panel must not retain the old rate line either.
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(ContextUsageIndicator, {
+          context: usage.context,
+          threadCacheHitRate: 0.5,
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".context-usage-trigger").click());
+    const panel = requiredElement('[role="dialog"]');
+    assert.match(panel.textContent ?? "", /120K \/ 400K tokens/u);
+    assert.match(panel.textContent ?? "", /50%/u);
+    assert.doesNotMatch(panel.outerHTML, /tok\/s|output speed|输出速度/u);
+  });
 });
 
-test("session throughput weights matched completed windows and excludes gaps, failures and missing telemetry", async () => {
-  const { threadOutputRatePerSecond, turnOutputRatePerSecond } =
-    await import("../src/renderer/src/ThreadView.js");
-  const one = { ...turnWithItems("completed", [], 250), id: "one" };
-  const two = {
-    ...turnWithItems("completed", [], 750),
-    id: "two",
-    startedAt: 86400,
-    completedAt: 86401,
-  };
-  const failed = { ...turnWithItems("failed", [], 1000), id: "failed" };
-  const unmeasured = {
-    ...turnWithItems("completed", [], 1000),
-    id: "unmeasured",
-  };
-  const untimed = {
-    ...turnWithItems("completed", [], 1000),
-    id: "untimed",
-    durationMs: null,
-  };
-  const usage: ModelUsageProjection = {
-    context: {
-      inputTokens: null,
-      inputTokenSource: null,
-      contextWindow: null,
-      ratio: null,
-    },
-    thread: { responseCount: 5, inputTokens: 100, outputTokens: 5000 },
-    turns: {
-      one: { responseCount: 1, inputTokens: 10, outputTokens: 50 },
-      two: { responseCount: 1, inputTokens: 10, outputTokens: 150 },
-      failed: { responseCount: 1, inputTokens: 10, outputTokens: 2000 },
-      untimed: { responseCount: 1, inputTokens: 10, outputTokens: 2800 },
-    },
-  };
-  assert.equal(
-    threadOutputRatePerSecond(
-      thread([one, two, failed, unmeasured, untimed]),
-      usage,
-    ),
-    200,
-  );
-  for (const durationMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      turnOutputRatePerSecond(usage.turns.one, { ...one, durationMs }),
+test("missing timing, partial usage and restored terminal output never invent TPS", async () => {
+  const { nativeRecoveryForThread } =
+    await import("./native-recovery-fixture.js");
+  const { projectNativeRecovery } =
+    await import("../src/renderer/src/thread-view-state.js");
+  for (const status of [
+    "completed",
+    "failed",
+    "interrupted",
+    "inProgress",
+  ] as const) {
+    for (const durationMs of [
       null,
-    );
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      250,
+    ]) {
+      const original = turnWithItems(
+        status,
+        [user("ask"), agent("partial or final")],
+        durationMs,
+      );
+      for (const usage of [
+        undefined,
+        usageProjection(),
+        {
+          ...usageProjection(),
+          turns: {
+            "turn-1": { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+          },
+        },
+      ]) {
+        const html = renderTurns([original], [], undefined, {}, usage);
+        assert.doesNotMatch(html, /tok\/s|output speed|输出速度/u);
+      }
+    }
+  }
+  const recovered = projectNativeRecovery(
+    nativeRecoveryForThread(
+      thread([
+        turnWithItems("completed", [user("ask"), agent("stored answer")], 1000),
+      ]),
+    ),
+  );
+  assert.doesNotMatch(
+    renderTurns(recovered.turns, [], undefined, {}, usageProjection()),
+    /tok\/s|output speed|输出速度/u,
+  );
+});
+
+test("pending wait sweeps while returned waits stay settled across groups", () => {
+  const base = commandItem("shell", "sleep 60");
+  if (base.type !== "commandExecution") throw new Error("Expected command");
+  const shell = {
+    ...base,
+    toolName: "shell",
+    contentType: "application/vnd.zen.tool-task+json",
+    structuredContent: { task_id: "background", status: "running" },
+  };
+  const returned = { ...shell, id: "returned", toolName: "wait" };
+  const pending = {
+    ...returned,
+    id: "pending",
+    status: "inProgress" as const,
+    contentType: undefined,
+    structuredContent: undefined,
+  };
+  for (const grouped of [false, true]) {
+    const items = [
+      shell,
+      { ...agent("Checking"), id: "sep-1" },
+      returned,
+      { ...agent("Waiting again"), id: "sep-2" },
+      ...(grouped ? [commandItem("done", "echo ok")] : []),
+      pending,
+    ];
+    const dom = new JSDOM(renderTurns([turnWithItems("inProgress", items)]));
+    try {
+      const doc = dom.window.document;
+      const sequences = [
+        ...doc.querySelectorAll(".trace-singleton, .trace-group"),
+      ];
+      assert.equal(sequences.length, 3);
+      assert.equal(
+        sequences[0]!
+          .querySelector(".activity-text")
+          ?.getAttribute("data-active"),
+        "true",
+      );
+      assert.equal(
+        sequences[1]!
+          .querySelector(".activity-text")
+          ?.getAttribute("data-active"),
+        "false",
+      );
+      assert.match(sequences[1]!.textContent ?? "", /Waited/);
+      assert.equal(
+        sequences[2]!
+          .querySelector(".activity-text")
+          ?.getAttribute("data-active"),
+        "true",
+      );
+      assert.ok(sequences[2]!.querySelector(".activity-sweep"));
+    } finally {
+      dom.window.close();
+    }
   }
 });

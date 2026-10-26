@@ -113,7 +113,7 @@ export class NativeRecoveryProjection {
         processEpoch: this.processEpoch,
         revision: event.revision,
       };
-      for (const listener of this.#listeners) listener(projected);
+      this.#emit(projected);
       return;
     }
     const threadId = eventThreadId(event);
@@ -134,11 +134,22 @@ export class NativeRecoveryProjection {
       );
     }
     state.events.push(projected);
-    for (const listener of this.#listeners) {
-      listener({ type: "thread_event", event: projected });
-    }
+    this.#emit({ type: "thread_event", event: projected });
     if (eventEstablishesCanonicalBoundary(event)) {
       this.#scheduleCompaction(threadId, state, projected.watermark);
+    }
+  }
+
+  #emit(event: NativeProjectionEvent): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener(event);
+      } catch {
+        // A consumer failure must not detach this projection from AppServer or
+        // starve other consumers. Do not log thrown values or event payloads.
+        this.#listeners.delete(listener);
+        console.warn("Removed a failing native recovery event subscriber");
+      }
     }
   }
 

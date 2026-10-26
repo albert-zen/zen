@@ -39,3 +39,10 @@ flow; they never post a human message. The receipt's `wakeupId` references Trigg
 history, while the working Thread stores a native `host_message`. The real Agent
 uses `zenx_rooms_post_message` for its welcome and `zenx_rooms_rename` to save the
 user's chosen name. Reading or remounting the Room never restarts initialization.
+
+## PAW heartbeat
+
+New PAWs own an ordinary hourly timer Trigger, starting one hour after creation.
+Existing PAWs keep their saved Triggers and can add the preset explicitly from
+Room management. The Trigger remains editable, pausable and deletable in the
+normal Trigger panel. Pausing message wakeups does not pause this timer.

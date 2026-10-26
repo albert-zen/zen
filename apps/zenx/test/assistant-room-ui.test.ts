@@ -17,12 +17,15 @@ test("assistant view reads without starting work, pauses future replies explicit
   Object.assign(window, { zenx: { threads: { list: async () => [] } } });
   dom.window.HTMLElement.prototype.scrollTo = () => {};
   let enabled = true;
+  let heartbeatTriggerId: string | undefined;
+  const routes: string[] = [];
   let deliveryMode: "steer" | "queue" | undefined;
   let roomName = "My assistant";
   let releaseRename: (() => void) | undefined;
   let deferRename = false;
   const calls: Array<{ id: string; input: any }> = [];
   const sdk = {
+    navigation: { navigate: (route: string) => routes.push(route) },
     commands: {
       execute: async (id: string, input: any) => {
         calls.push({ id, input });
@@ -37,6 +40,7 @@ test("assistant view reads without starting work, pauses future replies explicit
                   threadId: "chief",
                   triggerId: "trigger",
                   deliveryMode,
+                  heartbeatTriggerId,
                 },
                 assistantRepliesEnabled: enabled,
                 messages: [],
@@ -59,6 +63,10 @@ test("assistant view reads without starting work, pauses future replies explicit
         if (id === "assistant-replies") {
           enabled = input.enabled;
           return { updated: true };
+        }
+        if (id === "assistant-heartbeat") {
+          heartbeatTriggerId = "heartbeat";
+          return { id: heartbeatTriggerId };
         }
         throw new Error(`Unexpected ${id}`);
       },
@@ -259,8 +267,23 @@ test("assistant view reads without starting work, pauses future replies explicit
       )?.dataset.value,
       "queue",
     );
+    const addHeartbeat = [...document.querySelectorAll("button")].find(
+      (x) => x.textContent === "Add hourly heartbeat",
+    );
+    assert.ok(addHeartbeat);
+    await act(async () => addHeartbeat.click());
+    assert.deepEqual(
+      calls.filter((entry) => entry.id === "assistant-heartbeat"),
+      [{ id: "assistant-heartbeat", input: { roomId: "room" } }],
+    );
+    assert.equal(
+      [...document.querySelectorAll("button")].some(
+        (button) => button.textContent === "Add hourly heartbeat",
+      ),
+      false,
+    );
     const pause = [...document.querySelectorAll("button")].find(
-      (x) => x.textContent === "Pause PAW",
+      (x) => x.textContent === "Pause message wakeups",
     );
     assert.ok(pause);
     await act(async () => pause.click());
@@ -272,6 +295,11 @@ test("assistant view reads without starting work, pauses future replies explicit
     assert.match(document.body.textContent ?? "", /does not replay them/);
     assert.match(document.body.textContent ?? "", /First saved name/);
     assert.match(document.body.textContent ?? "", /Chief/);
+    const manageHeartbeat = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Manage heartbeat and triggers",
+    )!;
+    await act(async () => manageHeartbeat.click());
+    assert.match(routes.at(-1)!, /roomId=room&panel=triggers/);
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

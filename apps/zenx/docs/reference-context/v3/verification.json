@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-10-21T03:00:00.000Z",
+  "assertions": "passed",
+  "reports": [
+    {
+      "format": "chat-completions",
+      "requestCount": 1,
+      "matchingUserMessageCaptures": 1,
+      "networkRequests": 0,
+      "canonicalJournalMatch": true,
+      "providerUserMessageMatch": true,
+      "threadAId": "synthetic-v3-host-3",
+      "subagentBId": "synthetic-v3-host-7",
+      "sourceMessageAId": "synthetic-v3-runtime-3",
+      "sourceMessageBId": "synthetic-v3-runtime-7"
+    },
+    {
+      "format": "responses",
+      "requestCount": 1,
+      "matchingUserMessageCaptures": 1,
+      "networkRequests": 0,
+      "canonicalJournalMatch": true,
+      "providerUserMessageMatch": true,
+      "threadAId": "synthetic-v3-host-3",
+      "subagentBId": "synthetic-v3-host-7",
+      "sourceMessageAId": "synthetic-v3-runtime-3",
+      "sourceMessageBId": "synthetic-v3-runtime-7"
+    }
+  ],
+  "capturesOnlyUserMessage": true,
+  "fullProviderRequestsWritten": false,
+  "systemAndToolPromptsWritten": false,
+  "networkRequests": 0,
+  "notes": [
+    "The captured string came from each production provider adapter request at an injected fake transport boundary.",
+    "Only the exact user text part, synthetic reference metadata, and these verification facts are persisted.",
+    "Source threads, source messages, and the synthetic file are created only in memory or a temporary directory and are not included as bodies in the captured user string unless an exact excerpt is explicitly referenced.",
+    "Thread and file references are pointers, not evidence that the source body was read or included."
+  ]
+}

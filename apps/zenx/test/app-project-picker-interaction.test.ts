@@ -16,6 +16,7 @@ import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/model-key.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { i18n } from "../src/renderer/src/i18n.js";
+import { parseSentReferenceContent } from "../src/renderer/src/reference-draft.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const {
@@ -5022,20 +5023,45 @@ test("reference selector sends exact locators through App with and without nativ
         document.querySelector<HTMLButtonElement>(".selector-option"),
       );
       await act(async () => option.click());
-      await waitFor(() => document.querySelector(".composer-references"));
+      await waitFor(() =>
+        document.querySelector(".inline-composer-editor .reference-token"),
+      );
+      assert.ok(document.querySelector(".composer .reference-token"));
       assert.equal(sends.length, 0);
       assert.doesNotMatch(
         textarea.value,
         /zenx-references|relative path|space root/,
       );
-      await dispatchComposerKey(textarea, { key: "Enter" });
+      const inlineInput = document.querySelector<HTMLElement>(".cm-content")!;
+      await act(async () =>
+        inlineInput.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
       await waitFor(() => sends.length === 1);
       const send = sends[0]!;
       assert.equal(send.method, "zen/turn/send");
       const text = send.params.input.find(
         (part: any) => part.type === "text",
       ).text;
-      assert.match(text, /File reference/);
+      assert.match(text, /^\[zenx-reference-message:v3;/u);
+      assert.deepEqual(
+        parseSentReferenceContent(text, send.params.clientUserMessageId)
+          .references,
+        [
+          {
+            kind: "file",
+            name: '文 [x]".ts',
+            path: 'src/文 [x]".ts',
+            cwd: "C:/space root",
+            position: 5,
+          },
+        ],
+      );
       assert.ok(text.includes(JSON.stringify('src/文 [x]".ts')));
       assert.ok(text.includes("C:/space root"));
       assert.doesNotMatch(text, /zenx-references/);
@@ -5559,6 +5585,13 @@ function messageSourcePlugins() {
     ],
     panels: [
       {
+        key: "zenx-triggers:triggers",
+        id: "triggers",
+        pluginId: "zenx-triggers",
+        title: "Triggers",
+        surfaceId: "trigger-panel",
+      },
+      {
         key: "zenx-subagents:subagents",
         id: "subagents",
         pluginId: "zenx-subagents",
@@ -5567,6 +5600,12 @@ function messageSourcePlugins() {
       },
     ],
     surfaces: [
+      {
+        pluginId: "zenx-triggers",
+        id: "trigger-panel",
+        bundleId: "main",
+        exportName: "trigger-panel",
+      },
       {
         pluginId: "zenx-subagents",
         id: "subagents-panel",
@@ -5599,7 +5638,7 @@ function messageSourcePlugins() {
   } as any;
 }
 
-test("App trigger source opens the exact plugin settings definition without writing or executing", async () => {
+test("App trigger source opens the exact scoped sidebar definition without global navigation or writes", async () => {
   const thread = sourceNavigationThread();
   thread.turns[0]!.items.push({
     type: "hostMessage",
@@ -5611,9 +5650,13 @@ test("App trigger source opens the exact plugin settings definition without writ
     text: "A message body naming a different trigger is not a route.",
   });
   const calls: string[] = [];
+  const resumes: string[] = [];
   const harness = await mountThreadApp({
-    request: async (method) => {
-      if (method === "zen/thread/resume") return resumed(thread);
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") {
+        resumes.push((params as { threadId: string }).threadId);
+        return resumed(thread);
+      }
       throw new Error(method);
     },
     plugins: {
@@ -5641,23 +5684,43 @@ test("App trigger source opens the exact plugin settings definition without writ
     },
   });
   try {
-    await selectedComposer();
+    const composer = await selectedComposer();
     const link = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(
         ".host-message-source.message-source-link",
       ),
     );
     await act(async () => link.click());
-    await waitFor(
-      () =>
-        document.querySelector<HTMLTextAreaElement>(
-          ".trigger-editor textarea",
-        ) ?? document.querySelector<HTMLTextAreaElement>("form textarea"),
+    await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".auxiliary-panel .trigger-editor textarea",
+      ),
     );
     assert.equal(
-      document.querySelector<HTMLTextAreaElement>("form textarea")!.value,
+      document.querySelector<HTMLTextAreaElement>(
+        ".auxiliary-panel .trigger-editor textarea",
+      )!.value,
       "exact/trigger",
     );
+    assert.equal(
+      document.querySelector("#thread-composer"),
+      composer,
+      "Main conversation stays mounted",
+    );
+    assert.deepEqual(
+      resumes,
+      ["thread-1"],
+      "Source click does not resume or navigate any other Thread",
+    );
+    assert.equal(
+      document.querySelector(".auxiliary-panel")?.getAttribute("data-open"),
+      "true",
+    );
+    assert.equal(
+      document.querySelector(".trigger-message-row .user-bubble")?.textContent,
+      "A message body naming a different trigger is not a route.",
+    );
+    assert.ok(calls.length > 0);
     assert.ok(calls.every((call) => /\/(list|threads|workspaces)$/.test(call)));
   } finally {
     await unmountApp(harness);

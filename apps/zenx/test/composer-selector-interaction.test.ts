@@ -1,3 +1,5 @@
+import { undo, redo } from "@codemirror/commands";
+import { EditorView } from "@codemirror/view";
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -6,6 +8,7 @@ import { createRoot } from "react-dom/client";
 import test from "node:test";
 import type { Thread } from "../src/protocol-client/index.js";
 import type { WorkspaceFileSearch } from "../src/main/workspace-files.js";
+import { threadTitle } from "../src/renderer/src/thread-list.js";
 import {
   editComposer,
   emptyComposerState,
@@ -130,7 +133,7 @@ async function withView(
     sends: string[];
     reads: string[];
     scrolled: string[];
-    setThread(id: string | null): Promise<void>;
+    setThread(id: string | null, draft?: string): Promise<void>;
     setDraft(text: string): Promise<void>;
     api: {
       skills: {
@@ -151,7 +154,7 @@ async function withView(
         list: () => Promise<
           Array<{
             threadId: string;
-            name: string;
+            name: string | null;
             preview: string;
             status: string;
             currentMetadata: { cwd: string };
@@ -174,10 +177,8 @@ async function withView(
     window: dom.window,
     document: dom.window.document,
     IS_REACT_ACT_ENVIRONMENT: true,
-    requestAnimationFrame: (callback: FrameRequestCallback) => {
-      callback(0);
-      return 0;
-    },
+    requestAnimationFrame: (callback: FrameRequestCallback) =>
+      window.requestAnimationFrame(callback),
   });
   Object.assign(dom.window.HTMLElement.prototype, {
     attachEvent: () => {},
@@ -217,7 +218,7 @@ async function withView(
       list: async (): Promise<
         Array<{
           threadId: string;
-          name: string;
+          name: string | null;
           preview: string;
           status: string;
           currentMetadata: { cwd: string };
@@ -260,9 +261,11 @@ async function withView(
       reads,
       scrolled,
       getDraft: () => parseSkillDraft(composer.draft.text),
-      setThread: async (id) => {
+      setThread: async (id, draft) => {
         await act(async () => {
           activeThread = id;
+          if (draft !== undefined)
+            composer = editComposer(emptyComposerState(), draft);
           render();
         });
       },
@@ -366,9 +369,113 @@ test("duplicate thread names select canonical ID with keyboard, preserve tail, f
       (getDraft().references[0] as { id: string }).id,
       "bbbbbbbb-second",
     );
-    assert.equal(getDraft().text, "Ask  after");
-    assert.equal(document.activeElement, textarea());
+    assert.equal(getDraft().text, "Ask \uFFFC after");
+    assert.equal(getDraft().references[0]?.position, 4);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
     assert.deepEqual(sends, []);
+  });
+});
+
+/** An unnamed Thread whose first message is the wakeup that created it. */
+function unnamedWakeupSummary(preview: string) {
+  return {
+    threadId: "wakeup-first-message",
+    name: undefined,
+    preview,
+    archived: false,
+    createdAt: new Date(1_000).toISOString(),
+    updatedAt: new Date(2_000).toISOString(),
+    currentMetadata: {
+      model: "fake",
+      provider: "fake",
+      cwd: "C:/workspace",
+      sandbox: "danger-full-access" as const,
+      approvalPolicy: "never" as const,
+    },
+    status: "idle" as const,
+  };
+}
+
+test("Thread references share the Thread title and disclose a wakeup first message", async () => {
+  await withView(async ({ api, getDraft }) => {
+    const wakeup = [
+      "[ZenX trigger wakeup]",
+      "Trigger ID: trigger-a",
+      "Source Room: 63c6c01d-5989-4d55-bf78-03e714189d3e",
+    ].join("\n");
+    api.threads.list = async () => [
+      {
+        threadId: "named-paw",
+        name: "PAW",
+        preview: wakeup,
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
+      {
+        threadId: "unnamed-paw",
+        name: wakeup,
+        preview: "",
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
+      {
+        threadId: "wakeup-first-message",
+        name: null,
+        preview: wakeup,
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
+    ];
+    await input("@");
+    await settleSearch();
+    const labels = options().map((row) => row.textContent ?? "");
+    assert.equal(labels.length, 3);
+    // A named Thread never shows its wakeup first message here either.
+    assert.match(labels[0]!, /PAW/u);
+    assert.doesNotMatch(labels[0]!, /Trigger ID/u);
+    // A legacy raw-wakeup name follows the exact same disclosure rule as the
+    // Sidebar instead of leaking the prompt into the picker and the reference.
+    assert.equal(
+      labels[1]!.startsWith(
+        threadTitle({
+          threadId: "unnamed-paw",
+          name: wakeup,
+          preview: "",
+          archived: false,
+          createdAt: new Date(1_000).toISOString(),
+          updatedAt: new Date(2_000).toISOString(),
+          currentMetadata: {
+            model: "fake",
+            provider: "fake",
+            cwd: "C:/workspace",
+            sandbox: "danger-full-access",
+            approvalPolicy: "never",
+          },
+          status: "idle",
+        }),
+      ),
+      true,
+    );
+    assert.doesNotMatch(labels[1]!, /Trigger ID|ZenX trigger wakeup/u);
+    // A Thread with no name yet falls back to its first message; that decision
+    // is the user's, and it stays identical here and in the Sidebar.
+    assert.equal(
+      labels[2]!.startsWith(threadTitle(unnamedWakeupSummary(wakeup))),
+      true,
+    );
+    await key("Enter");
+    const reference = getDraft().references[0];
+    assert.equal(reference?.kind, "thread");
+    assert.doesNotMatch(
+      (reference as { name?: string }).name ?? "",
+      /Trigger ID/u,
+    );
   });
 });
 
@@ -387,7 +494,13 @@ test("loading Enter, IME Enter and Escape do not send; Tab chooses a file refere
     await act(async () => pending.resolve(fileResult("文档 [draft] # %.bin")));
     await key("Tab");
     assert.equal(getDraft().references[0]?.name, "文档 [draft] # %.bin");
-    assert.equal(document.activeElement, textarea());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
     assert.deepEqual(sends, []);
   });
 });
@@ -459,7 +572,13 @@ test("failed reference validation preserves input, announces the error and never
     assert.equal(getDraft().text, "@deleted");
     assert.deepEqual(getDraft().references, []);
     assert.deepEqual(sends, []);
-    assert.equal(document.activeElement, textarea());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
   });
 });
 
@@ -490,7 +609,13 @@ test("editing after Escape reopens the same reference query", async () => {
     await input("@same");
     await settleSearch();
     assert.match(options()[0]?.textContent ?? "", /same.txt/);
-    assert.equal(document.activeElement, textarea());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    assert.ok(
+      document.activeElement === textarea(),
+      "Composer retains focus after selection",
+    );
     assert.deepEqual(sends, []);
   });
 });
@@ -625,5 +750,95 @@ test("keyboard selection scrolls only the portaled candidate list", async () => 
     await key("ArrowDown");
     assert.equal(list.scrollTop, 60);
     assert.deepEqual(scrolled, []);
+  });
+});
+
+test("a repeated @ reference stays at each caret position between surrounding prose", async () => {
+  await withView(async ({ api, getDraft, sends }) => {
+    api.threads.list = async () => [
+      {
+        threadId: "thread-exact",
+        name: "Same",
+        preview: "",
+        status: "idle",
+        currentMetadata: { cwd: "C:/workspace" },
+      },
+    ];
+    await input("先看 @Same 再比较", 8);
+    await settleSearch();
+    await key("Enter");
+    assert.equal(getDraft().references.length, 1);
+    const content = document.querySelector<HTMLElement>(".cm-content")!;
+    const view = EditorView.findFromDOM(content)!;
+    const end = view.state.doc.length;
+    await act(async () =>
+      view.dispatch({
+        changes: { from: end, insert: " 然后 @Same 最后" },
+        selection: { anchor: end + 9 },
+      }),
+    );
+    await settleSearch();
+    await key("Enter");
+    const result = getDraft();
+    assert.equal(result.references.length, 2);
+    assert.equal((result.references[0] as { id: string }).id, "thread-exact");
+    assert.equal((result.references[1] as { id: string }).id, "thread-exact");
+    assert.equal(result.text, "先看 \uFFFC 再比较 然后 \uFFFC 最后");
+    assert.ok(
+      result.references[1]!.position! > result.references[0]!.position!,
+    );
+    assert.deepEqual(sends, []);
+  });
+});
+
+test("inline undo history stays in its thread and preserves first-reference undo", async () => {
+  await withView(async ({ setThread, setDraft, getDraft }) => {
+    const aText = "A private draft";
+    const aInline = withSkillDraft(
+      aText + "\uFFFC",
+      [],
+      [
+        {
+          kind: "thread",
+          name: "A source",
+          cwd: "/a",
+          id: "a-source",
+          position: aText.length,
+        },
+      ],
+    );
+    const bInline = withSkillDraft(
+      "B question \uFFFC",
+      [],
+      [
+        {
+          kind: "thread",
+          name: "B source",
+          cwd: "/b",
+          id: "b-source",
+          position: 11,
+        },
+      ],
+    );
+    const editor = () =>
+      EditorView.findFromDOM(
+        document.querySelector<HTMLElement>(".cm-editor")!,
+      )!;
+    await setThread("thread-a", aText);
+    await setDraft(aInline);
+    // The first insertion must remain undoable inside the same thread.
+    await act(async () => assert.equal(undo(editor()), true));
+    assert.equal(getDraft().text, aText);
+    assert.deepEqual(getDraft().references, []);
+    await act(async () => assert.equal(redo(editor()), true));
+    assert.deepEqual(getDraft(), parseSkillDraft(aInline));
+
+    await setThread("thread-b", bInline);
+    await act(async () => assert.equal(undo(editor()), false));
+    assert.deepEqual(getDraft(), parseSkillDraft(bInline));
+    // Returning to A must not resurrect the abandoned seed from its old editor.
+    await setThread("thread-a", aInline);
+    await act(async () => assert.equal(undo(editor()), false));
+    assert.deepEqual(getDraft(), parseSkillDraft(aInline));
   });
 });

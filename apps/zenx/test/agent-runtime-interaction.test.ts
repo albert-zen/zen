@@ -12,19 +12,17 @@ import {
   confirmedStopped,
 } from "./fixtures/agent-runtime-data.js";
 
-test("native wait receipt stays static despite successful outer call; parallel running task remains active", async () => {
+test("returned native wait stays settled; parallel running task remains active", async () => {
   await withRuntimeDom(async (h) => {
     const wait = runtimeWait("wait", "task-a");
     await h.render(runtimeThread([wait]));
     assert.equal(
       document.querySelector(".turn-running-label")?.getAttribute("data-phase"),
-      "waiting",
+      "idle",
     );
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
     await h.render(
       runtimeThread([wait, runtimeTask("other", "task-b", "running")]),
@@ -34,10 +32,8 @@ test("native wait receipt stays static despite successful outer call; parallel r
       "running",
     );
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
     assert.equal(
       document
@@ -60,10 +56,8 @@ test("empty recovered turn without start evidence does not advertise running ani
     thread.turns[0]!.startedAt = null;
     await h.render(thread);
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
   });
 });
@@ -106,14 +100,19 @@ test("action-set headers keep one mounted disclosure and metadata while current 
   });
 });
 
-test("waiting and approval retain visible static metadata rather than duplicate activity", async () => {
+test("returned wait and approval retain static metadata rather than duplicate activity", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(
       runtimeThread([runtimeWait("wait", "waiting"), runtimeCommand("done")]),
     );
     const label = document.querySelector(".turn-running-label")!;
     assert.equal(label.getAttribute("data-compact"), "false");
-    assert.equal(label.querySelector(".sr-only"), null);
+    assert.ok(label.querySelector('[role="status"].sr-only'));
+    assert.match(
+      label.querySelector(".turn-work-label")!.textContent!,
+      /^Working for /u,
+    );
+    assert.equal(label.querySelector("svg"), null);
     assert.equal(
       document
         .querySelector(".trace-toggle .activity-text")
@@ -122,7 +121,7 @@ test("waiting and approval retain visible static metadata rather than duplicate 
     );
     assert.equal(
       document.querySelector(".trace-activity-title")?.textContent,
-      "Waiting for task",
+      "Wait for task ×1 · Run command ×1",
     );
     await h.render(
       runtimeThread([
@@ -131,11 +130,13 @@ test("waiting and approval retain visible static metadata rather than duplicate 
       { approvals: [runtimeApproval] },
     );
     assert.equal(label.getAttribute("data-phase"), "approval");
-    assert.equal(label.getAttribute("data-compact"), "false");
-    assert.equal(
-      label.querySelector(".activity-text")?.getAttribute("data-active"),
-      "false",
+    assert.ok(document.querySelector(".approval-request-allow"));
+    assert.match(
+      label.querySelector(".turn-work-label")!.textContent!,
+      /^Working for /u,
     );
+    assert.equal(label.getAttribute("data-compact"), "false");
+    assert.equal(label.querySelector(".activity-text"), null);
   });
 });
 
@@ -149,10 +150,8 @@ test("submitted generic call is requested and static until an authoritative runn
       "requested",
     );
     assert.equal(
-      document
-        .querySelector(".turn-running-label .activity-text")
-        ?.getAttribute("data-active"),
-      "false",
+      document.querySelector(".turn-running-label .activity-text"),
+      null,
     );
   });
 });
@@ -435,6 +434,45 @@ test("transcript selection pauses live following; explicit Back to live clears i
     assert.equal(document.getSelection()!.isCollapsed, true);
     assert.equal(scroll.scrollTop, 1000);
     assert.ok(!document.querySelector(".back-live"));
+  });
+});
+
+test("selecting a completed answer keeps its history collapsed and selection mounted", async () => {
+  await withRuntimeDom(async (h) => {
+    const value = runtimeThread(
+      [
+        runtimeCommand("history"),
+        runtimeMessage(
+          "answer",
+          "Select this answer to quote without moving it.",
+        ),
+      ],
+      "completed",
+    );
+    await h.render(value);
+    const answer = document.querySelector(".turn-final article p")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".turn-toggle")!;
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    await act(async () => {
+      const range = document.createRange();
+      range.selectNodeContents(answer);
+      document.getSelection()!.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.querySelector(".turn-history"), null);
+    assert.equal(document.querySelector(".turn-final article p"), answer);
+    assert.equal(document.getSelection()!.toString(), answer.textContent);
+    // Projection refreshes and repeated selection events are not disclosure intent.
+    await h.render({ ...value });
+    await act(async () => document.dispatchEvent(new Event("selectionchange")));
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(document.getSelection()!.toString(), answer.textContent);
+    // The explicit disclosure remains operable even with a live answer selection.
+    await h.click(".turn-toggle");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    await h.click(".turn-toggle");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
   });
 });
 

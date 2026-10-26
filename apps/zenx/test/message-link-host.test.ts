@@ -92,3 +92,24 @@ test("message classification preserves explicit and Host current-page URL target
     value: "报告（v2）.md",
   });
 });
+
+test("encoded location-like filenames retain exact Host file identity", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "zenx-link-location-"));
+  try {
+    for (const name of ["note.md#L12", "name.md:12"]) {
+      // Colon is a Windows reserved filename character, not a portable fixture.
+      if (process.platform === "win32" && name.includes(":")) continue;
+      await writeFile(join(cwd, name), name);
+      const target = classifyMessageLink(`${cwd}/${encodeURIComponent(name)}`);
+      assert.equal(target.kind, "file");
+      if (target.kind === "file")
+        assert.equal(
+          (await readWorkspaceFile(cwd, messageFilePath(target.value, cwd)))
+            .text,
+          name,
+        );
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

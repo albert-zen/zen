@@ -276,6 +276,23 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       tab.view.setBackgroundColor(color);
       tab.backgroundColor = color;
     }
+    if (web.getURL() === "about:blank" && !web.isLoading() && !tab.error) {
+      // Chromium can repaint its empty canvas dark independently of the View
+      // background. Style only our blank document; recheck in the document so
+      // a navigation between dispatch and execution cannot restyle a website.
+      void web
+        .executeJavaScript(
+          `(() => {
+        if (location.href !== "about:blank") return;
+        document.documentElement.style.colorScheme = ${JSON.stringify(tab.appearance)};
+        document.documentElement.style.backgroundColor = ${JSON.stringify(color)};
+      })()`,
+        )
+        .catch((error: unknown) => {
+          if (!web.isDestroyed() && web.getURL() === "about:blank")
+            console.warn("Could not update blank browser appearance", error);
+        });
+    }
   }
 
   #publish(threadId: string): void {

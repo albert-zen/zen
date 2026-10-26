@@ -148,6 +148,7 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 - Archive 在 active Turn 期间禁用。Thread 切换后也必须先恢复权威 running state，不能因本地选择变化短暂放开 Archive。
 - Sidebar 只有 active Threads，因此 Unarchive 的 row 位于 Settings → Archived Threads；它可以复用同一管理模式。
 - Escape 只在菜单或弹层确实打开时关闭并归还焦点，不得在无菜单时抢走当前焦点。
+- 按住平台切换修饰键（macOS Cmd，其它平台 Ctrl）时，线程快捷键提示独占行尾空间；标题为该提示预留宽度，运行、Trigger、未读状态和 hover/focus 操作区整体左移，不能与提示重叠。松开修饰键或窗口失焦后恢复普通布局。
 - Thread title、ellipsis 与状态在紧凑宽度下不得重叠。异步 summary/read 结果必须有 freshness fence，旧结果不能覆盖较新的 Thread 选择。
 - 当前菜单不暴露未定义的永久 Delete；未来是否提供以及它的产品合同仍为 **TBD**。
 - Projects mode 中 Project 标题与 owning Project 内的非 Pinned Thread row 可直接拖动；标题按钮显式启用 native draggable，行内动作按钮不启动排序。
@@ -213,6 +214,8 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 - 代码块属于相邻 Agent Message 内容，可以有容器，但不能被误认为 Tool Call。
 
 ### 4.4 Composer、审批与 live following
+
+- Composer 的文字输入焦点由现有中性圆角外框表达；首次插入引用切换到 inline editor 后、删除最后一个引用后与再次聚焦时均不叠加内部矩形 outline。引用按钮及其他控件保留各自的键盘焦点指示，forced-colors 下保留可见外框；不改变草稿、undo、发送或 Thread 状态语义。
 
 Composer 保持一个位置、几何和命中区域稳定的 primary action，只改变语义：
 
@@ -333,6 +336,8 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 6.1 已确认的 contribution 边界
 
+- IMZenX 的本机进程状态与渠道协议连接状态分别显示：只有 SDK 确认渠道 ready 才显示“QQ 已连接”；连接中、重连中、未连接、失败和状态暂不可用保持明确文字。状态更新中断或进程退出时不保留旧的已连接指示。运行后初始“确认连接”变为明确的“重新连接”，成功的前置检查不继续提示用户确认初次连接。渠道已连接不代表真实消息收发已验收。
+
 - 当前 Plugin Package v2、Host Catalog、Runtime Supervisor、Host SDK storage migration、Generic UI Host 与完整 Settings 生命周期入口已经实现；五个第一方 package 与本地 process package 使用同一 lifecycle/runtime/discovery API，没有 legacy capability 控制区。
 - 目标 Generic UI Host 支持 sidebar、pages/subroutes、settings、panel、commands/menu 与 namespaced result renderers。第一方 bundled plugin 与隔离运行的第三方 plugin 使用同一逻辑 Plugin UI SDK，不建立两套 contribution 语义。
 - 已启用 plugin 可以使用这些受控 surfaces，但不取得核心 DOM、router、Chat、Composer、Thread Item 层级或导航 authority。第三方 UI/runtime 必须隔离；第一方信任边界不同也不允许绕过逻辑 SDK。
@@ -437,7 +442,9 @@ ThreadView
 
 - Thread 顶栏只有一个工作区入口；文件、Terminal、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
 - 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。外部 provider 的每个目标在同一 tab strip 中以“外部 · 只读”页面展示，固定其 backend/connection/session/observer 身份；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。不再单设 Agent Browser / Attached browser 入口。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
+- 内置浏览器的空白页（精确 `about:blank`）跟随 App 明确的浅/深外观，而不是系统外观；仅空白文档设置背景与 color-scheme，实际网站保留自身样式与系统媒体查询，不通过全局 nativeTheme 或覆盖层伪装。导航到外站前后的异步外观更新不得污染外站。
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
+- macOS 同行标题栏的 traffic lights 与左侧栏开关拥有独立、共享的 leading 安全区；右栏展开、左侧栏收起或布局动画不能让工作区 Tab、滚动轨道和拖动命中区侵入。安全区约束整个 Tab 容器，不依赖首个 Tab 的名称或顺序；窄屏仍沿用独立标题行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
 - 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
 - 文件选择器提供按需展开的文件树，以及覆盖当前 Thread 精确 cwd 的文件名/相对路径搜索；搜索不会退化成当前已展开目录的过滤。文件名是主标签，搜索结果的父路径单独显示，完整路径保留在 tooltip 和文件头。方向键导航树、左右展开/折叠，Enter 打开，Escape 清除搜索；输入法组合期间不提交。返回、切换 Thread、更新查询和刷新后，旧读取不能回填。显式“打开输入的路径”保留已知相对路径入口，仍经同一 Host 校验。
@@ -509,7 +516,7 @@ The existing right workspace shell is shared. Room-owned tabs expose Overview, M
 
 Files, Browser, Computer and Thread plugin tabs require a real Room member Thread. The PAW Overview displays its exact working Thread title with inline rename through the existing Host title authority; this never renames the PAW or its speaker. Direct working-Thread navigation retains title editing while the Thread-list projection catches up after successful recovery. A PAW can use its single bound Thread; shared Rooms ask the user to select a member, with the resource context visible above the tabs. Room navigation and tab selection stay separate from canonical execution identity. Existing file drafts remain owned by the shared workspace draft store.
 
-Overview shows the current recurring timer definitions, including cadence and paused state, rather than inventing a heartbeat default. The Triggers tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
+New PAW setup discloses an hourly heartbeat and model-quota use before Create. It commits one ordinary timer with the Room and message Trigger without immediately running the model. Existing PAWs retain their saved definitions and offer Add hourly heartbeat in management; repeated clicks reuse the existing preset without changing its prompt, cadence or paused state. A deleted timer stays deleted after reload. Management opens the existing Triggers tab for editing, pausing and deleting; message-wakeup pause is labeled separately. Overview shows actual recurring timer definitions, including cadence and paused state. The Triggers tab shows the assistant's existing Triggers and their instructions, and opens the existing Trigger controls for configuration. Reading any of these views does not start a Turn or install a timer. Missing plugins and unavailable sources must be visible rather than treated as a successful empty state.
 
 ## 2026-10-02：持续适用的 UI 修改与验收原则
 
@@ -556,6 +563,8 @@ is the user's explicit ZenX decision, not a claim about those products.
 
 Agent activity is a disposable projection of native turn items. Consecutive tool/reasoning items stay in stable disclosures; assistant/user messages remain chronological boundaries and final replies stay outside process folds. Counts describe calls, not promised successful work. Task receipts determine background lifetime independently of call disposition. A stopped turn can still have an unconfirmed background action; the latest terminal receipt retires earlier nonterminal observations across groups.
 
+Turn-level metadata remains before history throughout running and completion. Its duration is explicitly labelled “Working for …” while active and “Worked for …” after normal completion; both are localized as “已工作 …”, not bare digits. Existing duplicate-status suppression, input arguments, item order and disclosure behavior are unchanged. Running states share one unboxed row; terminal diagnostics use a panel rather than a status capsule.
+
 Only actual running/model activity has a left-to-right text highlight. Waiting, approval, stop-request intent, unconfirmed cancellation and terminal outcomes stay static. Reduced motion and forced colors retain readable static labels. Selected transcript text pauses automatic following; an explicit Back to live resumes it. Terminal folding does not interrupt selected or focused inspection.
 
 Approvals stay composer-adjacent and name their real once-only or remembered capability scope. A bounded inline preview has a user-opened full-request dialog containing complete code, cwd and arguments. Opening or dismissing review never decides a request; both surfaces share one pending lock and preserve errors. Focus restoration respects the exact request and newer user interaction.
@@ -594,7 +603,7 @@ Only the terminal Agent response exposes Copy and Fork in its hover/focus action
 
 ### Compact activity context
 
-Settled multi-tool disclosures lead with at most two known action kinds and an exact remainder of other operations, plus the actual names of unknown tools. Counts describe calls per action, never unique files, success, or work inferred from arbitrary shell/code text. The total call count remains available to assistive technology; duplicate category counts are omitted. Group headers show at most two distinct existing capability glyphs in first-seen order, not a generic list icon. A fixed 32×16px decorative slot keeps one glyph left-aligned and prevents later types from shifting the label; unknown tools retain the existing presentation fallback, and reasoning-only groups retain their reasoning glyph. Canonical chronological members and stable disclosures are unchanged. Active groups name the observed current operation in the same single-line row; genuine waits stay static. A running/thinking trace removes only the duplicate visual Turn-level generic status, retaining the metadata row height, elapsed time and accessible status. Model-only continuation, approval, stopping and waiting remain visible. Cancellation counts remain explicit; generic failure and nonzero-result counts are omitted, and call counts never imply success. The same text-only left-to-right activity cue applies to visible singleton and expanded tool/reasoning titles only while the Turn and the observed item are genuinely running; waiting, approval and terminal states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
+Settled multi-tool disclosures lead with at most two known action kinds and an exact remainder of other operations, plus the actual names of unknown tools. Counts describe calls per action, never unique files, success, or work inferred from arbitrary shell/code text. The total call count remains available to assistive technology; duplicate category counts are omitted. Group headers show at most two distinct existing capability glyphs in first-seen order, not a generic list icon. A content-sized decorative slot uses 16px for one glyph and at most 32px for two, so the label remains 8px from the visible glyph set; unknown tools retain the existing presentation fallback, and reasoning-only groups retain their reasoning glyph. Canonical chronological members and stable disclosures are unchanged. Active groups name the observed current operation in the same single-line row; an unresolved wait invocation receives the same activity cue as running work. A returned wait is settled even when its receipt reports that the observed target task is still running; that target lifetime remains represented on the originating operation, not on historical wait calls. A running/thinking trace removes only the duplicate visual Turn-level generic status, retaining the metadata row height, elapsed time and accessible status. Model-only continuation, approval, stopping and waiting remain visible. Cancellation counts remain explicit; generic failure and nonzero-result counts are omitted, and call counts never imply success. The same left-to-right activity cue applies to the visible capability/reasoning icon strokes and their adjacent singleton or expanded tool/reasoning titles only while the Turn is active and the observed item is genuinely running or its wait invocation is unresolved; approval and terminal invocation states remain static. Reduced-motion and forced-colors preferences retain readable static text. Sidebar running status uses the existing accessible status icon at a calmer 1.8-second rotation, without a duplicate Working label beside the model; approval text remains visible.
 
 ### 2026-10-14: Codex conversation import in Settings
 
@@ -674,8 +683,74 @@ External connected pages are separate, explicitly read-only peer tabs keyed by t
 
 ### 2026-10-15: Machine picker and generation throughput
 
-The Run on machine picker has room for device names independently of its compact trigger and remains within the viewport. Final-message hover shows output tokens per second for that completed Turn; context usage shows the weighted session rate over completed Turns with matched usage and exact canonical millisecond duration. Idle time between Turns is excluded, while tool and waiting time within each Turn remain included. This is end-to-end Turn throughput, not Provider decode speed. Missing telemetry or duration is Unknown.
+The Run on machine picker has room for device names independently of its compact trigger and remains within the viewport. Final-message telemetry and context usage retain authoritative token counts, cache and context information, but do not show output TPS. Canonical usage has per-response output counts, including reported reasoning tokens and tool-argument generation, but no matching sample start/first-token/end timing. Turn duration includes tool execution and inter-sample waits and must not be used as a generation-rate denominator. Neither text/character counts nor transient message boundaries supply the missing measurement. This applies to live completion, failed/interrupted output and restored history. “Working for” / “Worked for” remains elapsed Turn time, not model speed. Any future TPS must pair authoritative per-sample counts with the same generation interval, explicitly disclose TTFT/reasoning inclusion, exclude tool execution and inter-sample waits, and omit unmatched or partial data.
 
 ### Verified remote message sources
 
 Remote source actions read the canonical receiving message's explicit return binding and open a read-only, bounded source dialog naming the exact Host, workspace and Thread. They preserve local main/side selection and Composer drafts. Nested source navigation stays on that pinned Host/workspace; unbound cross-host sources remain unavailable. Trigger source settings are read on the viewed Host by exact Trigger and owner Thread IDs, never the local Trigger editor. Removed, revoked, changed and offline sources keep explicit errors; close, newer navigation and newer source actions retire old results. The dialog keeps keyboard/focus handling and reachable 44px controls at narrow widths.
+
+### 2026-10-20: Process styling correction
+
+The process header stays before history through completion. The work-duration label is explicit rather than bare digits; its exact wording and icon treatment are specified below. Header state still uses the existing phase, approval, stopping, recovery and compact inputs. Tool/reasoning grouping, chronology, raw details, focus protection and default folding are unchanged.
+
+The presentation reference is T3 Code's [shared icon/text overlay](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/chat/MessagesTimeline.tsx#L3479-L3489) and [activity sweep](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/index.css#L540-L610), checked 2026-10-20: a clipped decorative copy, 4.5rem band, 2.2s steps(30), offscreen/hidden pause, and static reduced-motion/forced-colors fallback. ZenX adapts this into the existing ActivityText component, preserving its activity inputs and readable base content. Icons and text share one sweep rather than independently flashing. The icon-to-label gap is 6px; a one-icon group no longer reserves a phantom second-icon column. Existing ZenX capability naming and icon mapping are retained rather than importing T3's execution/group model.
+
+### Work-duration header reference correction (2026-10-20)
+
+The normal turn header follows T3 Code commit
+[`90c3f835`](https://github.com/pingdotgg/t3code/blob/90c3f8350d777f09c7afdf643db63bf8135161e6/apps/web/src/components/chat/MessagesTimeline.tsx#L3610-L3639):
+`Working for …` during a turn, `Worked for …` after normal completion, both
+localized as `已工作 …`. There is no leading activity glyph in this header in
+any active phase. Phase feedback remains accessible, and actual activity labels
+remain on their original rows. Do not combine a top waiting/thinking prefix with
+a separate total-duration label. The completed header retains the existing fold
+control as a trailing right/down chevron, consistent with T3's
+[TurnFoldTimelineRow](https://github.com/pingdotgg/t3code/blob/90c3f8350d777f09c7afdf643db63bf8135161e6/apps/web/src/components/chat/MessagesTimeline.tsx#L2635-L2654).
+Error/retry actions and exceptional terminal feedback remain separate and intact. Live recovery keeps its visible retry/attempt feedback alongside, not inside, the work-duration label. Missing timing inputs use Working/Worked without an invented duration.
+Runtime phase calculations, chronology, grouping and fold behavior do not change.
+
+### Activity sweep contrast correction (2026-10-20)
+
+Pinned reference: T3 Code `90c3f8350d777f09c7afdf643db63bf8135161e6`, `MessagesTimeline.tsx` (`ActivityShimmerOverlay`, `LiveActivityRow`, `LiveActivityContent`), `WorkLog.tsx`, `index.css`, and `packages/shared/src/themePalettes.ts`. T3's shared overlay traverses the icon and full activity label, not the row background or trailing controls. Its normal active tool-label path also uses `live-tool-shine`; not every T3 row uses the shared overlay.
+
+ZenX already matched the 4.5rem alpha mask, 2.2s steps(30), and cancelling translation geometry. The mismatch was base contrast: group text/icons inherited secondary text, and tool-category prefixes had their own secondary override. Active base icon, category and full label now consistently use muted text; the decorative copy remains foreground. Inactive rows, counts/status/chevrons, duration header, runtime predicates, order, grouping and disclosure are unchanged.
+
+At normal contrast, T3 default light base/crest are #71717b/#27272a (3.09:1 luminance ratio); dark #818181/#f5f5f5 (3.57:1). ZenX retains its own accessible palette: light #616878/#1c2029 (2.92:1, previously 2.12:1 for group text), dark #898c96/#f0f1f3 (2.97:1, previously 1.79:1). These are solid-color base-to-crest ratios, not an assertion that anti-aliased motion has been visually accepted. The browser capture checks the actual computed icon, full-label and overlay colors as well as separate sweep phases. This is contrast-role parity, not pixel-identical T3 typography or a whole-row pulse.
+
+## Selected-message Copy / Quote and unified references (2026-10-21 draft)
+
+Select text inside a single canonical Agent message to reveal Copy and Quote. Copy only changes the clipboard; Quote inserts an exact reference at the remembered Composer selection and focuses the same Composer. Neither starts a Turn or sends. Cross-message/control selections are rejected; IME Enter never quotes or sends.
+
+All existing reference types share one compact inline ReferenceToken, interleaved with prose inside the Composer, sent user bubble and queued-message editor. File, Thread/sub-agent and message/selection references preserve their exact text positions; a repeated reference can appear in several places. The same token opens full exact text and source identity, with removal only in editable drafts. Long labels have a bounded width and truncation; the non-shrinking remove button remains at the right edge. Images remain canonical image attachments rather than being silently converted into file pointers.
+
+The existing CodeMirror engine provides atomic token cursor/deletion, undo/redo and IME handling. First insertion transfers the preceding plain draft for undo; new Thread identities reset the editor session. Clipboard copying expands genuine tokens into readable reference strings; pasting external plain text never creates a reference identity. Source popovers preserve the selection. File/Thread tokens are pointers, not included source contents; message excerpts preserve exact whitespace. Navigation uses existing source handling and reports unavailable sources explicitly, without guessed substitutes or automatic content reads.
+
+Production InputMessage reads canonical text parts. The v3 model-facing string preserves readable prose, with an inline typed reference marker at each token. A strict client-bound header and reversible marker/backslash escaping permit exact parsing without hiding malformed, unknown, unbound or noncanonical input. The model receives this ordinary text string, not a new Provider object. Legacy v1/v2 remains readable; those versions have no text-position data, so their original ordered references are shown after their prose, never assigned invented earlier positions. Sent referenced messages keep one Markdown parse, including formatting that spans a reference and code fences; no raw HTML is enabled. Host-added canonical text parts remain visible. Copy-message copies raw input; submission, queue identity, revision, retry and acceptance ownership are unchanged. Presentation binding is not cryptographic provenance.
+
+The synthetic full-context preview exercises selection → quote → interleaved editing → explicit send → projected native userMessage with no Provider call. A separate no-network capture passes the same input through real native admission, runtime and Provider request construction and persists only the actual user-message text, not system or tool prompts. Real-browser keyboard, pointer, narrow/touch-emulated layout, pending queue edits and long-token geometry are required before visual acceptance or merge. Physical touch and OS clipboard permission checks are not claimed by desktop emulation.
+
+### 2026-10-20: Thread title authority over wakeup first messages
+
+A Thread's own name is the single source of its displayed title, whether it comes from staged automatic naming or from the user's explicit rename. The first-message preview is used only while that Thread has no name at all — including a machine Room/Trigger wakeup envelope when that is the first message, which is therefore shown as the provisional title exactly like any other first message. No wakeup-derived stand-in ever replaces a name, in the sidebar, the conversation title bar, the PAW workspace, the Composer Thread reference picker or anywhere else; the short disclosure label is reserved for a legacy name that is itself an unmodified raw wakeup prompt. Thread rename inputs start from the Thread's exact current name, so submitting an untouched editor can never rewrite that name; a Thread with nothing but machine or placeholder text offers no name to save.
+
+### Streaming activity excerpt and DSH sweep (2026-10-21)
+
+Active collapsed groups and item rows show actual public item content: `Thinking` / `思考中` followed by a latest-text excerpt of at most 240 Unicode characters of exposed reasoning text (falling back to the provider summary, then the plain localized label), or the complete `item.command` with its existing tool category. Omitted reasoning context is marked with a leading ellipsis; a partial leading Latin word is skipped without splitting Unicode characters. Whitespace is collapsed for the reasoning excerpt only; full reasoning and command remain in their original disclosures. The preview is one line, at most 72ch and bounded by the row; an overflowing excerpt fades over its final 48px without fading short text. Streaming updates do not reset group membership, order, disclosure state, observed task state or the top work-duration header.
+
+The exact animation reference is DeepSeek Harness [`639ed015`, TextShimmer.module.css](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-primitives/src/TextShimmer.module.css): a width-relative 105° mask with transparent 0%, black 40–60%, transparent 100%; 1.5s `steps(48, end)`, 0.3s initial delay, −100% to +100% travel during the first 66.6667% and a hold for the remaining cycle. The counter-transform keeps icon strokes, prefix and excerpt aligned under one sweep. The separate excerpt fade follows [`ReasoningRow.module.css`](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-chat/src/client/chat/ReasoningRow.module.css). This supersedes the earlier fixed 4.5rem T3 band, not the accepted T3-style top header. Existing ZenX muted base/foreground crest tokens, hidden/offscreen pause and static reduced-motion/forced-colors fallbacks remain.
+
+### 2026-10-20: Bundled What's New
+
+A compact release-notes icon sits at the right of Settings in the same Sidebar footer row, replacing the decorative service-status dot without adding row height. Settings and What's New / 更新内容 are sibling buttons with independent pointer and keyboard targets; the notes icon has a localized tooltip and accessible name. Service runtime behavior, Settings status text and non-ready Sidebar feedback remain unchanged. It opens a compact, date-grouped dialog of changes included in this build, not an updater or a promise of unmerged features. Notes ship locally with stable release and item IDs independent of the package version. Opening is always explicit; there is no startup modal, unread badge, read-state persistence, network request or new permission. The shared Dialog owns focus trapping, Escape, outside dismissal and focus restoration. Notes scroll inside the dialog, with the close control always visible; repeated opening never navigates away from the current conversation or changes its draft.
+
+### Context pressure details
+
+上下文圆圈 hover/click 默认只展示彩色分段占用条、系统/工具/插件/对话四个短标签及数值；颜色与文字一一对应，不依赖颜色独自传达含义。分项之和等于估算总数，剩余窗口保留底色。面板仅展示产品的单一统计，不显示说明段落、估算详情或第二个历史值；缓存项写全“线程缓存命中率”。工具项包含已披露插件 SDK；插件项是注入消息，不重复计算。当前沿用字符启发式而非 tokenizer，对中文等内容可能明显偏差；媒体和协议开销也不是精确计费，不能把估算称为准确值。不展示不存在的 MCP 分类，不因 hover/click 向外发送历史或草稿进行网络计数。
+
+### Message file-path links
+
+Message Markdown may render clear local paths as keyboard-focusable links. Activation opens the existing right-side file viewer for the Thread's runtime Host workspace, not the browser client's machine, an external app, or an executable. Rendering does not probe files; unavailable, outside-workspace and permission-denied targets retain the existing explicit error flow. UNC/network authority links are not supported.
+
+Unquoted automatic paths require a directory and file extension; paths containing spaces must be quoted or inline-code delimited. Extensionless automatic paths additionally require an absolute path or an explicit `./` or `../` prefix (for example, `./docs/README`); a quoted bare relative `docs/README` remains inert. Fenced code, ordinary standalone filenames and ambiguous prose are not auto-linked. Existing explicit Markdown links remain supported. Windows drive paths and local file URLs use the same Host containment checks. Conventional `#L12`, `#L12C4`, `:12` or `:12:4` suffixes on file paths open the underlying file; this does not claim exact-line scrolling. Percent-encoded filename punctuation remains literal. Canonical content and copy text are unchanged.
+
+A closed top-level `text` or `plaintext` fenced block containing exactly one whitespace-free local path offers a separate **Open file** header action alongside Copy. Code remains literal and copy remains unchanged; incomplete, multiline, command-like, reference-bearing and other-language blocks have no file action. Activation uses the same current-Thread Host workspace reader, never execution or an external app.

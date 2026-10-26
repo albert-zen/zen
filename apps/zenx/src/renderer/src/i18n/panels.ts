@@ -1,4 +1,5 @@
 export const en = {
+  openMessageFile: "Open file",
   browserOperationFailed:
     "The browser operation failed or its outcome is uncertain. Check the tool result before continuing.",
   externalReadOnly: "External · read-only",
@@ -97,6 +98,21 @@ export const en = {
 
   imPreparedWaitingToConnect: "Preparation saved; waiting to connect",
   imLocalConsumerRunning: "Local connection process is running",
+  imChannelConnections: "Channel connections",
+  imChannelConnectionMeaning:
+    "Connected confirms the channel connection. Verify sending and receiving in the bot chat.",
+  imChannel_connecting: "{{channel}} connecting",
+  imChannel_ready: "{{channel}} connected",
+  imChannel_reconnecting: "{{channel}} reconnecting",
+  imChannel_disconnected: "{{channel}} not connected",
+  imChannel_failed: "{{channel}} connection failed",
+  imChannel_unknown: "{{channel}} status unavailable",
+  imChannelStatusUnavailable: "Channel connection status unavailable",
+  imConnectionSettings: "Connection settings",
+  imRunningConnectionInstructions:
+    "The connection process is running. After changing settings, save preparation and check again before reconnecting.",
+  imReadinessPassedRunning: "Preparation checks passed",
+  imReconnect: "Reconnect…",
   imRuntimePreparedNotice:
     "Runtime prepared. Save the channel, then check connection readiness.",
   imChannelSavedNotice:
@@ -332,9 +348,9 @@ export const en = {
   anEarlierTriggerSaveReturnedAnUncertain:
     "An earlier Trigger save returned an uncertain outcome after its form was left. Inspect definitions before retrying; no Host cancellation was implied.",
   hostSchedulesIndependentlyOfThisPanel:
-    "Host schedules independently of this panel.",
+    "Runs while ZenX is open, even if you leave this panel.",
   hostSchedulesWhileRunningEvenWhenThis:
-    "Host schedules while running, even when this page is closed.",
+    "Runs while ZenX is open, even if you leave this page.",
   schedulingAndRecovery: "Scheduling and recovery",
   setUpReplies: "Set up replies",
   editTrigger: "Edit trigger",
@@ -496,8 +512,14 @@ export const en = {
   rename: "Rename",
   memberName: "Member name",
   memberConversation: "Member conversation",
-  pausePaw: "Pause PAW",
-  resumePaw: "Resume PAW",
+  pausePaw: "Pause message wakeups",
+  resumePaw: "Resume message wakeups",
+  pawHeartbeatCreateNote:
+    "Includes an hourly heartbeat to review and advance your work. It can use model quota; edit, pause or delete it in Triggers.",
+  pawHeartbeatHelp:
+    "The heartbeat reviews your overall situation and advances authorized work, posting only useful progress or decisions. Manage its schedule, prompt and enabled state in Triggers.",
+  pawAddHeartbeat: "Add hourly heartbeat",
+  pawManageHeartbeat: "Manage heartbeat and triggers",
   members: "Members",
   details: "Details",
   you: "You",
@@ -793,7 +815,7 @@ export const en = {
   directThreadMessagesStayInTheThread:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without duplicating replies.",
   creatingAPawEnablesMessageWakeupsOnly:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start a run.",
+    "New PAWs include an hourly heartbeat. Existing PAWs keep their saved triggers until you add one in PAW settings. Timers may consume model quota; reading this workspace does not start work.",
   membersShareThisConversationChooseAMember:
     "members share this conversation. Choose a member above to use its files, browser and other thread tools.",
   automationStatusUnavailable: "Trigger status unavailable:",
@@ -843,7 +865,7 @@ export const en = {
   pawThreadRoomNote:
     "Direct Thread messages stay in the Thread. The assistant posts here only through its Room messaging tool. This binding keeps both conversations connected without copying every message between them.",
   pawWakeupNote:
-    "Creating a PAW enables message wakeups only. Configure recurring checks in Triggers when needed; they can consume model quota. Reading this workspace does not start agent work.",
+    "New PAWs include an hourly heartbeat. Existing PAWs keep their saved triggers until you add one in PAW settings. Timers may consume model quota; reading this workspace does not start work.",
   mattersDescription:
     "Assistant-written plans and notes. Linked execution status is shown separately.",
   delegatedWorkDescription:
@@ -856,6 +878,10 @@ export const en = {
     "Use /threads and /pick to continue a work conversation directly; this mode mirrors its model replies. /new clears the selection. PAW mode currently supports text; native read receipts, quotes, and reactions depend on future channel adapters.",
   save: "Save",
   imageUnavailablePrefix: "Image unavailable:",
+  triggerOnce: "Once",
+  triggerEveryHours: "Every {{count}} hours",
+  triggerEveryHours_one: "Every hour",
+  triggerEveryHours_other: "Every {{count}} hours",
   everyMinutes: "Every {{count}} min",
   onceAt: "Once · {{time}}",
   everyMinutesAt: "Every {{count}} min · {{time}}",
@@ -930,6 +956,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  openMessageFile: "打开文件",
   browserOperationFailed: "浏览器操作失败或结果不确定。继续前请检查工具结果。",
   externalReadOnly: "外部 · 只读",
   browserAgentWorking: "Agent 正在操作此页面",
@@ -1021,6 +1048,21 @@ export const zhCN = {
 
   imPreparedWaitingToConnect: "准备已保存，等待连接",
   imLocalConsumerRunning: "本机连接进程运行中",
+  imChannelConnections: "渠道连接状态",
+  imChannelConnectionMeaning:
+    "已连接表示渠道连接已建立；实际收发可在机器人聊天中验证。",
+  imChannel_connecting: "{{channel}} 连接中",
+  imChannel_ready: "{{channel}} 已连接",
+  imChannel_reconnecting: "{{channel}} 重连中",
+  imChannel_disconnected: "{{channel}} 未连接",
+  imChannel_failed: "{{channel}} 连接失败",
+  imChannel_unknown: "{{channel}} 状态暂不可用",
+  imChannelStatusUnavailable: "渠道连接状态暂不可用",
+  imConnectionSettings: "连接设置",
+  imRunningConnectionInstructions:
+    "连接进程已在运行。修改设置后，请保存准备、重新检查，再重新连接。",
+  imReadinessPassedRunning: "准备检查已通过",
+  imReconnect: "重新连接…",
   imRuntimePreparedNotice: "运行环境已准备。保存频道后再检查连接准备情况。",
   imChannelSavedNotice: "频道设置已安全保存，连接尚未启动",
   imConfigurationEditedNotice: "配置已修改，请重新检查准备情况",
@@ -1228,9 +1270,10 @@ export const zhCN = {
     "之前创建会话的结果尚未确认。重试前请检查会话列表；离开表单并未取消 Host 请求。",
   anEarlierTriggerSaveReturnedAnUncertain:
     "之前保存触发器的结果尚未确认。重试前请检查定义；离开表单并未取消 Host 请求。",
-  hostSchedulesIndependentlyOfThisPanel: "Host 独立于此面板执行调度。",
+  hostSchedulesIndependentlyOfThisPanel:
+    "ZenX 运行时，离开面板也会按计划执行。",
   hostSchedulesWhileRunningEvenWhenThis:
-    "Host 运行期间会继续调度，即使此页面已关闭。",
+    "ZenX 运行时，离开页面也会按计划执行。",
   schedulingAndRecovery: "调度与恢复",
   setUpReplies: "设置回复",
   editTrigger: "编辑触发器",
@@ -1379,8 +1422,14 @@ export const zhCN = {
   rename: "重命名",
   memberName: "成员名称",
   memberConversation: "成员会话",
-  pausePaw: "暂停 PAW",
-  resumePaw: "恢复 PAW",
+  pausePaw: "暂停消息唤醒",
+  resumePaw: "恢复消息唤醒",
+  pawHeartbeatCreateNote:
+    "默认每小时检查并推进一次工作，可能消耗模型额度；可在触发器中修改、暂停或删除。",
+  pawHeartbeatHelp:
+    "心跳会综合当前情况、推进已授权工作，有实质进展或需要决策时才通知。间隔、提示词和启用状态可在触发器中管理。",
+  pawAddHeartbeat: "添加每小时心跳",
+  pawManageHeartbeat: "管理心跳与触发器",
   members: "成员",
   details: "详情",
   you: "你",
@@ -1703,7 +1752,7 @@ export const zhCN = {
   pawThreadRoomNote:
     "直接发送给会话的消息留在会话中。助手仅通过房间消息工具在此发言。此绑定使两个会话保持关联，而不会复制每条消息。",
   pawWakeupNote:
-    "创建 PAW 只启用消息唤醒。需要时在触发器中配置定期检查；它们可能消耗模型额度。查看此工作区不会启动 Agent 工作。",
+    "新建 PAW 默认每小时心跳一次；已有 PAW 保留原触发器，可在 PAW 设置中添加。定时运行可能消耗模型额度，查看此工作区不会启动工作。",
   mattersDescription: "助手编写的计划和笔记。关联的执行状态会单独显示。",
   delegatedWorkDescription:
     "其他委派工作显示在所属事项下，并标明设备和工作区身份。",
@@ -1714,6 +1763,10 @@ export const zhCN = {
     "/threads 和 /pick 继续直接工作会话；这个模式会同步该线程的模型回复。/new 清除选择。PAW 模式目前支持文字，平台原生已读、引用和表情取决于后续渠道适配。",
   save: "保存",
   imageUnavailablePrefix: "图片不可用：",
+  triggerOnce: "执行一次",
+  triggerEveryHours: "每 {{count}} 小时",
+  triggerEveryHours_one: "每 1 小时",
+  triggerEveryHours_other: "每 {{count}} 小时",
   everyMinutes: "每 {{count}} 分钟",
   onceAt: "一次 · {{time}}",
   everyMinutesAt: "每 {{count}} 分钟 · {{time}}",

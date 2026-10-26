@@ -457,7 +457,20 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
   assert.ok(displayLabel);
   assert.match(displayLabel, /kAXDescriptionAttribute/u);
   assert.match(displayLabel, /kAXHelpAttribute/u);
-  assert.doesNotMatch(displayLabel, /kAXValueAttribute/u);
+  // Displayed static text may expose AXValue; editable/secure-field values
+  // must never be read as labels. Permit only this exact role-gated fallback.
+  const staticTextValueFallback =
+    /if textAttribute\(element, kAXRoleAttribute\) == kAXStaticTextRole \{\s*return textAttribute\(element, kAXValueAttribute\)\s*\}/u;
+  assert.match(displayLabel, staticTextValueFallback);
+  assert.doesNotMatch(
+    displayLabel.replace(staticTextValueFallback, ""),
+    /kAXValueAttribute/u,
+  );
+  const selector = sources.MAC_ACCESSIBILITY_SOURCE.match(
+    /func selector[\s\S]*?func matches/u,
+  )?.[0];
+  assert.ok(selector);
+  assert.doesNotMatch(selector, /kAXValueAttribute/u);
   assert.match(
     sources.MAC_ACCESSIBILITY_SOURCE,
     /func supportsTextValue[\s\S]*?AXTextField[\s\S]*?isSettable/u,
@@ -637,7 +650,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     const sourceDirectory = path.join(directory, "source", "plugins");
     await mkdir(sourceDirectory, { recursive: true });
     await writeFile(
-      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.7.tgz"),
+      path.join(sourceDirectory, "zenx-rooms-plugin-1.0.8.tgz"),
       "rooms tarball",
     );
     const buildPath = path.join(
@@ -654,7 +667,7 @@ test("copies first-party plugin tarballs into App Resources", async () => {
     });
     assert.equal(
       await readFile(
-        path.join(destination, "zenx-rooms-plugin-1.0.7.tgz"),
+        path.join(destination, "zenx-rooms-plugin-1.0.8.tgz"),
         "utf8",
       ),
       "rooms tarball",

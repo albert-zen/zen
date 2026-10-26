@@ -79,10 +79,15 @@ candidates do not consume messages. Each admitted Host generation captures an
 isolated runtime instance. Disable → enable reloads the persisted configuration.
 
 The page shows waiting for activation, unconfigured, prepared, waiting for ZAS, starting, connected or failed.
-Connected means the SDK Gateway started, not that a real bot delivery has been
-verified. Channel transport errors remain subject to the SDK's diagnostics and
-native API delivery limits. After a failure, fix the configuration and use
-**Reconnect**. No plugin-owned retry or recovery queue is created.
+The local process status means the SDK Gateway started. Separate channel badges
+show the SDK's connecting, connected, reconnecting, disconnected or failed facts;
+QQ is shown as connected only after its native READY/RESUMED handshake. Missing
+or expired observations are explicitly unavailable, never a retained green badge.
+These fixed facts arrive over the existing private child pipe, without raw
+errors, credentials or native session identifiers. Channel connection does not
+verify a real bot delivery. A running process uses an explicit **Reconnect**
+action; readiness and single-consumer confirmation still apply. No plugin-owned
+retry or recovery queue is created.
 
 Legacy Gateway state is checked before the consumer opens it. A supported upgrade
 retains a private full backup and verifies native Thread/workspace ancestry. An

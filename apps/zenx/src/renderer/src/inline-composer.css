@@ -1,0 +1,114 @@
+.inline-composer-editor {
+  --inline-composer-max-rows: 6;
+}
+
+/* The rich editor occupies the same single input slot as the plain textarea. */
+.composer:has(> .inline-composer-editor:focus-within) {
+  border-color: var(--color-focus-ring);
+}
+
+.composer > .inline-composer-editor {
+  min-width: 0;
+  width: calc(100% - 16px);
+  margin: 14px 8px 0;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.inline-composer-editor .cm-editor {
+  max-height: max(
+    36px,
+    min(calc(var(--inline-composer-max-rows) * 21px + 8px), calc(35vh - 14px))
+  );
+  min-height: 36px;
+  background: transparent;
+  outline: none;
+}
+
+/* The rounded Composer already owns focus presentation, like its textarea.
+   Match CodeMirror's focused state explicitly so its injected base theme and
+   the editable element's native focus outline cannot add a second rectangle.
+   Queue editors and reference buttons keep their own focus indicators. */
+.composer > .inline-composer-editor .cm-editor.cm-focused,
+.composer > .inline-composer-editor .cm-content:focus {
+  outline: none;
+}
+
+.inline-composer-editor .cm-scroller {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-control) transparent;
+  font: inherit;
+}
+
+.inline-composer-editor .cm-content {
+  /* Atomic reference widgets must not set the flex item minimum on narrow editors. */
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 8px 6px;
+  caret-color: var(--color-text-primary);
+  font: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inline-composer-editor .cm-line {
+  padding: 0;
+}
+
+.inline-composer-editor .cm-placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
+}
+
+.inline-composer-editor .cm-cursor {
+  border-left-color: var(--color-text-primary);
+}
+
+.inline-composer-editor .cm-selectionBackground {
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+.inline-composer-reference {
+  display: inline-flex;
+  max-width: min(100%, 280px);
+  vertical-align: middle;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.inline-composer-reference .reference-token {
+  max-width: 100%;
+  height: 24px;
+}
+
+.inline-composer-reference .reference-token > button {
+  height: 22px;
+}
+
+.inline-composer-reference .reference-token-details {
+  max-width: min(240px, calc(100vw - 100px));
+}
+
+@media (pointer: coarse), (hover: none) {
+  .inline-composer-reference .reference-token {
+    height: 48px;
+  }
+
+  .inline-composer-reference .reference-token > button {
+    height: 44px;
+  }
+
+  .inline-composer-reference .reference-token > .reference-token-remove {
+    width: 44px;
+  }
+}
+
+@media (forced-colors: active) {
+  .inline-composer-editor .cm-editor.cm-focused,
+  .composer:has(> .inline-composer-editor:focus-within) {
+    outline: 1px solid Highlight;
+  }
+}

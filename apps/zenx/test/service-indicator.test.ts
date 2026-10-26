@@ -15,8 +15,8 @@ const { Sidebar, serviceStatusPresentation } =
   await import("../src/renderer/src/Sidebar.js");
 const { Icon } = await import("../src/renderer/src/icons.js");
 
-test("the selected radial Settings glyph stays legible at the real 14/16/18px sizes", () => {
-  for (const size of [14, 16, 18]) {
+test("Settings uses a connected gear outline at the real 13/14/16/18px sizes", () => {
+  for (const size of [13, 14, 16, 18]) {
     const html = renderToStaticMarkup(
       createElement(Icon, { name: "settings", size }),
     );
@@ -26,14 +26,19 @@ test("the selected radial Settings glyph stays legible at the real 14/16/18px si
     assert.equal(icon.getAttribute("width"), String(size));
     assert.equal(icon.getAttribute("height"), String(size));
     assert.equal(icon.getAttribute("viewBox"), "0 0 16 16");
-    assert.ok(
-      Array.from(icon.querySelectorAll("path")).some(
-        (path) =>
-          path.getAttribute("d") ===
-          "M8 1.8v1.3M8 12.9v1.3M1.8 8h1.3M12.9 8h1.3M3.6 3.6l.9.9M11.5 11.5l.9.9M12.4 3.6l-.9.9M4.5 11.5l-.9.9",
-      ),
-      "Settings must reuse the simpler radial candidate from the existing ZenX icon family",
+    const outline = icon.querySelector("path")?.getAttribute("d") ?? "";
+    assert.equal(icon.querySelectorAll("path").length, 1);
+    assert.equal(
+      (outline.match(/M/giu) ?? []).length,
+      1,
+      "gear outline must be connected, not detached sun rays",
     );
+    assert.match(outline, /Z$/iu, "gear has a closed toothed outer silhouette");
+    const hub = icon.querySelector("circle");
+    assert.equal(hub?.getAttribute("cx"), "8");
+    assert.equal(hub?.getAttribute("cy"), "8");
+    assert.equal(hub?.getAttribute("r"), "2.2");
+    assert.equal(icon.querySelector("g")?.getAttribute("stroke-width"), "1.6");
     dom.window.close();
   }
 });
@@ -76,7 +81,7 @@ test("maps every App Server host state to an explicit status", () => {
   }
 });
 
-test("service status is part of the Settings row, not a separate footer line", async () => {
+test("Settings and release notes share one footer row without a service dot", async () => {
   const dom = new JSDOM(
     "<!doctype html><html><body><div id=root></div></body></html>",
     { url: "http://localhost" },
@@ -101,11 +106,17 @@ test("service status is part of the Settings row, not a separate footer line", a
   try {
     await act(async () => root.render(createElement(TestSidebar)));
     assert.equal(document.querySelector(".service-status"), null);
-    const dot = document.querySelector(".service-status-dot");
-    assert.ok(dot);
-    assert.equal(dot.tagName, "SPAN");
-    assert.equal(dot.getAttribute("role"), null);
-    assert.equal(dot.getAttribute("tabindex"), null);
+    assert.equal(document.querySelector(".service-status-dot"), null);
+    const footer = document.querySelector(".sidebar-footer")!;
+    const row = footer.querySelector(".sidebar-settings-row")!;
+    assert.ok(row);
+    assert.equal(footer.children.length, 1);
+    assert.equal(row.querySelectorAll(":scope > button").length, 2);
+    assert.equal(row.querySelector("button button"), null);
+    const notes = row.querySelector<HTMLButtonElement>(".whats-new-trigger")!;
+    assert.equal(notes.textContent, "");
+    assert.equal(notes.title, "What’s New");
+    assert.equal(notes.getAttribute("aria-label"), "What’s New");
     const settings =
       document.querySelector<HTMLButtonElement>(".settings-nav-row");
     assert.ok(settings);
@@ -119,18 +130,6 @@ test("service status is part of the Settings row, not a separate footer line", a
     });
     dom.window.close();
   }
-});
-
-test("starting and reconnecting status dots stop animating for reduced motion", async () => {
-  const css = await readFile(
-    new URL("../src/renderer/src/styles.css", import.meta.url),
-    "utf8",
-  );
-  assert.match(css, /prefers-reduced-motion:\s*reduce/u);
-  assert.match(
-    css,
-    /\.service-status-dot\.starting,\s*\.service-status-dot\.reconnecting\s*\{\s*animation:\s*none;/su,
-  );
 });
 
 function TestSidebar() {

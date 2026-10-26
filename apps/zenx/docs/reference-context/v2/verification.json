@@ -1,0 +1,59 @@
+{
+  "sourceCommit": "working-tree (see enclosing review commit)",
+  "timestamp": "2026-10-21T02:00:00.000Z",
+  "notes": [
+    "Actual production serialization, native input validation, Host admission, Runtime, in-memory journal and production provider adapters.",
+    "Only external fetch and authentication are synthetic; no live provider call, credentials, source document or transcript.",
+    "Canonical journal records are read back from InMemoryThreadJournal, not OS-durable JSONL.",
+    "Full-message reference is an existing message snapshot assembled by fixture; no dedicated @message picker exists.",
+    "Main request has exactly five references and no image. with-image.* files are a separate sixth-category comparison with complete 1x1 PNG bytes.",
+    "Tool catalog is deliberately restricted to the automatically supplied wait tool: this exact run has no file/thread-reading capability, and no tool was called.",
+    "timestamp is fixed synthetic admission time, not wall-clock capture time."
+  ],
+  "reports": [
+    {
+      "variant": "five-references",
+      "format": "chat-completions",
+      "targetThreadId": "synthetic-host-1",
+      "sourceThreadId": "synthetic-host-3",
+      "subagentThreadId": "synthetic-host-7",
+      "sourceMessageId": "synthetic-runtime-3",
+      "requestCount": 1,
+      "assertions": "passed",
+      "networkRequests": 0
+    },
+    {
+      "variant": "five-references",
+      "format": "responses",
+      "targetThreadId": "synthetic-host-1",
+      "sourceThreadId": "synthetic-host-3",
+      "subagentThreadId": "synthetic-host-7",
+      "sourceMessageId": "synthetic-runtime-3",
+      "requestCount": 1,
+      "assertions": "passed",
+      "networkRequests": 0
+    },
+    {
+      "variant": "with-image",
+      "format": "chat-completions",
+      "targetThreadId": "synthetic-host-1",
+      "sourceThreadId": "synthetic-host-3",
+      "subagentThreadId": "synthetic-host-7",
+      "sourceMessageId": "synthetic-runtime-3",
+      "requestCount": 1,
+      "assertions": "passed",
+      "networkRequests": 0
+    },
+    {
+      "variant": "with-image",
+      "format": "responses",
+      "targetThreadId": "synthetic-host-1",
+      "sourceThreadId": "synthetic-host-3",
+      "subagentThreadId": "synthetic-host-7",
+      "sourceMessageId": "synthetic-runtime-3",
+      "requestCount": 1,
+      "assertions": "passed",
+      "networkRequests": 0
+    }
+  ]
+}

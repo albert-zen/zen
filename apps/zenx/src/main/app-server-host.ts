@@ -23,11 +23,6 @@ import {
 } from "./capability-tool-executor.js";
 import type { ZenXCapabilityGenerationSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
-import { compileModelMessages } from "../../../../src/model.js";
-import {
-  estimateModelMessageInputTokens,
-  projectModelUsage,
-} from "../../../../src/model-usage.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let fleetHost: FleetHostService | undefined;
@@ -424,40 +419,10 @@ async function handleCommand(command: HostCommand): Promise<void> {
       return;
     }
     try {
-      const snapshot = await appServer.readThread(command.threadId);
-      const selection = {
-        providerProfileId: snapshot.providerProfileId,
-        modelId: snapshot.modelId,
-        reasoningEffort: snapshot.reasoningEffort,
-      };
-      const contextWindow =
-        appServer
-          .listModels()
-          .find(
-            (entry) =>
-              entry.providerProfileId === selection.providerProfileId &&
-              entry.model.id === selection.modelId,
-          )?.model.contextWindow ?? null;
-      const latestUsage = snapshot.items.findLast(
-        (item) => item.type === "model_usage",
-      );
-      const usageSelection = snapshot.turns.find(
-        (turn) => turn.id === latestUsage?.turnId,
-      )?.selection;
       send({
         type: "thread-usage/result",
         requestId: command.requestId,
-        usage: projectModelUsage(snapshot.items, {
-          contextWindow,
-          estimatedInputTokens: estimateModelMessageInputTokens(
-            compileModelMessages(snapshot.items, selection),
-          ),
-          providerContextUsageCompatible:
-            usageSelection !== undefined &&
-            usageSelection.providerProfileId === selection.providerProfileId &&
-            usageSelection.modelId === selection.modelId &&
-            usageSelection.reasoningEffort === selection.reasoningEffort,
-        }),
+        usage: await appServer.readModelUsage(command.threadId),
       });
     } catch (error) {
       send({

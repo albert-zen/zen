@@ -1,7 +1,7 @@
 # Shared workflow status: context compaction
 
-Tracks #447. This change is stacked on #446 candidate
-`e70440b1da06c2c5ae42251678328f57b3918bd3`, not a claim that it has merged.
+Tracks #447. The #446 foundation is now in main; this candidate is integrated
+with main and independently validated.
 
 Compaction pending/error and committed-success summaries consume the same
 `.workflow-status` foundation as running, recovery and terminal outcomes:

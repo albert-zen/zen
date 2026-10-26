@@ -105,23 +105,25 @@ test("adding tool types preserves the mounted decorative slot, activity and disc
   });
 });
 
-test("wide and narrow group rows reserve the same fixed two-glyph slot", async () => {
+test("wide and narrow group rows fit the visible glyphs without a phantom second slot", async () => {
   const css = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
   );
   assert.match(
     css,
-    /\.trace-toggle\s*\{[^}]*grid-template-columns: 32px minmax\(120px, 1fr\) auto 14px;/su,
+    /\.trace-toggle\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto 14px;/su,
   );
   assert.match(
     css,
-    /@container \(max-width: 460px\)\s*\{\s*\.trace-toggle\s*\{[^}]*grid-template-columns: 32px minmax\(0, 1fr\) 14px;/su,
+    /@container \(max-width: 460px\)\s*\{\s*\.trace-toggle\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 14px;/su,
   );
   const slot = css.match(/\.trace-tool-icons\s*\{([^}]+)\}/su)?.[1] ?? "";
   for (const declaration of [
     "display: flex;",
-    "width: 32px;",
+    "width: max-content;",
+    "min-width: 16px;",
+    "max-width: 32px;",
     "height: 16px;",
     "justify-content: flex-start;",
     "gap: 2px;",

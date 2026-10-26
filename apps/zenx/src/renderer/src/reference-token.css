@@ -1,0 +1,192 @@
+.reference-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+  align-items: center;
+}
+.composer-reference-rail {
+  margin: 0 4px 8px;
+}
+.queue-editor-reference-rail {
+  margin: 0 0 10px;
+}
+.reference-token > button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.sent-reference-rail {
+  justify-content: flex-end;
+  margin-bottom: 7px;
+  max-width: 100%;
+}
+/* Keep the fixed intrinsic cap separate from the available-width constraint.
+   A percentage max on the token itself lets its hidden label size the bubble. */
+.reference-token-wrap {
+  display: inline-flex;
+  vertical-align: middle;
+  min-width: 0;
+  max-width: 100%;
+}
+.reference-token {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  width: fit-content;
+  min-width: 0;
+  max-width: 300px;
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-wash);
+  color: var(--color-text-secondary);
+}
+.reference-token > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.reference-token > button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.reference-token > button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.reference-token > .reference-token-details {
+  gap: 5px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding-inline: 8px;
+}
+.reference-token-details > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 18px;
+}
+.reference-token-details svg {
+  flex: none;
+}
+.reference-token > .reference-token-remove {
+  flex: none;
+  width: 24px;
+  margin-right: 1px;
+}
+.reference-details-popover {
+  width: min(430px, calc(100vw - 24px));
+  max-height: min(520px, var(--radix-popover-content-available-height));
+  overflow: auto;
+  padding: 14px;
+  border-radius: 14px;
+}
+.reference-details-popover header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.reference-details-popover header button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.reference-content-policy {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0;
+}
+.reference-details-popover .reference-exact-excerpt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--color-surface-wash);
+}
+.reference-details-popover dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.reference-details-popover dt {
+  color: var(--color-text-muted);
+}
+.reference-details-popover dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.reference-open-source {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 4px 0;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.reference-source-error {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+}
+@media (pointer: coarse), (hover: none) {
+  .reference-token {
+    height: 48px;
+  }
+  .reference-token > button {
+    height: 44px;
+  }
+  .reference-token > .reference-token-remove {
+    width: 44px;
+  }
+  .reference-details-popover header button {
+    width: 44px;
+    height: 44px;
+  }
+  .reference-open-source {
+    min-height: 44px;
+  }
+}
+
+.inline-reference-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+}
+.inline-reference-content .reference-token {
+  vertical-align: middle;
+  margin-inline: 2px;
+}

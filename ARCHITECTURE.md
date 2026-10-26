@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **ZenX selected-message references** — Exact rendered excerpts and source Thread/Item IDs live in the existing Composer draft until explicit send. Message references serialize once into a versioned text envelope bound to that submission client ID; matching canonical user input renders a read-only quote projection, while invalid or missing-ID formats remain complete ordinary text. The ID match is a presentation discriminator, not authentication; raw input remains the sole conversation authority. No Core schema, protocol field, durable annotation store, or alternative send state is introduced.
+
 - **Explicit manual continuation** — Native turn retry admits one localized human continuation message only against the exact latest failed/aborted Turn under the existing admission lock; a stable client message identity plus canonical retryOfTurnId provenance reconciles uncertain replies, preserves canonical history and tool receipts, and never replays a tool or consumes a Composer draft. Forked history preserves original Turn IDs, but inherited retry provenance cannot authorize a local retry.
 
 - **Live Turn recovery observation** — Runtime emits a transient native repair-sampling status after canonical recovery intent commits and clears it when sampling resumes successfully or exits; the existing epoch/watermark projection retains only the latest observation per active Turn, never deriving live execution from historical failure Items or adding durable recovery authority.
@@ -26,6 +28,8 @@
 
 ## 核心概念
 
+- **ZenX 更新内容** — Renderer 仅展示随构建分发、以稳定条目 ID 标识的本地更新说明；打开状态为易失 UI 状态，不联网、不检查更新、不进入 Core journal。
+
 - **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
 
 - **Plugin configuration readiness** — Host catalog readiness is a read-only lifecycle projection shared by any Agent and preset; each plugin owns its nonsecret configuration and bounded readiness checks, while IMZenX save-only preparation retains an explicit-connect gate outside Thread history and never launches a channel consumer or grants permission.
@@ -49,7 +53,7 @@
 - **Fleet Settings / Host** — 桌面设置保存设备定位与加密凭证，App Server 所在 Host 子进程持有原生 TLS gateway；授权摘要持久化且可撤销，进程重启不自动撤销配对，关闭进程停止服务。
 - **Fleet Relay** — 可选自托管 TLS relay 按预授权 Host 身份转发出站连接中的原生配对、请求与事件；relay 是可见消息与 grant 的受信任 TLS 终止端，不提供端到端加密、不拥有会话状态。
 - **Fleet Rooms** — Host 对已授权 workspace 内的助手 Room 投影有限消息与原生 Room 操作，客户端沿用 operation epoch 和幂等键，不复制 Room 状态机。
-- **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。
+- **Fleet Stream Watch** — HTTPS 原生订阅或 SSH bridge 的易失事件流恢复 canonical Thread 状态，只向既有 Trigger 交付有身份的终态，不建立第二份 journal。首次完整恢复快照固定历史基线；后续 canonical 快照中新出现的已完成 Turn 必须被交付，即使 start/end 通知已被该快照 watermark 吸收，不能依赖磁盘延迟或事件提示恰好先到。观察边界只保留最后一个 canonical Turn ID（常量空间），后续完整快照必须仍包含该边界，否则明确停止观察并报告错误，不淘汰 ID 后重放历史。
 
 - **Android RemoteHostTransport** — Android 客户端用共享 ZAS 原生 wire、Host ID 与安全存储 grant 建立 TLS 连接，把公开快照/事件映射到可撤销的临时视图；epoch/watermark 恢复不改变 Host 的 canonical authority。共享工具 ownership identity 定义于无 runtime 依赖的纯类型模块，原生 wire 的 TypeScript import graph 不进入 Node/Host 工具实现。
 - **ZenX Android 控制端** — Android 只保存本地连接偏好并显示选定 Host 的 ZAS 读模型；设备、workspace 或 Thread 切换按发起身份隔离易失输入与命令回执，草稿编辑/视图选择世代避免相同文字的新稿被旧回执清除，而同归属命令结算与旧恢复视图各自核验身份；断线/失权不保留公开页面投影但未知送达围栏仍归属原 Thread，请求准入与 Host canonical Turn 终态分别呈现，不保存 Agent、Turn、Provider key 或第二份 ItemList。
@@ -87,7 +91,7 @@
 - **Provider 执行依赖持有** — 一次 Turn 或 Host 辅助模型请求对 adapter、模型元数据及 transport 的瞬时引用在真正执行结束后释放，退役资源待最后一个引用结束后关闭，不进入 journal。
 - **Host 配置候选** — prepare 产生绑定 processEpoch 与 revision 的瞬时候选，publish/discard 幂等且进程退出即丢弃；候选不成为持久配置权威。
 - **Host Provider 资源** — Host 按连接身份复用 adapter/transport，由配置快照与执行持有共同决定寿命，最后引用结束后异步关闭。
-- **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。
+- **原生恢复投影** — ZAS 为每个 Thread 保留当前 processEpoch 的单调水位与活动显示尾部，在恢复快照中与 canonical 历史一起交付，不重放执行或保存第二份会话权威。快照读取失败不截断既有订阅：连接按原顺序释放同 epoch 的临时事件，仍服从删除、退订及关闭栅栏；首次恢复失败不创建普通事件订阅，不自动重试。
 - **远程设备接入边界** — 可选的 Host-owned 原生 ZAS 网关以独立设备凭证、Host 身份和当前授权 workspace 约束读取/创建/发送/停止，只转交唯一 AppServer 的 canonical 权威，不暴露本机 descriptor、不复制 Thread 或改变默认 loopback listener。
 - **有界远程恢复页** — ZAS 网关以同一 Host epoch/watermark 与首次读取的 canonical Item 数为边界，按字节有界地逐页重读 append-only 前缀，并在单连接内暂存有界新事件与最近页重试位置；断线或水位失配重读权威快照，不持有完整镜像或另建日志。
 - **公开文本片段** — 单条合法的大文本 Item 可在多个恢复页按 UTF-16 offset 分片，客户端只在收到完整片段后合成该公开 Item，不将部分文本当作 canonical 完成事实。
@@ -141,6 +145,7 @@
 - **ToolTaskBounds** — 同一 Environment 默认最多 8 个尚未确认结束的执行体、64 个含待领取结果的任务，已完成结果保留 5 分钟；交回不释放 prepared bundle lease 或资源 fence，完成/关闭才释放，达到容量时立即告知模型等待现有任务。
 - **Tool Execution Status** — AgentRuntime 为每条新 `tool_result` 记录 `completed`、`failed` 或 `declined` 的 provider-neutral canonical 事实，Tool Runtime 只返回结果内容和 exit code，不能决定审批语义。
 - **Tool Model Content** — trusted builtin 可以让 canonical `tool_result` 携带 provider-neutral `UserInput`，由既有 Attachment Store 在后续模型采样时投影为真实媒体内容，并随 ItemList 重放而不保存 payload 副本。
+- **Chat tool-media batch projection** — OpenAI-compatible Chat serializes a contiguous tool-reply batch before supplemental user-role media; media occurrence error paths are recorded at their final wire indices, without changing canonical tool receipts or attachments.
 - **Tool Model Modality Requirement** — Tool Runtime 可声明执行所需的模型输入 modality；AgentRuntime 对已知不支持的模型在执行 body 前明确失败，而 `null` 继续表示 Unknown 并沿用尝试语义。
 - **Tool Policy Store** — Host 按稳定 tool name 持有 `ask_unknown` 的 approved/denied 决定并通过可持久化 port 注入 Tool Environment，不进入 Thread 或 canonical ItemList。
 - **Tool Runtime** — Tool Environment 按一个精确 stable tool name 注册的 specification、execution mode 与 execution body；builtin、plugin proxy 与 external proxy 使用同一单工具合同。
@@ -274,8 +279,13 @@
   默认模型；`hidden` 只表示不在客户端选择器展示，已知模型 id 仍可由既有 Thread
   或显式请求使用。
 - **ModelCatalogPreset** — 宿主版本化维护的内建 catalog 数据层，只记录仓库已确认的
-  Provider/model metadata；手工配置始终覆盖 discovery，OpenAI-compatible discovery 只补充
-  Unknown capability，而 OpenAI subscription 的官方目录替换非手工 preset metadata，失败时 preset 才作为兜底。
+  Provider/model metadata，用于首次初始化与用户显式发现、添加模型；已有 Provider 的模型列表、
+  顺序与 capability 以保存的配置为准，不因加载、升级、登录或远端目录变化回填或刷新，
+  也不依赖额外的用户管理标记。旧格式迁移保留已配置条目与选择；v1 独立配置的标题模型
+  归入同一目录，但不额外添加无配置引用的预设。
+  显式 discovery 返回候选而不保存配置：手工配置覆盖 discovery，OpenAI-compatible discovery
+  只补充 Unknown capability，OpenAI subscription 的官方目录刷新非手工候选 metadata，
+  失败时 preset 作为发现兜底；只有用户明确保存候选才修改已有配置。
 - **ZenX Subscription Quota Projection** — ZenX Host 使用当前订阅 profile 的凭证租约读取官方账户额度窗口，经 typed IPC 提供有界临时读模型；账户/请求变化使迟到结果失效，未知保持 null，不进入 Core、journal、配置或持久缓存。
 - **OpenAI Subscription Model Cache** — ZenX Host 按 ChatGPT account id 保存官方 Codex
   `/models` 的最近一次成功投影与 ETag；它只作为可替换的模型发现缓存，远端失败时依次退回
@@ -957,6 +967,8 @@ Turn 边界由 Zen canonical lifecycle 定义：`turn_started` 开始 Turn，
 `turn_completed` / `turn_aborted` 结束 Turn；完成的语义 Item 在二者之间追加。
 ZAS 当前把它们投影为 `turn/started` / `turn/completed`；CAS adapter 可将这部分
 无损映射到固定 Codex shape，但外部 rollout 命名不反向定义 canonical Turn。
+**Journal payload write** — canonical 与产品 metadata JSONL 写入共用无状态 UTF-8 完整写入 helper，在 fsync 或新 Thread 发布前处理 short write；零进展明确失败，不重放逻辑操作、不修复已写前缀。
+
 任一 canonical append Promise 拒绝后，持久化结果都视为未知：当前 Turn 停止后续
 canonical 写入，App Server 丢弃对应 Thread 与 summary 缓存并在下次读取时从 journal
 重建，不补写替代 failure 或第二个 terminal。
@@ -1218,6 +1230,15 @@ ZenX 的 `/compact --no-reference` 仅将关闭原文定位符作为 `thread/com
 ### Always On Assistant preset
 
 An assistant Room binds one real Thread to an owned roomMention Trigger.
+New Rooms also own one ordinary hourly timer Trigger with a general task-review
+prompt and exact reply Room. Its optional heartbeat Trigger reference records
+ownership only; existing Rooms acquire no timer on load, and deleting the timer
+clears the reference without recreating it. Cadence, prompt, delivery and active
+state remain the ordinary Trigger definition, without another scheduler or
+heartbeat enablement state. Trusted setup adds the preset to an existing PAW
+idempotently, preserving paused or edited definitions. Message-wakeup pause and
+heartbeat pause are independent. Room deletion retires both owned Triggers and
+remains fenced by a nonterminal wakeup's reply route.
 Its personal display name is the existing Room name; an explicit PAW rename
 atomically updates that name, its bound member name and owned Trigger mention.
 Historical messages and canonical Thread titles remain unchanged. First-use
@@ -1237,7 +1258,7 @@ stays under Core workspace instructions and file permissions, with no second
 Host identity document or bootstrap execution ledger.
 Trusted setup defaults to creating an idle Thread through the existing Host
 Project/thread-start boundary with confirmed settings; explicit existing-Thread
-binding remains available. The Room and its Trigger commit atomically in the
+binding remains available. The Room and its owned Triggers commit atomically in the
 existing automation store, after the Thread exists. A bounded Host-lifetime
 setup receipt joins duplicate requests and retains attempted creation failures;
 it is ephemeral request idempotency, not an execution ledger or automatic recovery
@@ -1317,6 +1338,8 @@ continues through the SDK's namespace, workspace fingerprint, and runtime fencin
 
 ### IMZenX PAW Room routes
 
+IMZenX projects only allowlisted, process-local SDK channel connection diagnostics over its existing private child pipe. These transient observations expire when their heartbeat stops or their child retires; they are neither bridge authority nor proof of message delivery, and never contain credentials, native session identifiers, or raw errors.
+
 IMZenX may explicitly bind an external IM conversation to an existing PAW Room in its configured workspace; a bounded private child-pipe adapter invokes the existing Room service, and the SDK delivers only explicit Room posts, keeping direct working-Thread output separate. The adapter stores route selection and projection checkpoints, never a second transcript or Agent runtime; normal Thread subscriptions remain a separate mode. Startup preparation and Room polling are scoped to the explicitly enabled deployment channels; disabling a channel retains its Room binding and checkpoint for a later re-enable. The PAW product label preserves existing assistant/companion serialization and user-chosen names.
 
 - **ZenX sidebar width** — A renderer-only local preference drives the existing shell track; viewport clamping, pointer gestures and collapsed/overlay presentation are disposable layout state and never alter Thread or Host facts.
@@ -1390,3 +1413,69 @@ does not imply delivery or permit client-side cancel/resend. This is a one-messa
 action; it does not rewrite any ingress preference or an explicitly queued sibling.
 
 ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按单调钟至少间隔 15 秒读取固定 host-visible 内存与 visible-cgroup-root v2 数值；它不是 job/child 内存归因，不探索成员或挂载路径，无 timer/进程/信号修改，独立双 sink 32 KiB/32 样本上限不占用原 4 MiB trace 预算，缺值为 null，停事件或预算耗尽后最后样本会陈旧。
+
+ZenX's unified-reference v2 text envelope extends the existing client-ID-bound quote presentation with an ordered, strictly validated list of file/Thread pointers and explicit message excerpts; it remains one canonical text part, is model-visible verbatim, preserves legacy v1 reads, and adds no Core field, automatic resolver, or frontend-owned conversation state.
+
+ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
+
+ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.
+
+- **Plugin storage generation ownership** — A Host-process namespace has one mutation queue and current value shared by runtime and first-party storage views. Replacement fences old writers before migration; candidate startup writes are owned by that candidate, rollback restores only its frozen snapshot, and publication revokes old runtime storage handles. Busy/stale access fails explicitly rather than waiting for a lease held by the replacement caller; ordinary Host views follow the current same-version value. This adds no durable journal or automatic retry and does not coordinate separate Host processes sharing one data directory.
+
+- **Plugin postcommit activation failure** — Runtime activation follows Catalog, tool-bundle and storage publication. A synchronous activation exception retains the committed generation and any successful writes, fences further invocation, and projects an explicit committed-but-failed reason through existing plugin availability/status snapshots and mutation results; it never triggers destructive rollback, old-SDK reactivation or automatic retry.
+
+### Context pressure projection
+
+Context budgeting is a disposable projection of compiled messages, the exact disclosed tool-presentation snapshot (including generated run_code SDK), and adapter-owned static instructions; it is not canonical state or provider billing. The same estimate drives compaction admission and ZenX's next-input breakdown. Message categories are out-of-band projection metadata, never serialized as model text. Last provider-reported input remains a separate historical observation.
+
+### Context usage calibration
+
+Runtime keeps one ephemeral input-usage anchor per thread. The anchor pairs the
+raw local estimate of one capability-projected request with that same sample's
+provider input usage. It stores only counts and SHA-256 fingerprints, not a
+second prompt payload. Provider input already includes its cached subset.
+A compatible append-only request uses the measured anchor plus the locally
+estimated delta. UI, admission, and compaction call the same product estimator.
+Four local category weights allocate the corrected total with integer remainders;
+they are not provider-reported per-category measurements.
+
+The scope includes provider/model/reasoning selection, adapter protocol and object
+generation, tool schemas, static instructions, input capabilities, and compaction
+boundary. The original message prefix must hash identically. Changing/replacing
+the adapter (including endpoint/configuration reload), rewriting history or media
+receipts, and compaction invalidate reuse. Invalid or absent usage does not create
+an anchor. Process restart starts uncalibrated until the next response; no journal
+migration, tokenizer download, or preflight network request is introduced.
+The underlying character heuristic remains imperfect, especially for dense text;
+the product reports one context statistic, not a second historical usage counter.
+
+Primary-source comparison (inspected 2026-10-25):
+
+- OpenCode uses a measured prompt anchor plus locally estimated later messages,
+  with provider compatibility checks:
+  https://github.com/anomalyco/opencode/blob/32b57015e5b491a789fba1534ecb472e676c9d8e/packages/core/src/session/compaction.ts
+- Cline estimates complete request payloads with a character heuristic and media
+  allowance; its compaction code bounds underestimation adjustments:
+  https://github.com/cline/cline/blob/40c5d99031fe1128189c5b52e40638d2b7787754/sdk/packages/shared/src/llms/tokens.ts
+  https://github.com/cline/cline/blob/40c5d99031fe1128189c5b52e40638d2b7787754/sdk/packages/core/src/extensions/context/compaction-shared.ts
+- Roo adds the last-message estimate to prior context tokens, and recounts after
+  truncation rather than retaining an invalid old anchor:
+  https://github.com/RooCodeInc/Roo-Code/blob/main/src/core/context-management/index.ts
+
+These are design references, not claims that their cache normalization or hidden
+reasoning policies can be copied across adapters. The product does not send
+history or unsent drafts to a provider merely because a user opens the context UI.
+
+- **Disposable Thread summary persistence** — Canonical commits await journal durability and ordered in-memory summary derivation, never projection disk I/O. A single cache writer coalesces changes with one dirty flag; shutdown offers a one-second best-effort drain, and missing/stale cache snapshots rebuild from canonical journals on restart. No mutation replay or extra durable authority is introduced.
+
+- **Synthetic UI capture lifecycle** — CI-only Chrome observers share bounded startup and teardown phases with failure receipts; they do not restart browsers, retry UI actions, change product timeouts, or own runtime state.
+
+First-party automation startup/shutdown uses the candidate SDK storage only for its awaited lifecycle read/write transaction; the shared running service keeps its normal Host storage view. Candidate authority is not installed globally or inherited by timers, old runtime writes remain fenced, and rollback closes the exact staged runtime lease before restoring its storage snapshot.
+
+First-party automation pauses new wakeup admission while either of its Host storage namespaces is being replaced. Host-only ephemeral storage fence notifications preserve existing due times, do not abort admitted programs or grant candidate writes to callbacks, and trigger a serialized read of the published or rolled-back ordinary Host snapshot before scheduling resumes. Generation-scoped subscriptions are disposed on stop; stale publication observations cannot reactivate a retired service. This is transaction-bound admission, not automatic replay of attempted effects.
+
+Known Host admission and local-program results wait outside the snapshot mutation slot while a replacement fence is closed; retirement releases these waiters without replay. Only explicitly pure result projections may be reapplied after a typed storage-fence rejection against the refreshed Host snapshot; general I/O failures remain fail-closed, and external effects are never retried.
+
+### Message local-path presentation
+
+ZenX renders conservative local file-path tokens as disposable Markdown links to the existing current-Host workspace file viewer; linkification performs no filesystem reads, grants no access, and does not alter canonical message text or model input. Host realpath containment and permissions remain authoritative.

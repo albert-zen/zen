@@ -26,7 +26,14 @@ next-cycle delivery by default while preserving the explicit event prompt and Ro
 Each Trigger independently supports `deliveryMode: "steer" | "queue"`; its choice
 does not inherit or change the Room preference. Trigger/Room wakeups are canonical
 Host input with real source identity, never fabricated human messages.
-Fleet also offers bounded immediate waits. There is no unsolicited periodic model loop.
+Fleet also offers bounded immediate waits. New PAWs include an ordinary hourly
+heartbeat Trigger that reviews the notebook and actual work status, advances
+authorized tasks, and posts only useful progress, failures or required decisions.
+The first tick is an hour after creation; opening a view never runs the model.
+Existing PAWs keep their saved configuration; add the preset explicitly in PAW
+settings. Edit, pause or delete it with the existing Trigger controls. Pausing
+message wakeups is separate from pausing the heartbeat. Deleting a PAW removes
+both owned Triggers; deleting a heartbeat never causes it to return on reload.
 Thread/Trigger facts persist normally; interrupted or unknown work must be
 inspected before resuming. The preset does not automatically replay uncertain
 side effects after restart.

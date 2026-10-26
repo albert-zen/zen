@@ -64,6 +64,116 @@ test("reference search matches nested special paths and validates binary without
   }
 });
 
+test("reference search supports filename and partial path substrings without treating them as missing directories", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-search-substring-"));
+  try {
+    for (const directory of ["src/lib", "archive"])
+      await mkdir(path.join(root, directory), { recursive: true });
+    for (const file of [
+      "README.md",
+      "src/lib/Widget.ts",
+      "src/lib/Widget-extra.ts",
+      "archive/Widget.ts",
+    ])
+      await writeFile(path.join(root, file), "");
+    const cases: [string, string[]][] = [
+      [
+        "",
+        [
+          "README.md",
+          "archive/Widget.ts",
+          "src/lib/Widget-extra.ts",
+          "src/lib/Widget.ts",
+        ],
+      ],
+      ["Widget.ts", ["archive/Widget.ts", "src/lib/Widget.ts"]],
+      [
+        "widg",
+        ["archive/Widget.ts", "src/lib/Widget-extra.ts", "src/lib/Widget.ts"],
+      ],
+      ["lib/Wid", ["src/lib/Widget-extra.ts", "src/lib/Widget.ts"]],
+      ["SRC/LIB/WID", ["src/lib/Widget-extra.ts", "src/lib/Widget.ts"]],
+      [".\\src\\lib\\Wid", ["src/lib/Widget-extra.ts", "src/lib/Widget.ts"]],
+      ["missing/Widget", []],
+      ["README.md/Widget", []],
+    ];
+    for (const [query, expected] of cases) {
+      const result = await searchWorkspaceFiles(root, query);
+      assert.deepEqual(
+        result.entries.map((entry) => entry.path),
+        expected,
+        query,
+      );
+      assert.equal(result.truncated, false, query);
+      assert.deepEqual(result.warnings ?? [], [], query);
+      assert.equal(
+        new Set(result.entries.map((entry) => entry.path)).size,
+        result.entries.length,
+        query,
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("filename search reaches later sibling folders before large siblings exhaust the scan budget", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-search-siblings-"));
+  const cwd = await realpath(root);
+  const originalOpen = fs.opendir;
+  const names = [
+    ...Array.from({ length: 12 }, (_, index) => `package-${index}`),
+    "src",
+  ];
+  let rootOpens = 0;
+  try {
+    for (const name of names) await mkdir(path.join(root, name));
+    await writeFile(path.join(root, "src", "ImportantWidget.ts"), "");
+    t.mock.method(fs, "opendir", async (directory: string) => {
+      if (directory === cwd && ++rootOpens % 2 === 0)
+        return {
+          async *[Symbol.asyncIterator]() {
+            for (const name of names)
+              yield { name, isDirectory: () => true, isFile: () => false };
+          },
+        } as Awaited<ReturnType<typeof fs.opendir>>;
+      if (path.basename(directory).startsWith("package-"))
+        return {
+          async *[Symbol.asyncIterator]() {
+            for (let index = 0; index < 1024; index++)
+              yield {
+                name: `generated-${index}.js`,
+                isDirectory: () => false,
+                isFile: () => true,
+              };
+          },
+        } as Awaited<ReturnType<typeof fs.opendir>>;
+      return originalOpen(directory);
+    });
+    syncBuiltinESMExports();
+    // An exact relative path already prioritizes src and can open this real file.
+    const precise = await searchWorkspaceFiles(root, "src/ImportantWidget.ts");
+    assert.deepEqual(precise.entries, [
+      { name: "ImportantWidget.ts", path: "src/ImportantWidget.ts" },
+    ]);
+    assert.equal(
+      (await validateWorkspaceFileReference(root, precise.entries[0]!.path))
+        .path,
+      "src/ImportantWidget.ts",
+    );
+    for (const query of ["ImportantWidget.ts", "widget"]) {
+      const result = await searchWorkspaceFiles(root, query);
+      assert.deepEqual(result.entries, precise.entries, query);
+      assert.equal(result.truncated, true);
+      assert.ok(result.scanned <= 10_000);
+    }
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("reference search reports truncation and does not follow directory junctions", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zenx-search-bound-"));
   try {

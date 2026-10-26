@@ -41,6 +41,7 @@ export interface Room {
   assistant?: {
     threadId: string;
     triggerId: string;
+    heartbeatTriggerId?: string;
     deliveryMode?: "steer" | "queue";
   };
   id: string;
@@ -124,6 +125,7 @@ export interface ZenXRoomsTrustedService {
     mode: "steer" | "queue",
   ): Promise<void>;
   setAssistantReplies?(roomId: string, enabled: boolean): Promise<void>;
+  addAssistantHeartbeat?(roomId: string): Promise<unknown>;
   createRoom(input: { name: string; members: RoomMember[] }): Promise<Room>;
   renameRoom(roomId: string, name: string): Promise<void>;
   deleteRoom(roomId: string): Promise<void>;
@@ -524,6 +526,13 @@ export function createZenXTrustedPlugin(
           );
           return { updated: true };
         }
+        case "zenx_rooms_assistant_heartbeat":
+          if (uiInput === null || !service.addAssistantHeartbeat)
+            throw new Error("Trusted Room UI required");
+          fields(args, ["roomId"]);
+          return await service.addAssistantHeartbeat(
+            string(args, "roomId", MAX_ID_BYTES),
+          );
         case "zenx_rooms_assistant_replies":
           if (uiInput === null || !service.setAssistantReplies)
             throw new Error("Trusted Room UI required");

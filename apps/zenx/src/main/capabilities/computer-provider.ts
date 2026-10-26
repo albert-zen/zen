@@ -1322,7 +1322,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   ): Promise<void> {
     requireMacOs();
     await this.#foregroundInput.run(
-      { operation: "scroll", deltaY: Math.round(deltaY) },
+      { operation: "scroll", deltaY },
       signal,
       onStopping,
     );
@@ -1365,6 +1365,20 @@ export class MacForegroundInputDriver {
     onStopping?: () => void,
   ): Promise<void> {
     signal.throwIfAborted();
+    if (request.operation === "scroll") {
+      const deltaY = request.deltaY;
+      if (
+        typeof deltaY !== "number" ||
+        !Number.isFinite(deltaY) ||
+        Math.abs(deltaY) > 10_000 ||
+        Math.round(deltaY) === 0
+      ) {
+        throw new Error(
+          "macOS scroll deltaY must round to a non-zero pixel amount between -10000 and 10000",
+        );
+      }
+      request = { ...request, deltaY: Math.round(deltaY) };
+    }
     const executable = await (this.#executable ??= this.#compileHelper());
     signal.throwIfAborted();
     await this.#runProcess(
@@ -1708,6 +1722,11 @@ func displayLabel(_ element: AXUIElement) -> String {
     let value = textAttribute(element, name)
     if !value.isEmpty { return value }
   }
+  // Static text exposes its displayed content through AXValue. Do not read
+  // editable or secure-field values as labels, or add values to selectors.
+  if textAttribute(element, kAXRoleAttribute) == kAXStaticTextRole {
+    return textAttribute(element, kAXValueAttribute)
+  }
   return ""
 }
 
@@ -2010,9 +2029,16 @@ let keyCodes: [String: CGKeyCode] = [
 ]
 
 func postKey(_ code: CGKeyCode) {
-  CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)?.post(tap: .cghidEventTap)
+  // Preserve construction timing: native event metadata reflects creation time.
+  guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) else {
+    fail("could not construct keyboard press; no events dispatched")
+  }
+  down.post(tap: .cghidEventTap)
   usleep(20_000)
-  CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)?.post(tap: .cghidEventTap)
+  guard let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else {
+    fail("could not construct keyboard release; input partially dispatched; outcome unknown; do not retry automatically")
+  }
+  up.post(tap: .cghidEventTap)
 }
 
 switch operation {
@@ -2025,16 +2051,33 @@ case "click":
   let button: CGMouseButton = right ? .right : .left
   let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
   let up: CGEventType = right ? .rightMouseUp : .leftMouseUp
-  CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button)?.post(tap: .cghidEventTap)
-  CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: point, mouseButton: button)?.post(tap: .cghidEventTap)
+  guard let moveEvent = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button) else {
+    fail("could not construct mouse movement; no events dispatched")
+  }
+  moveEvent.post(tap: .cghidEventTap)
+  guard let downEvent = CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: point, mouseButton: button) else {
+    fail("could not construct mouse press; pointer movement dispatched; outcome unknown; do not retry automatically")
+  }
+  downEvent.post(tap: .cghidEventTap)
   usleep(30_000)
-  CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: point, mouseButton: button)?.post(tap: .cghidEventTap)
+  guard let upEvent = CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: point, mouseButton: button) else {
+    fail("could not construct mouse release; input partially dispatched; outcome unknown; do not retry automatically")
+  }
+  upEvent.post(tap: .cghidEventTap)
 case "key":
   guard let key = request["key"] as? String, let code = keyCodes[key] else { fail("unsupported key") }
   postKey(code)
 case "scroll":
-  guard let delta = (request["deltaY"] as? NSNumber)?.int32Value else { fail("invalid scroll request") }
-  CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -delta, wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
+  guard let number = request["deltaY"] as? NSNumber,
+        number.doubleValue.isFinite,
+        number.doubleValue.rounded() == number.doubleValue,
+        number.doubleValue != 0,
+        abs(number.doubleValue) <= 10000 else { fail("invalid scroll request") }
+  let delta = number.int32Value
+  guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -delta, wheel2: 0, wheel3: 0) else {
+    fail("could not construct scroll input; no events dispatched")
+  }
+  event.post(tap: .cghidEventTap)
 default:
   fail("unsupported foreground input operation")
 }

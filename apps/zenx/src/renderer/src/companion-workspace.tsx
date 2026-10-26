@@ -11,7 +11,7 @@ import type {
 import type { RoomConversation } from "./room-conversations.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import { ThreadTitleEditor } from "./thread-title-editor.js";
-import { threadTitle } from "./thread-list.js";
+import { threadEditTitle, threadTitle } from "./thread-list.js";
 
 export interface CompanionViewState {
   selected: string;
@@ -34,7 +34,13 @@ export function CompanionWorkspace({
   onViewChange,
   renderConversation,
   onRenameThread,
+  triggerSourceRequest,
 }: {
+  triggerSourceRequest?: {
+    threadId: string;
+    triggerId: string;
+    requestId: number;
+  };
   onRenameThread?(threadId: string, title: string): Promise<void>;
   renderConversation?(threadId: string): React.ReactNode;
   room: RoomConversation;
@@ -230,6 +236,7 @@ export function CompanionWorkspace({
           {workingThread && onRenameThread ? (
             <ThreadTitleEditor
               key={workingThread.threadId}
+              editTitle={threadEditTitle(workingThread)}
               title={threadTitle(workingThread)}
               editable={
                 !workingThread.archived &&
@@ -590,7 +597,7 @@ export function CompanionWorkspace({
       openedTabs={tabs}
       onTabsChange={setTabs}
       navigate={navigate}
-      threadContext={{ threads }}
+      threadContext={{ threads, triggerSourceRequest }}
       customTabs={tabsContent}
       contextControl={
         <label className="companion-context">

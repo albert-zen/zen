@@ -5,7 +5,6 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  applyBuiltInModelCatalogPresets,
   hostConfigFromProfile,
   migrateLegacyHostProfile,
   structuredLegacyModelCatalog,
@@ -45,6 +44,92 @@ const profile: ZenXHostProfile = {
   visibleSubagentThreadIds: [],
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
+
+for (const legacyOwnershipMarker of [false, true]) {
+  test(`loading a saved subscription catalog preserves deletions and metadata (legacy marker: ${legacyOwnershipMarker})`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-saved-catalog-"),
+    );
+    const file = path.join(directory, "host-profile.json");
+    try {
+      const models = structuredLegacyModelCatalog("openai-subscription", [
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+      ]).map((model, index) => ({
+        ...model,
+        displayName: `My model ${index}`,
+        description: "Saved capability choices",
+        hidden: index === 0,
+        contextWindow: 64_000,
+        supportedReasoningEfforts: ["high"],
+        defaultReasoningEffort: "high",
+        inputModalities: ["text" as const],
+      }));
+      const reference = {
+        providerProfileId: "openai-codex",
+        modelId: "gpt-5.6-terra",
+      };
+      await writeFile(
+        file,
+        JSON.stringify({
+          ...profile,
+          providerProfiles: [
+            {
+              providerProfileId: "openai-codex",
+              type: "openai-subscription",
+              displayName: "OpenAI subscription",
+              models,
+              ...(legacyOwnershipMarker ? { modelsUserConfigured: true } : {}),
+            },
+          ],
+          defaultModel: reference,
+          titleModel: reference,
+        }),
+      );
+      const store = new ZenXHostProfileStore(file);
+      for (let load = 0; load < 2; load++) {
+        const loaded = await store.readOptional();
+        assert.deepEqual(loaded?.providerProfiles[0]?.models, models);
+        assert.deepEqual(loaded?.defaultModel, reference);
+        assert.deepEqual(loaded?.titleModel, reference);
+        const persisted = JSON.parse(await readFile(file, "utf8"));
+        assert.deepEqual(persisted.providerProfiles[0].models, models);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("loading a saved compatible catalog keeps explicitly unknown capabilities", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-unknown-catalog-"),
+  );
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    const models = profile.providerProfiles[0]!.models.map((model, index) =>
+      index === 1
+        ? {
+            ...model,
+            supportedReasoningEfforts: null,
+            defaultReasoningEffort: null,
+            inputModalities: null,
+            contextWindow: null,
+          }
+        : model,
+    );
+    await store.write({
+      ...profile,
+      providerProfiles: [{ ...profile.providerProfiles[0]!, models }],
+    });
+    const loaded = await store.readOptional();
+    assert.deepEqual(loaded?.providerProfiles[0]?.models, models);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("normalizes explicit child Thread Sidebar visibility independently of Pins", () => {
   const legacy = { ...profile } as Record<string, unknown>;
@@ -407,174 +492,6 @@ test("v1 migration preserves fake and OpenAI subscription runtime identities", (
   }
 });
 
-test("upgrades an existing subscription catalog with current presets while preserving manual overrides", () => {
-  const oldTerra = {
-    ...structuredLegacyModelCatalog("openai-subscription", [
-      "gpt-5.6-terra",
-    ])[0]!,
-    supportedReasoningEfforts: ["medium"],
-    inputModalities: ["text" as const],
-  };
-  const luna = {
-    ...structuredLegacyModelCatalog("openai-subscription", [
-      "gpt-5.6-luna",
-    ])[0]!,
-    displayName: "Luna override",
-    source: "manual" as const,
-  };
-  const upgraded = applyBuiltInModelCatalogPresets({
-    ...profile,
-    providerProfiles: [
-      {
-        providerProfileId: "openai-codex",
-        type: "openai-subscription",
-        displayName: "OpenAI subscription",
-        models: [oldTerra, luna],
-      },
-    ],
-    defaultModel: {
-      providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-terra",
-    },
-    titleModel: {
-      providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-terra",
-    },
-  });
-  assert.deepEqual(
-    upgraded.providerProfiles[0]?.models.map((model) => model.id),
-    ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
-  );
-  assert.deepEqual(
-    upgraded.providerProfiles[0]?.models[1]?.supportedReasoningEfforts,
-    ["low", "medium", "high", "xhigh", "max", "ultra"],
-  );
-  assert.deepEqual(upgraded.providerProfiles[0]?.models[1]?.inputModalities, [
-    "text",
-    "image",
-  ]);
-  assert.equal(
-    upgraded.providerProfiles[0]?.models[2]?.displayName,
-    "Luna override",
-  );
-  assert.equal(upgraded.providerProfiles[0]?.models[2]?.source, "manual");
-});
-
-test("built-in preset refresh preserves a user's hidden selection", () => {
-  const hidden = {
-    ...structuredLegacyModelCatalog("openai-subscription", [
-      "gpt-5.6-terra",
-    ])[0]!,
-    hidden: true,
-  };
-  const upgraded = applyBuiltInModelCatalogPresets({
-    ...profile,
-    providerProfiles: [
-      {
-        providerProfileId: "openai-codex",
-        type: "openai-subscription",
-        displayName: "OpenAI subscription",
-        models: [hidden],
-      },
-    ],
-    defaultModel: {
-      providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-terra",
-    },
-    titleModel: {
-      providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-terra",
-    },
-  });
-  assert.equal(
-    upgraded.providerProfiles[0]?.models.find(
-      (model) => model.id === "gpt-5.6-terra",
-    )?.hidden,
-    true,
-  );
-});
-
-test("a user-configured subscription catalog is never re-seeded with built-in presets", () => {
-  // Deleting gpt-5.4/5.5 in Settings used to resurrect them on the next
-  // profile load or after repackaging, because presets were injected
-  // unconditionally. Once the user owns the catalog, Host leaves it as-is.
-  const kept = structuredLegacyModelCatalog("openai-subscription", [
-    "gpt-5.6-terra",
-  ])[0]!;
-  const owned = applyBuiltInModelCatalogPresets({
-    ...profile,
-    providerProfiles: [
-      {
-        providerProfileId: "openai-codex",
-        type: "openai-subscription",
-        displayName: "OpenAI subscription",
-        models: [kept],
-        modelsUserConfigured: true,
-      },
-    ],
-    defaultModel: {
-      providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-terra",
-    },
-    titleModel: {
-      providerProfileId: "openai-codex",
-      modelId: "gpt-5.6-terra",
-    },
-  });
-  assert.deepEqual(
-    owned.providerProfiles[0]?.models.map((model) => model.id),
-    ["gpt-5.6-terra"],
-  );
-  assert.equal(
-    owned.providerProfiles[0]?.modelsUserConfigured,
-    true,
-    "the ownership marker survives validation",
-  );
-  // Without the marker the historical seeding behavior is unchanged.
-  const seeded = applyBuiltInModelCatalogPresets({
-    ...owned,
-    providerProfiles: [
-      {
-        providerProfileId: "openai-codex",
-        type: "openai-subscription",
-        displayName: "OpenAI subscription",
-        models: [kept],
-      },
-    ],
-  });
-  assert.deepEqual(
-    seeded.providerProfiles[0]?.models.map((model) => model.id),
-    ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
-  );
-});
-
-test("migrates unconfigured compatible models to text-only without inferring provider controls", () => {
-  const unconfigured = {
-    ...profile.providerProfiles[0]!.models[1]!,
-    source: "manual" as const,
-    supportedReasoningEfforts: null,
-    defaultReasoningEffort: null,
-    inputModalities: null,
-    contextWindow: null,
-  };
-  const upgraded = applyBuiltInModelCatalogPresets({
-    ...profile,
-    providerProfiles: [
-      {
-        ...profile.providerProfiles[0]!,
-        models: [profile.providerProfiles[0]!.models[0]!, unconfigured],
-      },
-    ],
-    titleModel: profile.defaultModel,
-  });
-
-  const migrated = upgraded.providerProfiles[0]!.models[1]!;
-  assert.deepEqual(migrated.supportedReasoningEfforts, []);
-  assert.equal(migrated.defaultReasoningEffort, null);
-  assert.deepEqual(migrated.inputModalities, ["text"]);
-  assert.equal(migrated.contextWindow, null);
-});
-
 test("migrates v2 string catalogs deterministically without changing active model references", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-profile-v2-"));
   const file = path.join(directory, "host-profile.json");
@@ -623,11 +540,7 @@ test("migrates v2 string catalogs deterministically without changing active mode
         model.defaultReasoningEffort,
       ]),
       [
-        ["gpt-5.6-sol", "preset", "medium"],
         ["gpt-5.6-terra", "preset", "medium"],
-        ["gpt-5.6-luna", "preset", "medium"],
-        ["gpt-5.5", "preset", "medium"],
-        ["gpt-5.4", "preset", "medium"],
         ["custom-confirmed", "legacy", "medium"],
       ],
     );

@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Manage shared ZenX Room collaboration.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -820,6 +820,20 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536,
+      "name": "zenx_rooms_assistant_heartbeat",
+      "description": "Trusted UI only: explicitly add the hourly PAW heartbeat preset to an existing Room. Returns an existing preset unchanged when present; never re-enables a paused timer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "roomId": { "type": "string", "maxLength": 512 } },
+        "required": ["roomId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 65536,
       "name": "zenx_rooms_assistant_delivery",
       "description": "Trusted UI only: choose soft steer or explicit next-Turn queue for messages in this assistant Room. Independent of Trigger and Composer preferences.",
       "inputSchema": {
@@ -1034,6 +1048,11 @@
         "id": "assistant-delivery",
         "title": "Set assistant Room message delivery",
         "tool": "zenx_rooms_assistant_delivery"
+      },
+      {
+        "id": "assistant-heartbeat",
+        "title": "Add hourly heartbeat",
+        "tool": "zenx_rooms_assistant_heartbeat"
       },
       {
         "id": "prepare-introduction",

@@ -209,6 +209,60 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+test("QQ connection state follows channel facts and successful Connect becomes an explicit reconnect action", async () => {
+  let connected = false;
+  let channelState = "connecting";
+  const harness = await mountImPage(async (command) => {
+    if (command === "readiness") return ready;
+    if (command === "connect") connected = true;
+    return {
+      state: connected ? "connected" : "prepared",
+      configuration: preparedConfig,
+      activeConfiguration: connected ? preparedConfig : null,
+      channels: connected ? [{ id: "qq", state: channelState }] : [],
+    };
+  });
+  try {
+    await click(button("Check readiness"));
+    await click(button("Confirm connection…"));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const confirmation = dialog.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    )!;
+    await click(confirmation);
+    await click(button("Connect", dialog));
+    assert.match(document.body.textContent ?? "", /QQ connecting/);
+    assert.equal(
+      Array.from(document.querySelectorAll("button")).some(
+        (element) => element.textContent?.trim() === "Confirm connection…",
+      ),
+      false,
+    );
+    assert.equal(
+      button("Reconnect…").classList.contains("secondary-button"),
+      true,
+    );
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /You can confirm connection/,
+    );
+    for (const [state, label] of [
+      ["ready", "QQ connected"],
+      ["reconnecting", "QQ reconnecting"],
+      ["disconnected", "QQ not connected"],
+      ["unknown", "QQ status unavailable"],
+    ]) {
+      channelState = state!;
+      await click(button("Refresh status"));
+      assert.ok((document.body.textContent ?? "").includes(label!));
+      if (state !== "ready")
+        assert.doesNotMatch(document.body.textContent ?? "", /QQ connected/);
+    }
+  } finally {
+    await harness.close();
+  }
+});
 async function mountImPage(
   execute: (command: string, input: unknown) => Promise<unknown>,
   nativeApi?: {
@@ -282,6 +336,74 @@ function button(
   assert(result, `Missing button: ${label}`);
   return result;
 }
+
+test("a failed status refresh clears QQ ready instead of retaining a green connection", async () => {
+  let fail = false;
+  const harness = await mountImPage(async () => {
+    if (fail) throw new Error("Test Host unavailable");
+    return {
+      state: "connected",
+      configuration: preparedConfig,
+      channels: [{ id: "qq", state: "ready" }],
+    };
+  });
+  try {
+    assert.match(document.body.textContent ?? "", /QQ connected/);
+    fail = true;
+    await click(button("Refresh status"));
+    assert.match(document.body.textContent ?? "", /QQ status unavailable/);
+    assert.doesNotMatch(document.body.textContent ?? "", /QQ connected/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("a running older plugin without channel observations never implies QQ readiness", async () => {
+  const harness = await mountImPage(async () => ({
+    state: "connected",
+    configuration: preparedConfig,
+  }));
+  try {
+    assert.match(
+      document.body.textContent ?? "",
+      /Channel connection status unavailable/,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /QQ connected/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("QQ ready expires even while a pending readiness operation suspends status polling", async () => {
+  const pending = deferred<unknown>();
+  const harness = await mountImPage(async (command) => {
+    if (command === "readiness") return pending.promise;
+    return {
+      state: "connected",
+      configuration: preparedConfig,
+      channels: [{ id: "qq", state: "ready" }],
+    };
+  });
+  const original = harness.dom.window.setTimeout.bind(harness.dom.window);
+  let expire: (() => void) | undefined;
+  harness.dom.window.setTimeout = ((handler, timeout, ...args) => {
+    if (timeout === 10000 && typeof handler === "function")
+      expire = handler as () => void;
+    return original(handler, timeout, ...args);
+  }) as typeof harness.dom.window.setTimeout;
+  try {
+    await click(button("Refresh status"));
+    await click(button("Check readiness"));
+    assert.match(document.body.textContent ?? "", /QQ connected/);
+    assert.ok(expire);
+    await act(async () => expire!());
+    assert.match(document.body.textContent ?? "", /QQ status unavailable/);
+    assert.doesNotMatch(document.body.textContent ?? "", /QQ connected/);
+  } finally {
+    await harness.close();
+    pending.resolve(ready);
+  }
+});
 async function click(element: HTMLElement) {
   await act(async () => element.click());
 }
@@ -488,7 +610,7 @@ test("IM connect requires fresh saved preparation and explicit single-consumer c
     });
     assert.match(
       document.body.textContent ?? "",
-      /Local process status does not prove actual message delivery on channels such as QQ/,
+      /Connected confirms the channel connection. Verify sending and receiving in the bot chat/,
     );
   } finally {
     connection.resolve({ state: "prepared", configuration: preparedConfig });
@@ -546,7 +668,7 @@ test("IM save races preserve newer drafts, reject duplicate submits and do not r
       document.body.textContent ?? "",
       /The current connection still uses the previous runtime configuration/,
     );
-    assert.equal(button("Confirm connection…").disabled, true);
+    assert.equal(button("Reconnect…").disabled, true);
     await harness.render();
     assert.equal(
       document.querySelector<HTMLInputElement>('input[value="/newer-draft"]')
@@ -1111,7 +1233,7 @@ test("same-path managed IM edits show the explicit pending gate while the old co
       document.querySelector(".imzenx-active-note")?.textContent ?? "",
       /Newly saved preparation or channel settings take effect after an explicit connection/,
     );
-    assert.equal(button("Confirm connection…").disabled, true);
+    assert.equal(button("Reconnect…").disabled, true);
     assert.equal(
       harness.calls.some((call) => call.command === "connect"),
       false,
@@ -1452,7 +1574,7 @@ test("IM continuation keyboard edits preserve a newer draft across late Save and
     );
     assert.equal(harness.drafts.current.imzenx?.dirty, true);
     await click(button("Check readiness"));
-    assert.equal(button("Confirm connection…").disabled, true);
+    assert.equal(button("Reconnect…").disabled, true);
     await click(button("Save preparation"));
     assert.deepEqual(
       harness.calls.find(({ command }) => command === "prepare")?.input,

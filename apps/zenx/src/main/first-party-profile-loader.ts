@@ -6,7 +6,7 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   imzenx: {
     pluginId: "imzenx",
     packageName: "@zenx/imzenx-plugin",
-    tarball: "zenx-imzenx-plugin-1.0.2.tgz",
+    tarball: "zenx-imzenx-plugin-1.0.3.tgz",
   },
   browser: {
     pluginId: "browser",
@@ -143,7 +143,9 @@ export function createDelegatingFirstPartyProfileLoader(
     // Capture the selected service for this runtime generation. Provider
     // replacement stages a different candidate without redirecting calls from
     // the still-published generation before the Catalog commit.
-    const selectedService = service();
+    const selectedPackage = service();
+    const selectedService =
+      selectedPackage.createRuntime?.() ?? selectedPackage;
     const create = module["createZenXTrustedPlugin"];
     if (typeof create !== "function")
       throw new Error("Bundled first-party runtime factory is missing");

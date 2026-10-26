@@ -246,6 +246,123 @@ const multiProviderSettings: PublicHostSettings = {
   apiKeyProviderProfileIds: ["profile-alpha", "profile-beta"],
 };
 
+test("Initial settings failure stops loading and retries only on explicit request", async () => {
+  let calls = 0;
+  let resolveRetry: ((value: PublicHostSettings) => void) | undefined;
+  const retry = new Promise<PublicHostSettings>((resolve) => {
+    resolveRetry = resolve;
+  });
+  const harness = await mountSettings("models", {
+    get: async () => {
+      calls++;
+      if (calls === 1) throw new Error("Synthetic settings unavailable");
+      return retry;
+    },
+  });
+  try {
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Synthetic settings unavailable/,
+    );
+    assert.ok(
+      document.querySelector(".loading-ring") === null,
+      "Settled failure must not show a loading ring",
+    );
+    assert.equal(calls, 1);
+    await act(async () =>
+      exactButtonRequired("Retry loading settings").click(),
+    );
+    assert.equal(calls, 2);
+    assert.ok(
+      document.querySelector('[role="alert"]') === null,
+      "Retry must clear the old error",
+    );
+    assert.ok(document.querySelector(".loading-ring"));
+    assert.ok(
+      exactButton("Retry loading settings") === undefined,
+      "Pending retry must not offer a second retry action",
+    );
+    await act(async () => {
+      resolveRetry?.(settings);
+      await retry;
+    });
+    assert.ok(
+      document.querySelector(".page-loading") === null,
+      "Successful loading must reveal settings",
+    );
+    assert.equal(calls, 2);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Failed settings retry remains actionable without an automatic retry loop", async () => {
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    get: async () => {
+      calls++;
+      throw new Error(`Synthetic failure ${calls}`);
+    },
+  });
+  try {
+    await act(async () =>
+      exactButtonRequired("Retry loading settings").click(),
+    );
+    assert.equal(calls, 2);
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /Synthetic failure 2/,
+    );
+    assert.ok(exactButton("Retry loading settings"));
+    assert.ok(
+      document.querySelector(".loading-ring") === null,
+      "Settled failure must not show a loading ring",
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("Settings retry ignores a response after its active scope is left", async () => {
+  let calls = 0;
+  let resolveRetry: ((value: PublicHostSettings) => void) | undefined;
+  const retry = new Promise<PublicHostSettings>((resolve) => {
+    resolveRetry = resolve;
+  });
+  const harness = await mountSettings("models", {
+    get: async () => {
+      calls++;
+      if (calls === 1) throw new Error("Synthetic failure");
+      return retry;
+    },
+  });
+  try {
+    await act(async () =>
+      exactButtonRequired("Retry loading settings").click(),
+    );
+    await act(async () =>
+      exactButtonRequired("Toggle settings visibility").click(),
+    );
+    await act(async () => {
+      resolveRetry?.(settings);
+      await retry;
+    });
+    assert.ok(document.querySelector(".page-loading"));
+    assert.equal(document.querySelectorAll(".provider-profile-card").length, 0);
+    assert.equal(calls, 2);
+    await act(async () =>
+      exactButtonRequired("Toggle settings visibility").click(),
+    );
+    assert.ok(
+      document.querySelector(".page-loading") === null,
+      "Successful loading must reveal settings",
+    );
+    assert.equal(calls, 3);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("Browser setup focus waits for settings to finish loading", async () => {
   let finishLoading: ((value: PublicHostSettings) => void) | undefined;
   const pendingSettings = new Promise<PublicHostSettings>((resolve) => {
@@ -3628,3 +3745,262 @@ test("Settings Plugins uses the plug icon while Context compaction retains compr
     await unmount(harness);
   }
 });
+
+test("provider editing protects the in-memory draft from other card actions and returns focus", async () => {
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+  });
+  try {
+    const opener = await waitFor(() => labeledButton("Edit Alpha"));
+    await click(opener);
+    await changeControl(requiredInput("Display name"), "Unsaved Alpha");
+    await changeControl(requiredInput("Model 2"), "unsaved-model");
+    await changeControl(requiredInput("API key"), "synthetic-unsaved-key");
+    await changeControl(
+      requiredInput("Model 2 context window (Required)"),
+      "64000",
+    );
+    const logoInput = document.querySelector<HTMLInputElement>(
+      'input[type="file"][accept="image/png,image/jpeg,image/webp"]',
+    )!;
+    Object.defineProperty(logoInput, "files", {
+      configurable: true,
+      value: [
+        new window.File([Buffer.from("synthetic logo")], "unsaved-logo.png", {
+          type: "image/png",
+        }),
+      ],
+    });
+    await act(async () => {
+      logoInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    await waitFor(() =>
+      document
+        .querySelector(".provider-editor")
+        ?.textContent?.includes("unsaved-logo.png")
+        ? true
+        : undefined,
+    );
+    await click(exactButtonRequired("General"));
+    await click(exactButtonRequired("Models & provider"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    await click(exactButtonRequired("Toggle settings visibility"));
+    for (const label of [
+      "Edit Alpha",
+      "Edit Beta",
+      "Delete Alpha",
+      "Delete Beta",
+    ]) {
+      const button = labeledButtonRequired(label);
+      await click(button);
+      assert.equal(requiredInput("Display name").value, "Unsaved Alpha");
+      assert.equal(requiredInput("Model 2").value, "unsaved-model");
+      assert.equal(requiredInput("API key").value, "synthetic-unsaved-key");
+      assert.equal(
+        requiredInput("Model 2 context window (Required)").value,
+        "64000",
+      );
+      assert.match(
+        document.querySelector(".provider-editor")?.textContent ?? "",
+        /unsaved-logo.png/,
+      );
+      assert.equal(button.disabled, true);
+      assert.ok(button.getAttribute("aria-describedby"));
+    }
+    const cancel = document.querySelector<HTMLButtonElement>(
+      ".provider-editor-head button",
+    )!;
+    cancel.focus();
+    await click(cancel);
+    assert.equal(!!document.querySelector(".provider-editor"), false);
+    assert.equal(document.activeElement === opener, true);
+    assert.equal(opener.disabled, false);
+    await click(labeledButtonRequired("Edit Beta"));
+    assert.equal(requiredInput("Display name").value, "Beta");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("provider add cancel returns focus to the remounted custom-add button", async () => {
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+  });
+  try {
+    await click(await waitFor(() => exactButton("Add custom provider")));
+    const cancel = document.querySelector<HTMLButtonElement>(
+      ".provider-editor-head button",
+    )!;
+    cancel.focus();
+    await click(cancel);
+    assert.equal(
+      document.activeElement === exactButtonRequired("Add custom provider"),
+      true,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const outcome of ["success", "failure"] as const) {
+  test(`provider pending save protects editor; ${outcome} preserves logical focus and draft`, async () => {
+    let finish!: (value: PublicHostSettings) => void;
+    let fail!: (reason: Error) => void;
+    let attempts = 0;
+    const harness = await mountSettings("models", {
+      initialSettings: multiProviderSettings,
+      editProvider: async () => {
+        attempts += 1;
+        return await new Promise<PublicHostSettings>((resolve, reject) => {
+          finish = resolve;
+          fail = reject;
+        });
+      },
+    });
+    try {
+      const opener = await waitFor(() => labeledButton("Edit Alpha"));
+      await click(opener);
+      await changeControl(requiredInput("Display name"), "Pending draft");
+      await click(exactButtonRequired("Save provider"));
+      const cancels = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".provider-editor button",
+        ),
+      ].filter((button) => button.textContent === "Cancel");
+      assert.equal(cancels.length, 2);
+      for (const cancel of cancels) {
+        assert.equal(cancel.disabled, true);
+        await click(cancel);
+      }
+      await click(labeledButtonRequired("Edit Beta"));
+      await act(async () =>
+        document
+          .querySelector(".provider-editor form")!
+          .dispatchEvent(
+            new window.Event("submit", { bubbles: true, cancelable: true }),
+          ),
+      );
+      assert.equal(attempts, 1);
+      assert.equal(requiredInput("Display name").matches(":disabled"), true);
+      assert.equal(
+        document
+          .querySelector(".provider-editor form")
+          ?.getAttribute("aria-busy"),
+        "true",
+      );
+      assert.equal(requiredInput("Display name").value, "Pending draft");
+      await act(async () =>
+        outcome === "success"
+          ? finish(multiProviderSettings)
+          : fail(new Error("Synthetic save failure")),
+      );
+      if (outcome === "success") {
+        assert.equal(!!document.querySelector(".provider-editor"), false);
+        assert.equal(document.activeElement === opener, true);
+      } else {
+        assert.equal(requiredInput("Display name").value, "Pending draft");
+        assert.equal(requiredInput("Display name").matches(":disabled"), false);
+        assert.equal(labeledButtonRequired("Edit Beta").disabled, true);
+        const cancel = document.querySelector<HTMLButtonElement>(
+          ".provider-editor-head button",
+        )!;
+        assert.equal(cancel.disabled, false);
+        await click(cancel);
+        assert.equal(document.activeElement === opener, true);
+      }
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("late provider save does not steal focus from another Settings tab or restore it on return", async () => {
+  let finish!: (value: PublicHostSettings) => void;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    editProvider: async () =>
+      await new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  try {
+    await click(await waitFor(() => labeledButton("Edit Alpha")));
+    await click(exactButtonRequired("Save provider"));
+    await click(exactButtonRequired("General"));
+    const destination = requiredInput("Maximum tool rounds");
+    destination.focus();
+    await act(async () => finish(multiProviderSettings));
+    assert.equal(document.activeElement === destination, true);
+    const tab = exactButtonRequired("Models & provider");
+    tab.focus();
+    await click(tab);
+    assert.equal(document.activeElement === tab, true);
+    assert.equal(!!document.querySelector(".provider-editor"), false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const navigation of [
+  "none",
+  "typing",
+  "pointer",
+  "tab",
+  "window",
+  "activity",
+] as const) {
+  test(`provider Save after native-style blur respects ${navigation} focus intent`, async () => {
+    let finish!: (value: PublicHostSettings) => void;
+    const harness = await mountSettings("models", {
+      initialSettings: multiProviderSettings,
+      editProvider: async () =>
+        await new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    try {
+      const opener = await waitFor(() => labeledButton("Edit Alpha"));
+      await click(opener);
+      const save = exactButtonRequired("Save provider");
+      save.focus();
+      await click(save);
+      // Chromium does this automatically when the focused control is disabled.
+      // JSDOM ignores blur() on disabled controls; temporarily enable only to
+      // emulate Chromium's automatic blur, then restore the pending DOM state.
+      const fieldset = document.querySelector<HTMLFieldSetElement>(
+        ".provider-editor fieldset",
+      )!;
+      fieldset.disabled = false;
+      save.disabled = false;
+      save.blur();
+      fieldset.disabled = true;
+      save.disabled = true;
+      assert.equal(document.activeElement === document.body, true);
+      if (navigation === "pointer")
+        document.body.dispatchEvent(
+          new window.Event("pointerdown", { bubbles: true }),
+        );
+      if (navigation === "typing" || navigation === "tab")
+        document.body.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: navigation === "tab" ? "Tab" : "a",
+            bubbles: true,
+          }),
+        );
+      if (navigation === "window")
+        window.dispatchEvent(new window.Event("blur"));
+      if (navigation === "activity")
+        await click(exactButtonRequired("Toggle settings visibility"));
+      await act(async () => finish(multiProviderSettings));
+      if (navigation === "activity")
+        await click(exactButtonRequired("Toggle settings visibility"));
+      assert.equal(
+        document.activeElement === opener,
+        navigation === "none" || navigation === "typing",
+      );
+      assert.equal(!!document.querySelector(".provider-editor"), false);
+    } finally {
+      await unmount(harness);
+    }
+  });
+}

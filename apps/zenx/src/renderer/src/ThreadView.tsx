@@ -1,3 +1,14 @@
+import { triggerMessagePresentation } from "./trigger-message-presentation.js";
+import { InlineComposerEditor } from "./InlineComposerEditor.js";
+import type { ComposerInput } from "./composer-input.js";
+import { normalizeInlineReferences } from "./reference-draft.js";
+import { InlineReferenceContent } from "./InlineReferenceContent.js";
+import { ReferenceToken } from "./ReferenceToken.js";
+import { MessageSelectionActions, addMessageQuote } from "./message-quote.js";
+import {
+  parseSentReferenceContent,
+  type SentMessageQuote,
+} from "./reference-draft.js";
 import { OriginalHistoryReference } from "./OriginalHistory.js";
 import { ThreadDebugger } from "./ThreadDebugger.js";
 import {
@@ -43,7 +54,7 @@ import {
 } from "react";
 
 import type { AttachmentRef } from "../../../../../src/attachment.js";
-import type { FailureItem } from "../../../../../src/item.js";
+import type { CanonicalItem, FailureItem } from "../../../../../src/item.js";
 import {
   isTurnEndItem,
   latestTurnEnd,
@@ -171,11 +182,44 @@ export function ThreadViewActionsProvider({
   );
 }
 
+// A read-only projection of canonical input parts preserves boundaries such as
+// Host-added skill snapshots; it never changes or replaces the journal payload.
+const CanonicalInputContentContext = createContext<
+  ReadonlyMap<string, Extract<CanonicalItem, { type: "user_message" }>>
+>(new Map());
+
 const CanonicalMessageForkContext = createContext<{
   threadId: string;
   items: Map<string, string | undefined>;
   isCurrent(itemId: string): boolean;
 } | null>(null);
+
+function findMessageQuoteSource(
+  viewport: Element | null,
+  quote: SentMessageQuote,
+): HTMLElement | null {
+  return (
+    Array.from(
+      viewport?.querySelectorAll<HTMLElement>(
+        "[data-quote-thread-id][data-quote-item-id]",
+      ) ?? [],
+    ).find(
+      (element) =>
+        element.dataset.quoteThreadId === quote.threadId &&
+        element.dataset.quoteItemId === quote.id,
+    ) ?? null
+  );
+}
+function goToMessageQuoteSource(
+  viewport: Element | null,
+  quote: SentMessageQuote,
+): boolean {
+  const source = findMessageQuoteSource(viewport, quote);
+  if (!source) return false;
+  source.scrollIntoView({ block: "center", behavior: "auto" });
+  source.focus({ preventScroll: true });
+  return true;
+}
 
 interface ThreadViewProps {
   localModelDebug?: boolean;
@@ -264,6 +308,15 @@ export function ThreadView(props: ThreadViewProps) {
       items === undefined ? undefined : projectThreadAttachmentItems(items),
     [items],
   );
+  const canonicalInputs = useMemo(
+    () =>
+      new Map(
+        (items ?? []).flatMap((item) =>
+          item.type === "user_message" ? [[item.id, item] as const] : [],
+        ),
+      ),
+    [items],
+  );
   const forkSource = useMemo(
     () =>
       props.thread === null
@@ -310,30 +363,34 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <ThreadReadingContext.Provider value={readingState}>
-      <CanonicalMessageForkContext.Provider value={forkContext}>
-        <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
-          <div className="thread-conversation-surface">
-            {debugging && props.thread && items !== undefined ? (
-              <ThreadDebugger
-                key={props.thread.id}
-                thread={props.thread}
-                items={items}
-                localModelDebug={props.localModelDebug}
-                onExit={props.onExitDebug}
-                onOpenMessageLink={props.onOpenMessageLink}
-                onReadAttachment={props.onReadAttachment}
-              />
-            ) : (
-              <ThreadViewContent
-                {...props}
-                threadAttachments={
-                  canonicalAttachments ?? props.threadAttachments
-                }
-              />
-            )}
-          </div>
-        </MessageSourceViewportContext.Provider>
-      </CanonicalMessageForkContext.Provider>
+      <CanonicalInputContentContext.Provider value={canonicalInputs}>
+        <CanonicalMessageForkContext.Provider value={forkContext}>
+          <MessageSourceViewportContext.Provider
+            value={props.thread?.id ?? null}
+          >
+            <div className="thread-conversation-surface">
+              {debugging && props.thread && items !== undefined ? (
+                <ThreadDebugger
+                  key={props.thread.id}
+                  thread={props.thread}
+                  items={items}
+                  localModelDebug={props.localModelDebug}
+                  onExit={props.onExitDebug}
+                  onOpenMessageLink={props.onOpenMessageLink}
+                  onReadAttachment={props.onReadAttachment}
+                />
+              ) : (
+                <ThreadViewContent
+                  {...props}
+                  threadAttachments={
+                    canonicalAttachments ?? props.threadAttachments
+                  }
+                />
+              )}
+            </div>
+          </MessageSourceViewportContext.Provider>
+        </CanonicalMessageForkContext.Provider>
+      </CanonicalInputContentContext.Provider>
     </ThreadReadingContext.Provider>
   );
 }
@@ -496,7 +553,7 @@ function ThreadViewContent({
         )
       )
         return [];
-      const draft = queuedInputDraft(item.input, item.id);
+      const draft = queuedInputDraft(item.input, item.id, item.clientId);
       return draft === null ? [] : [[item.id, { item, draft }] as const];
     }),
   );
@@ -569,7 +626,19 @@ function ThreadViewContent({
   const [atLive, setAtLive] = useState(readingState.scroll?.following ?? true);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [skillError, setSkillError] = useState<string | null>(null);
-  const skillDraft = parseSkillDraft(composer.draft.text);
+  const parsedSkillDraft = parseSkillDraft(composer.draft.text);
+  const normalizedDraft = normalizeInlineReferences(
+    parsedSkillDraft.text,
+    parsedSkillDraft.references,
+  );
+  const skillDraft = { ...parsedSkillDraft, ...normalizedDraft };
+  const composerScope = thread?.id ?? "new-thread";
+  const [inlineSession, setInlineSession] = useState<string | null>(null);
+  const useInlineComposer =
+    inlineSession === composerScope || skillDraft.references.length > 0;
+  useEffect(() => {
+    if (skillDraft.references.length > 0) setInlineSession(composerScope);
+  }, [skillDraft.references.length, composerScope]);
   useEffect(() => {
     if (window.zenx?.skills === undefined) return;
     let active = true;
@@ -591,7 +660,29 @@ function ThreadViewContent({
   const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
-  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerTextareaRef = useRef<ComposerInput>(null);
+  const plainSnapshot = useRef<{
+    scope: string;
+    value: string;
+    references: typeof skillDraft.references;
+    selection: { anchor: number; head: number };
+  } | null>(null);
+  // A seed exists only for a plain-to-inline transition in this composer.
+  // Discard it on scope changes, including when the next draft is already inline.
+  if (plainSnapshot.current?.scope !== composerScope)
+    plainSnapshot.current = null;
+  if (!useInlineComposer)
+    plainSnapshot.current = {
+      scope: composerScope,
+      value: skillDraft.text,
+      references: [],
+      selection: {
+        anchor:
+          composerTextareaRef.current?.selectionStart ?? skillDraft.text.length,
+        head:
+          composerTextareaRef.current?.selectionEnd ?? skillDraft.text.length,
+      },
+    };
   const lastCanonicalTurnEnd = latestTurnEnd(thread?.canonicalItems ?? []);
   const readMessageOrder = useMemo(
     () =>
@@ -864,7 +955,7 @@ function ThreadViewContent({
     ) {
       throw new Error(i18n.t("shell:queueEditBusy"));
     }
-    const input = queuedDraftInput(draft);
+    const input = queuedDraftInput(draft, session.clientId);
     const fingerprint = JSON.stringify(input);
     const attempt =
       session.attempt?.fingerprint === fingerprint
@@ -1324,6 +1415,49 @@ function ThreadViewContent({
         </MessageLinkContext.Provider>
       </div>
 
+      <MessageSelectionActions
+        viewport={scrollRef}
+        threadId={thread?.id}
+        disabled={composerDisabled || submitting}
+        onQuote={(selection) => {
+          if (
+            !thread ||
+            selection.threadId !== thread.id ||
+            !thread.canonicalItems?.some(
+              (item) =>
+                item.type === "agent_message" &&
+                item.id === selection.id &&
+                item.threadId === thread.id,
+            )
+          )
+            return;
+          const insertion =
+            composerTextareaRef.current?.selectionStart ??
+            skillDraft.text.length;
+          onDraftChange(
+            addMessageQuote(
+              composer.draft.text,
+              {
+                ...selection,
+                kind: "message",
+                name: "ZenX",
+                cwd: thread.cwd,
+              },
+              composerTextareaRef.current?.selectionStart ??
+                skillDraft.text.length,
+              composerTextareaRef.current?.selectionEnd ??
+                skillDraft.text.length,
+            ),
+          );
+          requestAnimationFrame(() => {
+            composerTextareaRef.current?.focus({ preventScroll: true });
+            composerTextareaRef.current?.setSelectionRange(
+              insertion + 1,
+              insertion + 1,
+            );
+          });
+        }}
+      />
       {atLive ? null : (
         <button
           className="back-live"
@@ -1518,6 +1652,30 @@ function ThreadViewContent({
             {cancelNotice.message}
           </p>
         ) : null}
+        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+          {composer.draft.images.length === 0 ? null : (
+            <div
+              className="composer-images"
+              aria-label={i18n.t("shell:imagesToSend")}
+            >
+              {composer.draft.images.map((image) => (
+                <DraftImage
+                  image={image}
+                  key={image.id}
+                  onOpen={(trigger) =>
+                    setPreview({
+                      attachment: image.attachment,
+                      name: image.name,
+                      trigger,
+                    })
+                  }
+                  onReadAttachment={onReadAttachment}
+                  onRemove={() => onRemoveImage(image.id)}
+                />
+              ))}
+            </div>
+          )}
+        </MessageLinkContext.Provider>
         <ComposerShell
           onSubmit={(event) => {
             event.preventDefault();
@@ -1559,40 +1717,6 @@ function ThreadViewContent({
               ))}
             </div>
           )}
-          {skillDraft.references.length > 0 && (
-            <div
-              className="composer-skills composer-references"
-              aria-label={i18n.t("shell:referencesToSend")}
-            >
-              {skillDraft.references.map((reference, index) => (
-                <span
-                  className="composer-skill"
-                  key={index}
-                  title={`${reference.cwd} · ${reference.kind === "file" ? reference.path : reference.id}`}
-                >
-                  <Icon name={reference.kind === "file" ? "file" : "thread"} />
-                  <span>{reference.name}</span>
-                  <button
-                    type="button"
-                    aria-label={i18n.t("shell:removeReference", {
-                      name: reference.name,
-                    })}
-                    onClick={() =>
-                      onDraftChange(
-                        withSkillDraft(
-                          skillDraft.text,
-                          skillDraft.skills,
-                          skillDraft.references.filter((_, i) => i !== index),
-                        ),
-                      )
-                    }
-                  >
-                    <Icon name="x" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
           <WorkflowCommandMenu
             id={selectorId}
             selector={selector}
@@ -1601,90 +1725,167 @@ function ThreadViewContent({
           <label className="sr-only" htmlFor={composerId}>
             {i18n.t("panels:messageZenx")}
           </label>
-          {composer.draft.images.length === 0 ? null : (
-            <div
-              className="composer-images"
-              aria-label={i18n.t("shell:imagesToSend")}
-            >
-              {composer.draft.images.map((image) => (
-                <DraftImage
-                  image={image}
-                  key={image.id}
-                  onOpen={(trigger) =>
-                    setPreview({
-                      attachment: image.attachment,
-                      name: image.name,
-                      trigger,
-                    })
-                  }
-                  onReadAttachment={onReadAttachment}
-                  onRemove={() => onRemoveImage(image.id)}
-                />
-              ))}
-            </div>
-          )}
-          <ComposerEditor
-            id={composerId}
-            aria-label={i18n.t("shell:message")}
-            aria-controls={selector.open ? selectorId : undefined}
-            aria-activedescendant={
-              selector.open && selector.rows.length
-                ? `${selectorId}-${selector.active}`
-                : undefined
-            }
-            aria-describedby={selector.open ? `${selectorId}-hint` : undefined}
-            onSelect={(event) => selector.select(event.currentTarget)}
-            onBlur={() => selector.dismiss()}
+          {useInlineComposer ? (
+            <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+              <InlineComposerEditor
+                key={composerScope}
+                initialUndo={plainSnapshot.current ?? undefined}
+                initialSelection={{
+                  anchor:
+                    (skillDraft.references[0]?.position ??
+                      skillDraft.text.length - 1) + 1,
+                  head:
+                    (skillDraft.references[0]?.position ??
+                      skillDraft.text.length - 1) + 1,
+                }}
+                id={composerId}
+                editorRef={composerTextareaRef}
+                value={skillDraft.text}
+                references={skillDraft.references}
+                aria-label={i18n.t("shell:message")}
+                aria-controls={selector.open ? selectorId : undefined}
+                aria-activedescendant={
+                  selector.open && selector.rows.length
+                    ? `${selectorId}-${selector.active}`
+                    : undefined
+                }
+                aria-describedby={
+                  selector.open ? `${selectorId}-hint` : undefined
+                }
+                disabled={composerDisabled}
+                onChange={(text, references) => {
+                  selector.reopen();
+                  onDraftChange(
+                    withSkillDraft(text, skillDraft.skills, references),
+                  );
+                }}
+                onSelectionChange={(input) => selector.select(input)}
+                onBlur={() => selector.dismiss()}
+                onReferenceSource={(reference) => {
+                  if (reference.kind !== "message") return false;
+                  pauseFollowing();
+                  return goToMessageQuoteSource(scrollRef.current, reference);
+                }}
+                onPaste={(event) => {
+                  if (composerDisabled || submitting) return;
+                  const files = event.clipboardData
+                    ? imageFiles(event.clipboardData.files)
+                    : [];
+                  if (files.length === 0) return;
+                  event.preventDefault();
+                  setAttachmentError(null);
+                  void onImportImages(files).catch((error: unknown) =>
+                    setAttachmentError(describeError(error)),
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    handleComposerSuggestionKey(
+                      {
+                        key: event.key,
+                        shiftKey: event.shiftKey,
+                        repeat: event.repeat,
+                        preventDefault: () => event.preventDefault(),
+                        nativeEvent: { isComposing: event.isComposing },
+                      },
+                      selector,
+                    )
+                  )
+                    return;
+                  if (
+                    event.key !== "Enter" ||
+                    event.shiftKey ||
+                    event.isComposing
+                  )
+                    return;
+                  event.preventDefault();
+                  if (!event.repeat)
+                    submit(
+                      defaultComposerIntent(
+                        runningTurn !== null,
+                        composerSendMode,
+                        event.metaKey || event.ctrlKey,
+                      ),
+                    );
+                }}
+                placeholder={
+                  runningTurn === null
+                    ? watching
+                      ? i18n.t("shell:sendAMessageToWakeThisThread")
+                      : i18n.t("shell:askZenxAnything")
+                    : composerSendMode === "queue" ||
+                        composerSendMode === "batch"
+                      ? i18n.t("shell:messageForTheNextTurn")
+                      : i18n.t("shell:steerTheCurrentRun")
+                }
+              />
+            </MessageLinkContext.Provider>
+          ) : (
+            <ComposerEditor
+              id={composerId}
+              aria-label={i18n.t("shell:message")}
+              aria-controls={selector.open ? selectorId : undefined}
+              aria-activedescendant={
+                selector.open && selector.rows.length
+                  ? `${selectorId}-${selector.active}`
+                  : undefined
+              }
+              aria-describedby={
+                selector.open ? `${selectorId}-hint` : undefined
+              }
+              onSelect={(event) => selector.select(event.currentTarget)}
+              onBlur={() => selector.dismiss()}
 
-            disabled={composerDisabled}
-            onChange={(event) => {
-              selector.reopen();
-              selector.select(event.currentTarget ?? event.target);
-              onDraftChange(
-                withSkillDraft(
-                  event.target.value,
-                  skillDraft.skills,
-                  skillDraft.references,
-                ),
-              );
-            }}
-            onPaste={(event) => {
-              if (composerDisabled || submitting) return;
-              const files = imageFiles(event.clipboardData.files);
-              if (files.length === 0) return;
-              event.preventDefault();
-              setAttachmentError(null);
-              void onImportImages(files).catch((error: unknown) =>
-                setAttachmentError(describeError(error)),
-              );
-            }}
-            onKeyDown={(event) => {
-              if (handleComposerSuggestionKey(event, selector)) return;
-              if (event.key !== "Enter" || event.shiftKey) return;
-              if (event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              if (event.repeat) return;
-              submit(
-                defaultComposerIntent(
-                  runningTurn !== null,
-                  composerSendMode,
-                  event.metaKey || event.ctrlKey,
-                ),
-              );
-            }}
-            placeholder={
-              runningTurn === null
-                ? watching
-                  ? i18n.t("shell:sendAMessageToWakeThisThread")
-                  : i18n.t("shell:askZenxAnything")
-                : composerSendMode === "queue" || composerSendMode === "batch"
-                  ? i18n.t("shell:messageForTheNextTurn")
-                  : i18n.t("shell:steerTheCurrentRun")
-            }
-            textareaRef={composerTextareaRef}
-            rows={1}
-            value={skillDraft.text}
-          />
+              disabled={composerDisabled}
+              onChange={(event) => {
+                selector.reopen();
+                selector.select(event.currentTarget ?? event.target);
+                onDraftChange(
+                  withSkillDraft(
+                    event.target.value,
+                    skillDraft.skills,
+                    skillDraft.references,
+                  ),
+                );
+              }}
+              onPaste={(event) => {
+                if (composerDisabled || submitting) return;
+                const files = imageFiles(event.clipboardData.files);
+                if (files.length === 0) return;
+                event.preventDefault();
+                setAttachmentError(null);
+                void onImportImages(files).catch((error: unknown) =>
+                  setAttachmentError(describeError(error)),
+                );
+              }}
+              onKeyDown={(event) => {
+                if (handleComposerSuggestionKey(event, selector)) return;
+                if (event.key !== "Enter" || event.shiftKey) return;
+                if (event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                if (event.repeat) return;
+                submit(
+                  defaultComposerIntent(
+                    runningTurn !== null,
+                    composerSendMode,
+                    event.metaKey || event.ctrlKey,
+                  ),
+                );
+              }}
+              placeholder={
+                runningTurn === null
+                  ? watching
+                    ? i18n.t("shell:sendAMessageToWakeThisThread")
+                    : i18n.t("shell:askZenxAnything")
+                  : composerSendMode === "queue" || composerSendMode === "batch"
+                    ? i18n.t("shell:messageForTheNextTurn")
+                    : i18n.t("shell:steerTheCurrentRun")
+              }
+              textareaRef={composerTextareaRef}
+              rows={1}
+              value={skillDraft.text}
+            />
+          )}
           <div className="composer-rail">
             <div className="composer-tools">
               <button
@@ -1719,10 +1920,6 @@ function ThreadViewContent({
               <ContextUsageIndicator
                 context={threadUsage?.context}
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
-                threadOutputRate={threadOutputRatePerSecond(
-                  thread ?? null,
-                  threadUsage,
-                )}
                 compactDisabled={
                   composerDisabled || runningTurn !== null || submitting
                 }
@@ -1855,75 +2052,88 @@ function ThreadViewContent({
           </div>
         </Dialog>
       )}
-      {Object.entries(editSessions).map(([key, session]) => (
-        <QueuedMessageEditor
-          key={session.identity}
-          identity={session.identity}
-          open={
-            openEditKey === key &&
-            session.owner === editOwner.current &&
-            thread?.id === session.threadId
-          }
-          initialDraft={session.draft}
-          pending={session.pending}
-          error={session.error}
-          trigger={session.trigger}
-          canRestoreFocus={() =>
-            currentThreadRef.current === session.threadId &&
-            document.getSelection()?.isCollapsed !== false
-          }
-          onRestoreFocus={() => {
-            if (
-              currentThreadRef.current === session.threadId &&
-              !document.querySelector('[role="dialog"]') &&
-              document.getSelection()?.isCollapsed !== false
-            )
-              composerTextareaRef.current?.focus({ preventScroll: true });
-          }}
-          disabledReason={
-            session.confirmed
-              ? i18n.t("shell:queueEditSyncing")
-              : composerDisabled
-                ? i18n.t("shell:queueEditBusy")
-                : undefined
-          }
-          onDraftChange={(draft) => {
-            const current = editSessionsRef.current[key];
-            if (
-              current?.owner === editOwner.current &&
-              !current.pending &&
-              !current.confirmed
-            )
-              updateEditSession(key, { ...current, draft });
-          }}
-          onSave={(draft) => saveQueuedEdit(key, draft)}
-          onClose={(_reason) => {
-            const current = editSessionsRef.current[key];
-            if (current?.owner === editOwner.current) {
-              if (
-                !current.pending &&
-                (!current.confirmed || observedEdit(current))
-              )
-                updateEditSession(key, null);
-              else updateEditSession(key, { ...current, owner: undefined });
+      <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+        {Object.entries(editSessions).map(([key, session]) => (
+          <QueuedMessageEditor
+            key={session.identity}
+            identity={session.identity}
+            open={
+              openEditKey === key &&
+              session.owner === editOwner.current &&
+              thread?.id === session.threadId
             }
-            setOpenEditKey((value) => (value === key ? null : value));
-          }}
-          onReadAttachment={onReadAttachment}
-          onImportImages={
-            onImportQueueImages ??
-            (async () => {
-              throw new Error(i18n.t("shell:imageReaderUnavailable"));
-            })
-          }
-          onPickImages={
-            onPickQueueImages ??
-            (async () => {
-              throw new Error(i18n.t("shell:imageReaderUnavailable"));
-            })
-          }
-        />
-      ))}
+            initialDraft={session.draft}
+            pending={session.pending}
+            error={session.error}
+            trigger={session.trigger}
+            canRestoreFocus={() =>
+              currentThreadRef.current === session.threadId &&
+              document.getSelection()?.isCollapsed !== false
+            }
+            onRestoreFocus={() => {
+              if (
+                currentThreadRef.current === session.threadId &&
+                !document.querySelector('[role="dialog"]') &&
+                document.getSelection()?.isCollapsed !== false
+              )
+                composerTextareaRef.current?.focus({ preventScroll: true });
+            }}
+            disabledReason={
+              session.confirmed
+                ? i18n.t("shell:queueEditSyncing")
+                : composerDisabled
+                  ? i18n.t("shell:queueEditBusy")
+                  : undefined
+            }
+            onDraftChange={(draft) => {
+              const current = editSessionsRef.current[key];
+              if (
+                current?.owner === editOwner.current &&
+                !current.pending &&
+                !current.confirmed
+              )
+                updateEditSession(key, { ...current, draft });
+            }}
+            onSave={(draft) => saveQueuedEdit(key, draft)}
+            onReferenceSource={(reference) => {
+              if (currentThreadRef.current !== session.threadId) return null;
+              const target = findMessageQuoteSource(
+                scrollRef.current,
+                reference,
+              );
+              if (target) pauseFollowing();
+              return target;
+            }}
+            onClose={(reason) => {
+              const current = editSessionsRef.current[key];
+              if (current?.owner === editOwner.current) {
+                if (reason === "source")
+                  updateEditSession(key, { ...current, owner: undefined });
+                else if (
+                  !current.pending &&
+                  (!current.confirmed || observedEdit(current))
+                )
+                  updateEditSession(key, null);
+                else updateEditSession(key, { ...current, owner: undefined });
+              }
+              setOpenEditKey((value) => (value === key ? null : value));
+            }}
+            onReadAttachment={onReadAttachment}
+            onImportImages={
+              onImportQueueImages ??
+              (async () => {
+                throw new Error(i18n.t("shell:imageReaderUnavailable"));
+              })
+            }
+            onPickImages={
+              onPickQueueImages ??
+              (async () => {
+                throw new Error(i18n.t("shell:imageReaderUnavailable"));
+              })
+            }
+          />
+        ))}
+      </MessageLinkContext.Provider>
       {preview === null || !queuePreviewCurrent ? null : (
         <ImagePreview
           attachment={preview.attachment}
@@ -2240,45 +2450,37 @@ function RunningTurnLabel({
             : phase === "requested"
               ? i18n.t("shell:awaitingToolResult")
               : commandPhaseLabel(phase);
-  const busy =
-    phase === "running" ||
-    phase === "thinking" ||
-    phase === "idle" ||
-    phase === "recovering";
   return (
     <div
       className="turn-running-label"
       data-phase={phase}
       data-compact={compact}
     >
-      <Icon
-        name={
-          phase === "approval"
-            ? "lock"
-            : phase === "stopping"
-              ? "stop"
-              : "reasoning"
-        }
-        size={14}
-      />
       <span
-        className={compact ? "sr-only" : undefined}
+        className="sr-only"
         role="status"
         aria-live="polite"
         aria-atomic="true"
       >
-        <ActivityText active={busy && !compact}>{label}</ActivityText>
+        {label}
+      </span>
+      <span className="turn-work-label">
+        {startedAt === null ? (
+          i18n.t("shell:working")
+        ) : (
+          <span className="turn-duration">
+            {i18n.t("shell:workingFor", {
+              duration: formatDuration(now - startedAt * 1000),
+            })}
+          </span>
+        )}
       </span>
       {phase === "recovering" && recovery ? (
         <span className="turn-recovery-attempt">
+          {i18n.t("shell:recoveringTask")} ·{" "}
           {i18n.t("shell:recoveryAttempt", { count: recovery.attempt })}
         </span>
       ) : null}
-      {startedAt === null ? null : (
-        <span className="turn-duration" aria-hidden="true">
-          {formatDuration(now - startedAt * 1000)}
-        </span>
-      )}
     </div>
   );
 }
@@ -2386,7 +2588,6 @@ function TurnBlock({
     disclosureKey("turn", turn.id),
   );
   const [protectedOpen, setProtectedOpen] = useState(false);
-  const [inspecting, setInspecting] = useState(false);
   const previousStatus = useRef(turn.status);
   // selectionchange is queued by browsers. Observe the still-mounted history
   // before a terminal render could remove the user's selected/focused node.
@@ -2402,16 +2603,15 @@ function TurnBlock({
           !!active.closest(".turn-history") &&
           !!sectionRef.current?.contains(active)))
     ) {
-      setInspecting(true);
       setProtectedOpen(true);
     }
   }
+  // Selecting/copying the visible answer is not a request to reveal history.
+  // Only preserve an already-visible selection at the running → terminal edge.
   const expanded =
     protectedOpen ||
     (expandedOverride ??
-      (turn.status === "failed" ||
-        turn.status === "interrupted" ||
-        inspecting));
+      (turn.status === "failed" || turn.status === "interrupted"));
   const complete = turn.status !== "inProgress";
   const compactRunningStatus =
     !turn.liveRecovery &&
@@ -2419,25 +2619,6 @@ function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "running" && activity.active > 0) ||
       activity.phase === "thinking");
-  useEffect(() => {
-    const preserve = () => {
-      const active = document.activeElement;
-      setInspecting(
-        transcriptHasSelection(sectionRef.current) ||
-          (active instanceof Element &&
-            !!active.closest(".turn-history") &&
-            !!sectionRef.current?.contains(active)),
-      );
-    };
-    document.addEventListener("selectionchange", preserve);
-    document.addEventListener("focusin", preserve);
-    document.addEventListener("focusout", preserve);
-    return () => {
-      document.removeEventListener("selectionchange", preserve);
-      document.removeEventListener("focusin", preserve);
-      document.removeEventListener("focusout", preserve);
-    };
-  }, []);
   const reviewActivity = () => {
     setExpanded(true);
     requestAnimationFrame(() => {
@@ -2481,7 +2662,12 @@ function TurnBlock({
         turn={turn}
       />
     ) : (
-      <WakeupCard entry={wakeup} key={item.id} />
+      <TriggerMessageBubble
+        text={item.content.map((part) => part.text).join("\n")}
+        sourceId={wakeup.triggerId}
+        key={item.id}
+        turn={turn}
+      />
     );
   };
   return (
@@ -2503,7 +2689,7 @@ function TurnBlock({
             setExpanded(!expanded);
           }}
         >
-          <span>
+          <span className="turn-work-label">
             {turn.status === "failed" || confirmedStopped
               ? i18n.t("shell:turnActivityHistory")
               : completedTurnLabel(turn)}
@@ -2511,7 +2697,16 @@ function TurnBlock({
           <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
-      ) : null}
+      ) : (
+        <RunningTurnLabel
+          recovery={turn.liveRecovery}
+          startedAt={turn.liveRecovery ? null : turn.startedAt}
+          activity={activity}
+          stopping={stopping}
+          approval={approvals.length > 0}
+          compact={compactRunningStatus}
+        />
+      )}
       {!complete || expanded ? (
         <div className="turn-history" id={historyId}>
           {projection.history.map((node) =>
@@ -2555,20 +2750,6 @@ function TurnBlock({
             showActions
             turn={turn}
             usage={usage}
-          />
-        </div>
-      ) : null}
-      {!complete ? (
-        <div
-          className={`turn-status-footer${compactRunningStatus ? "" : " workflow-status"}`}
-        >
-          <RunningTurnLabel
-            recovery={turn.liveRecovery}
-            startedAt={turn.liveRecovery ? null : turn.startedAt}
-            activity={activity}
-            stopping={stopping}
-            approval={approvals.length > 0}
-            compact={compactRunningStatus}
           />
         </div>
       ) : null}
@@ -2776,66 +2957,14 @@ export function threadCacheUsageLabel(
       });
 }
 
-function outputWindowSeconds(turn: Turn): number | null {
-  const ms = turn.durationMs;
-  return turn.status === "completed" &&
-    ms !== null &&
-    Number.isFinite(ms) &&
-    ms > 0
-    ? ms / 1_000
-    : null;
-}
-
-/** Output tokens per second for one Turn. Unknown without usage telemetry or
- * a positive completed window; the UI never guesses from model names. */
-export function turnOutputRatePerSecond(
-  usage: ModelUsageAggregate | undefined,
-  turn: Turn,
-): number | null {
-  const seconds = outputWindowSeconds(turn);
-  if (usage === undefined || seconds === null) return null;
-  return usage.outputTokens > 0 ? usage.outputTokens / seconds : null;
-}
-
-/** Session rate over completed Turns with matched usage and known duration.
- * Idle gaps between Turns are excluded; tool/wait time within a Turn remains
- * part of its observed execution duration. */
-export function threadOutputRatePerSecond(
-  thread: Thread | null,
-  usage: ModelUsageProjection | undefined,
-): number | null {
-  if (thread === null || usage === undefined) return null;
-  let tokens = 0;
-  let seconds = 0;
-  for (const turn of thread.turns) {
-    const window = outputWindowSeconds(turn);
-    const turnUsage = usage.turns[turn.id];
-    if (window === null || turnUsage === undefined) continue;
-    tokens += turnUsage.outputTokens;
-    seconds += window;
-  }
-  if (tokens <= 0 || seconds <= 0) return null;
-  return tokens / seconds;
-}
-
-export function outputRateLabel(rate: number | null): string {
-  if (rate === null) return i18n.t("shell:outputRateUnknown");
-  const formatted = rate >= 10 ? String(Math.round(rate)) : rate.toFixed(1);
-  return i18n.t("shell:outputRate", { rate: formatted });
-}
-
 export function ContextUsageIndicator({
   context,
   threadCacheHitRate,
-  threadOutputRate,
   compactDisabled = false,
   onCompact,
 }: {
   context?: ModelContextUsageProjection;
   threadCacheHitRate?: number;
-  /** Session output rate in tokens/s; `null` renders Unknown. Omitted for
-   * Threads without usage data, where the line would always be noise. */
-  threadOutputRate?: number | null;
   compactDisabled?: boolean;
   onCompact?(): Promise<void>;
 }) {
@@ -2969,9 +3098,6 @@ export function ContextUsageIndicator({
   const tooltip = [
     contextLabel,
     threadCacheUsageLabel(threadCacheHitRate),
-    ...(threadOutputRate === undefined
-      ? []
-      : [outputRateLabel(threadOutputRate)]),
   ].join("\n");
   const radius = 7;
   return (
@@ -3029,7 +3155,7 @@ export function ContextUsageIndicator({
             aria-label={i18n.t("shell:contextDetails")}
           >
             <div className="context-usage-heading">
-              <span>{i18n.t("shell:contextWindowUsed")}</span>
+              <span>{i18n.t("shell:contextCompactTitle")}</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
@@ -3041,13 +3167,51 @@ export function ContextUsageIndicator({
               aria-valuenow={visualPercent}
               aria-valuetext={contextLabel}
             >
-              <span style={{ width: `${String(visualPercent)}%` }} />
+              {context.estimate ? (
+                (
+                  [
+                    "instructions",
+                    "toolDefinitions",
+                    "pluginContext",
+                    "conversation",
+                  ] as const
+                ).map((category) => (
+                  <span
+                    key={category}
+                    data-category={category}
+                    style={{
+                      width: `${context.estimate!.total > 0 ? (visualRatio * 100 * context.estimate![category]) / context.estimate!.total : 0}%`,
+                    }}
+                  />
+                ))
+              ) : (
+                <span style={{ width: `${String(visualPercent)}%` }} />
+              )}
             </div>
             <p>{tokenUsage}</p>
+            {context.estimate ? (
+              <>
+                <dl className="context-usage-breakdown">
+                  {(
+                    [
+                      "instructions",
+                      "toolDefinitions",
+                      "pluginContext",
+                      "conversation",
+                    ] as const
+                  ).map((category) => (
+                    <div key={category} data-category={category}>
+                      <dt>
+                        <i aria-hidden="true" />
+                        {i18n.t(`shell:contextCategory.${category}`)}
+                      </dt>
+                      <dd>{formatTokenCount(context.estimate![category])}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </>
+            ) : null}
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
-            {threadOutputRate === undefined ? null : (
-              <p>{outputRateLabel(threadOutputRate)}</p>
-            )}
             <button
               className="context-usage-compact"
               type="button"
@@ -3171,7 +3335,16 @@ function TraceSequence({
   );
   const busy =
     turn.status === "inProgress" &&
-    (activity.phase === "running" || activity.phase === "thinking");
+    (activity.phase === "running" ||
+      activity.phase === "waiting" ||
+      activity.phase === "thinking");
+  const previewItem = busy
+    ? (activity.current ??
+      (node.kind === "traceGroup" ? node.items : [node.item]).findLast(
+        (item) => item.type === "reasoning" && item.status === "inProgress",
+      ))
+    : undefined;
+  const preview = previewItem ? traceActivityPreview(previewItem) : undefined;
   const detailsId = useId();
   const singleton = node.kind === "traceItem" ? node.item : null;
   const singletonExpandable =
@@ -3202,17 +3375,27 @@ function TraceSequence({
           aria-controls={detailsId}
           onClick={toggleExpanded}
         >
-          <span className="trace-tool-icons" aria-hidden="true">
-            {traceGroupIcons(node.items).map((name) => (
-              <Icon key={name} name={name} size={15} />
-            ))}
-          </span>
           <span
             className="trace-activity-title"
-            title={traceSummary(node.items, observations)}
+            title={
+              preview
+                ? `${preview.prefix} ${preview.text}`.trim()
+                : traceSummary(node.items, observations)
+            }
           >
-            <ActivityText active={busy}>
-              {traceSummary(node.items, observations)}
+            <ActivityText
+              active={busy}
+              preview={preview !== undefined}
+              prefix={preview?.prefix}
+              leading={
+                <span className="trace-tool-icons" aria-hidden="true">
+                  {traceGroupIcons(node.items).map((name) => (
+                    <Icon key={name} name={name} size={15} />
+                  ))}
+                </span>
+              }
+            >
+              {preview?.text ?? traceSummary(node.items, observations)}
             </ActivityText>
           </span>
           <TraceCounts activity={activity} />
@@ -3408,24 +3591,42 @@ function TraceItemHeader({
     !approvalPending &&
     (item.type === "reasoning"
       ? item.status === "inProgress"
-      : observedCommandPhase(item, observations) === "running");
+      : ["running", "waiting"].includes(
+          observedCommandPhase(item, observations),
+        ));
+  const preview = active ? traceActivityPreview(item) : undefined;
   return (
     <>
-      <Icon
-        name={
-          item.type === "reasoning"
-            ? "reasoning"
-            : toolPresentation(item.toolName ?? item.command).icon
+      <span
+        className="trace-item-label"
+        title={
+          preview
+            ? `${preview.prefix} ${preview.text}`.trim()
+            : traceItemLabel(item)
         }
-        size={14}
-      />
-      {item.type === "reasoning" ? null : (
-        <strong>
-          {toolPresentation(item.toolName ?? item.command).category}
-        </strong>
-      )}
-      <span title={traceItemLabel(item)}>
-        <ActivityText active={active}>{traceItemLabel(item)}</ActivityText>
+      >
+        <ActivityText
+          active={active}
+          preview={preview !== undefined}
+          leading={
+            <Icon
+              name={
+                item.type === "reasoning"
+                  ? "reasoning"
+                  : toolPresentation(item.toolName ?? item.command).icon
+              }
+              size={14}
+            />
+          }
+          prefix={
+            preview?.prefix ??
+            (item.type === "reasoning"
+              ? undefined
+              : toolPresentation(item.toolName ?? item.command).category)
+          }
+        >
+          {preview?.text ?? traceItemLabel(item)}
+        </ActivityText>
       </span>
       <span className="trace-item-status">
         {approvalPending ? (
@@ -3607,8 +3808,28 @@ function InputMessage({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
   const text = item.content.map((content) => content.text).join("\n");
+  const article = useRef<HTMLElement>(null);
+  const canonical = useContext(CanonicalInputContentContext).get(item.id);
+  const parts = canonical
+    ? canonical.text !== undefined
+      ? [canonical.text]
+      : canonical.content.flatMap((part) =>
+          part.type === "text" ? [part.text] : [],
+        )
+    : item.content.map((part) => part.text);
+  const clientId = canonical ? canonical.clientId : item.clientId;
+  const presentation =
+    item.type === "userMessage"
+      ? parts.map((part) => parseSentReferenceContent(part, clientId))
+      : [{ text, references: [] }];
+  const presented = {
+    text: presentation.map((part) => part.text).join("\n"),
+    references: presentation.flatMap((part) => part.references),
+  };
   return (
     <article
+      ref={article}
+      data-sent-message-id={item.id}
       className={
         item.type === "threadMessage"
           ? "user-row thread-message-row"
@@ -3655,9 +3876,26 @@ function InputMessage({
           ))}
         </div>
       )}
-      {text.length === 0 ? null : (
+      {(presented.text.length > 0 || presented.references.length > 0) && (
         <div className="user-bubble">
-          <Markdown text={text} />
+          {presented.references.length > 0 ? (
+            presentation.map((part, index) => (
+              <InlineReferenceContent
+                key={index}
+                text={part.text}
+                references={part.references}
+                onSource={(reference) =>
+                  reference.kind === "message" &&
+                  goToMessageQuoteSource(
+                    article.current?.closest(".thread-view") ?? null,
+                    reference,
+                  )
+                }
+              />
+            ))
+          ) : (
+            <Markdown text={presented.text} />
+          )}
         </div>
       )}
       <MessageActions
@@ -3739,8 +3977,18 @@ function AgentMessage({
       ? { sourceThreadId: source.threadId, itemId: item.id }
       : undefined;
   return (
-    <article className="agent-copy" data-read-message-id={item.id}>
-      <Markdown text={item.text} />
+    <article
+      className="agent-copy"
+      data-read-message-id={item.id}
+      data-quote-thread-id={
+        source?.items.has(item.id) ? source.threadId : undefined
+      }
+      data-quote-item-id={source?.items.has(item.id) ? item.id : undefined}
+      tabIndex={-1}
+    >
+      <div data-message-quote-body>
+        <Markdown text={item.text} />
+      </div>
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
       {showActions ? (
         <MessageActions
@@ -3797,9 +4045,7 @@ function MessageActions({
       {usage === undefined ? null : (
         <span
           className="message-cache"
-          title={`${i18n.t("shell:turnCacheTelemetry")} · ${outputRateLabel(
-            turnOutputRatePerSecond(usage, turn),
-          )}`}
+          title={i18n.t("shell:turnCacheTelemetry")}
         >
           {usageLabel(usage, i18n.t("shell:cache"))}
         </span>
@@ -3876,6 +4122,38 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
   );
 }
 
+/** Full readable prompt/context; canonical ID, never text, owns navigation. */
+function TriggerMessageBubble({
+  text,
+  sourceId,
+  turn,
+}: {
+  text: string;
+  sourceId?: string;
+  turn: Turn;
+}) {
+  const presentation = triggerMessagePresentation(text, sourceId);
+  return (
+    <article className="user-row thread-message-row trigger-message-row">
+      <MessageSourceLink
+        target={{ kind: "trigger", id: sourceId ?? "" }}
+        label={presentation.name || i18n.t("shell:hostMessageTrigger")}
+        className="host-message-source"
+      />
+      <div className="user-bubble">
+        <Markdown text={presentation.text} />
+      </div>
+      <MessageActions
+        className="user-message-actions"
+        copyLabel={i18n.t("shell:copyHostMessage")}
+        copiedLabel={i18n.t("shell:copiedHostMessage")}
+        text={presentation.text}
+        turn={turn}
+      />
+    </article>
+  );
+}
+
 function WakeupCard(
   props:
     | { entry: TriggerHistoryEntry }
@@ -3887,6 +4165,14 @@ function WakeupCard(
 ) {
   if ("item" in props) {
     const { item, entry, turn } = props;
+    if (item.source === "trigger")
+      return (
+        <TriggerMessageBubble
+          text={item.text}
+          sourceId={item.sourceId}
+          turn={turn}
+        />
+      );
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent
@@ -3922,6 +4208,37 @@ function WakeupCard(
   );
 }
 
+/** Only preview public item text already available in the disclosure. */
+function traceActivityPreview(
+  item: ThreadItem,
+): { prefix: string; text: string } | undefined {
+  if (item.type === "reasoning") {
+    const content =
+      reasoningContentText(item).trim() || item.summary.join("\n").trim();
+    // Keep the latest live text visible even after a long stream; never synthesize it.
+    const characters = [...content.replace(/\s+/gu, " ")];
+    let text = characters.join("");
+    if (characters.length > 240) {
+      text = characters.slice(-238).join("");
+      // Mark omitted context, and avoid starting halfway through a Latin word.
+      if (
+        /[A-Za-z0-9_]/u.test(characters[characters.length - 239] ?? "") &&
+        /^[A-Za-z0-9_]/u.test(text)
+      )
+        text = text.replace(/^[A-Za-z0-9_]+(?:[.,:;!?])?\s+/u, "");
+      text = `… ${text}`;
+    }
+    return { prefix: i18n.t("shell:thinking"), text };
+  }
+  if (item.type === "commandExecution") {
+    return {
+      prefix: toolPresentation(item.toolName ?? item.command).category,
+      text: item.command,
+    };
+  }
+  return undefined;
+}
+
 function traceItemLabel(item: ThreadItem): string {
   if (item.type === "reasoning") {
     const summary = item.summary.join("\n").trim();
@@ -3945,6 +4262,8 @@ function completedTurnLabel(turn: Turn): string {
         ? i18n.t("shell:interrupted")
         : i18n.t("shell:failed");
   if (duration === null) return result;
+  if (turn.status === "completed")
+    return i18n.t("shell:workedFor", { duration: formatDuration(duration) });
   return i18n.t("shell:statusForDuration", {
     status: result,
     duration: formatDuration(duration),
