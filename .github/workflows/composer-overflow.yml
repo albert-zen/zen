@@ -1,0 +1,54 @@
+name: Composer overflow regression
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/composer-overflow.yml
+      - apps/zenx/scripts/build-composer-overflow-preview.mjs
+      - apps/zenx/scripts/capture-composer-overflow-preview.mjs
+      - apps/zenx/test/fixtures/composer-overflow-visual.tsx
+      - apps/zenx/src/renderer/src/InlineComposerEditor.tsx
+      - apps/zenx/src/renderer/src/inline-composer.css
+      - apps/zenx/src/renderer/src/editor-style-nonce.ts
+      - apps/zenx/src/main/renderer-style-policy.ts
+      - apps/zenx/src/renderer/index.html
+
+permissions:
+  contents: read
+
+concurrency:
+  group: composer-overflow-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  composer-overflow:
+    name: Composer overflow under production CSP
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install CJK fonts for synthetic screenshots
+        timeout-minutes: 2
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          mkdir -p "${{ runner.temp }}/composer-overflow"
+          fc-match ':lang=zh' | tee "${{ runner.temp }}/composer-overflow/cjk-font.txt"
+          test -n "$(fc-list ':lang=zh' | head -n 1)"
+      - name: Build and exercise the production Composer
+        run: |
+          node apps/zenx/scripts/build-composer-overflow-preview.mjs "${{ runner.temp }}/composer-overflow"
+          node --import tsx apps/zenx/scripts/capture-composer-overflow-preview.mjs "${{ runner.temp }}/composer-overflow"
+      - name: Retain screenshots and measured geometry
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: composer-overflow-${{ github.sha }}
+          path: ${{ runner.temp }}/composer-overflow
+          if-no-files-found: warn
+          retention-days: 14

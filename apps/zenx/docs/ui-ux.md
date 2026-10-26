@@ -215,6 +215,7 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 
 ### 4.4 Composer、审批与 live following
 
+- Composer 的普通输入与含引用的 inline editor 共享受控高度：短内容自然收缩，超过上限后只在编辑区内部滚动，正文与引用不覆盖底部工具栏。长内容滚动后全选删除必须恢复与短内容清空相同的空输入高度；撤销/重做仍保留准确原文与引用身份。此合同须在 production CSP 下验证，不能只验宽松开发页面。
 - Composer 的文字输入焦点由现有中性圆角外框表达；首次插入引用切换到 inline editor 后、删除最后一个引用后与再次聚焦时均不叠加内部矩形 outline。引用按钮及其他控件保留各自的键盘焦点指示，forced-colors 下保留可见外框；不改变草稿、undo、发送或 Thread 状态语义。
 
 Composer 保持一个位置、几何和命中区域稳定的 primary action，只改变语义：
