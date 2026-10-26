@@ -100,14 +100,35 @@ export interface RuntimeConfiguration {
   /** null preserves the existing Unknown capability semantics. */
   inputModalities?: readonly string[] | null;
   contextWindow?: number | null;
-  /** Present only when Host admission enables agent-authored context resets. */
-  agenticContextCompaction?: {
-    contextWindow: number;
-  };
+  /** Host-owned switch for agent-authored context resets; read per model sample. */
+  agenticContextCompaction?: AgenticContextCompactionSetting;
   /** Turn-scoped execution limit captured at Host admission. */
   maxToolRounds?: number;
   /** Turn-scoped tool body concurrency captured at Host admission. */
   maxConcurrentToolBodies?: number;
+}
+
+/**
+ * Host setting that decides whether one model sample discloses
+ * `compact_context`. The Host may publish a new revision while a Turn runs, so
+ * every sample asks the current value instead of freezing it at admission;
+ * `contextWindow` stays the admitted model window that bounds each reset.
+ */
+export interface AgenticContextCompactionSetting {
+  readonly contextWindow: number;
+  isEnabled(): boolean;
+}
+
+/** The admitted reset budget for one model sample, or undefined when not disclosed. */
+interface DisclosedAgenticContextCompaction {
+  readonly contextWindow: number;
+}
+
+function disclosedAgenticContextCompaction(
+  setting: AgenticContextCompactionSetting | undefined,
+): DisclosedAgenticContextCompaction | undefined {
+  if (setting === undefined || !setting.isEnabled()) return undefined;
+  return { contextWindow: setting.contextWindow };
 }
 
 export interface PreparedModelSample {
@@ -218,6 +239,8 @@ interface ModelSampleResult {
   presentation: ToolPresentationSnapshot;
   contextBoundaryItemId: string;
   inputTokens: number | undefined;
+  /** Sample-level disclosure decision that also governs its own tool batch. */
+  agenticContextCompaction: DisclosedAgenticContextCompaction | undefined;
   toolCalls: Array<{
     callId: string;
     name: string;
@@ -514,6 +537,7 @@ export class AgentRuntime {
           toolCallItems,
           result.presentation,
           result.contextBoundaryItemId,
+          result.agenticContextCompaction,
           options,
           scheduler,
         );
@@ -862,9 +886,14 @@ export class AgentRuntime {
     };
 
     const preparedSample = await options.prepareModelSample(itemId);
+    // A Host settings revision published between samples must reach this
+    // sample's disclosed tools, not only the next Turn.
+    const agenticContextCompaction = disclosedAgenticContextCompaction(
+      options.configuration.agenticContextCompaction,
+    );
     if (
       Array.isArray(preparedSample) &&
-      options.configuration.agenticContextCompaction !== undefined
+      agenticContextCompaction !== undefined
     ) {
       throw new Error(
         "Agentic context compaction requires an atomic model sample boundary",
@@ -881,7 +910,7 @@ export class AgentRuntime {
     }
     const presentation = this.projectToolPresentation(
       options.thread.items,
-      options.configuration.agenticContextCompaction !== undefined,
+      agenticContextCompaction !== undefined,
     );
     const projectedMessages = projectModelMessages(
       messages,
@@ -1157,6 +1186,7 @@ export class AgentRuntime {
       toolCalls,
       presentation,
       contextBoundaryItemId,
+      agenticContextCompaction,
       inputTokens: latestUsage?.inputTokens,
     };
   }
@@ -1166,10 +1196,18 @@ export class AgentRuntime {
     toolCalls: readonly ToolCallItem[],
     presentation: ToolPresentationSnapshot,
     contextBoundaryItemId: string,
+    agenticContextCompaction: DisclosedAgenticContextCompaction | undefined,
     options: RunTurnOptions,
     scheduler: TurnToolScheduler,
   ): Promise<void> {
     const tickets: ScheduledToolCall[] = [];
+    // The batch settles with the disclosure decision of the sample that
+    // produced it, even if the Host setting changed meanwhile.
+    const disclosed =
+      agenticContextCompaction !== undefined &&
+      presentation.modelToolNames.has(AGENTIC_CONTEXT_COMPACTION_TOOL_NAME)
+        ? agenticContextCompaction
+        : undefined;
     for (let index = 0; index < toolCalls.length; index += 1) {
       const toolCall = toolCalls[index];
       if (toolCall === undefined) continue;
@@ -1187,12 +1225,15 @@ export class AgentRuntime {
         },
         scheduler,
         undefined,
-        {
-          contextBoundaryItemId,
-          standalone:
-            toolCalls.length === 1 &&
-            toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-        },
+        disclosed === undefined
+          ? undefined
+          : {
+              contextBoundaryItemId,
+              contextWindow: disclosed.contextWindow,
+              standalone:
+                toolCalls.length === 1 &&
+                toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
+            },
       );
       tickets.push(ticket);
       try {
@@ -1241,6 +1282,7 @@ export class AgentRuntime {
     observation?: Promise<NestedToolObservation>,
     agentic?: {
       contextBoundaryItemId: string;
+      contextWindow: number;
       standalone: boolean;
     },
   ): ScheduledToolCall {
@@ -1291,14 +1333,15 @@ export class AgentRuntime {
     agentic:
       | {
           contextBoundaryItemId: string;
+          contextWindow: number;
           standalone: boolean;
         }
       | undefined,
   ): Promise<ScheduledToolExecution> {
-    const configuration = options.configuration.agenticContextCompaction;
-    if (configuration === undefined || agentic === undefined) {
+    if (agentic === undefined) {
       return immediateScheduledExecution({
-        output: "Agentic context compaction is not enabled for this Turn.",
+        output:
+          "Agentic context compaction is not disclosed to this model sample.",
         exitCode: 1,
       });
     }
@@ -1422,7 +1465,7 @@ export class AgentRuntime {
             this.projectToolPresentation(options.thread.items, true).modelTools,
             options.modelAdapter.contextInstructions,
           ).total;
-          if (summaryTokens + instructionTokens > configuration.contextWindow) {
+          if (summaryTokens + instructionTokens > agentic.contextWindow) {
             throw new Error(
               "Compacted context and repository instructions exceed the selected model context window",
             );
@@ -1436,7 +1479,7 @@ export class AgentRuntime {
             },
             {
               retainedTokenBudget:
-                configuration.contextWindow - summaryTokens - instructionTokens,
+                agentic.contextWindow - summaryTokens - instructionTokens,
               retention,
               estimateRetainedTokens: (retainedItems) =>
                 estimateModelMessageInputTokens(
@@ -1463,9 +1506,9 @@ export class AgentRuntime {
             ).modelTools,
             options.modelAdapter.contextInstructions,
           ).total;
-          if (fullProjectionTokens > configuration.contextWindow) {
+          if (fullProjectionTokens > agentic.contextWindow) {
             throw new Error(
-              `Compacted projection exceeds the selected model context window (${String(fullProjectionTokens)} > ${String(configuration.contextWindow)} estimated input tokens)`,
+              `Compacted projection exceeds the selected model context window (${String(fullProjectionTokens)} > ${String(agentic.contextWindow)} estimated input tokens)`,
             );
           }
           options.signal.throwIfAborted();

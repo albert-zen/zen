@@ -189,9 +189,12 @@
 - **Agentic Context Compaction Tool** — Host admission 可选启用的 `compact_context` 顶层
   Runtime control，让当前模型用原样 continuation text 在同一 active Turn 建立新的 durable
   context projection boundary，而不把它下放给通用 Tool Environment 或 nested `tools.*`。
+  它属于 Host 压缩配置而非 Turn selection：每次模型采样重新读取当时的 Host revision，
+  运行中 Turn 的下一轮采样即可获得或失去该入口，`contextWindow` 仍取 admission 冻结的选中模型窗口。
 - **ContextCompactionConfig** — Host-owned 压缩策略配置；它规范化摘要指令、触发与目标占比及
   canonical Item 保留规则，并以默认关闭的实验开关控制 agentic compaction admission；省略字段时
-  使用 Core 默认，配置本身不写入 Thread canonical ItemList。
+  使用 Core 默认，配置本身不写入 Thread canonical ItemList；已发布的 revision 在运行中 Turn 的
+  下一个模型采样边界生效，不需要重启 Host 或新建 Thread。
 - **Active-Turn Host Compaction** — Runtime 在工具结果提交后的下一次模型采样边界同时使用最近一次
   Provider usage 与完整 canonical projection 的保守估算评估上下文压力；Agentic 模式先注入一次
   易失的 Host context notice，硬预算或关闭 Agentic 时复用同一 provider-generated projection
@@ -868,6 +871,10 @@ compaction call 返回局部失败，其他 call 沿原调度语义结算。Runt
 validation、abort 或已知提交失败不改变旧 projection，journal append 结果未知则停止 Turn 而不继续采样。
 这项路径不调用 summary Provider，不记录伪造的 Provider selection 或 summary token usage，也不使用
 generated compaction 的 prompt、trigger/target 百分比或 retention policy。
+
+开关是 Host 配置，不属于 admission 冻结的 Turn selection：每次模型采样都重新读取当前 revision，
+因此打开后运行中 Turn 的下一轮采样即可披露并调用 `compact_context`，关闭只影响之后的采样披露；
+已披露该入口的那次采样产生的调用仍按该采样的 disclosure 结算，不因中途关闭而失败。
 
 显式保留与 recent-items 选择是硬约束；Core 先取得它们，再让 budget 模式使用剩余预算选择后缀，
 不能为满足 target 静默删除所选 Item。任何被选中的 tool call、result、同一 model response 的

@@ -3414,7 +3414,7 @@ export class ZenAppServer {
             ? {}
             : { initialMessages: internal.initialMessages }),
           resolved,
-          contextCompaction: admitted.configuration.contextCompaction,
+          contextCompaction: this.#currentContextCompaction(),
           signal: controller.signal,
         });
       } catch (error) {
@@ -3455,14 +3455,18 @@ export class ZenAppServer {
                   approvalPolicy: configuration.approvalPolicy,
                   inputModalities: resolved.model.inputModalities,
                   contextWindow: resolved.model.contextWindow,
-                  ...(admitted.configuration.contextCompaction.agenticEnabled &&
-                  resolved.model.contextWindow !== null
-                    ? {
+                  ...(resolved.model.contextWindow === null
+                    ? {}
+                    : {
                         agenticContextCompaction: {
                           contextWindow: resolved.model.contextWindow,
+                          // Host compaction settings are read at every model
+                          // sample, so enabling the experiment reaches a Turn
+                          // that is already running.
+                          isEnabled: () =>
+                            this.#currentContextCompaction().agenticEnabled,
                         },
-                      }
-                    : {}),
+                      }),
                   ...(admitted.configuration.maxToolRounds === undefined
                     ? {}
                     : {
@@ -3634,8 +3638,7 @@ export class ZenAppServer {
                     modelResponseId,
                     {
                       resolved,
-                      contextCompaction:
-                        admitted.configuration.contextCompaction,
+                      contextCompaction: this.#currentContextCompaction(),
                       highestInputTokens: () => highestInputTokens,
                       signal: controller.signal,
                     },
@@ -3659,7 +3662,7 @@ export class ZenAppServer {
                     threadId,
                     turnId,
                     resolved,
-                    contextCompaction: admitted.configuration.contextCompaction,
+                    contextCompaction: this.#currentContextCompaction(),
                     inputTokens,
                     agenticCompaction,
                     signal: controller.signal,
@@ -4156,6 +4159,15 @@ export class ZenAppServer {
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,
     });
+  }
+
+  /**
+   * Host compaction policy is Host-owned configuration, not frozen Thread
+   * selection: it is read again at every sample boundary so a settings revision
+   * reaches the next model sample of a Turn that is already running.
+   */
+  #currentContextCompaction(): ResolvedContextCompactionConfig {
+    return this.#runtimeConfiguration.contextCompaction;
   }
 
   /** Read-only current request projection, using current resolved tools rather than last usage. */

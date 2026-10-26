@@ -125,7 +125,8 @@ wire。
 ZenX Account 页面使用本实例已登录的 ChatGPT subscription credential 查询真实额度窗口，分别显示剩余、已用和重置时间；缺失窗口不显示，未知值保持未知。额度只是 Host 临时读模型，不属于 Thread token usage、API 余额或持久配置。
 
 Context compaction 设置页另提供默认关闭的 Agentic compaction 实验开关，保存为
-`contextCompaction.agenticEnabled`，通过既有 Apply & restart 生效。启用后，当前 Agent 可以
+`contextCompaction.agenticEnabled`，保存后立即发布为新的 Host configuration revision：运行中的
+Turn 在下一轮模型采样就能看到并调用该工具，无需重启 Host 或新建 Thread。启用后，当前 Agent 可以
 单独顶层调用 `compact_context({ text })`，在同一活动 Turn 中用原样接续文本替换旧工作上下文，
 然后继续推理；完整 journal 和用户可见历史保留。`direct | code | both` 均有这个独立控制入口，
 不能嵌入 `run_code` 或与同一响应的其他工具调用混用。文件路径作为普通文本，Agent 按需读取。

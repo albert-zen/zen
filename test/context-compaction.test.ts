@@ -984,6 +984,300 @@ test("agentic compaction accepts a sample following an active settings change", 
   );
 });
 
+/**
+ * Fixture Host setting switch. Its body runs between two model samples, so the
+ * published revision lands while the Turn is already running.
+ */
+function agenticSettingRuntime(
+  publish: (enabled: boolean) => void,
+): AgentRuntime {
+  return new AgentRuntime({
+    toolEnvironment: new ToolEnvironment({
+      runtimes: [
+        {
+          name: "toggle_agentic_setting",
+          executionMode: "parallel_safe",
+          specification: {
+            name: "toggle_agentic_setting",
+            description: "Publish a Host agentic compaction setting revision",
+            inputSchema: {
+              type: "object",
+              properties: { enabled: { type: "boolean" } },
+            },
+          },
+          async execute(invocation) {
+            publish(invocation.arguments.enabled === true);
+            return { output: "host setting published", exitCode: 0 };
+          },
+        },
+      ],
+    }),
+  });
+}
+
+/** Publish a Host context-compaction revision against the same Provider profile. */
+function publishContextCompaction(
+  server: ZenAppServer,
+  options: {
+    model: ModelAdapter;
+    modelCatalog: ModelCatalog;
+    contextCompaction: ContextCompactionConfig;
+  },
+): void {
+  const configuration = server.currentRuntimeConfiguration();
+  server.publishRuntimeConfiguration(
+    server.prepareRuntimeConfiguration({
+      revision: configuration.revision + 1,
+      defaults: configuration.defaults,
+      contextCompaction: options.contextCompaction,
+      providerProfiles: [
+        {
+          providerProfileId: options.model.provider,
+          adapter: options.model,
+          modelCatalog: options.modelCatalog,
+        },
+      ],
+    }),
+  );
+}
+
+test("enabling agentic compaction reaches the next model sample of a running Turn", async () => {
+  const requests: ModelRequest[] = [];
+  const modelCatalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 32_768 },
+  ]);
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "enable-while-running",
+          name: "toggle_agentic_setting",
+          arguments: { enabled: true },
+        };
+        return;
+      }
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "compact-after-enable",
+          name: "compact_context",
+          arguments: {
+            text: "resume after enabling the setting",
+            includeOriginalReference: false,
+          },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  let publish: (enabled: boolean) => void = () => {
+    throw new Error("Host configuration published before the server existed");
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog,
+    runtime: agenticSettingRuntime((enabled) => publish(enabled)),
+  });
+  publish = (enabled) =>
+    publishContextCompaction(server, {
+      model,
+      modelCatalog,
+      contextCompaction: { agenticEnabled: enabled },
+    });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "keep working")
+  ).done;
+
+  const disclosed = (request: ModelRequest | undefined): boolean =>
+    request?.tools.some((tool) => tool.name === "compact_context") ?? false;
+  assert.equal(disclosed(requests[0]), false);
+  assert.equal(disclosed(requests[1]), true);
+
+  const snapshot = await server.readThread(thread.id);
+  const result = snapshot.items.find(
+    (item) =>
+      item.type === "tool_result" && item.callId === "compact-after-enable",
+  );
+  assert(result?.type === "tool_result");
+  assert.equal(result.exitCode, 0, result.output);
+  const compaction = snapshot.items.find(
+    (item) =>
+      item.type === "context_compaction" &&
+      item.provenance === "agentic" &&
+      item.callId === "compact-after-enable",
+  );
+  assert(compaction?.type === "context_compaction");
+  assert.deepEqual(requests[2]?.messages, [
+    {
+      role: "user",
+      text: "[Zen compacted context]\nresume after enabling the setting",
+    },
+  ]);
+});
+
+test("enabling agentic compaction mid-Turn replaces the Host trigger reset with its notice", async () => {
+  const requests: ModelRequest[] = [];
+  const modelCatalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+  ]);
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "enable-at-threshold",
+          name: "toggle_agentic_setting",
+          arguments: { enabled: true },
+        };
+        yield { type: "usage", inputTokens: 850, outputTokens: 1 };
+        return;
+      }
+      yield { type: "text_delta", delta: "continued after the notice" };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  let publish: (enabled: boolean) => void = () => {
+    throw new Error("Host configuration published before the server existed");
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog,
+    runtime: agenticSettingRuntime((enabled) => publish(enabled)),
+  });
+  publish = (enabled) =>
+    publishContextCompaction(server, {
+      model,
+      modelCatalog,
+      contextCompaction: { agenticEnabled: enabled },
+    });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.some(
+      (item) =>
+        item.type === "context_compaction" && item.initiator === "automatic",
+    ),
+    false,
+  );
+  const notices = requests.filter((request) =>
+    request.messages.some(
+      (message) =>
+        message.role === "user" &&
+        "text" in message &&
+        message.text.startsWith("[Host context notice]"),
+    ),
+  );
+  assert.equal(notices.length, 1);
+  assert.equal(
+    snapshot.items.filter((item) => item.type === "turn_started").length,
+    2,
+  );
+});
+
+test("a sample that disclosed compact_context still executes it after the setting is disabled", async () => {
+  const requests: ModelRequest[] = [];
+  const modelCatalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 32_768 },
+  ]);
+  let samples = 0;
+  let publish: (enabled: boolean) => void = () => {
+    throw new Error("Host configuration published before the server existed");
+  };
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        yield {
+          type: "tool_call",
+          callId: "enable-before-sample",
+          name: "toggle_agentic_setting",
+          arguments: { enabled: true },
+        };
+        return;
+      }
+      if (samples === 2) {
+        // The setting flips after this sample already disclosed the tool.
+        publish(false);
+        yield {
+          type: "tool_call",
+          callId: "compact-after-disable",
+          name: "compact_context",
+          arguments: {
+            text: "resume from the disclosed sample",
+            includeOriginalReference: false,
+          },
+        };
+        return;
+      }
+      yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog,
+    runtime: agenticSettingRuntime((enabled) => publish(enabled)),
+  });
+  publish = (enabled) =>
+    publishContextCompaction(server, {
+      model,
+      modelCatalog,
+      contextCompaction: { agenticEnabled: enabled },
+    });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "keep working")
+  ).done;
+
+  assert(requests[1]?.tools.some((tool) => tool.name === "compact_context"));
+  assert.equal(
+    requests[2]?.tools.some((tool) => tool.name === "compact_context"),
+    false,
+  );
+  const snapshot = await server.readThread(thread.id);
+  const result = snapshot.items.find(
+    (item) =>
+      item.type === "tool_result" && item.callId === "compact-after-disable",
+  );
+  assert(result?.type === "tool_result");
+  assert.equal(result.exitCode, 0, result.output);
+  assert(
+    snapshot.items.some(
+      (item) =>
+        item.type === "context_compaction" &&
+        item.provenance === "agentic" &&
+        item.callId === "compact-after-disable",
+    ),
+  );
+});
+
 test("repeated agentic resets supersede deterministically in one active Turn", async () => {
   const requests: ModelRequest[] = [];
   let samples = 0;
