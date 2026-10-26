@@ -3065,6 +3065,9 @@ export class ZenAppServer {
           boundary,
           initiator: "human",
           selection: admitted.provider,
+          // A manual reset is one Host operation admitted just above, so its
+          // own admission snapshot is the current policy; only a running Turn
+          // has to re-read the Host revision at every model sample.
           contextCompaction:
             options.retention === undefined
               ? admitted.configuration.contextCompaction
@@ -3608,6 +3611,14 @@ export class ZenAppServer {
                       items,
                       resolved.selection,
                     );
+                    // The pending notice tells the model to call a tool this
+                    // Host setting decides to disclose. Drop it as soon as the
+                    // setting no longer enables that disclosure, so one notice
+                    // can never point at a tool the sample does not carry.
+                    if (!this.#currentContextCompaction().agenticEnabled) {
+                      active.contextCompactionNotice = undefined;
+                      active.contextCompactionNoticeIssued = false;
+                    }
                     const notice =
                       active.contextCompactionNotice !== undefined &&
                       active.contextCompactionNoticeIssued !== true
@@ -4202,7 +4213,7 @@ export class ZenAppServer {
       estimate: this.#estimateContext(
         thread.items,
         resolved,
-        this.#runtimeConfiguration.contextCompaction,
+        this.#currentContextCompaction(),
       ),
       providerContextUsageCompatible:
         selection?.type === "turn_started" &&

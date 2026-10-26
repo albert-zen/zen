@@ -989,7 +989,12 @@ test("agentic compaction accepts a sample following an active settings change", 
  * published revision lands while the Turn is already running.
  */
 class LiveSettingRuntime extends AgentRuntime {
-  constructor(toggle: (enabled: boolean) => void) {
+  readonly #beforeSample: ((sample: number) => void) | undefined;
+
+  constructor(
+    toggle: (enabled: boolean) => void,
+    beforeSample?: (sample: number) => void,
+  ) {
     super({
       toolEnvironment: new ToolEnvironment({
         runtimes: [
@@ -1011,6 +1016,20 @@ class LiveSettingRuntime extends AgentRuntime {
           },
         ],
       }),
+    });
+    this.#beforeSample = beforeSample;
+  }
+
+  /** Lets a fixture publish another Host revision between two model samples. */
+  override async runTurn(options: RunTurnOptions): Promise<void> {
+    let preparations = 0;
+    await super.runTurn({
+      ...options,
+      prepareModelSample: async (responseId) => {
+        preparations += 1;
+        this.#beforeSample?.(preparations);
+        return await options.prepareModelSample(responseId);
+      },
     });
   }
 
@@ -1216,6 +1235,83 @@ test("enabling agentic compaction mid-Turn replaces the Host trigger reset with 
   assert.equal(
     snapshot.items.filter((item) => item.type === "turn_started").length,
     2,
+  );
+});
+
+test("a pending agentic notice is dropped once the setting is disabled before that sample", async () => {
+  const requests: ModelRequest[] = [];
+  const modelCatalog = new StaticModelCatalog([
+    { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+  ]);
+  let samples = 0;
+  let publish: (enabled: boolean) => void = () => {
+    throw new Error("Host configuration published before the server existed");
+  };
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      samples += 1;
+      if (samples === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+        return;
+      }
+      if (samples === 2) {
+        yield {
+          type: "tool_call",
+          callId: "enable-at-threshold",
+          name: "toggle_agentic_setting",
+          arguments: { enabled: true },
+        };
+        yield { type: "usage", inputTokens: 850, outputTokens: 1 };
+        return;
+      }
+      yield { type: "text_delta", delta: "continued without a notice" };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog,
+    runtime: new LiveSettingRuntime(
+      (enabled) => publish(enabled),
+      // The Host revision flips back before the sample that would carry the
+      // queued notice is prepared.
+      (sample) => {
+        if (sample === 2) publish(false);
+      },
+    ),
+  });
+  publish = (enabled) =>
+    publishContextCompaction(server, {
+      model,
+      modelCatalog,
+      contextCompaction: { agenticEnabled: enabled },
+    });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed request")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "active request")
+  ).done;
+
+  assert.equal(
+    requests.filter((request) =>
+      request.messages.some(
+        (message) =>
+          message.role === "user" &&
+          "text" in message &&
+          message.text.startsWith("[Host context notice]"),
+      ),
+    ).length,
+    0,
+  );
+  assert.equal(
+    requests[1]?.tools.some((tool) => tool.name === "compact_context"),
+    false,
   );
 });
 
@@ -1487,6 +1583,14 @@ test("agentic compaction stays off by default and mixed calls fail locally", asy
       );
       assert(rejected?.type === "tool_result");
       assert.notEqual(rejected.exitCode, 0);
+      // A top-level call rejects for its own reason; the generic
+      // "not available in this model sample" text belongs to nested calls.
+      assert.match(
+        rejected.output,
+        scenario === "mixed"
+          ? /must be the only top-level tool call/u
+          : /is not disclosed to this model sample/u,
+      );
       if (scenario === "mixed") {
         const ordinary = snapshot.items.find(
           (item) =>
