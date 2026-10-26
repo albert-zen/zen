@@ -13,6 +13,7 @@ import {
 } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
 import { fileContentSearch } from "./file-content-search.js";
+import { EDITOR_STYLE_NONCE } from "./editor-style-nonce.js";
 import { tags } from "@lezer/highlight";
 import React, { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -99,6 +100,7 @@ export function SourceEditor({
           rawSource.init(() => text),
           preserveRawSource,
           fileContentSearch,
+          EditorView.cspNonce.of(EDITOR_STYLE_NONCE),
           languageScope.current.of(large ? [] : sourceLanguage(path)),
           syntaxHighlighting(highlight),
           lineNumbers(),

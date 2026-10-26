@@ -18,6 +18,7 @@ import {
 } from "@codemirror/view";
 import { openSearchPanel, searchPanelOpen } from "@codemirror/search";
 import { fileContentSearch } from "./file-content-search.js";
+import { EDITOR_STYLE_NONCE } from "./editor-style-nonce.js";
 import { GFM } from "@lezer/markdown";
 import { useEffect, useRef } from "react";
 import { classifyZenXLink } from "../../external-link-policy.js";
@@ -239,6 +240,7 @@ export function InlineMarkdownEditor({
           rawSource.init(() => text),
           preserveRawSource,
           fileContentSearch,
+          EditorView.cspNonce.of(EDITOR_STYLE_NONCE),
           markdown({ extensions: [GFM] }),
           historyCompartment.current.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap]),

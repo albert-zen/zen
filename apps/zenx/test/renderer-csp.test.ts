@@ -8,6 +8,8 @@ import { loadConfigFromFile } from "electron-vite";
 import { JSDOM } from "jsdom";
 import { build, createServer } from "vite";
 
+import { EDITOR_STYLE_NONCE } from "../src/renderer/src/editor-style-nonce.js";
+
 const rendererIndexPath = new URL(
   "../src/renderer/index.html",
   import.meta.url,
@@ -18,6 +20,7 @@ const rendererRootPath = fileURLToPath(
 const configFilePath = fileURLToPath(
   new URL("../electron.vite.config.ts", import.meta.url),
 );
+const productionStyleDirective = `style-src 'self' 'nonce-${EDITOR_STYLE_NONCE}'`;
 
 test("development Vite pipeline only relaxes the renderer CSP meta", async () => {
   const productionHtml = await readFile(rendererIndexPath, "utf8");
@@ -65,8 +68,8 @@ test("development Vite pipeline only relaxes the renderer CSP meta", async () =>
       server.transformIndexHtml(
         "/index.html",
         productionHtml.replace(
-          "style-src 'self';",
-          "style-src 'self'; style-src 'self';",
+          productionStyleDirective,
+          `${productionStyleDirective}; ${productionStyleDirective}`,
         ),
       ),
       /exactly one style-src directive/u,
@@ -91,7 +94,7 @@ test("development Vite pipeline only relaxes the renderer CSP meta", async () =>
 test("production Vite build keeps the renderer CSP strict", async () => {
   const productionHtml = await readFile(rendererIndexPath, "utf8");
 
-  assert.match(productionHtml, /style-src 'self';/u);
+  assert.match(productionHtml, /style-src 'self' 'nonce-qMpCLgrjajDz';/u);
   assert.doesNotMatch(productionHtml, /style-src[^;]*'unsafe-inline'/u);
   const loaded = await loadConfigFromFile(
     { command: "build", mode: "production" },
@@ -113,10 +116,28 @@ test("production Vite build keeps the renderer CSP strict", async () => {
 
   assert.ok(indexHtml && indexHtml.type === "asset");
   const builtHtml = String(indexHtml.source);
-  assert.match(builtHtml, /style-src 'self';/u);
+  assert.match(builtHtml, /style-src 'self' 'nonce-qMpCLgrjajDz';/u);
   assert.doesNotMatch(builtHtml, /style-src[^;]*'unsafe-inline'/u);
   assert.match(builtHtml, /script-src 'self'(?: 'sha256-[^']+')*;/u);
   assert.doesNotMatch(builtHtml, /script-src[^;]*'unsafe-inline'/u);
+});
+
+test("the editor stylesheet nonce matches the renderer CSP", async () => {
+  // CodeMirror injects its base theme and token colours at runtime. The nonce
+  // is the only way those styles may apply, so the HTML and the editor
+  // extension share one value; drift here silently breaks the file workspace.
+  const productionHtml = await readFile(rendererIndexPath, "utf8");
+  assert.ok(
+    productionHtml.includes(`'nonce-${EDITOR_STYLE_NONCE}'`),
+    "index.html must carry the nonce from editor-style-nonce.ts",
+  );
+  const editors = await Promise.all(
+    ["SourceEditor.tsx", "InlineMarkdownEditor.tsx"].map((name) =>
+      readFile(new URL(`../src/renderer/src/${name}`, import.meta.url), "utf8"),
+    ),
+  );
+  for (const source of editors)
+    assert.match(source, /EditorView\.cspNonce\.of\(EDITOR_STYLE_NONCE\)/u);
 });
 
 test("allows only the hashed pre-paint appearance bootstrap", async () => {

@@ -26,6 +26,7 @@ import { WorkspaceFilesPanel } from "./workspace-files-panel.js";
 import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
+import { revealTabScroll } from "./workspace-tab-scroll.js";
 
 function panelIcon(pluginId: string): IconName {
   if (pluginId === "zenx-subagents") return "users";
@@ -166,6 +167,9 @@ export function AuxiliaryPanel({
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
+  const [railOverflow, setRailOverflow] = useState<
+    "none" | "start" | "end" | "both"
+  >("none");
   const fileBody = useRef<HTMLDivElement>(null);
   const [fileNavigationWidth, setFileNavigationWidth] = useState(192);
   const [fileNavigationHeight, setFileNavigationHeight] = useState(180);
@@ -471,33 +475,52 @@ export function AuxiliaryPanel({
   useLayoutEffect(() => {
     const rail = tabRail.current;
     if (!rail || !open) return;
-    const reveal = () => {
-      const tab = active ? document.getElementById(`aux-tab-${active}`) : null;
-      const item = tab?.closest<HTMLElement>(".workspace-content-tab");
-      if (!item || !rail.contains(item) || rail.clientWidth <= 0) return;
-      const bounds = item.getBoundingClientRect();
-      const railBounds = rail.getBoundingClientRect();
-      const left = bounds.left - railBounds.left + rail.scrollLeft;
-      const right = bounds.right - railBounds.left + rail.scrollLeft;
-      const visibleEnd = rail.scrollLeft + rail.clientWidth;
+    // A clipped tab at the leading edge loses its icon first, so the rail only
+    // ever exposes whole tabs where the scroll position allows it, and masks
+    // the edge where the content genuinely continues.
+    const syncOverflow = () => {
+      const start = rail.scrollLeft > 1;
+      const end = rail.scrollWidth - rail.scrollLeft - rail.clientWidth > 1;
       const next =
-        left < rail.scrollLeft || bounds.width > rail.clientWidth
-          ? left
-          : right > visibleEnd
-            ? right - rail.clientWidth
-            : rail.scrollLeft;
-      rail.scrollLeft = Math.max(
-        0,
-        Math.min(next, rail.scrollWidth - rail.clientWidth),
-      );
+        start && end ? "both" : start ? "start" : end ? "end" : "none";
+      setRailOverflow((current) => (current === next ? current : next));
     };
+    const reveal = () => {
+      if (rail.clientWidth <= 0) return;
+      const items = [
+        ...rail.querySelectorAll<HTMLElement>(".workspace-content-tab"),
+      ];
+      const railBounds = rail.getBoundingClientRect();
+      const extents = items.map((item) => {
+        const bounds = item.getBoundingClientRect();
+        return {
+          start: bounds.left - railBounds.left + rail.scrollLeft,
+          end: bounds.right - railBounds.left + rail.scrollLeft,
+        };
+      });
+      rail.scrollLeft = revealTabScroll({
+        tabs: extents,
+        active: items.findIndex(
+          (item) =>
+            item.querySelector('[role="tab"]')?.id === `aux-tab-${active}`,
+        ),
+        clientWidth: rail.clientWidth,
+        scrollLeft: rail.scrollLeft,
+        scrollWidth: rail.scrollWidth,
+      });
+      syncOverflow();
+    };
+    rail.addEventListener("scroll", syncOverflow, { passive: true });
     reveal();
     const observer =
       typeof ResizeObserver === "undefined"
         ? undefined
         : new ResizeObserver(reveal);
     observer?.observe(rail);
-    return () => observer?.disconnect();
+    return () => {
+      rail.removeEventListener("scroll", syncOverflow);
+      observer?.disconnect();
+    };
   }, [active, open, signature, width, expanded]);
   useLayoutEffect(() => {
     const target = pendingTabFocus.current;
@@ -964,6 +987,7 @@ export function AuxiliaryPanel({
           <div
             ref={tabRail}
             role="tablist"
+            data-overflow={railOverflow}
             aria-label={i18n.t("panels:workspaceTabs")}
           >
             {tabs.map((tab, index) => (

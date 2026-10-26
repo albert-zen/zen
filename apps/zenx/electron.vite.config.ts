@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { startupScreenHtml } from "./src/main/startup-screen.js";
+import { EDITOR_STYLE_NONCE } from "./src/renderer/src/editor-style-nonce.js";
 import { defineConfig } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import type { Plugin } from "vite";
 
-const productionStylePolicy = "style-src 'self'";
+const productionStylePolicy = `style-src 'self' 'nonce-${EDITOR_STYLE_NONCE}'`;
 const developmentStylePolicy = "style-src 'self' 'unsafe-inline'";
 
 function quotedAttribute(markup: string, name: string) {

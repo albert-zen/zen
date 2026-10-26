@@ -5459,6 +5459,8 @@ button:disabled {
   }
   :root[data-platform="darwin"] .app-shell {
     --titlebar-brand-track: 84px;
+    /* Space macOS reserves for the window controls at the window's leading edge. */
+    --macos-window-controls-inset: 84px;
   }
   :root[data-platform="darwin"] .window-titlebar-product {
     width: min(286px, calc(100% - 44px));
@@ -8181,6 +8183,15 @@ button:disabled {
     .thread-heading {
     visibility: hidden;
   }
+  /* An expanded panel takes the whole window, so its tab strip owns the
+     leading edge where macOS draws the window controls. They sit over the
+     panel surface in fullscreen too, which hid the first tab's icon. */
+  :root[data-platform="darwin"]
+    .app-shell.sidebar-collapsed
+    .auxiliary-panel[data-expanded="true"]
+    > .auxiliary-heading {
+    padding-left: calc(var(--macos-window-controls-inset, 84px) + 8px);
+  }
 }
 @media (min-width: 721px) and (max-width: 1099px) {
   :root[data-platform="darwin"]
@@ -8239,11 +8250,38 @@ button:disabled {
 .workspace-content-tab {
   display: inline-flex;
   align-items: center;
-  flex: 0 0 auto;
+  /* Tabs shrink before the rail scrolls, so an ordinary set of open files keeps
+     every icon and a readable title instead of clipping the leading tab. */
+  flex: 0 1 auto;
   max-width: 210px;
-  min-width: 0;
+  min-width: 96px;
   height: 30px;
   border-radius: 8px;
+}
+.auxiliary-heading [role="tablist"][data-overflow="start"] {
+  /* A mask only reads alpha, so the opaque stop reuses the main surface token
+     instead of introducing a raw color outside theme.css. */
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    var(--color-surface-main) 14px
+  );
+}
+.auxiliary-heading [role="tablist"][data-overflow="end"] {
+  mask-image: linear-gradient(
+    to left,
+    transparent 0,
+    var(--color-surface-main) 14px
+  );
+}
+.auxiliary-heading [role="tablist"][data-overflow="both"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    var(--color-surface-main) 14px,
+    var(--color-surface-main) calc(100% - 14px),
+    transparent 100%
+  );
 }
 .workspace-content-tab[data-active="true"] {
   background: var(--color-surface-hover);

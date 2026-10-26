@@ -35,8 +35,30 @@ const measure = `(() => {
   const location=active?.querySelector('.file-location');
   const toggle=[...document.querySelectorAll('.workspace-navigation-toggle')].find(e=>e.getClientRects().length);
   const nav=document.querySelector('.workspace-file-navigation');
+  const rail=document.querySelector('.auxiliary-heading [role="tablist"]');
+  const railBounds=rail?.getBoundingClientRect();
   return {
     activeId:active?.id,
+    editorDisplay:editor?getComputedStyle(editor).display:null,
+    tokenColors:active?[...new Set([...active.querySelectorAll('.cm-line span')].map(e=>getComputedStyle(e).color))]:[],
+    markdownHeadings:active?active.querySelectorAll('.cm-live-heading').length:0,
+    rail:rail&&railBounds?{
+      scrollLeft:Math.round(rail.scrollLeft),
+      clientWidth:rail.clientWidth,
+      scrollWidth:rail.scrollWidth,
+      tabs:[...document.querySelectorAll('.workspace-content-tab')].map(t=>{
+        const b=t.getBoundingClientRect();
+        const icon=t.querySelector('svg');
+        const i=icon?.getBoundingClientRect();
+        return {
+          title:t.innerText.trim().slice(0,18),
+          width:Math.round(b.width),
+          visible:Math.round(Math.max(0,Math.min(b.right,railBounds.right)-Math.max(b.left,railBounds.left))),
+          clippedAtLeadingEdge:b.left<railBounds.left-0.5&&b.right>railBounds.left+1,
+          iconVisible:i?i.x>=railBounds.left-0.5&&i.right<=railBounds.right+0.5:null,
+        };
+      }),
+    }:null,
     heading:rect(document.querySelector('.auxiliary-heading')),
     panel:box(document.querySelector('.auxiliary-panel')),
     body:box(document.querySelector('.auxiliary-body')),
@@ -57,6 +79,9 @@ const measure = `(() => {
     calls:window.__fileSidebarPreview?.calls,
   };
 })()`;
+
+const noLeadingSliver = (rail) =>
+  !!rail && rail.tabs.every((tab) => !tab.clippedAtLeadingEdge);
 
 let server;
 let child;
@@ -352,6 +377,34 @@ try {
     await delay(350);
     receipt.initial = await evaluate(measure);
     await capture("source-start");
+    // CodeMirror injects its base theme and token colours as a style element;
+    // without that sheet the editor is an unlaid-out column of text that cannot
+    // scroll, and nothing in it is highlighted.
+    check(
+      receipt,
+      "editor-theme-stylesheet-applied",
+      receipt.initial.editorDisplay === "flex",
+      JSON.stringify(receipt.initial.editorDisplay),
+    );
+    check(
+      receipt,
+      "source-tokens-are-highlighted",
+      receipt.initial.tokenColors.length > 1,
+      JSON.stringify(receipt.initial.tokenColors),
+    );
+    check(
+      receipt,
+      "tab-rail-shows-whole-tabs",
+      noLeadingSliver(receipt.initial.rail),
+      JSON.stringify(receipt.initial.rail),
+    );
+    check(
+      receipt,
+      "tab-rail-has-overflowing-tabs",
+      !!receipt.initial.rail &&
+        receipt.initial.rail.scrollWidth > receipt.initial.rail.clientWidth,
+      JSON.stringify(receipt.initial.rail),
+    );
     check(
       receipt,
       "toggle-in-breadcrumb-not-tab-header",
@@ -431,6 +484,18 @@ try {
     await capture("source-tree-hidden");
     await selectTab(markdownId);
     receipt.markdownStart = await evaluate(measure);
+    check(
+      receipt,
+      "switching-tabs-keeps-whole-tabs-in-the-rail",
+      noLeadingSliver(receipt.markdownStart.rail),
+      JSON.stringify(receipt.markdownStart.rail),
+    );
+    check(
+      receipt,
+      "markdown-decorations-render",
+      receipt.markdownStart.markdownHeadings > 0,
+      JSON.stringify(receipt.markdownStart.markdownHeadings),
+    );
     check(
       receipt,
       "hidden-tree-scope-shared-across-files",

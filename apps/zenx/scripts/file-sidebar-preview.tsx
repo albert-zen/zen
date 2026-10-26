@@ -19,6 +19,7 @@ const threadId = "synthetic-file-sidebar-thread";
 const workspace = "/synthetic/file-sidebar-preview";
 const sourcePath = "src/long-source.ts";
 const markdownPath = "docs/long-notes.md";
+const extraPaths = ["docs/release-notes.md", "src/second-source.ts"] as const;
 const source =
   Array.from(
     { length: 320 },
@@ -42,6 +43,14 @@ const files = new Map<string, WorkspaceTextFile>([
     markdownPath,
     { path: markdownPath, text: markdown, revision: "synthetic-markdown-v1" },
   ],
+  ...extraPaths.map((path) => [
+    path,
+    {
+      path,
+      text: path.endsWith(".md") ? markdown : source,
+      revision: `synthetic-${path}-v1`,
+    },
+  ]),
 ]);
 const drafts = new WorkspaceFileDrafts();
 for (const file of files.values())
@@ -123,6 +132,7 @@ function Preview() {
   const [openedTabs, setOpenedTabs] = useState([
     `file:${sourcePath}`,
     `file:${markdownPath}`,
+    ...extraPaths.map((path) => `file:${path}`),
     "custom:overview",
   ]);
   const [open, setOpen] = useState(true);
