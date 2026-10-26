@@ -5,8 +5,55 @@ import * as fixtureEvidence from "../src/main/windows-packaged-uia-evidence.js";
 
 import {
   assertWindowsPackagedUiaFocusEvidence,
+  windowsUiaTargetDiagnostics,
   type WindowsPackagedUiaFocusEvidence,
 } from "../src/main/windows-packaged-uia-evidence.js";
+
+test("failure diagnostics retain only bounded fixed numeric fields, never raw fixture text", () => {
+  const snapshot = {
+    elapsedMs: 1000,
+    ticks: 60,
+    lastTickMs: 999,
+    getObjectEntered: 1,
+    getObjectExited: 0,
+    lastEnterMs: 990,
+    lastExitMs: -1,
+    objectKind: -25,
+    privateText: "must never leave the private fixture stderr",
+  };
+  const line = (value: unknown) =>
+    `ZENX_UIA_TARGET_DIAGNOSTIC ${JSON.stringify(value)}\n`;
+  const [result] = windowsUiaTargetDiagnostics(
+    "private exception text\n" + line(snapshot),
+  );
+  assert.ok(result);
+  assert.equal(result.objectKind, -25);
+  assert.equal("privateText" in result, false);
+  assert.deepEqual(
+    windowsUiaTargetDiagnostics(line({ ...snapshot, objectKind: 1234 })),
+    [],
+  );
+  assert.deepEqual(
+    windowsUiaTargetDiagnostics(line({ ...snapshot, ticks: -1 })),
+    [],
+  );
+  assert.deepEqual(
+    windowsUiaTargetDiagnostics(line({ ...snapshot, elapsedMs: "secret" })),
+    [],
+  );
+  assert.deepEqual(
+    windowsUiaTargetDiagnostics(line({ ...snapshot, lastExitMs: null })),
+    [],
+  );
+  assert.deepEqual(
+    windowsUiaTargetDiagnostics("ZENX_UIA_TARGET_DIAGNOSTIC {partial"),
+    [],
+  );
+  assert.equal(
+    windowsUiaTargetDiagnostics(line(snapshot).repeat(1000)).length,
+    24,
+  );
+});
 
 const expected = { targetPid: 101, guardPid: 202, guardHwnd: "700" };
 function evidence(): WindowsPackagedUiaFocusEvidence {
