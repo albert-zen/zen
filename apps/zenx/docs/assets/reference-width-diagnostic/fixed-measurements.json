@@ -1,0 +1,1286 @@
+{
+  "source": "Production responsive ReferenceToken wrapper, Markdown and CSS; synthetic identities, supplied visible excerpt. No Provider or user computer access.",
+  "scenes": [
+    {
+      "width": 1280,
+      "metrics": [
+        {
+          "name": "三行摘录（合成身份）",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 746,
+              "width": 378,
+              "right": 1124,
+              "clientWidth": 376,
+              "height": 54.296875,
+              "scrollWidth": 376
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "markdown-body",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "P",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "reference-token",
+              "x": 764,
+              "width": 300,
+              "right": 1064,
+              "clientWidth": 298,
+              "height": 28,
+              "scrollWidth": 298
+            },
+            {
+              "class": "reference-token-details",
+              "x": 765,
+              "width": 298,
+              "right": 1063,
+              "clientWidth": 298,
+              "height": 24,
+              "scrollWidth": 298
+            }
+          ]
+        },
+        {
+          "name": "短引用对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 973.984375,
+              "width": 150.015625,
+              "right": 1124,
+              "clientWidth": 148,
+              "height": 54.296875,
+              "scrollWidth": 148
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 989.984375,
+              "width": 118.015625,
+              "right": 1108,
+              "clientWidth": 118,
+              "height": 28.296875,
+              "scrollWidth": 118
+            },
+            {
+              "class": "markdown-body",
+              "x": 989.984375,
+              "width": 118.015625,
+              "right": 1108,
+              "clientWidth": 118,
+              "height": 28.296875,
+              "scrollWidth": 118
+            },
+            {
+              "class": "P",
+              "x": 989.984375,
+              "width": 118.015625,
+              "right": 1108,
+              "clientWidth": 118,
+              "height": 28.296875,
+              "scrollWidth": 118
+            },
+            {
+              "class": "reference-token",
+              "x": 991.984375,
+              "width": 72.015625,
+              "right": 1064,
+              "clientWidth": 70,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 992.984375,
+              "width": 70.015625,
+              "right": 1063,
+              "clientWidth": 70,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "相同摘录单行对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 746,
+              "width": 378,
+              "right": 1124,
+              "clientWidth": 376,
+              "height": 54.296875,
+              "scrollWidth": 376
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "markdown-body",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "P",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "reference-token",
+              "x": 764,
+              "width": 300,
+              "right": 1064,
+              "clientWidth": 298,
+              "height": 28,
+              "scrollWidth": 298
+            },
+            {
+              "class": "reference-token-details",
+              "x": 765,
+              "width": 298,
+              "right": 1063,
+              "clientWidth": 298,
+              "height": 24,
+              "scrollWidth": 298
+            }
+          ]
+        },
+        {
+          "name": "两条引用与 Markdown 混排",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 561.4375,
+              "width": 562.5625,
+              "right": 1124,
+              "clientWidth": 561,
+              "height": 54.296875,
+              "scrollWidth": 561
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 577.4375,
+              "width": 530.5625,
+              "right": 1108,
+              "clientWidth": 531,
+              "height": 28.296875,
+              "scrollWidth": 531
+            },
+            {
+              "class": "markdown-body",
+              "x": 577.4375,
+              "width": 530.5625,
+              "right": 1108,
+              "clientWidth": 531,
+              "height": 28.296875,
+              "scrollWidth": 531
+            },
+            {
+              "class": "P",
+              "x": 577.4375,
+              "width": 530.5625,
+              "right": 1108,
+              "clientWidth": 531,
+              "height": 28.296875,
+              "scrollWidth": 531
+            },
+            {
+              "class": "reference-token",
+              "x": 611.328125,
+              "width": 300,
+              "right": 911.328125,
+              "clientWidth": 298,
+              "height": 28,
+              "scrollWidth": 298
+            },
+            {
+              "class": "reference-token-details",
+              "x": 612.328125,
+              "width": 298,
+              "right": 910.328125,
+              "clientWidth": 298,
+              "height": 24,
+              "scrollWidth": 298
+            },
+            {
+              "class": "reference-token",
+              "x": 937.109375,
+              "width": 72.015625,
+              "right": 1009.125,
+              "clientWidth": 70,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 938.109375,
+              "width": 70.015625,
+              "right": 1008.125,
+              "clientWidth": 70,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "长无空格摘录",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 746,
+              "width": 378,
+              "right": 1124,
+              "clientWidth": 376,
+              "height": 54.296875,
+              "scrollWidth": 376
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "markdown-body",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "P",
+              "x": 762,
+              "width": 346,
+              "right": 1108,
+              "clientWidth": 346,
+              "height": 28.296875,
+              "scrollWidth": 346
+            },
+            {
+              "class": "reference-token",
+              "x": 764,
+              "width": 300,
+              "right": 1064,
+              "clientWidth": 298,
+              "height": 28,
+              "scrollWidth": 298
+            },
+            {
+              "class": "reference-token-details",
+              "x": 765,
+              "width": 298,
+              "right": 1063,
+              "clientWidth": 298,
+              "height": 24,
+              "scrollWidth": 298
+            }
+          ]
+        }
+      ],
+      "editable": {
+        "editor": {
+          "left": 229,
+          "right": 1051,
+          "width": 822
+        },
+        "token": {
+          "left": 237,
+          "right": 504,
+          "width": 267
+        },
+        "remove": {
+          "left": 478,
+          "right": 502,
+          "width": 24
+        }
+      },
+      "editorComparisons": {
+        "baseline": {
+          "editor": {
+            "left": 229,
+            "right": 1051,
+            "width": 822,
+            "clientWidth": 822,
+            "scrollWidth": 822
+          },
+          "content": {
+            "left": 229,
+            "right": 1051,
+            "width": 822,
+            "clientWidth": 822,
+            "scrollWidth": 822
+          },
+          "token": {
+            "left": 237,
+            "right": 504,
+            "width": 267,
+            "clientWidth": 265,
+            "scrollWidth": 265
+          },
+          "remove": {
+            "left": 478,
+            "right": 502,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        },
+        "wrapperOnly": {
+          "editor": {
+            "left": 229,
+            "right": 1051,
+            "width": 822,
+            "clientWidth": 822,
+            "scrollWidth": 822
+          },
+          "content": {
+            "left": 229,
+            "right": 1051,
+            "width": 822,
+            "clientWidth": 822,
+            "scrollWidth": 822
+          },
+          "token": {
+            "left": 237,
+            "right": 504,
+            "width": 267,
+            "clientWidth": 265,
+            "scrollWidth": 265
+          },
+          "remove": {
+            "left": 478,
+            "right": 502,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        },
+        "fixed": {
+          "editor": {
+            "left": 229,
+            "right": 1051,
+            "width": 822,
+            "clientWidth": 822,
+            "scrollWidth": 822
+          },
+          "content": {
+            "left": 229,
+            "right": 1051,
+            "width": 822,
+            "clientWidth": 822,
+            "scrollWidth": 822
+          },
+          "token": {
+            "left": 237,
+            "right": 504,
+            "width": 267,
+            "clientWidth": 265,
+            "scrollWidth": 265
+          },
+          "remove": {
+            "left": 478,
+            "right": 502,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        }
+      }
+    },
+    {
+      "width": 420,
+      "metrics": [
+        {
+          "name": "三行摘录（合成身份）",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 70.546875,
+              "width": 305.453125,
+              "right": 376,
+              "clientWidth": 303,
+              "height": 78.6875,
+              "scrollWidth": 303
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "markdown-body",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "P",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "reference-token",
+              "x": 88.546875,
+              "width": 269.453125,
+              "right": 358,
+              "clientWidth": 267,
+              "height": 28,
+              "scrollWidth": 267
+            },
+            {
+              "class": "reference-token-details",
+              "x": 89.546875,
+              "width": 267.453125,
+              "right": 357,
+              "clientWidth": 267,
+              "height": 24,
+              "scrollWidth": 267
+            }
+          ]
+        },
+        {
+          "name": "短引用对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 228.96875,
+              "width": 147.03125,
+              "right": 376,
+              "clientWidth": 145,
+              "height": 54,
+              "scrollWidth": 145
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 244.96875,
+              "width": 115.03125,
+              "right": 360,
+              "clientWidth": 115,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "markdown-body",
+              "x": 244.96875,
+              "width": 115.03125,
+              "right": 360,
+              "clientWidth": 115,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "P",
+              "x": 244.96875,
+              "width": 115.03125,
+              "right": 360,
+              "clientWidth": 115,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "reference-token",
+              "x": 246.96875,
+              "width": 72.015625,
+              "right": 318.984375,
+              "clientWidth": 70,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 247.96875,
+              "width": 70.015625,
+              "right": 317.984375,
+              "clientWidth": 70,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "相同摘录单行对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 70.546875,
+              "width": 305.453125,
+              "right": 376,
+              "clientWidth": 303,
+              "height": 78.6875,
+              "scrollWidth": 303
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "markdown-body",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "P",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "reference-token",
+              "x": 88.546875,
+              "width": 269.453125,
+              "right": 358,
+              "clientWidth": 267,
+              "height": 28,
+              "scrollWidth": 267
+            },
+            {
+              "class": "reference-token-details",
+              "x": 89.546875,
+              "width": 267.453125,
+              "right": 357,
+              "clientWidth": 267,
+              "height": 24,
+              "scrollWidth": 267
+            }
+          ]
+        },
+        {
+          "name": "两条引用与 Markdown 混排",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 70.546875,
+              "width": 305.453125,
+              "right": 376,
+              "clientWidth": 303,
+              "height": 106.6875,
+              "scrollWidth": 303
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 80.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "markdown-body",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 80.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "P",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 80.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "reference-token",
+              "x": 88.546875,
+              "width": 269.453125,
+              "right": 358,
+              "clientWidth": 267,
+              "height": 28,
+              "scrollWidth": 267
+            },
+            {
+              "class": "reference-token-details",
+              "x": 89.546875,
+              "width": 267.453125,
+              "right": 357,
+              "clientWidth": 267,
+              "height": 24,
+              "scrollWidth": 267
+            },
+            {
+              "class": "reference-token",
+              "x": 105.171875,
+              "width": 72.015625,
+              "right": 177.1875,
+              "clientWidth": 70,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 106.171875,
+              "width": 70.015625,
+              "right": 176.1875,
+              "clientWidth": 70,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "长无空格摘录",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 70.546875,
+              "width": 305.453125,
+              "right": 376,
+              "clientWidth": 303,
+              "height": 78.6875,
+              "scrollWidth": 303
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "markdown-body",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "P",
+              "x": 86.546875,
+              "width": 273.453125,
+              "right": 360,
+              "clientWidth": 273,
+              "height": 52.6875,
+              "scrollWidth": 273
+            },
+            {
+              "class": "reference-token",
+              "x": 88.546875,
+              "width": 269.453125,
+              "right": 358,
+              "clientWidth": 267,
+              "height": 28,
+              "scrollWidth": 267
+            },
+            {
+              "class": "reference-token-details",
+              "x": 89.546875,
+              "width": 267.453125,
+              "right": 357,
+              "clientWidth": 267,
+              "height": 24,
+              "scrollWidth": 267
+            }
+          ]
+        }
+      ],
+      "editable": {
+        "editor": {
+          "left": 53,
+          "right": 367,
+          "width": 314
+        },
+        "token": {
+          "left": 61,
+          "right": 328,
+          "width": 267
+        },
+        "remove": {
+          "left": 302,
+          "right": 326,
+          "width": 24
+        }
+      },
+      "editorComparisons": {
+        "baseline": {
+          "editor": {
+            "left": 53,
+            "right": 367,
+            "width": 314,
+            "clientWidth": 314,
+            "scrollWidth": 314
+          },
+          "content": {
+            "left": 53,
+            "right": 367,
+            "width": 314,
+            "clientWidth": 314,
+            "scrollWidth": 314
+          },
+          "token": {
+            "left": 61,
+            "right": 328,
+            "width": 267,
+            "clientWidth": 265,
+            "scrollWidth": 265
+          },
+          "remove": {
+            "left": 302,
+            "right": 326,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        },
+        "wrapperOnly": {
+          "editor": {
+            "left": 53,
+            "right": 367,
+            "width": 314,
+            "clientWidth": 314,
+            "scrollWidth": 314
+          },
+          "content": {
+            "left": 53,
+            "right": 367,
+            "width": 314,
+            "clientWidth": 314,
+            "scrollWidth": 314
+          },
+          "token": {
+            "left": 61,
+            "right": 328,
+            "width": 267,
+            "clientWidth": 265,
+            "scrollWidth": 265
+          },
+          "remove": {
+            "left": 302,
+            "right": 326,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        },
+        "fixed": {
+          "editor": {
+            "left": 53,
+            "right": 367,
+            "width": 314,
+            "clientWidth": 314,
+            "scrollWidth": 314
+          },
+          "content": {
+            "left": 53,
+            "right": 367,
+            "width": 314,
+            "clientWidth": 314,
+            "scrollWidth": 314
+          },
+          "token": {
+            "left": 61,
+            "right": 328,
+            "width": 267,
+            "clientWidth": 265,
+            "scrollWidth": 265
+          },
+          "remove": {
+            "left": 302,
+            "right": 326,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        }
+      }
+    },
+    {
+      "width": 320,
+      "metrics": [
+        {
+          "name": "三行摘录（合成身份）",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 53.265625,
+              "width": 222.734375,
+              "right": 276,
+              "clientWidth": 221,
+              "height": 78.6875,
+              "scrollWidth": 221
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "markdown-body",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "P",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "reference-token",
+              "x": 71.265625,
+              "width": 186.734375,
+              "right": 258,
+              "clientWidth": 185,
+              "height": 28,
+              "scrollWidth": 185
+            },
+            {
+              "class": "reference-token-details",
+              "x": 72.265625,
+              "width": 184.734375,
+              "right": 257,
+              "clientWidth": 185,
+              "height": 24,
+              "scrollWidth": 185
+            }
+          ]
+        },
+        {
+          "name": "短引用对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 128.96875,
+              "width": 147.03125,
+              "right": 276,
+              "clientWidth": 145,
+              "height": 54,
+              "scrollWidth": 145
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 144.96875,
+              "width": 115.03125,
+              "right": 260,
+              "clientWidth": 115,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "markdown-body",
+              "x": 144.96875,
+              "width": 115.03125,
+              "right": 260,
+              "clientWidth": 115,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "P",
+              "x": 144.96875,
+              "width": 115.03125,
+              "right": 260,
+              "clientWidth": 115,
+              "height": 28,
+              "scrollWidth": 115
+            },
+            {
+              "class": "reference-token",
+              "x": 146.96875,
+              "width": 72.015625,
+              "right": 218.984375,
+              "clientWidth": 70,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 147.96875,
+              "width": 70.015625,
+              "right": 217.984375,
+              "clientWidth": 70,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "相同摘录单行对照",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 53.265625,
+              "width": 222.734375,
+              "right": 276,
+              "clientWidth": 221,
+              "height": 78.6875,
+              "scrollWidth": 221
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "markdown-body",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "P",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "reference-token",
+              "x": 71.265625,
+              "width": 186.734375,
+              "right": 258,
+              "clientWidth": 185,
+              "height": 28,
+              "scrollWidth": 185
+            },
+            {
+              "class": "reference-token-details",
+              "x": 72.265625,
+              "width": 184.734375,
+              "right": 257,
+              "clientWidth": 185,
+              "height": 24,
+              "scrollWidth": 185
+            }
+          ]
+        },
+        {
+          "name": "两条引用与 Markdown 混排",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 53.265625,
+              "width": 222.734375,
+              "right": 276,
+              "clientWidth": 221,
+              "height": 106.6875,
+              "scrollWidth": 221
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 80.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "markdown-body",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 80.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "P",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 80.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "reference-token",
+              "x": 71.265625,
+              "width": 186.734375,
+              "right": 258,
+              "clientWidth": 185,
+              "height": 28,
+              "scrollWidth": 185
+            },
+            {
+              "class": "reference-token-details",
+              "x": 72.265625,
+              "width": 184.734375,
+              "right": 257,
+              "clientWidth": 185,
+              "height": 24,
+              "scrollWidth": 185
+            },
+            {
+              "class": "reference-token",
+              "x": 87.890625,
+              "width": 72.015625,
+              "right": 159.90625,
+              "clientWidth": 70,
+              "height": 28,
+              "scrollWidth": 70
+            },
+            {
+              "class": "reference-token-details",
+              "x": 88.890625,
+              "width": 70.015625,
+              "right": 158.90625,
+              "clientWidth": 70,
+              "height": 24,
+              "scrollWidth": 70
+            }
+          ]
+        },
+        {
+          "name": "长无空格摘录",
+          "boxes": [
+            {
+              "class": "user-bubble",
+              "x": 53.265625,
+              "width": 222.734375,
+              "right": 276,
+              "clientWidth": 221,
+              "height": 78.6875,
+              "scrollWidth": 221
+            },
+            {
+              "class": "inline-reference-content",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "markdown-body",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "P",
+              "x": 69.265625,
+              "width": 190.734375,
+              "right": 260,
+              "clientWidth": 191,
+              "height": 52.6875,
+              "scrollWidth": 191
+            },
+            {
+              "class": "reference-token",
+              "x": 71.265625,
+              "width": 186.734375,
+              "right": 258,
+              "clientWidth": 185,
+              "height": 28,
+              "scrollWidth": 185
+            },
+            {
+              "class": "reference-token-details",
+              "x": 72.265625,
+              "width": 184.734375,
+              "right": 257,
+              "clientWidth": 185,
+              "height": 24,
+              "scrollWidth": 185
+            }
+          ]
+        }
+      ],
+      "editable": {
+        "editor": {
+          "left": 53,
+          "right": 267,
+          "width": 214
+        },
+        "token": {
+          "left": 61,
+          "right": 259,
+          "width": 198
+        },
+        "remove": {
+          "left": 233,
+          "right": 257,
+          "width": 24
+        }
+      },
+      "editorComparisons": {
+        "baseline": {
+          "editor": {
+            "left": 53,
+            "right": 267,
+            "width": 214,
+            "clientWidth": 214,
+            "scrollWidth": 214
+          },
+          "content": {
+            "left": 53,
+            "right": 316,
+            "width": 263,
+            "clientWidth": 263,
+            "scrollWidth": 263
+          },
+          "token": {
+            "left": 61,
+            "right": 308,
+            "width": 247,
+            "clientWidth": 245,
+            "scrollWidth": 245
+          },
+          "remove": {
+            "left": 282,
+            "right": 306,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        },
+        "wrapperOnly": {
+          "editor": {
+            "left": 53,
+            "right": 267,
+            "width": 214,
+            "clientWidth": 214,
+            "scrollWidth": 214
+          },
+          "content": {
+            "left": 53,
+            "right": 316,
+            "width": 263,
+            "clientWidth": 263,
+            "scrollWidth": 263
+          },
+          "token": {
+            "left": 61,
+            "right": 308,
+            "width": 247,
+            "clientWidth": 245,
+            "scrollWidth": 245
+          },
+          "remove": {
+            "left": 282,
+            "right": 306,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        },
+        "fixed": {
+          "editor": {
+            "left": 53,
+            "right": 267,
+            "width": 214,
+            "clientWidth": 214,
+            "scrollWidth": 214
+          },
+          "content": {
+            "left": 53,
+            "right": 267,
+            "width": 214,
+            "clientWidth": 214,
+            "scrollWidth": 214
+          },
+          "token": {
+            "left": 61,
+            "right": 259,
+            "width": 198,
+            "clientWidth": 196,
+            "scrollWidth": 196
+          },
+          "remove": {
+            "left": 233,
+            "right": 257,
+            "width": 24,
+            "clientWidth": 24,
+            "scrollWidth": 24
+          }
+        }
+      }
+    }
+  ]
+}
