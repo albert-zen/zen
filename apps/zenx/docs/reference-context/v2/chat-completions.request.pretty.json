@@ -43,9 +43,7 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "task_id"
-          ],
+          "required": ["task_id"],
           "additionalProperties": false
         }
       }

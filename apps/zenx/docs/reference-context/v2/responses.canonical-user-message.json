@@ -17,8 +17,6 @@
   "clientId": "synthetic-reference-submission",
   "contentAuthority": {
     "version": 1,
-    "hostTextPartIndices": [
-      0
-    ]
+    "hostTextPartIndices": [0]
   }
 }
