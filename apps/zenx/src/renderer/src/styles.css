@@ -8280,6 +8280,7 @@ button:disabled {
   gap: 3px;
 }
 .auxiliary-heading [role="tablist"] {
+  --workspace-tab-end-gap: 0px;
   flex: 0 1 auto;
   gap: 4px;
   scrollbar-width: none;
@@ -8291,6 +8292,7 @@ button:disabled {
   content: "";
   flex: 0 0 var(--workspace-tab-end-gap, 0px);
   margin-inline-start: -4px;
+  transition: none;
 }
 .workspace-content-tab {
   display: inline-flex;
@@ -8362,7 +8364,7 @@ button:disabled {
   }
 }
 .workspace-new-tab {
-  align-items: center;
+  align-items: safe center;
   justify-content: center;
 }
 .workspace-tab-types {

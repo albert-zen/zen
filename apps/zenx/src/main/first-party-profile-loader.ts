@@ -131,7 +131,7 @@ export function firstPartyProviderTarball(
     if (providerId === "microsoft-winapp-cli")
       return "zenx-computer-plugin-win32-1.1.5.tgz";
     if (providerId === "peekaboo-cli")
-      return "zenx-computer-plugin-peekaboo-1.0.1.tgz";
+      return "zenx-computer-plugin-peekaboo-1.0.2.tgz";
   }
   throw new Error(`No provider variant for ${pluginId}/${providerId}`);
 }

@@ -130,7 +130,7 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 - 不提供常驻右侧 Activity rail。Tool details 留在聊天流内；Workspace/Artifact 使用按需面板。
 - Thread header 只保留一个按需工作区 icon entry；上下文与 cache telemetry 位于 Composer。不显示 Search 或 Archive 控件，也不使用常驻 “Workspace” 文本按钮、空 overflow 或装饰性状态控件。归档能力继续位于 Thread 管理菜单与 Settings。
 - 右侧工作区只有一个并排容器和一个顶部入口，不再叠加旧 Workspace 模态抽屉。顶层只显示实际内容 Tab（文件名、浏览器页面、Computer 或插件注册的视图），加号选择新内容类型；不再先按 Browser / Files 分类再选择二级内容。插件贡献进入加号选择器，打开后按自身 surface 展示；Trigger 与 Room 不硬编码为核心 tabs。关闭和展开始终避开原生标题栏控件。Markdown 使用连续可编辑的实时预览：光标进入或触及格式节点时局部露出源码，离开后恢复渲染，自动保存，不提供常规 Edit / Preview / Save 按钮；失败与磁盘冲突在文件内处理，不覆盖未保存输入。
-- 工作区 Tab 的自动 reveal（选择、重排或可见宽度变化）按完整标签的 leading edge 对齐，保留 active Tab 的图标、标题和关闭入口；末端只补足对齐所需的尾部空间。窄栏可缩短标签文字，不固定最小 Tab 宽度。原生水平滚动仍可自由停在标签中段；不为本修新增导航按钮、强制 wheel 吸附或持久化滚动状态，键盘切换不让浏览器再次改写 reveal 位置。
+- 工作区 Tab 的自动 reveal（选择、重排或可见宽度变化）按完整标签的 leading edge 对齐，保留 active Tab 的图标、标题和关闭入口；末端只补足对齐所需的尾部空间。窄栏可缩短标签文字，不固定最小 Tab 宽度。原生水平滚动仍可自由停在标签中段；不为本修新增导航按钮、强制 wheel 吸附或持久化滚动状态，键盘切换不让浏览器再次改写 reveal 位置。 不可见的末端布局 spacer 不参与视觉过渡，包括 reduced-motion；新增内容菜单能放下时保持居中，超高时从可滚动顶部开始，首末项的键盘焦点必须可见。
 
 ## 4. Interaction 与 state rules
 
@@ -216,6 +216,7 @@ ItemList replay，Renderer 不保存另一份 transcript authority。
 
 ### 4.4 Composer、审批与 live following
 
+- Composer 的普通输入与含引用的 inline editor 共享受控高度：短内容自然收缩，超过上限后只在编辑区内部滚动，正文与引用不覆盖底部工具栏。长内容滚动后全选删除必须恢复与短内容清空相同的空输入高度；撤销/重做仍保留准确原文与引用身份。此合同须在 production CSP 下验证，不能只验宽松开发页面。
 - Composer 的文字输入焦点由现有中性圆角外框表达；首次插入引用切换到 inline editor 后、删除最后一个引用后与再次聚焦时均不叠加内部矩形 outline。引用按钮及其他控件保留各自的键盘焦点指示，forced-colors 下保留可见外框；不改变草稿、undo、发送或 Thread 状态语义。
 
 Composer 保持一个位置、几何和命中区域稳定的 primary action，只改变语义：
@@ -588,6 +589,8 @@ During a live foreground Computer operation, the Host registers global Escape on
 
 The actual HTML renderer is also used by `test/fixtures/foreground-activity-visual.html`. Reduced motion removes animations; forced colors retain readable status and borders. Browser preview verifies presentation only. Native focus, physical pointer pass-through, fullscreen behavior and monitor changes need their own OS evidence. This slice covers explicit foreground tools, not every possible side effect of a provider currently declared background-safe; provider-specific activation must be fixed at its real admission/dispatch boundary, not hidden by a late glow.
 
+Peekaboo targeted press/value changes are not certified focus-isolated and therefore use the same explicit foreground permission and indicator admission as other foreground actions. No automatic background-to-foreground fallback is permitted. Native AX retains its separate targeted semantic contract; application-created dialogs/focus changes are not a guarantee of isolation. A successful tool dispatch and its optional visual pointer do not establish application effect. External-provider cancellation/timeout/output overflow shows stopping until actual child/pipe close, including failed kill requests; never shorten that lifecycle to make the indicator disappear.
+
 ### 2026-10-14: Per-tab Browser permission
 
 A single compact permission switch sits at the far right of the existing address toolbar, with the stable label “允许 Agent 操作此标签页” / “Allow Agent to operate this tab”. It indicates permission, never who is currently operating or whether the Agent is running. The user can always browse and sign in manually. Off blocks new Agent mutations on the exact tab; on only allows them again, retaining existing fresh-observation and unknown-outcome fences. Neither state starts a task, resumes a conversation or replays an action. The toolbar has no separate completion/continue action or persistent status row. Login and confirmation requests remain in the conversation.
@@ -765,6 +768,15 @@ Message Markdown may render clear local paths as keyboard-focusable links. Activ
 Unquoted automatic paths require a directory and file extension; paths containing spaces must be quoted or inline-code delimited. Extensionless automatic paths additionally require an absolute path or an explicit `./` or `../` prefix (for example, `./docs/README`); a quoted bare relative `docs/README` remains inert. Fenced code, ordinary standalone filenames and ambiguous prose are not auto-linked. Existing explicit Markdown links remain supported. Windows drive paths and local file URLs use the same Host containment checks. Conventional `#L12`, `#L12C4`, `:12` or `:12:4` suffixes on file paths open the underlying file; this does not claim exact-line scrolling. Percent-encoded filename punctuation remains literal. Canonical content and copy text are unchanged.
 
 A closed top-level `text` or `plaintext` fenced block containing exactly one whitespace-free local path offers a separate **Open file** header action alongside Copy. Code remains literal and copy remains unchanged; incomplete, multiline, command-like, reference-bearing and other-language blocks have no file action. Activation uses the same current-Thread Host workspace reader, never execution or an external app.
+
+### Unconfirmed provider shutdown
+
+If bootstrap join or Host cleanup cannot confirm completion within its reporting
+deadline, Quit remains blocked. Show the existing standard localized error dialog
+once for that shutdown attempt sequence; retain any existing stopping indicator
+and do not silently force termination or report a successful exit. Repeated Quit
+only observes the same pending cleanup, never restarts stop/input. Late completion
+does not automatically quit; the user may explicitly choose Quit again.
 
 ### Packaged editor style security
 

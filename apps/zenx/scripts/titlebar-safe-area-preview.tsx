@@ -27,21 +27,24 @@ const overflowLabels = [
   "workspace-panel-overflow-regression.test.ts",
   "最后一个资源.md",
 ];
-const customTabs = Array.from({ length: 12 }, (_, index) => ({
-  id: `synthetic-${index}`,
-  title:
-    query.get("tabs") === "overflow"
-      ? overflowLabels[index]!
-      : index === 0
-        ? "workspace.md"
-        : `Synthetic review ${index}`,
-  icon: "file" as const,
-  render: () => (
-    <p style={{ padding: 24 }}>
-      Synthetic tab {index}. No Host, filesystem, network or user data.
-    </p>
-  ),
-}));
+const customTabs = Array.from(
+  { length: query.get("count") === "short" ? 2 : 12 },
+  (_, index) => ({
+    id: `synthetic-${index}`,
+    title:
+      query.get("tabs") === "overflow"
+        ? overflowLabels[index]!
+        : index === 0
+          ? "workspace.md"
+          : `Synthetic review ${index}`,
+    icon: "file" as const,
+    render: () => (
+      <p style={{ padding: 24 }}>
+        Synthetic tab {index}. No Host, filesystem, network or user data.
+      </p>
+    ),
+  }),
+);
 function Preview() {
   const [collapsed, setCollapsed] = useState(query.get("sidebar") !== "open");
   const [open, setOpen] = useState(true);

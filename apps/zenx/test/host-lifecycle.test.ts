@@ -202,3 +202,39 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+test("unconfirmed shutdown remains blocked even if the user-visible failure reporter throws", async () => {
+  let quit = 0;
+  let stop = 0;
+  let report = 0;
+  const pending = deferred<void>();
+  const lifecycle = new ZenXHostLifecycle({
+    platform: "linux",
+    windowCount: () => 0,
+    createWindow() {},
+    shutdownWaitMs: 5,
+    stopHost: () => {
+      stop++;
+      return pending.promise;
+    },
+    finishQuit: () => {
+      quit++;
+    },
+    reportStopFailure: () => {
+      report++;
+      throw new Error("dialog unavailable");
+    },
+  });
+  lifecycle.beforeQuit(() => {});
+  await lifecycle.quitCompletion;
+  lifecycle.beforeQuit(() => {});
+  await lifecycle.quitCompletion;
+  assert.deepEqual({ quit, stop, report }, { quit: 0, stop: 1, report: 1 });
+  pending.resolve();
+  await Promise.resolve();
+  assert.equal(quit, 0);
+  lifecycle.beforeQuit(() => {});
+  await lifecycle.quitCompletion;
+  assert.equal(quit, 1);
+  assert.equal(stop, 1);
+});

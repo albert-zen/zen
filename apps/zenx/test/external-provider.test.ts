@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ForegroundActivity } from "../src/main/foreground-activity.js";
 
 import {
   parseWindowsNpmShimEntry,
@@ -102,4 +103,163 @@ test("provider execution suppresses interactive update checks without forwarding
     },
   );
   assert.deepEqual(JSON.parse(result.stdout), { update: "1" });
+});
+
+// Synthetic children only: no application input, focus, or user desktop access.
+for (const cause of ["abort", "timeout", "output-limit"] as const) {
+  for (const killResult of [
+    "sent",
+    "false",
+    "throws",
+    "error event",
+  ] as const) {
+    test(`external ${cause} waits for close when kill ${killResult}`, async () => {
+      const { EventEmitter } = await import("node:events");
+      let kills = 0;
+      let stopping = 0;
+      let releases = 0;
+      let settled = false;
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill() {
+          kills++;
+          if (killResult === "throws") throw new Error("EPERM");
+          if (killResult === "error event")
+            child.emit("error", new Error("ESRCH"));
+          return killResult === "sent";
+        },
+      });
+      const runner = new SystemExternalProviderProcessRunner(
+        (() => child) as unknown as typeof import("node:child_process").spawn,
+      );
+      const controller = new AbortController();
+      const owner = new ForegroundActivity({
+        presenter: { update: async () => {}, close() {} },
+        agentName: () => "Synthetic external provider",
+        report() {},
+      });
+      const pending = owner.run(
+        {
+          callId: "external-fixture",
+          name: "computer_press",
+          arguments: {},
+          cwd: "/fixture",
+          signal: controller.signal,
+        },
+        (signal, onStopping) =>
+          runner.run(process.execPath, [], {
+            timeoutMs: cause === "timeout" ? 5 : 5000,
+            signal,
+            maxOutputBytes: 4,
+            onStopping: () => {
+              stopping++;
+              onStopping?.();
+            },
+            bindBeforeSpawn: async () => async () => {
+              releases++;
+            },
+          }),
+      );
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const rejected = assert.rejects(
+        pending,
+        cause === "abort"
+          ? /fixture abort/
+          : cause === "timeout"
+            ? /timed out/
+            : /output limit/,
+      );
+      await new Promise<void>((r) => setImmediate(r));
+      if (cause === "abort") controller.abort(new Error("fixture abort"));
+      else if (cause === "output-limit")
+        child.stdout.emit("data", Buffer.from("12345"));
+      else await new Promise((r) => setTimeout(r, 15));
+      assert.equal(kills, 1);
+      assert.equal(stopping, 1);
+      assert.equal(settled, false);
+      assert.equal(releases, 0);
+      assert.equal(owner.snapshot.activities[0]?.stopping, true);
+      child.emit("exit", null, "SIGKILL");
+      child.stderr.emit(
+        "data",
+        Buffer.from("ignored after termination request"),
+      );
+      controller.abort();
+      await new Promise<void>((r) => setImmediate(r));
+      assert.equal(settled, false);
+      assert.equal(kills, 1);
+      child.emit("close", null, "SIGKILL");
+      await rejected;
+      assert.equal(releases, 1);
+      assert.equal(stopping, 1);
+      assert.equal(owner.snapshot.activities.length, 0);
+      owner.close();
+    });
+  }
+}
+
+test("external cancellation during launch binding dispatches no process and releases once", async () => {
+  let spawns = 0;
+  let releases = 0;
+  const controller = new AbortController();
+  const runner = new SystemExternalProviderProcessRunner((() => {
+    spawns++;
+    throw new Error("must not spawn");
+  }) as typeof import("node:child_process").spawn);
+  await assert.rejects(
+    runner.run(process.execPath, [], {
+      timeoutMs: 1000,
+      signal: controller.signal,
+      bindBeforeSpawn: async () => {
+        controller.abort(new Error("revoked during binding"));
+        return async () => {
+          releases++;
+        };
+      },
+    }),
+    /revoked during binding/,
+  );
+  assert.equal(spawns, 0);
+  assert.equal(releases, 1);
+});
+
+test("synchronous external spawn failure releases its lease without waiting for nonexistent close", async () => {
+  let releases = 0;
+  const runner = new SystemExternalProviderProcessRunner((() => {
+    throw new Error("synthetic launch failure");
+  }) as typeof import("node:child_process").spawn);
+  await assert.rejects(
+    runner.run(process.execPath, [], {
+      timeoutMs: 1000,
+      bindBeforeSpawn: async () => async () => {
+        releases++;
+      },
+    }),
+    /synthetic launch failure/,
+  );
+  assert.equal(releases, 1);
+});
+
+test("stopping presentation failure cannot prevent external termination", async () => {
+  const runner = new SystemExternalProviderProcessRunner();
+  let stopping = 0;
+  await assert.rejects(
+    runner.run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      timeoutMs: 20,
+      onStopping: () => {
+        stopping++;
+        throw new Error("presentation lost");
+      },
+    }),
+    /timed out/,
+  );
+  assert.equal(stopping, 1);
 });

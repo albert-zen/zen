@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -17,6 +17,7 @@ export interface ExternalProviderProcessRunner {
       cwd?: string;
       timeoutMs: number;
       signal?: AbortSignal;
+      onStopping?: () => void;
       maxOutputBytes?: number;
       environment?: NodeJS.ProcessEnv;
       runtimeExecutable?: string;
@@ -29,6 +30,8 @@ export interface ExternalProviderProcessRunner {
 const DEFAULT_MAX_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 
 export class SystemExternalProviderProcessRunner implements ExternalProviderProcessRunner {
+  constructor(private readonly spawnProcess: typeof spawn = spawn) {}
+
   async run(
     executable: string,
     args: readonly string[],
@@ -36,6 +39,7 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
       cwd?: string;
       timeoutMs: number;
       signal?: AbortSignal;
+      onStopping?: () => void;
       maxOutputBytes?: number;
       environment?: NodeJS.ProcessEnv;
       runtimeExecutable?: string;
@@ -53,38 +57,73 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
     );
     await options.verifyBeforeSpawn?.();
     const releaseBinding = await options.bindBeforeSpawn?.();
+    try {
+      // Consent/cancellation can change while resolving or acquiring the launch lease.
+      options.signal?.throwIfAborted();
+    } catch (error) {
+      await releaseBinding?.();
+      throw error;
+    }
     return await new Promise((resolve, reject) => {
-      const child = spawn(
-        invocation.executable,
-        [...invocation.argumentPrefix, ...args],
-        {
-          cwd: options.cwd,
-          env: providerProcessEnvironment({
-            ...process.env,
-            ...options.environment,
-          }),
-          shell: false,
-          stdio: ["ignore", "pipe", "pipe"],
-          windowsHide: true,
-        },
-      );
+      let child: ChildProcess;
+      try {
+        child = this.spawnProcess(
+          invocation.executable,
+          [...invocation.argumentPrefix, ...args],
+          {
+            cwd: options.cwd,
+            env: providerProcessEnvironment({
+              ...process.env,
+              ...options.environment,
+            }),
+            shell: false,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+          },
+        );
+      } catch (error) {
+        // A synchronous launch failure created no child; no close can arrive.
+        void Promise.resolve()
+          .then(() => releaseBinding?.())
+          .catch(() => undefined)
+          .then(() => reject(error));
+        return;
+      }
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let totalBytes = 0;
       let settled = false;
+      let failure: unknown;
+      let stopping = false;
       const finish = (callback: () => void): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         options.signal?.removeEventListener("abort", abort);
-        void Promise.resolve(releaseBinding?.()).catch(() => undefined);
-        callback();
+        void Promise.resolve()
+          .then(() => releaseBinding?.())
+          .catch(() => undefined)
+          .then(callback);
       };
       const fail = (error: unknown): void => {
-        child.kill("SIGKILL");
-        finish(() => reject(error));
+        if (settled || stopping) return;
+        stopping = true;
+        failure = error;
+        try {
+          options.onStopping?.();
+        } catch {
+          /* Notice cannot prevent termination. */
+        }
+        // A kill request (including false/throw/error) is not confirmation of
+        // termination. Retain the caller and launch lease until actual close.
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* Wait for close. */
+        }
       };
       const collect = (target: Buffer[], chunk: Buffer): void => {
+        if (stopping) return;
         totalBytes += chunk.length;
         if (totalBytes > maxOutputBytes) {
           fail(
@@ -116,6 +155,10 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
       child.once("error", (error) => fail(error));
       child.once("close", (code, signal) => {
         finish(() => {
+          if (stopping) {
+            reject(failure);
+            return;
+          }
           const output = Buffer.concat(stdout).toString("utf8");
           const diagnostic = Buffer.concat(stderr).toString("utf8");
           if (code === 0) {

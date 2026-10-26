@@ -57,8 +57,10 @@ import {
 } from "./observation-capture.js";
 
 const USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS = 2_000;
-// One absolute attachment initialization window, never renewed by inspection.
+// Attachment setup and the first trusted document observation have separate
+// one-use windows. Neither grants arbitrary evaluation or mutation more time.
 const USER_BROWSER_ATTACHMENT_SETUP_TIMEOUT_MS = 10_000;
+const USER_BROWSER_FIRST_INSPECT_TIMEOUT_MS = 10_000;
 const USER_BROWSER_SCREENSHOT_TIMEOUT_MS = 10_000;
 const USER_BROWSER_INPUT_OBJECT_CLEANUP_TIMEOUT_MS = 500;
 const USER_BROWSER_MAX_TARGET_EVIDENCE = 128;
@@ -97,7 +99,7 @@ interface UserBrowserAttachmentEpoch extends UserBrowserAttachmentOwner {
   targetId: string;
   cdpSessionId?: string;
   attachAttempt: number;
-  /** Original initialization deadline; cached attachments never renew it. */
+  /** Original setup deadline; cached attachments never renew it. */
   setupDeadline: number;
   firstInspectClaimed: boolean;
   /** A returned reservation keeps its originally granted deadline, even expired. */
@@ -3217,16 +3219,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (epoch.firstInspectClaimed) return undefined;
     epoch.firstInspectClaimed = true;
     this.#assertDocumentFence(fence, false);
-    // Only the initial grant requires >2s remaining. A known-undispatched
-    // lifecycle rejection may return its reservation, never renew its deadline
-    // or fall back to an ordinary budget when reclaiming an expired grant.
+    // Setup has already succeeded. Reserve this one observation window before
+    // asynchronous document preflight, independently of attachment age/cost.
+    // A known-undispatched lifecycle rejection may return its reservation,
+    // never renew its deadline or substitute an ordinary budget after expiry.
     const deadline =
       epoch.firstInspectGrantedDeadline ??
-      (epoch.setupDeadline - performance.now() >
-      USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS
-        ? epoch.setupDeadline
-        : undefined);
-    if (deadline === undefined) return undefined;
+      performance.now() + USER_BROWSER_FIRST_INSPECT_TIMEOUT_MS;
     epoch.firstInspectGrantedDeadline = deadline;
     const reservation = { deadline };
     epoch.firstInspectReservation = reservation;
@@ -3275,7 +3274,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (inspectDeadline !== undefined && performance.now() >= inspectDeadline)
         throw new UserBrowserCdpOutcomeUnknownError(
           method,
-          "original attachment inspection deadline elapsed",
+          "original reserved deadline elapsed",
           settlement.promise,
         );
       return result;
@@ -3350,9 +3349,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     let worldDispatched = false;
     const assertInspectDeadline = () => {
       if (inspectDeadline !== undefined && performance.now() >= inspectDeadline)
-        throw new Error(
-          "Attachment inspection deadline elapsed before dispatch",
-        );
+        throw new Error("Reserved deadline elapsed before dispatch");
     };
     try {
       assertInspectDeadline();
@@ -3435,7 +3432,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       if (inspectDeadline !== undefined && performance.now() >= inspectDeadline)
         throw new UserBrowserCdpOutcomeUnknownError(
           "Page.createIsolatedWorld",
-          "original attachment inspection deadline elapsed",
+          "original reserved deadline elapsed",
         );
       this.#assertDocumentFence(fence, false);
       if (typeof world?.executionContextId !== "number") {
@@ -3840,8 +3837,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           "attachment domains",
         );
         // The aggregate continuation can be delayed after both domain replies.
-        // Do not publish an expired setup and let first inspection obtain an
-        // ordinary budget. Both commands are known here; readiness was not sent.
+        // Do not publish an expired setup and let first inspection obtain its
+        // separate window. Both commands are known here; readiness was not sent.
         if (performance.now() >= setupDeadline)
           throw new Error(
             "User browser attachment setup deadline elapsed before readiness",
@@ -4128,7 +4125,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             reject(
               new UserBrowserCdpOutcomeUnknownError(
                 method,
-                `original attachment inspection deadline elapsed (${describeError(error)})`,
+                `original reserved deadline elapsed (${describeError(error)})`,
               ),
             );
             // This original reply already settled; do not retain a timer for
@@ -4164,9 +4161,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         outcomeTimeoutMs = absoluteDeadline - performance.now();
         if (outcomeTimeoutMs <= 0) {
           this.#pending.delete(id);
-          reject(
-            new Error("Attachment inspection deadline elapsed before dispatch"),
-          );
+          reject(new Error("Reserved deadline elapsed before dispatch"));
           return;
         }
       }
@@ -4214,9 +4209,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         if (absoluteDeadline !== undefined) {
           throwIfAborted(signal);
           if (performance.now() >= absoluteDeadline)
-            throw new Error(
-              "Attachment inspection deadline elapsed before dispatch",
-            );
+            throw new Error("Reserved deadline elapsed before dispatch");
         }
         this.#socket.send(
           JSON.stringify({

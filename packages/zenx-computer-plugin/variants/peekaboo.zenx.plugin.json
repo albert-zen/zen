@@ -1,7 +1,7 @@
 {
   "id": "computer",
-  "version": "1.0.1",
-  "description": "Peekaboo 3.x background-first macOS automation with bounded snapshots, explicit permissions, and foreground input only through labeled takeover tools.",
+  "version": "1.0.2",
+  "description": "Peekaboo 3.x targeted macOS automation. Mutations are not certified focus-isolated and require explicit foreground control with a visible activity indicator.",
   "provider": {
     "id": "peekaboo-cli",
     "platforms": ["darwin"],
@@ -9,7 +9,7 @@
     "capabilities": [
       "peekaboo.snapshot",
       "accessibility.inspect",
-      "background.semantic_action",
+      "foreground.targeted_action",
       "window.capture",
       "foreground.global_input"
     ]
@@ -108,7 +108,7 @@
     },
     {
       "name": "computer_press",
-      "description": "Perform a native semantic press on one control returned by computer_inspect. Does not move the pointer, type keys, or activate the target app.",
+      "description": "Peekaboo targeted press; may affect foreground focus/input. Requires explicit foreground control; never a background fallback. A successful dispatch does not verify application effect.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -159,18 +159,16 @@
         "required": ["target", "control"],
         "additionalProperties": false
       },
-      "permissions": ["computer.accessibility.act"],
-      "interactionMode": "background_safe",
-      "capabilities": [
-        "peekaboo_cli",
-        "semantic.press",
-        "app_targeted",
-        "no_global_input"
-      ]
+      "permissions": [
+        "computer.accessibility.act",
+        "computer.foreground.control"
+      ],
+      "interactionMode": "foreground_required",
+      "capabilities": ["peekaboo_cli", "semantic.press", "app_targeted"]
     },
     {
       "name": "computer_set_value",
-      "description": "Set the supplied text on one editable opaque target from the latest computer_inspect observation. The value follows the ordinary tool path and host/model policy decides how it is handled.",
+      "description": "Peekaboo targeted value change; may affect foreground focus/input. Requires explicit foreground control; never a background fallback. A successful dispatch does not verify application effect.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -224,14 +222,12 @@
         "required": ["target", "control", "value"],
         "additionalProperties": false
       },
-      "permissions": ["computer.accessibility.act"],
-      "interactionMode": "background_safe",
-      "capabilities": [
-        "peekaboo_cli",
-        "semantic.set_value",
-        "app_targeted",
-        "no_global_input"
-      ]
+      "permissions": [
+        "computer.accessibility.act",
+        "computer.foreground.control"
+      ],
+      "interactionMode": "foreground_required",
+      "capabilities": ["peekaboo_cli", "semantic.set_value", "app_targeted"]
     },
     {
       "name": "computer_screenshot",
@@ -377,5 +373,5 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target."
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target. Its targeted press/value mutations are not certified focus-isolated: they require explicit foreground control and cannot be used as a background fallback. Backend completion does not verify application effect."
 }

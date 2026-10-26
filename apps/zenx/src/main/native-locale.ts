@@ -19,6 +19,9 @@ const en = {
   zoomOut: "Zoom Out",
   minimize: "Minimize",
   close: "Close Window",
+  quitStopUnconfirmed: "Computer activity has not confirmed it stopped",
+  quitStopUnconfirmedDetail:
+    "ZenX has not quit. A provider may still be running, so its existing activity indicators and pending operation are retained. No input was retried. You can try Quit again after it stops; ZenX will not force termination automatically.",
   keepEditing: "Keep editing",
   leaveWindow: "Leave window",
   leaveUnsaved: "Leave with unsaved file edits?",
@@ -49,6 +52,9 @@ const zhCN: Record<keyof typeof en, string> = {
   zoomOut: "缩小",
   minimize: "最小化",
   close: "关闭窗口",
+  quitStopUnconfirmed: "尚未确认电脑操作已停止",
+  quitStopUnconfirmedDetail:
+    "ZenX 尚未退出。提供方可能仍在运行，因此保留现有操作提示与待结束的操作，没有重试输入。停止后可再次选择退出；ZenX 不会自动强制结束进程。",
   keepEditing: "继续编辑",
   leaveWindow: "离开窗口",
   leaveUnsaved: "放弃未保存的文件编辑并离开？",

@@ -14,12 +14,12 @@ const evidence = {
 const measure = `(() => {
   const rect = e => { const r=e.getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}; };
   const rail=document.querySelector('.auxiliary-heading [role=tablist]');
-  const r=rect(rail);
+  const r=rect(rail),spacer=getComputedStyle(rail,"::after");
   const tabs=[...rail.querySelectorAll('.workspace-content-tab')].map(item=>{
     const tab=item.querySelector('[role=tab]'), icon=rect(tab.querySelector('svg')), bounds=rect(item);
     return {id:tab.id,active:tab.getAttribute('aria-selected')==='true',bounds,icon,iconlessLeading:bounds.left<r.left-1 && bounds.right>r.left+12 && icon.right<=r.left};
   });
-  return {rail:r,scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,tabs,expanded:document.querySelector('.auxiliary-panel').dataset.expanded,focused:document.activeElement.id,pageWidth:document.documentElement.scrollWidth,controls:rect(document.querySelector('.window-titlebar-native-actions'))};
+  return {rail:r,spacer:{basis:spacer.flexBasis,transitionProperty:spacer.transitionProperty,transitionDuration:spacer.transitionDuration},endGap:rail.style.getPropertyValue("--workspace-tab-end-gap"),scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,tabs,expanded:document.querySelector('.auxiliary-panel').dataset.expanded,focused:document.activeElement.id,pageWidth:document.documentElement.scrollWidth,controls:rect(document.querySelector('.window-titlebar-native-actions'))};
 })()`;
 await withPreviewBrowser(
   directory,
@@ -64,6 +64,20 @@ await withPreviewBrowser(
       await stable();
     };
     const valid = (m) => {
+      assert.equal(
+        m.spacer.transitionProperty,
+        "none",
+        "layout spacer never animates, including reduced motion",
+      );
+      assert.equal(
+        m.rail.height,
+        34,
+        "overflow keeps the existing single-row height",
+      );
+      assert.ok(
+        m.tabs.every((tab) => tab.bounds.height === 30),
+        "tabs never wrap into another row",
+      );
       assert.ok(
         !m.tabs.some((tab) => tab.iconlessLeading),
         "automatic reveal must not leave iconless leading titles",
@@ -200,6 +214,16 @@ await withPreviewBrowser(
               );
               await stable();
               valid(await evaluate(measure));
+              evidence.phase = `${name}: resize wider`;
+              await evaluate(`(() => {
+                window.__tabOverflowResize=[]; let recording=true,raf=0,dropped=0;
+                const record=phase=>{if(window.__tabOverflowResize.length<256)window.__tabOverflowResize.push({phase,...${measure}});else dropped++;};
+                const observer=new ResizeObserver(()=>record('observer'));
+                observer.observe(document.querySelector('.auxiliary-heading [role=tablist]'));
+                const tick=()=>{if(recording){record('frame');raf=requestAnimationFrame(tick)}};
+                raf=requestAnimationFrame(tick);
+                window.__stopTabOverflowResize=()=>{recording=false;cancelAnimationFrame(raf);observer.disconnect();return {samples:window.__tabOverflowResize,dropped,scope:'Read-only independent ResizeObserver/RAF geometry sampling; extra reads may affect layout timing. Diagnostic results are not fix acceptance.'}};
+              })()`);
               await send("Emulation.setDeviceMetricsOverride", {
                 width: width + 80,
                 height: 820,
@@ -208,6 +232,7 @@ await withPreviewBrowser(
               });
               await stable();
               valid(await evaluate(measure));
+              evidence.phase = `${name}: resize back`;
               await send("Emulation.setDeviceMetricsOverride", {
                 width,
                 height: 820,
@@ -216,6 +241,10 @@ await withPreviewBrowser(
               });
               await stable();
               valid(await evaluate(measure));
+              item.resizeSamples = await evaluate(
+                "window.__stopTabOverflowResize()",
+              );
+              evidence.phase = `${name}: owner reorder`;
               await evaluate(
                 "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+(11-i)))",
               );
@@ -236,9 +265,9 @@ await withPreviewBrowser(
                 assert.equal((await evaluate(measure)).tabs.length, 11);
                 await click(".workspace-add-tab");
                 if (cycle === 0) {
-                  const probe = () =>
+                  const probe = (which = "first") =>
                     evaluate(`(() => {
-                    const first=document.querySelector('.workspace-tab-types > button'),r=first.getBoundingClientRect();
+                    const first=document.querySelector(${JSON.stringify(which === "last" ? ".workspace-tab-types > button:last-of-type" : ".workspace-tab-types > button")}),r=first.getBoundingClientRect();
                     const x=r.left+r.width/2,y=r.top+r.height/2;
                     return {top:r.top,bottom:r.bottom,focused:document.activeElement===first,reachable:y>=0&&y<innerHeight&&first.contains(document.elementFromPoint(x,y)),scrolls:[...document.querySelectorAll('.auxiliary-panel *')].filter(e=>e.scrollHeight>e.clientHeight+1).map(e=>({className:e.className,top:e.scrollTop,height:e.clientHeight,scrollHeight:e.scrollHeight}))};
                   })()`);
@@ -262,7 +291,24 @@ await withPreviewBrowser(
                     afterKeyboard = await probe();
                   }
                   item.firstChoiceProbe = { before, afterWheel, afterKeyboard };
-                  if (afterKeyboard.reachable) {
+                  assert.equal(
+                    afterWheel.reachable,
+                    true,
+                    "first chooser choice is reachable by native scrolling",
+                  );
+                  assert.equal(
+                    afterKeyboard.focused,
+                    true,
+                    "native Tab reaches the first choice",
+                  );
+                  assert.equal(
+                    afterKeyboard.reachable,
+                    true,
+                    "first chooser keyboard focus is visible",
+                  );
+                  if (platform === "darwin" && width === 760)
+                    await screenshot(`${name}-chooser-first-after.png`);
+                  {
                     await click(".workspace-tab-types > button");
                     assert.ok(
                       (await evaluate(measure)).tabs.some(
@@ -271,9 +317,50 @@ await withPreviewBrowser(
                     );
                     await click(".workspace-add-tab");
                   }
+                  await send("Input.dispatchMouseEvent", {
+                    type: "mouseWheel",
+                    ...body,
+                    deltaX: 0,
+                    deltaY: 2000,
+                  });
+                  await delay(250);
+                  const lastAfterWheel = await probe("last");
+                  let lastAfterKeyboard = lastAfterWheel;
+                  for (let n = 0; n < 32 && !lastAfterKeyboard.focused; n++) {
+                    await key("Tab", "Tab", 9);
+                    lastAfterKeyboard = await probe("last");
+                  }
+                  item.lastChoiceProbe = {
+                    afterWheel: lastAfterWheel,
+                    afterKeyboard: lastAfterKeyboard,
+                  };
+                  assert.equal(
+                    lastAfterWheel.reachable,
+                    true,
+                    "last chooser choice is reachable by native scrolling",
+                  );
+                  assert.equal(
+                    lastAfterKeyboard.focused,
+                    true,
+                    "native Tab reaches the last choice",
+                  );
+                  assert.equal(
+                    lastAfterKeyboard.reachable,
+                    true,
+                    "last chooser keyboard focus is visible",
+                  );
+                  if (platform === "darwin" && width === 760)
+                    await screenshot(`${name}-chooser-last-after.png`);
+                  await send("Input.dispatchMouseEvent", {
+                    type: "mouseWheel",
+                    ...body,
+                    deltaX: 0,
+                    deltaY: -2000,
+                  });
+                  await delay(250);
                 }
-                // Reopen the closed middle type. Keep the first-choice probe
-                // as separate evidence even if that unrelated tall chooser clips it.
+                // Reopen the closed middle type after independently checking
+                // both menu ends through real scrolling and keyboard navigation.
                 await click(".workspace-tab-types > button:nth-of-type(5)");
                 const m = await evaluate(measure);
                 valid(m);
@@ -294,6 +381,54 @@ await withPreviewBrowser(
             }
             item.status = baseline ? "observed" : "passed";
           }
+      if (!baseline) {
+        evidence.shortChoosers = [];
+        for (const theme of ["light", "dark"]) {
+          evidence.phase = `short chooser ${theme}`;
+          await send("Emulation.setDeviceMetricsOverride", {
+            width: 760,
+            height: 820,
+            deviceScaleFactor: 1,
+            mobile: false,
+          });
+          await send("Emulation.setEmulatedMedia", {
+            features: [
+              {
+                name: "prefers-reduced-motion",
+                value: theme === "dark" ? "reduce" : "no-preference",
+              },
+            ],
+          });
+          const destination = `${url}/titlebar-safe-area.html?${new URLSearchParams({ platform: "darwin", sidebar: "closed", tabs: "overflow", count: "short", theme, lang: theme === "dark" ? "zh-CN" : "en" })}`;
+          await send("Page.navigate", { url: destination });
+          await wait(
+            `location.href===${JSON.stringify(destination)}&&document.body?.dataset.previewReady==='true'`,
+          );
+          await stable();
+          await click(".workspace-add-tab");
+          const m = await evaluate(`(() => {
+            const body=document.querySelector('.workspace-new-tab').getBoundingClientRect(),menu=document.querySelector('.workspace-tab-types').getBoundingClientRect();
+            const reachable=e=>{const r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))};
+            return {body:{top:body.top,height:body.height},menu:{top:menu.top,height:menu.height},first:reachable(document.querySelector('.workspace-tab-types > button')),last:reachable(document.querySelector('.workspace-tab-types > button:last-of-type'))};
+          })()`);
+          evidence.shortChoosers.push({ theme, ...m });
+          assert.ok(
+            m.menu.height < m.body.height,
+            "short menu fits the viewport",
+          );
+          assert.ok(
+            Math.abs(
+              m.menu.top + m.menu.height / 2 - m.body.top - m.body.height / 2,
+            ) <= 1,
+            "short chooser remains vertically centered",
+          );
+          assert.ok(
+            m.first && m.last,
+            "short menu actions remain visible and hit-testable",
+          );
+          await screenshot(`short-chooser-${theme}-after.png`);
+        }
+      }
       const reproduced = evidence.cases.filter((item) => item.fragment);
       if (baseline)
         assert.ok(
@@ -305,6 +440,12 @@ await withPreviewBrowser(
     } catch (error) {
       evidence.status = "failed";
       evidence.failure = String(error);
+      evidence.failureState = await evaluate(measure).catch((reason) => ({
+        error: String(reason),
+      }));
+      evidence.resizeSamples = await evaluate(
+        "window.__stopTabOverflowResize?.() ?? []",
+      ).catch(() => []);
       await screenshot("failure.png").catch((captureError) => {
         evidence.failureScreenshotError = String(captureError);
       });

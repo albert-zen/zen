@@ -1,6 +1,7 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
@@ -261,4 +262,21 @@ test("automatic tab reveal preserves whole leading tabs, end slack, and keyboard
     globalThis.ResizeObserver = previousObserver;
     dom.window.close();
   }
+});
+
+// The browser fixture verifies the actual layout; these guard the CSS intent
+// against global reduced-motion duration rules reanimating an invisible spacer.
+test("tab end spacer has no transition property and tall chooser alignment is safe", () => {
+  const css = readFileSync(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const spacer = css.match(
+    /\.auxiliary-heading \[role="tablist"\]::after\s*\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(spacer);
+  assert.match(spacer, /transition:\s*none\s*;/);
+  const chooser = css.match(/\.workspace-new-tab\s*\{([^}]+)\}/)?.[1];
+  assert.ok(chooser);
+  assert.match(chooser, /align-items:\s*safe center\s*;/);
 });
