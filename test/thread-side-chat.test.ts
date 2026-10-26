@@ -10,6 +10,7 @@ import {
   JsonlThreadJournal,
   type ThreadJournal,
 } from "../src/journal.js";
+import { Thread } from "../src/thread.js";
 import { decodeCanonicalItem } from "../src/item.js";
 import {
   compileModelMessages,
@@ -610,7 +611,20 @@ test("generated compaction budgets the full pinned Side chat instructions before
     }),
     /token target|projection exceeds/,
   );
-  assert.deepEqual((await f.server.readThread(current.id)).items, before.items);
+  const after = (await f.server.readThread(current.id)).items;
+  assert.deepEqual(after.slice(0, before.items.length), before.items);
+  const appended = after.slice(before.items.length);
+  assert.deepEqual(
+    appended.map((item) =>
+      item.type === "context_message" ? item.purpose : item.type,
+    ),
+    ["agent_message", "compaction-instruction"],
+  );
+  new Thread(current.id, after.map(decodeCanonicalItem));
+  assert.equal(
+    after.some((item) => item.type === "context_compaction"),
+    false,
+  );
   await (
     await f.server.startTurn(current.id, "next explicit question")
   ).done;

@@ -272,6 +272,37 @@ try {
       "document.querySelectorAll('.provider-model-row').length===12",
     );
     await capture("02-edit-from-last-provider");
+    assert.equal(
+      await evaluate(
+        "document.querySelector('[data-provider-protocol]').textContent.includes('Chat Completions')",
+      ),
+      true,
+      "Legacy profile remains Chat Completions",
+    );
+    await clickSelector("[data-provider-protocol]");
+    await waitFor("!!document.querySelector('[role=option]')");
+    await capture("02d-protocol-options");
+    await waitFor("document.activeElement?.getAttribute('role') === 'option'");
+    await key("End", "End", 35);
+    await waitFor(
+      "document.activeElement?.getAttribute('data-value') === 'responses'",
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "document.querySelector('[data-provider-protocol]').textContent.includes('Responses')",
+    );
+    await capture("02e-explicit-responses");
+    await clickSelector("[data-provider-protocol]");
+    await waitFor("document.activeElement?.getAttribute('role') === 'option'");
+    await key("Home", "Home", 36);
+    await waitFor(
+      "document.activeElement?.getAttribute('data-value') === 'chat-completions'",
+    );
+    await key("Enter", "Enter", 13);
+    await waitFor(
+      "document.querySelector('[data-provider-protocol]').textContent.includes('Chat Completions')",
+    );
+
     await evaluate(
       `(() => { const name = document.querySelector('.provider-editor input[id$="-displayName"]'); name.focus(); name.select(); })()`,
     );

@@ -405,6 +405,15 @@ async function bootstrapZenX(): Promise<void> {
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
   );
   const skills = new SkillsService(zenDataDirectory);
+  ipcMain.handle(
+    ipcChannels.modelOperationHistory,
+    (_event, threadId: unknown) => {
+      if (threadId !== undefined && typeof threadId !== "string")
+        throw new Error("Invalid operation history target");
+      if (!appServerManager) throw new Error("Local Host unavailable");
+      return appServerManager.modelOperationHistory(threadId);
+    },
+  );
   ipcMain.handle(ipcChannels.modelRequestDebug, (_event, input: unknown) => {
     if (appServerManager === undefined)
       throw new Error("Local Host unavailable");
@@ -807,7 +816,10 @@ async function bootstrapZenX(): Promise<void> {
       store: new ZenXThreadTitleStore(
         join(userDataDirectory, "thread-title-projections.json"),
       ),
-      inference: new ZenXConfiguredTitleInference(settingsService),
+      inference: new ZenXConfiguredTitleInference(
+        settingsService,
+        appServerManager,
+      ),
       titleModel: () => settingsService!.configuredTitleModel(),
       setNativeName: async (threadId, name) => {
         await appServerManager!.request("thread/name/set", {
@@ -2230,6 +2242,10 @@ function installSettingsIpc(
         providerProfileId,
         modelId,
         {
+          runModelOperation: async (request, signal) => {
+            if (!appServerManager) throw new Error("Local Host unavailable");
+            return await appServerManager.runModelOperation(request, signal);
+          },
           resolveTransport: async (profile) =>
             await zenXProviderDiscoveryTransport(
               profile,

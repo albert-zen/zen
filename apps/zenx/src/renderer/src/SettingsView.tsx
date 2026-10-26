@@ -2227,6 +2227,24 @@ function ProviderEditor({
                     setValidationError(null);
                   }}
                 />
+                <label className="field">
+                  <span>{t("settingsView.apiProtocol")}</span>
+                  <Select
+                    aria-label={t("settingsView.apiProtocol")}
+                    data-provider-protocol="true"
+                    value={provider.protocol ?? "chat-completions"}
+                    onValueChange={(value) => {
+                      if (value !== "chat-completions" && value !== "responses")
+                        return;
+                      setProvider({ ...provider, protocol: value });
+                      setValidationError(null);
+                    }}
+                  >
+                    <option value="chat-completions">Chat Completions</option>
+                    <option value="responses">Responses</option>
+                  </Select>
+                  <small>{t("settingsView.apiProtocolHint")}</small>
+                </label>
                 <Field
                   wide
                   id={fieldId("baseUrl")}

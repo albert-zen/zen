@@ -29,6 +29,7 @@ import {
   type ModelCatalogEntryInput,
 } from "../../../src/model-catalog.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
+import { OpenAiResponsesModel } from "../../../src/model/openai-responses.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
@@ -63,6 +64,7 @@ export type HostProvider =
   | {
       type: "openai-compatible";
       baseUrl: string;
+      protocol?: "chat-completions" | "responses";
       apiKey: string;
       name?: string;
       defaultParams?: Readonly<Record<string, unknown>>;
@@ -135,6 +137,11 @@ export type ProviderFetch = typeof globalThis.fetch & {
 export type HostedZenAppServer = ZenAppServer & {
   readonly modelRequestDebug: ModelRequestDebugStore;
   readonly processEpoch: string;
+  runConfiguredModelOperation(
+    input: import("../../../src/app-server.js").RunModelOperationInput,
+    profile: HostProviderProfile | undefined,
+    signal?: AbortSignal,
+  ): Promise<import("../../../src/app-server.js").ModelOperationResult>;
   prepareConfiguration(
     options: ZenHostOptions,
     revision: number,
@@ -339,6 +346,77 @@ export function createHostedAppServer(
   };
   return Object.assign(appServer, {
     modelRequestDebug,
+    runConfiguredModelOperation: async (
+      input: import("../../../src/app-server.js").RunModelOperationInput,
+      profile: HostProviderProfile | undefined,
+      signal = new AbortController().signal,
+    ) => {
+      if (profile === undefined)
+        return await appServer.runModelOperation(input, signal);
+      const normalized = normalizePreparedProviderProfiles(
+        { ...options, providers: [profile] },
+        attachments,
+      )[0]!;
+      const resource = createProviderResource(
+        normalized,
+        attachments,
+        createModelDiagnosticWriter(
+          path.join(options.dataDirectory, "diagnostics"),
+        ),
+        modelRequestDebug,
+      );
+      try {
+        const model = normalized.catalog.get(input.selection.modelId);
+        if (
+          model === undefined ||
+          normalized.providerProfileId !== input.selection.providerProfileId
+        )
+          throw new Error(
+            "Draft operation selection does not match its provider profile",
+          );
+        if (input.kind === "title") {
+          const registry = new ProviderRegistry([
+            {
+              providerProfileId: normalized.providerProfileId,
+              adapter: resource.adapter,
+              modelCatalog: normalized.catalog,
+            },
+          ]);
+          let lease:
+            | import("../../../src/provider-registry.js").ProviderSelectionLease
+            | undefined;
+          try {
+            lease = registry.acquire(input.selection);
+            return await appServer.runModelOperation(input, signal, lease);
+          } finally {
+            lease?.release();
+            await registry.close();
+          }
+        }
+        // Explicit capability probing is allowed before context/reasoning capabilities are known.
+        // It cannot accept a caller-selected reasoning override: use only this model's metadata.
+        const reasoningEffort = model.defaultReasoningEffort;
+        if (
+          input.selection.reasoningEffort !== undefined &&
+          input.selection.reasoningEffort !== reasoningEffort
+        )
+          throw new Error(
+            "Image probe cannot override its model reasoning selection",
+          );
+        const selection = {
+          providerProfileId: normalized.providerProfileId,
+          modelId: model.id,
+          reasoningEffort,
+        };
+        return await appServer.runModelOperation(input, signal, {
+          adapter: resource.adapter,
+          model,
+          selection,
+        });
+      } finally {
+        await resource.close();
+      }
+    },
     processEpoch: configuration.processEpoch,
     prepareConfiguration: async (
       nextOptions: ZenHostOptions,
@@ -975,6 +1053,26 @@ function createModel(
         await profile.acquireAccessLease(signal),
       renewAccessLease: async (rejectedAccessToken, signal) =>
         await profile.renewAccessLease(rejectedAccessToken, signal),
+      fetch,
+      attachments,
+    });
+  }
+  if (
+    provider.protocol !== undefined &&
+    provider.protocol !== "chat-completions" &&
+    provider.protocol !== "responses"
+  )
+    throw new Error(
+      "Compatible provider protocol must be chat-completions or responses",
+    );
+  if (provider.protocol === "responses") {
+    return new OpenAiResponsesModel({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      ...(provider.name === undefined ? {} : { provider: provider.name }),
+      ...(provider.defaultParams === undefined
+        ? {}
+        : { defaultParams: provider.defaultParams }),
       fetch,
       attachments,
     });

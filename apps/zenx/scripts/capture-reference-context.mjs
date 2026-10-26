@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, unlink, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZenAppServer } from "../../../src/app-server.ts";
+import { originalUserInput } from "../../../src/item.ts";
 import { AgentRuntime } from "../../../src/runtime.ts";
 import { InMemoryThreadJournal } from "../../../src/journal.ts";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.ts";
@@ -286,7 +287,8 @@ try {
       const captured = JSON.parse(capturedRaw);
       const saved = await journal.read(target.id);
       const userMessage = saved.find((item) => item.type === "user_message");
-      assert.deepEqual(userMessage.content, nativeInput);
+      assert.deepEqual(originalUserInput(userMessage), nativeInput);
+      assert.match(userMessage.content[0].text, /received_at=/);
       assert.equal(userMessage.clientId, fixture.clientId);
       const last = (captured.messages ?? captured.input).at(-1);
       const textParts = last.content.filter((part) =>

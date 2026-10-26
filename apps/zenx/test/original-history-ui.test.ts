@@ -202,7 +202,13 @@ test("AppServer user-message content is readable before opening original Item JS
       (item) => item.type === "user_message",
     );
     assert(userMessage?.type === "user_message");
-    assert.deepEqual(userMessage.content, content);
+    const { originalUserInput, textFromUserMessage } =
+      await import("../../../src/item.js");
+    assert.deepEqual(originalUserInput(userMessage), content);
+    assert(userMessage.contentAuthority);
+    const complete = textFromUserMessage(userMessage);
+    assert.match(complete, /received_at=/);
+    assert(complete.includes(expected));
     const journalBefore = JSON.stringify(stored.items);
     await withRuntimeDom(async (h) => {
       installReader(async ({ threadId, ...options }) => {
@@ -217,7 +223,7 @@ test("AppServer user-message content is readable before opening original Item JS
       assert(userRow);
       assert.equal(
         userRow.querySelector(".original-history-body")?.textContent,
-        expected,
+        complete,
       );
       assert.equal(
         userRow.querySelector(".original-history-item-detail"),

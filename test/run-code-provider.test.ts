@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { projectModelMessages } from "../src/model-content.js";
 import type { ModelEvent, ModelRequest } from "../src/model.js";
 import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
@@ -105,7 +106,7 @@ test("Responses offers custom JS and replays canonical history even when run_cod
       {
         type: "custom_tool_call_output",
         call_id: "call-1",
-        output: "Exit code: 0\n你好",
+        output: "你好",
       },
     ]);
   }
@@ -334,7 +335,7 @@ test("tool catalog shares disclosed ordinary definitions without exposing orches
   assert.equal(catalog[0]!.description, "Visible");
 });
 
-test("audio uses Chat input_audio and honest Responses text references, including tool output", async () => {
+test("audio uses Chat input_audio; Responses requires compiler-materialized fallback, including tool output", async () => {
   for (const [mediaType, format] of [
     ["audio/wav", "wav"],
     ["audio/mpeg", "mp3"],
@@ -389,15 +390,23 @@ test("audio uses Chat input_audio and honest Responses text references, includin
         { type: "input_audio", input_audio: { data: "AQID", format } },
       ]);
     }
+    await assert.rejects(
+      collect(subscription([terminal]).stream(request({ messages }))),
+      /must be materialized by the context compiler/,
+    );
     let responses: any;
     await collect(
       subscription([terminal], (body) => {
         responses = body;
-      }).stream(request({ messages })),
+      }).stream(
+        request({
+          messages: projectModelMessages(messages, ["text", "image"]),
+        }),
+      ),
     );
     for (const message of [responses.input[0], responses.input[3]]) {
       assert.equal(message.content[0].type, "input_text");
-      assert.match(message.content[0].text, /audio.*not supported/i);
+      assert.match(message.content[0].text, /audio.*input unavailable/i);
       assert.ok(message.content[0].text.includes("a".repeat(64)));
       assert.ok(message.content[0].text.includes(mediaType));
     }

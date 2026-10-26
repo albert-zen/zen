@@ -318,6 +318,7 @@ export class ZenXThreadTitleCoordinator {
           started.source,
           this.#titleModel(),
           owner.signal,
+          { threadId: started.threadId },
         ),
       );
       if (!owner.isCurrent()) return;

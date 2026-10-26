@@ -454,7 +454,9 @@ test("live subscription emits reset on lost scope and cannot silently resume aft
     await notificationCount(events, "zen/remote/thread/reset");
     assert(
       !events.some((x) =>
-        x.params?.event?.item?.text?.includes("hidden-after-scope-loss"),
+        JSON.stringify(x.params?.event?.item ?? {}).includes(
+          "hidden-after-scope-loss",
+        ),
       ),
     );
     f.allow(true);
@@ -464,7 +466,9 @@ test("live subscription emits reset on lost scope and cannot silently resume aft
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert(
       !events.some((x) =>
-        x.params?.event?.item?.text?.includes("visible-after-regrant"),
+        JSON.stringify(x.params?.event?.item ?? {}).includes(
+          "visible-after-regrant",
+        ),
       ),
       "old subscription cannot revive",
     );
@@ -474,12 +478,16 @@ test("live subscription emits reset on lost scope and cannot silently resume aft
     });
     assert(
       renewed.result?.entries.some(
-        (x) => x.kind === "item" && x.item.text === "hidden-after-scope-loss",
+        (x) =>
+          x.kind === "item" &&
+          JSON.stringify(x.item).includes("hidden-after-scope-loss"),
       ),
     );
     assert(
       renewed.result?.entries.some(
-        (x) => x.kind === "item" && x.item.text === "visible-after-regrant",
+        (x) =>
+          x.kind === "item" &&
+          JSON.stringify(x.item).includes("visible-after-regrant"),
       ),
     );
   } finally {

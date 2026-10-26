@@ -64,6 +64,33 @@ export class Thread {
     if (this.#items.some((existing) => existing.id === item.id)) {
       throw new Error(`Duplicate item id ${item.id}`);
     }
+    const metadata = this.#items[0];
+    if (
+      metadata?.type === "thread_metadata" &&
+      metadata.purpose !== undefined &&
+      [
+        "turn_started",
+        "turn_completed",
+        "turn_aborted",
+        "turn_replacement_requested",
+        "user_message",
+        "user_message_queued",
+        "user_message_queue_edited",
+        "host_message",
+        "host_message_queued",
+        "thread_message",
+        "thread_message_queued",
+        "agent_message",
+        "reasoning",
+        "tool_call",
+        "tool_result",
+        "failure",
+        "context_compaction",
+      ].includes(item.type)
+    )
+      throw new Error(
+        "System model-operation history cannot accept conversation messages",
+      );
     const deletion = this.deletion;
     if (deletion !== undefined && item.type !== "thread_restored") {
       throw new Error(
@@ -89,6 +116,245 @@ export class Thread {
       )
     ) {
       throw new Error(`Turn ${item.turnId} already has a terminal Item`);
+    }
+    if (
+      item.type === "context_format" &&
+      this.#items.some((prior) => prior.type === "context_format")
+    )
+      throw new Error("Duplicate canonical content format marker");
+    if (item.type === "model_operation") {
+      const sources = item.sourceItemIds.map((id) =>
+        this.#items.find((source) => source.id === id),
+      );
+      if (
+        sources.length !== 1 ||
+        !sources[0] ||
+        sources[0].type === "model_operation_completed"
+      )
+        throw new Error(
+          "Model operation requires one earlier canonical source",
+        );
+      if (item.kind === "title" && sources[0].type !== "user_message")
+        throw new Error("Title operation requires a human message source");
+      if (
+        item.kind === "image-capability-probe" &&
+        !(
+          sources[0].type === "thread_metadata" &&
+          sources[0].purpose === "image-capability-probe"
+        )
+      )
+        throw new Error(
+          "Image probe requires trusted operation Thread provenance",
+        );
+      if (!this.#items.some((prior) => prior.type === "context_format"))
+        throw new Error(
+          "Model operation requires the canonical content format gate",
+        );
+    }
+    if (item.type === "model_operation_completed") {
+      const operation = this.#items.find(
+        (source) => source.id === item.operationItemId,
+      );
+      if (operation?.type !== "model_operation")
+        throw new Error("Operation result requires its preceding admission");
+      if (
+        this.#items.some(
+          (prior) =>
+            prior.type === "model_operation_completed" &&
+            prior.operationItemId === item.operationItemId,
+        )
+      )
+        throw new Error("Model operation already has a terminal result");
+      if (
+        item.status === "completed" &&
+        (item.error !== undefined || item.incomplete !== undefined)
+      )
+        throw new Error(
+          "Completed model operation cannot carry a failure diagnostic",
+        );
+      if (
+        item.status !== "completed" &&
+        item.content !== undefined &&
+        item.incomplete !== true
+      )
+        throw new Error("Partial model output requires incomplete provenance");
+      if (item.content?.some((part) => part.type !== "text"))
+        throw new Error(
+          "Auxiliary result must contain only observed model text",
+        );
+      if (item.probeOutcome === "supported" && item.status !== "completed")
+        throw new Error("Supported probe requires successful completion");
+      if (item.probeOutcome === "unsupported" && item.status !== "failed")
+        throw new Error("Unsupported probe requires a failed response");
+      if (
+        item.probeOutcome !== undefined &&
+        operation.kind !== "image-capability-probe"
+      )
+        throw new Error("Probe outcome requires an image probe operation");
+    }
+    if (item.type === "context_message") {
+      const sources = item.sourceItemIds.map((id) =>
+        this.#items.find((source) => source.id === id),
+      );
+      if (
+        !sources.length ||
+        sources.some(
+          (source) => source === undefined || source.type === "context_message",
+        )
+      )
+        throw new Error(
+          "Context content requires preceding canonical source facts",
+        );
+      if (
+        item.role === "tool" &&
+        !sources.some((source) => source?.type === "tool_result")
+      )
+        throw new Error("Tool context must retain its tool result source");
+      if (
+        item.role === "system" &&
+        (item.origin !== "host" ||
+          item.purpose !== "provider-instructions" ||
+          sources.length !== 1 ||
+          !(
+            sources[0]?.type === "turn_started" ||
+            sources[0]?.type === "thread_metadata" ||
+            sources[0]?.type === "model_operation" ||
+            (sources[0]?.type === "thread_configuration_changed" &&
+              !("permissions" in sources[0]))
+          ))
+      )
+        throw new Error(
+          "Only explicit provider instructions may use system context",
+        );
+      const first = sources[0];
+      const generatedPurposes = new Set([
+        "provider-instructions",
+        "auxiliary-title",
+        "auxiliary-image-probe",
+        "workspace-instructions",
+        "compaction-summary",
+        "file-permissions",
+        "compaction-notice",
+        "compaction-instruction",
+        "compaction-excerpt",
+      ]);
+      if (item.purpose !== first?.type && !generatedPurposes.has(item.purpose))
+        throw new Error("Unknown canonical context purpose");
+      if (
+        generatedPurposes.has(item.purpose) &&
+        item.purpose !== "provider-instructions" &&
+        (item.origin !== "host" || item.role !== "user")
+      )
+        throw new Error(
+          "Generated context must retain Host user-role provenance",
+        );
+      if (
+        item.purpose === "auxiliary-title" ||
+        item.purpose === "auxiliary-image-probe"
+      ) {
+        if (
+          first?.type !== "model_operation" ||
+          (item.purpose === "auxiliary-title"
+            ? first.kind !== "title"
+            : first.kind !== "image-capability-probe")
+        )
+          throw new Error(
+            "Auxiliary context requires its matching operation admission",
+          );
+        const expectedSources =
+          first.kind === "title"
+            ? [first.id, ...first.sourceItemIds]
+            : [first.id];
+        if (
+          JSON.stringify(item.sourceItemIds) !== JSON.stringify(expectedSources)
+        )
+          throw new Error(
+            "Auxiliary context must preserve the exact admitted source binding",
+          );
+      }
+      if (
+        item.purpose === "workspace-instructions" &&
+        !(
+          first?.type === "turn_started" || first?.type === "context_compaction"
+        )
+      )
+        throw new Error("Workspace context requires its instruction snapshot");
+      if (
+        item.purpose === "compaction-summary" &&
+        first?.type !== "context_compaction"
+      )
+        throw new Error("Compaction summary requires its source fact");
+      if (
+        item.purpose === "file-permissions" &&
+        !(
+          first?.type === "thread_metadata" ||
+          first?.type === "thread_configuration_changed"
+        )
+      )
+        throw new Error("File permissions require a canonical policy fact");
+      const expected =
+        first?.type === "user_message"
+          ? ["human", "user"]
+          : first?.type === "thread_message"
+            ? ["agent", "user"]
+            : first?.type === "agent_message"
+              ? ["model", "assistant"]
+              : first?.type === "tool_result"
+                ? ["tool", "tool"]
+                : first?.type === "reasoning"
+                  ? ["model", "reasoning"]
+                  : undefined;
+      if (
+        item.purpose === first?.type &&
+        expected === undefined &&
+        (item.origin !== "host" ||
+          !(
+            item.role === "user" ||
+            (first?.type === "failure" && item.role === "assistant")
+          ))
+      )
+        throw new Error("Host context cannot change source authority");
+      if (
+        item.purpose === first?.type &&
+        expected &&
+        (item.origin !== expected[0] || item.role !== expected[1])
+      )
+        throw new Error(
+          "Canonical content cannot change source role or authority",
+        );
+      if (
+        (item.purpose === "compaction-excerpt" ||
+          item.purpose === "compaction-instruction" ||
+          item.purpose === "compaction-notice") &&
+        (item.origin !== "host" || item.role !== "user")
+      )
+        throw new Error("Compaction context cannot promote source authority");
+      if (item.origin === "human" && sources[0]?.type !== "user_message")
+        throw new Error("Non-human context cannot claim human provenance");
+      if (item.origin === "agent" && sources[0]?.type !== "thread_message")
+        throw new Error("Agent context requires verified source provenance");
+      if (
+        sources[0]?.type === "thread_message" &&
+        item.origin !== "agent" &&
+        item.purpose !== "compaction-excerpt"
+      )
+        throw new Error("Agent source cannot be promoted to another origin");
+      const key = (value: typeof item) =>
+        JSON.stringify([
+          value.sourceItemIds,
+          value.role,
+          value.origin,
+          value.purpose,
+          value.compilerPolicyVersion,
+          value.variant,
+        ]);
+      if (
+        this.#items.some(
+          (prior) =>
+            prior.type === "context_message" && key(prior) === key(item),
+        )
+      )
+        throw new Error("Duplicate canonical context materialization");
     }
     if (item.type === "failure" && item.recovery !== undefined) {
       const recovery = item.recovery;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import os from "node:os";
+import { OpenAiResponsesModel } from "../src/model/openai-responses.js";
 import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
@@ -21,9 +22,14 @@ import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { testToolRuntime } from "./tool-fixtures.js";
 import type { CanonicalItem } from "../src/item.js";
 
-function fixture(window: number, description: string, instructions = "") {
+function fixture(
+  window: number,
+  description: string,
+  instructions = "",
+  providedAdapter?: ModelAdapter,
+) {
   let requests = 0;
-  const adapter: ModelAdapter = {
+  const adapter: ModelAdapter = providedAdapter ?? {
     provider: "fixture",
     contextInstructions: instructions,
     async *stream(): AsyncIterable<ModelEvent> {
@@ -594,4 +600,33 @@ test("Host/UI calibrates from the exact sent sample, not thread totals or cached
   const usage = await f.server.readModelUsage(thread.id);
   assert.equal(usage.thread.inputTokens, 1200);
   assert.notEqual(usage.context.inputTokens, 1200);
+});
+
+test("public Responses instructions exhaust the fixed budget before fetch or compaction", async () => {
+  let fetches = 0;
+  const instructions = "s".repeat(20000);
+  const adapter = new OpenAiResponsesModel({
+    baseUrl: "https://example.test/v1",
+    apiKey: "synthetic-key-not-a-credential",
+    defaultParams: { instructions },
+    fetch: async () => {
+      fetches++;
+      throw new Error("unexpected fetch");
+    },
+  });
+  assert.equal(adapter.contextInstructions, instructions);
+  assert(estimateModelInput([], [], adapter.contextInstructions).total > 5000);
+  const f = fixture(500, "small tool", "", adapter);
+  const thread = await f.server.startThread();
+  await assert.rejects(
+    f.server.startTurn(thread.id, "hello"),
+    /static model instructions exceed/,
+  );
+  assert.equal(fetches, 0);
+  assert.equal(
+    (await f.server.readThread(thread.id)).items.some(
+      (item) => item.type === "context_compaction",
+    ),
+    false,
+  );
 });

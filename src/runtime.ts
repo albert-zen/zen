@@ -1,4 +1,9 @@
 import {
+  assertCommittedModelContent,
+  planContextMaterialization,
+  copyCommittedMessageBinding,
+} from "./context-materialization.js";
+import {
   ContextCalibration,
   type ContextEstimateRequest,
 } from "./context-calibration.js";
@@ -111,6 +116,8 @@ export interface RuntimeConfiguration {
 }
 
 export interface PreparedModelSample {
+  instructions?: string;
+  instructionsItemId?: string;
   messages: ModelMessage[];
   /** Last canonical Item included in the atomically captured projection. */
   contextBoundaryItemId: string;
@@ -861,7 +868,7 @@ export class AgentRuntime {
       return reasoningItemId;
     };
 
-    const preparedSample = await options.prepareModelSample(itemId);
+    let preparedSample = await options.prepareModelSample(itemId);
     if (
       Array.isArray(preparedSample) &&
       options.configuration.agenticContextCompaction !== undefined
@@ -869,6 +876,31 @@ export class AgentRuntime {
       throw new Error(
         "Agentic context compaction requires an atomic model sample boundary",
       );
+    }
+    if (Array.isArray(preparedSample)) {
+      const plan = planContextMaterialization({
+        items: options.thread.items,
+        messages: projectModelMessages(
+          preparedSample,
+          options.configuration.inputModalities,
+        ),
+        threadId: options.thread.id,
+        turnId,
+        instructions: options.modelAdapter.contextInstructions,
+        inputModalities: options.configuration.inputModalities,
+        id: this.#id,
+        now: this.#now,
+      });
+      for (const item of plan.pending) {
+        await options.commit(item);
+        options.emit({ type: "item_completed", item });
+      }
+      const boundary = options.thread.items.at(-1)?.id;
+      if (!boundary) throw new Error("Model sample requires committed context");
+      preparedSample = {
+        ...plan.resolve(options.thread.items),
+        contextBoundaryItemId: boundary,
+      };
     }
     const messages = Array.isArray(preparedSample)
       ? preparedSample
@@ -887,6 +919,22 @@ export class AgentRuntime {
       messages,
       options.configuration.inputModalities,
       (source, projected) => mediaOrigins.set(projected, source),
+    );
+    projectedMessages.forEach((message, index) => {
+      const source = messages[index];
+      if (source) copyCommittedMessageBinding(source, message);
+    });
+    const instructions = Array.isArray(preparedSample)
+      ? undefined
+      : preparedSample.instructions;
+    const instructionsItemId = Array.isArray(preparedSample)
+      ? undefined
+      : preparedSample.instructionsItemId;
+    assertCommittedModelContent(
+      options.thread.items,
+      projectedMessages,
+      instructions,
+      instructionsItemId,
     );
     const contextRequest = this.#contextCalibration.prepare({
       threadId: options.thread.id,
@@ -914,6 +962,7 @@ export class AgentRuntime {
         model: options.configuration.model,
         reasoningEffort: options.configuration.reasoningEffort,
         messages: projectedMessages,
+        ...(instructions === undefined ? {} : { instructions }),
         tools: presentation.modelTools.map((definition) =>
           structuredClone(definition),
         ),
@@ -994,6 +1043,9 @@ export class AgentRuntime {
             ...(event.providerItemId === undefined
               ? {}
               : { providerItemId: event.providerItemId }),
+            ...(event.opaqueReplayProvenance === undefined
+              ? {}
+              : { opaqueReplayProvenance: event.opaqueReplayProvenance }),
           };
           // Later tool validation can still invalidate this entire sample.
           completedReasoning.push(reasoning);

@@ -23,6 +23,7 @@ export interface ThreadMessageSummary {
 }
 
 export interface ThreadSummary {
+  purpose?: "image-capability-probe";
   /** Canonical messages only; omitted on empty/legacy projections. */
   lastMessage?: ThreadMessageSummary;
   lastAgentMessage?: Omit<ThreadMessageSummary, "kind">;
@@ -53,6 +54,7 @@ export interface ThreadSummary {
 }
 
 export interface UnavailableThreadSummary {
+  purpose?: "image-capability-probe";
   threadId: string;
   lastItemId?: string;
   parentThreadId?: string;
@@ -68,6 +70,8 @@ export interface UnavailableThreadSummary {
 export type NativeThreadSummary = ThreadSummary | UnavailableThreadSummary;
 
 export interface ThreadSummaryListOptions {
+  /** Trusted Host diagnostics only; native chat lists keep their existing surface. */
+  includeOperations?: boolean;
   archived?: boolean;
 }
 
@@ -163,6 +167,8 @@ export function isNativeThreadSummary(
     (value.lastItemId !== undefined &&
       (typeof value.lastItemId !== "string" ||
         value.lastItemId.length === 0)) ||
+    (value.purpose !== undefined &&
+      value.purpose !== "image-capability-probe") ||
     typeof value.archived !== "boolean" ||
     (value.name !== undefined && typeof value.name !== "string") ||
     typeof value.preview !== "string"

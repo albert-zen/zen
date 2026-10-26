@@ -1,92 +1,65 @@
-import { createHash } from "node:crypto";
-
-import type { AttachmentRef } from "../../../../src/attachment.js";
-import {
-  OpenAiCompatibleModel,
-  OpenAiCompatibleModelError,
-} from "../../../../src/model/openai-compatible.js";
-
+import type { ModelCatalogEntryInput } from "../../../../src/model-catalog.js";
+import type { ProviderTransport } from "../../../../apps/cli/src/host.js";
+import type {
+  HostModelOperationRequest,
+  HostModelOperationResult,
+} from "./model-operation-messages.js";
 export type ImageCapabilityProbeOutcome =
   "supported" | "unsupported" | "inconclusive";
+export type ModelOperationExecutor = (
+  request: HostModelOperationRequest,
+  signal?: AbortSignal,
+) => Promise<HostModelOperationResult>;
 
-// A valid 1x1 transparent PNG. It is intentionally tiny because a probe is a
-// user-triggered real model request and may incur Provider cost.
-const PROBE_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-  "base64",
-);
-const PROBE_REF: AttachmentRef = Object.freeze({
-  type: "attachment",
-  sha256: createHash("sha256").update(PROBE_PNG).digest("hex"),
-  mediaType: "image/png",
-  byteLength: PROBE_PNG.byteLength,
-  width: 1,
-  height: 1,
-});
-
+/** No adapter/semantic message construction here: the owning Host commits then dispatches. */
 export async function probeOpenAiCompatibleImage(options: {
   baseUrl: string;
+  protocol?: "chat-completions" | "responses";
   apiKey: string;
   provider: string;
+  providerProfileId?: string;
   model: string;
-  fetch?: typeof globalThis.fetch;
+  metadata?: ModelCatalogEntryInput;
+  transport?: ProviderTransport;
   signal?: AbortSignal;
+  execute: ModelOperationExecutor;
 }): Promise<ImageCapabilityProbeOutcome> {
-  const controller = new AbortController();
-  const signal = options.signal ?? controller.signal;
-  const adapter = new OpenAiCompatibleModel({
-    baseUrl: options.baseUrl,
-    apiKey: options.apiKey,
-    provider: options.provider,
-    defaultParams: { max_tokens: 1 },
-    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-    attachments: {
-      read: async (ref) => {
-        if (ref.sha256 !== PROBE_REF.sha256)
-          throw new Error("Unknown probe image");
-        return PROBE_PNG;
+  const providerProfileId = options.providerProfileId ?? "explicit-image-probe";
+  const result = await options.execute(
+    {
+      input: {
+        kind: "image-capability-probe",
+        selection: { providerProfileId, modelId: options.model },
+      },
+      profile: {
+        providerProfileId,
+        model: options.model,
+        provider: {
+          type: "openai-compatible",
+          baseUrl: options.baseUrl,
+          apiKey: options.apiKey,
+          name: options.provider,
+          ...(options.protocol === undefined
+            ? {}
+            : { protocol: options.protocol }),
+        },
+        modelCatalog: [
+          {
+            ...(options.metadata ?? {
+              contextWindow: null,
+              supportedReasoningEfforts: null,
+              defaultReasoningEffort: null,
+            }),
+            id: options.model,
+            isDefault: true,
+          },
+        ],
+        ...(options.transport === undefined
+          ? {}
+          : { transport: options.transport }),
       },
     },
-  });
-  try {
-    for await (const _event of adapter.stream({
-      model: options.model,
-      reasoningEffort: "medium",
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Reply OK." },
-            { type: "image", attachment: PROBE_REF },
-          ],
-        },
-      ],
-      tools: [],
-      signal,
-    })) {
-      // Consume the real adapter stream through its terminal marker.
-    }
-    return "supported";
-  } catch (error) {
-    return isExplicitImageUnsupported(error) ? "unsupported" : "inconclusive";
-  }
-}
-
-function isExplicitImageUnsupported(error: unknown): boolean {
-  if (!(error instanceof OpenAiCompatibleModelError) || error.kind !== "http") {
-    return false;
-  }
-  if (
-    error.status === 401 ||
-    error.status === 402 ||
-    error.status === 403 ||
-    error.status === 404 ||
-    error.status === 408 ||
-    error.status === 409 ||
-    error.status === 429 ||
-    (error.status !== undefined && error.status >= 500)
-  ) {
-    return false;
-  }
-  return error.explicitlyRejectsImageInput;
+    options.signal,
+  );
+  return result.probeOutcome ?? "inconclusive";
 }

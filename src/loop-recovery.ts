@@ -1,3 +1,4 @@
+import { canonicalMediaPart } from "./media-content.js";
 import type {
   CanonicalItem,
   RecoveryMediaOccurrence,
@@ -96,7 +97,7 @@ export function safeProviderErrorIdentity(value: unknown): string | undefined {
 export function safeProviderErrorParameter(value: unknown): string | undefined {
   return typeof value === "string" &&
     value.length <= 160 &&
-    /^(?:messages|input)(?:\[\d{1,4}\]|\.(?:content|image_url|file_url|url|file|image|audio|data|type|input_audio|input_image|file_data|file_id))*$/u.test(
+    /^(?:messages|input)(?:\[\d{1,4}\]|\.(?:content|output|image_url|file_url|url|file|image|audio|data|type|input_audio|input_image|file_data|file_id))*$/u.test(
       value,
     )
     ? value
@@ -347,9 +348,14 @@ export function sampledMediaOccurrences(
       const key = `${part.type}:${part.attachment.sha256}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (rejectedParts !== undefined && !rejectedParts.includes(part))
+      const canonicalPart = canonicalMediaPart(part);
+      if (
+        rejectedParts !== undefined &&
+        !rejectedParts.includes(part) &&
+        !rejectedParts.includes(canonicalPart)
+      )
         continue;
-      const origin = origins.get(part);
+      const origin = origins.get(canonicalPart);
       if (origin !== undefined) found.set(JSON.stringify(origin), origin);
     }
   }

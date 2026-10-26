@@ -3181,7 +3181,10 @@ test("CLI executes one full local protocol turn", async () => {
       `!shell ${shellPrintCommand("cli-full-access")}`,
     ]);
     assert.equal(fullAccessTool.stderr, "");
-    assert.match(fullAccessTool.stdout, /Command result:\s+cli-full-access/u);
+    assert.match(
+      fullAccessTool.stdout,
+      /Command result:\s+Exit code: 0\s+cli-full-access/u,
+    );
 
     const approvedTool = await executeCli([
       "run",
@@ -3191,7 +3194,10 @@ test("CLI executes one full local protocol turn", async () => {
       `!shell ${shellPrintCommand("cli-approved")}`,
     ]);
     assert.equal(approvedTool.stderr, "");
-    assert.match(approvedTool.stdout, /Command result:\s+cli-approved/u);
+    assert.match(
+      approvedTool.stdout,
+      /Command result:\s+Exit code: 0\s+cli-approved/u,
+    );
 
     const deniedTool = await executeCli([
       "run",
