@@ -1,3 +1,13 @@
+import {
+  resolveSidebarScope,
+  bindSidebarResources,
+  type SidebarRoom,
+} from "../sidebar-tool-scope.js";
+import { sidebarTabId } from "../../thread-sidebar-state.js";
+import {
+  parseSidebarUpdate,
+  type ThreadSidebarPort,
+} from "../../thread-sidebar-state.js";
 import { deliverAssistantInput } from "../assistant-preset.js";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -150,7 +160,7 @@ const manifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: ZENX_SELF_CONTROL_CAPABILITY_ID,
   name: "ZenX self-control",
-  version: "1.0.1",
+  version: "1.1.0",
   description:
     "List derived workspaces and control Zen Threads through typed App Server requests.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -511,6 +521,87 @@ for (const tool of manifest.tools) {
     },
   };
 }
+const sidebarScopeSchema = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["thread", "room"] },
+    id: { type: "string" },
+  },
+  required: ["kind", "id"],
+  additionalProperties: false,
+};
+const sidebarTabSchema = {
+  type: "object",
+  properties: {
+    kind: {
+      type: "string",
+      enum: [
+        "file",
+        "webpage",
+        "browser",
+        "external-browser",
+        "plugin",
+        "thread",
+        "terminal",
+        "computer",
+        "custom",
+      ],
+    },
+    resourceThreadId: { type: "string" },
+    path: { type: "string" },
+    url: { type: "string" },
+    id: { type: "string" },
+    pluginId: { type: "string" },
+    panelId: { type: "string" },
+    threadId: { type: "string" },
+  },
+  required: ["kind"],
+  additionalProperties: false,
+};
+manifest.tools.push(
+  {
+    name: "zenx_self_control_sidebar_read",
+    description:
+      "Read the effective Thread or Room persisted sidebar presentation: revision, open/fullscreen, ordered typed tabs and selectedTab. This is state, not evidence of screen visibility. Default is the unique dedicated PAW Room binding, otherwise your private Thread. Explicit scope may be your private Thread or a Room whose membership is checked live. Multiple dedicated bindings require an explicit scope. Response reports effectiveScope/defaultReason/authorizedScopes; never infer the default from visible UI.",
+    inputSchema: {
+      type: "object",
+      properties: { scope: sidebarScopeSchema },
+      additionalProperties: false,
+    },
+    permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
+    interactionMode: "background_safe",
+    capabilities: ["zenx.threads.read"],
+    maxOutputBytes: 524288,
+  },
+  {
+    name: "zenx_self_control_sidebar_update",
+    description:
+      "Update authorized Thread/Room sidebar state using expectedRevision from sidebar_read. Runs even while another Thread is foreground; never switches focus or opens content in the background. tabs replaces ordered descriptors (max 64); preserve tabs you want to keep. selectedTab uses IDs returned by read: file:path, webpage:intentId, plugin:pluginId:panelId, thread:threadId, browser:id, terminal or computer. Omit webpage id to mint a stable persisted intent ID; duplicate URLs with different IDs are distinct tabs. Read returned IDs before selecting a newly minted tab. Room resource descriptors bind to your caller Thread, not another member; preserve existing descriptors unchanged. File paths are normalized workspace-relative paths (not absolute); file/webpage contents load through existing controls only when selected and visible. Conflict returns applied:false plus current state; read/reconsider rather than blindly overwrite. Does not save/discard file edits.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: sidebarScopeSchema,
+        expectedRevision: { type: "integer", minimum: 0 },
+        patch: {
+          type: "object",
+          properties: {
+            open: { type: "boolean" },
+            fullscreen: { type: "boolean" },
+            tabs: { type: "array", maxItems: 64, items: sidebarTabSchema },
+            selectedTab: { type: ["string", "null"] },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["expectedRevision", "patch"],
+      additionalProperties: false,
+    },
+    permissions: [ZENX_SELF_CONTROL_LOCAL_DEVICE_PERMISSION],
+    interactionMode: "background_safe",
+    capabilities: ["zenx.threads.control"],
+    maxOutputBytes: 524288,
+  },
+);
 const controlToolNames = new Set(manifest.tools.map((tool) => tool.name));
 
 export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
@@ -518,6 +609,8 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   readonly #appServer: AppServerRequestPort;
   readonly #fleet: FleetRouter | undefined;
   readonly #workflows: WorkflowConfigurationPort | undefined;
+  readonly #sidebar: ThreadSidebarPort | undefined;
+  readonly #sidebarRooms: () => readonly SidebarRoom[];
   readonly #sendPreference: () => Promise<"queue" | "soft" | "hard">;
   readonly #sending = new Map<
     string,
@@ -527,12 +620,16 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   constructor(options: {
     appServer: AppServerRequestPort;
     workflows?: WorkflowConfigurationPort;
+    sidebar?: ThreadSidebarPort;
+    sidebarRooms?: () => readonly SidebarRoom[];
     fleet?: FleetRouter;
     sendPreference?: () => Promise<"queue" | "soft" | "hard">;
   }) {
     this.#appServer = options.appServer;
     this.#fleet = options.fleet;
     this.#workflows = options.workflows;
+    this.#sidebar = options.sidebar;
+    this.#sidebarRooms = options.sidebarRooms ?? (() => []);
     this.#sendPreference = options.sendPreference ?? (async () => "soft");
   }
 
@@ -541,6 +638,76 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       throw new Error(`Unsupported ZenX self-control tool: ${name}`);
     }
     invocation.signal.throwIfAborted();
+    if (
+      name === "zenx_self_control_sidebar_read" ||
+      name === "zenx_self_control_sidebar_update"
+    ) {
+      if (!this.#sidebar)
+        throw new Error("Thread sidebar state is unavailable on this Host");
+      if (!invocation.threadId || invocation.trustedPluginUi)
+        throw new Error("Sidebar tools require a runtime-owned Thread context");
+      const threadId = invocation.threadId;
+      await this.#appServer.request("thread/read", {
+        threadId,
+        includeTurns: false,
+      });
+      invocation.signal.throwIfAborted();
+      const scope = resolveSidebarScope(
+        threadId,
+        invocation.arguments.scope,
+        this.#sidebarRooms(),
+      );
+      const admit = () => {
+        invocation.signal.throwIfAborted();
+        resolveSidebarScope(
+          threadId,
+          scope.effectiveScope,
+          this.#sidebarRooms(),
+        );
+      };
+      if (name === "zenx_self_control_sidebar_read") {
+        assertOnly(invocation.arguments, ["scope"]);
+        return {
+          source: "zenx.sidebar-state",
+          visibility: "not-observed",
+          ...scope,
+          state: await this.#sidebar.read(scope.effectiveScope, admit),
+        };
+      }
+      assertOnly(invocation.arguments, ["scope", "expectedRevision", "patch"]);
+      const current = await this.#sidebar.read(scope.effectiveScope, admit);
+      const request = parseSidebarUpdate({
+        owner: scope.effectiveScope,
+        expectedRevision: invocation.arguments.expectedRevision,
+        patch: invocation.arguments.patch,
+      });
+      if (request.patch.resourceThreadId !== undefined)
+        throw new Error(
+          "The resource picker is a user choice; resource tabs bind to your caller Thread",
+        );
+      if (request.patch.tabs) {
+        const before = request.patch.tabs;
+        request.patch.tabs = bindSidebarResources(before, current, threadId);
+        if (request.patch.selectedTab) {
+          const index = before.findIndex(
+            (tab) => sidebarTabId(tab) === request.patch.selectedTab,
+          );
+          if (index >= 0)
+            request.patch.selectedTab = sidebarTabId(
+              request.patch.tabs[index]!,
+            );
+        }
+      }
+      resolveSidebarScope(threadId, scope.effectiveScope, this.#sidebarRooms());
+      const result = await this.#sidebar.update(request, admit);
+      return {
+        source: "zenx.sidebar-state",
+        visibility: "not-observed",
+        ...scope,
+        ...result,
+      };
+    }
+
     if (name === "zenx_self_control_devices") {
       assertOnly(invocation.arguments, []);
       return {

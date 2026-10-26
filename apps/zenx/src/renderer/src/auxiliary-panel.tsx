@@ -1,3 +1,10 @@
+import {
+  sidebarTabId,
+  sidebarTabFromId,
+  sidebarOwnerKey,
+  type ThreadSidebarState,
+  type ThreadSidebarTab,
+} from "../../thread-sidebar-state.js";
 import { ShellThreadPanel } from "./shell-thread-panel.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
@@ -38,6 +45,8 @@ interface ContentTab {
   title: string;
   icon: IconName;
   path?: string;
+  resourceThreadId?: string;
+  descriptor?: ThreadSidebarTab;
   browser?: WorkspaceBrowserTab;
   externalBrowser?: BrowserThreadTarget;
   render?: () => React.ReactNode;
@@ -74,6 +83,11 @@ export type AuxiliaryConversationContext =
   | {
       kind: "room";
       roomId: string;
+      resourceThreads?: readonly {
+        threadId: string;
+        title: string;
+        workspacePath?: string;
+      }[];
       resourceThread?: {
         threadId: string;
         title: string;
@@ -90,6 +104,13 @@ export interface AuxiliaryCustomTab {
 }
 
 type AuxiliaryPanelProps = {
+  presentationState?: ThreadSidebarState;
+  onFullscreenChange?(value: boolean): void;
+  onRemoveTab?(id: string): void;
+  onReplaceTab?(
+    id: string,
+    tab: ThreadSidebarTab,
+  ): Promise<boolean> | boolean | void;
   customTabs?: readonly AuxiliaryCustomTab[];
   contextControl?: React.ReactNode;
   threadContext?: Readonly<Record<string, unknown>>;
@@ -123,6 +144,10 @@ type AuxiliaryPanelProps = {
 );
 
 export function AuxiliaryPanel({
+  presentationState,
+  onFullscreenChange,
+  onRemoveTab,
+  onReplaceTab,
   navigate,
   threadId: legacyThreadId,
   conversationContext,
@@ -147,14 +172,40 @@ export function AuxiliaryPanel({
   useTranslation("panels");
   const roomContext =
     conversationContext?.kind === "room" ? conversationContext : undefined;
+  const [choosing, setChoosing] = useState(false);
+  const selectedDescriptor =
+    presentationState?.tabs.find((tab) => sidebarTabId(tab) === selectedTab) ??
+    presentationState?.tabs[0];
+  const selectedResource = !choosing
+    ? selectedDescriptor?.resourceThreadId
+    : undefined;
+  const roomResource = selectedResource
+    ? roomContext?.resourceThreads?.find(
+        (member) => member.threadId === selectedResource,
+      )
+    : roomContext?.resourceThread;
+  const scopedId = (id: string) => {
+    if (
+      !presentationState ||
+      !roomContext ||
+      !threadId ||
+      id.startsWith("custom:") ||
+      id.startsWith("thread:")
+    )
+      return id;
+    const tab = sidebarTabFromId(id);
+    return sidebarTabId({ ...tab, resourceThreadId: threadId });
+  };
+  const scopedIdRef = useRef(scopedId);
+  scopedIdRef.current = scopedId;
   // Room identity owns presentation only. Execution APIs always use a real Thread.
   const threadId = roomContext
-    ? roomContext.resourceThread?.threadId
+    ? roomResource?.threadId
     : conversationContext?.kind === "thread"
       ? conversationContext.threadId
       : legacyThreadId;
   const workspacePath = roomContext
-    ? roomContext.resourceThread?.workspacePath
+    ? roomResource?.workspacePath
     : legacyWorkspacePath;
   const [localDrafts] = useState(() => new WorkspaceFileDrafts());
   const drafts = fileDrafts ?? localDrafts;
@@ -188,13 +239,20 @@ export function AuxiliaryPanel({
   const expandedKey = roomContext
     ? `room:${roomContext.roomId}`
     : `thread:${threadId}`;
-  const [expanded, setExpandedState] = useState(
+  const [localExpanded, setExpandedState] = useState(
     () => expandedByConversation.get(expandedKey) ?? false,
   );
   useEffect(() => {
     setExpandedState(expandedByConversation.get(expandedKey) ?? false);
   }, [expandedKey]);
+  const expanded = presentationState?.fullscreen ?? localExpanded;
   const setExpanded = (update: React.SetStateAction<boolean>) => {
+    if (onFullscreenChange) {
+      onFullscreenChange(
+        typeof update === "function" ? update(expanded) : update,
+      );
+      return;
+    }
     setExpandedState((current) => {
       const next =
         typeof update === "function"
@@ -222,7 +280,6 @@ export function AuxiliaryPanel({
       document.getElementById("thread-browser-toggle")?.focus();
     }
   }, [open]);
-  const [choosing, setChoosing] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
   const [fileNavigationOpen, setFileNavigationOpen] = useState(true);
   const [externalListScope, setExternalListScope] = useState<string>();
@@ -237,7 +294,10 @@ export function AuxiliaryPanel({
     useState<WorkspaceBrowserPresentation>();
   const automaticSelection = useRef<string | undefined>(undefined);
   const presentationCallbacks = useRef({ onSelectTab, onOpenChange });
-  presentationCallbacks.current = { onSelectTab, onOpenChange };
+  presentationCallbacks.current = {
+    onSelectTab: (id) => onSelectTab(scopedId(id)),
+    onOpenChange,
+  };
   const lastBrowserIntent = useRef(0);
   const [followRevision, setFollowRevision] = useState(0);
   const suppressFollowing = () => {
@@ -305,7 +365,7 @@ export function AuxiliaryPanel({
       icon: "users" as const,
     })),
     ...files.map(([, draft]) => ({
-      id: `file:${draft.base.path}`,
+      id: sidebarTabId({ kind: "file", path: draft.base.path }),
       title: draft.base.path.split("/").at(-1)!,
       icon: "file" as const,
       path: draft.base.path,
@@ -345,22 +405,49 @@ export function AuxiliaryPanel({
       icon: panelIcon(panel.pluginId),
     })),
   ];
+  for (const tab of candidates) {
+    tab.id = scopedId(tab.id);
+    tab.resourceThreadId = threadId;
+  }
   const available = new Map(candidates.map((tab) => [tab.id, tab]));
-  const ids = [
-    ...new Set([
-      ...order,
-      ...candidates
-        .filter((tab) => tab.path || tab.browser || tab.externalBrowser)
-        .map((tab) => tab.id),
-      ...(selectedTab && available.has(selectedTab) ? [selectedTab] : []),
-    ]),
-  ].filter((id) => available.has(id));
+  for (const descriptor of presentationState?.tabs ?? []) {
+    const id = sidebarTabId(descriptor);
+    const resource = descriptor.resourceThreadId ?? threadId;
+    const existing = available.get(id);
+    available.set(id, {
+      ...existing,
+      id,
+      descriptor,
+      resourceThreadId: resource,
+      title:
+        existing?.title ??
+        (descriptor.kind === "file"
+          ? descriptor.path.split("/").at(-1)!
+          : descriptor.kind === "webpage"
+            ? descriptor.url
+            : descriptor.kind),
+      icon: existing?.icon ?? (descriptor.kind === "file" ? "file" : "browser"),
+      ...(descriptor.kind === "file" ? { path: descriptor.path } : {}),
+    });
+  }
+  const ids = presentationState
+    ? presentationState.tabs.map(sidebarTabId)
+    : [
+        ...new Set([
+          ...order,
+          ...candidates
+            .filter((tab) => tab.path || tab.browser || tab.externalBrowser)
+            .map((tab) => tab.id),
+          ...(selectedTab && available.has(selectedTab) ? [selectedTab] : []),
+        ]),
+      ].filter((id) => available.has(id));
   const signature = JSON.stringify(ids);
   const browserListReady =
     threadId === undefined ||
     !window.zenx.workspaceBrowser ||
     browserListThread === threadId;
   useEffect(() => {
+    if (presentationState) return;
     if (browserListReady && JSON.stringify(order) !== signature)
       setOrder(JSON.parse(signature));
     const selectionKnown = selectedTab?.startsWith("custom:")
@@ -404,6 +491,57 @@ export function AuxiliaryPanel({
     mounted.current &&
     threadIdRef.current === owner &&
     resourceEpoch.current === epoch;
+  const materializing = useRef(new Set<string>());
+  useEffect(() => {
+    const descriptor = selectedDescriptor;
+    if (
+      !open ||
+      choosing ||
+      !threadId ||
+      descriptor?.kind !== "webpage" ||
+      !presentationState ||
+      !onReplaceTab
+    )
+      return;
+    const id = sidebarTabId(descriptor);
+    const owner = threadId;
+    const intent = `${sidebarOwnerKey(presentationState.owner)}:${descriptor.id}`;
+    if (materializing.current.has(intent)) return;
+    materializing.current.add(intent);
+    void window.zenx.workspaceBrowser
+      .command(owner, "materialize", intent, descriptor.url)
+      .then(async (value) => {
+        const tab = value.at(-1);
+        if (!tab) return;
+        // The owner controller, not a mounted snapshot, decides whether this
+        // intent or its idempotent native tab is still retained in any window.
+        const retained = await onReplaceTab(id, {
+          kind: "browser",
+          id: tab.id,
+          ...(descriptor.resourceThreadId
+            ? { resourceThreadId: descriptor.resourceThreadId }
+            : {}),
+        });
+        if (retained === false)
+          await window.zenx.workspaceBrowser.command(owner, "close", tab.id);
+        else if (mounted.current && threadIdRef.current === owner) {
+          setBrowserTabs(value);
+          setBrowserListThread(owner);
+        }
+      })
+      .catch((reason) => {
+        if (mounted.current) setError(String(reason));
+      })
+      .finally(() => materializing.current.delete(intent));
+  }, [
+    open,
+    choosing,
+    threadId,
+    selectedTab,
+    selectedDescriptor,
+    presentationState,
+    onReplaceTab,
+  ]);
   const showChooser = choosing || tabs.length === 0;
   const fileSurface =
     (!showChooser && active?.startsWith("file:")) ||
@@ -458,7 +596,7 @@ export function AuxiliaryPanel({
     setChoosing(false);
     setPickingFile(false);
     setError("");
-    onSelectTab(id);
+    onSelectTab(available.has(id) ? id : scopedId(id));
   };
   useLayoutEffect(() => {
     // Host SDK panel requests can change selection without calling select().
@@ -600,7 +738,7 @@ export function AuxiliaryPanel({
             following.suppressed = true;
             return;
           }
-          automaticSelection.current = following.tabId;
+          automaticSelection.current = scopedIdRef.current(following.tabId);
           setPresentation(undefined);
           setChoosing(false);
           setPickingFile(false);
@@ -669,7 +807,9 @@ export function AuxiliaryPanel({
         void api.declinePresentation(request.requestId).catch(() => undefined);
         return;
       }
-      automaticSelection.current = `browser:${request.tab.id}`;
+      automaticSelection.current = scopedIdRef.current(
+        `browser:${request.tab.id}`,
+      );
       setBrowserTabs((tabs) => [
         ...tabs.filter((tab) => tab.id !== request.tab.id),
         request.tab,
@@ -713,7 +853,7 @@ export function AuxiliaryPanel({
     }
     following.suppressed = false;
     setPresentation(undefined);
-    automaticSelection.current = following.tabId;
+    automaticSelection.current = scopedIdRef.current(following.tabId);
     onSelectTab(automaticSelection.current);
     onOpenChange(true);
     setChoosing(false);
@@ -768,7 +908,7 @@ export function AuxiliaryPanel({
     const current = drafts.snapshot().get(key);
     if (!current || (!isFileDirty(current) && !current.saving))
       drafts.set(key, { base: value, text: value.text });
-    select(`file:${value.path}`);
+    select(sidebarTabId({ kind: "file", path: value.path }));
   };
   const handledLink = useRef<number | null>(null);
   useEffect(() => {
@@ -818,6 +958,10 @@ export function AuxiliaryPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messageLinkRequest?.id, threadId]);
   const remove = (id: string, expectedEpoch?: number) => {
+    if (onRemoveTab) {
+      onRemoveTab(id);
+      return;
+    }
     const currentIds = idsRef.current;
     const currentOrder = orderRef.current;
     const source = currentOrder.includes(id) ? currentOrder : currentIds;
@@ -837,8 +981,9 @@ export function AuxiliaryPanel({
     const bindingEpoch = resourceEpoch.current;
     let operationEpoch: number | undefined;
     if (tab.path) {
-      if (threadId === undefined) return;
-      const key = fileDraftKey(threadId, tab.path);
+      const owner = tab.resourceThreadId ?? threadId;
+      if (owner === undefined) return;
+      const key = fileDraftKey(owner, tab.path);
       const draft = drafts.snapshot().get(key);
       if (draft && (isFileDirty(draft) || draft.saving)) {
         if (draft.conflict || draft.error) {
@@ -846,25 +991,44 @@ export function AuxiliaryPanel({
           setError("__zenx_file_save_blocked__");
           return;
         }
-        drafts.closeAfterSave(key, (text, revision) =>
-          window.zenx.workspaceFiles.save(threadId, tab.path!, text, revision),
+        drafts.closeAfterSave(
+          key,
+          (text, revision) =>
+            window.zenx.workspaceFiles.save(owner, tab.path!, text, revision),
+          () => remove(tab.id),
         );
         return;
       }
       drafts.remove(key);
-    } else if (tab.browser) {
-      if (threadId === undefined) return;
+    } else if (tab.browser || tab.descriptor?.kind === "browser") {
+      const owner = tab.resourceThreadId ?? threadId;
+      const browserId =
+        tab.browser?.id ??
+        (tab.descriptor?.kind === "browser" ? tab.descriptor.id : undefined);
+      if (!owner || !browserId) return;
+      // An unavailable member's descriptor may be dismissed, but must not execute
+      // against a different selected member or a departed member's resources.
+      if (
+        roomContext &&
+        !roomContext.resourceThreads?.some(
+          (member) => member.threadId === owner,
+        ) &&
+        roomContext.resourceThread?.threadId !== owner
+      ) {
+        remove(tab.id);
+        return;
+      }
       operationEpoch = selectionEpoch.current;
       try {
         const value = await window.zenx.workspaceBrowser.command(
-          threadId,
+          owner,
           "close",
-          tab.browser.id,
+          browserId,
         );
-        if (!resourceCurrent(bindingEpoch, threadId)) return;
-        setBrowserTabs(value);
+        if (resourceCurrent(bindingEpoch, owner)) setBrowserTabs(value);
+        else if (!onRemoveTab) return;
       } catch (reason) {
-        if (resourceCurrent(bindingEpoch, threadId)) setError(String(reason));
+        if (mounted.current) setError(String(reason));
         return;
       }
     }
@@ -1011,8 +1175,13 @@ export function AuxiliaryPanel({
                   <span>{tab.title}</span>
                   {tab.path &&
                   threadId !== undefined &&
+                  entries.has(
+                    fileDraftKey(tab.resourceThreadId ?? threadId, tab.path),
+                  ) &&
                   isFileDirty(
-                    entries.get(fileDraftKey(threadId, tab.path))!,
+                    entries.get(
+                      fileDraftKey(tab.resourceThreadId ?? threadId, tab.path),
+                    )!,
                   ) ? (
                     <span
                       className="workspace-tab-dirty"
@@ -1031,8 +1200,12 @@ export function AuxiliaryPanel({
                   title={i18n.t("panels:closeTabNamed", { title: tab.title })}
                   disabled={
                     tab.path && threadId !== undefined
-                      ? entries.get(fileDraftKey(threadId, tab.path))
-                          ?.closing === true
+                      ? entries.get(
+                          fileDraftKey(
+                            tab.resourceThreadId ?? threadId,
+                            tab.path,
+                          ),
+                        )?.closing === true
                       : false
                   }
                   onClick={() => void closeTab(tab)}
@@ -1131,7 +1304,9 @@ export function AuxiliaryPanel({
               threadId={threadId}
               workspacePath={workspacePath}
               selectedPath={
-                active?.startsWith("file:") ? active.slice(5) : undefined
+                active?.startsWith("file:")
+                  ? available.get(active)?.path
+                  : undefined
               }
               navigation={!pickingFile}
               onOpen={openFile}
@@ -1349,7 +1524,7 @@ export function AuxiliaryPanel({
           {tabs.map((tab) => {
             const visible = !showChooser && active === tab.id;
             const panel = panels.find(
-              (value) => `plugin:${value.key}` === tab.id,
+              (value) => scopedId(`plugin:${value.key}`) === tab.id,
             );
             const conversation = conversations.find(
               (value) => `thread:${value.threadId}` === tab.id,
@@ -1389,9 +1564,14 @@ export function AuxiliaryPanel({
                   </div>
                 ) : null}
                 {tab.render ? tab.render() : null}
-                {tab.path && threadId !== undefined ? (
+                {visible && selectedResource && !roomResource ? (
+                  <p role="status">
+                    This resource's Thread is no longer available in this Room.
+                  </p>
+                ) : null}
+                {tab.path && threadId !== undefined && open && visible ? (
                   <WorkspaceFilesPanel
-                    threadId={threadId}
+                    threadId={tab.resourceThreadId ?? threadId}
                     drafts={drafts}
                     workspacePath={workspacePath}
                     initialPath={tab.path}
@@ -1435,14 +1615,18 @@ export function AuxiliaryPanel({
                     }
                   />
                 ) : null}
-                {tab.id === "terminal" && threadId !== undefined ? (
+                {(tab.descriptor?.kind === "terminal" ||
+                  tab.id === "terminal") &&
+                threadId !== undefined ? (
                   <ShellThreadPanel
                     key={threadId}
                     threadId={threadId}
                     active={open === true && visible}
                   />
                 ) : null}
-                {tab.id === "computer" && threadId !== undefined ? (
+                {(tab.descriptor?.kind === "computer" ||
+                  tab.id === "computer") &&
+                threadId !== undefined ? (
                   <ComputerThreadPanel
                     threadId={threadId}
                     active={open === true && visible}

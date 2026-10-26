@@ -17,7 +17,7 @@ import {
 } from "../scripts/pack-first-party-plugins.mjs";
 import { firstPartyProviderTarball } from "../src/main/first-party-profile-loader.ts";
 import { browserCapabilityManifest } from "../src/main/capabilities/browser-provider.ts";
-import { computerCapabilityManifest } from "../src/main/capabilities/computer-provider.ts";
+import { boundComputerCapabilityManifest } from "../src/main/capabilities/computer-provider.ts";
 import { windowsStrictUiaCapabilityManifest } from "../src/main/capabilities/windows-strict-uia-provider.ts";
 import { windowsComputerCapabilityManifest } from "../src/main/capabilities/windows-computer-provider.ts";
 import {
@@ -43,12 +43,12 @@ const expected = [
   ["@zenx/browser-plugin", "zenx-browser-plugin-concurrent-1.0.7.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.5.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.6.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.0.2.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.1.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.1.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.5.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-strict-1.2.0.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.8.tgz"],
-  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
+  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.1.0.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.1.tgz"],
 ];
 
@@ -78,8 +78,8 @@ const providerVariants = new Map([
     ["browser", "1.0.6", "user-browser-cdp", 12],
   ],
   [
-    "zenx-computer-plugin-macos-1.0.2.tgz",
-    ["computer", "1.0.2", "macos-desktop", 8],
+    "zenx-computer-plugin-macos-1.1.0.tgz",
+    ["computer", "1.1.0", "macos-desktop", 11],
   ],
   [
     "zenx-computer-plugin-peekaboo-1.0.1.tgz",
@@ -152,7 +152,7 @@ test("all packaged Browser and Computer manifests match their runtime observatio
       "zenx-browser-plugin/variants/user-session.zenx.plugin.json",
       userSession.manifest,
     ],
-    ["zenx-computer-plugin/zenx.plugin.json", computerCapabilityManifest],
+    ["zenx-computer-plugin/zenx.plugin.json", boundComputerCapabilityManifest],
     [
       "zenx-computer-plugin/variants/peekaboo.zenx.plugin.json",
       peekaboo.manifest,
@@ -362,7 +362,7 @@ test("Host provider selection maps every real manifest variant deterministically
       "zenx-browser-plugin-multi-1.0.8.tgz",
       "zenx-browser-plugin-playwright-1.0.5.tgz",
       "zenx-browser-plugin-user-session-1.0.6.tgz",
-      "zenx-computer-plugin-macos-1.0.2.tgz",
+      "zenx-computer-plugin-macos-1.1.0.tgz",
       "zenx-computer-plugin-peekaboo-1.0.1.tgz",
       "zenx-computer-plugin-win32-1.1.5.tgz",
     ],

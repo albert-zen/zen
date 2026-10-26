@@ -1,6 +1,6 @@
 {
   "id": "zenx-self-control",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "List derived workspaces and control Zen Threads through typed App Server requests.",
   "provider": {
     "id": "zenx-app-server",
@@ -587,6 +587,128 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.threads.read"],
       "maxOutputBytes": 32768
+    },
+    {
+      "name": "zenx_self_control_sidebar_read",
+      "description": "Read the effective Thread or Room persisted sidebar presentation: revision, open/fullscreen, ordered typed tabs and selectedTab. This is state, not evidence of screen visibility. Default is the unique dedicated PAW Room binding, otherwise your private Thread. Explicit scope may be your private Thread or a Room whose membership is checked live. Multiple dedicated bindings require an explicit scope. Response reports effectiveScope/defaultReason/authorizedScopes; never infer the default from visible UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["thread", "room"]
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "id"],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.workspace-read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.read"],
+      "maxOutputBytes": 524288
+    },
+    {
+      "name": "zenx_self_control_sidebar_update",
+      "description": "Update authorized Thread/Room sidebar state using expectedRevision from sidebar_read. Runs even while another Thread is foreground; never switches focus or opens content in the background. tabs replaces ordered descriptors (max 64); preserve tabs you want to keep. selectedTab uses IDs returned by read: file:path, webpage:intentId, plugin:pluginId:panelId, thread:threadId, browser:id, terminal or computer. Omit webpage id to mint a stable persisted intent ID; duplicate URLs with different IDs are distinct tabs. Read returned IDs before selecting a newly minted tab. Room resource descriptors bind to your caller Thread, not another member; preserve existing descriptors unchanged. File paths are normalized workspace-relative paths (not absolute); file/webpage contents load through existing controls only when selected and visible. Conflict returns applied:false plus current state; read/reconsider rather than blindly overwrite. Does not save/discard file edits.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["thread", "room"]
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "id"],
+            "additionalProperties": false
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "patch": {
+            "type": "object",
+            "properties": {
+              "open": {
+                "type": "boolean"
+              },
+              "fullscreen": {
+                "type": "boolean"
+              },
+              "tabs": {
+                "type": "array",
+                "maxItems": 64,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "file",
+                        "webpage",
+                        "browser",
+                        "external-browser",
+                        "plugin",
+                        "thread",
+                        "terminal",
+                        "computer",
+                        "custom"
+                      ]
+                    },
+                    "resourceThreadId": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "pluginId": {
+                      "type": "string"
+                    },
+                    "panelId": {
+                      "type": "string"
+                    },
+                    "threadId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind"],
+                  "additionalProperties": false
+                }
+              },
+              "selectedTab": {
+                "type": ["string", "null"]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["expectedRevision", "patch"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-self-control.local-device-control"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.threads.control"],
+      "maxOutputBytes": 524288
     }
   ],
   "schemaVersion": 2,

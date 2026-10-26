@@ -73,7 +73,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-macos-1.0.2.tgz",
+    "zenx-computer-plugin-macos-1.1.0.tgz",
   ),
   plugin(
     "@zenx/computer-plugin",
@@ -97,7 +97,7 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/self-control-plugin",
     "zenx-self-control-plugin",
-    "zenx-self-control-plugin-1.0.1.tgz",
+    "zenx-self-control-plugin-1.1.0.tgz",
   ),
   plugin(
     "@zenx/triggers-plugin",
