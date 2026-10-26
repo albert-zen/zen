@@ -289,7 +289,7 @@ test("context usage renders beside the composer with concise usage and cache det
   );
   assert.match(
     html,
-    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 50%/u,
+    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate 50%/u,
   );
   assert.match(html, /aria-haspopup="dialog"/u);
   assert.match(html, /aria-expanded="false"/u);
@@ -595,7 +595,7 @@ test("context pressure above the configured window keeps the real percent in its
     }),
   );
   assert.match(html, /Context 216%/u);
-  assert.match(html, /Thread cache 96%/u);
+  assert.match(html, /Thread cache hit rate 96%/u);
   assert.match(html, /587\.5K \/ 272K tokens/u);
   assert.doesNotMatch(html, /last provider|configured window/u);
   assert.match(html, /stroke-dasharray="1 1"/u);
@@ -1114,7 +1114,7 @@ test("real compaction request rejection stays with its Thread, ignores stale com
   });
 });
 
-test("context tooltip exposes exact zero and unknown Thread cache rates", () => {
+test("context tooltip exposes exact zero and unknown Thread cache hit rate rates", () => {
   const zero = renderTurns(
     [],
     [],
@@ -1138,7 +1138,7 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
   );
   assert.match(
     zero,
-    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 0%/u,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate 0%/u,
   );
 
   const unknown = renderTurns(
@@ -1159,7 +1159,7 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
   );
   assert.match(
     unknown,
-    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache unknown/u,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate unknown/u,
   );
 });
 
@@ -2098,7 +2098,7 @@ test("renders compact token-weighted cache usage for each Turn, not the message 
     },
   );
 
-  assert.doesNotMatch(html, /Thread cache 33% · 200 in · 25 out/u);
+  assert.doesNotMatch(html, /Thread cache hit rate 33% · 200 in · 25 out/u);
   assert.match(html, /Cache 40% · 150 in · 17 out/u);
   assert.match(html, /Cache unknown · 50 in · 8 out/u);
   assert.doesNotMatch(html, /Cache 0% · 50 in/u);

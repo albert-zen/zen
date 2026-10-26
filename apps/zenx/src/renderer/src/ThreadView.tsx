@@ -2585,7 +2585,6 @@ function TurnBlock({
     disclosureKey("turn", turn.id),
   );
   const [protectedOpen, setProtectedOpen] = useState(false);
-  const [inspecting, setInspecting] = useState(false);
   const previousStatus = useRef(turn.status);
   // selectionchange is queued by browsers. Observe the still-mounted history
   // before a terminal render could remove the user's selected/focused node.
@@ -2601,16 +2600,15 @@ function TurnBlock({
           !!active.closest(".turn-history") &&
           !!sectionRef.current?.contains(active)))
     ) {
-      setInspecting(true);
       setProtectedOpen(true);
     }
   }
+  // Selecting/copying the visible answer is not a request to reveal history.
+  // Only preserve an already-visible selection at the running → terminal edge.
   const expanded =
     protectedOpen ||
     (expandedOverride ??
-      (turn.status === "failed" ||
-        turn.status === "interrupted" ||
-        inspecting));
+      (turn.status === "failed" || turn.status === "interrupted"));
   const complete = turn.status !== "inProgress";
   const compactRunningStatus =
     !turn.liveRecovery &&
@@ -2618,25 +2616,6 @@ function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "running" && activity.active > 0) ||
       activity.phase === "thinking");
-  useEffect(() => {
-    const preserve = () => {
-      const active = document.activeElement;
-      setInspecting(
-        transcriptHasSelection(sectionRef.current) ||
-          (active instanceof Element &&
-            !!active.closest(".turn-history") &&
-            !!sectionRef.current?.contains(active)),
-      );
-    };
-    document.addEventListener("selectionchange", preserve);
-    document.addEventListener("focusin", preserve);
-    document.addEventListener("focusout", preserve);
-    return () => {
-      document.removeEventListener("selectionchange", preserve);
-      document.removeEventListener("focusin", preserve);
-      document.removeEventListener("focusout", preserve);
-    };
-  }, []);
   const reviewActivity = () => {
     setExpanded(true);
     requestAnimationFrame(() => {
@@ -3173,7 +3152,7 @@ export function ContextUsageIndicator({
             aria-label={i18n.t("shell:contextDetails")}
           >
             <div className="context-usage-heading">
-              <span>{i18n.t("shell:contextWindowUsed")}</span>
+              <span>{i18n.t("shell:contextCompactTitle")}</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
@@ -3185,9 +3164,50 @@ export function ContextUsageIndicator({
               aria-valuenow={visualPercent}
               aria-valuetext={contextLabel}
             >
-              <span style={{ width: `${String(visualPercent)}%` }} />
+              {context.estimate ? (
+                (
+                  [
+                    "instructions",
+                    "toolDefinitions",
+                    "pluginContext",
+                    "conversation",
+                  ] as const
+                ).map((category) => (
+                  <span
+                    key={category}
+                    data-category={category}
+                    style={{
+                      width: `${context.estimate!.total > 0 ? (visualRatio * 100 * context.estimate![category]) / context.estimate!.total : 0}%`,
+                    }}
+                  />
+                ))
+              ) : (
+                <span style={{ width: `${String(visualPercent)}%` }} />
+              )}
             </div>
             <p>{tokenUsage}</p>
+            {context.estimate ? (
+              <>
+                <dl className="context-usage-breakdown">
+                  {(
+                    [
+                      "instructions",
+                      "toolDefinitions",
+                      "pluginContext",
+                      "conversation",
+                    ] as const
+                  ).map((category) => (
+                    <div key={category} data-category={category}>
+                      <dt>
+                        <i aria-hidden="true" />
+                        {i18n.t(`shell:contextCategory.${category}`)}
+                      </dt>
+                      <dd>{formatTokenCount(context.estimate![category])}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </>
+            ) : null}
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
             <button
               className="context-usage-compact"

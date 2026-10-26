@@ -9,6 +9,11 @@ import test from "node:test";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  JsonPluginStorage,
+  createZenXPluginHostSdk,
+  type ZenXPluginHostSdkV1,
+} from "../src/main/plugin-host-sdk.js";
 import { ZenAppServer } from "../../../src/app-server.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
@@ -1311,5 +1316,240 @@ test("closed plugin stdin rejects invocation without an unhandled EPIPE and clos
     );
   } finally {
     await runtime.close();
+  }
+});
+
+test("Catalog replacement failure preserves committed old storage and successful replacement fences draining calls", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-catalog-storage-"));
+  const environment = new ToolEnvironment();
+  const supervisor = new PluginRuntimeSupervisor(environment);
+  const sdks: ZenXPluginHostSdkV1[] = [];
+  let failStart = false;
+  let failSave = false;
+  let failActivation = false;
+  let activationWrite: Promise<void> | undefined;
+  let persisted: ZenXPluginCatalogState | undefined;
+  const storageStages: Array<{ rollback(): Promise<void> }> = [];
+  const observedSnapshots: ZenXPluginSnapshot[] = [];
+  const held = deferred<void>();
+  const entered = deferred<void>();
+  let holdInvocation = false;
+  const registry = new ZenXPluginCatalog(
+    {
+      load: async () => emptyCapabilityConfiguration(),
+      save: async (state) => {
+        if (failSave) throw new Error("synthetic catalog save failure");
+        persisted = structuredClone(state);
+      },
+    },
+    {
+      pluginRuntimeLifecycle: new CatalogPluginRuntimeLifecycle({
+        supervisor,
+        hostSdkFor: async () => {
+          const staged = await JsonPluginStorage.prepare({
+            pluginId: "fixture",
+            root,
+            version: 1,
+            initialValue: { count: 0 },
+          });
+          const sdk = await createZenXPluginHostSdk({
+            pluginId: "fixture",
+            storageRoot: root,
+            storageVersion: 1,
+            storage: staged.storage,
+            queryProjects: async () => [],
+            appServer: {
+              completeTurn: async () => {
+                throw new Error("unused");
+              },
+            },
+          });
+          sdks.push(sdk);
+          storageStages.push(staged);
+          return { sdk, publish: staged.publish, rollback: staged.rollback };
+        },
+        registrationFor: (registration) => {
+          const runtime = bundledPackageRegistration(registration);
+          return {
+            ...runtime,
+            start: async (sdk) => {
+              assert(sdk);
+              if (failStart) {
+                await sdk.storage.set({ candidateOnly: true });
+                throw new Error("synthetic runtime start failure");
+              }
+              const started = await runtime.start(sdk);
+              return {
+                identity: started.identity,
+                activate: () => {
+                  if (failActivation) {
+                    activationWrite = sdk.storage.set({
+                      count: 42,
+                      postCommit: true,
+                    });
+                    throw new Error("synthetic activation failure");
+                  }
+                },
+                close: async () => await started.close(),
+                invoke: async () => {
+                  if (holdInvocation) {
+                    entered.resolve();
+                    await held.promise;
+                  }
+                  await sdk.storage.set({ count: 999 });
+                  return { output: "written", exitCode: 0 };
+                },
+              };
+            },
+          };
+        },
+      }),
+    },
+  );
+  try {
+    registry.onChange((snapshot) => observedSnapshots.push(snapshot));
+    await registry.initialize();
+    await registry.install(pluginPackage(), "bundled");
+    const old = sdks[0]!;
+    await old.storage.set({ count: 1 });
+    const next = () => ({
+      ...pluginPackage(),
+      manifest: { ...pluginManifest(), version: "2.0.0" },
+    });
+    failStart = true;
+    await assert.rejects(
+      registry.update(next(), "bundled", {
+        generation: "fixture-generation-2",
+        packageName: "fixture",
+        source: {
+          mode: "bundled",
+          packageSpec: "fixture",
+          resolvedSpec: "fixture",
+          packageName: "fixture",
+          packageVersion: "2.0.0",
+        },
+      }),
+      /synthetic runtime start failure/,
+    );
+    assert.deepEqual(await old.storage.get(), { count: 1 });
+    failStart = false;
+    await old.storage.set({ count: 2 });
+    failSave = true;
+    await assert.rejects(
+      registry.update(next(), "bundled", {
+        generation: "fixture-generation-2",
+        packageName: "fixture",
+        source: {
+          mode: "bundled",
+          packageSpec: "fixture",
+          resolvedSpec: "fixture",
+          packageName: "fixture",
+          packageVersion: "2.0.0",
+        },
+      }),
+      /synthetic catalog save failure/,
+    );
+    assert.deepEqual(await old.storage.get(), { count: 2 });
+    failSave = false;
+    holdInvocation = true;
+    const draining = supervisor.invoke(
+      "fixture",
+      runtimeInvocation("fixture_echo", "held-old"),
+    );
+    const failedDraining = assert.rejects(draining, /generation was replaced/);
+    await entered.promise;
+    await registry.update(next(), "bundled", {
+      generation: "fixture-generation-2",
+      packageName: "fixture",
+      source: {
+        mode: "bundled",
+        packageSpec: "fixture",
+        resolvedSpec: "fixture",
+        packageName: "fixture",
+        packageVersion: "2.0.0",
+      },
+    });
+    held.resolve();
+    await failedDraining;
+    assert.deepEqual(await sdks.at(-1)!.storage.get(), { count: 2 });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(root, "fixture/storage.json"), "utf8"),
+      ),
+      { version: 1, value: { count: 2 } },
+    );
+    const previousSdk = sdks.at(-1)!;
+    failActivation = true;
+    await registry.update(
+      {
+        ...pluginPackage(),
+        manifest: { ...pluginManifest(), version: "3.0.0" },
+      },
+      "bundled",
+      {
+        generation: "fixture-generation-3",
+        packageName: "fixture",
+        source: {
+          mode: "bundled",
+          packageSpec: "fixture",
+          resolvedSpec: "fixture",
+          packageName: "fixture",
+          packageVersion: "3.0.0",
+        },
+      },
+    );
+    await activationWrite;
+    const failed = registry
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === "fixture")!;
+    assert.equal(failed.version, "3.0.0");
+    assert.equal(failed.enabled, true);
+    assert.equal(failed.available, false);
+    assert.match(
+      failed.unavailableReason!,
+      /committed but activation failed.*synthetic activation failure/,
+    );
+    assert.deepEqual(
+      observedSnapshots
+        .at(-1)
+        ?.plugins.find((plugin) => plugin.id === "fixture"),
+      failed,
+    );
+    assert.equal(persisted?.packages?.fixture?.manifest.version, "3.0.0");
+    assert.equal(persisted?.profileGeneration, "fixture-generation-3");
+    assert.equal(
+      registry
+        .hostSnapshot()
+        .pluginReadiness?.find((plugin) => plugin.id === "fixture")?.available,
+      false,
+    );
+    assert.deepEqual(registry.availablePlugins(), []);
+    await assert.rejects(
+      supervisor.invoke(
+        "fixture",
+        runtimeInvocation("fixture_echo", "failed-activation"),
+      ),
+      /committed but activation failed/,
+    );
+    await assert.rejects(
+      previousSdk.storage.set({ count: -1 }),
+      /generation was replaced/,
+    );
+    await storageStages.at(-1)!.rollback();
+    await storageStages.at(-2)!.rollback();
+    assert.deepEqual(await sdks.at(-1)!.storage.get(), {
+      count: 42,
+      postCommit: true,
+    });
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(root, "fixture/storage.json"), "utf8"),
+      ),
+      { version: 1, value: { count: 42, postCommit: true } },
+    );
+  } finally {
+    held.resolve();
+    await supervisor.close();
+    await rm(root, { recursive: true, force: true });
   }
 });

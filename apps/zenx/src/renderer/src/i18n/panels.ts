@@ -19,6 +19,7 @@ export const en = {
   externalManageBusy: "Waiting for application selection…",
   externalApplicationPath: "Application path",
 
+  openMessageFile: "Open file",
   browserOperationFailed:
     "The browser operation failed or its outcome is uncertain. Check the tool result before continuing.",
   externalReadOnly: "External · read-only",
@@ -995,6 +996,7 @@ export const zhCN = {
   externalManageBusy: "正在等待应用选择…",
   externalApplicationPath: "应用路径",
 
+  openMessageFile: "打开文件",
   browserOperationFailed: "浏览器操作失败或结果不确定。继续前请检查工具结果。",
   externalReadOnly: "外部 · 只读",
   browserAgentWorking: "Agent 正在操作此页面",

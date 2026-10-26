@@ -178,6 +178,7 @@ test("autolink cleanup stays out of explicit anchors, mail, files and code", asy
         "mailto:owner@example.test?subject=report%EF%BC%88v2%EF%BC%89",
         "%E6%8A%A5%E5%91%8A%EF%BC%88v2%EF%BC%89.md",
         "https://example.test/a_",
+        "https://example.test/code**%EF%BC%88prose",
       ],
     );
     await act(async () => fixture.anchors[2]!.click());
@@ -228,6 +229,71 @@ test("bare-link cleanup works in nested GFM blocks and before an unfinished fenc
       fixture.body.querySelector(".markdown-code.streaming code")?.textContent,
       "https://example.test/code（说明）",
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("complete inline-code web URLs preserve code styling and use the message browser route", async () => {
+  const urls = [
+    "http://127.0.0.1:8774",
+    "http://localhost:40123/path?q=one%20two&n=2#section",
+    "https://example.test/report_(v2).html?q=one,two#chapter!",
+    "https://example.test/报告?值=一#标题",
+  ];
+  const fixture = await renderLinks(
+    urls.map((url) => `入口 \`${url}\`。`).join("\n\n"),
+  );
+  try {
+    assert.equal(fixture.anchors.length, urls.length);
+    for (const [index, anchor] of fixture.anchors.entries()) {
+      assert.equal(anchor.querySelector("code")?.textContent, urls[index]);
+      await act(async () => anchor.click());
+    }
+    assert.deepEqual(
+      fixture.opened,
+      urls.map((url) => ({ kind: "browser", value: new URL(url).toString() })),
+    );
+    assert.equal(fixture.body.textContent?.match(/。/gu)?.length, urls.length);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("inline-code URL detection leaves commands, other schemes, email and code blocks inert", async () => {
+  const inert = [
+    "curl https://example.test",
+    "https://example.test one",
+    "https://",
+    "javascript:alert(1)",
+    "data:text/html,hello",
+    "mailto:hello@example.test",
+    "hello@example.test",
+    "ftp://example.test",
+    "//example.test",
+    "https://example.test\u0000x",
+  ];
+  const fixture = await renderLinks(
+    [
+      ...inert.map((value) => `\`${value}\``),
+      "\n```text\nhttps://example.test\n```",
+      "\n```js\nhttps://example.test\n```",
+      "\n    https://example.test\n",
+      "[\`https://label.test\`](https://destination.test)",
+      "\n[mail](mailto:hello@example.test)",
+    ].join("\n\n"),
+  );
+  try {
+    assert.equal(fixture.anchors.length, 2);
+    assert.equal(
+      fixture.anchors[0]?.getAttribute("href"),
+      "https://destination.test/",
+    );
+    assert.equal(
+      fixture.anchors[1]?.getAttribute("href"),
+      "mailto:hello@example.test",
+    );
+    assert.equal(fixture.body.querySelectorAll("a a").length, 0);
   } finally {
     await fixture.close();
   }

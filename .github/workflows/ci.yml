@@ -56,6 +56,18 @@ jobs:
         id: zenx-dependencies
       - name: Install CJK fonts for synthetic UI acceptance
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Capture reference bubble width diagnostic (production components, synthetic identity)
+        run: |
+          node apps/zenx/scripts/build-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
+          node apps/zenx/scripts/capture-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
+      - name: Retain reference width measurements and screenshots
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-reference-width-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-reference-width
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture approved UI previews
         run: |
           node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
@@ -85,6 +97,7 @@ jobs:
           node --import tsx apps/zenx/scripts/capture-inline-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context-v3"
           node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
           node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+          ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-turn-selection-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
       - name: Retain synthetic quote visual evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
