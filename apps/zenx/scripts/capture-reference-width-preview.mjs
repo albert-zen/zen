@@ -110,8 +110,16 @@ await withPreviewBrowser(
       await evaluate(
         "document.querySelector('section .reference-token-details').focus()",
       );
+      assert.ok(
+        await evaluate(
+          "document.activeElement===document.querySelector('section .reference-token-details')",
+        ),
+        "trigger focused before keyboard activation",
+      );
       await send("Input.dispatchKeyEvent", {
         type: "keyDown",
+        text: "\r",
+        unmodifiedText: "\r",
         key: "Enter",
         code: "Enter",
         windowsVirtualKeyCode: 13,
