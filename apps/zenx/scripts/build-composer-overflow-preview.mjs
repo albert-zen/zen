@@ -43,6 +43,7 @@ const inputs = [
     "apps/zenx/scripts/preview-browser.mjs",
     "apps/zenx/scripts/preview-browser-lifecycle.mjs",
     ".github/workflows/composer-overflow.yml",
+    "apps/zenx/scripts/prepare-cjk-fonts.mjs",
   ]),
 ].sort();
 await writeFile(

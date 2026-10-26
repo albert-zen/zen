@@ -32,17 +32,36 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Install CJK fonts for synthetic screenshots
+      # Shared authenticated helper; budget 2m resolve + 4m install + 3m capture.
+      # The whole job remains capped at 10m including checkout/dependencies/cache.
+      - name: Test authenticated CJK prerequisite contracts
+        run: node --test apps/zenx/test/cjk-font-prerequisite.test.mjs
+      - name: Resolve CJK font from authenticated Ubuntu package indexes
+        id: cjk-package
         timeout-minutes: 2
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          mkdir -p "${{ runner.temp }}/composer-overflow"
-          fc-match ':lang=zh' | tee "${{ runner.temp }}/composer-overflow/cjk-font.txt"
-          test -n "$(fc-list ':lang=zh' | head -n 1)"
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Restore exact verified CJK package archive
+        id: cjk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Install and verify CJK fonts before Composer capture
+        id: zenx-fonts
+        timeout-minutes: 4
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Cache only the verified CJK package archive
+        if: ${{ steps.zenx-fonts.outcome == 'success' && steps.cjk-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
       - name: Build and exercise the production Composer
+        timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-composer-overflow-preview.mjs "${{ runner.temp }}/composer-overflow"
+          cp "${{ runner.temp }}/zenx-cjk-fonts/package.json" "${{ runner.temp }}/composer-overflow/cjk-package.json"
+          fc-match ':lang=zh' > "${{ runner.temp }}/composer-overflow/cjk-font.txt"
           node --import tsx apps/zenx/scripts/capture-composer-overflow-preview.mjs "${{ runner.temp }}/composer-overflow"
       - name: Retain screenshots and measured geometry
         if: ${{ always() }}
