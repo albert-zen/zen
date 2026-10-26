@@ -16,7 +16,13 @@ export class WorkspaceFileViewport {
     const generation = ++this.#generation;
     let live = true;
     const save = () => {
-      if (!live || generation !== this.#generation) return;
+      if (
+        !live ||
+        generation !== this.#generation ||
+        !view.dom.isConnected ||
+        view.scrollDOM.clientHeight === 0
+      )
+        return;
       this.#snapshot = view.scrollSnapshot();
       if (this.#doc !== view.state.doc) {
         this.#doc = view.state.doc;

@@ -18,6 +18,7 @@ function fixture(text: string, top = 0, left = 0) {
   const snapshot = {};
   let measure: any;
   const view = {
+    dom: { isConnected: true },
     state: { doc: { toString: () => text } },
     scrollDOM,
     scrollSnapshot: () => snapshot,
@@ -100,4 +101,21 @@ test("same-file rebind fences older cleanup and scrolling does not flatten an un
     "old cleanup cannot overwrite newer binding",
   );
   releaseFresh();
+});
+
+test("detached passive-effect cleanup cannot overwrite the last visible scroll snapshot with zero", () => {
+  const position = new WorkspaceFileDrafts().viewport(
+    fileDraftKey("A", "file.ts"),
+  );
+  const f = fixture("text", 700, 400);
+  const release = position.bind(f.view);
+  f.scrollDOM.dispatchEvent(new Event("scroll"));
+  const saved = position.initial("text");
+  Object.assign(f.view.dom, { isConnected: false });
+  f.scrollDOM.scrollTop = 0;
+  f.scrollDOM.scrollLeft = 0;
+  f.view.scrollSnapshot = () =>
+    ({}) as ReturnType<EditorView["scrollSnapshot"]>;
+  release();
+  assert.equal(position.initial("text"), saved);
 });

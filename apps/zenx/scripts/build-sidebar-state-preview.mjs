@@ -47,6 +47,10 @@ await writeFile(
   `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'"><title>ZenX Thread and Room sidebar state · synthetic component preview</title><style>${css}</style></head><body><div id="root"></div><script>${js.replaceAll("</script", "<\\/script")}</script></body></html>`,
 );
 const sources = [
+  "src/renderer/src/SourceEditor.tsx",
+  "src/renderer/src/InlineMarkdownEditor.tsx",
+  "src/renderer/src/workspace-file-viewport.ts",
+  "src/renderer/src/workspace-file-drafts.ts",
   "src/thread-sidebar-state.ts",
   "src/renderer/src/auxiliary-panel.tsx",
   "src/renderer/src/use-thread-sidebar.ts",
