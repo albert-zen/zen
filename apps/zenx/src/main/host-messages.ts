@@ -1,3 +1,9 @@
+import {
+  validateHostModelOperationRequest,
+  type HostModelOperationRequest,
+  type HostModelOperationResult,
+  type HostModelOperationHistory,
+} from "./model-operation-messages.js";
 import { validateModelRequestDebugCommand } from "../../../../apps/cli/src/model-request-debug.js";
 import type {
   ModelRequestDebugCommand,
@@ -65,6 +71,13 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
 
 export type HostCommand =
+  | {
+      type: "model-operation/run";
+      requestId: string;
+      request: HostModelOperationRequest;
+    }
+  | { type: "model-operation/cancel"; requestId: string }
+  | { type: "model-operation/history"; requestId: string; threadId?: string }
   | {
       type: "model-debug/request";
       requestId: string;
@@ -151,6 +164,18 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | {
+      type: "model-operation/result";
+      requestId: string;
+      result?: HostModelOperationResult;
+      error?: string;
+    }
+  | {
+      type: "model-operation/history-result";
+      requestId: string;
+      result?: HostModelOperationHistory;
+      error?: string;
+    }
   | {
       type: "model-debug/result";
       requestId: string;
@@ -319,6 +344,21 @@ export function isHostCommand(value: unknown): value is HostCommand {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "model-operation/run") {
+    try {
+      validateHostModelOperationRequest(fleet.request);
+      return typeof fleet.requestId === "string";
+    } catch {
+      return false;
+    }
+  }
+  if (fleet.type === "model-operation/cancel")
+    return typeof fleet.requestId === "string";
+  if (fleet.type === "model-operation/history")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.threadId === undefined || typeof fleet.threadId === "string")
+    );
   if (fleet.type === "model-debug/request") {
     try {
       validateModelRequestDebugCommand(fleet.input);
@@ -437,6 +477,14 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (
+    fleet.type === "model-operation/result" ||
+    fleet.type === "model-operation/history-result"
+  )
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
   if (fleet.type === "model-debug/result")
     return (
       typeof fleet.requestId === "string" &&

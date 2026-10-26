@@ -1,4 +1,54 @@
 export const en = {
+  modelDebugOperation: "Auxiliary operation",
+  debugOperationProbe: "Image capability probe",
+  debugOperations: "System operation histories",
+  debugOperationsNote:
+    "Read-only probe histories, separate from chats. Titles remain in their source Thread history. The model_operation Item records the actual provider/model selection; container defaults are not execution evidence.",
+  debugOperationsEmpty: "No recorded probe histories.",
+  debugOperationsUnavailable:
+    "Operation history unavailable. Refresh to retry.",
+
+  messageDebugRelated: "Related materialized content in this history",
+  messageDebugOrigin: "Origin / role / purpose",
+  messageDebugSources: "Canonical source Items",
+  messageDebugHostDiagnostic: "Host diagnostic",
+  messageDebugHostPart: "Host-authored metadata",
+  messageDebugSampleRequest: "Optional: this sample’s captured requests",
+  messageDebugItemType: "Source Item type",
+  messageDebugRecordedAt: "Item recorded at (metadata)",
+  messageDebugPartSource: "Saved part provenance",
+  messageDebugLegacy:
+    "Legacy Item: displaying saved content without a content-authority declaration. Missing parts and past provider input cannot be reconstructed.",
+
+  messageDebugOpen: "Inspect message input",
+  messageDebugTitle: "Message input",
+  messageDebugClose: "Close message input",
+  messageDebugExperiment: "CANONICAL ITEM HISTORY",
+  messageDebugScope:
+    "Read-only canonical history. Content is available without request capture. Optional transport observations are separate and never enable capture or resend input.",
+  messageDebugSaved: "Canonical content",
+  messageDebugSavedNote:
+    "Saved content, in text-part order, without reconstructing or adding metadata. The original Item remains available below.",
+  messageDebugCaptured: "Optional: observed provider message",
+  messageDebugCaptureNote:
+    "Explicit serializer attribution, not text matching. Each entry is one observed sample/transport attempt; observation before transport does not prove server receipt.",
+  messageDebugUnavailable:
+    "Capture unavailable, expired, or attribution ambiguous. Refresh to check again.",
+  messageDebugLoading: "Reading local capture…",
+  messageDebugOff:
+    "Request capture is off. Enable it explicitly in the thread debugger before a future request; past requests cannot be recovered.",
+  messageDebugNoCapture:
+    "No retained attributed capture. It may not have been captured, may have expired, or may have been omitted after compaction. Unsupported adapters do not claim an actual provider field.",
+  messageDebugRedacted: "redacted",
+  messageDebugTruncated: "truncated · unavailable",
+  messageDebugRedactedNote:
+    "Actual captured provider field after redaction; not byte-exact original content.",
+  messageDebugObservedNote:
+    "Field extracted from the observed serialized request. JSON whitespace is formatted for reading.",
+  messageDebugPage: "Characters {{start}}–{{end}} / {{total}}",
+  messageDebugFirst: "First page",
+  messageDebugNext: "Next page",
+
   referenceDetails: "Reference details",
   referenceDetailsNamed: "Reference details: {{name}}",
   closeReferenceDetails: "Close reference details",
@@ -949,6 +999,53 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  modelDebugOperation: "辅助操作",
+  debugOperationProbe: "图片能力探测",
+  debugOperations: "系统操作历史",
+  debugOperationsNote:
+    "只读查看独立的探测 history，不混入聊天。标题操作仍在来源线程 history。实际 Provider/模型选择以 model_operation Item 为准，容器默认配置不是执行证据。",
+  debugOperationsEmpty: "没有已记录的探测历史。",
+  debugOperationsUnavailable: "操作历史暂不可读，请刷新重试。",
+
+  messageDebugRelated: "同一 history 中关联的已提交内容",
+  messageDebugOrigin: "来源 / 角色 / 用途",
+  messageDebugSources: "关联的原始 Item",
+  messageDebugHostDiagnostic: "Host 诊断",
+  messageDebugHostPart: "Host 生成的元数据",
+  messageDebugSampleRequest: "可选校验：本次采样的请求捕获",
+  messageDebugItemType: "来源 Item 类型",
+  messageDebugRecordedAt: "Item 记录时间（元数据）",
+  messageDebugPartSource: "已保存的 part 来源",
+  messageDebugLegacy:
+    "旧格式 Item：忠实显示已保存的内容，但没有完整内容权威声明。不补造缺失的 part，也不据此还原历史供应商输入。",
+
+  messageDebugOpen: "查看消息输入",
+  messageDebugTitle: "消息输入",
+  messageDebugClose: "关闭消息输入",
+  messageDebugExperiment: "权威 Item history",
+  messageDebugScope:
+    "只读展示同一份 Item history，无需开启请求捕获。传输观察是独立的可选校验入口，不会开启捕获或重发消息。",
+  messageDebugSaved: "权威消息 content",
+  messageDebugSavedNote:
+    "按 text part 顺序显示已保存的完整内容，不推导或补写元数据。下方可展开原始 Item。",
+  messageDebugCaptured: "可选校验：观察到的供应商消息",
+  messageDebugCaptureNote:
+    "依据序列化时的明确来源映射，不按文字猜测。每项对应一次采样或传输尝试；发送前的观察不能证明服务器已收到。",
+  messageDebugUnavailable: "捕获不可用、已过期或来源映射不唯一。请刷新检查。",
+  messageDebugLoading: "正在读取本机捕获…",
+  messageDebugOff:
+    "请求捕获已关闭。请在后续请求前，通过线程调试器明确开启；无法找回未捕获的历史请求。",
+  messageDebugNoCapture:
+    "没有保留的对应捕获。可能未开启捕获、已过期，或压缩后未包含本消息。不支持的适配器不会冒充实际供应商字段。",
+  messageDebugRedacted: "已脱敏",
+  messageDebugTruncated: "已截断 · 不可读取",
+  messageDebugRedactedNote: "实际捕获字段的脱敏版本，不是逐字节原文。",
+  messageDebugObservedNote:
+    "从序列化请求的观察记录中提取此字段。JSON 空白已格式化以便阅读。",
+  messageDebugPage: "字符 {{start}}–{{end}} / {{total}}",
+  messageDebugFirst: "第一页",
+  messageDebugNext: "下一页",
+
   referenceDetails: "引用详情",
   referenceDetailsNamed: "引用详情：{{name}}",
   closeReferenceDetails: "关闭引用详情",

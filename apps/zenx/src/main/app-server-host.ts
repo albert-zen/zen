@@ -25,6 +25,10 @@ import type { ZenXCapabilityGenerationSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
+const modelOperations = new Map<
+  string,
+  { controller: AbortController; settled: Promise<void> }
+>();
 let fleetHost: FleetHostService | undefined;
 const roomListeners = new Set<
   (event: { roomId: string; threadId: string }) => void
@@ -74,6 +78,77 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "model-operation/cancel") {
+    modelOperations
+      .get(command.requestId)
+      ?.controller.abort(new Error("Model operation cancelled"));
+    return;
+  }
+  if (command.type === "model-operation/history") {
+    try {
+      if (!appServer) throw new Error("Local Host unavailable");
+      const result =
+        command.threadId === undefined
+          ? {
+              summaries: (
+                await appServer.listThreadSummaries({ includeOperations: true })
+              ).filter((entry) => entry.purpose !== undefined),
+            }
+          : {
+              threadId: command.threadId,
+              items: (await appServer.readThread(command.threadId)).items,
+            };
+      send({
+        type: "model-operation/history-result",
+        requestId: command.requestId,
+        result,
+      });
+    } catch (error) {
+      send({
+        type: "model-operation/history-result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (command.type === "model-operation/run") {
+    const controller = new AbortController();
+    let settle!: () => void;
+    const operation = {
+      controller,
+      settled: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    try {
+      if (!appServer || shuttingDown) throw new Error("Local Host unavailable");
+      if (modelOperations.has(command.requestId))
+        throw new Error("Duplicate model operation request");
+      modelOperations.set(command.requestId, operation);
+      const result = await appServer.runConfiguredModelOperation(
+        command.request.input,
+        command.request.profile,
+        controller.signal,
+      );
+      send({
+        type: "model-operation/result",
+        requestId: command.requestId,
+        result,
+      });
+    } catch (error) {
+      send({
+        type: "model-operation/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (modelOperations.get(command.requestId) === operation)
+        modelOperations.delete(command.requestId);
+      settle();
+    }
+    return;
+  }
   if (command.type === "model-debug/request") {
     try {
       if (!appServer) throw new Error("Local Host unavailable");
@@ -513,6 +588,9 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  const auxiliaryOperations = [...modelOperations.values()];
+  for (const operation of auxiliaryOperations)
+    operation.controller.abort(new Error("Host shutting down"));
   const failures: unknown[] = [];
   const cleanup = async (operation: () => unknown | Promise<unknown>) => {
     try {
@@ -535,6 +613,9 @@ async function shutdown(): Promise<void> {
   await cleanup(() => server?.close());
   server = undefined;
   await toolCleanup;
+  await cleanup(() =>
+    Promise.all(auxiliaryOperations.map((operation) => operation.settled)),
+  );
   if (appServer !== undefined) {
     await cleanup(() => appServer!.closeHostResources());
   } else {

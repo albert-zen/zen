@@ -18,8 +18,10 @@ import { Icon } from "./icons.js";
 export function ModelRequestDebugPanel({
   threadId = "",
   onClose,
+  sampleId,
 }: {
   threadId?: string;
+  sampleId?: string;
   onClose?(): void;
 }) {
   const { t } = useTranslation("shell");
@@ -82,55 +84,72 @@ export function ModelRequestDebugPanel({
   }, [narrow, detailOpen]);
   const current = useRef<ModelRequestDebugResult | null>(null);
   const busyRef = useRef(false);
-  const run = useCallback(async (input: ModelRequestDebugCommand) => {
-    const version = ++sequence.current;
-    busyRef.current = true;
-    setBusy(true);
-    setError(false);
-    if (input.action === "clear" || input.action === "setEnabled") {
-      setPage(undefined);
-      setDetailOpen(false);
-    }
-    try {
-      const bridge = window.zenx.modelRequestDebug;
-      if (!bridge) throw new Error("Local model debug unavailable");
-      const result = await bridge.request(input);
-      if (version !== sequence.current) return;
-      if (
-        current.current?.sessionId !== result.sessionId ||
-        current.current.generation !== result.generation
-      ) {
-        setPage(undefined);
-        setOffsets([]);
-        setDetailOpen(false);
-      }
-      const next = {
-        ...result,
-        records:
-          result.records ??
-          (current.current?.sessionId === result.sessionId &&
-          current.current.generation === result.generation
-            ? current.current.records
-            : []),
-      };
-      current.current = next;
-      setState(next);
-      if (result.page) {
-        setPage(result.page);
-      }
-    } catch {
-      if (version === sequence.current) {
-        setError(true);
+  useEffect(() => {
+    sequence.current++;
+    current.current = null;
+    setState(null);
+    setPage(undefined);
+    setDetailOpen(false);
+    setOffsets([]);
+  }, [threadId, sampleId]);
+  const run = useCallback(
+    async (input: ModelRequestDebugCommand) => {
+      const version = ++sequence.current;
+      busyRef.current = true;
+      setBusy(true);
+      setError(false);
+      if (input.action === "clear" || input.action === "setEnabled") {
         setPage(undefined);
         setDetailOpen(false);
       }
-    } finally {
-      if (version === sequence.current) {
-        busyRef.current = false;
-        setBusy(false);
+      try {
+        const bridge = window.zenx.modelRequestDebug;
+        if (!bridge) throw new Error("Local model debug unavailable");
+        const result = await bridge.request(input);
+        if (version !== sequence.current) return;
+        if (
+          current.current?.sessionId !== result.sessionId ||
+          current.current.generation !== result.generation
+        ) {
+          setPage(undefined);
+          setOffsets([]);
+          setDetailOpen(false);
+        }
+        const next = {
+          ...result,
+          records:
+            result.records?.filter(
+              (record) =>
+                sampleId === undefined || record.sampleId === sampleId,
+            ) ??
+            (current.current?.sessionId === result.sessionId &&
+            current.current.generation === result.generation
+              ? current.current.records
+              : []),
+        };
+        current.current = next;
+        setState(next);
+        if (
+          result.page &&
+          (sampleId === undefined || result.page.record.sampleId === sampleId)
+        ) {
+          setPage(result.page);
+        }
+      } catch {
+        if (version === sequence.current) {
+          setError(true);
+          setPage(undefined);
+          setDetailOpen(false);
+        }
+      } finally {
+        if (version === sequence.current) {
+          busyRef.current = false;
+          setBusy(false);
+        }
       }
-    }
-  }, []);
+    },
+    [sampleId],
+  );
   useEffect(() => {
     const timer = setTimeout(
       () => {
@@ -332,7 +351,9 @@ export function ModelRequestDebugPanel({
                   <span>
                     {entry.purpose === "compaction"
                       ? t("modelDebugCompaction")
-                      : t("modelDebugTurn")}{" "}
+                      : entry.purpose === "operation"
+                        ? t("modelDebugOperation")
+                        : t("modelDebugTurn")}{" "}
                     · {entry.format}
                   </span>
                   <span>{(entry.retainedBytes / 1024).toFixed(1)} KB</span>

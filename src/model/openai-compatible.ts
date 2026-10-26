@@ -1,4 +1,8 @@
 import {
+  serializedMessageSource,
+  type SerializedMessageSource,
+} from "./message-provenance.js";
+import {
   safeProviderErrorIdentity,
   safeProviderErrorParameter,
   providerRecoveryBlocked,
@@ -142,6 +146,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     });
     const messages: Readonly<Record<string, unknown>>[] = [];
     const mediaPaths = new Map<string, object>();
+    const messageSources: SerializedMessageSource[] = [];
     // Chat tool replies are a contiguous batch. Supplemental user-role media
     // follows the entire batch, never another tool's still-pending reply.
     const pendingToolMedia: Array<{
@@ -197,6 +202,10 @@ export class OpenAiCompatibleModel implements ModelAdapter {
           `messages[${messages.length}]`,
           modelUserContent(message),
         );
+      if (message.role === "user")
+        messageSources.push(
+          ...serializedMessageSource(message, "messages", messages.length),
+        );
       messages.push(encoded);
       if (message.role === "tool" && message.modelContent !== undefined) {
         pendingToolMedia.push({
@@ -221,6 +230,9 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
     const body = serializeRequest({
       ...this.#defaultParams,
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_tokens: request.maxOutputTokens }),
       model: requiredLabel(request.model, "model"),
       messages,
       n: 1,
@@ -255,6 +267,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             this.provider,
             ++transportAttempt,
             [this.#apiKey],
+            messageSources,
           );
           return this.#fetch(this.#endpoint, {
             method: "POST",
@@ -705,7 +718,7 @@ async function toChatMessage(
         message.exitCode === null
           ? historicalCallId(message.callId)
           : requiredLabel(message.callId, "tool call id"),
-      content: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+      content: message.text,
     };
   }
 

@@ -1,4 +1,5 @@
 export const ipcChannels = {
+  modelOperationHistory: "zenx:model-operation-history",
   modelRequestDebug: "zenx:model-request-debug",
   shellPanelRequest: "zenx:shell-panel:request",
   imzenxSetupInspect: "zenx:imzenx-setup:inspect",

@@ -24,7 +24,7 @@ export function projectThreadAttachmentItems(
   return Object.fromEntries(
     items.flatMap((item) => {
       const id =
-        item.type === "user_message"
+        item.type === "user_message" || item.type === "context_message"
           ? item.id
           : item.type === "tool_result"
             ? calls.get(JSON.stringify([item.turnId, item.callId]))
@@ -33,9 +33,11 @@ export function projectThreadAttachmentItems(
       const content =
         item.type === "user_message"
           ? contentFromUserMessage(item)
-          : item.type === "tool_result"
-            ? (item.modelContent ?? [])
-            : [];
+          : item.type === "context_message"
+            ? item.content
+            : item.type === "tool_result"
+              ? (item.modelContent ?? [])
+              : [];
       const attachments = content.flatMap((part) =>
         part.type === "image" ? [part.attachment] : [],
       );

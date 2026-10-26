@@ -1,4 +1,8 @@
 import {
+  serializedMessageSource,
+  type SerializedMessageSource,
+} from "./message-provenance.js";
+import {
   safeProviderErrorIdentity,
   safeProviderErrorParameter,
   providerRecoveryBlocked,
@@ -110,6 +114,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     const sessionHint = promptCacheHint(request.sessionId);
     const input: Array<Record<string, unknown>> = [];
     const mediaPaths = new Map<string, object>();
+    const messageSources: SerializedMessageSource[] = [];
     for (const [index, message] of request.messages.entries()) {
       const encoded = await toResponsesInput(
         message,
@@ -132,13 +137,20 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
           message.modelContent,
           ["image"],
         );
+      if (message.role === "user" && encoded.length === 1)
+        messageSources.push(
+          ...serializedMessageSource(message, "input", input.length),
+        );
       input.push(...encoded);
     }
     const body = JSON.stringify({
       model: requiredLabel(request.model, "model"),
       store: false,
       stream: true,
-      instructions: this.#instructions,
+      instructions: request.instructions ?? "",
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_output_tokens: request.maxOutputTokens }),
       input,
       include: ["reasoning.encrypted_content"],
       text: { verbosity: "low" },
@@ -165,6 +177,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
         this.provider,
         ++transportAttempt,
         [...observedTokens],
+        messageSources,
       );
     };
     let lease = await this.#acquireAccessLease(request.signal);
@@ -358,11 +371,9 @@ async function toResponsesInput(
       } else {
         const attachment = part.attachment;
         if (part.type !== "image") {
-          content.push({
-            type: "input_text",
-            text: `Audio input is not supported by this Responses transport. Attachment: ${attachment.sha256} (${attachment.mediaType}, ${attachment.byteLength} bytes).`,
-          });
-          continue;
+          throw new Error(
+            "Unsupported audio must be materialized by the context compiler before Responses encoding",
+          );
         }
         if (attachments === undefined) {
           throw new Error(
@@ -389,7 +400,7 @@ async function toResponsesInput(
           message.exitCode === null
             ? historicalCallId(message.callId)
             : providerCallId(message.callId),
-        output: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+        output: message.text,
       },
     ];
     if (message.modelContent !== undefined) {

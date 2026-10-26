@@ -160,3 +160,26 @@ test("projects existing tool image content by call item without rewriting raw to
   });
   assert.equal(JSON.stringify(items), original);
 });
+
+test("probe attachment reachable only from canonical context content is projected by its own Item identity", async () => {
+  const { projectThreadAttachmentItems } =
+    await import("../src/thread-attachment-projection.js");
+  const ref = attachment("d");
+  const item = {
+    type: "context_message" as const,
+    id: "probe-context",
+    threadId: "probe",
+    createdAt: "2026-01-01T00:00:00Z",
+    compilerPolicyVersion: 1 as const,
+    sourceItemIds: ["operation"],
+    role: "user" as const,
+    origin: "host" as const,
+    purpose: "image-capability-probe",
+    variant: "synthetic",
+    content: [{ type: "image" as const, attachment: ref }],
+  };
+  assert.deepEqual(projectThreadAttachmentItems([item]), {
+    "probe-context": [ref],
+  });
+  assert.deepEqual(projectThreadAttachmentItems([]), {});
+});

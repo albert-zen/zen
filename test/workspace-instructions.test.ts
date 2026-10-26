@@ -199,7 +199,13 @@ test("ordinary Turns do not reload empty snapshots or historical threads", async
       compileModelMessages((await restarted.readThread("historical")).items)[0],
       {
         role: "user",
-        content: [{ type: "text", text: "old empty thread" }],
+        content: [
+          {
+            type: "text",
+            text: `[Zen recorded user-message metadata: received_at="${(await restarted.readThread("historical")).items.find((item) => item.type === "user_message")?.createdAt}"]`,
+          },
+          { type: "text", text: "old empty thread" },
+        ],
         userTimestamp: (await restarted.readThread("historical")).items.find(
           (item) => item.type === "user_message",
         )?.createdAt,

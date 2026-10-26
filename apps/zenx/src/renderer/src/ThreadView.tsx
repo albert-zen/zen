@@ -1,4 +1,10 @@
+import { originalUserInput } from "../../../../../src/item.js";
 import { triggerMessagePresentation } from "./trigger-message-presentation.js";
+import {
+  MessageContextDebugAction,
+  MessageContextDebugContext,
+  type DebugInput,
+} from "./MessageContextDebug.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
@@ -222,6 +228,7 @@ function goToMessageQuoteSource(
 }
 
 interface ThreadViewProps {
+  /** Local-owned Host capability; available in packaged builds, never enables capture. */
   localModelDebug?: boolean;
   debugMode?: boolean;
   onExitDebug?(): void;
@@ -298,6 +305,23 @@ interface ThreadViewProps {
 }
 
 export function ThreadView(props: ThreadViewProps) {
+  const messageDebugItems = useMemo(
+    () =>
+      new Map(
+        (props.thread?.canonicalItems ?? [])
+          .filter((item): item is DebugInput =>
+            [
+              "user_message",
+              "thread_message",
+              "host_message",
+              "context_message",
+              "model_operation_completed",
+            ].includes(item.type),
+          )
+          .map((item) => [item.id, item]),
+      ),
+    [props.thread?.canonicalItems],
+  );
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
   debuggingRef.current = debugging;
@@ -362,36 +386,48 @@ export function ThreadView(props: ThreadViewProps) {
   // also removes old references synchronously; never merge stale Host results.
 
   return (
-    <ThreadReadingContext.Provider value={readingState}>
-      <CanonicalInputContentContext.Provider value={canonicalInputs}>
-        <CanonicalMessageForkContext.Provider value={forkContext}>
-          <MessageSourceViewportContext.Provider
-            value={props.thread?.id ?? null}
-          >
-            <div className="thread-conversation-surface">
-              {debugging && props.thread && items !== undefined ? (
-                <ThreadDebugger
-                  key={props.thread.id}
-                  thread={props.thread}
-                  items={items}
-                  localModelDebug={props.localModelDebug}
-                  onExit={props.onExitDebug}
-                  onOpenMessageLink={props.onOpenMessageLink}
-                  onReadAttachment={props.onReadAttachment}
-                />
-              ) : (
-                <ThreadViewContent
-                  {...props}
-                  threadAttachments={
-                    canonicalAttachments ?? props.threadAttachments
-                  }
-                />
-              )}
-            </div>
-          </MessageSourceViewportContext.Provider>
-        </CanonicalMessageForkContext.Provider>
-      </CanonicalInputContentContext.Provider>
-    </ThreadReadingContext.Provider>
+    <MessageContextDebugContext.Provider
+      value={
+        props.thread
+          ? {
+              threadId: props.thread.id,
+              items: messageDebugItems,
+              captureAvailable: props.localModelDebug === true,
+            }
+          : null
+      }
+    >
+      <ThreadReadingContext.Provider value={readingState}>
+        <CanonicalInputContentContext.Provider value={canonicalInputs}>
+          <CanonicalMessageForkContext.Provider value={forkContext}>
+            <MessageSourceViewportContext.Provider
+              value={props.thread?.id ?? null}
+            >
+              <div className="thread-conversation-surface">
+                {debugging && props.thread && items !== undefined ? (
+                  <ThreadDebugger
+                    key={props.thread.id}
+                    thread={props.thread}
+                    items={items}
+                    localModelDebug={props.localModelDebug}
+                    onExit={props.onExitDebug}
+                    onOpenMessageLink={props.onOpenMessageLink}
+                    onReadAttachment={props.onReadAttachment}
+                  />
+                ) : (
+                  <ThreadViewContent
+                    {...props}
+                    threadAttachments={
+                      canonicalAttachments ?? props.threadAttachments
+                    }
+                  />
+                )}
+              </div>
+            </MessageSourceViewportContext.Provider>
+          </CanonicalMessageForkContext.Provider>
+        </CanonicalInputContentContext.Provider>
+      </ThreadReadingContext.Provider>
+    </MessageContextDebugContext.Provider>
   );
 }
 
@@ -3808,11 +3844,9 @@ function InputMessage({
   const article = useRef<HTMLElement>(null);
   const canonical = useContext(CanonicalInputContentContext).get(item.id);
   const parts = canonical
-    ? canonical.text !== undefined
-      ? [canonical.text]
-      : canonical.content.flatMap((part) =>
-          part.type === "text" ? [part.text] : [],
-        )
+    ? originalUserInput(canonical).flatMap((part) =>
+        part.type === "text" ? [part.text] : [],
+      )
     : item.content.map((part) => part.text);
   const clientId = canonical ? canonical.clientId : item.clientId;
   const presentation =
@@ -3896,6 +3930,7 @@ function InputMessage({
         </div>
       )}
       <MessageActions
+        debugItemId={item.id}
         className="user-message-actions"
         copyLabel={i18n.t(
           item.type === "threadMessage"
@@ -4010,6 +4045,7 @@ function MessageActions({
   turn,
   usage,
   forkTarget,
+  debugItemId,
 }: {
   className: string;
   copyLabel: string;
@@ -4018,6 +4054,7 @@ function MessageActions({
   turn: Turn;
   usage?: ModelUsageAggregate;
   forkTarget?: MessageForkTarget;
+  debugItemId?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -4056,6 +4093,9 @@ function MessageActions({
       >
         <Icon name={copied ? "check" : "copy"} size={14} />
       </button>
+      {debugItemId === undefined ? null : (
+        <MessageContextDebugAction itemId={debugItemId} />
+      )}
       {forkTarget === undefined ? null : (
         <MessageForkButton target={forkTarget} />
       )}
@@ -4181,6 +4221,7 @@ function WakeupCard(
           copyAction={false}
         />
         <MessageActions
+          debugItemId={item.id}
           className="host-message-actions"
           copyLabel={i18n.t("shell:copyHostMessage")}
           copiedLabel={i18n.t("shell:copiedHostMessage")}

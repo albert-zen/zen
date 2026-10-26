@@ -8,7 +8,7 @@ import test from "node:test";
 import { WebSocket } from "ws";
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
-import { textFromUserMessage } from "../src/item.js";
+import { originalUserInput, textFromUserInput } from "../src/item.js";
 import { RemoteHostAccess } from "../src/protocol/native/remote-host.js";
 import { serveRemoteHost } from "../src/protocol/native/remote-transport.js";
 
@@ -242,7 +242,7 @@ test("legitimate >2MiB canonical history is fully recovered through bounded TLS 
       for (const item of originalItems)
         assert.equal(
           collected.get(item.id),
-          textFromUserMessage(item),
+          textFromUserInput(originalUserInput(item)),
           item.id,
         );
       const deadline = Date.now() + 2000;

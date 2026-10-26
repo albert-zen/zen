@@ -1,9 +1,11 @@
+import type { SerializedMessageSource } from "../../../src/model/message-provenance.js";
 /** Ephemeral Host observations; never a source of conversation or execution state. */
 export interface ModelRequestDebugSummary {
   id: string;
+  messageSources?: SerializedMessageSource[];
   capturedAt: string;
   threadId: string;
-  purpose: "turn" | "compaction";
+  purpose: "turn" | "compaction" | "operation";
   turnId: string | null;
   sampleId: string;
   contextBoundaryItemId: string;
@@ -26,16 +28,17 @@ export interface ModelRequestDebugSummary {
   sourceAttachmentCount: number;
 }
 export type ModelRequestDebugView =
-  "payload" | "messages" | "tools" | "configuration";
+  "payload" | "messages" | "tools" | "configuration" | "message";
 export type ModelRequestDebugCommand =
   | { action: "status" }
   | { action: "setEnabled"; enabled: boolean }
   | { action: "clear" }
-  | { action: "list"; threadId: string; query?: string }
+  | { action: "list"; threadId: string; query?: string; itemId?: string }
   | {
       action: "read";
       id: string;
       offset?: number;
+      itemId?: string;
       view?: ModelRequestDebugView;
     };
 export interface ModelRequestDebugResult {

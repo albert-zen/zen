@@ -261,7 +261,7 @@ test("converter shares the store and removes duplicate explicit media while nest
   assert.deepEqual(messages.at(-1), {
     role: "tool",
     callId: "outer",
-    text: "done",
+    text: "Exit code: 0\ndone",
     exitCode: 0,
     modelContent: content,
   });

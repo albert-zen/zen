@@ -186,12 +186,15 @@ test("Host-confirmed publication despite a lost ACK is reported applied", async 
 test("auxiliary title lease prevents maintenance until released, and maintenance rejects new title work", async () => {
   const { service, close } = await fixture();
   try {
-    const title = await service.titleModel();
+    const title = await service.titleOperationConfiguration();
     assert.equal(service.tryBeginMaintenance(), false);
     await title.release();
     await title.release();
     assert.equal(service.tryBeginMaintenance(), true);
-    await assert.rejects(service.titleModel(), /host_restarting/);
+    await assert.rejects(
+      service.titleOperationConfiguration(),
+      /host_restarting/,
+    );
     service.endMaintenance();
     assert.equal(service.activeConfigurationOperations(), 0);
   } finally {
