@@ -1,0 +1,127 @@
+{
+  "localCommit": "72b2869a34031e8400c05b55ac23f5ae610aee1c",
+  "publicHead": "f62bf6f847cc6607d565d084933f51ec9204b7ab",
+  "testMerge": "7eb3b4e70267723c91543caec16822f4935887b9",
+  "exactTree": "77c0082455523022c55f1b48185f0123776a02c8",
+  "runId": 40314250284,
+  "artifactId": 12646321882,
+  "zipSha256": "b914de497cad84e383169b91c2357956ea446a9d3bd60a778a3a68763b46221c",
+  "sourcesVerified": [
+    {
+      "path": "src/renderer/src/MessageContextDebug.tsx",
+      "sha256": "dd7aba38f5a3267e0921195a1697e0979ecde2200537ee50efbc9c226869acbe"
+    },
+    {
+      "path": "src/renderer/src/ThreadDebugger.tsx",
+      "sha256": "c3f5c082989877b8803ab11a4f6ad7dd4d77c7c832ae1b973fdb170687379682"
+    },
+    {
+      "path": "src/renderer/src/ModelRequestDebugDialog.tsx",
+      "sha256": "2d5bc35f84b65ef344c93b300c6a29d27f8f10d323fd71c4946367e979422ec1"
+    },
+    {
+      "path": "src/renderer/src/ThreadView.tsx",
+      "sha256": "eecfb80916a2287274c7d3b04f61a7f788bb56e9cf638a7abee1b021ee524ff6"
+    },
+    {
+      "path": "src/renderer/src/styles.css",
+      "sha256": "11bfcb11df90e841b49a7509f1c96c77b1e603742973a9f91a7ac69a26bb6bf2"
+    },
+    {
+      "path": "src/renderer/src/theme.css",
+      "sha256": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271"
+    },
+    {
+      "path": "src/renderer/src/i18n/shell.ts",
+      "sha256": "0a9e11d45eaaf1793a3b2126dd00760315189b1f8c8644da2293f6d7d3739f9d"
+    },
+    {
+      "path": "src/renderer/src/reference-draft.ts",
+      "sha256": "6aa05109d0fe2febdf9cc03f83457503453aa132cebd660c8e118ad4d669a38a"
+    },
+    {
+      "path": "scripts/message-context-debug-preview.tsx",
+      "sha256": "201b793e27fbccef2dd0503844e06c73c287ceb0a19ba35239a835c7525667e1"
+    },
+    {
+      "path": "scripts/build-message-context-debug-preview.mjs",
+      "sha256": "19259dbfab87c13c06f83beb965ede6c113d8e827a925c396d1ad212c1099533"
+    },
+    {
+      "path": "scripts/capture-message-context-debug-preview.mjs",
+      "sha256": "055540d0f06db8c04e5f727081133250505d6a6dc2d4237b40fd946b20b66484"
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "canonical-content-en-light-1100.png",
+      "sha256": "00f920667daa9387f75a5116a854e9fb4c3125502a784a1605f472532eec355d",
+      "bytes": 92759
+    },
+    {
+      "file": "canonical-content-zh-CN-dark-390.png",
+      "sha256": "5af0a503e8e679303ad7c820cf62f258a676f303ba0292dc92a8d1e19d5e5140",
+      "bytes": 69919
+    },
+    {
+      "file": "canonical-history-en-light-1100.png",
+      "sha256": "cfdab95ebbad8a55a20abb8e019359a37e75a09c43f474b5f5c71bdb92cd44a3",
+      "bytes": 97723
+    },
+    {
+      "file": "canonical-history-zh-CN-dark-390.png",
+      "sha256": "f38b8599a703e08767bbd591acdfc2eeeb37ed49f8989af5a61a09e3899626ed",
+      "bytes": 74687
+    },
+    {
+      "file": "captured-json-end-en-light-1100.png",
+      "sha256": "f6d3470ac5982ee32e9f6f90ca8d9f02f63e37cfda544fec7b2e01e899f61425",
+      "bytes": 124589
+    },
+    {
+      "file": "captured-json-end-zh-CN-dark-390.png",
+      "sha256": "05c75ae074c3219abc9ccd7b3f8939aae12cb6be4bf1809f739d17e518e83ebb",
+      "bytes": 74231
+    },
+    {
+      "file": "captured-json-start-en-light-1100.png",
+      "sha256": "9c64b4fb5f1a903dced1ece74d2ec6eb4f4e20e66a2eb660e0f6a886098ab86b",
+      "bytes": 125598
+    },
+    {
+      "file": "captured-json-start-zh-CN-dark-390.png",
+      "sha256": "9ab5ce2ffd676a2e71b9a251d7125f24f1b8c4e3c9aff3cf366681f6ca009d00",
+      "bytes": 74266
+    },
+    {
+      "file": "message-input-en-light-1100.png",
+      "sha256": "bb712c55fccf19897f5bf758a31885f7bdf46b6e36324aa08606789a88bd3202",
+      "bytes": 120994
+    },
+    {
+      "file": "message-input-zh-CN-dark-390.png",
+      "sha256": "a31161d5e11a354c4189fb8ce45509466f9ca7b5ae376357da688e91c75e823d",
+      "bytes": 78143
+    },
+    {
+      "file": "operation-history-en-light-1100.png",
+      "sha256": "8771ad7d1c28eaab25e24b166b1ecc5bb630e20d8e3b1f37ef3d02960d87b3ef",
+      "bytes": 92876
+    },
+    {
+      "file": "operation-history-zh-CN-dark-390.png",
+      "sha256": "e6a525b6041fe750da2aa25c7c99fe841476cb746006f56d8c7d455b44fcfd41",
+      "bytes": 74567
+    },
+    {
+      "file": "operation-terminal-en-light-1100.png",
+      "sha256": "240ffb70f2f10a9b7f287009876b41ea6e2406da3f46e44bea62e1ce66450898",
+      "bytes": 79346
+    },
+    {
+      "file": "operation-terminal-zh-CN-dark-390.png",
+      "sha256": "afe51416bb2ea6d25e64e83869c7abedd33e96b8765e707117d848e0fe694b04",
+      "bytes": 69019
+    }
+  ]
+}

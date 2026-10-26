@@ -1,0 +1,383 @@
+{
+  "scope": "Actual action/Dialog, synthetic message and capture API, no Host or real model. No native app acceptance.",
+  "cases": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1100,
+      "height": 900,
+      "measured": {
+        "appearance": "light",
+        "colorScheme": "light",
+        "role": "dialog",
+        "preCount": 3,
+        "saved": "Source Item typeuser_messageItem recorded at (metadata)2026-10-25T05:00:00Zcontent[0] · text · Host-authored metadata[Zen recorded user-message metadata: received_at=\"2026-10-25T05:00:00.000Z\"]content[1] · text[zenx-reference-message:v2]\n{\"version\":2,\"clientId\":\"synthetic-client\",\"text\":\"Explain this passage, then compare with the other thread.\",\"references\":[{\"kind\":\"thread\",\"name\":\"Research\",\"cwd\":\"/synthetic/workspace\",\"id\":\"synthetic-research\",\"contentMode\":\"pointer\"}]}",
+        "captured": "{\n  \"role\": \"user\",\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"[Zen recorded user-message metadata: received_at=\\\"2026-10-25T05:00:00.000Z\\\"]\"\n    },\n    {\n      \"type\": \"text\",\n      \"text\": \"[zenx-reference-message:v2]\\n{\\\"version\\\":2,\\\"clientId\\\":\\\"synthetic-client\\\",\\\"text\\\":\\\"Explain this passage, then compare with the other thread.\\\",\\\"references\\\":[{\\\"kind\\\":\\\"thread\\\",\\\"name\\\":\\\"Research\\\",\\\"cwd\\\":\\\"/synthetic/workspace\\\",\\\"id\\\":\\\"synthetic-research\\\",\\\"contentMode\\\":\\\"pointer\\\"}]}\"\n    }\n  ]\n}",
+        "overflow": false,
+        "bounds": {
+          "left": 170,
+          "right": 930,
+          "top": 67.5,
+          "bottom": 832.5
+        },
+        "focused": true,
+        "commands": [
+          {
+            "action": "list",
+            "threadId": "synthetic-thread",
+            "itemId": "synthetic-message"
+          },
+          {
+            "action": "read",
+            "id": "synthetic-capture",
+            "view": "message",
+            "itemId": "synthetic-message",
+            "offset": 0
+          }
+        ]
+      },
+      "captureJsonVisible": {
+        "selector": ".message-context-debug > details section > pre",
+        "expected": "\"role\": \"user\"",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 192,
+          "top": 542.5,
+          "right": 888,
+          "bottom": 780.5
+        },
+        "rectangles": [
+          {
+            "left": 218.453125,
+            "top": 568.5,
+            "right": 319.609375,
+            "bottom": 582.5,
+            "width": 101.15625,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "",
+            "top": 0
+          },
+          {
+            "className": "ui-dialog ui-dialog-surface message-context-debug",
+            "top": 261
+          }
+        ]
+      },
+      "captureMetadataVisible": {
+        "selector": ".message-context-debug > details section > pre",
+        "expected": "received_at",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 192,
+          "top": 542.5,
+          "right": 888,
+          "bottom": 780.5
+        },
+        "rectangles": [
+          {
+            "left": 579.6875,
+            "top": 624.5,
+            "right": 659.171875,
+            "bottom": 638.5,
+            "width": 79.484375,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "",
+            "top": 0
+          },
+          {
+            "className": "ui-dialog ui-dialog-surface message-context-debug",
+            "top": 261
+          }
+        ]
+      },
+      "captureJsonEndVisible": {
+        "selector": ".message-context-debug > details section > pre",
+        "expected": "pointer",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 192,
+          "top": 542.5,
+          "right": 888,
+          "bottom": 780.5
+        },
+        "rectangles": [
+          {
+            "left": 435.1875,
+            "top": 712.5,
+            "right": 485.765625,
+            "bottom": 726.5,
+            "width": 50.578125,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "",
+            "top": 38
+          },
+          {
+            "className": "ui-dialog ui-dialog-surface message-context-debug",
+            "top": 261
+          }
+        ]
+      },
+      "operationStatusVisible": {
+        "selector": ".operation-history-panel [data-item-id=synthetic-completed] .canonical-message-content > p",
+        "expected": "completed",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 28,
+          "top": 273,
+          "right": 1062,
+          "bottom": 872
+        },
+        "rectangles": [
+          {
+            "left": 52,
+            "top": 731,
+            "right": 116.59375,
+            "bottom": 747,
+            "width": 64.59375,
+            "height": 16
+          }
+        ],
+        "scroll": [
+          {
+            "className": "thread-debug-items",
+            "top": 387
+          }
+        ]
+      },
+      "operationOutputVisible": {
+        "selector": ".operation-history-panel [data-item-id=synthetic-completed] .canonical-message-part > pre",
+        "expected": "Blue",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 52,
+          "top": 789,
+          "right": 1038,
+          "bottom": 803
+        },
+        "rectangles": [
+          {
+            "left": 52,
+            "top": 789,
+            "right": 80.90625,
+            "bottom": 803,
+            "width": 28.90625,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "thread-debug-items",
+            "top": 387
+          }
+        ]
+      },
+      "escapeAndFocusRestoration": true
+    },
+    {
+      "lang": "zh-CN",
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "measured": {
+        "appearance": "dark",
+        "colorScheme": "dark",
+        "role": "dialog",
+        "preCount": 3,
+        "saved": "来源 Item 类型user_messageItem 记录时间（元数据）2026-10-25T05:00:00Zcontent[0] · text · Host 生成的元数据[Zen recorded user-message metadata: received_at=\"2026-10-25T05:00:00.000Z\"]content[1] · text[zenx-reference-message:v2]\n{\"version\":2,\"clientId\":\"synthetic-client\",\"text\":\"Explain this passage, then compare with the other thread.\",\"references\":[{\"kind\":\"thread\",\"name\":\"Research\",\"cwd\":\"/synthetic/workspace\",\"id\":\"synthetic-research\",\"contentMode\":\"pointer\"}]}",
+        "captured": "{\n  \"role\": \"user\",\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"[Zen recorded user-message metadata: received_at=\\\"2026-10-25T05:00:00.000Z\\\"]\"\n    },\n    {\n      \"type\": \"text\",\n      \"text\": \"[zenx-reference-message:v2]\\n{\\\"version\\\":2,\\\"clientId\\\":\\\"synthetic-client\\\",\\\"text\\\":\\\"Explain this passage, then compare with the other thread.\\\",\\\"references\\\":[{\\\"kind\\\":\\\"thread\\\",\\\"name\\\":\\\"Research\\\",\\\"cwd\\\":\\\"/synthetic/workspace\\\",\\\"id\\\":\\\"synthetic-research\\\",\\\"contentMode\\\":\\\"pointer\\\"}]}\"\n    }\n  ]\n}",
+        "overflow": false,
+        "bounds": {
+          "left": 16,
+          "right": 374,
+          "top": 63.3046875,
+          "bottom": 780.6953125
+        },
+        "focused": true,
+        "commands": [
+          {
+            "action": "list",
+            "threadId": "synthetic-thread",
+            "itemId": "synthetic-message"
+          },
+          {
+            "action": "read",
+            "id": "synthetic-capture",
+            "view": "message",
+            "itemId": "synthetic-message",
+            "offset": 0
+          }
+        ]
+      },
+      "captureJsonVisible": {
+        "selector": ".message-context-debug > details section > pre",
+        "expected": "\"role\": \"user\"",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 38,
+          "top": 490.3046875,
+          "right": 332,
+          "bottom": 728.3046875
+        },
+        "rectangles": [
+          {
+            "left": 64.453125,
+            "top": 516.3046875,
+            "right": 165.609375,
+            "bottom": 530.3046875,
+            "width": 101.15625,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "",
+            "top": 0
+          },
+          {
+            "className": "ui-dialog ui-dialog-surface message-context-debug",
+            "top": 470
+          }
+        ]
+      },
+      "captureMetadataVisible": {
+        "selector": ".message-context-debug > details section > pre",
+        "expected": "received_at",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 38,
+          "top": 490.3046875,
+          "right": 332,
+          "bottom": 728.3046875
+        },
+        "rectangles": [
+          {
+            "left": 180.03125,
+            "top": 586.3046875,
+            "right": 259.515625,
+            "bottom": 600.3046875,
+            "width": 79.484375,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "",
+            "top": 0
+          },
+          {
+            "className": "ui-dialog ui-dialog-surface message-context-debug",
+            "top": 470
+          }
+        ]
+      },
+      "captureJsonEndVisible": {
+        "selector": ".message-context-debug > details section > pre",
+        "expected": "pointer",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 38,
+          "top": 490.3046875,
+          "right": 332,
+          "bottom": 728.3046875
+        },
+        "rectangles": [
+          {
+            "left": 259.5,
+            "top": 646.3046875,
+            "right": 310.09375,
+            "bottom": 660.3046875,
+            "width": 50.59375,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "",
+            "top": 136
+          },
+          {
+            "className": "ui-dialog ui-dialog-surface message-context-debug",
+            "top": 470
+          }
+        ]
+      },
+      "operationStatusVisible": {
+        "selector": ".operation-history-panel [data-item-id=synthetic-completed] .canonical-message-content > p",
+        "expected": "completed",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 28,
+          "top": 319,
+          "right": 352,
+          "bottom": 816
+        },
+        "rectangles": [
+          {
+            "left": 42,
+            "top": 677,
+            "right": 106.59375,
+            "bottom": 693,
+            "width": 64.59375,
+            "height": 16
+          }
+        ],
+        "scroll": [
+          {
+            "className": "thread-debug-items",
+            "top": 702
+          }
+        ]
+      },
+      "operationOutputVisible": {
+        "selector": ".operation-history-panel [data-item-id=synthetic-completed] .canonical-message-part > pre",
+        "expected": "Blue",
+        "visible": true,
+        "pageOverflow": false,
+        "clip": {
+          "left": 42,
+          "top": 735,
+          "right": 338,
+          "bottom": 749
+        },
+        "rectangles": [
+          {
+            "left": 42,
+            "top": 735,
+            "right": 70.90625,
+            "bottom": 749,
+            "width": 28.90625,
+            "height": 14
+          }
+        ],
+        "scroll": [
+          {
+            "className": "thread-debug-items",
+            "top": 702
+          }
+        ]
+      },
+      "escapeAndFocusRestoration": true
+    }
+  ]
+}
